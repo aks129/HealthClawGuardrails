@@ -105,8 +105,11 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 ## Testing
 
 ```bash
-# Run all Python tests (177 passing)
-python -m pytest tests/ -v
+# Run all Python tests
+uv run python -m pytest tests/ -v
+
+# Run a single test file or specific test
+uv run python -m pytest tests/test_r6_routes.py::test_name -v
 
 # MCP server tests
 cd services/agent-orchestrator && npm ci && npm test
@@ -196,7 +199,7 @@ services/agent-orchestrator/
   src/tools.ts                  10 tool definitions + executor
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
-tests/                          177 pytest tests (4 files)
+tests/                          254 pytest tests (6 files)
 ```
 
 ## Known Limitations
