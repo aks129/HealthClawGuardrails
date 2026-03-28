@@ -1,6 +1,6 @@
 ---
 name: fhir-r6-guardrails
-version: 0.9.0
+version: 1.0.0
 description: >
   FHIR R6 agent guardrails for secure clinical data access via MCP. Use when:
   (1) Reading patient data through MCP with automatic PHI redaction,

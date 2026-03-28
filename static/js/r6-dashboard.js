@@ -930,6 +930,159 @@ async function runDemoLoop() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// --------------- Curatr: Patient Data Quality ---------------
+
+let _curatrConditionId = null;
+
+async function curatrCreateCondition() {
+  clearResult('curatr-result');
+  setLoading('btn-curatr-create', true);
+  toast('Creating Condition with retired ICD-9 code…', 'info');
+
+  // Get a step-up token first
+  const tokenRes = await r6Fetch('/internal/step-up-token', { method: 'POST' });
+  if (!tokenRes.body || !tokenRes.body.token) {
+    showResult('curatr-result', { error: 'Could not obtain step-up token', detail: tokenRes.body }, tokenRes.status);
+    setLoading('btn-curatr-create', false);
+    return;
+  }
+  const stepUpToken = tokenRes.body.token;
+
+  const condition = {
+    resourceType: 'Condition',
+    clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'active' }] },
+    code: {
+      coding: [{
+        system: 'http://hl7.org/fhir/sid/icd-9-cm',
+        code: '250.00',
+        display: 'Diabetes mellitus without mention of complication',
+      }],
+      text: 'Diabetes mellitus',
+    },
+    subject: { reference: 'Patient/demo-patient' },
+  };
+
+  const res = await r6Fetch('/Condition', {
+    method: 'POST',
+    body: JSON.stringify(condition),
+    headers: { 'X-Step-Up-Token': stepUpToken, 'X-Human-Confirmed': 'true' },
+  });
+
+  if (res.status === 201) {
+    _curatrConditionId = res.body.id;
+    showResult('curatr-result', {
+      status: 'Condition created',
+      id: _curatrConditionId,
+      note: 'Uses retired ICD-9-CM code 250.00 — ready for Curatr evaluation',
+      condition: res.body,
+    }, res.status);
+    toast('ICD-9 Condition created — run $curatr-evaluate to check quality', 'success');
+  } else {
+    showResult('curatr-result', res.body, res.status);
+    toast('Create failed: ' + res.status, 'error');
+  }
+  setLoading('btn-curatr-create', false);
+}
+
+async function curatrEvaluate() {
+  if (!_curatrConditionId) {
+    toast('Create a Condition first', 'error');
+    return;
+  }
+  clearResult('curatr-result');
+  setLoading('btn-curatr-evaluate', true);
+  toast('Evaluating against live terminology services…', 'info');
+
+  const res = await r6Fetch(`/Condition/${_curatrConditionId}/$curatr-evaluate`);
+
+  if (res.status === 200) {
+    const issues = res.body.issues || [];
+    const quality = res.body.overall_quality || 'unknown';
+    const qualityColor = quality === 'critical' ? '#ef4444' : quality === 'needs-review' ? '#f59e0b' : '#22c55e';
+
+    showResult('curatr-result', {
+      overall_quality: quality,
+      summary: res.body.summary,
+      issue_count: issues.length,
+      checked_at: res.body.checked_at,
+      issues: issues.map(i => ({
+        severity: i.severity,
+        title: i.title,
+        plain_language: i.plain_language,
+        impact: i.impact,
+        suggestion: i.suggestion,
+        field_path: i.field_path,
+      })),
+      _note: 'Terminology services: NLM Clinical Tables (ICD-10-CM), tx.fhir.org (SNOMED/LOINC), RXNAV (RxNorm)',
+    }, res.status);
+
+    const msg = issues.length > 0
+      ? `Found ${issues.length} issue(s) — quality: ${quality}. Run "Apply Fix" to correct.`
+      : 'No issues found';
+    toast(msg, issues.length > 0 ? 'warning' : 'success');
+  } else {
+    showResult('curatr-result', res.body, res.status);
+    toast('Evaluate failed: ' + res.status, 'error');
+  }
+  setLoading('btn-curatr-evaluate', false);
+}
+
+async function curatrApplyFix() {
+  if (!_curatrConditionId) {
+    toast('Create and evaluate a Condition first', 'error');
+    return;
+  }
+  clearResult('curatr-result');
+  setLoading('btn-curatr-fix', true);
+  toast('Applying patient-approved ICD-10-CM fix…', 'info');
+
+  const tokenRes = await r6Fetch('/internal/step-up-token', { method: 'POST' });
+  if (!tokenRes.body || !tokenRes.body.token) {
+    showResult('curatr-result', { error: 'Could not obtain step-up token' }, tokenRes.status);
+    setLoading('btn-curatr-fix', false);
+    return;
+  }
+  const stepUpToken = tokenRes.body.token;
+
+  const fixes = [
+    { field_path: 'Condition.code.coding[0].system', new_value: 'http://hl7.org/fhir/sid/icd-10-cm' },
+    { field_path: 'Condition.code.coding[0].code', new_value: 'E11.9' },
+    { field_path: 'Condition.code.coding[0].display', new_value: 'Type 2 diabetes mellitus without complications' },
+  ];
+
+  const res = await r6Fetch(`/Condition/${_curatrConditionId}/$curatr-apply-fix`, {
+    method: 'POST',
+    body: JSON.stringify({
+      fixes,
+      patient_intent: 'Updating retired ICD-9 code 250.00 to ICD-10-CM E11.9 — approved by patient via Curatr',
+    }),
+    headers: { 'X-Step-Up-Token': stepUpToken, 'X-Human-Confirmed': 'true' },
+  });
+
+  if (res.status === 200) {
+    showResult('curatr-result', {
+      status: 'Fix applied',
+      issues_fixed: res.body.issues_fixed,
+      change_summary: res.body.change_summary,
+      provenance_id: res.body.provenance?.id,
+      provenance_recorded: res.body.provenance?.recorded,
+      provenance_agent: res.body.provenance?.agent?.[0]?.who?.display,
+      updated_code: res.body.updated_resource?.code,
+      _patient_rights: [
+        'Change initiated and approved by the patient',
+        'Original ICD-9 data preserved in audit trail',
+        'Provenance record documents patient intent verbatim',
+        'Patient can request provider correct the source EHR',
+      ],
+    }, res.status);
+    toast(`${res.body.issues_fixed} fix(es) applied — Provenance ${res.body.provenance?.id?.slice(0, 8)}… created`, 'success');
+  } else {
+    showResult('curatr-result', res.body, res.status);
+    toast('Fix failed: ' + res.status, 'error');
+  }
+  setLoading('btn-curatr-fix', false);
+}
+
 // --------------- Walkthrough Mode ---------------
 
 const WALKTHROUGH_STEPS = [
@@ -944,6 +1097,7 @@ const WALKTHROUGH_STEPS = [
   { title: 'Seed Observations + $stats', action: async () => { await seedObservations(); await runObsStats(); }, panel: 'stats-panel' },
   { title: 'SubscriptionTopic + Subscribe', action: async () => { await createDemoTopic(); await createDemoSubscription(); }, panel: 'subscription-panel' },
   { title: 'NutritionIntake + DeviceAlert', action: async () => { await createNutritionIntake(); await createDeviceAlert(); }, panel: 'r6resources-panel' },
+  { title: 'Curatr: Data Quality Evaluation + Fix', action: async () => { await curatrCreateCondition(); await sleep(800); await curatrEvaluate(); }, panel: 'curatr-panel' },
 ];
 
 let walkthroughIdx = -1;

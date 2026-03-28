@@ -34,6 +34,9 @@ from r6.health_compliance import (
     export_audit_trail, MEDICAL_DISCLAIMER
 )
 from r6.fhir_proxy import get_proxy, is_proxy_enabled
+from r6.curatr import CuratrEngine, apply_fix as _curatr_apply_fix
+
+_curatr_engine = CuratrEngine()
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +144,7 @@ def r6_metadata():
         'format': ['json'],
         'software': {
             'name': 'MCP FHIR R6 Guardrails',
-            'version': '0.9.0'
+            'version': '1.0.0'
         },
         'implementation': {
             'description': (
@@ -1714,6 +1717,134 @@ def demo_agent_loop():
         ],
         'steps': steps,
     })
+
+
+# --- Curatr Data Quality Operations ---
+
+@r6_blueprint.route(
+    '/<resource_type>/<resource_id>/$curatr-evaluate',
+    methods=['GET']
+)
+def curatr_evaluate(resource_type, resource_id):
+    """
+    Evaluate a FHIR resource for data quality issues.
+
+    Checks coding elements against public terminology services
+    (tx.fhir.org, NLM ICD-10, RXNAV) and returns issues in plain
+    language with impact descriptions and resolution suggestions.
+
+    Read-only — does not require step-up authorization.
+    """
+    if not R6Resource.is_supported_type(resource_type):
+        return _operation_outcome(
+            'error', 'not-supported',
+            f'Resource type {resource_type} is not supported'
+        ), 400
+
+    tenant_id = request.headers.get('X-Tenant-Id')
+    resource = R6Resource.query.filter_by(
+        id=resource_id, resource_type=resource_type,
+        is_deleted=False, tenant_id=tenant_id
+    ).first()
+
+    if not resource:
+        return _operation_outcome(
+            'error', 'not-found',
+            f'{resource_type}/{resource_id} not found'
+        ), 404
+
+    record_audit_event(
+        'read', resource_type, resource_id,
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail='curatr-evaluate',
+    )
+
+    fhir_json = resource.to_fhir_json()
+    result = _curatr_engine.evaluate(fhir_json)
+    return jsonify(result.to_dict())
+
+
+@r6_blueprint.route(
+    '/<resource_type>/<resource_id>/$curatr-apply-fix',
+    methods=['POST']
+)
+def curatr_apply_fix(resource_type, resource_id):
+    """
+    Apply patient-approved data quality fixes to a FHIR resource.
+
+    Request body::
+
+        {
+          "fixes": [
+            {"field_path": "Condition.code.coding[0].system",
+             "new_value": "http://hl7.org/fhir/sid/icd-10-cm"},
+            {"field_path": "Condition.code.coding[0].code",
+             "new_value": "E11.9"},
+            {"field_path": "Condition.code.coding[0].display",
+             "new_value": "Type 2 diabetes mellitus without complications"}
+          ],
+          "patient_intent": "Updating from retired ICD-9 to ICD-10-CM"
+        }
+
+    Requires step-up authorization (X-Step-Up-Token) and human
+    confirmation (X-Human-Confirmed: true) — Condition is a clinical
+    resource type.
+
+    Creates a linked Provenance resource with full change attribution.
+    """
+    if not R6Resource.is_supported_type(resource_type):
+        return _operation_outcome(
+            'error', 'not-supported',
+            f'Resource type {resource_type} is not supported'
+        ), 400
+
+    tenant_id = request.headers.get('X-Tenant-Id')
+    step_up_token = request.headers.get('X-Step-Up-Token')
+    if not step_up_token:
+        return _operation_outcome(
+            'error', 'security',
+            'Write operations require X-Step-Up-Token header'
+        ), 403
+
+    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _operation_outcome(
+            'error', 'security',
+            f'Step-up token rejected: {err}'
+        ), 403
+
+    body = request.get_json(silent=True)
+    if not body:
+        return _operation_outcome(
+            'error', 'invalid', 'Request body must be valid JSON'
+        ), 400
+
+    fixes = body.get('fixes', [])
+    patient_intent = body.get('patient_intent', 'Patient-initiated fix')
+
+    if not fixes:
+        return _operation_outcome(
+            'error', 'invalid', 'fixes array is required and must not be empty'
+        ), 400
+
+    try:
+        result = _curatr_apply_fix(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            approved_fixes=fixes,
+            patient_intent=patient_intent,
+            tenant_id=tenant_id,
+            agent_id=request.headers.get('X-Agent-Id', 'curatr'),
+        )
+    except RuntimeError as exc:
+        logger.error('curatr_apply_fix failed: %s', exc)
+        return _operation_outcome('error', 'exception', str(exc)), 500
+
+    if 'error' in result:
+        return _operation_outcome('error', 'not-found', result['error']), 404
+
+    return jsonify(result)
 
 
 # --- Helper Functions ---

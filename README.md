@@ -2,7 +2,7 @@
 
 The security layer between AI agents and clinical data.
 
-**v0.9.0** | 254 tests | 10 MCP tools | FHIR R6 v6.0.0-ballot3
+**v1.0.0** | 234 tests | 12 MCP tools | FHIR R6 v6.0.0-ballot3
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
@@ -55,7 +55,7 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (10)
+## MCP Tools (12)
 
 **Read tools** (no step-up required):
 
@@ -69,6 +69,7 @@ docker-compose up -d --build
 | `fhir.lastn` | Most recent N observations per code |
 | `fhir.permission_evaluate` | R6 Permission access control evaluation |
 | `fhir.subscription_topics` | List available SubscriptionTopics |
+| `curatr.evaluate` | Evaluate a FHIR resource for data quality issues |
 
 **Write tools** (require step-up token):
 
@@ -76,6 +77,7 @@ docker-compose up -d --build
 | --- | --- |
 | `fhir.propose_write` | Validate + preview without committing |
 | `fhir.commit_write` | Commit with step-up auth + human-in-the-loop |
+| `curatr.apply_fix` | Apply patient-approved fixes with Provenance tracking |
 
 All tools add `_mcp_summary` with reasoning, clinical context, and limitations.
 
@@ -140,6 +142,8 @@ cd e2e && npm run test:ui        # interactive UI mode
 | `/r6/fhir/AuditEvent/$export` | GET | Export audit trail (NDJSON/Bundle) |
 | `/r6/fhir/demo/agent-loop` | POST | 6-step guardrail demo |
 | `/r6/fhir/oauth/*` | * | OAuth 2.1 + PKCE + SMART discovery |
+| `/r6/fhir/{type}/{id}/$curatr-evaluate` | GET | Evaluate resource data quality (Curatr) |
+| `/r6/fhir/{type}/{id}/$curatr-apply-fix` | POST | Apply patient-approved fixes with Provenance |
 
 ## Upstream Proxy
 
@@ -155,6 +159,35 @@ FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py
 - **URL rewriting**: Upstream URLs never leak to clients
 
 Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
+
+## Curatr — Patient-Owned Data Quality
+
+Curatr is a patient-facing data quality skill that evaluates FHIR health records for
+coding issues and lets the patient decide how to resolve them.
+
+```text
+1. Patient connects data → HealthClaw Guardrails deidentifies and loads it
+2. OpenClaw calls curatr.evaluate → checks codes against live terminology APIs
+3. Issues presented in plain language with impact and fix suggestions
+4. Patient approves fixes → curatr.apply_fix updates resource + creates Provenance
+5. Optional: generate a structured correction request for the source provider
+```
+
+**What Curatr checks on a Condition:**
+
+| Check | Service | Example |
+| --- | --- | --- |
+| Deprecated code system | Local lookup (no network) | ICD-9-CM → critical |
+| ICD-10-CM code validity | NLM Clinical Tables API | Invalid code → warning |
+| SNOMED CT / LOINC validity | tx.fhir.org (HL7 public) | Unknown code → warning |
+| RxNorm drug code | RXNAV API (NLM) | Missing RXCUI → warning |
+| Display name accuracy | Cross-checked with canonical term | Mismatch → suggestion |
+| Missing required fields | Structural | No clinicalStatus → warning |
+
+Every fix creates a linked **Provenance** resource recording patient intent, field
+changes, and agent attribution. All changes are audited in the immutable trail.
+
+**OpenClaw skill:** `skills/curatr/SKILL.md`
 
 ## R6-Specific Resources
 
@@ -197,13 +230,15 @@ r6/
   context_builder.py            Bundle ingestion + context envelopes
   rate_limit.py                 Per-tenant rate limiting
   fhir_proxy.py                 Upstream FHIR server proxy with URL rewriting
+  curatr.py                     Curatr data quality engine (terminology lookups + fix application)
 services/agent-orchestrator/
   src/index.ts                  MCP server (Streamable HTTP + SSE)
-  src/tools.ts                  10 tool definitions + executor
+  src/tools.ts                  12 tool definitions + executor (incl. curatr.evaluate, curatr.apply_fix)
 e2e/                            Playwright end-to-end tests
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
-tests/                          254 pytest tests (6 files)
+skills/curatr/                  Curatr OpenClaw skill definition
+tests/                          234 pytest tests (7 files)
 ```
 
 ## Known Limitations

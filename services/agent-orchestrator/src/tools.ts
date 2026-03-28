@@ -10,8 +10,10 @@
  *
  * Two tiers:
  * - Read-only (no step-up): context.get, fhir.read, fhir.search, fhir.validate,
- *   fhir.stats, fhir.lastn, fhir.permission_evaluate, fhir.subscription_topics
- * - Write (require step-up): fhir.propose_write, fhir.commit_write
+ *   fhir.stats, fhir.lastn, fhir.permission_evaluate, fhir.subscription_topics,
+ *   curatr.evaluate
+ * - Write (require step-up): fhir.propose_write, fhir.commit_write,
+ *   curatr.apply_fix
  *
  * All tools include MCP annotations (readOnlyHint, destructiveHint, openWorldHint).
  */
@@ -106,6 +108,8 @@ export class FHIRTools {
                 "DeviceAssociation",
                 "Requirements",
                 "ActorDefinition",
+                "Condition",
+                "Provenance",
               ],
             },
             resource_id: { type: "string", description: "The resource ID" },
@@ -139,6 +143,8 @@ export class FHIRTools {
                 "DeviceAssociation",
                 "Requirements",
                 "ActorDefinition",
+                "Condition",
+                "Provenance",
               ],
             },
             patient: {
@@ -316,6 +322,67 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- Curatr: patient-facing data quality tools ---
+      {
+        name: "curatr.evaluate",
+        description:
+          "Evaluate a FHIR resource for data quality issues. Checks coding elements against public terminology services (tx.fhir.org for SNOMED/LOINC, NLM for ICD-10-CM, RXNAV for RxNorm) and structural rules. Returns issues in plain language with patient-facing impact descriptions and resolution suggestions. Read-only — no step-up required.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            resource_type: {
+              type: "string",
+              description: "FHIR resource type to evaluate (e.g. 'Condition')",
+            },
+            resource_id: {
+              type: "string",
+              description: "ID of the resource to evaluate",
+            },
+          },
+          required: ["resource_type", "resource_id"],
+        },
+      },
+      {
+        name: "curatr.apply_fix",
+        description:
+          "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token) and human confirmation (X-Human-Confirmed: true) for clinical resources like Condition.",
+        tier: "write",
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            resource_type: {
+              type: "string",
+              description: "FHIR resource type to fix (e.g. 'Condition')",
+            },
+            resource_id: {
+              type: "string",
+              description: "ID of the resource to fix",
+            },
+            fixes: {
+              type: "array",
+              description:
+                "List of field fixes to apply. Each fix has 'field_path' (dot-notation, e.g. 'Condition.code.coding[0].system') and 'new_value' (the corrected value).",
+              items: {
+                type: "object",
+                properties: {
+                  field_path: { type: "string" },
+                  new_value: {},
+                },
+                required: ["field_path", "new_value"],
+              },
+            },
+            patient_intent: {
+              type: "string",
+              description:
+                "Plain-language reason for the fix, provided by the patient (recorded in Provenance).",
+            },
+          },
+          required: ["resource_type", "resource_id", "fixes", "patient_intent"],
+        },
+      },
     ];
   }
 
@@ -419,6 +486,22 @@ export class FHIRTools {
 
       case "fhir.subscription_topics":
         return this.listSubscriptionTopics(fwdHeaders);
+
+      case "curatr.evaluate":
+        return this.curatrEvaluate(
+          input.resource_type as string,
+          input.resource_id as string,
+          fwdHeaders
+        );
+
+      case "curatr.apply_fix":
+        return this.curatrApplyFix(
+          input.resource_type as string,
+          input.resource_id as string,
+          input.fixes as Array<{ field_path: string; new_value: unknown }>,
+          input.patient_intent as string,
+          fwdHeaders
+        );
 
       default:
         return { error: `Unimplemented tool: ${toolName}` };
@@ -717,6 +800,97 @@ export class FHIRTools {
       note: total === 0
         ? "No SubscriptionTopics found. Create one first."
         : `Found ${total} topic(s). Note: this demo stores topics but does NOT dispatch notifications.`,
+    };
+
+    return result;
+  }
+
+  // --- Curatr: patient-facing data quality tools ---
+
+  private async curatrEvaluate(
+    resourceType: string,
+    resourceId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const resp = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-evaluate`,
+      { headers }
+    );
+    if (!resp.ok) {
+      return { error: `Curatr evaluate failed with status ${resp.status}` };
+    }
+    const result = (await resp.json()) as Record<string, unknown>;
+
+    const issueCount = result.issue_count as number ?? 0;
+    const quality = result.overall_quality as string ?? "unknown";
+
+    (result as Record<string, unknown>)._mcp_summary = {
+      resource: `${resourceType}/${resourceId}`,
+      overall_quality: quality,
+      issue_count: issueCount,
+      note: issueCount === 0
+        ? `No data quality issues found in this ${resourceType} record.`
+        : `Found ${issueCount} issue(s). Present each issue to the patient in plain language before calling curatr.apply_fix.`,
+      next_steps: issueCount > 0
+        ? [
+            "Present each issue.plain_language and issue.impact to the patient",
+            "Show issue.suggestion for each issue",
+            "Ask patient which fixes they approve",
+            "Call curatr.apply_fix with approved fixes and patient_intent",
+          ]
+        : ["No action needed — data quality looks good."],
+      public_services_used: [
+        "tx.fhir.org (SNOMED CT, LOINC)",
+        "NLM Clinical Tables API (ICD-10-CM)",
+        "RXNAV API (RxNorm)",
+      ],
+    };
+
+    return result;
+  }
+
+  private async curatrApplyFix(
+    resourceType: string,
+    resourceId: string,
+    fixes: Array<{ field_path: string; new_value: unknown }>,
+    patientIntent: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const stepUpToken = headers["X-Step-Up-Token"] || headers["x-step-up-token"];
+    if (!stepUpToken) {
+      return {
+        error: "Step-up authorization required for curatr.apply_fix",
+        requires_step_up: true,
+        message:
+          "Applying fixes to clinical resources requires X-Step-Up-Token and X-Human-Confirmed: true headers.",
+      };
+    }
+
+    const resp = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-apply-fix`,
+      {
+        method: "POST",
+        headers: { ...headers, "X-Human-Confirmed": "true" },
+        body: JSON.stringify({ fixes, patient_intent: patientIntent }),
+      }
+    );
+    if (!resp.ok) {
+      return { error: `Curatr apply-fix failed with status ${resp.status}` };
+    }
+    const result = (await resp.json()) as Record<string, unknown>;
+
+    const fixed = result.issues_fixed as number ?? 0;
+    (result as Record<string, unknown>)._mcp_summary = {
+      resource: `${resourceType}/${resourceId}`,
+      fixes_applied: fixed,
+      provenance_created: !!(result.provenance),
+      note: `${fixed} fix(es) applied. A Provenance resource was created to document the change with full patient attribution.`,
+      patient_rights: [
+        "This change was initiated and approved by the patient",
+        "The original source data is preserved in the audit trail",
+        "A Provenance record links this fix to the patient's intent",
+        "The patient can request their provider correct the source record",
+      ],
     };
 
     return result;

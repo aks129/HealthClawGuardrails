@@ -43,6 +43,8 @@ class R6Resource(db.Model):
         'NutritionIntake', 'NutritionProduct',
         'DeviceAlert', 'DeviceAssociation',
         'Requirements', 'ActorDefinition',
+        # Phase 3 — Curatr (data quality)
+        'Condition', 'Provenance',
     ]
 
     def __init__(self, resource_type, resource_json, resource_id=None, tenant_id=None):

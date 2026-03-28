@@ -421,6 +421,44 @@
       </div>
     </div>
 
+    <!-- Curatr: Patient Data Quality -->
+    <div class="r6-panel" id="curatr-panel" style="border-color: #7c3aed;">
+      <div class="r6-panel-header" style="border-bottom-color: #7c3aed;">
+        <i class="fas fa-microscope" style="color:#7c3aed"></i>
+        <h3 style="color:#7c3aed">Curatr — Patient Data Quality</h3>
+        <span class="r6-tag r6-tag-write" style="background:#7c3aed22;color:#7c3aed;border-color:#7c3aed">NEW v1.0</span>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.5rem">
+          Patient-owned data quality evaluation. Creates a Condition with a retired <strong>ICD-9-CM</strong> code,
+          evaluates it against live terminology APIs (<strong>NLM ICD-10-CM</strong>, <strong>tx.fhir.org</strong>),
+          presents issues in plain language, then applies patient-approved fixes with a linked <strong>Provenance</strong> record.
+        </p>
+        <p style="color:var(--r6-text-muted);font-size:0.78rem;margin-bottom:0.75rem">
+          Flow: Create ICD-9 Condition &rarr; <code>$curatr-evaluate</code> (live terminology check) &rarr; Review issues &rarr;
+          <code>$curatr-apply-fix</code> (update + Provenance). No black-box corrections &mdash; patient decides.
+        </p>
+        <div class="d-flex gap-2 flex-wrap mb-3">
+          <button class="r6-btn r6-btn-sm" id="btn-curatr-create"
+                  style="background:#7c3aed;color:#fff;border-color:#7c3aed"
+                  onclick="curatrCreateCondition()">
+            <i class="fas fa-plus"></i> Create ICD-9 Condition
+          </button>
+          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-curatr-evaluate"
+                  style="border-color:#7c3aed;color:#7c3aed"
+                  onclick="curatrEvaluate()">
+            <i class="fas fa-microscope"></i> $curatr-evaluate
+          </button>
+          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-curatr-fix"
+                  style="border-color:#7c3aed;color:#7c3aed"
+                  onclick="curatrApplyFix()">
+            <i class="fas fa-wrench"></i> Apply Fix + Provenance
+          </button>
+        </div>
+        <div class="r6-json-output" id="curatr-result"></div>
+      </div>
+    </div>
+
     <!-- $validate -->
     <div class="r6-panel" id="validate-panel">
       <div class="r6-panel-header">
@@ -508,9 +546,13 @@
           <span>ETag Concurrency</span>
           <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> If-Match</span>
         </div>
-        <div class="d-flex justify-content-between">
+        <div class="d-flex justify-content-between mb-2">
           <span>Medical Disclaimer</span>
           <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Injected</span>
+        </div>
+        <div class="d-flex justify-content-between">
+          <span>Curatr Data Quality</span>
+          <span style="color:#7c3aed"><i class="fas fa-microscope"></i> Patient-Owned</span>
         </div>
       </div>
     </div>

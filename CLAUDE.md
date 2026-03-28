@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A **reference implementation** of security and compliance patterns for AI agent access to
-FHIR R6 data via Model Context Protocol (MCP). Version 0.9.0.
+FHIR R6 data via Model Context Protocol (MCP). Version 1.0.0.
 
 **What this is:** A pattern library showing how tenant isolation, step-up authorization,
 audit trails, PHI redaction, and human-in-the-loop enforcement work together when an

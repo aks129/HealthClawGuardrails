@@ -1,6 +1,6 @@
 [project]
 name = "fhir-mcp-guardrails"
-version = "0.9.0"
+version = "1.0.0"
 description = "R6-only Agent-First FHIR Server Showcase with MCP"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,4 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=7.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
 ]

@@ -26,6 +26,8 @@ R6_RESOURCE_TYPES = [
     'NutritionIntake', 'NutritionProduct',
     'DeviceAlert', 'DeviceAssociation',
     'Requirements', 'ActorDefinition',
+    # Phase 3 — Curatr (data quality)
+    'Condition', 'Provenance',
 ]
 
 # TTL for validator availability cache (seconds)
@@ -169,6 +171,10 @@ class R6Validator:
             issues.extend(self._validate_nutrition_intake(resource))
         elif resource_type == 'DeviceAlert':
             issues.extend(self._validate_device_alert(resource))
+        elif resource_type == 'Condition':
+            issues.extend(self._validate_condition(resource))
+        elif resource_type == 'Provenance':
+            issues.extend(self._validate_provenance(resource))
 
         has_errors = any(i['severity'] in ('error', 'fatal') for i in issues)
 
@@ -330,7 +336,89 @@ class R6Validator:
             issues.append({
                 'severity': 'warning',
                 'code': 'business-rule',
-                'diagnostics': 'DeviceAlert.condition is recommended for alert categorization',
+                'diagnostics': (
+                    'DeviceAlert.condition is recommended'
+                    ' for alert categorization'
+                ),
                 'expression': ['DeviceAlert.condition']
+            })
+        return issues
+
+    def _validate_condition(self, resource):
+        """Validate Condition resource (clinical problem/diagnosis)."""
+        issues = []
+        if not resource.get('code'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Condition.code is required',
+                'expression': ['Condition.code']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Condition.subject is required',
+                'expression': ['Condition.subject']
+            })
+        valid_clinical = {
+            'active', 'recurrence', 'relapse',
+            'inactive', 'remission', 'resolved',
+        }
+        cs = resource.get('clinicalStatus', {})
+        for coding in cs.get('coding', []):
+            if coding.get('code') and coding['code'] not in valid_clinical:
+                issues.append({
+                    'severity': 'warning',
+                    'code': 'value',
+                    'diagnostics': (
+                        f'Condition.clinicalStatus code '
+                        f'"{coding["code"]}" is not a valid'
+                        f' FHIR value'
+                    ),
+                    'expression': ['Condition.clinicalStatus'],
+                })
+        valid_ver = {
+            'unconfirmed', 'provisional', 'differential',
+            'confirmed', 'refuted', 'entered-in-error',
+        }
+        vs = resource.get('verificationStatus', {})
+        for coding in vs.get('coding', []):
+            if coding.get('code') and coding['code'] not in valid_ver:
+                issues.append({
+                    'severity': 'warning',
+                    'code': 'value',
+                    'diagnostics': (
+                        f'Condition.verificationStatus code '
+                        f'"{coding["code"]}" is not a valid'
+                        f' FHIR value'
+                    ),
+                    'expression': ['Condition.verificationStatus'],
+                })
+        return issues
+
+    def _validate_provenance(self, resource):
+        """Validate Provenance resource (data change tracking)."""
+        issues = []
+        if not resource.get('target'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Provenance.target is required',
+                'expression': ['Provenance.target']
+            })
+        if not resource.get('recorded'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Provenance.recorded is required',
+                'expression': ['Provenance.recorded']
+            })
+        if not resource.get('agent'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Provenance.agent is required',
+                'expression': ['Provenance.agent']
             })
         return issues
