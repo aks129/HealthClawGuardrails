@@ -18,7 +18,7 @@ This is a **vendor-neutral guardrail proxy** that sits between any AI agent and 
 - **Tenant isolation** — Every query scoped to tenant, cross-tenant access blocked
 - **Medical disclaimers** — Injected on all clinical resource reads
 
-```
+```text
 AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Server
                               ↓                    (HAPI, Epic,
                          PHI redaction              Medplum, etc.)
@@ -40,7 +40,7 @@ STEP_UP_SECRET=your-secret python main.py
 FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 STEP_UP_SECRET=your-secret python main.py
 
 # Open browser
-open http://localhost:5000          # Landing page with live demo
+open http://localhost:5000            # Landing page with live demo
 open http://localhost:5000/r6-dashboard  # Interactive dashboard
 ```
 
@@ -60,7 +60,7 @@ docker-compose up -d --build
 **Read tools** (no step-up required):
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `context.get` | Retrieve pre-built context envelopes |
 | `fhir.read` | Read a FHIR resource (redacted) |
 | `fhir.search` | Search with patient, code, status, date filters |
@@ -73,7 +73,7 @@ docker-compose up -d --build
 **Write tools** (require step-up token):
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `fhir.propose_write` | Validate + preview without committing |
 | `fhir.commit_write` | Commit with step-up auth + human-in-the-loop |
 
@@ -93,7 +93,7 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 ## Comparison
 
 | Feature | This Project | AWS HealthLake MCP | Medplum MCP | Raw FHIR API |
-|---------|-------------|-------------------|-------------|-------------|
+| --- | --- | --- | --- | --- |
 | Works with any FHIR server | Yes | HealthLake only | Medplum only | N/A |
 | PHI redaction on reads | Yes | No | No | No |
 | Immutable audit trail | Yes | CloudTrail (separate) | Partial | No |
@@ -105,20 +105,23 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 ## Testing
 
 ```bash
-# Run all Python tests
+# Python tests (254 tests)
 uv run python -m pytest tests/ -v
-
-# Run a single test file or specific test
-uv run python -m pytest tests/test_r6_routes.py::test_name -v
+uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
 # MCP server tests
 cd services/agent-orchestrator && npm ci && npm test
+
+# Playwright end-to-end tests (UI + API, requires Flask on :5000)
+cd e2e && npm ci && npx playwright install --with-deps chromium && npm test
+cd e2e && npm run test:headed    # headed browser
+cd e2e && npm run test:ui        # interactive UI mode
 ```
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
-|---|---|---|
+| --- | --- | --- |
 | `/r6/fhir/metadata` | GET | CapabilityStatement |
 | `/r6/fhir/health` | GET | Liveness probe (reports upstream status) |
 | `/r6/fhir/{type}` | POST | Create resource (requires step-up) |
@@ -156,7 +159,7 @@ Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 ## R6-Specific Resources
 
 | Resource | What's New in R6 |
-|----------|-----------------|
+| --- | --- |
 | Permission | Access control (separate from Consent), `$evaluate` operation |
 | SubscriptionTopic | Restructured pub/sub (introduced R5, maturing R6) |
 | DeviceAlert | ISO/IEEE 11073 device alarms |
@@ -169,7 +172,7 @@ Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 ## Environment Variables
 
 | Variable | Required | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `STEP_UP_SECRET` | Production | — | HMAC-SHA256 signing secret |
 | `FHIR_UPSTREAM_URL` | No | — | Upstream FHIR server (enables proxy mode) |
 | `SQLALCHEMY_DATABASE_URI` | Production | `sqlite:///mcp_server.db` | Database connection |
@@ -179,7 +182,7 @@ Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 
 ## Project Structure
 
-```
+```text
 main.py                         Flask app entry point
 app.py                          Web UI routes (landing, dashboard)
 r6/
@@ -197,6 +200,7 @@ r6/
 services/agent-orchestrator/
   src/index.ts                  MCP server (Streamable HTTP + SSE)
   src/tools.ts                  10 tool definitions + executor
+e2e/                            Playwright end-to-end tests
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
 tests/                          254 pytest tests (6 files)

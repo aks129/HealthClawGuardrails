@@ -100,6 +100,15 @@ cd services/agent-orchestrator && npm ci && npm test
 # TypeScript compile check (no emit)
 cd services/agent-orchestrator && npx tsc --noEmit
 
+# Playwright end-to-end tests (requires Flask running on :5000)
+cd e2e && npm ci && npx playwright install --with-deps chromium && npm test
+
+# Playwright with headed browser (for debugging)
+cd e2e && npm run test:headed
+
+# Playwright interactive UI mode
+cd e2e && npm run test:ui
+
 # Docker Compose (full stack)
 docker-compose up -d --build
 
@@ -181,7 +190,7 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 
 ## Search Capabilities (Honest)
 
-In **local mode**: Supported parameters: `patient` (reference), `code` (token), `status` (token), `_lastUpdated` (date with ge/le/gt/lt prefix), `_count` (1-200), `_sort` (_lastUpdated/-_lastUpdated), `_summary` (count). NOT supported: chaining, _include, _revinclude, modifiers.
+In **local mode**: Supported parameters: `patient` (reference), `code` (token), `status` (token), `_lastUpdated` (date with ge/le/gt/lt prefix), `_count` (1-200), `_sort` (`_lastUpdated`/`-_lastUpdated`), `_summary` (count). NOT supported: chaining, `_include`, `_revinclude`, modifiers.
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 

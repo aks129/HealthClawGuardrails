@@ -1,0 +1,14 @@
+{
+  "name": "fhir-mcp-guardrails-e2e",
+  "version": "1.0.0",
+  "description": "Playwright end-to-end tests for FHIR MCP Guardrails",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "install:browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0"
+  }
+}

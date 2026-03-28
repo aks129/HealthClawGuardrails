@@ -48,6 +48,49 @@ jobs:
       - name: Run tests
         run: npm test
 
+  playwright-tests:
+    runs-on: ubuntu-latest
+    needs: [python-tests]
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv and Python dependencies
+        working-directory: .
+        run: |
+          pip install uv
+          uv sync
+
+      - name: Install Playwright and dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm test
+        env:
+          STEP_UP_SECRET: e2e-test-secret-not-for-production
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
   compose-smoke:
     runs-on: ubuntu-latest
     needs: [python-tests]
