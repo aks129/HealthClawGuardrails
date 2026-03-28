@@ -191,7 +191,7 @@ class TestR6CRUD:
         assert data['meta']['versionId'] == '2'
 
     def test_unsupported_resource_type(self, client, tenant_headers):
-        resp = client.get('/r6/fhir/MedicationRequest/123',
+        resp = client.get('/r6/fhir/ImagingStudy/123',
                          headers=tenant_headers)
         assert resp.status_code == 400
 

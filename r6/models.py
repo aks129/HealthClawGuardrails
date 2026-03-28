@@ -29,22 +29,32 @@ class R6Resource(db.Model):
     is_deleted = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Supported R6 resource types for the showcase
-    # Phase 1: Core FHIR resources
-    # Phase 2: R6-specific resources (Permission, SubscriptionTopic, Subscription,
-    #          NutritionIntake, NutritionProduct, DeviceAlert, DeviceAssociation,
-    #          Requirements, ActorDefinition)
+    # Supported resource types for the showcase
+    # Phase 1: Core FHIR resources (R4+)
+    # Phase 2: R6-specific ballot resources
+    # Phase 3: Curatr data quality resources
+    # Phase 4: US Core v9 R4 clinical resources (stable, widely deployed)
     SUPPORTED_TYPES = [
-        # Phase 1 — Core
+        # Phase 1 — Core (R4+)
         'Patient', 'Encounter', 'Observation', 'Bundle',
         'AuditEvent', 'Consent', 'OperationOutcome',
-        # Phase 2 — R6-specific
+        # Phase 2 — R6-specific (experimental ballot3)
         'Permission', 'SubscriptionTopic', 'Subscription',
         'NutritionIntake', 'NutritionProduct',
         'DeviceAlert', 'DeviceAssociation',
         'Requirements', 'ActorDefinition',
         # Phase 3 — Curatr (data quality)
         'Condition', 'Provenance',
+        # Phase 4 — US Core v9 R4 clinical resources
+        'AllergyIntolerance', 'Immunization', 'MedicationRequest',
+        'Medication', 'MedicationDispense',
+        'Procedure', 'DiagnosticReport',
+        'CarePlan', 'CareTeam', 'Goal',
+        'DocumentReference',
+        'Location', 'Organization',
+        'Practitioner', 'PractitionerRole', 'RelatedPerson',
+        'Coverage', 'ServiceRequest', 'Specimen',
+        'FamilyMemberHistory',
     ]
 
     def __init__(self, resource_type, resource_json, resource_id=None, tenant_id=None):

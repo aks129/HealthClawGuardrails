@@ -1,4 +1,4 @@
-/* R6 FHIR Agent Dashboard - Demo-worthy styles */
+/* HealthClaw Guardrails — healthclaw.io */
 
 :root {
   --r6-primary: #6366f1;
@@ -37,6 +37,10 @@
 }
 .r6-hero h1 { font-size: 1.75rem; font-weight: 700; position: relative; z-index: 1; }
 .r6-hero .lead { color: var(--r6-text-muted); font-size: 0.95rem; position: relative; z-index: 1; }
+
+/* Brand link (hero section) */
+.hero-brand-link { color: var(--r6-primary); text-decoration: none; }
+.hero-brand-link:hover { color: var(--r6-primary); text-decoration: underline; }
 
 /* Stat cards */
 .stat-card {

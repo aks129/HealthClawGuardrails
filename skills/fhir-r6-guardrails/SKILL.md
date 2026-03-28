@@ -1,19 +1,22 @@
 ---
 name: fhir-r6-guardrails
 description: >
-  FHIR R6 agent guardrails for clinical data access via MCP. Use when: (1) Reading
-  patient data through MCP tools with automatic PHI redaction, (2) Writing clinical
-  resources with two-phase propose/commit and step-up authorization, (3) Querying
-  observation statistics or recent lab results, (4) Evaluating R6 Permission resources
-  for access control decisions, (5) Auditing agent access to healthcare data. This
-  skill teaches how to use the fhir-mcp-guardrails MCP server's 10 tools safely.
+  HealthClaw Guardrails (healthclaw.io) — FHIR agent guardrails for clinical data
+  access via MCP. Supports FHIR R4 US Core v9 (stable) and FHIR R6 ballot3
+  (experimental). Use when: (1) Reading patient data through MCP tools with
+  automatic PHI redaction, (2) Writing clinical resources with two-phase
+  propose/commit and step-up authorization, (3) Querying observation statistics
+  or recent lab results, (4) Evaluating R6 Permission resources for access control
+  decisions, (5) Auditing agent access to healthcare data. 12 MCP tools.
 disable-model-invocation: true
 ---
 
-# FHIR R6 MCP Guardrail Patterns
+# HealthClaw Guardrails
 
-Reference implementation of security and compliance patterns for AI agent access to
-FHIR R6 data via Model Context Protocol (MCP).
+A [healthclaw.io](https://healthclaw.io) open source project. Reference implementation
+of security and compliance patterns for AI agent access to FHIR data via MCP.
+
+Supports **FHIR R4 US Core v9** (stable) and **FHIR R6 v6.0.0-ballot3** (experimental).
 
 **This is a runtime guardrail layer, not a knowledge skill.** It sits between any AI
 agent and FHIR data (local or upstream), enforcing PHI redaction, audit trails,
@@ -27,7 +30,7 @@ step-up authorization, and tenant isolation on every request.
 - You need step-up authorization gates on write operations
 - You need to evaluate R6 Permission resources for access control
 
-## MCP Tools Available (10)
+## MCP Tools Available (12)
 
 ### Read Tools (no step-up required)
 
@@ -41,6 +44,7 @@ step-up authorization, and tenant isolation on every request.
 | `fhir.lastn` | Most recent N observations per code |
 | `fhir.permission_evaluate` | Evaluate R6 Permission for permit/deny with reasoning |
 | `fhir.subscription_topics` | List available SubscriptionTopics |
+| `curatr.evaluate` | Evaluate a FHIR resource for data quality issues |
 
 ### Write Tools (require step-up token)
 
@@ -48,6 +52,7 @@ step-up authorization, and tenant isolation on every request.
 |------|---------|
 | `fhir.propose_write` | Validate and preview a write without committing |
 | `fhir.commit_write` | Commit a proposed write (requires X-Step-Up-Token) |
+| `curatr.apply_fix` | Apply patient-approved data quality fixes with Provenance |
 
 ## Two-Phase Write Pattern
 
@@ -72,11 +77,18 @@ Procedure, CarePlan, Immunization, NutritionIntake, DeviceAlert.
 
 ## Supported FHIR Resource Types
 
-Patient, Encounter, Observation, AuditEvent, Consent, Permission, SubscriptionTopic,
-Subscription, NutritionIntake, NutritionProduct, DeviceAlert, DeviceAssociation,
-Requirements, ActorDefinition.
+### FHIR R4 US Core v9 (Stable)
 
-### R6-Specific Resources
+Patient, Encounter, Observation, AuditEvent, Consent, Condition, Provenance,
+AllergyIntolerance, Immunization, MedicationRequest, Medication, MedicationDispense,
+Procedure, DiagnosticReport, CarePlan, CareTeam, Goal, DocumentReference,
+Location, Organization, Practitioner, PractitionerRole, RelatedPerson,
+Coverage, ServiceRequest, Specimen, FamilyMemberHistory.
+
+### FHIR R6 ballot3 (Experimental)
+
+Permission, SubscriptionTopic, Subscription, NutritionIntake, NutritionProduct,
+DeviceAlert, DeviceAssociation, Requirements, ActorDefinition.
 
 - **Permission** — Access control (separate from Consent). `$evaluate` operation.
 - **DeviceAlert** — ISO/IEEE 11073 device alarms.

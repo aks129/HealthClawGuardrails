@@ -5,7 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A **reference implementation** of security and compliance patterns for AI agent access to
-FHIR R6 data via Model Context Protocol (MCP). Version 1.0.0.
+FHIR data via Model Context Protocol (MCP). Version 1.0.0. A [healthclaw.io](https://healthclaw.io) project.
+
+**Supports:**
+
+- FHIR R4 with US Core v9 profiles (stable, widely deployed US healthcare resources)
+- FHIR R6 v6.0.0-ballot3 (experimental ballot resources: Permission, SubscriptionTopic, DeviceAlert, NutritionIntake)
 
 **What this is:** A pattern library showing how tenant isolation, step-up authorization,
 audit trails, PHI redaction, and human-in-the-loop enforcement work together when an
@@ -173,13 +178,31 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 - No cross-version translation (R4 responses stay R4)
 - Tenant isolation is enforced locally, not on the upstream server
 
-## What's Actually R6-Specific
+## What's R6-Specific (Experimental)
 
 - **Permission** — R6 access control resource (separate from Consent). $evaluate operation.
 - **SubscriptionTopic** — Restructured pub/sub (introduced R5, maturing R6). Storage + discovery only, no notification dispatch.
 - **DeviceAlert** — ISO/IEEE 11073 device alarms (new in R6).
 - **NutritionIntake** — Dietary consumption tracking (new in R6).
 - **DeviceAssociation, NutritionProduct, Requirements, ActorDefinition** — Additional R6 resources (CRUD only).
+
+## What's US Core v9 R4 (Stable)
+
+Standard R4 resources added in Phase 4. All validated against US Core v9 required fields:
+
+- **AllergyIntolerance** — requires clinicalStatus, verificationStatus, patient
+- **Immunization** — requires status, vaccineCode, patient, occurrence[x]
+- **MedicationRequest** — requires status, intent, medication[x], subject
+- **Procedure** — requires status, code, subject
+- **DiagnosticReport** — requires status, code, subject
+- **DocumentReference** — requires status, subject, content
+- **Coverage** — requires status, beneficiary, payor
+- **ServiceRequest** — requires status, intent, subject
+- **Goal** — requires lifecycleStatus, description, subject
+- **CarePlan** — requires status, intent, subject
+- **Location, Organization, Practitioner, PractitionerRole, RelatedPerson, CareTeam, Specimen, FamilyMemberHistory** — CRUD only
+
+Curatr evaluates: AllergyIntolerance, MedicationRequest, Immunization, Procedure, DiagnosticReport (in addition to Condition).
 
 ## What's Standard FHIR (Not R6-Specific)
 
@@ -194,10 +217,10 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (10)
+## MCP Tools (12)
 
-- **Read tools** (no step-up): `context.get`, `fhir.read`, `fhir.search`, `fhir.validate`, `fhir.stats`, `fhir.lastn`, `fhir.permission_evaluate`, `fhir.subscription_topics`
-- **Write tools** (require step-up token): `fhir.propose_write`, `fhir.commit_write`
+- **Read tools** (no step-up): `context.get`, `fhir.read`, `fhir.search`, `fhir.validate`, `fhir.stats`, `fhir.lastn`, `fhir.permission_evaluate`, `fhir.subscription_topics`, `curatr.evaluate`
+- **Write tools** (require step-up token): `fhir.propose_write`, `fhir.commit_write`, `curatr.apply_fix`
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
 - `propose_write` identifies clinical types requiring human-in-the-loop
 - `permission_evaluate` returns reasoning explaining why permit/deny

@@ -1,7 +1,7 @@
 [project]
-name = "fhir-mcp-guardrails"
+name = "healthclaw-guardrails"
 version = "1.0.0"
-description = "R6-only Agent-First FHIR Server Showcase with MCP"
+description = "HealthClaw Guardrails — FHIR R4 US Core v9 + R6 MCP guardrail proxy (healthclaw.io)"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.49.0",

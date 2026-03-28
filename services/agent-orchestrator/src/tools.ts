@@ -1,5 +1,7 @@
 /**
- * FHIR R6 MCP Tool Definitions and Executor.
+ * FHIR MCP Tool Definitions and Executor.
+ *
+ * Supports FHIR R4 US Core v9 (stable) and FHIR R6 ballot3 (experimental).
  *
  * This is a reference implementation demonstrating MCP guardrail patterns
  * for FHIR agent access. Tools add value beyond raw HTTP by:
@@ -85,7 +87,7 @@ export class FHIRTools {
       },
       {
         name: "fhir.read",
-        description: "Read a specific FHIR R6 resource by type and ID. Returns redacted resource with PHI protection.",
+        description: "Read a specific FHIR resource by type and ID. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Returns redacted resource with PHI protection.",
         tier: "read",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
@@ -110,6 +112,26 @@ export class FHIRTools {
                 "ActorDefinition",
                 "Condition",
                 "Provenance",
+                "AllergyIntolerance",
+                "Immunization",
+                "MedicationRequest",
+                "Medication",
+                "MedicationDispense",
+                "Procedure",
+                "DiagnosticReport",
+                "CarePlan",
+                "CareTeam",
+                "Goal",
+                "DocumentReference",
+                "Location",
+                "Organization",
+                "Practitioner",
+                "PractitionerRole",
+                "RelatedPerson",
+                "Coverage",
+                "ServiceRequest",
+                "Specimen",
+                "FamilyMemberHistory",
               ],
             },
             resource_id: { type: "string", description: "The resource ID" },
@@ -120,7 +142,7 @@ export class FHIRTools {
       {
         name: "fhir.search",
         description:
-          "Search for FHIR R6 resources. Supports patient, code, status, _lastUpdated, _count, _sort parameters. Returns paginated, redacted Bundle.",
+          "Search for FHIR resources. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Supports patient, code, status, _lastUpdated, _count, _sort parameters. Returns paginated, redacted Bundle.",
         tier: "read",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
@@ -145,6 +167,26 @@ export class FHIRTools {
                 "ActorDefinition",
                 "Condition",
                 "Provenance",
+                "AllergyIntolerance",
+                "Immunization",
+                "MedicationRequest",
+                "Medication",
+                "MedicationDispense",
+                "Procedure",
+                "DiagnosticReport",
+                "CarePlan",
+                "CareTeam",
+                "Goal",
+                "DocumentReference",
+                "Location",
+                "Organization",
+                "Practitioner",
+                "PractitionerRole",
+                "RelatedPerson",
+                "Coverage",
+                "ServiceRequest",
+                "Specimen",
+                "FamilyMemberHistory",
               ],
             },
             patient: {

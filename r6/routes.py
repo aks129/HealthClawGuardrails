@@ -132,7 +132,7 @@ def check_human_confirmation():
 @r6_blueprint.route('/metadata', methods=['GET'])
 def r6_metadata():
     """
-    Return an R6 CapabilityStatement with fhirVersion set.
+    Return a CapabilityStatement declaring R4 US Core v9 + R6 ballot3 support.
     """
     capability_statement = {
         'resourceType': 'CapabilityStatement',
@@ -143,18 +143,25 @@ def r6_metadata():
         'fhirVersion': R6_FHIR_VERSION,
         'format': ['json'],
         'software': {
-            'name': 'MCP FHIR R6 Guardrails',
+            'name': 'HealthClaw Guardrails',
             'version': '1.0.0'
         },
         'implementation': {
             'description': (
-                'MCP guardrail patterns for FHIR R6 agent access. '
-                + ('Proxying to upstream FHIR server with guardrail layer (redaction, audit, step-up auth).'
+                'MCP guardrail proxy supporting FHIR R4 (US Core v9) stable resources '
+                'and FHIR R6 ballot3 experimental resources. '
+                + ('Proxying to upstream FHIR server with full guardrail layer (redaction, audit, step-up auth).'
                    if is_proxy_enabled()
                    else 'Local JSON blob storage with structural validation. Not a production server.')
             ),
             'url': request.host_url.rstrip('/') + '/r6/fhir'
         },
+        'instantiates': [
+            'http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient',
+        ],
+        'implementationGuide': [
+            'http://hl7.org/fhir/us/core/ImplementationGuide/hl7.fhir.us.core',
+        ],
         'rest': [
             {
                 'mode': 'server',
@@ -1331,7 +1338,7 @@ def health_check():
     """
     health = {
         'status': 'healthy',
-        'version': '0.9.0',
+        'version': '1.0.0',
         'fhirVersion': R6_FHIR_VERSION,
         'mode': 'upstream' if is_proxy_enabled() else 'local',
         'checks': {}

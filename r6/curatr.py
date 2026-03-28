@@ -197,6 +197,16 @@ class CuratrEngine:
 
         if resource_type == "Condition":
             return self._evaluate_condition(resource)
+        if resource_type == "AllergyIntolerance":
+            return self._evaluate_allergy_intolerance(resource)
+        if resource_type == "MedicationRequest":
+            return self._evaluate_medication_request(resource)
+        if resource_type == "Immunization":
+            return self._evaluate_immunization(resource)
+        if resource_type == "Procedure":
+            return self._evaluate_procedure(resource)
+        if resource_type == "DiagnosticReport":
+            return self._evaluate_diagnostic_report(resource)
 
         # Generic fallback: just check any coding elements present
         issues = self._scan_codings(resource, resource_type)
@@ -284,6 +294,202 @@ class CuratrEngine:
             ))
 
         return self._build_result("Condition", resource_id, issues)
+
+    def _evaluate_allergy_intolerance(self, resource: dict) -> CuratrResult:
+        """Evaluate AllergyIntolerance for US Core v9 data quality."""
+        resource_id = resource.get("id", "unknown")
+        issues: list[CuratrIssue] = []
+
+        # Required: clinicalStatus
+        if not resource.get("clinicalStatus"):
+            issues.append(CuratrIssue(
+                field_path="AllergyIntolerance.clinicalStatus",
+                severity="critical",
+                title="Missing clinical status",
+                plain_language="Your allergy record is missing a clinical status.",
+                impact="Without a status, it is unclear if this allergy is still active or resolved.",
+                suggestion="Add a clinicalStatus with code 'active', 'inactive', or 'resolved'.",
+            ))
+
+        # Required: patient
+        if not resource.get("patient"):
+            issues.append(CuratrIssue(
+                field_path="AllergyIntolerance.patient",
+                severity="critical",
+                title="Missing patient link",
+                plain_language="This allergy record is not linked to a patient.",
+                impact="Unlinked allergy records may be ignored or lost.",
+                suggestion="Add a patient reference.",
+            ))
+
+        # code element coding quality
+        code_elem = resource.get("code")
+        if code_elem:
+            issues.extend(self._check_codeable_concept(code_elem, "AllergyIntolerance.code"))
+        else:
+            issues.append(CuratrIssue(
+                field_path="AllergyIntolerance.code",
+                severity="warning",
+                title="Missing allergy code",
+                plain_language="Your allergy record has no standard allergen code.",
+                impact="Without a code, other systems cannot match this allergy to alerts or drug interactions.",
+                suggestion="Add a code using RxNorm (for drug allergies) or SNOMED CT (for other allergens).",
+            ))
+
+        # Reaction coding quality
+        for idx, reaction in enumerate(resource.get("reaction", [])):
+            for midx, manifestation in enumerate(reaction.get("manifestation", [])):
+                issues.extend(self._check_codeable_concept(
+                    manifestation, f"AllergyIntolerance.reaction[{idx}].manifestation[{midx}]"
+                ))
+
+        return self._build_result("AllergyIntolerance", resource_id, issues)
+
+    def _evaluate_medication_request(self, resource: dict) -> CuratrResult:
+        """Evaluate MedicationRequest for US Core v9 data quality."""
+        resource_id = resource.get("id", "unknown")
+        issues: list[CuratrIssue] = []
+
+        # Required fields
+        if not resource.get("status"):
+            issues.append(CuratrIssue(
+                field_path="MedicationRequest.status",
+                severity="critical",
+                title="Missing status",
+                plain_language="This medication request has no status.",
+                impact="Without a status, it is unclear if this prescription is active or cancelled.",
+                suggestion="Add a status: 'active', 'on-hold', 'cancelled', 'completed', etc.",
+            ))
+
+        if not resource.get("intent"):
+            issues.append(CuratrIssue(
+                field_path="MedicationRequest.intent",
+                severity="critical",
+                title="Missing intent",
+                plain_language="This medication request is missing its intent.",
+                impact="Intent identifies whether this is a plan, proposal, or actual order.",
+                suggestion="Add intent: 'proposal', 'plan', or 'order'.",
+            ))
+
+        # Medication code quality — check medicationCodeableConcept or medication.concept
+        med_code = (
+            resource.get("medicationCodeableConcept") or
+            resource.get("medication", {}).get("concept")
+        )
+        if med_code:
+            issues.extend(self._check_codeable_concept(med_code, "MedicationRequest.medication"))
+        elif not resource.get("medicationReference") and not resource.get("medication", {}).get("reference"):
+            issues.append(CuratrIssue(
+                field_path="MedicationRequest.medication[x]",
+                severity="critical",
+                title="Missing medication",
+                plain_language="No medication is identified in this request.",
+                impact="Without a medication code or reference, the prescription is uninterpretable.",
+                suggestion="Add a medicationCodeableConcept using RxNorm, or a medicationReference.",
+            ))
+
+        return self._build_result("MedicationRequest", resource_id, issues)
+
+    def _evaluate_immunization(self, resource: dict) -> CuratrResult:
+        """Evaluate Immunization for US Core v9 data quality."""
+        resource_id = resource.get("id", "unknown")
+        issues: list[CuratrIssue] = []
+
+        if not resource.get("status"):
+            issues.append(CuratrIssue(
+                field_path="Immunization.status",
+                severity="critical",
+                title="Missing status",
+                plain_language="This immunization record has no status.",
+                impact="Without a status, it is unclear if the vaccine was actually administered.",
+                suggestion="Set status to 'completed' for administered vaccines.",
+            ))
+
+        # vaccineCode quality check
+        vaccine_code = resource.get("vaccineCode")
+        if vaccine_code:
+            issues.extend(self._check_codeable_concept(vaccine_code, "Immunization.vaccineCode"))
+        else:
+            issues.append(CuratrIssue(
+                field_path="Immunization.vaccineCode",
+                severity="critical",
+                title="Missing vaccine code",
+                plain_language="This immunization record has no vaccine code.",
+                impact="Without a CVX or SNOMED code, this vaccine cannot be matched to immunization records.",
+                suggestion="Add a vaccineCode using CVX (http://hl7.org/fhir/sid/cvx) or SNOMED CT.",
+            ))
+
+        if not resource.get("occurrenceDateTime") and not resource.get("occurrenceString"):
+            issues.append(CuratrIssue(
+                field_path="Immunization.occurrenceDateTime",
+                severity="warning",
+                title="Missing occurrence date",
+                plain_language="No date is recorded for when this vaccine was given.",
+                impact="Without a date, this record cannot be used for immunization history timelines.",
+                suggestion="Add an occurrenceDateTime in FHIR date format (e.g. '2024-03-15').",
+            ))
+
+        return self._build_result("Immunization", resource_id, issues)
+
+    def _evaluate_procedure(self, resource: dict) -> CuratrResult:
+        """Evaluate Procedure for US Core v9 data quality."""
+        resource_id = resource.get("id", "unknown")
+        issues: list[CuratrIssue] = []
+
+        if not resource.get("status"):
+            issues.append(CuratrIssue(
+                field_path="Procedure.status",
+                severity="critical",
+                title="Missing status",
+                plain_language="This procedure record has no status.",
+                impact="Without a status, it is unclear if the procedure was performed or just planned.",
+                suggestion="Set status to 'completed' for procedures that have been performed.",
+            ))
+
+        code_elem = resource.get("code")
+        if code_elem:
+            issues.extend(self._check_codeable_concept(code_elem, "Procedure.code"))
+        else:
+            issues.append(CuratrIssue(
+                field_path="Procedure.code",
+                severity="critical",
+                title="Missing procedure code",
+                plain_language="This procedure has no standard medical code.",
+                impact="Without a CPT or SNOMED code, this procedure is unidentifiable in claims and records.",
+                suggestion="Add a code using SNOMED CT or CPT.",
+            ))
+
+        return self._build_result("Procedure", resource_id, issues)
+
+    def _evaluate_diagnostic_report(self, resource: dict) -> CuratrResult:
+        """Evaluate DiagnosticReport for US Core v9 data quality."""
+        resource_id = resource.get("id", "unknown")
+        issues: list[CuratrIssue] = []
+
+        if not resource.get("status"):
+            issues.append(CuratrIssue(
+                field_path="DiagnosticReport.status",
+                severity="critical",
+                title="Missing status",
+                plain_language="This diagnostic report has no status.",
+                impact="Without a status, it is unclear if this report is final or preliminary.",
+                suggestion="Set status to 'final' for completed reports.",
+            ))
+
+        code_elem = resource.get("code")
+        if code_elem:
+            issues.extend(self._check_codeable_concept(code_elem, "DiagnosticReport.code"))
+        else:
+            issues.append(CuratrIssue(
+                field_path="DiagnosticReport.code",
+                severity="critical",
+                title="Missing report code",
+                plain_language="This diagnostic report has no standard code.",
+                impact="Without a LOINC code, this report type cannot be identified.",
+                suggestion="Add a code using LOINC (http://loinc.org).",
+            ))
+
+        return self._build_result("DiagnosticReport", resource_id, issues)
 
     # ------------------------------------------------------------------ #
     # CodeableConcept and Coding checks                                   #

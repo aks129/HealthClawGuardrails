@@ -110,7 +110,7 @@ function extractHeaders(req: express.Request): Record<string, string> {
 
 function createMCPServer(): Server {
   const server = new Server(
-    { name: "fhir-mcp-guardrails", version: "0.9.0" },
+    { name: "healthclaw-guardrails", version: "1.0.0" },
     { capabilities: { tools: {}, logging: {} } }
   );
 
@@ -198,7 +198,7 @@ app.post("/mcp", async (req, res) => {
           result: {
             protocolVersion: negotiatedVersion,
             capabilities: { tools: {}, logging: {} },
-            serverInfo: { name: "fhir-mcp-guardrails", version: "0.9.0" },
+            serverInfo: { name: "healthclaw-guardrails", version: "1.0.0" },
           },
         });
       }
@@ -396,8 +396,8 @@ app.post("/mcp/rpc", async (req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     status: "healthy",
-    service: "fhir-mcp-guardrails",
-    version: "0.9.0",
+    service: "healthclaw-guardrails",
+    version: "1.0.0",
     transports: ["streamable-http", "sse", "http-bridge"],
     protocol: "MCP",
     protocolVersion: SUPPORTED_PROTOCOL_VERSIONS[0],

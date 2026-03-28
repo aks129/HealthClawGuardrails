@@ -1,14 +1,15 @@
 ---
 name: curatr
-version: 0.1.0
 description: >
-  HealthClaw Curatr — patient-facing FHIR data quality evaluation and correction.
-  Use when: (1) Evaluating a patient's health record for coding issues (deprecated
-  code systems, invalid codes, missing required fields), (2) Presenting issues in
-  plain language with clinical impact, (3) Applying patient-approved corrections
-  with full Provenance tracking, (4) Preparing a structured correction request
-  for the patient's healthcare provider. Supports Condition resources with
-  ICD-10-CM, SNOMED CT, LOINC, and RxNorm validation via public terminology APIs.
+  HealthClaw Curatr (healthclaw.io) — patient-facing FHIR data quality evaluation
+  and correction. Use when: (1) Evaluating a patient's health record for coding
+  issues (deprecated code systems, invalid codes, missing required fields),
+  (2) Presenting issues in plain language with clinical impact, (3) Applying
+  patient-approved corrections with full Provenance tracking, (4) Preparing a
+  structured correction request for the patient's healthcare provider. Supports
+  FHIR R4 US Core v9 resources: Condition, AllergyIntolerance, MedicationRequest,
+  Immunization, Procedure, DiagnosticReport — with ICD-10-CM, SNOMED CT, LOINC,
+  CVX, and RxNorm validation via public terminology APIs.
 metadata:
   openclaw:
     requires:
@@ -40,20 +41,36 @@ Your health data belongs to you. Curatr helps you understand what's in it, spot
 problems, and take action — whether that's correcting your personal record or
 requesting your provider fix the source.
 
+## Supported FHIR R4 US Core v9 Resource Types
+
+| Resource | Checks |
+|---|---|
+| Condition | ICD-9 detection, ICD-10-CM/SNOMED validity, clinicalStatus, verificationStatus |
+| AllergyIntolerance | clinicalStatus, patient link, allergen code (RxNorm/SNOMED) |
+| MedicationRequest | status, intent, medication code (RxNorm) |
+| Immunization | status, vaccineCode (CVX/SNOMED), occurrenceDateTime |
+| Procedure | status, procedure code (SNOMED/CPT) |
+| DiagnosticReport | status, report code (LOINC) |
+
+For all other resource types, Curatr runs a generic coding scan checking all `coding[]`
+elements for deprecated systems.
+
 ## What Curatr Checks
 
 ### Code System Quality
+
 - **Deprecated systems**: ICD-9-CM codes (retired October 2015) flagged as critical
 - **Code validity**: Live lookups against public terminology services — no account needed
 - **Display name accuracy**: Checks whether the written description matches the official term
 
 ### Structural Completeness
-- Missing `clinicalStatus` (is the condition currently active?)
-- Missing `verificationStatus` (has this been confirmed by a provider?)
-- Missing standard medical code
-- Invalid status values
+
+- Missing required fields (varies by resource type — see table above)
+- Invalid status values (e.g. unrecognized clinicalStatus codes)
+- Missing standard medical codes
 
 ### Terminology Services Used (all public, no auth required)
+
 | Service | Systems Validated |
 |---|---|
 | [tx.fhir.org](https://tx.fhir.org) — HL7 public FHIR terminology server | SNOMED CT, LOINC |

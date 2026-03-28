@@ -2,13 +2,13 @@
 name: fhir-r6-guardrails
 version: 1.0.0
 description: >
-  FHIR R6 agent guardrails for secure clinical data access via MCP. Use when:
-  (1) Reading patient data through MCP with automatic PHI redaction,
-  (2) Writing clinical resources with two-phase propose/commit and step-up auth,
-  (3) Proxying requests to real FHIR servers (HAPI, SMART Health IT, Epic),
-  (4) Auditing AI agent access to healthcare data,
-  (5) Evaluating R6 Permission resources for access control decisions.
-  Provides 10 MCP tools with guardrail enforcement on every request.
+  HealthClaw Guardrails (healthclaw.io) — FHIR agent guardrails for secure clinical
+  data access via MCP. Supports FHIR R4 US Core v9 (stable) and R6 ballot3
+  (experimental). Use when: (1) Reading patient data through MCP with automatic PHI
+  redaction, (2) Writing clinical resources with two-phase propose/commit and step-up
+  auth, (3) Proxying requests to real FHIR servers (HAPI, SMART Health IT, Epic),
+  (4) Auditing AI agent access to healthcare data, (5) Evaluating R6 Permission
+  resources for access control decisions. 12 MCP tools with guardrail enforcement.
 metadata:
   openclaw:
     requires:

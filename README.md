@@ -1,8 +1,8 @@
-# FHIR R6 + MCP Guardrail Patterns
+# HealthClaw Guardrails
 
-The security layer between AI agents and clinical data.
+The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.0.0** | 234 tests | 12 MCP tools | FHIR R6 v6.0.0-ballot3
+**v1.0.0** | 266 tests | 12 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
@@ -104,10 +104,19 @@ The 6-step demo at `/r6/fhir/demo/agent-loop` shows the full guardrail sequence:
 | Permission $evaluate (R6) | Yes | No | No | No |
 | Setup time | 10 seconds | 30+ minutes | 15+ minutes | Varies |
 
+## FHIR Version Support
+
+| Version | Profile | Status | Resources |
+| --- | --- | --- | --- |
+| R4 | US Core v9 | **Stable** | Patient, Condition, AllergyIntolerance, Immunization, MedicationRequest, Procedure, DiagnosticReport, CarePlan, CareTeam, Goal, DocumentReference, Coverage, ServiceRequest, Location, Organization, Practitioner, PractitionerRole, RelatedPerson, Specimen, FamilyMemberHistory |
+| R6 | v6.0.0-ballot3 | Experimental | Permission, SubscriptionTopic, DeviceAlert, NutritionIntake, DeviceAssociation, NutritionProduct, Requirements, ActorDefinition |
+
+Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, audit, step-up auth, tenant isolation). R6 ballot resources may change before final release.
+
 ## Testing
 
 ```bash
-# Python tests (254 tests)
+# Python tests (266 tests)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
@@ -189,7 +198,9 @@ changes, and agent attribution. All changes are audited in the immutable trail.
 
 **OpenClaw skill:** `skills/curatr/SKILL.md`
 
-## R6-Specific Resources
+## R6-Specific Resources (Experimental)
+
+These resources are part of the FHIR R6 ballot3 specification and may change before final release.
 
 | Resource | What's New in R6 |
 | --- | --- |
@@ -201,6 +212,16 @@ changes, and agent attribution. All changes are audited in the immutable trail.
 | NutritionProduct | Nutritional product definitions |
 | Requirements | Functional requirements tracking |
 | ActorDefinition | Actor role definitions |
+
+## US Core v9 R4 Resources (Stable)
+
+Standard FHIR R4 resources conforming to US Core Implementation Guide v9.
+These are widely deployed in US healthcare and stable for production use.
+
+AllergyIntolerance, Immunization, MedicationRequest, Medication, MedicationDispense,
+Procedure, DiagnosticReport, CarePlan, CareTeam, Goal, DocumentReference,
+Location, Organization, Practitioner, PractitionerRole, RelatedPerson,
+Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 
 ## Environment Variables
 
@@ -238,7 +259,7 @@ e2e/                            Playwright end-to-end tests
 templates/                      Jinja2 (landing page, dashboard)
 static/                         CSS + JS for interactive dashboard
 skills/curatr/                  Curatr OpenClaw skill definition
-tests/                          234 pytest tests (7 files)
+tests/                          266 pytest tests (8 files, incl. test_us_core_r4.py)
 ```
 
 ## Known Limitations

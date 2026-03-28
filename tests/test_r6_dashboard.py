@@ -38,7 +38,7 @@ class TestHealthEndpoint:
     def test_health_includes_version(self, client):
         resp = client.get('/r6/fhir/health')
         data = resp.get_json()
-        assert data['version'] == '0.9.0'
+        assert data['version'] == '1.0.0'
         assert '6.0.0' in data['fhirVersion']
 
     def test_health_no_tenant_required(self, client):
@@ -382,7 +382,7 @@ class TestBundleEdgeCases:
             'resourceType': 'Bundle', 'type': 'collection',
             'entry': [
                 {'resource': {'resourceType': 'Patient', 'id': 'skip-pt'}},
-                {'resource': {'resourceType': 'MedicationRequest', 'id': 'skip-med'}},
+                {'resource': {'resourceType': 'ImagingStudy', 'id': 'skip-img'}},
             ]
         }
         resp = client.post('/r6/fhir/Bundle/$ingest-context',
@@ -390,7 +390,7 @@ class TestBundleEdgeCases:
                           content_type='application/json',
                           headers=tenant_headers)
         assert resp.status_code == 201
-        # Only Patient should be stored (MedicationRequest is not supported)
+        # Only Patient should be stored (ImagingStudy is not supported)
         assert resp.get_json()['resource_count'] == 1
 
     def test_bundle_all_valid_types(self, client, tenant_headers):
@@ -498,8 +498,8 @@ class TestValidateEdgeCases:
     """Edge cases for $validate endpoint."""
 
     def test_validate_unsupported_type(self, client, tenant_headers):
-        resp = client.post('/r6/fhir/MedicationRequest/$validate',
-                          data=json.dumps({'resourceType': 'MedicationRequest'}),
+        resp = client.post('/r6/fhir/ImagingStudy/$validate',
+                          data=json.dumps({'resourceType': 'ImagingStudy'}),
                           content_type='application/json',
                           headers=tenant_headers)
         assert resp.status_code == 400
@@ -584,7 +584,7 @@ class TestPhase2VersionUpdate:
     def test_health_shows_phase2_version(self, client):
         resp = client.get('/r6/fhir/health')
         data = resp.get_json()
-        assert data['version'] == '0.9.0'
+        assert data['version'] == '1.0.0'
 
 
 class TestPhase2EndToEndWorkflow:

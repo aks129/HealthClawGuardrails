@@ -16,18 +16,28 @@ logger = logging.getLogger(__name__)
 # Validator service URL (HL7 validator-wrapper)
 VALIDATOR_URL = os.environ.get('FHIR_VALIDATOR_URL', 'http://localhost:8080')
 
-# R6 supported resource types
+# Supported FHIR resource types (R4 stable + R6 experimental ballot3)
 R6_RESOURCE_TYPES = [
-    # Phase 1 — Core
+    # Phase 1 — Core (R4+)
     'Patient', 'Encounter', 'Observation', 'Bundle',
     'AuditEvent', 'Consent', 'OperationOutcome',
-    # Phase 2 — R6-specific
+    # Phase 2 — R6-specific (experimental ballot3)
     'Permission', 'SubscriptionTopic', 'Subscription',
     'NutritionIntake', 'NutritionProduct',
     'DeviceAlert', 'DeviceAssociation',
     'Requirements', 'ActorDefinition',
     # Phase 3 — Curatr (data quality)
     'Condition', 'Provenance',
+    # Phase 4 — US Core v9 R4 clinical resources (stable)
+    'AllergyIntolerance', 'Immunization', 'MedicationRequest',
+    'Medication', 'MedicationDispense',
+    'Procedure', 'DiagnosticReport',
+    'CarePlan', 'CareTeam', 'Goal',
+    'DocumentReference',
+    'Location', 'Organization',
+    'Practitioner', 'PractitionerRole', 'RelatedPerson',
+    'Coverage', 'ServiceRequest', 'Specimen',
+    'FamilyMemberHistory',
 ]
 
 # TTL for validator availability cache (seconds)
@@ -175,6 +185,27 @@ class R6Validator:
             issues.extend(self._validate_condition(resource))
         elif resource_type == 'Provenance':
             issues.extend(self._validate_provenance(resource))
+        # Phase 4 — US Core v9 R4 structural checks
+        elif resource_type == 'AllergyIntolerance':
+            issues.extend(self._validate_allergy_intolerance(resource))
+        elif resource_type == 'Immunization':
+            issues.extend(self._validate_immunization(resource))
+        elif resource_type == 'MedicationRequest':
+            issues.extend(self._validate_medication_request(resource))
+        elif resource_type == 'Procedure':
+            issues.extend(self._validate_procedure(resource))
+        elif resource_type == 'DiagnosticReport':
+            issues.extend(self._validate_diagnostic_report(resource))
+        elif resource_type == 'DocumentReference':
+            issues.extend(self._validate_document_reference(resource))
+        elif resource_type == 'Coverage':
+            issues.extend(self._validate_coverage(resource))
+        elif resource_type == 'ServiceRequest':
+            issues.extend(self._validate_service_request(resource))
+        elif resource_type == 'Goal':
+            issues.extend(self._validate_goal(resource))
+        elif resource_type == 'CarePlan':
+            issues.extend(self._validate_care_plan(resource))
 
         has_errors = any(i['severity'] in ('error', 'fatal') for i in issues)
 
@@ -182,7 +213,7 @@ class R6Validator:
             issues.append({
                 'severity': 'information',
                 'code': 'informational',
-                'diagnostics': 'Structural validation passed (R6 ballot, external validator unavailable)'
+                'diagnostics': 'Structural validation passed (R4/R6, external validator unavailable)'
             })
 
         return {
@@ -420,5 +451,300 @@ class R6Validator:
                 'code': 'required',
                 'diagnostics': 'Provenance.agent is required',
                 'expression': ['Provenance.agent']
+            })
+        return issues
+
+    # --- Phase 4: US Core v9 R4 resource validation ---
+
+    def _validate_allergy_intolerance(self, resource):
+        """Validate AllergyIntolerance (US Core v9)."""
+        issues = []
+        if not resource.get('clinicalStatus'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'AllergyIntolerance.clinicalStatus is required (US Core)',
+                'expression': ['AllergyIntolerance.clinicalStatus']
+            })
+        if not resource.get('verificationStatus'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'AllergyIntolerance.verificationStatus is required (US Core)',
+                'expression': ['AllergyIntolerance.verificationStatus']
+            })
+        if not resource.get('patient'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'AllergyIntolerance.patient is required',
+                'expression': ['AllergyIntolerance.patient']
+            })
+        return issues
+
+    def _validate_immunization(self, resource):
+        """Validate Immunization (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Immunization.status is required',
+                'expression': ['Immunization.status']
+            })
+        if not resource.get('vaccineCode'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Immunization.vaccineCode is required (US Core)',
+                'expression': ['Immunization.vaccineCode']
+            })
+        if not resource.get('patient'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Immunization.patient is required',
+                'expression': ['Immunization.patient']
+            })
+        if not resource.get('occurrenceDateTime') and not resource.get('occurrenceString'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Immunization.occurrence[x] is required',
+                'expression': ['Immunization.occurrence[x]']
+            })
+        return issues
+
+    def _validate_medication_request(self, resource):
+        """Validate MedicationRequest (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationRequest.status is required',
+                'expression': ['MedicationRequest.status']
+            })
+        if not resource.get('intent'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationRequest.intent is required',
+                'expression': ['MedicationRequest.intent']
+            })
+        has_medication = (
+            resource.get('medicationCodeableConcept') or
+            resource.get('medicationReference') or
+            resource.get('medication')
+        )
+        if not has_medication:
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationRequest.medication[x] is required (US Core)',
+                'expression': ['MedicationRequest.medication[x]']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationRequest.subject is required',
+                'expression': ['MedicationRequest.subject']
+            })
+        return issues
+
+    def _validate_procedure(self, resource):
+        """Validate Procedure (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Procedure.status is required',
+                'expression': ['Procedure.status']
+            })
+        if not resource.get('code'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Procedure.code is required (US Core)',
+                'expression': ['Procedure.code']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Procedure.subject is required',
+                'expression': ['Procedure.subject']
+            })
+        return issues
+
+    def _validate_diagnostic_report(self, resource):
+        """Validate DiagnosticReport (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DiagnosticReport.status is required',
+                'expression': ['DiagnosticReport.status']
+            })
+        if not resource.get('code'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DiagnosticReport.code is required (US Core)',
+                'expression': ['DiagnosticReport.code']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DiagnosticReport.subject is required',
+                'expression': ['DiagnosticReport.subject']
+            })
+        return issues
+
+    def _validate_document_reference(self, resource):
+        """Validate DocumentReference (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DocumentReference.status is required',
+                'expression': ['DocumentReference.status']
+            })
+        if not resource.get('type'):
+            issues.append({
+                'severity': 'warning',
+                'code': 'business-rule',
+                'diagnostics': 'DocumentReference.type is recommended (US Core)',
+                'expression': ['DocumentReference.type']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DocumentReference.subject is required (US Core)',
+                'expression': ['DocumentReference.subject']
+            })
+        if not resource.get('content'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'DocumentReference.content is required',
+                'expression': ['DocumentReference.content']
+            })
+        return issues
+
+    def _validate_coverage(self, resource):
+        """Validate Coverage (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Coverage.status is required',
+                'expression': ['Coverage.status']
+            })
+        if not resource.get('beneficiary'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Coverage.beneficiary is required (US Core)',
+                'expression': ['Coverage.beneficiary']
+            })
+        if not resource.get('payor'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Coverage.payor is required',
+                'expression': ['Coverage.payor']
+            })
+        return issues
+
+    def _validate_service_request(self, resource):
+        """Validate ServiceRequest (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'ServiceRequest.status is required',
+                'expression': ['ServiceRequest.status']
+            })
+        if not resource.get('intent'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'ServiceRequest.intent is required',
+                'expression': ['ServiceRequest.intent']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'ServiceRequest.subject is required',
+                'expression': ['ServiceRequest.subject']
+            })
+        if not resource.get('code'):
+            issues.append({
+                'severity': 'warning',
+                'code': 'business-rule',
+                'diagnostics': 'ServiceRequest.code is recommended (US Core)',
+                'expression': ['ServiceRequest.code']
+            })
+        return issues
+
+    def _validate_goal(self, resource):
+        """Validate Goal (US Core v9)."""
+        issues = []
+        if not resource.get('lifecycleStatus'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Goal.lifecycleStatus is required',
+                'expression': ['Goal.lifecycleStatus']
+            })
+        if not resource.get('description'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Goal.description is required (US Core)',
+                'expression': ['Goal.description']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'Goal.subject is required',
+                'expression': ['Goal.subject']
+            })
+        return issues
+
+    def _validate_care_plan(self, resource):
+        """Validate CarePlan (US Core v9)."""
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'CarePlan.status is required',
+                'expression': ['CarePlan.status']
+            })
+        if not resource.get('intent'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'CarePlan.intent is required',
+                'expression': ['CarePlan.intent']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'CarePlan.subject is required',
+                'expression': ['CarePlan.subject']
             })
         return issues
