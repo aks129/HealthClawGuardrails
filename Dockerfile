@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
+# Add venv to PATH so gunicorn and other scripts are directly accessible
+ENV PATH="/app/.venv/bin:$PATH"
+
 # Copy application code
 COPY . .
 
@@ -23,4 +26,4 @@ RUN mkdir -p /app/instance
 
 EXPOSE 5000
 
-CMD ["uv", "run", "gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "--keep-alive", "5", "main:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "--keep-alive", "5", "main:app"]
