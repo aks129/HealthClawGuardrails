@@ -106,7 +106,7 @@ The proxy uses `httpx` for HTTP client operations with:
 - Configurable timeout (default 15 seconds)
 - Automatic redirect following
 - `application/fhir+json` accept header
-- User-Agent identification: `MCP-FHIR-Guardrails/0.9.0`
+- User-Agent identification: `HealthClaw-Guardrails/1.0.0`
 
 URL rewriting is recursive — it traverses the entire response JSON tree and
 replaces all occurrences of the upstream URL with the local proxy URL.

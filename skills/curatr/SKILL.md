@@ -10,26 +10,7 @@ description: >
   FHIR R4 US Core v9 resources: Condition, AllergyIntolerance, MedicationRequest,
   Immunization, Procedure, DiagnosticReport — with ICD-10-CM, SNOMED CT, LOINC,
   CVX, and RxNorm validation via public terminology APIs.
-metadata:
-  openclaw:
-    requires:
-      env:
-        - STEP_UP_SECRET
-      bins:
-        - node
-        - python3
-    install:
-      - kind: node
-        packages:
-          - "@modelcontextprotocol/sdk"
-          - express
-          - node-fetch
-      - kind: uv
-        packages:
-          - flask
-          - flask-sqlalchemy
-          - requests
-    primaryEnv: STEP_UP_SECRET
+metadata: {"openclaw":{"requires":{"env":["STEP_UP_SECRET"],"bins":["node","python3"]},"install":[{"kind":"node","packages":["@modelcontextprotocol/sdk","express","node-fetch"]},{"kind":"uv","packages":["flask","flask-sqlalchemy","requests"]}],"primaryEnv":"STEP_UP_SECRET"}}
 ---
 
 # HealthClaw Curatr
