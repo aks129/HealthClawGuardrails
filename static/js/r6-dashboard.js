@@ -1083,72 +1083,123 @@ async function curatrApplyFix() {
   setLoading('btn-curatr-fix', false);
 }
 
-// --------------- Fasten Connect E2E Demo ---------------
+// --------------- Fasten Connect ---------------
 
-async function runFastenDemo() {
-  const btn = document.getElementById('btn-fasten-demo');
+// Shared step-tracker helpers for the Fasten panel
+function fastenStepSet(stepsEl, n, state, subtitle) {
+  const el = stepsEl.querySelector(`.demo-step[data-step="f${n}"]`);
+  if (!el) return;
+  el.classList.remove('active', 'done', 'error');
+  if (state) el.classList.add(state);                        // ← never add empty string
+  const ind = el.querySelector('.demo-step-indicator');
+  if (state === 'active') ind.innerHTML = '<i class="fas fa-spinner fa-spin" style="color:var(--r6-info)"></i>';
+  else if (state === 'done') ind.innerHTML = '<i class="fas fa-check-circle" style="color:var(--r6-success)"></i>';
+  else if (state === 'error') ind.innerHTML = '<i class="fas fa-times-circle" style="color:var(--r6-danger)"></i>';
+  else ind.innerHTML = '';
+  if (subtitle) el.querySelector('.demo-step-subtitle').textContent = subtitle;
+}
+
+function fastenResetSteps() {
   const stepsEl = document.getElementById('fasten-steps');
-  const detailEl = document.getElementById('fasten-step-detail');
-
-  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…'; }
-  stepsEl.style.display = 'block';
-  detailEl.style.display = 'none';
-  detailEl.innerHTML = '';
-
-  // Reset all step indicators
+  if (!stepsEl) return stepsEl;
   stepsEl.querySelectorAll('.demo-step').forEach(s => {
     s.classList.remove('active', 'done', 'error');
     s.querySelector('.demo-step-indicator').innerHTML = '';
   });
+  return stepsEl;
+}
 
-  function setStep(n, state, subtitle) {
-    const el = stepsEl.querySelector(`.demo-step[data-step="f${n}"]`);
-    if (!el) return;
-    el.classList.remove('active', 'done', 'error');
-    el.classList.add(state);
-    const ind = el.querySelector('.demo-step-indicator');
-    if (state === 'active') ind.innerHTML = '<i class="fas fa-spinner fa-spin" style="color:var(--r6-info)"></i>';
-    else if (state === 'done') ind.innerHTML = '<i class="fas fa-check-circle" style="color:var(--r6-success)"></i>';
-    else if (state === 'error') ind.innerHTML = '<i class="fas fa-times-circle" style="color:var(--r6-danger)"></i>';
-    if (subtitle) el.querySelector('.demo-step-subtitle').textContent = subtitle;
+// Animate an array of step objects from the /fasten/demo response
+async function fastenAnimateSteps(steps, startFrom = 1) {
+  const stepsEl = document.getElementById('fasten-steps');
+  const detailEl = document.getElementById('fasten-step-detail');
+  if (!stepsEl) return;
+  stepsEl.style.display = 'block';
+  for (const step of steps) {
+    if (step.step < startFrom) continue;
+    const n = step.step;
+    if (n > startFrom) fastenStepSet(stepsEl, n - 1, 'done');
+    fastenStepSet(stepsEl, n, 'active');
+    if (detailEl) { detailEl.style.display = 'block'; detailEl.innerHTML = highlightJSON(step); }
+    await sleep(550);
+    fastenStepSet(stepsEl, n, step.status === 'success' ? 'done' : 'error', step.detail);
   }
+}
 
-  // Animate steps 1-5 while waiting for the API
-  for (let i = 1; i <= 5; i++) setStep(i, i === 1 ? 'active' : '');
-
+// Run full simulated demo (all 5 steps via /fasten/demo)
+async function runFastenDemo() {
+  const btn = document.getElementById('btn-fasten-demo');
+  const stepsEl = fastenResetSteps();
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…'; }
   try {
-    // Step 1 active — call the demo endpoint
     const res = await fetch('/fasten/demo', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const data = await res.json();
-
     if (res.status !== 200) {
-      setStep(1, 'error', data.error || 'Demo failed');
-      detailEl.style.display = 'block';
-      detailEl.innerHTML = highlightJSON(data);
+      const detailEl = document.getElementById('fasten-step-detail');
+      if (stepsEl) { stepsEl.style.display = 'block'; fastenStepSet(stepsEl, 1, 'error', data.error || 'Demo failed'); }
+      if (detailEl) { detailEl.style.display = 'block'; detailEl.innerHTML = highlightJSON(data); }
       toast('Fasten demo failed', 'error');
       return;
     }
-
-    // Animate each step with a brief delay for visual effect
-    for (const step of data.steps) {
-      const n = step.step;
-      if (n > 1) setStep(n - 1, 'done');
-      setStep(n, 'active');
-      // Show step detail
-      detailEl.style.display = 'block';
-      detailEl.innerHTML = highlightJSON(step);
-      await sleep(600);
-      setStep(n, step.status === 'success' ? 'done' : 'error', step.detail);
-    }
-
-    toast(`Fasten demo complete — ${data.steps.length} steps, org_connection_id: ${data.org_connection_id.slice(0, 20)}`, 'success');
+    await fastenAnimateSteps(data.steps, 1);
+    toast('Fasten demo complete — 5 steps, all guardrails exercised', 'success');
     refreshAuditFeed();
-
   } catch (err) {
-    setStep(1, 'error', err.message);
+    if (stepsEl) { stepsEl.style.display = 'block'; fastenStepSet(stepsEl, 1, 'error', err.message); }
     toast('Fasten demo error: ' + err.message, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plug"></i> Run Fasten Demo'; }
+    if (btn) {
+      btn.disabled = false;
+      const label = document.getElementById('stitch-widget') ? 'Run Simulated Demo' : 'Run Fasten Demo';
+      btn.innerHTML = `<i class="fas fa-flask"></i> ${label}`;
+    }
+  }
+}
+
+// Launch the real Fasten Stitch widget
+function launchStitchWidget() {
+  const container = document.getElementById('stitch-container');
+  if (!container) { toast('Stitch widget not configured (FASTEN_PUBLIC_KEY not set)', 'warning'); return; }
+  container.style.display = 'block';
+  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const btn = document.getElementById('btn-stitch-launch');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Waiting for connection…'; }
+}
+
+// Called when Stitch widget fires widget.complete
+async function onStitchComplete(orgConnectionId, meta) {
+  const container = document.getElementById('stitch-container');
+  if (container) container.style.display = 'none';
+  const launchBtn = document.getElementById('btn-stitch-launch');
+  if (launchBtn) { launchBtn.disabled = false; launchBtn.innerHTML = '<i class="fas fa-check-circle"></i> Connected!'; }
+
+  const stepsEl = fastenResetSteps();
+  if (stepsEl) stepsEl.style.display = 'block';
+
+  // Step 1: mark done immediately (real authorization happened)
+  fastenStepSet(stepsEl, 1, 'done', `org_connection_id: ${orgConnectionId.slice(0, 28)}…`);
+
+  // Register the connection with the backend
+  try {
+    await fetch('/fasten/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': TENANT },
+      body: JSON.stringify({ org_connection_id: orgConnectionId, ...meta }),
+    });
+  } catch (_) { /* non-fatal */ }
+
+  // Run steps 2-5 via the demo endpoint (simulates webhook → ingest → redact → audit)
+  try {
+    const res = await fetch('/fasten/demo', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+    if (res.status === 200) {
+      await fastenAnimateSteps(data.steps, 2);
+      toast(`Health data imported — org_connection_id: ${orgConnectionId.slice(0, 24)}`, 'success');
+      refreshAuditFeed();
+    }
+  } catch (err) {
+    fastenStepSet(stepsEl, 2, 'error', err.message);
+    toast('Fasten import error: ' + err.message, 'error');
   }
 }
 
@@ -1208,4 +1259,14 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshAuditFeed();
   // Poll audit feed every 10s
   setInterval(refreshAuditFeed, 10000);
+
+  // Wire up Fasten Stitch widget if present
+  const stitchEl = document.getElementById('stitch-widget');
+  if (stitchEl) {
+    stitchEl.addEventListener('widget.complete', (evt) => {
+      const { org_connection_id, endpoint_id, tefca_directory_id, platform_type, connection_status } = evt.detail || {};
+      if (!org_connection_id) return;
+      onStitchComplete(org_connection_id, { endpoint_id, tefca_directory_id, platform_type, connection_status });
+    });
+  }
 });

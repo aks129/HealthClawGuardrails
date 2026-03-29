@@ -4,6 +4,9 @@
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/r6-dashboard.css') }}">
+{% if fasten_public_key %}
+<link rel="stylesheet" href="https://stitch.fastenhealth.com/v0.4/bundle.css">
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -468,16 +471,33 @@
       </div>
       <div class="r6-panel-body">
         <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
-          Full end-to-end Fasten Connect flow: patient authorizes EHR access via the Stitch widget,
-          an EHI export webhook fires, 4 FHIR resources are ingested (Patient, Observation, Condition,
-          MedicationRequest), PHI is redacted on read-back, and every step is audited.
+          Patient authorizes EHR access via the <strong>Fasten Stitch widget</strong>.
+          An EHI export webhook fires, 4 FHIR resources are ingested (Patient, Observation, Condition,
+          MedicationRequest), PHI is redacted on read-back, and every step is recorded in the audit trail.
         </p>
-        <button class="r6-btn r6-btn-sm mb-3" id="btn-fasten-demo" onclick="runFastenDemo()"
-                style="background:var(--r6-info);color:#000;border-color:var(--r6-info);font-size:0.9rem;padding:0.55rem 1.4rem;">
-          <i class="fas fa-plug"></i> Run Fasten Demo
-        </button>
 
-        <!-- Step tracker -->
+        <div class="d-flex gap-2 flex-wrap mb-3">
+          {% if fasten_public_key %}
+          <button class="r6-btn r6-btn-sm" id="btn-stitch-launch" onclick="launchStitchWidget()"
+                  style="background:var(--r6-info);color:#000;border-color:var(--r6-info);font-size:0.9rem;padding:0.55rem 1.4rem;">
+            <i class="fas fa-hospital"></i> Connect Health Records
+          </button>
+          {% endif %}
+          <button class="r6-btn r6-btn-sm {% if not fasten_public_key %}r6-btn-primary{% else %}r6-btn-outline{% endif %}"
+                  id="btn-fasten-demo" onclick="runFastenDemo()"
+                  style="font-size:0.85rem;padding:0.5rem 1.2rem;{% if not fasten_public_key %}background:var(--r6-info);color:#000;border-color:var(--r6-info);{% else %}border-color:var(--r6-info);color:var(--r6-info);{% endif %}">
+            <i class="fas fa-flask"></i> {% if fasten_public_key %}Run Simulated Demo{% else %}Run Fasten Demo{% endif %}
+          </button>
+        </div>
+
+        {% if fasten_public_key %}
+        <!-- Stitch widget — shown inline when Connect is clicked -->
+        <div id="stitch-container" style="display:none;margin-bottom:1.25rem;border:1px solid var(--r6-info);border-radius:8px;overflow:hidden;">
+          <fasten-stitch-element id="stitch-widget" public-id="{{ fasten_public_key }}"></fasten-stitch-element>
+        </div>
+        {% endif %}
+
+        <!-- 5-step tracker (shared between live and demo flows) -->
         <div id="fasten-steps" style="margin-top:1rem;display:none">
           <div class="demo-step" data-step="f1">
             <div class="demo-step-indicator"></div>
@@ -654,5 +674,8 @@
 {% endblock %}
 
 {% block scripts %}
+{% if fasten_public_key %}
+<script src="https://stitch.fastenhealth.com/v0.4/bundle.js"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/r6-dashboard.js') }}"></script>
 {% endblock %}

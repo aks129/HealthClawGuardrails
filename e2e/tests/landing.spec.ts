@@ -37,7 +37,8 @@ test.describe('Landing page', () => {
 
   test('feature cards are visible', async ({ page }) => {
     await expect(page.getByText('Security Patterns')).toBeVisible();
-    await expect(page.getByText('12 MCP Tools')).toBeVisible();
+    // '12 MCP Tools' appears in both hero badge and feature card — scope to first visible
+    await expect(page.getByText('12 MCP Tools').first()).toBeVisible();
     await expect(page.getByText('Clinical Safety')).toBeVisible();
   });
 

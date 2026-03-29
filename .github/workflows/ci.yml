@@ -113,6 +113,10 @@ jobs:
             sleep 5
           done
 
+      - name: Show Flask container logs (debug)
+        if: always()
+        run: docker compose logs fhir-mcp-guardrails
+
       - name: Smoke test - R6 metadata
         run: |
           curl -sf http://localhost:5000/r6/fhir/metadata | python3 -c "

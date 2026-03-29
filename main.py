@@ -114,6 +114,13 @@ else:
 # Structured request logging with correlation IDs
 request_logger = logging.getLogger('request')
 
+
+@app.context_processor
+def inject_fasten_public_key():
+    """Expose FASTEN_PUBLIC_KEY to all templates (safe — public key only)."""
+    return {'fasten_public_key': os.environ.get('FASTEN_PUBLIC_KEY', '')}
+
+
 @app.before_request
 def attach_request_id():
     g.request_id = flask_request.headers.get('X-Request-Id', str(uuid.uuid4())[:8])
