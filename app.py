@@ -34,3 +34,15 @@ def faq():
 def wiki():
     """Project Wiki — architecture, concepts, and how-tos."""
     return render_template('wiki.html')
+
+
+@app.route('/privacy')
+def privacy():
+    """Privacy Policy."""
+    return render_template('privacy.html')
+
+
+@app.route('/terms')
+def terms():
+    """Terms & Conditions."""
+    return render_template('terms.html')

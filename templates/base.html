@@ -70,7 +70,16 @@
 
     <footer class="footer mt-5 py-3 bg-dark">
         <div class="container text-center">
-            <span class="text-muted">HealthClaw Guardrails &middot; <a href="https://healthclaw.io" class="text-muted" target="_blank" rel="noopener noreferrer">healthclaw.io</a> &middot; FHIR R4 US Core v9 + R6 &middot; MCP</span>
+            <span class="text-muted">
+                HealthClaw Guardrails &middot;
+                <a href="https://healthclaw.io" class="text-muted" target="_blank" rel="noopener noreferrer">healthclaw.io</a>
+                &middot; FHIR R4 US Core v9 + R6 &middot; MCP
+            </span>
+            <div class="mt-1 footer-legal">
+                <a href="{{ url_for('privacy') }}" class="text-muted me-3">Privacy Policy</a>
+                <a href="{{ url_for('terms') }}" class="text-muted me-3">Terms &amp; Conditions</a>
+                <a href="https://github.com/aks129/HealthClawGuardrails" class="text-muted" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </div>
         </div>
     </footer>
 

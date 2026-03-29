@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Terms &amp; Conditions — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<style>
+.legal-page h2 { margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.25rem; color: var(--r6-primary); }
+.legal-page h3 { margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 1rem; color: var(--bs-body-color); }
+.legal-page p, .legal-page li { color: var(--bs-secondary-color); line-height: 1.75; }
+.legal-page ul { padding-left: 1.5rem; }
+.legal-meta { font-size: 0.85rem; color: var(--bs-secondary-color); }
+.legal-toc a { color: var(--bs-secondary-color); text-decoration: none; font-size: 0.9rem; }
+.legal-toc a:hover { color: var(--r6-primary); }
+.legal-toc li { margin-bottom: 0.25rem; }
+.callout-warning { border-left: 3px solid var(--r6-danger); background: rgba(220,53,69,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
+.callout-info { border-left: 3px solid var(--r6-primary); background: rgba(13,202,240,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+
+    <div class="mb-4">
+      <h1 class="h3 mb-1">Terms &amp; Conditions</h1>
+      <p class="legal-meta">
+        <strong>HealthClaw Guardrails</strong> &middot; healthclaw.io &middot;
+        Effective: March 29, 2026 &middot; Last updated: March 29, 2026
+      </p>
+    </div>
+
+    <div class="card bg-dark border-secondary mb-4 p-4 legal-page">
+
+      <div class="callout-warning mb-4">
+        <strong>Not a Medical Device.</strong> HealthClaw Guardrails is a software development tool and security
+        reference implementation. It is <strong>not a medical device</strong>, does not provide medical advice,
+        diagnoses, or treatment recommendations, and is not intended to be used as clinical decision support
+        without independent validation and regulatory clearance.
+      </div>
+
+      <nav class="mb-4">
+        <p class="text-muted mb-2" style="font-size:0.85rem">Contents</p>
+        <ol class="legal-toc">
+          <li><a href="#acceptance">Acceptance of Terms</a></li>
+          <li><a href="#description">Description of Service</a></li>
+          <li><a href="#acceptable-use">Acceptable Use</a></li>
+          <li><a href="#no-medical-advice">No Medical Advice</a></li>
+          <li><a href="#hipaa">HIPAA &amp; Regulatory Compliance</a></li>
+          <li><a href="#open-source">Open Source License</a></li>
+          <li><a href="#disclaimer">Disclaimer of Warranties</a></li>
+          <li><a href="#limitation">Limitation of Liability</a></li>
+          <li><a href="#indemnification">Indemnification</a></li>
+          <li><a href="#third-party">Third-Party Services</a></li>
+          <li><a href="#ip">Intellectual Property</a></li>
+          <li><a href="#termination">Termination</a></li>
+          <li><a href="#governing-law">Governing Law</a></li>
+          <li><a href="#changes">Changes to These Terms</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="acceptance">1. Acceptance of Terms</h2>
+      <p>
+        By accessing the HealthClaw Guardrails website, demo application, or software (collectively, the
+        "Service"), you agree to be bound by these Terms &amp; Conditions ("Terms"). If you do not agree,
+        do not use the Service.
+      </p>
+      <p>
+        These Terms apply to all users including developers, researchers, healthcare organizations, and
+        visitors to the public demo. Organizations using this software in production environments should
+        ensure these Terms are reviewed by qualified legal counsel.
+      </p>
+
+      <h2 id="description">2. Description of Service</h2>
+      <p>
+        HealthClaw Guardrails is an open-source reference implementation of security and compliance patterns
+        for AI agent access to FHIR health data via the Model Context Protocol (MCP). The Service includes:
+      </p>
+      <ul>
+        <li>A Flask-based FHIR guardrail proxy (PHI redaction, audit trail, step-up authorization, tenant isolation)</li>
+        <li>A Node.js MCP server exposing 12 FHIR-aware tools to AI agents</li>
+        <li>Curatr — a patient-facing data quality evaluation engine</li>
+        <li>Fasten Connect integration for patient-authorized FHIR data import</li>
+        <li>A public demo environment at healthclaw.io (no guarantees of availability or data persistence)</li>
+        <li>Documentation, wiki, and technical guides</li>
+      </ul>
+      <p>
+        The Service is a <strong>developer tool and pattern library</strong>. It is not a production-ready,
+        fully validated clinical system.
+      </p>
+
+      <h2 id="acceptable-use">3. Acceptable Use</h2>
+      <p>You agree not to use the Service to:</p>
+      <ul>
+        <li>Submit real patient data (PHI/PII) to the public demo environment</li>
+        <li>Attempt to circumvent guardrails, tenant isolation, or security controls</li>
+        <li>Conduct denial-of-service attacks, scraping, or automated abuse of the demo endpoints</li>
+        <li>Impersonate another user, organization, or tenant</li>
+        <li>Use the Service in a production clinical environment without independent security validation,
+            legal review, and applicable regulatory compliance (see Section 5)</li>
+        <li>Redistribute the software under a license incompatible with the MIT License</li>
+        <li>Use the Service for any unlawful purpose or in violation of any applicable law</li>
+      </ul>
+
+      <h2 id="no-medical-advice">4. No Medical Advice</h2>
+      <div class="callout-info mb-3">
+        The output of HealthClaw Guardrails, including MCP tool responses, Curatr evaluations, PHI-redacted
+        FHIR resources, and any AI-generated summaries, does <strong>not constitute medical advice</strong>.
+        All clinical decisions must be made by qualified healthcare professionals.
+      </div>
+      <p>
+        Medical disclaimers are automatically injected into all clinical resource reads by the guardrail stack.
+        This is a technical safeguard and does not create a professional relationship of any kind.
+      </p>
+      <p>
+        Curatr data quality evaluations (code validation, missing field checks) are informational only.
+        Suggested fixes require patient review and, where clinically significant, provider confirmation before
+        any action should be taken.
+      </p>
+
+      <h2 id="hipaa">5. HIPAA &amp; Regulatory Compliance</h2>
+      <p>
+        HealthClaw Guardrails is a software tool. It is <strong>not a HIPAA covered entity or business
+        associate</strong> by virtue of its existence as open-source software.
+      </p>
+      <p>
+        If you are a covered entity or business associate under HIPAA and you deploy this software to process,
+        store, or transmit electronic protected health information (ePHI):
+      </p>
+      <ul>
+        <li>You are responsible for your own HIPAA compliance, including conducting a risk assessment</li>
+        <li>You must execute appropriate Business Associate Agreements with all subprocessors</li>
+        <li>You must validate that the software's security controls meet your organization's requirements</li>
+        <li>You must satisfy all applicable state and federal health data privacy laws</li>
+        <li>The built-in guardrails (PHI redaction, audit trail, step-up auth) are reference patterns,
+            not a complete HIPAA compliance solution</li>
+      </ul>
+      <p>
+        Similar obligations apply under other frameworks: GDPR Article 9 (health data), CCPA, HITECH,
+        state breach notification laws, and applicable international regulations. Consult qualified
+        legal counsel before processing patient data.
+      </p>
+
+      <h2 id="open-source">6. Open Source License</h2>
+      <p>
+        HealthClaw Guardrails is released under the <strong>MIT License</strong>. You are free to use,
+        copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software,
+        subject to the conditions of the MIT License included in the repository.
+      </p>
+      <p>
+        The MIT License does not grant rights to the HealthClaw or healthclaw.io trademarks, logos,
+        or brand identity. Use of HealthClaw branding requires separate written permission.
+      </p>
+
+      <h2 id="disclaimer">7. Disclaimer of Warranties</h2>
+      <p>
+        THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+        PURPOSE, NON-INFRINGEMENT, ACCURACY, COMPLETENESS, OR UNINTERRUPTED AVAILABILITY.
+      </p>
+      <p>
+        We do not warrant that the Service will be error-free, that defects will be corrected, or that
+        the Service is free of viruses or other harmful components. We do not warrant the accuracy of
+        FHIR validation results, terminology lookups, or Curatr code evaluations.
+      </p>
+
+      <h2 id="limitation">8. Limitation of Liability</h2>
+      <p>
+        TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, HEALTHCLAW.IO AND ITS CONTRIBUTORS SHALL NOT
+        BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES,
+        INCLUDING BUT NOT LIMITED TO:
+      </p>
+      <ul>
+        <li>Loss of data, revenue, profits, or business</li>
+        <li>Unauthorized access to or alteration of health records</li>
+        <li>Clinical decisions made in reliance on software output</li>
+        <li>Regulatory penalties or enforcement actions arising from your use of the Service</li>
+        <li>Patient harm resulting from software malfunction or misconfiguration</li>
+      </ul>
+      <p>
+        IN JURISDICTIONS THAT DO NOT ALLOW EXCLUSION OF CERTAIN WARRANTIES OR LIMITATIONS OF LIABILITY,
+        OUR LIABILITY IS LIMITED TO THE MAXIMUM EXTENT PERMITTED BY LAW.
+      </p>
+
+      <h2 id="indemnification">9. Indemnification</h2>
+      <p>
+        You agree to indemnify, defend, and hold harmless healthclaw.io and its contributors from and
+        against any claims, liabilities, damages, losses, and expenses (including reasonable attorneys'
+        fees) arising out of or related to:
+      </p>
+      <ul>
+        <li>Your use of the Service or violation of these Terms</li>
+        <li>Your deployment of the software in a clinical or production environment</li>
+        <li>Any PHI you process using the Service</li>
+        <li>Your failure to comply with applicable healthcare regulations</li>
+      </ul>
+
+      <h2 id="third-party">10. Third-Party Services</h2>
+      <p>
+        The Service may integrate with or link to third-party services including FHIR servers, NLM APIs,
+        HL7 terminology servers, Fasten Health, and GitHub. These services are governed by their own terms
+        and privacy policies. We are not responsible for the availability, accuracy, or conduct of
+        third-party services.
+      </p>
+      <p>
+        When connecting to upstream FHIR servers (HAPI, Epic, SMART Health IT, etc.), you are subject to
+        those servers' terms of service. Do not use sandbox credentials in production environments.
+      </p>
+
+      <h2 id="ip">11. Intellectual Property</h2>
+      <p>
+        The HealthClaw Guardrails software source code is MIT-licensed (see Section 6). Documentation,
+        website content, and marketing materials are copyright healthclaw.io. FHIR&reg; is a registered
+        trademark of HL7. US Core and other implementation guides are published by HL7 under their own
+        licenses. This software is not endorsed by HL7, Epic, or any FHIR server vendor.
+      </p>
+
+      <h2 id="termination">12. Termination</h2>
+      <p>
+        We reserve the right to suspend or terminate access to the public demo environment at any time,
+        with or without notice, for any reason including but not limited to abuse, excessive usage, or
+        violation of these Terms. Sections 4, 5, 7, 8, 9, and 13 survive termination.
+      </p>
+
+      <h2 id="governing-law">13. Governing Law</h2>
+      <p>
+        These Terms are governed by and construed in accordance with the laws of the United States.
+        Any disputes arising under these Terms shall be resolved through good-faith negotiation first.
+        If unresolved, disputes shall be submitted to binding arbitration or the courts of competent
+        jurisdiction. You waive any right to participate in class-action proceedings related to the Service.
+      </p>
+
+      <h2 id="changes">14. Changes to These Terms</h2>
+      <p>
+        We reserve the right to modify these Terms at any time. Material changes will be noted in the
+        project <a href="https://github.com/aks129/HealthClawGuardrails/releases" target="_blank" rel="noopener noreferrer">release notes</a>
+        and this page will reflect the updated effective date. Continued use of the Service after
+        changes constitutes acceptance of the revised Terms.
+      </p>
+
+      <h2 id="contact">15. Contact</h2>
+      <p>
+        Legal questions: <a href="mailto:legal@healthclaw.io">legal@healthclaw.io</a><br>
+        Privacy inquiries: <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a><br>
+        Security disclosures: <a href="mailto:security@healthclaw.io">security@healthclaw.io</a><br>
+        GitHub: <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener noreferrer">aks129/HealthClawGuardrails</a>
+      </p>
+
+    </div>
+
+    <p class="text-center">
+      <a href="{{ url_for('privacy') }}" class="text-muted me-3">Privacy Policy</a>
+      <a href="{{ url_for('index') }}" class="text-muted">Back to Home</a>
+    </p>
+
+  </div>
+</div>
+{% endblock %}

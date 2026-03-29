@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Privacy Policy — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<style>
+.legal-page h2 { margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.25rem; color: var(--r6-primary); }
+.legal-page h3 { margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 1rem; color: var(--bs-body-color); }
+.legal-page p, .legal-page li { color: var(--bs-secondary-color); line-height: 1.75; }
+.legal-page ul { padding-left: 1.5rem; }
+.legal-meta { font-size: 0.85rem; color: var(--bs-secondary-color); }
+.legal-toc a { color: var(--bs-secondary-color); text-decoration: none; font-size: 0.9rem; }
+.legal-toc a:hover { color: var(--r6-primary); }
+.legal-toc li { margin-bottom: 0.25rem; }
+.callout-hipaa { border-left: 3px solid var(--r6-warning); background: rgba(255,193,7,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+
+    <div class="mb-4">
+      <h1 class="h3 mb-1">Privacy Policy</h1>
+      <p class="legal-meta">
+        <strong>HealthClaw Guardrails</strong> &middot; healthclaw.io &middot;
+        Effective: March 29, 2026 &middot; Last updated: March 29, 2026
+      </p>
+    </div>
+
+    <div class="card bg-dark border-secondary mb-4 p-4 legal-page">
+
+      <div class="callout-hipaa mb-4">
+        <strong>Important:</strong> HealthClaw Guardrails is a <strong>developer tool and reference implementation</strong>.
+        It is not a covered entity or business associate under HIPAA. When used in upstream proxy mode with real patient
+        data, operators are responsible for their own HIPAA compliance, BAAs, and applicable regulations.
+      </div>
+
+      <nav class="mb-4">
+        <p class="text-muted mb-2" style="font-size:0.85rem">Contents</p>
+        <ol class="legal-toc">
+          <li><a href="#information-we-collect">Information We Collect</a></li>
+          <li><a href="#how-we-use">How We Use Information</a></li>
+          <li><a href="#phi-handling">PHI Handling &amp; Guardrails</a></li>
+          <li><a href="#data-storage">Data Storage &amp; Retention</a></li>
+          <li><a href="#third-party">Third-Party Services</a></li>
+          <li><a href="#cookies">Cookies &amp; Analytics</a></li>
+          <li><a href="#your-rights">Your Rights</a></li>
+          <li><a href="#children">Children's Privacy</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#changes">Changes to This Policy</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ol>
+      </nav>
+
+      <h2 id="information-we-collect">1. Information We Collect</h2>
+
+      <h3>Website Visitors</h3>
+      <p>When you visit healthclaw.io or interact with this demo application, we may collect:</p>
+      <ul>
+        <li>Standard web server logs (IP address, browser type, referring URL, pages visited, timestamp)</li>
+        <li>Aggregate, anonymized usage statistics</li>
+      </ul>
+      <p>We do not use third-party behavioral tracking or advertising cookies.</p>
+
+      <h3>Self-Hosted / API Users</h3>
+      <p>If you deploy HealthClaw Guardrails yourself:</p>
+      <ul>
+        <li>All data remains on your own infrastructure. We never receive it.</li>
+        <li>Audit events, tenant records, and FHIR resources are stored in your database (SQLite by default, PostgreSQL in production).</li>
+        <li>You control all retention, access, and deletion policies.</li>
+      </ul>
+
+      <h3>Demo Submissions</h3>
+      <p>
+        API calls made against the public demo endpoint at <code>/r6/fhir/*</code> are ephemeral and stored
+        transiently in the demo database. Do not submit real patient data to the public demo.
+      </p>
+
+      <h2 id="how-we-use">2. How We Use Information</h2>
+      <p>Information collected is used solely to:</p>
+      <ul>
+        <li>Operate and improve the HealthClaw Guardrails service and documentation</li>
+        <li>Diagnose errors and monitor uptime</li>
+        <li>Respond to support inquiries submitted via GitHub Issues or email</li>
+      </ul>
+      <p>We do not sell, rent, or share personal information with third parties for commercial purposes.</p>
+
+      <h2 id="phi-handling">3. PHI Handling &amp; Guardrails</h2>
+      <p>
+        HealthClaw Guardrails is designed with PHI minimization as a core architectural principle:
+      </p>
+      <ul>
+        <li><strong>PHI redaction on all read paths</strong> — names truncated to initials, full identifiers masked, addresses stripped, birth dates truncated to year, photos removed</li>
+        <li><strong>Audit trail</strong> — all resource access is logged with tenant, agent identity, and timestamp; no PHI in log entries</li>
+        <li><strong>Step-up authorization</strong> — write operations require HMAC-signed tokens in addition to tenant credentials</li>
+        <li><strong>Human-in-the-loop</strong> — clinical writes are blocked until a human operator explicitly confirms</li>
+        <li><strong>Tenant isolation</strong> — every database query is scoped to the authenticated tenant; cross-tenant access is blocked at the query layer</li>
+      </ul>
+      <p>
+        These controls are reference implementations. Organizations deploying this software for production use with
+        real patients must conduct their own risk assessment, engage qualified legal counsel, and satisfy all
+        applicable regulatory requirements (HIPAA, HITECH, state privacy laws, etc.).
+      </p>
+
+      <h2 id="data-storage">4. Data Storage &amp; Retention</h2>
+      <h3>Public Demo</h3>
+      <p>
+        Data submitted to the public demo may be retained for up to 30 days for debugging purposes, then deleted.
+        No backups are made of demo data. Do not submit real PHI to the public demo.
+      </p>
+      <h3>Self-Hosted Deployments</h3>
+      <p>
+        You control all retention. The software does not phone home. No data leaves your infrastructure unless
+        you configure an upstream FHIR server or external service.
+      </p>
+
+      <h2 id="third-party">5. Third-Party Services</h2>
+      <p>The software may connect to the following external services, depending on configuration:</p>
+      <ul>
+        <li><strong>FHIR servers</strong> — HAPI FHIR, SMART Health IT, Epic Sandbox, or any FHIR R4/R5 server you configure. Subject to their own terms.</li>
+        <li><strong>NLM Clinical Tables API</strong> — used by Curatr for ICD-10-CM code validation. No PHI is sent; only code values.</li>
+        <li><strong>HL7 tx.fhir.org</strong> — used by Curatr for SNOMED CT / LOINC validation. No PHI is sent; only code values.</li>
+        <li><strong>NLM RxNav API</strong> — used by Curatr for RxNorm drug code validation. No PHI is sent; only code values.</li>
+        <li><strong>Fasten Health</strong> — if the Fasten Connect integration is enabled, patient-authorized FHIR exports flow through Fasten's infrastructure. Subject to <a href="https://www.fastenhealth.com/privacy" target="_blank" rel="noopener noreferrer">Fasten's Privacy Policy</a>.</li>
+        <li><strong>Redis</strong> — used for session management and rate limiting when configured. Data remains within your infrastructure.</li>
+      </ul>
+      <p>
+        Upstream FHIR server URLs are never exposed to end users (URL rewriting is enforced by the proxy layer).
+      </p>
+
+      <h2 id="cookies">6. Cookies &amp; Analytics</h2>
+      <p>
+        The public demo site uses only session cookies required for Flask operation. No advertising cookies,
+        third-party trackers, or behavioral analytics are used. Server-side access logs are the only analytics
+        collected and are not shared with any third party.
+      </p>
+
+      <h2 id="your-rights">7. Your Rights</h2>
+      <p>
+        If you have submitted data through the public demo and wish to request deletion, contact us at
+        <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a>. We will respond within 30 days.
+      </p>
+      <p>
+        For self-hosted deployments, all rights (access, deletion, portability) are exercised directly against
+        your own database. We have no access to your data.
+      </p>
+
+      <h2 id="children">8. Children's Privacy</h2>
+      <p>
+        This software and website are intended for healthcare developers and technologists. We do not knowingly
+        collect personal information from children under 13. If you believe a child has submitted personal
+        information through the demo, contact us at <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a>.
+      </p>
+
+      <h2 id="security">9. Security</h2>
+      <p>
+        We implement reasonable technical safeguards including HTTPS for all public endpoints, HMAC-signed
+        write tokens, append-only audit logs, and tenant-scoped queries. No system is perfectly secure.
+        Please report security vulnerabilities via GitHub Security Advisories or
+        <a href="mailto:security@healthclaw.io">security@healthclaw.io</a>.
+      </p>
+
+      <h2 id="changes">10. Changes to This Policy</h2>
+      <p>
+        We may update this policy as the software evolves. Material changes will be noted in the project
+        <a href="https://github.com/aks129/HealthClawGuardrails/releases" target="_blank" rel="noopener noreferrer">release notes</a>
+        and this page will reflect the updated effective date. Continued use of the service after changes
+        constitutes acceptance of the revised policy.
+      </p>
+
+      <h2 id="contact">11. Contact</h2>
+      <p>
+        Privacy questions: <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a><br>
+        Security disclosures: <a href="mailto:security@healthclaw.io">security@healthclaw.io</a><br>
+        General: <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer">healthclaw.io</a><br>
+        GitHub Issues: <a href="https://github.com/aks129/HealthClawGuardrails/issues" target="_blank" rel="noopener noreferrer">aks129/HealthClawGuardrails</a>
+      </p>
+
+    </div>
+
+    <p class="text-center">
+      <a href="{{ url_for('terms') }}" class="text-muted me-3">Terms &amp; Conditions</a>
+      <a href="{{ url_for('index') }}" class="text-muted">Back to Home</a>
+    </p>
+
+  </div>
+</div>
+{% endblock %}
