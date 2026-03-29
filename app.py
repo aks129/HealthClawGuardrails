@@ -1,9 +1,11 @@
 """
-Flask application routes for the FHIR R6 MCP Showcase.
+Flask application routes for HealthClaw Guardrails.
 
-Provides the web UI routes:
+Web UI routes:
 - / (landing page)
-- /r6-dashboard (interactive R6 agent dashboard)
+- /r6-dashboard (Health Data Dashboard — FHIR interactive showcase)
+- /faq (Frequently Asked Questions)
+- /wiki (Project Wiki)
 """
 
 from flask import render_template
@@ -12,11 +14,23 @@ from main import app
 
 @app.route('/')
 def index():
-    """Landing page — redirects attention to the R6 Dashboard."""
+    """Landing page."""
     return render_template('index.html')
 
 
 @app.route('/r6-dashboard')
 def r6_dashboard():
-    """Render the R6 FHIR Agent Dashboard — interactive showcase."""
+    """Health Data Dashboard (FHIR) — interactive guardrail showcase."""
     return render_template('r6_dashboard.html')
+
+
+@app.route('/faq')
+def faq():
+    """Frequently Asked Questions."""
+    return render_template('faq.html')
+
+
+@app.route('/wiki')
+def wiki():
+    """Project Wiki — architecture, concepts, and how-tos."""
+    return render_template('wiki.html')

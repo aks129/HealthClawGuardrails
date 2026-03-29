@@ -28,7 +28,19 @@
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == url_for('r6_dashboard') %}active{% endif %}"
                            href="{{ url_for('r6_dashboard') }}">
-                           <i class="fas fa-fire me-1"></i>R6 Dashboard
+                           <i class="fas fa-heartbeat me-1"></i>Health Data Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('faq') %}active{% endif %}"
+                           href="{{ url_for('faq') }}">
+                           <i class="fas fa-question-circle me-1"></i>FAQ
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('wiki') %}active{% endif %}"
+                           href="{{ url_for('wiki') }}">
+                           <i class="fas fa-book me-1"></i>Wiki
                         </a>
                     </li>
                 </ul>

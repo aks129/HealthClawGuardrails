@@ -1,0 +1,374 @@
+{% extends "base.html" %}
+
+{% block title %}Wiki — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<style>
+.wiki-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 2rem;
+  align-items: start;
+  margin-top: 1.5rem;
+}
+@media (max-width: 768px) {
+  .wiki-layout { grid-template-columns: 1fr; }
+  .wiki-toc { display: none; }
+}
+.wiki-toc {
+  position: sticky;
+  top: 1.5rem;
+  background: var(--r6-surface);
+  border: 1px solid var(--r6-border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  font-size: 0.82rem;
+}
+.wiki-toc-title {
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--r6-text-muted);
+  margin-bottom: 0.75rem;
+}
+.wiki-toc a {
+  display: block;
+  color: var(--r6-text-muted);
+  text-decoration: none;
+  padding: 0.2rem 0;
+  border-left: 2px solid transparent;
+  padding-left: 0.6rem;
+  transition: all 0.15s;
+}
+.wiki-toc a:hover, .wiki-toc a.active {
+  color: var(--r6-primary);
+  border-left-color: var(--r6-primary);
+}
+.wiki-toc .toc-sub { padding-left: 1.4rem; font-size: 0.78rem; }
+.wiki-content h2 {
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin: 2.5rem 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--r6-border);
+  color: #fff;
+}
+.wiki-content h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 1.75rem 0 0.6rem;
+  color: var(--r6-primary);
+}
+.wiki-content p, .wiki-content li {
+  color: var(--r6-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+.wiki-content ul, .wiki-content ol {
+  padding-left: 1.4rem;
+  margin-bottom: 1rem;
+}
+.wiki-content code {
+  background: rgba(99,102,241,0.12);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
+.wiki-content pre {
+  background: var(--r6-surface-2);
+  border: 1px solid var(--r6-border);
+  border-radius: 0.4rem;
+  padding: 1rem;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  margin: 0.75rem 0 1rem;
+}
+.wiki-content a { color: var(--r6-primary); }
+.wiki-callout {
+  border-left: 3px solid var(--r6-primary);
+  background: rgba(99,102,241,0.06);
+  padding: 0.8rem 1rem;
+  border-radius: 0 0.4rem 0.4rem 0;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+  color: var(--r6-text-muted);
+}
+.wiki-callout.warn {
+  border-color: var(--r6-warning);
+  background: rgba(245,158,11,0.06);
+}
+.wiki-callout.success {
+  border-color: var(--r6-success);
+  background: rgba(16,185,129,0.06);
+}
+.wiki-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.1em 0.5em;
+  border-radius: 99px;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
+.wiki-badge.stable { background: rgba(16,185,129,0.2); color: #10b981; }
+.wiki-badge.experimental { background: rgba(99,102,241,0.2); color: #6366f1; }
+.wiki-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.wiki-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--r6-text-muted);
+  border-bottom: 1px solid var(--r6-border);
+}
+.wiki-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--r6-text-muted);
+  vertical-align: top;
+}
+.wiki-table td:first-child { color: #fff; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="padding: 2rem 0 1rem; border-bottom: 1px solid var(--r6-border); margin-bottom: 0.5rem;">
+  <h1 style="font-size: 2rem; font-weight: 800; margin-bottom: 0.4rem;">
+    <i class="fas fa-book me-2" style="color:var(--r6-primary)"></i>Wiki
+  </h1>
+  <p style="color: var(--r6-text-muted); font-size: 0.92rem; margin: 0;">
+    Architecture, guardrail patterns, FHIR concepts, and how-tos for HealthClaw Guardrails.
+  </p>
+</div>
+
+<div class="wiki-layout">
+
+<!-- ===== TABLE OF CONTENTS ===== -->
+<nav class="wiki-toc">
+  <div class="wiki-toc-title">Contents</div>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture</a>
+  <a class="toc-sub" href="#flow">Request Flow</a>
+  <a class="toc-sub" href="#components">Components</a>
+  <a href="#guardrails">Guardrail Stack</a>
+  <a class="toc-sub" href="#phi">PHI Redaction</a>
+  <a class="toc-sub" href="#stepup">Step-up Auth</a>
+  <a class="toc-sub" href="#hitl">Human-in-the-Loop</a>
+  <a class="toc-sub" href="#audit">Audit Trail</a>
+  <a class="toc-sub" href="#tenant">Tenant Isolation</a>
+  <a href="#fhir">FHIR Resources</a>
+  <a class="toc-sub" href="#r4">US Core v9 R4</a>
+  <a class="toc-sub" href="#r6">R6 Experimental</a>
+  <a href="#mcp-tools">MCP Tools</a>
+  <a href="#curatr">Curatr</a>
+  <a href="#proxy">Upstream Proxy</a>
+  <a href="#deploy">Deployment</a>
+  <a href="#limitations">Limitations</a>
+</nav>
+
+<!-- ===== CONTENT ===== -->
+<div class="wiki-content">
+
+<h2 id="overview">Overview</h2>
+<p>HealthClaw Guardrails is a vendor-neutral guardrail proxy that sits between any AI agent and any FHIR health data server. It is a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer">healthclaw.io</a> open source project.</p>
+<div class="wiki-callout success">
+  <strong>The core problem it solves:</strong> FHIR standardized how health data is structured. MCP standardized how AI connects to tools. Nobody standardized the guardrails in between — who can see what data, who can write what, what gets logged, and when a human must be involved. That's what HealthClaw Guardrails does.
+</div>
+
+<h2 id="architecture">Architecture</h2>
+<pre>AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Server
+(Claude,       (Node.js)       (Flask Python)       (HAPI, Epic,
+ GPT-4, etc)                       ↓                Medplum, etc.)
+                             PHI redaction
+                             Audit trail
+                             Step-up auth
+                             Tenant isolation
+                             Human-in-the-loop</pre>
+
+<h3 id="flow">Request Flow</h3>
+<ol>
+  <li>AI agent calls an MCP tool (e.g. <code>fhir.read</code>)</li>
+  <li>MCP Server translates the tool call to an HTTP request to the Flask guardrail proxy</li>
+  <li>Flask checks: tenant header present? Step-up token valid (for writes)? Human-confirmed (for clinical writes)?</li>
+  <li>Resource fetched from local DB or upstream FHIR server</li>
+  <li>PHI redacted from the response</li>
+  <li>AuditEvent written (append-only)</li>
+  <li>Medical disclaimer injected</li>
+  <li>Redacted response + MCP summary returned to agent</li>
+</ol>
+
+<h3 id="components">Components</h3>
+<table class="wiki-table">
+  <thead><tr><th>Component</th><th>Tech</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>Flask App</td><td>Python / Flask</td><td>FHIR REST facade at <code>/r6/fhir/*</code>, guardrail enforcement</td></tr>
+    <tr><td>MCP Server</td><td>Node.js / TypeScript</td><td>12 MCP tools, Streamable HTTP + SSE transports</td></tr>
+    <tr><td>Database</td><td>SQLite (dev) / PostgreSQL (prod)</td><td>Resource storage, audit trail, context envelopes</td></tr>
+    <tr><td>Redis</td><td>Optional</td><td>Per-tenant rate limiting, session storage</td></tr>
+    <tr><td>Upstream FHIR</td><td>Any FHIR R4/R5/R6 server</td><td>Real clinical data source (proxy mode)</td></tr>
+  </tbody>
+</table>
+
+<h2 id="guardrails">Guardrail Stack</h2>
+<p>All guardrails are always active — they cannot be disabled per-request. They apply in local mode and upstream proxy mode identically.</p>
+
+<h3 id="phi">PHI Redaction</h3>
+<p>Applied on every read path, including upstream FHIR server responses, before data reaches the AI agent.</p>
+<table class="wiki-table">
+  <thead><tr><th>Field</th><th>What happens</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td>Name</td><td>Truncated to initials</td><td>Maria Elena Rivera → M. E. Rivera</td></tr>
+    <tr><td>Identifier</td><td>Masked to last 4 chars</td><td>MRN12345678 → ***5678</td></tr>
+    <tr><td>Address</td><td>Stripped to city/state/country</td><td>123 Main St, Boston, MA → Boston, MA</td></tr>
+    <tr><td>Birth date</td><td>Truncated to year</td><td>1985-03-15 → 1985</td></tr>
+    <tr><td>Telecom</td><td>Fully removed</td><td>617-555-0198 → [removed]</td></tr>
+    <tr><td>Photo</td><td>Fully removed</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h3 id="stepup">Step-up Authorization</h3>
+<p>Reads require only <code>X-Tenant-Id</code>. All write operations additionally require an <code>X-Step-Up-Token</code> header.</p>
+<ul>
+  <li>Tokens are HMAC-SHA256 signed with <code>STEP_UP_SECRET</code></li>
+  <li>Each token includes a 128-bit cryptographically random nonce</li>
+  <li>Tokens expire after 5 minutes</li>
+  <li>Tokens are tenant-bound — cross-tenant replay is rejected</li>
+</ul>
+<p>Tokens are issued at <code>GET /r6/fhir/internal/step-up-token</code> (with tenant header).</p>
+
+<h3 id="hitl">Human-in-the-Loop</h3>
+<p>Clinical resource writes return <strong>HTTP 428 Precondition Required</strong> unless the request includes <code>X-Human-Confirmed: true</code>.</p>
+<p>Clinical types: Observation, Condition, MedicationRequest, DiagnosticReport, AllergyIntolerance, Procedure, CarePlan, Immunization, NutritionIntake, DeviceAlert.</p>
+<div class="wiki-callout warn">
+  <strong>Current limitation:</strong> This is header-based, not cryptographic. Anyone with API access can set the header. It enforces intent in automated pipelines, but a determined attacker with API access could bypass it. A future version will use signed human-confirmation tokens.
+</div>
+
+<h3 id="audit">Audit Trail</h3>
+<p>Every resource access writes an AuditEvent record. Records are append-only — SQLAlchemy event listeners raise <code>RuntimeError</code> on any <code>UPDATE</code> or <code>DELETE</code>.</p>
+<p>Each AuditEvent records: event type, resource type + ID, tenant ID, agent ID, outcome (success/failure), timestamp, and optional detail.</p>
+<p>Export via <code>GET /r6/fhir/AuditEvent/$export</code> in NDJSON or Bundle format.</p>
+
+<h3 id="tenant">Tenant Isolation</h3>
+<p>Every database query is scoped by <code>tenant_id</code>. Resources created by tenant A are invisible to tenant B. The <code>X-Tenant-Id</code> header is required on all non-public endpoints and validated against <code>[a-zA-Z0-9_-]{1,64}</code>.</p>
+
+<h2 id="fhir">FHIR Resources</h2>
+
+<h3 id="r4">US Core v9 R4 <span class="wiki-badge stable">Stable</span></h3>
+<p>Standard FHIR R4 resources conforming to the US Core Implementation Guide v9. Widely deployed in US healthcare.</p>
+<table class="wiki-table">
+  <thead><tr><th>Resource</th><th>US Core required fields</th><th>Curatr evaluates</th></tr></thead>
+  <tbody>
+    <tr><td>Condition</td><td>code, subject</td><td>Yes — ICD-10, SNOMED, deprecated code detection</td></tr>
+    <tr><td>AllergyIntolerance</td><td>clinicalStatus, verificationStatus, patient</td><td>Yes — RxNorm/SNOMED, status validation</td></tr>
+    <tr><td>Immunization</td><td>status, vaccineCode, patient, occurrence[x]</td><td>Yes — CVX/SNOMED, occurrence date</td></tr>
+    <tr><td>MedicationRequest</td><td>status, intent, medication[x], subject</td><td>Yes — RxNorm code quality</td></tr>
+    <tr><td>Procedure</td><td>status, code, subject</td><td>Yes — SNOMED/CPT code quality</td></tr>
+    <tr><td>DiagnosticReport</td><td>status, code, subject</td><td>Yes — LOINC code quality</td></tr>
+    <tr><td>CarePlan</td><td>status, intent, subject</td><td>No — CRUD only</td></tr>
+    <tr><td>Goal</td><td>lifecycleStatus, description, subject</td><td>No — CRUD only</td></tr>
+    <tr><td>Coverage</td><td>status, beneficiary, payor</td><td>No — CRUD only</td></tr>
+    <tr><td>ServiceRequest</td><td>status, intent, subject</td><td>No — CRUD only</td></tr>
+    <tr><td>DocumentReference</td><td>status, subject, content</td><td>No — CRUD only</td></tr>
+    <tr><td>Location, Organization, Practitioner, PractitionerRole, RelatedPerson, CareTeam, Specimen, FamilyMemberHistory</td><td>Varies</td><td>No — CRUD only</td></tr>
+  </tbody>
+</table>
+
+<h3 id="r6">R6 Experimental <span class="wiki-badge experimental">Ballot3</span></h3>
+<p>FHIR R6 v6.0.0-ballot3 resources. These are experimental and may change before R6 final release.</p>
+<table class="wiki-table">
+  <thead><tr><th>Resource</th><th>What's new in R6</th></tr></thead>
+  <tbody>
+    <tr><td>Permission</td><td>Access control separate from Consent. <code>$evaluate</code> with human-readable reasoning.</td></tr>
+    <tr><td>SubscriptionTopic</td><td>Restructured pub/sub. Storage + discovery — notifications not dispatched.</td></tr>
+    <tr><td>DeviceAlert</td><td>ISO/IEEE 11073 device alarms.</td></tr>
+    <tr><td>NutritionIntake</td><td>Dietary consumption tracking.</td></tr>
+    <tr><td>DeviceAssociation, NutritionProduct, Requirements, ActorDefinition</td><td>CRUD only.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="mcp-tools">MCP Tools</h2>
+<p>The MCP server exposes 12 tools in two tiers. All read tools include an <code>_mcp_summary</code> field with reasoning, clinical context, and limitations to help the AI agent understand what it received and what it should tell the user.</p>
+
+<h3>Two-Phase Write Pattern</h3>
+<ol>
+  <li><strong>Propose</strong>: Call <code>fhir.propose_write</code>. Validates the resource and returns a preview. Nothing is written.</li>
+  <li><strong>Review</strong>: Check <code>requires_human_confirmation</code> (true for clinical types) and <code>proposal_status</code>.</li>
+  <li><strong>Commit</strong>: Call <code>fhir.commit_write</code> with <code>X-Step-Up-Token</code> and <code>X-Human-Confirmed: true</code> for clinical resources.</li>
+</ol>
+
+<h3>Permission Evaluation</h3>
+<p><code>fhir.permission_evaluate</code> evaluates stored R6 Permission resources against a subject + action + resource combination. Returns permit/deny with a human-readable reasoning string explaining which rule matched (or why default deny applied). This separates access control from consent records.</p>
+
+<h2 id="curatr">Curatr — Patient-Owned Data Quality</h2>
+<p>Curatr is the patient-facing skill within HealthClaw. It gives patients visibility into the quality of their own health records and the ability to correct them.</p>
+
+<h3>How it works</h3>
+<ol>
+  <li>Call <code>curatr.evaluate</code> on a resource</li>
+  <li>Issues returned with severity (critical/warning/info/suggestion), plain language description, clinical impact, and suggested fix</li>
+  <li>Present issues to the patient — explain what's wrong, why it matters, what can be done</li>
+  <li>Patient approves specific fixes</li>
+  <li>Call <code>curatr.apply_fix</code> — resource updated + linked Provenance resource created</li>
+</ol>
+
+<h3>Terminology services used</h3>
+<table class="wiki-table">
+  <thead><tr><th>Service</th><th>Validates</th><th>Auth needed</th></tr></thead>
+  <tbody>
+    <tr><td>tx.fhir.org (HL7 public)</td><td>SNOMED CT, LOINC, ICD-10</td><td>None</td></tr>
+    <tr><td>NLM Clinical Tables API</td><td>ICD-10-CM codes + descriptions</td><td>None</td></tr>
+    <tr><td>RXNAV API (NLM)</td><td>RxNorm drug codes</td><td>None</td></tr>
+    <tr><td>Local lookup</td><td>Deprecated systems (ICD-9-CM, etc.)</td><td>None</td></tr>
+  </tbody>
+</table>
+
+<h3>Provenance tracking</h3>
+<p>Every approved fix creates a FHIR Provenance resource recording: target resource, recorded timestamp, patient intent as free text, agent attribution (curatr), and exact field changes (before/after values).</p>
+
+<h2 id="proxy">Upstream FHIR Proxy</h2>
+<p>Set <code>FHIR_UPSTREAM_URL</code> to enable proxy mode. All guardrails remain active.</p>
+<ul>
+  <li><strong>Reads</strong>: Fetched from upstream, redacted, audited, disclaimers added</li>
+  <li><strong>Searches</strong>: All query parameters forwarded; results redacted per entry</li>
+  <li><strong>Writes</strong>: Validated locally first, then forwarded with step-up auth enforcement</li>
+  <li><strong>URL rewriting</strong>: Upstream URLs never appear in client responses</li>
+</ul>
+<div class="wiki-callout warn">
+  Proxy mode does not cache responses, does not translate between FHIR versions, and does not forward SMART-on-FHIR auth to upstream (uses upstream's native auth model).
+</div>
+
+<h2 id="deploy">Deployment</h2>
+<pre>uv sync
+STEP_UP_SECRET=your-secret python main.py
+
+# With upstream FHIR server
+FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 STEP_UP_SECRET=secret python main.py
+
+# Docker Compose (Flask + MCP server + Redis)
+docker-compose up -d --build
+
+# MCP server only
+cd services/agent-orchestrator && npm ci && npm start</pre>
+
+<h2 id="limitations">Known Limitations</h2>
+<ul>
+  <li><strong>Local mode storage</strong>: SQLite JSON blobs — table scans for filtering, no indexed search fields</li>
+  <li><strong>Structural validation only</strong>: No StructureDefinition conformance, cardinality checks, or terminology binding validation</li>
+  <li><strong>SubscriptionTopic</strong>: Stored and discoverable, but notifications are not dispatched</li>
+  <li><strong>Human-in-the-loop</strong>: Header-based, not cryptographic — enforces intent in pipelines, not against a determined attacker</li>
+  <li><strong>No historical versioning</strong>: version_id increments but old versions are not retrievable</li>
+  <li><strong>Context envelope consent</strong>: Always set to 'permit' (consent decision not evaluated)</li>
+  <li><strong>De-identification</strong>: Applied at read time, not storage time</li>
+  <li><strong>Upstream proxy</strong>: No response caching, no cross-version translation, no upstream auth forwarding</li>
+</ul>
+
+</div><!-- /wiki-content -->
+</div><!-- /wiki-layout -->
+{% endblock %}
