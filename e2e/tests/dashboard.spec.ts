@@ -115,6 +115,6 @@ test.describe('R6 Dashboard', () => {
     await expect(page.locator('a[href="/r6/fhir/metadata"]').first()).toBeVisible();
     await expect(page.locator('a[href="/r6/fhir/.well-known/oauth-authorization-server"]')).toBeVisible();
     await expect(page.locator('a[href="/r6/fhir/.well-known/smart-configuration"]')).toBeVisible();
-    await expect(page.locator('a[href="/r6/fhir/docs/privacy-policy"]')).toBeVisible();
+    await expect(page.locator('a[href="/privacy"]')).toBeVisible();
   });
 });

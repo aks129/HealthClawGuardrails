@@ -6,20 +6,22 @@ test.describe('Landing page', () => {
   });
 
   test('has correct title', async ({ page }) => {
-    await expect(page).toHaveTitle(/MCP Guardrail Patterns/);
+    await expect(page).toHaveTitle(/HealthClaw Guardrails/);
   });
 
   test('navbar has Home and Health Data Dashboard links', async ({ page }) => {
     await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Health Data Dashboard/ })).toBeVisible();
+    // Scope to navbar to avoid strict-mode conflict with hero CTA button
+    const nav = page.locator('nav');
+    await expect(nav.getByRole('link', { name: /Health Data Dashboard/ })).toBeVisible();
   });
 
   test('hero title is visible', async ({ page }) => {
-    await expect(page.locator('h1.hero-title')).toContainText('MCP Guardrail Patterns for Healthcare AI');
+    await expect(page.locator('h1.hero-title')).toContainText('HealthClaw Guardrails');
   });
 
   test('Try the Dashboard button navigates to dashboard', async ({ page }) => {
-    await page.getByRole('link', { name: /Try the Dashboard/ }).click();
+    await page.getByRole('link', { name: /Health Data Dashboard/ }).first().click();
     await expect(page).toHaveURL('/r6-dashboard');
   });
 
@@ -29,7 +31,7 @@ test.describe('Landing page', () => {
 
   test('6-step story section shows all steps', async ({ page }) => {
     await expect(page.getByText('1. Read Patient Record')).toBeVisible();
-    await expect(page.getByText('2. Propose Observation')).toBeVisible();
+    await expect(page.getByText('2. Propose Write')).toBeVisible();
     await expect(page.getByText('6. Commit + Audit Trail')).toBeVisible();
   });
 
