@@ -17,6 +17,12 @@ services:
       - FHIR_UPSTREAM_URL=${FHIR_UPSTREAM_URL:-}
       - FHIR_UPSTREAM_TIMEOUT=${FHIR_UPSTREAM_TIMEOUT:-15}
       - FHIR_LOCAL_BASE_URL=http://localhost:5000/r6/fhir
+      # Fasten Connect (https://docs.connect.fastenhealth.com)
+      - FASTEN_PUBLIC_KEY=${FASTEN_PUBLIC_KEY:-}
+      - FASTEN_PRIVATE_KEY=${FASTEN_PRIVATE_KEY:-}
+      - FASTEN_WEBHOOK_SECRET=${FASTEN_WEBHOOK_SECRET:-}
+      # Set to "true" to run Curatr quality scan after each import
+      - FASTEN_CURATR_SCAN=${FASTEN_CURATR_SCAN:-false}
     depends_on:
       - redis
     volumes:

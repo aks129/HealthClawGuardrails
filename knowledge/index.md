@@ -5,6 +5,7 @@ Domain knowledge captured during development of HealthClaw Guardrails.
 ## Domains
 
 - [skills/](skills/) — Claude/OpenClaw skill file standards, compliance rules, and patterns
+- [integrations/](integrations/) — Third-party data integrations: Fasten Connect, TEFCA IAS, webhook patterns
 
 ## How to Use
 

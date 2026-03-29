@@ -89,13 +89,19 @@ db.init_app(app)
 
 with app.app_context():
     from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
+    from r6.fasten.models import FastenConnection, FastenJob
     db.create_all()
-    logger.info("Database tables created (R6 models)")
+    logger.info("Database tables created (R6 models + Fasten Connect)")
 
 # Register R6 FHIR Blueprint
 from r6.routes import r6_blueprint
 app.register_blueprint(r6_blueprint)
 logger.info("R6 FHIR Blueprint registered at /r6/fhir")
+
+# Register Fasten Connect Blueprint
+from r6.fasten.routes import fasten_blueprint
+app.register_blueprint(fasten_blueprint)
+logger.info("Fasten Connect Blueprint registered at /fasten")
 
 # Log upstream FHIR server configuration
 _upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()

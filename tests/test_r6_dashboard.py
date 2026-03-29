@@ -85,7 +85,7 @@ class TestDashboardPage:
     def test_dashboard_returns_html(self, client):
         resp = client.get('/r6-dashboard')
         assert resp.status_code == 200
-        assert b'R6 FHIR Agent Dashboard' in resp.data
+        assert b'Health Data Dashboard' in resp.data
 
     def test_dashboard_includes_js(self, client):
         resp = client.get('/r6-dashboard')
@@ -108,7 +108,7 @@ class TestDashboardPage:
 
     def test_dashboard_linked_in_navbar(self, client):
         resp = client.get('/')
-        assert b'R6 Dashboard' in resp.data
+        assert b'Health Data Dashboard' in resp.data
 
 
 # ===== Full Agent Workflow =====
