@@ -2,7 +2,7 @@
 
 The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.0.0** | 266 tests | 12 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3
+**v1.1.0** | 266 tests | 12 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.

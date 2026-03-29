@@ -453,6 +453,9 @@
   margin-bottom: 1.5rem;
 }
 
+/* Full-height tiles in row grids */
+.tile-full { height: 100%; }
+
 /* Hero brand link */
 .hero-brand-link {
   color: var(--r6-primary);

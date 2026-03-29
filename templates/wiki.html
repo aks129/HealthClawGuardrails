@@ -168,6 +168,9 @@
   <a class="toc-sub" href="#r6">R6 Experimental</a>
   <a href="#mcp-tools">MCP Tools</a>
   <a href="#curatr">Curatr</a>
+  <a href="#fasten">Fasten Connect</a>
+  <a class="toc-sub" href="#fasten-openclaw">OpenClaw</a>
+  <a class="toc-sub" href="#fasten-claude">Claude Code / Desktop</a>
   <a href="#proxy">Upstream Proxy</a>
   <a href="#deploy">Deployment</a>
   <a href="#limitations">Limitations</a>
@@ -331,6 +334,160 @@
 
 <h3>Provenance tracking</h3>
 <p>Every approved fix creates a FHIR Provenance resource recording: target resource, recorded timestamp, patient intent as free text, agent attribution (curatr), and exact field changes (before/after values).</p>
+
+<h2 id="fasten">Fasten Connect — Patient Health Record Ingestion</h2>
+<p><a href="https://docs.connect.fastenhealth.com" target="_blank" rel="noopener noreferrer">Fasten Connect</a> is the ingestion layer for HealthClaw Guardrails. Patients authorize access to their EHR systems via the Fasten Stitch widget; records arrive as FHIR R4 NDJSON and flow through the full guardrail stack once ingested.</p>
+
+<div class="wiki-callout success">
+  <strong>Two modes:</strong> Standard mode connects to individual EHR portals (Epic, Cerner, Athena). TEFCA IAS mode uses a single identity verification (CLEAR or ID.me) to pull longitudinal records across all QHINs — no per-provider logins required.
+</div>
+
+<h3>Required environment variables</h3>
+<table class="wiki-table">
+  <thead><tr><th>Variable</th><th>Where to get it</th><th>Required</th></tr></thead>
+  <tbody>
+    <tr><td><code>FASTEN_PUBLIC_KEY</code></td><td>Fasten Developer Portal — starts with <code>public_test_</code> or <code>public_live_</code></td><td>Yes</td></tr>
+    <tr><td><code>FASTEN_PRIVATE_KEY</code></td><td>Same portal — never expose client-side</td><td>Yes</td></tr>
+    <tr><td><code>FASTEN_WEBHOOK_SECRET</code></td><td>Portal → Delivery Logs → Signing secret (starts with <code>whsec_</code>)</td><td>Recommended</td></tr>
+    <tr><td><code>FASTEN_CURATR_SCAN</code></td><td>Set <code>true</code> to auto-run Curatr after each import</td><td>No</td></tr>
+  </tbody>
+</table>
+
+<h3 id="fasten-openclaw">Quick Start — OpenClaw</h3>
+
+<p><strong>Step 1: Start the stack</strong></p>
+<pre>export FASTEN_PUBLIC_KEY=public_test_XXX
+export FASTEN_PRIVATE_KEY=private_test_XXX
+export FASTEN_WEBHOOK_SECRET=whsec_XXX
+export STEP_UP_SECRET=$(openssl rand -hex 32)
+export FASTEN_CURATR_SCAN=true
+
+docker-compose up -d --build</pre>
+
+<p><strong>Step 2: Enable the skill in OpenClaw</strong></p>
+<p>Place the skill in your workspace skills folder or install from the project:</p>
+<pre># Copy the skill to your OpenClaw workspace skills folder
+cp -r skills/fasten-connect ~/.openclaw/skills/
+
+# Or run from this project directory — OpenClaw picks up workspace skills automatically</pre>
+<p>OpenClaw reads <code>FASTEN_PUBLIC_KEY</code> from your environment (declared in <code>metadata.openclaw.requires.env</code>). The skill gates itself — it won't appear active until the key is set.</p>
+
+<p><strong>Step 3: Embed the Stitch widget in your web app</strong></p>
+<pre>&lt;!-- Add to any HTML page your patients use --&gt;
+&lt;link rel="stylesheet" href="https://stitch.fastenhealth.com/v0.4/bundle.css"&gt;
+&lt;script src="https://stitch.fastenhealth.com/v0.4/bundle.js"&gt;&lt;/script&gt;
+
+&lt;fasten-stitch-element public-id="public_test_XXX"&gt;&lt;/fasten-stitch-element&gt;
+
+&lt;!-- TEFCA mode: single identity verification for all QHINs --&gt;
+&lt;!-- &lt;fasten-stitch-element public-id="public_test_XXX" tefca-mode="true"&gt;&lt;/fasten-stitch-element&gt; --&gt;
+
+&lt;script&gt;
+document.querySelector('fasten-stitch-element')
+  .addEventListener('widget.complete', async (event) =&gt; {
+    const { org_connection_id, endpoint_id, tefca_directory_id, platform_type } = event.detail;
+    // Register the connection with HealthClaw
+    await fetch('/fasten/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': 'YOUR_TENANT_ID' },
+      body: JSON.stringify({ org_connection_id, endpoint_id, tefca_directory_id, platform_type }),
+    });
+  });
+&lt;/script&gt;</pre>
+
+<p><strong>Step 4: Configure your webhook</strong></p>
+<p>In the <a href="https://app.connect.fastenhealth.com" target="_blank" rel="noopener noreferrer">Fasten Developer Portal</a>, set your webhook delivery URL to:</p>
+<pre>https://your-domain.com/fasten/webhook</pre>
+<p>For local development, use <a href="https://ngrok.com" target="_blank" rel="noopener noreferrer">ngrok</a> or the <a href="https://docs.connect.fastenhealth.com/guides/webhook-debugging-simulator.md" target="_blank" rel="noopener noreferrer">Fasten Webhook Simulator</a>.</p>
+
+<p><strong>Step 5: Use OpenClaw to work with ingested data</strong></p>
+<p>Once an import completes, the <code>fhir-r6-guardrails</code> and <code>curatr</code> skills expose all ingested data through MCP. In OpenClaw Messenger:</p>
+<pre>You: "Show me my recent conditions"
+→ fhir.search(patient, Condition) — returns redacted conditions
+
+You: "Check my diabetes diagnosis for quality issues"
+→ curatr.evaluate(Condition, cond-001) — checks ICD-10, SNOMED, required fields
+
+You: "Update the code to ICD-10-CM E11.9"
+→ Patient approves → curatr.apply_fix() — writes fix + Provenance record</pre>
+
+<p><strong>Check import status:</strong></p>
+<pre>curl /fasten/jobs -H "X-Tenant-Id: your-tenant-id"
+# Returns: [{"task_id": "...", "status": "complete", "ingested_resources": 847, ...}]</pre>
+
+<div class="wiki-callout warn">
+  <strong>Production note:</strong> Fasten exports can be 30MB–3GB. Vercel's 60-second function timeout will cut off large downloads. Deploy to Railway (see <code>railway.toml</code>) or any persistent server for production use.
+</div>
+
+<h3 id="fasten-claude">Quick Start — Claude Code / Claude Desktop</h3>
+
+<p><strong>Step 1: Start the HealthClaw stack</strong></p>
+<pre>export FASTEN_PUBLIC_KEY=public_test_XXX
+export FASTEN_PRIVATE_KEY=private_test_XXX
+export FASTEN_WEBHOOK_SECRET=whsec_XXX
+export STEP_UP_SECRET=$(openssl rand -hex 32)
+
+# Start Flask + MCP server
+docker-compose up -d --build
+
+# Or manually:
+uv sync && python main.py &amp;
+cd services/agent-orchestrator &amp;&amp; npm ci &amp;&amp; npm start</pre>
+
+<p><strong>Step 2: Point Claude at the MCP server</strong></p>
+<p>Add to <code>~/.claude/settings.json</code> (Claude Code) or your Claude Desktop MCP config:</p>
+<pre>{
+  "mcpServers": {
+    "healthclaw-guardrails": {
+      "url": "http://localhost:3001/mcp",
+      "headers": {
+        "X-Tenant-Id": "my-tenant"
+      }
+    }
+  }
+}</pre>
+
+<p><strong>Step 3: Register a test connection</strong></p>
+<p>Use Fasten's test credentials to connect a synthetic patient, then register the <code>org_connection_id</code>:</p>
+<pre># After patient authenticates via Stitch widget, register the connection:
+curl -X POST http://localhost:5000/fasten/connections \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-Id: my-tenant" \
+  -d '{"org_connection_id": "org-conn-test-001", "platform_type": "epic"}'
+
+# Trigger the export via Fasten API:
+curl -X POST https://api.connect.fastenhealth.com/v1/bridge/fhir/ehi-export \
+  -u "public_test_XXX:private_test_XXX" \
+  -H "Content-Type: application/json" \
+  -d '{"org_connection_id": "org-conn-test-001"}'</pre>
+
+<p><strong>Step 4: Ask Claude to work with the data</strong></p>
+<p>Once the import webhook fires and ingestion completes, Claude has full access via MCP:</p>
+<pre># In Claude Code (claude.ai/code) or Claude Desktop:
+
+"Check the import status"
+→ (uses curl or direct) GET /fasten/jobs
+
+"Search for my conditions"
+→ fhir.search with resourceType=Condition, patient filter
+
+"Evaluate this condition for data quality issues"
+→ curatr.evaluate on the Condition resource
+
+"What guardrails apply to writing a new observation?"
+→ fhir.propose_write to see validation + HITL requirements before committing</pre>
+
+<p><strong>Step 5: Load the skill files for context</strong></p>
+<p>In Claude Code, the skill files provide authoritative reference without token overhead:</p>
+<pre># The skills are in the workspace — Claude Code loads them automatically.
+# Or reference them directly:
+cat skills/fasten-connect/SKILL.md     # Fasten integration reference
+cat skills/fhir-r6-guardrails/SKILL.md # MCP tool reference
+cat skills/curatr/SKILL.md             # Curatr evaluation reference</pre>
+
+<div class="wiki-callout">
+  <strong>TEFCA IAS (Claude platform):</strong> Enable TEFCA mode by setting <code>tefca-mode="true"</code> on the Stitch widget. For test mode, use synthetic patients from the Fasten test credentials page. Use <code>tefca_directory_id</code> (not <code>endpoint_id</code>) as the stable identifier when registering TEFCA connections.
+</div>
 
 <h2 id="proxy">Upstream FHIR Proxy</h2>
 <p>Set <code>FHIR_UPSTREAM_URL</code> to enable proxy mode. All guardrails remain active.</p>

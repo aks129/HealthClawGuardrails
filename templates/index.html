@@ -4,51 +4,63 @@
 
 {% block head %}
 <style>
-/* ===== Hero Demo Styles ===== */
-.hero-demo-section {
-  margin: -1.5rem -12px 0;
-  padding: 3rem 1.5rem 2rem;
+.hero-section {
+  padding: 3.5rem 1.5rem 3rem;
   background: linear-gradient(135deg, var(--r6-surface) 0%, #1e1b4b 50%, #0f172a 100%);
   border-bottom: 1px solid var(--r6-border);
   position: relative;
   overflow: hidden;
+  margin: -1.5rem -12px 0;
 }
-.hero-demo-section::before {
+.hero-section::before {
   content: '';
   position: absolute;
   inset: 0;
   background: radial-gradient(ellipse at 30% 50%, var(--r6-primary-soft) 0%, transparent 60%);
   pointer-events: none;
 }
-.hero-demo-section .hero-inner {
+.hero-inner {
   position: relative;
   z-index: 1;
-  max-width: 960px;
+  max-width: 800px;
   margin: 0 auto;
+  text-align: center;
 }
 .hero-title {
   font-size: 2.4rem;
   font-weight: 800;
-  margin-bottom: 0.5rem;
-  text-align: center;
+  margin-bottom: 0.6rem;
 }
-.hero-oneliner {
+.hero-sub {
   color: var(--r6-text-muted);
   font-size: 1.05rem;
-  max-width: 720px;
-  margin: 0 auto 1.75rem;
-  text-align: center;
-  line-height: 1.5;
+  max-width: 680px;
+  margin: 0 auto 0.75rem;
+  line-height: 1.55;
+}
+.hero-badges {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+.hero-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.65rem;
+  border-radius: 99px;
+  border: 1px solid var(--r6-border);
+  color: var(--r6-text-muted);
 }
 .hero-ctas {
   display: flex;
   gap: 0.75rem;
   justify-content: center;
   flex-wrap: wrap;
-  margin-bottom: 2.5rem;
 }
 .hero-ctas .r6-btn { font-size: 0.95rem; padding: 0.7rem 1.75rem; }
-.hero-ctas .btn-github {
+.btn-secondary-outline {
   font-size: 0.82rem;
   padding: 0.55rem 1.25rem;
   color: var(--r6-text-muted);
@@ -60,339 +72,278 @@
   align-items: center;
   gap: 0.4rem;
 }
-.hero-ctas .btn-github:hover {
+.btn-secondary-outline:hover {
   color: var(--r6-text);
   border-color: var(--r6-text-muted);
 }
 
-/* Split-screen demo */
-.demo-container {
+/* PHI Before/After */
+.phi-compare {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.25rem;
-  margin-bottom: 1.25rem;
+  gap: 1rem;
+  margin: 1rem 0;
 }
-@media (max-width: 768px) {
-  .demo-container { grid-template-columns: 1fr; }
-  .hero-title { font-size: 1.75rem; }
-  .hero-oneliner { font-size: 0.92rem; }
-}
-.demo-panel {
-  background: rgba(0, 0, 0, 0.35);
+@media (max-width: 600px) { .phi-compare { grid-template-columns: 1fr; } }
+.phi-panel {
+  background: var(--r6-surface-2);
   border: 1px solid var(--r6-border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   overflow: hidden;
-  min-height: 280px;
 }
-.demo-panel-header {
-  padding: 0.65rem 1rem;
-  font-size: 0.78rem;
+.phi-panel-header {
+  padding: 0.4rem 0.85rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--r6-border);
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
 }
-.demo-panel-left .demo-panel-header {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--r6-danger);
-}
-.demo-panel-right .demo-panel-header {
-  background: rgba(16, 185, 129, 0.1);
-  color: var(--r6-success);
-}
-.demo-panel-body {
-  padding: 1rem 1.15rem;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.82rem;
-  line-height: 1.7;
-  color: var(--r6-text);
-}
-.demo-field {
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
-}
-.demo-field.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-.demo-field .field-label {
-  color: var(--r6-text-muted);
-  min-width: 75px;
-  display: inline-block;
-}
-.demo-field .field-value {
-  color: var(--r6-text);
-}
-
-/* Right panel: redacted highlight flash */
-.demo-field.flash .field-value {
-  animation: redactFlash 0.6s ease;
-}
-@keyframes redactFlash {
-  0% { background: rgba(16, 185, 129, 0.35); color: #fff; }
-  100% { background: transparent; color: var(--r6-text); }
-}
-
-/* Redacted text styling */
-.redacted {
-  color: var(--r6-success);
-}
-.redacted-tag {
-  color: var(--r6-warning);
-  font-style: italic;
+.phi-panel-header.before { background: rgba(239,68,68,0.1); color: var(--r6-danger); }
+.phi-panel-header.after { background: rgba(16,185,129,0.1); color: var(--r6-success); }
+.phi-panel pre {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
   font-size: 0.78rem;
+  line-height: 1.65;
+  background: transparent;
+  border: none;
 }
+.phi-redacted { color: var(--r6-success); }
+.phi-removed { color: var(--r6-warning); font-style: italic; }
 
-/* Audit trail entry */
-.demo-audit {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--r6-border);
-  border-radius: 0.5rem;
-  padding: 0.7rem 1rem;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.78rem;
-  color: var(--r6-text-muted);
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
+/* Guardrail step cards */
+.panel-featured {
+  border-color: var(--r6-primary);
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.15);
 }
-.demo-audit.visible {
-  opacity: 1;
-  transform: translateY(0);
+.panel-featured-header {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+  border-bottom-color: var(--r6-primary);
 }
-.demo-audit .audit-check {
-  color: var(--r6-success);
-  font-weight: 700;
+.panel-featured-header i { color: #fbbf24; font-size: 1.1rem; }
+.panel-featured-header h3 { color: #fbbf24; }
+.step-card {
+  padding: 0.75rem;
+  border-left: 3px solid;
+  border-radius: 0 0.5rem 0.5rem 0;
+  height: 100%;
 }
-.demo-audit .audit-label {
-  color: var(--r6-info);
-}
+.step-card-info    { border-color: var(--r6-info);    background: rgba(6,182,212,0.05); }
+.step-card-primary { border-color: var(--r6-primary); background: rgba(99,102,241,0.05); }
+.step-card-danger  { border-color: var(--r6-danger);  background: rgba(239,68,68,0.05); }
+.step-card-success { border-color: var(--r6-success); background: rgba(16,185,129,0.05); }
+.step-card-warning { border-color: var(--r6-warning); background: rgba(245,158,11,0.05); }
+.step-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.25rem; }
+.step-title-info    { color: var(--r6-info); }
+.step-title-primary { color: var(--r6-primary); }
+.step-title-danger  { color: var(--r6-danger); }
+.step-title-success { color: var(--r6-success); }
+.step-title-warning { color: var(--r6-warning); }
+.step-body { font-size: 0.78rem; color: var(--r6-text-muted); }
 
-/* "Try it yourself" link */
-.demo-try-link {
-  text-align: center;
-  margin-top: 1rem;
-  opacity: 0;
-  transition: opacity 0.5s ease;
-}
-.demo-try-link.visible { opacity: 1; }
-.demo-try-link a {
-  color: var(--r6-primary);
-  font-size: 0.85rem;
-  text-decoration: none;
-  border-bottom: 1px dashed var(--r6-primary);
-  padding-bottom: 1px;
-}
-.demo-try-link a:hover {
-  color: #818cf8;
-  border-color: #818cf8;
-}
+/* Architecture / data source tables */
+.arch-table { width: 100%; }
+.arch-table td { padding: 0.3rem 0; font-size: 0.85rem; color: var(--r6-text-muted); }
+.arch-table td:first-child { color: var(--r6-text); font-weight: 600; padding-right: 0.75rem; white-space: nowrap; }
 
-/* Replay button */
-.demo-replay {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.78rem;
-  color: var(--r6-text-muted);
-  background: none;
-  border: 1px solid var(--r6-border);
-  border-radius: 0.4rem;
-  padding: 0.3rem 0.7rem;
-  cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
-  margin-left: 0.75rem;
+@media (max-width: 768px) {
+  .hero-title { font-size: 1.75rem; }
+  .hero-sub { font-size: 0.92rem; }
 }
-.demo-replay:hover {
-  color: var(--r6-text);
-  border-color: var(--r6-text-muted);
-}
-
-/* ===== Comparison Table ===== */
-.comparison-table-wrapper {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-.comparison-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-  min-width: 600px;
-}
-.comparison-table th,
-.comparison-table td {
-  padding: 0.6rem 0.85rem;
-  border-bottom: 1px solid var(--r6-border);
-  text-align: center;
-  white-space: nowrap;
-}
-.comparison-table th {
-  background: var(--r6-surface-3);
-  font-weight: 700;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--r6-text-muted);
-}
-.comparison-table th:first-child,
-.comparison-table td:first-child {
-  text-align: left;
-  font-weight: 600;
-}
-.comparison-table th.highlight-col {
-  color: var(--r6-primary);
-  background: rgba(99, 102, 241, 0.1);
-}
-.comparison-table td.highlight-col {
-  background: rgba(99, 102, 241, 0.05);
-}
-.comparison-table .check { color: var(--r6-success); font-weight: 700; }
-.comparison-table .cross { color: var(--r6-danger); }
-.comparison-table .partial { color: var(--r6-warning); font-size: 0.78rem; }
-.comparison-table .na { color: var(--r6-text-muted); }
 </style>
 {% endblock %}
 
 {% block content %}
-<!-- ===== HERO SECTION WITH AUTO-PLAYING DEMO ===== -->
-<div class="hero-demo-section" id="hero-demo">
+
+<!-- ===== HERO ===== -->
+<div class="hero-section">
   <div class="hero-inner">
     <h1 class="hero-title">
       <i class="fas fa-shield-alt" style="color:var(--r6-primary)"></i>
       HealthClaw Guardrails
     </h1>
-    <p class="hero-oneliner">
-      The security layer between AI agents and clinical data &mdash; a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer" class="hero-brand-link">healthclaw.io</a> project.<br>
-      FHIR R4 US Core v9 + R6 &middot; PHI redaction &middot; Audit trails &middot; Step-up auth &middot; Any FHIR server.
+    <p class="hero-sub">
+      The security layer between AI agents and clinical data &mdash;
+      a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer" class="hero-brand-link">healthclaw.io</a> open source project.
     </p>
-
+    <div class="hero-badges">
+      <span class="hero-badge"><i class="fas fa-check-circle me-1" style="color:var(--r6-success)"></i>FHIR R4 US Core v9</span>
+      <span class="hero-badge"><i class="fas fa-flask me-1" style="color:var(--r6-primary)"></i>FHIR R6 ballot3</span>
+      <span class="hero-badge"><i class="fas fa-plug me-1" style="color:var(--r6-info)"></i>12 MCP Tools</span>
+      <span class="hero-badge"><i class="fas fa-database me-1" style="color:var(--r6-warning)"></i>37 Resource Types</span>
+      <span class="hero-badge"><i class="fas fa-link me-1" style="color:var(--r6-text-muted)"></i>Fasten Connect</span>
+    </div>
     <div class="hero-ctas">
-      <button class="r6-btn r6-btn-primary" onclick="replayDemo()" id="btn-watch-demo">
-        <i class="fas fa-play"></i> Watch the Demo
-      </button>
-      <a href="{{ url_for('r6_dashboard') }}" class="r6-btn r6-btn-outline">
-        <i class="fas fa-th-large"></i> Try the Dashboard
+      <a href="{{ url_for('r6_dashboard') }}" class="r6-btn r6-btn-primary">
+        <i class="fas fa-th-large"></i> Health Data Dashboard
       </a>
-      <a href="https://github.com/aks129/fhir-mcp-guardrails" target="_blank" rel="noopener" class="btn-github">
-        <i class="fab fa-github"></i> View on GitHub
+      <a href="{{ url_for('wiki') }}" class="r6-btn r6-btn-outline">
+        <i class="fas fa-book"></i> Quick Start
       </a>
-    </div>
-
-    <!-- Split-Screen Demo -->
-    <div class="demo-container" id="demo-split">
-      <!-- Left Panel: Raw Data -->
-      <div class="demo-panel demo-panel-left">
-        <div class="demo-panel-header">
-          <i class="fas fa-eye"></i>
-          What the AI Agent Requested
-        </div>
-        <div class="demo-panel-body" id="demo-left">
-          <div class="demo-field" data-idx="0"><span class="field-label">Patient:</span> <span class="field-value">Maria Elena Rivera</span></div>
-          <div class="demo-field" data-idx="1"><span class="field-label">MRN:</span> <span class="field-value">MRN-2026-4471</span></div>
-          <div class="demo-field" data-idx="2"><span class="field-label">Phone:</span> <span class="field-value">617-555-0198</span></div>
-          <div class="demo-field" data-idx="3"><span class="field-label">Address:</span> <span class="field-value">123 Clinical Ave, Boston, MA</span></div>
-          <div class="demo-field" data-idx="4"><span class="field-label">DOB:</span> <span class="field-value">1985-03-15</span></div>
-        </div>
-      </div>
-
-      <!-- Right Panel: Redacted Data -->
-      <div class="demo-panel demo-panel-right">
-        <div class="demo-panel-header">
-          <i class="fas fa-shield-alt"></i>
-          What the AI Agent Received
-        </div>
-        <div class="demo-panel-body" id="demo-right">
-          <div class="demo-field" data-idx="0"><span class="field-label">Patient:</span> <span class="field-value"><span class="redacted">Rivera, M. E.</span></span></div>
-          <div class="demo-field" data-idx="1"><span class="field-label">MRN:</span> <span class="field-value"><span class="redacted">***4471</span></span></div>
-          <div class="demo-field" data-idx="2"><span class="field-label">Phone:</span> <span class="field-value"><span class="redacted-tag">[Redacted]</span></span></div>
-          <div class="demo-field" data-idx="3"><span class="field-label">Address:</span> <span class="field-value"><span class="redacted">Boston, MA</span></span></div>
-          <div class="demo-field" data-idx="4"><span class="field-label">DOB:</span> <span class="field-value"><span class="redacted">1985</span></span></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Audit Trail Entry -->
-    <div class="demo-audit" id="demo-audit">
-      <span class="audit-check">&#10003;</span>
-      <span class="audit-label">AuditEvent:</span>
-      READ Patient/aee09834 by Agent/demo-agent at <span id="demo-timestamp"></span> | Tenant: hospital-a
-      <button class="demo-replay" onclick="replayDemo()" title="Replay animation"><i class="fas fa-redo-alt"></i> Replay</button>
-    </div>
-
-    <!-- Try it yourself -->
-    <div class="demo-try-link" id="demo-try-link">
-      <a href="{{ url_for('r6_dashboard') }}">This is a demo &mdash; try it yourself on the live dashboard &rarr;</a>
+      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="btn-secondary-outline">
+        <i class="fab fa-github"></i> GitHub
+      </a>
     </div>
   </div>
 </div>
 
-<!-- ===== COMPARISON TABLE ===== -->
-<div class="r6-panel mb-5 mt-5">
-  <div class="r6-panel-header">
-    <i class="fas fa-balance-scale"></i>
-    <h3>How This Compares</h3>
+<!-- ===== GUARDRAIL SEQUENCE ===== -->
+<div class="r6-panel panel-featured mb-5 mt-5">
+  <div class="r6-panel-header panel-featured-header">
+    <i class="fas fa-bolt"></i>
+    <h3>What Happens When an AI Agent Accesses Clinical Data</h3>
   </div>
   <div class="r6-panel-body">
-    <div class="comparison-table-wrapper">
-      <table class="comparison-table">
-        <thead>
-          <tr>
-            <th>Feature</th>
-            <th class="highlight-col">This Project</th>
-            <th>AWS HealthLake MCP</th>
-            <th>Medplum MCP</th>
-            <th>Raw FHIR</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Works with any FHIR server</td>
-            <td class="highlight-col"><span class="check">&#10003;</span></td>
-            <td><span class="partial">HealthLake only</span></td>
-            <td><span class="partial">Medplum only</span></td>
-            <td><span class="na">&mdash;</span></td>
-          </tr>
-          <tr>
-            <td>PHI redaction on reads</td>
-            <td class="highlight-col"><span class="check">&#10003;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-          </tr>
-          <tr>
-            <td>Immutable audit trail</td>
-            <td class="highlight-col"><span class="check">&#10003;</span></td>
-            <td><span class="partial">CloudTrail</span></td>
-            <td><span class="partial">Partial</span></td>
-            <td><span class="cross">&#10007;</span></td>
-          </tr>
-          <tr>
-            <td>Step-up auth for writes</td>
-            <td class="highlight-col"><span class="check">&#10003;</span></td>
-            <td><span class="partial">IAM</span></td>
-            <td><span class="partial">Medplum auth</span></td>
-            <td><span class="cross">&#10007;</span></td>
-          </tr>
-          <tr>
-            <td>Human-in-the-loop</td>
-            <td class="highlight-col"><span class="check">&#10003;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-            <td><span class="cross">&#10007;</span></td>
-          </tr>
-          <tr>
-            <td>Setup time</td>
-            <td class="highlight-col"><strong style="color:var(--r6-success)">10 seconds</strong></td>
-            <td><span class="partial">30+ min</span></td>
-            <td><span class="partial">15+ min</span></td>
-            <td><span class="na">Varies</span></td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="step-card step-card-info">
+          <div class="step-title"><span class="step-title-info">1.</span> Read Patient Record</div>
+          <div class="step-body">PHI redacted: identifiers masked, addresses stripped, telecom removed. Agent only sees safe data.</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="step-card step-card-primary">
+          <div class="step-title"><span class="step-title-primary">2.</span> Propose Write</div>
+          <div class="step-body">Agent calls <code>fhir.propose_write</code>. Structural validation gate runs. Resource previewed without committing.</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="step-card step-card-danger">
+          <div class="step-title"><span class="step-title-danger">3.</span> Permission Evaluated</div>
+          <div class="step-body">R6 Permission <code>$evaluate</code> returns permit or deny with reasoning. No matching rule = default deny.</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="step-card step-card-success">
+          <div class="step-title"><span class="step-title-success">4.</span> Policy Permits</div>
+          <div class="step-body">Permit rule matched. Re-evaluation returns reasoning showing which rule applied and why.</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="step-card step-card-warning">
+          <div class="step-title"><span class="step-title-warning">5.</span> Step-up + Human Gate</div>
+          <div class="step-body">HMAC-SHA256 token required (128-bit nonce, 5-min TTL). Clinical writes blocked until <code>X-Human-Confirmed: true</code>.</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="step-card step-card-success">
+          <div class="step-title"><span class="step-title-success">6.</span> Commit + Audit Trail</div>
+          <div class="step-body">Write committed. Every step recorded in an immutable, append-only AuditEvent trail. Full accountability.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PHI REDACTION EXAMPLE ===== -->
+<div class="r6-panel mb-5">
+  <div class="r6-panel-header">
+    <i class="fas fa-user-shield"></i>
+    <h3>PHI Redaction — What the Agent Sees</h3>
+  </div>
+  <div class="r6-panel-body">
+    <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
+      Applied on every read path — direct reads, search results, upstream proxy responses, and context envelopes. The agent never has access to raw patient data.
+    </p>
+    <div class="phi-compare">
+      <div class="phi-panel">
+        <div class="phi-panel-header before"><i class="fas fa-eye me-1"></i>Stored in FHIR server</div>
+        <pre>name:    Maria Elena Rivera
+mrn:     MRN-2026-4471
+phone:   617-555-0198
+address: 123 Clinical Ave
+         Boston, MA 02101
+dob:     1985-03-15</pre>
+      </div>
+      <div class="phi-panel">
+        <div class="phi-panel-header after"><i class="fas fa-shield-alt me-1"></i>Delivered to AI agent</div>
+        <pre>name:    <span class="phi-redacted">M. E. Rivera</span>
+mrn:     <span class="phi-redacted">***4471</span>
+phone:   <span class="phi-removed">[Redacted]</span>
+address: <span class="phi-redacted">Boston, MA</span>
+
+dob:     <span class="phi-redacted">1985</span></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CAPABILITY TILES ===== -->
+<div class="row g-4 mb-5">
+  <div class="col-md-4">
+    <div class="r6-panel tile-full">
+      <div class="r6-panel-header">
+        <i class="fas fa-shield-alt"></i>
+        <h3>Security Patterns</h3>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem">
+          Tenant isolation enforced at the database layer on every query. HMAC-SHA256 step-up tokens for writes. ETag/If-Match concurrency control. OAuth 2.1 with PKCE (S256 only). Append-only audit trail with database-level immutability.
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="r6-panel tile-full">
+      <div class="r6-panel-header">
+        <i class="fas fa-robot"></i>
+        <h3>12 MCP Tools</h3>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem">
+          Read tools return <code>_mcp_summary</code> with reasoning and clinical context. Writes use propose/commit: <code>fhir.propose_write</code> validates first, <code>fhir.commit_write</code> requires step-up auth. Curatr tools evaluate and fix patient record quality.
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="r6-panel tile-full">
+      <div class="r6-panel-header">
+        <i class="fas fa-heartbeat"></i>
+        <h3>Clinical Safety</h3>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem">
+          Clinical writes return HTTP 428 without explicit human confirmation. HIPAA Safe Harbor de-identification on demand. Medical disclaimer injected on clinical reads. PHI redaction on all read paths including upstream proxy responses.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ARCHITECTURE + DATA SOURCES ===== -->
+<div class="row g-4 mb-5">
+  <div class="col-md-6">
+    <div class="r6-panel tile-full">
+      <div class="r6-panel-header">
+        <i class="fas fa-layer-group"></i>
+        <h3>Architecture</h3>
+      </div>
+      <div class="r6-panel-body">
+        <table class="arch-table">
+          <tr><td><strong>Flask App</strong></td><td>FHIR REST at <code>/r6/fhir/*</code>, guardrail enforcement</td></tr>
+          <tr><td><strong>MCP Server</strong></td><td>Node.js + TypeScript — 12 tools, Streamable HTTP + SSE</td></tr>
+          <tr><td><strong>Fasten Connect</strong></td><td>Patient-authorized EHR ingestion via <code>/fasten/webhook</code></td></tr>
+          <tr><td><strong>Storage</strong></td><td>SQLite (dev) / PostgreSQL (prod) — 37 FHIR resource types</td></tr>
+          <tr><td><strong>Validation</strong></td><td>Structural: US Core v9 required fields + R6 value constraints</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="r6-panel tile-full">
+      <div class="r6-panel-header">
+        <i class="fas fa-database"></i>
+        <h3>Data Sources</h3>
+      </div>
+      <div class="r6-panel-body">
+        <table class="arch-table">
+          <tr><td><strong>Local mode</strong></td><td>JSON blobs in SQLite — zero-config for development</td></tr>
+          <tr><td><strong>Upstream proxy</strong></td><td>Any FHIR server (HAPI, SMART Health IT, Epic) — set <code>FHIR_UPSTREAM_URL</code></td></tr>
+          <tr><td><strong>Fasten Connect</strong></td><td>Patient-authorized bulk EHI import from 1000+ EHR systems</td></tr>
+          <tr><td><strong>TEFCA IAS</strong></td><td>Single identity verification → longitudinal record across all QHINs</td></tr>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -421,9 +372,7 @@
             not the provider's back office?
           </p>
           <div class="blog-card-footer">
-            <span class="blog-card-source">
-              <i class="fas fa-rss me-1"></i>evestel.substack.com
-            </span>
+            <span class="blog-card-source"><i class="fas fa-rss me-1"></i>evestel.substack.com</span>
             <span class="blog-card-read">Read &rarr;</span>
           </div>
         </a>
@@ -440,9 +389,7 @@
             Curatr, and actually owning the output.
           </p>
           <div class="blog-card-footer">
-            <span class="blog-card-source">
-              <i class="fas fa-rss me-1"></i>evestel.substack.com
-            </span>
+            <span class="blog-card-source"><i class="fas fa-rss me-1"></i>evestel.substack.com</span>
             <span class="blog-card-read">Read &rarr;</span>
           </div>
         </a>
@@ -452,259 +399,40 @@
   </div>
 </div>
 
-<!-- ===== The Story: 6-Step Guardrail Sequence ===== -->
-<div class="r6-panel mb-5" style="border-color: var(--r6-primary); box-shadow: 0 0 30px rgba(99, 102, 241, 0.15);">
-  <div class="r6-panel-header" style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); border-bottom-color: var(--r6-primary);">
-    <i class="fas fa-bolt" style="color: #fbbf24; font-size: 1.1rem;"></i>
-    <h3 style="color: #fbbf24;">The Story: What Happens When an AI Agent Tries to Write Clinical Data?</h3>
+<!-- ===== DISCOVERY ENDPOINTS ===== -->
+<div class="r6-panel mb-5">
+  <div class="r6-panel-header">
+    <i class="fas fa-globe"></i>
+    <h3>Live Endpoints</h3>
   </div>
   <div class="r6-panel-body">
-    <div class="row g-3">
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-info);background:rgba(6,182,212,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-info)">1.</span> Read Patient Record</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">PHI redacted: identifiers masked, addresses stripped, telecom hidden. Agent only sees safe data.</div>
-        </div>
+    <div class="row" style="font-size:0.85rem">
+      <div class="col-md-3 mb-2">
+        <a href="/r6/fhir/metadata" target="_blank" style="color:var(--r6-info);text-decoration:none">
+          <i class="fas fa-external-link-alt me-1"></i>/r6/fhir/metadata
+        </a>
+        <div style="color:var(--r6-text-muted);font-size:0.75rem">CapabilityStatement (R4+R6)</div>
       </div>
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-primary);background:rgba(99,102,241,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-primary)">2.</span> Propose Observation</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">Agent calls $validate. Structural validation gate ensures the resource is well-formed before anything else.</div>
-        </div>
+      <div class="col-md-3 mb-2">
+        <a href="/r6/fhir/health" target="_blank" style="color:var(--r6-info);text-decoration:none">
+          <i class="fas fa-external-link-alt me-1"></i>/r6/fhir/health
+        </a>
+        <div style="color:var(--r6-text-muted);font-size:0.75rem">Liveness + upstream status</div>
       </div>
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-danger);background:rgba(239,68,68,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-danger)">3.</span> Permission DENIES</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">R6 Permission $evaluate returns deny with reasoning. No active rules = default deny. Agent explains why.</div>
-        </div>
+      <div class="col-md-3 mb-2">
+        <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" style="color:var(--r6-info);text-decoration:none">
+          <i class="fas fa-external-link-alt me-1"></i>SMART Configuration
+        </a>
+        <div style="color:var(--r6-text-muted);font-size:0.75rem">SMART-on-FHIR v2 / OAuth 2.1</div>
       </div>
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-success);background:rgba(16,185,129,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-success)">4.</span> Policy Change + Re-evaluate</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">Treatment-purpose permit rule created. Re-evaluation returns permit with reasoning showing which rule matched.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-warning);background:rgba(245,158,11,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-warning)">5.</span> Step-up Auth + Human Gate</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">HMAC-SHA256 token issued (128-bit nonce, 5-min TTL). Clinical write requires X-Human-Confirmed header.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div style="padding:0.75rem;border-left:3px solid var(--r6-success);background:rgba(16,185,129,0.05);border-radius:0 0.5rem 0.5rem 0">
-          <div style="font-weight:700;font-size:0.85rem;margin-bottom:0.25rem"><span style="color:var(--r6-success)">6.</span> Commit + Audit Trail</div>
-          <div style="font-size:0.78rem;color:var(--r6-text-muted)">Write committed. Every step recorded in immutable, append-only AuditEvent trail. Full accountability.</div>
-        </div>
-      </div>
-    </div>
-    <div class="text-center mt-3">
-      <a href="{{ url_for('r6_dashboard') }}" class="r6-btn r6-btn-primary" style="padding:0.6rem 1.5rem">
-        <i class="fas fa-play"></i> Watch This Live in 60 Seconds
-      </a>
-    </div>
-  </div>
-</div>
-
-<div class="row g-4 mb-5">
-  <div class="col-md-4">
-    <div class="r6-panel" style="height:100%">
-      <div class="r6-panel-header">
-        <i class="fas fa-shield-alt"></i>
-        <h3>Security Patterns</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          <strong>What's real:</strong> Mandatory tenant isolation on every query, HMAC-SHA256 step-up tokens
-          for writes, ETag/If-Match concurrency control, OAuth 2.1 with PKCE (S256).
-          Append-only audit trail with database-level immutability enforcement.
-        </p>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="r6-panel" style="height:100%">
-      <div class="r6-panel-header">
-        <i class="fas fa-robot"></i>
-        <h3>10 MCP Tools</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          Read tools add <code>_mcp_summary</code> with reasoning, clinical context, and limitations.
-          Write tools use a propose/commit pattern: <code>propose_write</code> validates first,
-          <code>commit_write</code> requires step-up auth.
-          <code>permission_evaluate</code> returns human-readable reasoning.
-        </p>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="r6-panel" style="height:100%">
-      <div class="r6-panel-header">
-        <i class="fas fa-heartbeat"></i>
-        <h3>Clinical Safety</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          Human-in-the-loop enforcement: clinical writes return HTTP 428 without explicit confirmation.
-          HIPAA Safe Harbor de-identification. Medical disclaimer injection.
-          PHI redaction on all read paths — the agent never sees raw patient data.
-        </p>
+      <div class="col-md-3 mb-2">
+        <a href="/fasten/jobs" target="_blank" style="color:var(--r6-info);text-decoration:none">
+          <i class="fas fa-external-link-alt me-1"></i>/fasten/jobs
+        </a>
+        <div style="color:var(--r6-text-muted);font-size:0.75rem">Fasten import job status</div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="row g-4 mb-5">
-  <div class="col-md-6">
-    <div class="r6-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-layer-group"></i>
-        <h3>Architecture</h3>
-      </div>
-      <div class="r6-panel-body" style="font-size:0.85rem;color:var(--r6-text-muted)">
-        <table style="width:100%">
-          <tr><td style="padding:0.3rem 0"><strong>Flask App</strong></td><td>R6 REST facade at <code>/r6/fhir/*</code></td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>MCP Server</strong></td><td>Node.js + TypeScript — 10 tools with reasoning</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>Storage</strong></td><td>JSON blobs in SQLite (demo) — not production</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>Validation</strong></td><td>Structural only (required fields + value constraints)</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>FHIR Version</strong></td><td>R6 v6.0.0-ballot3</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>Resources</strong></td><td>16 types (7 base + 9 R6 ballot)</td></tr>
-        </table>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="r6-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-flask"></i>
-        <h3>R6-Specific Resources</h3>
-      </div>
-      <div class="r6-panel-body" style="font-size:0.85rem;color:var(--r6-text-muted)">
-        <table style="width:100%">
-          <tr><td style="padding:0.3rem 0"><strong>Permission</strong></td><td>R6 access control with $evaluate + reasoning</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>SubscriptionTopic</strong></td><td>Restructured pub/sub (storage + discovery)</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>DeviceAlert</strong></td><td>ISO/IEEE 11073 device alarms (new in R6)</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>NutritionIntake</strong></td><td>Dietary tracking (new in R6)</td></tr>
-          <tr><td style="padding:0.3rem 0"><strong>$stats/$lastn</strong></td><td>Standard FHIR ops (since R4, not R6-specific)</td></tr>
-        </table>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="row mb-4">
-  <div class="col-md-12">
-    <div class="r6-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-globe"></i>
-        <h3>Discovery Endpoints</h3>
-      </div>
-      <div class="r6-panel-body">
-        <div class="row" style="font-size:0.85rem">
-          <div class="col-md-3 mb-2">
-            <a href="/r6/fhir/metadata" target="_blank" style="color:var(--r6-info);text-decoration:none">
-              <i class="fas fa-external-link-alt me-1"></i> /r6/fhir/metadata
-            </a>
-            <div style="color:var(--r6-text-muted);font-size:0.75rem">CapabilityStatement</div>
-          </div>
-          <div class="col-md-3 mb-2">
-            <a href="/r6/fhir/health" target="_blank" style="color:var(--r6-info);text-decoration:none">
-              <i class="fas fa-external-link-alt me-1"></i> /r6/fhir/health
-            </a>
-            <div style="color:var(--r6-text-muted);font-size:0.75rem">Liveness/Readiness</div>
-          </div>
-          <div class="col-md-3 mb-2">
-            <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" style="color:var(--r6-info);text-decoration:none">
-              <i class="fas fa-external-link-alt me-1"></i> SMART Configuration
-            </a>
-            <div style="color:var(--r6-text-muted);font-size:0.75rem">SMART-on-FHIR v2</div>
-          </div>
-          <div class="col-md-3 mb-2">
-            <a href="/r6/fhir/docs/privacy-policy" target="_blank" style="color:var(--r6-info);text-decoration:none">
-              <i class="fas fa-external-link-alt me-1"></i> Privacy Policy
-            </a>
-            <div style="color:var(--r6-text-muted);font-size:0.75rem">Compliance & Terms</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-(function() {
-  'use strict';
-
-  var demoRunning = false;
-
-  function runHeroDemo() {
-    if (demoRunning) return;
-    demoRunning = true;
-
-    var leftFields = document.querySelectorAll('#demo-left .demo-field');
-    var rightFields = document.querySelectorAll('#demo-right .demo-field');
-    var auditEl = document.getElementById('demo-audit');
-    var tryLink = document.getElementById('demo-try-link');
-    var timestampEl = document.getElementById('demo-timestamp');
-
-    // Reset all fields
-    leftFields.forEach(function(f) { f.classList.remove('visible'); });
-    rightFields.forEach(function(f) { f.classList.remove('visible', 'flash'); });
-    auditEl.classList.remove('visible');
-    tryLink.classList.remove('visible');
-
-    var fieldCount = leftFields.length;
-    var fieldDelay = 300;   // ms between each field appearing
-    var rightOffset = 150;  // ms delay before right side responds
-
-    // Animate each field pair
-    for (var i = 0; i < fieldCount; i++) {
-      (function(idx) {
-        // Left field appears (typewriter reveal)
-        setTimeout(function() {
-          leftFields[idx].classList.add('visible');
-        }, idx * fieldDelay);
-
-        // Right field appears with flash shortly after
-        setTimeout(function() {
-          rightFields[idx].classList.add('visible', 'flash');
-        }, idx * fieldDelay + rightOffset);
-      })(i);
-    }
-
-    // Audit trail appears after all fields
-    var auditTime = fieldCount * fieldDelay + rightOffset + 400;
-    setTimeout(function() {
-      // Set current timestamp
-      var now = new Date();
-      timestampEl.textContent = now.toISOString().replace('T', ' ').substring(0, 19) + 'Z';
-      auditEl.classList.add('visible');
-    }, auditTime);
-
-    // "Try it yourself" link appears last
-    setTimeout(function() {
-      tryLink.classList.add('visible');
-      demoRunning = false;
-    }, auditTime + 500);
-  }
-
-  // Replay function (global)
-  window.replayDemo = function() {
-    // Scroll to hero if not visible
-    var hero = document.getElementById('hero-demo');
-    if (hero) {
-      hero.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    // Small delay to let scroll settle, then replay
-    setTimeout(runHeroDemo, 300);
-  };
-
-  // Auto-play 1 second after page load
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(runHeroDemo, 1000);
-  });
-})();
-</script>
 {% endblock %}
