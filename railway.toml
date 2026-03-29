@@ -16,7 +16,6 @@ dockerfilePath = "Dockerfile"
 watchPatterns = ["**/*.py", "templates/**", "static/**", "pyproject.toml"]
 
 [deploy]
-startCommand = "gunicorn main:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300 --keep-alive 5"
 healthcheckPath = "/r6/fhir/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

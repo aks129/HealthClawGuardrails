@@ -26,4 +26,4 @@ RUN mkdir -p /app/instance
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "--keep-alive", "5", "main:app"]
+CMD gunicorn main:app --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 300 --keep-alive 5
