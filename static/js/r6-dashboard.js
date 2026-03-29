@@ -829,6 +829,92 @@ async function createDeviceAlert() {
   refreshAuditFeed();
 }
 
+// --------------- Fasten Connect Demo Flow ---------------
+
+async function runFastenDemo() {
+  setLoading('btn-fasten-demo', true);
+  const stepsEl = document.getElementById('fasten-steps');
+  const detailEl = document.getElementById('fasten-step-detail');
+  stepsEl.style.display = 'block';
+  detailEl.style.display = 'block';
+  detailEl.innerHTML = '';
+
+  // Reset all steps
+  document.querySelectorAll('.fasten-demo-step').forEach(s => {
+    s.className = 'fasten-demo-step';
+    s.querySelector('.fasten-step-indicator').innerHTML = '';
+  });
+
+  // Scroll into view
+  document.getElementById('fasten-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const res = await fetch('/fasten/demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': TENANT },
+    });
+    const data = await res.json();
+
+    if (res.status !== 200) {
+      detailEl.innerHTML = highlightJSON(data);
+      setLoading('btn-fasten-demo', false);
+      return;
+    }
+
+    const steps = data.steps || [];
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepEl = document.querySelector(`.fasten-demo-step[data-fstep="${step.step}"]`);
+      if (!stepEl) continue;
+
+      // Mark active
+      stepEl.className = 'fasten-demo-step fasten-active';
+      stepEl.querySelector('.fasten-step-indicator').innerHTML = '<span class="r6-spinner" style="width:14px;height:14px;border-width:2px"></span>';
+
+      // Show step detail
+      detailEl.innerHTML = highlightJSON({
+        step: step.step,
+        title: step.title,
+        guardrail: step.guardrail,
+        action: step.action,
+        detail: step.detail,
+      });
+
+      await sleep(800);
+
+      // Show full result
+      detailEl.innerHTML = highlightJSON(step);
+
+      // Mark completed
+      stepEl.className = 'fasten-demo-step fasten-completed';
+      stepEl.querySelector('.fasten-step-indicator').innerHTML = '<i class="fas fa-check" style="font-size:0.7rem"></i>';
+
+      toast(`Step ${step.step}: ${step.title}`, 'success');
+      refreshAuditFeed();
+
+      if (i < steps.length - 1) await sleep(1000);
+    }
+
+    // Final summary
+    await sleep(600);
+    detailEl.innerHTML = highlightJSON({
+      demo_complete: true,
+      guardrails_demonstrated: data.guardrails_demonstrated,
+      total_steps: steps.length,
+      summary: data.summary,
+      audit_events: 'All operations recorded in immutable audit trail',
+    });
+    toast('Fasten Connect demo complete — full import flow demonstrated', 'success');
+
+  } catch (e) {
+    detailEl.innerHTML = highlightJSON({ error: e.message });
+    toast('Fasten demo failed: ' + e.message, 'error');
+  }
+
+  setLoading('btn-fasten-demo', false);
+}
+
 // --------------- Agent Guardrail Demo Loop ---------------
 
 async function runDemoLoop() {
@@ -1098,6 +1184,7 @@ const WALKTHROUGH_STEPS = [
   { title: 'SubscriptionTopic + Subscribe', action: async () => { await createDemoTopic(); await createDemoSubscription(); }, panel: 'subscription-panel' },
   { title: 'NutritionIntake + DeviceAlert', action: async () => { await createNutritionIntake(); await createDeviceAlert(); }, panel: 'r6resources-panel' },
   { title: 'Curatr: Data Quality Evaluation + Fix', action: async () => { await curatrCreateCondition(); await sleep(800); await curatrEvaluate(); }, panel: 'curatr-panel' },
+  { title: 'Fasten Connect: Health Data Import', action: runFastenDemo, panel: 'fasten-panel' },
 ];
 
 let walkthroughIdx = -1;

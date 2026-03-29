@@ -459,6 +459,73 @@
       </div>
     </div>
 
+    <!-- Fasten Connect: End-to-End Demo Flow -->
+    <div class="r6-panel" id="fasten-panel" style="border-color: #0ea5e9;">
+      <div class="r6-panel-header" style="background: linear-gradient(135deg, #0c1929 0%, #0c3547 100%); border-bottom-color: #0ea5e9;">
+        <i class="fas fa-link" style="color: #0ea5e9; font-size: 1.2rem;"></i>
+        <h3 style="color: #0ea5e9;">Fasten Connect — Health Data Import</h3>
+        <span class="r6-tag" style="margin-left:auto;background:rgba(14,165,233,0.15);color:#0ea5e9;border:1px solid rgba(14,165,233,0.3)">END-TO-END</span>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.5rem">
+          Patient-authorized health data import via <strong>Fasten Connect</strong>.
+          Simulates the full flow: Stitch widget authorization, Standard-Webhooks verified export,
+          streaming NDJSON ingestion, PHI redaction on reads, and immutable audit trail.
+        </p>
+        <p style="color:var(--r6-text-muted);font-size:0.78rem;margin-bottom:1rem">
+          Flow: Stitch Widget &rarr; Connection Registered &rarr; EHR Export Webhook &rarr;
+          FHIR Ingestion (4 resources) &rarr; PHI Redacted Read &rarr; Job Complete
+        </p>
+        <button class="r6-btn r6-btn-sm" id="btn-fasten-demo"
+                style="background:#0ea5e9;color:#fff;border-color:#0ea5e9;font-size:0.9rem;padding:0.6rem 1.5rem;"
+                onclick="runFastenDemo()">
+          <i class="fas fa-play"></i> Run Fasten Connect Demo (5 steps)
+        </button>
+
+        <!-- Step progress tracker -->
+        <div id="fasten-steps" style="margin-top:1.25rem;display:none">
+          <div class="fasten-demo-step" data-fstep="1">
+            <div class="fasten-step-indicator"></div>
+            <div class="fasten-step-content">
+              <div class="fasten-step-title">1. Patient Connects via Stitch Widget</div>
+              <div class="fasten-step-subtitle">Authorization + tenant isolation</div>
+            </div>
+          </div>
+          <div class="fasten-demo-step" data-fstep="2">
+            <div class="fasten-step-indicator"></div>
+            <div class="fasten-step-content">
+              <div class="fasten-step-title">2. EHR Export Webhook Received</div>
+              <div class="fasten-step-subtitle">HMAC-SHA256 verification</div>
+            </div>
+          </div>
+          <div class="fasten-demo-step" data-fstep="3">
+            <div class="fasten-step-indicator"></div>
+            <div class="fasten-step-content">
+              <div class="fasten-step-title">3. FHIR Resources Ingested</div>
+              <div class="fasten-step-subtitle">Tenant isolation + audit trail</div>
+            </div>
+          </div>
+          <div class="fasten-demo-step" data-fstep="4">
+            <div class="fasten-step-indicator"></div>
+            <div class="fasten-step-content">
+              <div class="fasten-step-title">4. Ingested Data Read (PHI Redacted)</div>
+              <div class="fasten-step-subtitle">Redaction on all read paths</div>
+            </div>
+          </div>
+          <div class="fasten-demo-step" data-fstep="5">
+            <div class="fasten-step-indicator"></div>
+            <div class="fasten-step-content">
+              <div class="fasten-step-title">5. Import Complete — Job Status</div>
+              <div class="fasten-step-subtitle">Immutable audit trail</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step detail output -->
+        <div id="fasten-step-detail" class="r6-json-output mt-3" style="display:none;max-height:500px"></div>
+      </div>
+    </div>
+
     <!-- $validate -->
     <div class="r6-panel" id="validate-panel">
       <div class="r6-panel-header">
@@ -550,9 +617,13 @@
           <span>Medical Disclaimer</span>
           <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Injected</span>
         </div>
-        <div class="d-flex justify-content-between">
+        <div class="d-flex justify-content-between mb-2">
           <span>Curatr Data Quality</span>
           <span style="color:#7c3aed"><i class="fas fa-microscope"></i> Patient-Owned</span>
+        </div>
+        <div class="d-flex justify-content-between">
+          <span>Fasten Connect</span>
+          <span style="color:#0ea5e9"><i class="fas fa-link"></i> Patient-Authorized</span>
         </div>
       </div>
     </div>
