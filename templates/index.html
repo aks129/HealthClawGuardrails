@@ -1,438 +1,739 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HealthClaw Guardrails — healthclaw.io</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-{% block title %}HealthClaw Guardrails — healthclaw.io{% endblock %}
+    :root {
+      --bg:        #0A0E17;
+      --bg-card:   #111827;
+      --bg-hover:  #1a2235;
+      --border:    #1e293b;
+      --cyan:      #22d3ee;
+      --cyan-dim:  rgba(34,211,238,0.53);
+      --cyan-glow: rgba(34,211,238,0.13);
+      --green:     #34d399;
+      --amber:     #fbbf24;
+      --red:       #f87171;
+      --white:     #f1f5f9;
+      --gray:      #94a3b8;
+      --gray-dim:  #64748b;
+      --gray-dark: #334155;
+      --font-sans: 'Outfit', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
 
-{% block head %}
-<style>
-.hero-section {
-  padding: 3.5rem 1.5rem 3rem;
-  background: linear-gradient(135deg, var(--r6-surface) 0%, #1e1b4b 50%, #0f172a 100%);
-  border-bottom: 1px solid var(--r6-border);
-  position: relative;
-  overflow: hidden;
-  margin: -1.5rem -12px 0;
-}
-.hero-section::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at 30% 50%, var(--r6-primary-soft) 0%, transparent 60%);
-  pointer-events: none;
-}
-.hero-inner {
-  position: relative;
-  z-index: 1;
-  max-width: 800px;
-  margin: 0 auto;
-  text-align: center;
-}
-.hero-title {
-  font-size: 2.4rem;
-  font-weight: 800;
-  margin-bottom: 0.6rem;
-}
-.hero-sub {
-  color: var(--r6-text-muted);
-  font-size: 1.05rem;
-  max-width: 680px;
-  margin: 0 auto 0.75rem;
-  line-height: 1.55;
-}
-.hero-badges {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: center;
-  flex-wrap: wrap;
-  margin-bottom: 2rem;
-}
-.hero-badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 0.2rem 0.65rem;
-  border-radius: 99px;
-  border: 1px solid var(--r6-border);
-  color: var(--r6-text-muted);
-}
-.hero-ctas {
-  display: flex;
-  gap: 0.75rem;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-.hero-ctas .r6-btn { font-size: 0.95rem; padding: 0.7rem 1.75rem; }
-.btn-secondary-outline {
-  font-size: 0.82rem;
-  padding: 0.55rem 1.25rem;
-  color: var(--r6-text-muted);
-  border: 1px solid var(--r6-border);
-  border-radius: 0.5rem;
-  text-decoration: none;
-  transition: color 0.2s, border-color 0.2s;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.btn-secondary-outline:hover {
-  color: var(--r6-text);
-  border-color: var(--r6-text-muted);
-}
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--white); font-family: var(--font-sans); overflow-x: hidden; }
+    a { text-decoration: none; }
 
-/* PHI Before/After */
-.phi-compare {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin: 1rem 0;
-}
-@media (max-width: 600px) { .phi-compare { grid-template-columns: 1fr; } }
-.phi-panel {
-  background: var(--r6-surface-2);
-  border: 1px solid var(--r6-border);
-  border-radius: 0.5rem;
-  overflow: hidden;
-}
-.phi-panel-header {
-  padding: 0.4rem 0.85rem;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.phi-panel-header.before { background: rgba(239,68,68,0.1); color: var(--r6-danger); }
-.phi-panel-header.after { background: rgba(16,185,129,0.1); color: var(--r6-success); }
-.phi-panel pre {
-  margin: 0;
-  padding: 0.75rem 0.85rem;
-  font-size: 0.78rem;
-  line-height: 1.65;
-  background: transparent;
-  border: none;
-}
-.phi-redacted { color: var(--r6-success); }
-.phi-removed { color: var(--r6-warning); font-style: italic; }
+    /* ── Nav ── */
+    #main-nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      transition: background 0.3s, backdrop-filter 0.3s, border-bottom 0.3s;
+    }
+    #main-nav.scrolled {
+      background: rgba(10,14,23,0.92);
+      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1200px; margin: 0 auto; padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-brand { display: flex; align-items: center; gap: 10px; }
+    .nav-brand-name {
+      font-family: var(--font-sans); font-size: 20px; font-weight: 800;
+      color: var(--white); letter-spacing: -0.02em;
+    }
+    .nav-badge {
+      font-family: var(--font-mono); font-size: 10px; color: var(--cyan);
+      background: var(--cyan-glow); padding: 2px 8px; border-radius: 4px; font-weight: 600;
+    }
+    .nav-links { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
+    .nav-link {
+      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
+      font-weight: 500; transition: color 0.2s;
+    }
+    .nav-link:hover { color: var(--white); }
+    .nav-cta {
+      background: var(--cyan); color: var(--bg) !important; font-weight: 600 !important;
+      padding: 8px 18px; border-radius: 8px; font-size: 13px !important;
+      transition: opacity 0.2s !important;
+    }
+    .nav-cta:hover { opacity: 0.88; }
 
-/* Guardrail step cards */
-.panel-featured {
-  border-color: var(--r6-primary);
-  box-shadow: 0 0 30px rgba(99, 102, 241, 0.15);
-}
-.panel-featured-header {
-  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
-  border-bottom-color: var(--r6-primary);
-}
-.panel-featured-header i { color: #fbbf24; font-size: 1.1rem; }
-.panel-featured-header h3 { color: #fbbf24; }
-.step-card {
-  padding: 0.75rem;
-  border-left: 3px solid;
-  border-radius: 0 0.5rem 0.5rem 0;
-  height: 100%;
-}
-.step-card-info    { border-color: var(--r6-info);    background: rgba(6,182,212,0.05); }
-.step-card-primary { border-color: var(--r6-primary); background: rgba(99,102,241,0.05); }
-.step-card-danger  { border-color: var(--r6-danger);  background: rgba(239,68,68,0.05); }
-.step-card-success { border-color: var(--r6-success); background: rgba(16,185,129,0.05); }
-.step-card-warning { border-color: var(--r6-warning); background: rgba(245,158,11,0.05); }
-.step-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.25rem; }
-.step-title-info    { color: var(--r6-info); }
-.step-title-primary { color: var(--r6-primary); }
-.step-title-danger  { color: var(--r6-danger); }
-.step-title-success { color: var(--r6-success); }
-.step-title-warning { color: var(--r6-warning); }
-.step-body { font-size: 0.78rem; color: var(--r6-text-muted); }
+    /* ── Sections ── */
+    .section { padding: 80px 24px; max-width: 1200px; margin: 0 auto; }
+    .section-sm { padding: 40px 24px; max-width: 1200px; margin: 0 auto; }
 
-/* Architecture / data source tables */
-.arch-table { width: 100%; }
-.arch-table td { padding: 0.3rem 0; font-size: 0.85rem; color: var(--r6-text-muted); }
-.arch-table td:first-child { color: var(--r6-text); font-weight: 600; padding-right: 0.75rem; white-space: nowrap; }
+    /* ── Section header ── */
+    .section-tag {
+      font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+      color: var(--cyan); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px;
+    }
+    .section-title {
+      font-family: var(--font-sans); font-size: clamp(26px, 3.5vw, 36px); font-weight: 800;
+      color: var(--white); line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 12px;
+    }
+    .section-desc {
+      font-family: var(--font-sans); font-size: 16px; color: var(--gray);
+      line-height: 1.7; max-width: 700px;
+    }
+    .section-header { margin-bottom: 48px; }
 
-@media (max-width: 768px) {
-  .hero-title { font-size: 1.75rem; }
-  .hero-sub { font-size: 0.92rem; }
-}
-</style>
-{% endblock %}
+    /* ── Hero ── */
+    .hero-wrap { position: relative; padding: 140px 24px 60px; text-align: center; }
+    .hero-glow {
+      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 400px;
+      background: radial-gradient(ellipse, rgba(34,211,238,0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; max-width: 860px; margin: 0 auto; }
+    .hero-eyebrow {
+      font-family: var(--font-mono); font-size: 12px; color: var(--cyan);
+      letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 20px;
+    }
+    h1.hero-title {
+      font-family: var(--font-sans); font-size: clamp(36px, 5.5vw, 64px); font-weight: 800;
+      line-height: 1.08; letter-spacing: -0.03em; margin-bottom: 24px;
+    }
+    .hero-sub {
+      font-family: var(--font-sans); font-size: 18px; color: var(--gray);
+      max-width: 640px; margin: 0 auto 36px; line-height: 1.7;
+    }
+    .hero-ctas { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      background: var(--cyan); color: var(--bg); font-family: var(--font-sans);
+      font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 10px;
+      letter-spacing: -0.01em; transition: opacity 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-outline {
+      background: transparent; color: var(--cyan); font-family: var(--font-sans);
+      font-weight: 600; font-size: 15px; padding: 14px 32px; border-radius: 10px;
+      border: 1px solid rgba(34,211,238,0.27); transition: border-color 0.2s, color 0.2s;
+    }
+    .btn-outline:hover { border-color: var(--cyan); }
 
-{% block content %}
+    /* ── Fade-in animations ── */
+    .fade-up { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
+    .fade-up.in { opacity: 1; transform: translateY(0); }
+    .hero-eyebrow, h1.hero-title, .hero-sub, .hero-ctas {
+      opacity: 0; transform: translateY(16px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+    .hero-loaded .hero-eyebrow { opacity: 1; transform: none; transition-delay: 0.1s; }
+    .hero-loaded h1.hero-title  { opacity: 1; transform: none; transition-delay: 0.22s; }
+    .hero-loaded .hero-sub      { opacity: 1; transform: none; transition-delay: 0.36s; }
+    .hero-loaded .hero-ctas     { opacity: 1; transform: none; transition-delay: 0.46s; }
 
-<!-- ===== HERO ===== -->
-<div class="hero-section">
+    /* ── Stats bar ── */
+    .stats-row {
+      display: flex; justify-content: center; gap: 48px; flex-wrap: wrap;
+      padding: 20px 24px 48px;
+    }
+    .stat { text-align: center; padding: 0 12px; }
+    .stat-num {
+      font-family: var(--font-mono); font-size: 42px; font-weight: 700;
+      color: var(--cyan); letter-spacing: -0.02em; display: block;
+    }
+    .stat-label { font-family: var(--font-sans); font-size: 14px; color: var(--gray-dim); margin-top: 4px; }
+
+    /* ── Guardrail pipeline cards ── */
+    .pipeline-grid {
+      display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
+    }
+    .pipeline-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px 18px; width: 175px; position: relative;
+    }
+    .pipeline-icon { font-size: 28px; margin-bottom: 8px; }
+    .pipeline-label {
+      font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+      color: var(--cyan); margin-bottom: 6px; letter-spacing: 0.03em;
+    }
+    .pipeline-desc { font-family: var(--font-sans); font-size: 13px; color: var(--gray); line-height: 1.5; }
+
+    /* ── PHI redaction ── */
+    .phi-compare {
+      display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; align-items: center;
+    }
+    .phi-block {
+      font-family: var(--font-mono); font-size: 13px; line-height: 1.9;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 24px; flex: 1 1 280px; max-width: 380px; white-space: pre-wrap;
+    }
+    .phi-label {
+      font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+      margin-bottom: 14px; letter-spacing: 0.06em; text-transform: uppercase;
+    }
+    .phi-arrow { color: var(--cyan); font-size: 28px; flex-shrink: 0; }
+    .phi-key { color: var(--gray-dim); }
+
+    /* ── Audience cards ── */
+    .audience-grid {
+      display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;
+    }
+    .audience-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 32px; flex: 1 1 300px; max-width: 380px; position: relative;
+      overflow: hidden; transition: background 0.2s, border-color 0.2s; cursor: pointer;
+    }
+    .audience-card:hover { background: var(--bg-hover); }
+    .audience-glow {
+      position: absolute; top: -40px; right: -40px; width: 120px; height: 120px;
+      border-radius: 50%;
+    }
+    .audience-icon { font-size: 36px; margin-bottom: 16px; }
+    .audience-title {
+      font-family: var(--font-sans); font-size: 22px; font-weight: 700;
+      color: var(--white); margin-bottom: 6px; letter-spacing: -0.01em;
+    }
+    .audience-sub { font-family: var(--font-sans); font-size: 14px; font-weight: 500; margin-bottom: 20px; }
+    .audience-list { list-style: none; margin-bottom: 24px; }
+    .audience-list li {
+      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
+      line-height: 1.7; padding-left: 18px; position: relative;
+    }
+    .audience-list li::before {
+      content: "●"; position: absolute; left: 0; top: 3px; font-size: 10px;
+    }
+    .audience-cta { font-family: var(--font-mono); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+
+    /* ── Curatr checks ── */
+    .curatr-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
+    }
+    .check-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .check-badge {
+      font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px; text-transform: uppercase;
+      letter-spacing: 0.05em; display: inline-block; width: fit-content;
+    }
+    .check-label { font-family: var(--font-sans); font-size: 14px; font-weight: 600; color: var(--white); }
+    .check-source { font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim); }
+    .curatr-note {
+      margin-top: 24px; font-family: var(--font-sans); font-size: 14px;
+      color: var(--gray); line-height: 1.7; max-width: 700px;
+    }
+
+    /* ── Comparison table ── */
+    .compare-wrap { overflow-x: auto; }
+    .compare-table {
+      width: 100%; border-collapse: collapse; font-family: var(--font-sans); font-size: 14px;
+    }
+    .compare-table th {
+      padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .compare-table td {
+      padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px;
+    }
+    .compare-table td.hl { background: var(--cyan-glow); }
+    .compare-table .tick { color: var(--green); font-size: 16px; }
+    .compare-table .cross { color: rgba(248,113,113,0.55); font-size: 16px; }
+    .compare-table .val { color: var(--gray); font-family: var(--font-mono); font-size: 12px; }
+
+    /* ── Quick start ── */
+    .code-wrap { position: relative; }
+    .code-block {
+      font-family: var(--font-mono); font-size: 13px; line-height: 1.8;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 24px 28px; color: var(--gray); overflow-x: auto; margin: 0;
+    }
+    .code-comment { color: var(--gray-dim); }
+    .code-cmd { color: var(--cyan); }
+    .copy-btn {
+      position: absolute; top: 12px; right: 12px;
+      background: var(--gray-dark); border: none; border-radius: 6px;
+      color: var(--gray); font-family: var(--font-mono); font-size: 11px;
+      padding: 6px 12px; cursor: pointer; transition: color 0.2s;
+    }
+    .copy-btn:hover { color: var(--white); }
+
+    /* ── Blog posts ── */
+    .blog-grid { display: flex; gap: 24px; flex-wrap: wrap; }
+    .blog-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 28px; flex: 1 1 300px; max-width: 500px; transition: border-color 0.2s;
+    }
+    .blog-card:hover { border-color: rgba(34,211,238,0.27); }
+    .blog-title {
+      font-family: var(--font-sans); font-size: 18px; font-weight: 700;
+      color: var(--white); line-height: 1.3; margin-bottom: 8px;
+    }
+    .blog-desc {
+      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
+      line-height: 1.6; margin-bottom: 16px;
+    }
+    .blog-cta { font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 500; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 24px;
+    }
+    .footer-inner {
+      max-width: 1200px; margin: 0 auto;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      flex-wrap: wrap; gap: 24px;
+    }
+    .footer-brand { font-family: var(--font-sans); font-weight: 800; font-size: 16px; color: var(--white); }
+    .footer-sub { font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim); margin-top: 4px; }
+    .footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
+    .footer-link { font-family: var(--font-sans); font-size: 13px; color: var(--gray-dim); transition: color 0.2s; }
+    .footer-link:hover { color: var(--white); }
+    .footer-endpoints {
+      width: 100%; display: flex; gap: 24px; flex-wrap: wrap;
+      padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--border);
+    }
+    .footer-ep { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-dim); transition: color 0.2s; }
+    .footer-ep:hover { color: var(--cyan); }
+
+    @media (max-width: 640px) {
+      .nav-links { gap: 16px; }
+      .section { padding: 56px 16px; }
+      .hero-wrap { padding: 120px 16px 48px; }
+      .pipeline-card { width: 150px; }
+      .stats-row { gap: 28px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══ NAV ═══ -->
+<nav id="main-nav">
+  <div class="nav-inner">
+    <a href="{{ url_for('index') }}" class="nav-brand" style="text-decoration:none">
+      <span class="nav-brand-name">HealthClaw</span>
+      <span class="nav-badge">v1.1.0</span>
+    </a>
+    <div class="nav-links">
+      <a href="{{ url_for('index') }}" class="nav-link">Home</a>
+      <a href="{{ url_for('r6_dashboard') }}" class="nav-link">Health Data Dashboard</a>
+      <a href="{{ url_for('wiki') }}" class="nav-link">Docs</a>
+      <a href="{{ url_for('faq') }}" class="nav-link">FAQ</a>
+      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="nav-link nav-cta">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<div class="hero-wrap" id="hero-wrap">
+  <div class="hero-glow"></div>
   <div class="hero-inner">
+    <div class="hero-eyebrow">Open Source &middot; MIT License &middot; FHIR R4 + R6</div>
     <h1 class="hero-title">
-      <i class="fas fa-shield-alt" style="color:var(--r6-primary)"></i>
-      HealthClaw Guardrails
+      The guardrail layer between<br>
+      <span style="color:var(--cyan)">AI agents</span> and
+      <span style="color:var(--green)">clinical data</span>
     </h1>
     <p class="hero-sub">
-      The security layer between AI agents and clinical data &mdash;
-      a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer" class="hero-brand-link">healthclaw.io</a> open source project.
+      FHIR standardized health data. MCP standardized how AI connects to tools.
+      HealthClaw standardizes the security, privacy, and clinical safety guardrails in between.
     </p>
-    <div class="hero-badges">
-      <span class="hero-badge"><i class="fas fa-check-circle me-1" style="color:var(--r6-success)"></i>FHIR R4 US Core v9</span>
-      <span class="hero-badge"><i class="fas fa-flask me-1" style="color:var(--r6-primary)"></i>FHIR R6 ballot3</span>
-      <span class="hero-badge"><i class="fas fa-plug me-1" style="color:var(--r6-info)"></i>12 MCP Tools</span>
-      <span class="hero-badge"><i class="fas fa-database me-1" style="color:var(--r6-warning)"></i>37 Resource Types</span>
-      <span class="hero-badge"><i class="fas fa-link me-1" style="color:var(--r6-text-muted)"></i>Fasten Connect</span>
-    </div>
     <div class="hero-ctas">
-      <a href="{{ url_for('r6_dashboard') }}" class="r6-btn r6-btn-primary">
-        <i class="fas fa-th-large"></i> Health Data Dashboard
-      </a>
-      <a href="{{ url_for('wiki') }}" class="r6-btn r6-btn-outline">
-        <i class="fas fa-book"></i> Quick Start
-      </a>
-      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="btn-secondary-outline">
-        <i class="fab fa-github"></i> GitHub
-      </a>
+      <a href="{{ url_for('r6_dashboard') }}" class="btn-primary">Try the Live Dashboard</a>
+      <a href="{{ url_for('wiki') }}" class="btn-outline">Read the Docs</a>
     </div>
   </div>
 </div>
 
-<!-- ===== GUARDRAIL SEQUENCE ===== -->
-<div class="r6-panel panel-featured mb-5 mt-5">
-  <div class="r6-panel-header panel-featured-header">
-    <i class="fas fa-bolt"></i>
-    <h3>What Happens When an AI Agent Accesses Clinical Data</h3>
+<!-- ═══ STATS ═══ -->
+<div class="stats-row">
+  <div class="stat">
+    <span class="stat-num" data-target="12">0</span>
+    <div class="stat-label">MCP Tools</div>
   </div>
-  <div class="r6-panel-body">
-    <div class="row g-3">
-      <div class="col-md-4">
-        <div class="step-card step-card-info">
-          <div class="step-title"><span class="step-title-info">1.</span> Read Patient Record</div>
-          <div class="step-body">PHI redacted: identifiers masked, addresses stripped, telecom removed. Agent only sees safe data.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="step-card step-card-primary">
-          <div class="step-title"><span class="step-title-primary">2.</span> Propose Write</div>
-          <div class="step-body">Agent calls <code>fhir.propose_write</code>. Structural validation gate runs. Resource previewed without committing.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="step-card step-card-danger">
-          <div class="step-title"><span class="step-title-danger">3.</span> Permission Evaluated</div>
-          <div class="step-body">R6 Permission <code>$evaluate</code> returns permit or deny with reasoning. No matching rule = default deny.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="step-card step-card-success">
-          <div class="step-title"><span class="step-title-success">4.</span> Policy Permits</div>
-          <div class="step-body">Permit rule matched. Re-evaluation returns reasoning showing which rule applied and why.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="step-card step-card-warning">
-          <div class="step-title"><span class="step-title-warning">5.</span> Step-up + Human Gate</div>
-          <div class="step-body">HMAC-SHA256 token required (128-bit nonce, 5-min TTL). Clinical writes blocked until <code>X-Human-Confirmed: true</code>.</div>
-        </div>
-      </div>
-      <div class="col-md-4">
-        <div class="step-card step-card-success">
-          <div class="step-title"><span class="step-title-success">6.</span> Commit + Audit Trail</div>
-          <div class="step-body">Write committed. Every step recorded in an immutable, append-only AuditEvent trail. Full accountability.</div>
-        </div>
-      </div>
+  <div class="stat">
+    <span class="stat-num" data-target="37">0</span>
+    <div class="stat-label">FHIR Resource Types</div>
+  </div>
+  <div class="stat">
+    <span class="stat-num" data-target="266">0</span>
+    <div class="stat-label">Tests Passing</div>
+  </div>
+  <div class="stat">
+    <span class="stat-num" data-target="6">0</span>
+    <div class="stat-label">Guardrail Layers</div>
+  </div>
+</div>
+
+<!-- ═══ GUARDRAIL PIPELINE ═══ -->
+<div class="section">
+  <div class="section-header fade-up">
+    <div class="section-tag">How it works</div>
+    <h2 class="section-title">Every request passes through 6 layers</h2>
+    <p class="section-desc">When an AI agent accesses clinical data through HealthClaw, each request is validated, redacted, authorized, and recorded before anything touches the FHIR server.</p>
+  </div>
+  <div class="pipeline-grid" id="pipeline-grid">
+    <div class="pipeline-card fade-up" style="transition-delay:0s">
+      <div class="pipeline-icon">🛡️</div>
+      <div class="pipeline-label">PHI Redacted</div>
+      <div class="pipeline-desc">Names, addresses, DOB stripped before agent sees data</div>
+    </div>
+    <div class="pipeline-card fade-up" style="transition-delay:0.1s">
+      <div class="pipeline-icon">✅</div>
+      <div class="pipeline-label">$validate Gate</div>
+      <div class="pipeline-desc">Structural validation before any write proposal</div>
+    </div>
+    <div class="pipeline-card fade-up" style="transition-delay:0.2s">
+      <div class="pipeline-icon">🔒</div>
+      <div class="pipeline-label">Permission Eval</div>
+      <div class="pipeline-desc">R6 Permission $evaluate: deny by default</div>
+    </div>
+    <div class="pipeline-card fade-up" style="transition-delay:0.3s">
+      <div class="pipeline-icon">🔑</div>
+      <div class="pipeline-label">HMAC Step-up</div>
+      <div class="pipeline-desc">Signed token with 128-bit nonce, 5-min TTL</div>
+    </div>
+    <div class="pipeline-card fade-up" style="transition-delay:0.4s">
+      <div class="pipeline-icon">👤</div>
+      <div class="pipeline-label">Human Gate</div>
+      <div class="pipeline-desc">Clinical writes blocked until human confirms</div>
+    </div>
+    <div class="pipeline-card fade-up" style="transition-delay:0.5s">
+      <div class="pipeline-icon">📋</div>
+      <div class="pipeline-label">Audit Trail</div>
+      <div class="pipeline-desc">Immutable, append-only record of every action</div>
     </div>
   </div>
 </div>
 
-<!-- ===== PHI REDACTION EXAMPLE ===== -->
-<div class="r6-panel mb-5">
-  <div class="r6-panel-header">
-    <i class="fas fa-user-shield"></i>
-    <h3>PHI Redaction — What the Agent Sees</h3>
+<!-- ═══ PHI REDACTION ═══ -->
+<div class="section" style="padding-top:0">
+  <div class="section-header fade-up">
+    <div class="section-tag">PHI Redaction</div>
+    <h2 class="section-title">The agent never sees raw patient data</h2>
+    <p class="section-desc">Applied on every read path: direct reads, search results, upstream proxy responses, and context envelopes. Agents work with safe, de-identified data by default.</p>
   </div>
-  <div class="r6-panel-body">
-    <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
-      Applied on every read path — direct reads, search results, upstream proxy responses, and context envelopes. The agent never has access to raw patient data.
+  <div class="phi-compare fade-up">
+    <div class="phi-block">
+      <div class="phi-label" style="color:var(--red)">Stored in FHIR Server</div><span class="phi-key">name:    </span><span style="color:var(--white)">Maria Elena Rivera</span>
+<span class="phi-key">mrn:     </span><span style="color:var(--white)">MRN-2026-4471</span>
+<span class="phi-key">phone:   </span><span style="color:var(--white)">617-555-0198</span>
+<span class="phi-key">address: </span><span style="color:var(--white)">123 Clinical Ave, Boston MA 02101</span>
+<span class="phi-key">dob:     </span><span style="color:var(--white)">1985-03-15</span></div>
+    <div class="phi-arrow">→</div>
+    <div class="phi-block">
+      <div class="phi-label" style="color:var(--green)">Delivered to AI Agent</div><span class="phi-key">name:    </span><span style="color:var(--green)">M. E. Rivera</span>
+<span class="phi-key">mrn:     </span><span style="color:var(--green)">***4471</span>
+<span class="phi-key">phone:   </span><span style="color:var(--green)">[Redacted]</span>
+<span class="phi-key">address: </span><span style="color:var(--green)">Boston, MA</span>
+<span class="phi-key">dob:     </span><span style="color:var(--green)">1985</span></div>
+  </div>
+</div>
+
+<!-- ═══ AUDIENCE CARDS ═══ -->
+<div class="section" style="padding-top:0">
+  <div class="section-header fade-up">
+    <div class="section-tag">Built for</div>
+    <h2 class="section-title">Three paths, one guardrail stack</h2>
+    <p class="section-desc">Whether you're building an AI health agent, managing your own health data, or evaluating compliance infrastructure — HealthClaw meets you where you are.</p>
+  </div>
+  <div class="audience-grid">
+
+    <a href="{{ url_for('wiki') }}" class="audience-card fade-up" style="transition-delay:0s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(34,211,238,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
+      <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
+      <div class="audience-icon">⚡</div>
+      <div class="audience-title">AI Agent Developer</div>
+      <div class="audience-sub" style="color:var(--cyan)">Ship HIPAA-safe agents in minutes, not months</div>
+      <ul class="audience-list" style="--dot:var(--cyan)">
+        <li style="--before-color:var(--cyan)">12 MCP tools — drop into Claude Desktop or any MCP client</li>
+        <li style="--before-color:var(--cyan)">Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
+        <li style="--before-color:var(--cyan)">PHI redaction, audit, step-up auth — zero config</li>
+        <li style="--before-color:var(--cyan)"><code style="font-size:12px;color:var(--cyan)">uv sync &amp;&amp; python main.py</code> — running in 10 seconds</li>
+      </ul>
+      <div class="audience-cta" style="color:var(--cyan)">Quick Start →</div>
+    </a>
+
+    <a href="{{ url_for('r6_dashboard') }}" class="audience-card fade-up" style="transition-delay:0.15s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(52,211,153,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
+      <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
+      <div class="audience-icon">💊</div>
+      <div class="audience-title">Patient / Consumer</div>
+      <div class="audience-sub" style="color:var(--green)">See what's wrong with your health data — and fix it</div>
+      <ul class="audience-list">
+        <li style="--before-color:var(--green)">Curatr checks records against live medical code databases</li>
+        <li style="--before-color:var(--green)">Plain-language explanations of coding errors and their impact</li>
+        <li style="--before-color:var(--green)">You approve every fix — full provenance trail, no black boxes</li>
+        <li style="--before-color:var(--green)">Connect 1,000+ EHR systems via Fasten Connect</li>
+      </ul>
+      <div class="audience-cta" style="color:var(--green)">Try Curatr →</div>
+    </a>
+
+    <a href="{{ url_for('faq') }}" class="audience-card fade-up" style="transition-delay:0.3s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(251,191,36,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
+      <div class="audience-glow" style="background:rgba(251,191,36,0.05)"></div>
+      <div class="audience-icon">🏥</div>
+      <div class="audience-title">Health System / Payer</div>
+      <div class="audience-sub" style="color:var(--amber)">Let AI agents touch clinical data without a compliance disaster</div>
+      <ul class="audience-list">
+        <li style="--before-color:var(--amber)">Vendor-neutral proxy — works with your existing FHIR stack</li>
+        <li style="--before-color:var(--amber)">Tenant isolation, immutable audit, OAuth 2.1 + PKCE</li>
+        <li style="--before-color:var(--amber)">Human-in-the-loop for clinical writes (HTTP 428 pattern)</li>
+        <li style="--before-color:var(--amber)">266 tests, Playwright e2e, open source (MIT)</li>
+      </ul>
+      <div class="audience-cta" style="color:var(--amber)">Architecture →</div>
+    </a>
+
+  </div>
+</div>
+
+<!-- ═══ CURATR ═══ -->
+<div style="background:linear-gradient(180deg,rgba(52,211,153,0.04) 0%,transparent 100%)">
+  <div class="section" style="padding-top:60px">
+    <div class="section-header fade-up">
+      <div class="section-tag">Curatr — Patient Data Quality</div>
+      <h2 class="section-title">Your health data is full of errors. Now you can fix them.</h2>
+      <p class="section-desc">Curatr evaluates FHIR resources against live public terminology services, explains issues in plain language, and lets you approve fixes with full provenance tracking.</p>
+    </div>
+    <div class="curatr-grid fade-up">
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--red);background:rgba(248,113,113,0.1)">critical</span>
+        <div class="check-label">Deprecated ICD-9</div>
+        <div class="check-source">Local lookup</div>
+      </div>
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
+        <div class="check-label">Invalid ICD-10-CM</div>
+        <div class="check-source">NLM Clinical Tables</div>
+      </div>
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
+        <div class="check-label">Unknown SNOMED CT</div>
+        <div class="check-source">tx.fhir.org</div>
+      </div>
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
+        <div class="check-label">Missing RxNorm</div>
+        <div class="check-source">RXNAV API</div>
+      </div>
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--cyan);background:rgba(34,211,238,0.1)">info</span>
+        <div class="check-label">Display mismatch</div>
+        <div class="check-source">Cross-check</div>
+      </div>
+      <div class="check-card">
+        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
+        <div class="check-label">Missing fields</div>
+        <div class="check-source">Structural</div>
+      </div>
+    </div>
+    <p class="curatr-note fade-up" style="transition-delay:0.2s">
+      Every approved fix creates a linked <code style="color:var(--green);font-family:var(--font-mono);font-size:13px">Provenance</code> resource
+      recording patient intent, field changes, and agent attribution — recorded in the immutable audit trail. No black-box corrections.
     </p>
-    <div class="phi-compare">
-      <div class="phi-panel">
-        <div class="phi-panel-header before"><i class="fas fa-eye me-1"></i>Stored in FHIR server</div>
-        <pre>name:    Maria Elena Rivera
-mrn:     MRN-2026-4471
-phone:   617-555-0198
-address: 123 Clinical Ave
-         Boston, MA 02101
-dob:     1985-03-15</pre>
-      </div>
-      <div class="phi-panel">
-        <div class="phi-panel-header after"><i class="fas fa-shield-alt me-1"></i>Delivered to AI agent</div>
-        <pre>name:    <span class="phi-redacted">M. E. Rivera</span>
-mrn:     <span class="phi-redacted">***4471</span>
-phone:   <span class="phi-removed">[Redacted]</span>
-address: <span class="phi-redacted">Boston, MA</span>
-
-dob:     <span class="phi-redacted">1985</span></pre>
-      </div>
-    </div>
   </div>
 </div>
 
-<!-- ===== CAPABILITY TILES ===== -->
-<div class="row g-4 mb-5">
-  <div class="col-md-4">
-    <div class="r6-panel tile-full">
-      <div class="r6-panel-header">
-        <i class="fas fa-shield-alt"></i>
-        <h3>Security Patterns</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          Tenant isolation enforced at the database layer on every query. HMAC-SHA256 step-up tokens for writes. ETag/If-Match concurrency control. OAuth 2.1 with PKCE (S256 only). Append-only audit trail with database-level immutability.
-        </p>
-      </div>
-    </div>
+<!-- ═══ COMPARISON ═══ -->
+<div class="section">
+  <div class="section-header fade-up">
+    <div class="section-tag">Comparison</div>
+    <h2 class="section-title">Vendor-neutral by design</h2>
+    <p class="section-desc">HealthClaw works with any FHIR server. The guardrails are the product, not the data layer.</p>
   </div>
-  <div class="col-md-4">
-    <div class="r6-panel tile-full">
-      <div class="r6-panel-header">
-        <i class="fas fa-robot"></i>
-        <h3>12 MCP Tools</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          Read tools return <code>_mcp_summary</code> with reasoning and clinical context. Writes use propose/commit: <code>fhir.propose_write</code> validates first, <code>fhir.commit_write</code> requires step-up auth. Curatr tools evaluate and fix patient record quality.
-        </p>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="r6-panel tile-full">
-      <div class="r6-panel-header">
-        <i class="fas fa-heartbeat"></i>
-        <h3>Clinical Safety</h3>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem">
-          Clinical writes return HTTP 428 without explicit human confirmation. HIPAA Safe Harbor de-identification on demand. Medical disclaimer injected on clinical reads. PHI redaction on all read paths including upstream proxy responses.
-        </p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ===== ARCHITECTURE + DATA SOURCES ===== -->
-<div class="row g-4 mb-5">
-  <div class="col-md-6">
-    <div class="r6-panel tile-full">
-      <div class="r6-panel-header">
-        <i class="fas fa-layer-group"></i>
-        <h3>Architecture</h3>
-      </div>
-      <div class="r6-panel-body">
-        <table class="arch-table">
-          <tr><td><strong>Flask App</strong></td><td>FHIR REST at <code>/r6/fhir/*</code>, guardrail enforcement</td></tr>
-          <tr><td><strong>MCP Server</strong></td><td>Node.js + TypeScript — 12 tools, Streamable HTTP + SSE</td></tr>
-          <tr><td><strong>Fasten Connect</strong></td><td>Patient-authorized EHR ingestion via <code>/fasten/webhook</code></td></tr>
-          <tr><td><strong>Storage</strong></td><td>SQLite (dev) / PostgreSQL (prod) — 37 FHIR resource types</td></tr>
-          <tr><td><strong>Validation</strong></td><td>Structural: US Core v9 required fields + R6 value constraints</td></tr>
-        </table>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="r6-panel tile-full">
-      <div class="r6-panel-header">
-        <i class="fas fa-database"></i>
-        <h3>Data Sources</h3>
-      </div>
-      <div class="r6-panel-body">
-        <table class="arch-table">
-          <tr><td><strong>Local mode</strong></td><td>JSON blobs in SQLite — zero-config for development</td></tr>
-          <tr><td><strong>Upstream proxy</strong></td><td>Any FHIR server (HAPI, SMART Health IT, Epic) — set <code>FHIR_UPSTREAM_URL</code></td></tr>
-          <tr><td><strong>Fasten Connect</strong></td><td>Patient-authorized bulk EHI import from 1000+ EHR systems</td></tr>
-          <tr><td><strong>TEFCA IAS</strong></td><td>Single identity verification → longitudinal record across all QHINs</td></tr>
-        </table>
-      </div>
-    </div>
+  <div class="compare-wrap fade-up">
+    <table class="compare-table">
+      <thead>
+        <tr>
+          <th style="text-align:left;color:var(--gray-dim);font-weight:500;font-size:13px"></th>
+          <th style="text-align:center;color:var(--cyan);font-weight:700;font-size:15px">HealthClaw</th>
+          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">AWS HealthLake</th>
+          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">Medplum MCP</th>
+          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">Raw FHIR</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="color:var(--white);font-weight:500">Any FHIR server</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="val">—</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">PHI redaction on reads</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">Immutable audit trail</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="val">Separate</span></td>
+          <td style="text-align:center"><span class="val">Partial</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">Step-up auth for writes</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="val">Separate</span></td>
+          <td style="text-align:center"><span class="val">Built-in</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">Human-in-the-loop</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">R6 Permission $evaluate</td>
+          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+          <td style="text-align:center"><span class="cross">✗</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--white);font-weight:500">Setup time</td>
+          <td class="hl" style="text-align:center"><span class="val" style="color:var(--green)">10 sec</span></td>
+          <td style="text-align:center"><span class="val">30+ min</span></td>
+          <td style="text-align:center"><span class="val">15+ min</span></td>
+          <td style="text-align:center"><span class="val">Varies</span></td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
-<!-- ===== BLOG / SUBSTACK ===== -->
-<div class="r6-panel mb-5" id="blog">
-  <div class="r6-panel-header">
-    <i class="fas fa-pen-nib"></i>
-    <h3>From the Builder — The Why Behind This</h3>
+<!-- ═══ QUICK START ═══ -->
+<div class="section" style="padding-top:0">
+  <div class="section-header fade-up">
+    <div class="section-tag">Get Started</div>
+    <h2 class="section-title">Running in 10 seconds</h2>
+    <p class="section-desc">No accounts. No API keys. No cloud setup. Clone, install, run.</p>
   </div>
-  <div class="r6-panel-body">
-    <p class="blog-intro">
-      HealthClaw Guardrails was built from personal experience navigating a broken health data system.
-      These articles share the thinking, the frustrations, and the vision behind the project.
-    </p>
-    <div class="row g-3">
+  <div class="code-wrap fade-up">
+    <pre class="code-block" id="quickstart-code"><span class="code-comment"># Install + run in 10 seconds</span>
+<span class="code-cmd">uv sync</span>
+<span class="code-cmd">STEP_UP_SECRET=your-secret python main.py</span>
 
-      <div class="col-md-6">
-        <a href="https://evestel.substack.com/p/building-a-new-empowered-health-system"
-           target="_blank" rel="noopener noreferrer" class="blog-card">
-          <div class="blog-card-tag">Health Data Ownership</div>
-          <h4 class="blog-card-title">Building a New, Empowered Health System</h4>
-          <p class="blog-card-excerpt">
-            The current health data system was built around institutions, not patients.
-            What does it look like when we flip that — when AI tools serve the person,
-            not the provider's back office?
-          </p>
-          <div class="blog-card-footer">
-            <span class="blog-card-source"><i class="fas fa-rss me-1"></i>evestel.substack.com</span>
-            <span class="blog-card-read">Read &rarr;</span>
-          </div>
-        </a>
-      </div>
+<span class="code-comment"># Or with Docker</span>
+<span class="code-cmd">docker-compose up -d --build</span>
 
-      <div class="col-md-6">
-        <a href="https://evestel.substack.com/p/how-i-build-my-personal-openclaw"
-           target="_blank" rel="noopener noreferrer" class="blog-card">
-          <div class="blog-card-tag">Personal AI Health</div>
-          <h4 class="blog-card-title">How I Build My Personal OpenClaw</h4>
-          <p class="blog-card-excerpt">
-            A personal walkthrough of building an AI health agent using OpenClaw skills
-            and HealthClaw Guardrails — connecting real health data, evaluating it with
-            Curatr, and actually owning the output.
-          </p>
-          <div class="blog-card-footer">
-            <span class="blog-card-source"><i class="fas fa-rss me-1"></i>evestel.substack.com</span>
-            <span class="blog-card-read">Read &rarr;</span>
-          </div>
-        </a>
-      </div>
-
-    </div>
+<span class="code-comment"># Connect to your FHIR server</span>
+<span class="code-cmd">FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py</span></pre>
+    <button type="button" class="copy-btn" id="copy-btn" onclick="copyQuickstart()">Copy</button>
   </div>
 </div>
 
-<!-- ===== DISCOVERY ENDPOINTS ===== -->
-<div class="r6-panel mb-5">
-  <div class="r6-panel-header">
-    <i class="fas fa-globe"></i>
-    <h3>Live Endpoints</h3>
+<!-- ═══ FROM THE BUILDER ═══ -->
+<div class="section" style="padding-top:0">
+  <div class="section-header fade-up">
+    <div class="section-tag">From the Builder</div>
+    <h2 class="section-title">The why behind this</h2>
   </div>
-  <div class="r6-panel-body">
-    <div class="row" style="font-size:0.85rem">
-      <div class="col-md-3 mb-2">
-        <a href="/r6/fhir/metadata" target="_blank" style="color:var(--r6-info);text-decoration:none">
-          <i class="fas fa-external-link-alt me-1"></i>/r6/fhir/metadata
-        </a>
-        <div style="color:var(--r6-text-muted);font-size:0.75rem">CapabilityStatement (R4+R6)</div>
-      </div>
-      <div class="col-md-3 mb-2">
-        <a href="/r6/fhir/health" target="_blank" style="color:var(--r6-info);text-decoration:none">
-          <i class="fas fa-external-link-alt me-1"></i>/r6/fhir/health
-        </a>
-        <div style="color:var(--r6-text-muted);font-size:0.75rem">Liveness + upstream status</div>
-      </div>
-      <div class="col-md-3 mb-2">
-        <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" style="color:var(--r6-info);text-decoration:none">
-          <i class="fas fa-external-link-alt me-1"></i>SMART Configuration
-        </a>
-        <div style="color:var(--r6-text-muted);font-size:0.75rem">SMART-on-FHIR v2 / OAuth 2.1</div>
-      </div>
-      <div class="col-md-3 mb-2">
-        <a href="/fasten/jobs" target="_blank" style="color:var(--r6-info);text-decoration:none">
-          <i class="fas fa-external-link-alt me-1"></i>/fasten/jobs
-        </a>
-        <div style="color:var(--r6-text-muted);font-size:0.75rem">Fasten import job status</div>
-      </div>
-    </div>
+  <div class="blog-grid">
+    <a href="https://evestel.substack.com/p/building-a-new-empowered-health-system" target="_blank" rel="noopener" class="blog-card fade-up" style="transition-delay:0s">
+      <div class="blog-title">Building a New, Empowered Health System</div>
+      <p class="blog-desc">The current health data system was built around institutions, not patients. What happens when we flip that?</p>
+      <span class="blog-cta">Read on Substack →</span>
+    </a>
+    <a href="https://evestel.substack.com/p/how-i-build-my-personal-openclaw" target="_blank" rel="noopener" class="blog-card fade-up" style="transition-delay:0.15s">
+      <div class="blog-title">How I Build My Personal OpenClaw</div>
+      <p class="blog-desc">A walkthrough of building an AI health agent using OpenClaw skills and HealthClaw Guardrails with real health data.</p>
+      <span class="blog-cta">Read on Substack →</span>
+    </a>
   </div>
 </div>
 
-{% endblock %}
+<!-- ═══ FOOTER ═══ -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-brand">HealthClaw Guardrails</div>
+      <div class="footer-sub">FHIR R4 US Core v9 + R6 &middot; MCP &middot; MIT License &middot; a <a href="https://healthclaw.io" target="_blank" rel="noopener" style="color:inherit">healthclaw.io</a> project</div>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="footer-link">GitHub</a>
+      <a href="{{ url_for('r6_dashboard') }}" class="footer-link">Dashboard</a>
+      <a href="{{ url_for('privacy') }}" class="footer-link">Privacy</a>
+      <a href="{{ url_for('terms') }}" class="footer-link">Terms</a>
+    </div>
+    <!-- Discovery links (kept for e2e tests + developer discovery) -->
+    <div class="footer-endpoints">
+      <a href="/r6/fhir/metadata" target="_blank" class="footer-ep">/r6/fhir/metadata</a>
+      <a href="/r6/fhir/health" target="_blank" class="footer-ep">/r6/fhir/health</a>
+      <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" class="footer-ep">SMART Configuration</a>
+      <a href="/fasten/jobs" target="_blank" class="footer-ep">/fasten/jobs</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── Hero entrance ──
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => document.getElementById('hero-wrap').classList.add('hero-loaded'), 80);
+});
+
+// ── Nav blur on scroll ──
+window.addEventListener('scroll', () => {
+  document.getElementById('main-nav').classList.toggle('scrolled', window.scrollY > 40);
+}, { passive: true });
+
+// ── Intersection observer for fade-up + stat counters ──
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    e.target.classList.add('in');
+    io.unobserve(e.target);
+  });
+}, { threshold: 0.15 });
+
+document.querySelectorAll('.fade-up').forEach(el => io.observe(el));
+
+// ── Animated stat counters ──
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+function animateCounter(el, target, duration) {
+  const t0 = performance.now();
+  const tick = (now) => {
+    const p = Math.min((now - t0) / duration, 1);
+    el.textContent = Math.round(target * easeOut(p));
+    if (p < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+const statsIO = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    const target = parseInt(e.target.dataset.target, 10);
+    animateCounter(e.target, target, 1100);
+    statsIO.unobserve(e.target);
+  });
+}, { threshold: 0.5 });
+
+document.querySelectorAll('.stat-num').forEach(el => statsIO.observe(el));
+
+// ── Audience list bullet colors via CSS custom property ──
+document.querySelectorAll('.audience-list li').forEach(li => {
+  const color = window.getComputedStyle(li).getPropertyValue('--before-color').trim();
+  if (color) li.style.setProperty('--before-color', color);
+});
+
+// ── Copy quickstart ──
+function copyQuickstart() {
+  const text = `uv sync\nSTEP_UP_SECRET=your-secret python main.py\n\ndocker-compose up -d --build\n\nFHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py`;
+  navigator.clipboard?.writeText(text);
+  const btn = document.getElementById('copy-btn');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+}
+</script>
+
+</body>
+</html>

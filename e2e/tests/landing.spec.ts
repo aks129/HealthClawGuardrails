@@ -10,18 +10,18 @@ test.describe('Landing page', () => {
   });
 
   test('navbar has Home and Health Data Dashboard links', async ({ page }) => {
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
-    // Scope to navbar to avoid strict-mode conflict with hero CTA button
-    const nav = page.locator('nav');
-    await expect(nav.getByRole('link', { name: /Health Data Dashboard/ })).toBeVisible();
+    const nav = page.locator('#main-nav');
+    await expect(nav.getByRole('link', { name: 'Home' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Health Data Dashboard' })).toBeVisible();
   });
 
   test('hero title is visible', async ({ page }) => {
-    await expect(page.locator('h1.hero-title')).toContainText('HealthClaw Guardrails');
+    await expect(page.locator('h1.hero-title')).toBeVisible();
+    await expect(page.locator('h1.hero-title')).toContainText('AI agents');
   });
 
-  test('Try the Dashboard button navigates to dashboard', async ({ page }) => {
-    await page.getByRole('link', { name: /Health Data Dashboard/ }).first().click();
+  test('Try the Live Dashboard button navigates to dashboard', async ({ page }) => {
+    await page.getByRole('link', { name: 'Try the Live Dashboard' }).click();
     await expect(page).toHaveURL('/r6-dashboard');
   });
 
@@ -29,20 +29,19 @@ test.describe('Landing page', () => {
     await expect(page.locator('.phi-compare')).toBeVisible();
   });
 
-  test('6-step story section shows all steps', async ({ page }) => {
-    await expect(page.getByText('1. Read Patient Record')).toBeVisible();
-    await expect(page.getByText('2. Propose Write')).toBeVisible();
-    await expect(page.getByText('6. Commit + Audit Trail')).toBeVisible();
+  test('guardrail pipeline cards show all 6 layers', async ({ page }) => {
+    await expect(page.getByText('PHI Redacted')).toBeVisible();
+    await expect(page.getByText('$validate Gate')).toBeVisible();
+    await expect(page.getByText('Audit Trail')).toBeVisible();
   });
 
-  test('feature cards are visible', async ({ page }) => {
-    await expect(page.getByText('Security Patterns')).toBeVisible();
-    // '12 MCP Tools' appears in both hero badge and feature card — scope to first visible
-    await expect(page.getByText('12 MCP Tools').first()).toBeVisible();
-    await expect(page.getByText('Clinical Safety')).toBeVisible();
+  test('audience cards are visible', async ({ page }) => {
+    await expect(page.getByText('AI Agent Developer')).toBeVisible();
+    await expect(page.getByText('Patient / Consumer')).toBeVisible();
+    await expect(page.getByText('Health System / Payer')).toBeVisible();
   });
 
-  test('discovery endpoint links are present', async ({ page }) => {
+  test('discovery endpoint links are present in footer', async ({ page }) => {
     await expect(page.locator('a[href="/r6/fhir/metadata"]')).toBeVisible();
     await expect(page.locator('a[href="/r6/fhir/health"]')).toBeVisible();
   });
