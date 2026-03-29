@@ -459,6 +459,68 @@
       </div>
     </div>
 
+    <!-- Fasten Connect E2E Demo -->
+    <div class="r6-panel" id="fasten-panel" style="border-color: var(--r6-info); box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);">
+      <div class="r6-panel-header" style="background: linear-gradient(135deg, #0c2a3a 0%, #0f3d52 100%); border-bottom-color: var(--r6-info);">
+        <i class="fas fa-plug" style="color: var(--r6-info);"></i>
+        <h3 style="color: var(--r6-info);">Fasten Connect — Health Data Import</h3>
+        <span class="r6-tag r6-tag-read" style="margin-left:auto;background:rgba(6,182,212,0.15);color:var(--r6-info);border-color:var(--r6-info);">E2E DEMO</span>
+      </div>
+      <div class="r6-panel-body">
+        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
+          Full end-to-end Fasten Connect flow: patient authorizes EHR access via the Stitch widget,
+          an EHI export webhook fires, 4 FHIR resources are ingested (Patient, Observation, Condition,
+          MedicationRequest), PHI is redacted on read-back, and every step is audited.
+        </p>
+        <button class="r6-btn r6-btn-sm mb-3" id="btn-fasten-demo" onclick="runFastenDemo()"
+                style="background:var(--r6-info);color:#000;border-color:var(--r6-info);font-size:0.9rem;padding:0.55rem 1.4rem;">
+          <i class="fas fa-plug"></i> Run Fasten Demo
+        </button>
+
+        <!-- Step tracker -->
+        <div id="fasten-steps" style="margin-top:1rem;display:none">
+          <div class="demo-step" data-step="f1">
+            <div class="demo-step-indicator"></div>
+            <div class="demo-step-content">
+              <div class="demo-step-title">1. Patient Authorization</div>
+              <div class="demo-step-subtitle">Stitch widget → org_connection_id registered</div>
+            </div>
+          </div>
+          <div class="demo-step" data-step="f2">
+            <div class="demo-step-indicator"></div>
+            <div class="demo-step-content">
+              <div class="demo-step-title">2. EHI Export Webhook</div>
+              <div class="demo-step-subtitle">patient.ehi_export_success received</div>
+            </div>
+          </div>
+          <div class="demo-step" data-step="f3">
+            <div class="demo-step-indicator"></div>
+            <div class="demo-step-content">
+              <div class="demo-step-title">3. NDJSON Ingestion</div>
+              <div class="demo-step-subtitle">Patient · Observation · Condition · MedicationRequest</div>
+            </div>
+          </div>
+          <div class="demo-step" data-step="f4">
+            <div class="demo-step-indicator"></div>
+            <div class="demo-step-content">
+              <div class="demo-step-title">4. PHI Redaction on Read</div>
+              <div class="demo-step-subtitle">Name → initials · identifiers masked · address stripped</div>
+            </div>
+          </div>
+          <div class="demo-step" data-step="f5">
+            <div class="demo-step-indicator"></div>
+            <div class="demo-step-content">
+              <div class="demo-step-title">5. Immutable Audit Trail</div>
+              <div class="demo-step-subtitle">Every step recorded in append-only AuditEvent log</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step detail output -->
+        <div id="fasten-step-detail" class="r6-json-output mt-3" style="display:none;max-height:400px"></div>
+      </div>
+    </div>
+
     <!-- $validate -->
     <div class="r6-panel" id="validate-panel">
       <div class="r6-panel-header">

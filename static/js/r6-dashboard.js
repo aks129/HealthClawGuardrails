@@ -1083,6 +1083,75 @@ async function curatrApplyFix() {
   setLoading('btn-curatr-fix', false);
 }
 
+// --------------- Fasten Connect E2E Demo ---------------
+
+async function runFastenDemo() {
+  const btn = document.getElementById('btn-fasten-demo');
+  const stepsEl = document.getElementById('fasten-steps');
+  const detailEl = document.getElementById('fasten-step-detail');
+
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…'; }
+  stepsEl.style.display = 'block';
+  detailEl.style.display = 'none';
+  detailEl.innerHTML = '';
+
+  // Reset all step indicators
+  stepsEl.querySelectorAll('.demo-step').forEach(s => {
+    s.classList.remove('active', 'done', 'error');
+    s.querySelector('.demo-step-indicator').innerHTML = '';
+  });
+
+  function setStep(n, state, subtitle) {
+    const el = stepsEl.querySelector(`.demo-step[data-step="f${n}"]`);
+    if (!el) return;
+    el.classList.remove('active', 'done', 'error');
+    el.classList.add(state);
+    const ind = el.querySelector('.demo-step-indicator');
+    if (state === 'active') ind.innerHTML = '<i class="fas fa-spinner fa-spin" style="color:var(--r6-info)"></i>';
+    else if (state === 'done') ind.innerHTML = '<i class="fas fa-check-circle" style="color:var(--r6-success)"></i>';
+    else if (state === 'error') ind.innerHTML = '<i class="fas fa-times-circle" style="color:var(--r6-danger)"></i>';
+    if (subtitle) el.querySelector('.demo-step-subtitle').textContent = subtitle;
+  }
+
+  // Animate steps 1-5 while waiting for the API
+  for (let i = 1; i <= 5; i++) setStep(i, i === 1 ? 'active' : '');
+
+  try {
+    // Step 1 active — call the demo endpoint
+    const res = await fetch('/fasten/demo', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+
+    if (res.status !== 200) {
+      setStep(1, 'error', data.error || 'Demo failed');
+      detailEl.style.display = 'block';
+      detailEl.innerHTML = highlightJSON(data);
+      toast('Fasten demo failed', 'error');
+      return;
+    }
+
+    // Animate each step with a brief delay for visual effect
+    for (const step of data.steps) {
+      const n = step.step;
+      if (n > 1) setStep(n - 1, 'done');
+      setStep(n, 'active');
+      // Show step detail
+      detailEl.style.display = 'block';
+      detailEl.innerHTML = highlightJSON(step);
+      await sleep(600);
+      setStep(n, step.status === 'success' ? 'done' : 'error', step.detail);
+    }
+
+    toast(`Fasten demo complete — ${data.steps.length} steps, org_connection_id: ${data.org_connection_id.slice(0, 20)}`, 'success');
+    refreshAuditFeed();
+
+  } catch (err) {
+    setStep(1, 'error', err.message);
+    toast('Fasten demo error: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plug"></i> Run Fasten Demo'; }
+  }
+}
+
 // --------------- Walkthrough Mode ---------------
 
 const WALKTHROUGH_STEPS = [
@@ -1098,6 +1167,7 @@ const WALKTHROUGH_STEPS = [
   { title: 'SubscriptionTopic + Subscribe', action: async () => { await createDemoTopic(); await createDemoSubscription(); }, panel: 'subscription-panel' },
   { title: 'NutritionIntake + DeviceAlert', action: async () => { await createNutritionIntake(); await createDeviceAlert(); }, panel: 'r6resources-panel' },
   { title: 'Curatr: Data Quality Evaluation + Fix', action: async () => { await curatrCreateCondition(); await sleep(800); await curatrEvaluate(); }, panel: 'curatr-panel' },
+  { title: 'Fasten Connect: Health Data Import (E2E)', action: runFastenDemo, panel: 'fasten-panel' },
 ];
 
 let walkthroughIdx = -1;

@@ -111,6 +111,28 @@ test.describe('R6 Dashboard', () => {
     }
   });
 
+  test('Fasten Connect panel is visible with Run Demo button', async ({ page }) => {
+    await expect(page.locator('#fasten-panel')).toBeVisible();
+    await expect(page.locator('#btn-fasten-demo')).toContainText('Run Fasten Demo');
+    // Step tracker hidden until demo runs
+    await expect(page.locator('#fasten-steps')).not.toBeVisible();
+    await expect(page.locator('.demo-step[data-step="f1"]')).toBeAttached();
+    await expect(page.locator('.demo-step[data-step="f5"]')).toBeAttached();
+  });
+
+  test('Fasten demo runs all 5 steps successfully', async ({ page }) => {
+    await page.locator('#btn-fasten-demo').click();
+    // Step tracker should appear
+    await expect(page.locator('#fasten-steps')).toBeVisible({ timeout: 3000 });
+    // All 5 steps complete (button re-enables when done)
+    await expect(page.locator('#btn-fasten-demo')).toBeEnabled({ timeout: 15000 });
+    // All steps should be marked done
+    const doneSteps = page.locator('#fasten-steps .demo-step.done');
+    await expect(doneSteps).toHaveCount(5, { timeout: 15000 });
+    // Step detail JSON visible
+    await expect(page.locator('#fasten-step-detail')).toBeVisible();
+  });
+
   test('Discovery endpoint links are present', async ({ page }) => {
     await expect(page.locator('a[href="/r6/fhir/metadata"]').first()).toBeVisible();
     await expect(page.locator('a[href="/r6/fhir/.well-known/oauth-authorization-server"]')).toBeVisible();

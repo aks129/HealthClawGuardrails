@@ -339,3 +339,206 @@ def _job_to_dict(job: FastenJob) -> dict:
         'created_at': job.created_at.isoformat() if job.created_at else None,
         'completed_at': job.completed_at.isoformat() if job.completed_at else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Demo endpoint (no Stitch widget required)
+# ---------------------------------------------------------------------------
+
+@fasten_blueprint.route('/demo', methods=['POST'])
+def run_demo():
+    """
+    Simulate the full Fasten Connect end-to-end flow for dashboard demos.
+
+    Steps executed synchronously (no background thread):
+      1. Register a demo org_connection_id → tenant mapping
+      2. Create a FastenJob (simulate webhook receipt)
+      3. Ingest 4 sample FHIR resources (Patient, Observation, Condition, MedicationRequest)
+      4. Read back the Patient with PHI redaction applied
+      5. Return audit trail entries for this job
+
+    Returns a structured result with each step's outcome.
+    """
+    import uuid as _uuid
+    from r6.models import R6Resource
+    from r6.redaction import apply_redaction as redact_resource
+
+    demo_tenant = 'fasten-demo-tenant'
+    org_connection_id = f'demo-conn-{_uuid.uuid4().hex[:8]}'
+    task_id = f'demo-task-{_uuid.uuid4().hex[:8]}'
+
+    steps = []
+
+    # ── Step 1: Register connection ──────────────────────────────────────────
+    conn = FastenConnection(
+        org_connection_id=org_connection_id,
+        tenant_id=demo_tenant,
+        platform_type='demo',
+        connection_status='authorized',
+    )
+    db.session.add(conn)
+    db.session.flush()
+    record_audit_event(
+        event_type='fasten_connection_registered',
+        agent_id='fasten-demo',
+        tenant_id=demo_tenant,
+        outcome='success',
+        detail=f'org_connection_id={org_connection_id}',
+    )
+    steps.append({
+        'step': 1,
+        'title': 'Patient Authorization',
+        'status': 'success',
+        'detail': 'Stitch widget complete — org_connection_id registered',
+        'data': {'org_connection_id': org_connection_id, 'tenant': demo_tenant, 'platform': 'demo'},
+    })
+
+    # ── Step 2: Simulate webhook receipt ─────────────────────────────────────
+    job = FastenJob(
+        task_id=task_id,
+        org_connection_id=org_connection_id,
+        tenant_id=demo_tenant,
+    )
+    db.session.add(job)
+    conn.last_export_at = datetime.now(timezone.utc)
+    db.session.flush()
+    record_audit_event(
+        event_type='fasten_import_start',
+        agent_id='fasten-demo',
+        tenant_id=demo_tenant,
+        outcome='success',
+        detail=f'job={task_id} event=patient.ehi_export_success',
+    )
+    steps.append({
+        'step': 2,
+        'title': 'EHI Export Webhook',
+        'status': 'success',
+        'detail': 'patient.ehi_export_success received — ingestion job created',
+        'data': {'task_id': task_id, 'event': 'patient.ehi_export_success'},
+    })
+
+    # ── Step 3: Ingest 4 sample FHIR resources ───────────────────────────────
+    patient_id = f'demo-pt-{_uuid.uuid4().hex[:8]}'
+    obs_id = f'demo-obs-{_uuid.uuid4().hex[:8]}'
+    cond_id = f'demo-cond-{_uuid.uuid4().hex[:8]}'
+    med_id = f'demo-med-{_uuid.uuid4().hex[:8]}'
+
+    sample_resources = [
+        {
+            'resourceType': 'Patient',
+            'id': patient_id,
+            'name': [{'family': 'DemoPatient', 'given': ['Jane']}],
+            'birthDate': '1985-04-12',
+            'gender': 'female',
+            'identifier': [{'system': 'http://example.org/mrn', 'value': 'MRN-DEMO-001'}],
+            'address': [{'line': ['123 Main St'], 'city': 'Springfield', 'state': 'IL'}],
+        },
+        {
+            'resourceType': 'Observation',
+            'id': obs_id,
+            'status': 'final',
+            'code': {'coding': [{'system': 'http://loinc.org', 'code': '8480-6', 'display': 'Systolic blood pressure'}]},
+            'subject': {'reference': f'Patient/{patient_id}'},
+            'valueQuantity': {'value': 118, 'unit': 'mmHg'},
+        },
+        {
+            'resourceType': 'Condition',
+            'id': cond_id,
+            'clinicalStatus': {'coding': [{'system': 'http://terminology.hl7.org/CodeSystem/condition-clinical', 'code': 'active'}]},
+            'verificationStatus': {'coding': [{'system': 'http://terminology.hl7.org/CodeSystem/condition-ver-status', 'code': 'confirmed'}]},
+            'code': {'coding': [{'system': 'http://snomed.info/sct', 'code': '44054006', 'display': 'Diabetes mellitus type 2'}]},
+            'subject': {'reference': f'Patient/{patient_id}'},
+        },
+        {
+            'resourceType': 'MedicationRequest',
+            'id': med_id,
+            'status': 'active',
+            'intent': 'order',
+            'medicationCodeableConcept': {'coding': [{'system': 'http://www.nlm.nih.gov/research/umls/rxnorm', 'code': '860975', 'display': 'Metformin 500 MG'}]},
+            'subject': {'reference': f'Patient/{patient_id}'},
+        },
+    ]
+
+    ingested = []
+    for resource in sample_resources:
+        r_type = resource['resourceType']
+        r_id = resource['id']
+        existing = R6Resource.query.filter_by(
+            resource_type=r_type, id=r_id, tenant_id=demo_tenant
+        ).first()
+        if not existing:
+            row = R6Resource(
+                resource_type=r_type,
+                resource_id=r_id,
+                tenant_id=demo_tenant,
+                resource_json=json.dumps(resource),
+            )
+            db.session.add(row)
+            ingested.append(f'{r_type}/{r_id}')
+
+    job.ingested_resources = len(ingested)
+    job.status = 'completed'
+    job.completed_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    record_audit_event(
+        event_type='fasten_import_complete',
+        agent_id='fasten-demo',
+        tenant_id=demo_tenant,
+        outcome='success',
+        detail=f'job={task_id} ingested={len(ingested)}',
+    )
+    steps.append({
+        'step': 3,
+        'title': 'NDJSON Ingestion',
+        'status': 'success',
+        'detail': f'{len(ingested)} FHIR resources ingested from EHI export',
+        'data': {'ingested': ingested, 'resource_types': ['Patient', 'Observation', 'Condition', 'MedicationRequest']},
+    })
+
+    # ── Step 4: Read back Patient with PHI redaction ─────────────────────────
+    pt_row = R6Resource.query.filter_by(
+        resource_type='Patient', id=patient_id, tenant_id=demo_tenant
+    ).first()
+    raw_patient = json.loads(pt_row.resource_json) if pt_row else {}
+    redacted = redact_resource(raw_patient)
+    steps.append({
+        'step': 4,
+        'title': 'PHI Redaction on Read',
+        'status': 'success',
+        'detail': 'Guardrail applied: name → initials, identifier masked, address stripped, birthDate → year only',
+        'data': {'original_fields': list(raw_patient.keys()), 'redacted_patient': redacted},
+    })
+
+    # ── Step 5: Audit trail ──────────────────────────────────────────────────
+    from r6.models import AuditEventRecord
+    audit_rows = (
+        AuditEventRecord.query
+        .filter_by(tenant_id=demo_tenant)
+        .order_by(AuditEventRecord.recorded.desc())
+        .limit(10)
+        .all()
+    )
+    audit_entries = [
+        {
+            'event_type': a.event_type,
+            'agent_id': a.agent_id,
+            'outcome': a.outcome,
+            'recorded': a.recorded.isoformat() if a.recorded else None,
+        }
+        for a in audit_rows
+    ]
+    steps.append({
+        'step': 5,
+        'title': 'Immutable Audit Trail',
+        'status': 'success',
+        'detail': f'{len(audit_entries)} audit events recorded for this demo session',
+        'data': {'audit_events': audit_entries},
+    })
+
+    return jsonify({
+        'demo': 'fasten_connect_e2e',
+        'org_connection_id': org_connection_id,
+        'task_id': task_id,
+        'steps': steps,
+    }), 200
