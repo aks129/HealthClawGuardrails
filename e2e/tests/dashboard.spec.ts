@@ -6,7 +6,7 @@ test.describe('R6 Dashboard', () => {
   });
 
   test('has correct title', async ({ page }) => {
-    await expect(page).toHaveTitle(/R6 FHIR Agent Dashboard/);
+    await expect(page).toHaveTitle(/Health Data Dashboard/);
   });
 
   test('shows dashboard heading', async ({ page }) => {

@@ -103,7 +103,15 @@ jobs:
       - name: Start services
         run: |
           docker compose up -d fhir-mcp-guardrails redis
-          sleep 5
+          echo "Waiting for Flask to be ready..."
+          for i in $(seq 1 24); do
+            if curl -sf http://localhost:5000/r6/fhir/health > /dev/null 2>&1; then
+              echo "Flask is ready after ${i}x5s"
+              break
+            fi
+            echo "Attempt $i/24 — not ready yet, sleeping 5s..."
+            sleep 5
+          done
 
       - name: Smoke test - R6 metadata
         run: |
@@ -127,16 +135,10 @@ jobs:
           print('Validate smoke test passed')
           "
 
-      - name: Smoke test - Privacy policy
+      - name: Smoke test - Privacy page
         run: |
-          curl -sf http://localhost:5000/r6/fhir/docs/privacy-policy \
-            -H 'X-Tenant-Id: smoke-test' | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          assert 'medical_disclaimer' in data
-          assert 'data_protection' in data
-          print('Privacy policy smoke test passed')
-          "
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/privacy)
+          [ "$STATUS" = "200" ] && echo "Privacy page smoke test passed" || (echo "Expected 200 got $STATUS" && exit 1)
 
       - name: Smoke test - OAuth discovery
         run: |

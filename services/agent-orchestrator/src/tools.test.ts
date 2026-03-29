@@ -42,6 +42,8 @@ function fakeResponse(body: Record<string, unknown>, status = 200) {
 
 const EXPECTED_TOOL_NAMES = [
   "context.get",
+  "curatr.apply_fix",
+  "curatr.evaluate",
   "fhir.commit_write",
   "fhir.lastn",
   "fhir.permission_evaluate",
@@ -78,8 +80,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 10 tools", () => {
-    expect(schemas).toHaveLength(10);
+  it("getMCPToolSchemas() returns exactly 12 tools", () => {
+    expect(schemas).toHaveLength(12);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -98,7 +100,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 10 tool names match the expected set", () => {
+  it("all 12 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -525,12 +527,12 @@ describe("Express App Tests", () => {
   // -- Health endpoint --
 
   describe("GET /health", () => {
-    it("returns healthy status with version 0.9.0", async () => {
+    it("returns healthy status with version 1.0.0", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("healthy");
-      expect(res.body.version).toBe("0.9.0");
-      expect(res.body.service).toBe("fhir-mcp-guardrails");
+      expect(res.body.version).toBe("1.0.0");
+      expect(res.body.service).toBe("healthclaw-guardrails");
       expect(res.body.transports).toEqual(
         expect.arrayContaining(["streamable-http", "sse", "http-bridge"])
       );
@@ -568,8 +570,8 @@ describe("Express App Tests", () => {
       expect(res.body.jsonrpc).toBe("2.0");
       expect(res.body.id).toBe(1);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.serverInfo.name).toBe("fhir-mcp-guardrails");
-      expect(res.body.result.serverInfo.version).toBe("0.9.0");
+      expect(res.body.result.serverInfo.name).toBe("healthclaw-guardrails");
+      expect(res.body.result.serverInfo.version).toBe("1.0.0");
       expect(res.body.result.protocolVersion).toBe("2024-11-05");
       expect(res.body.result.capabilities).toHaveProperty("tools");
 
@@ -586,7 +588,7 @@ describe("Express App Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(10);
+      expect(res.body.result.tools).toHaveLength(12);
 
       const names = new Set(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -767,7 +769,7 @@ describe("Express App Tests", () => {
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(10);
+      expect(res.body.result.tools).toHaveLength(12);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
