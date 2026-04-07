@@ -29,6 +29,7 @@ no StructureDefinition conformance, no terminology binding).
 │  ├── /r6/fhir/* — R6 REST facade (Blueprint)    │
 │  ├── /r6/fhir/health — Liveness probe           │
 │  ├── /r6/fhir/oauth/* — OAuth 2.1 + SMART       │
+│  ├── /fasten/* — Fasten Connect EHR integration  │
 │  ├── / — Landing page                            │
 │  └── /r6-dashboard — Interactive dashboard       │
 ├─────────────────────────────────────────────────┤
@@ -69,16 +70,24 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 
 ```text
 /                         Main Flask app (main.py, app.py, models.py)
+/api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
 /r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy)
+/r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
 /templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html)
 /static/css/              Dashboard styles (r6-dashboard.css)
 /static/js/               Dashboard JavaScript (r6-dashboard.js)
 /tests/                   Python tests (conftest.py, test_r6_routes.py, test_r6_dashboard.py, test_context_builder.py, test_fhir_proxy.py)
+/e2e/                     Playwright end-to-end tests (landing.spec.ts, dashboard.spec.ts)
 /.github/workflows/       CI configuration (ci.yml)
 /.claude/rules/           Claude Code rules (build.md, security.md)
 /.mcp/                    MCP server manifest (server.json)
 ```
+
+### Template notes
+
+- `templates/index.html` is a **standalone page** — it does NOT `{% extends "base.html" %}`. It has its own `<html>`, nav, and footer. All other templates extend `base.html`.
+- Flask route names for `url_for()`: `index`, `r6_dashboard`, `wiki`, `faq`, `privacy`, `terms`.
 
 ## Build & Run Commands
 
@@ -119,6 +128,12 @@ docker-compose up -d --build
 
 # Docker Compose with upstream FHIR server
 FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 docker-compose up -d --build
+
+# Vercel (production deployment at healthclaw.io)
+vercel deploy --prod                     # deploy current branch to production
+vercel logs healthclaw.io                # tail runtime logs
+vercel dns ls healthclaw.io              # inspect DNS records
+vercel project ls                        # list all projects
 ```
 
 ## Environment Variables
@@ -138,6 +153,13 @@ FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 docker-compose up -d --build
 | `SESSION_SECRET` | dev default | Flask session key |
 | `LOG_LEVEL` | `DEBUG` (dev) | Log verbosity |
 | `LOG_FORMAT` | — | Set to `json` for structured logging in production |
+
+### Fasten Connect
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FASTEN_PUBLIC_KEY` | — | Stitch widget public key; exposes `<fasten-stitch-element>` in dashboard when set |
+| `FASTEN_PRIVATE_KEY` | — | Webhook verification secret |
 
 ### MCP Orchestrator (`services/agent-orchestrator/`)
 
@@ -247,6 +269,39 @@ The conftest provides an in-memory SQLite Flask test app and these fixtures:
 - **Human-in-the-loop** — Clinical writes return 428 until `X-Human-Confirmed` header is set (header-based, not cryptographic)
 - **Medical disclaimers** — Injected on clinical resource reads (local and upstream)
 - **URL rewriting** — Upstream server URLs never leak to clients
+
+## Fasten Connect Integration
+
+`r6/fasten/` is registered as a Blueprint at `/fasten`. Key endpoints:
+
+- `POST /fasten/demo` — 5-step animated demo: register connection → webhook → ingest 4 FHIR resources → PHI redact → audit trail. Returns structured JSON with per-step results.
+- `POST /fasten/webhook` — receives real Fasten webhook events, creates `FastenJob`, triggers ingestion
+- `GET /fasten/jobs` — list jobs for a tenant
+- `GET /fasten/connections` — list EHR connections
+
+When `FASTEN_PUBLIC_KEY` is set, the dashboard shows a live `<fasten-stitch-element>` widget. On `widget.complete`, the JS calls `/fasten/demo` to simulate the backend flow using the returned `org_connection_id`.
+
+## SQLAlchemy Model Gotchas
+
+Column names differ from what you might guess — use these exactly:
+
+| Model | Column | NOT |
+| --- | --- | --- |
+| `R6Resource` | `id` (PK) | ~~`resource_id`~~ |
+| `R6Resource` | `resource_json` | ~~`data`~~ |
+| `AuditEventRecord` | `recorded` | ~~`recorded_at`~~ |
+| `FastenConnection` | `org_connection_id` | — |
+
+PHI redaction function: `from r6.redaction import apply_redaction` (not `redact_resource`).
+
+## Deployment (healthclaw.io)
+
+Hosted on **Vercel** (project: `healthclaw`, team: `aks129s-projects`). `api/index.py` is the serverless WSGI entry point. `vercel.json` routes all traffic to it.
+
+- Production URL: `https://healthclaw.io`
+- Railway is also configured (`railway.toml`) for full-stack Docker deployment with Redis; use Railway when persistent SQLite or the MCP server is needed.
+- Vercel serverless has no persistent filesystem — SQLite writes don't persist between invocations. Suitable for demo/read-only use.
+- SSO/deployment protection should remain **disabled** (`ssoProtection: null`) so public visitors can access the site without Vercel auth.
 
 ## Known Limitations
 
