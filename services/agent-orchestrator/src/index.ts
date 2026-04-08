@@ -419,12 +419,12 @@ app.get("/health", (_req, res) => {
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`FHIR R6 MCP Server v0.9.0 running on port ${PORT}`);
-    console.log(`FHIR Base URL: ${FHIR_BASE_URL}`);
-    console.log(`Streamable HTTP: http://localhost:${PORT}/mcp`);
-    console.log(`SSE endpoint:    http://localhost:${PORT}/sse`);
-    console.log(`HTTP bridge:     http://localhost:${PORT}/mcp/rpc`);
-    console.log(`CORS: ${ALLOWED_ORIGINS.length > 0 ? `allowlist (${ALLOWED_ORIGINS.join(", ")})` : "deny-all (set ALLOWED_ORIGINS to enable)"}`);
+    console.error(`FHIR R6 MCP Server v0.9.0 running on port ${PORT}`);
+    console.error(`FHIR Base URL: ${FHIR_BASE_URL}`);
+    console.error(`Streamable HTTP: http://localhost:${PORT}/mcp`);
+    console.error(`SSE endpoint:    http://localhost:${PORT}/sse`);
+    console.error(`HTTP bridge:     http://localhost:${PORT}/mcp/rpc`);
+    console.error(`CORS: ${ALLOWED_ORIGINS.length > 0 ? `allowlist (${ALLOWED_ORIGINS.join(", ")})` : "deny-all (set ALLOWED_ORIGINS to enable)"}`);
   });
 }
 
