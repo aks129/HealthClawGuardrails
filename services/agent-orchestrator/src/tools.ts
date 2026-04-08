@@ -72,7 +72,7 @@ export class FHIRTools {
   getToolSchemas(): ToolDefinition[] {
     return [
       {
-        name: "context.get",
+        name: "context_get",
         description:
           "Retrieve a pre-built context envelope with patient-centric FHIR resources. Returns bounded, policy-stamped, time-limited context.",
         tier: "read",
@@ -86,7 +86,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.read",
+        name: "fhir_read",
         description: "Read a specific FHIR resource by type and ID. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Returns redacted resource with PHI protection.",
         tier: "read",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -140,7 +140,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.search",
+        name: "fhir_search",
         description:
           "Search for FHIR resources. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Supports patient, code, status, _lastUpdated, _count, _sort parameters. Returns paginated, redacted Bundle.",
         tier: "read",
@@ -219,7 +219,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.validate",
+        name: "fhir_validate",
         description:
           "Validate a proposed FHIR R6 resource against structural rules. Returns OperationOutcome.",
         tier: "read",
@@ -236,7 +236,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.propose_write",
+        name: "fhir_propose_write",
         description:
           "Propose a write — validates the resource and returns a preview. Does NOT commit. Safe to call without step-up authorization.",
         tier: "write",
@@ -258,7 +258,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.commit_write",
+        name: "fhir_commit_write",
         description:
           "Commit a previously proposed write. Requires step-up authorization token. This is a destructive operation.",
         tier: "write",
@@ -280,7 +280,7 @@ export class FHIRTools {
       },
       // --- Additional tools (mix of R6-specific and standard FHIR) ---
       {
-        name: "fhir.stats",
+        name: "fhir_stats",
         description:
           "Compute statistics (count, min, max, mean) over numeric Observation values. Standard FHIR $stats (since R4). Only supports valueQuantity. Filter by patient and/or code.",
         tier: "read",
@@ -301,7 +301,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.lastn",
+        name: "fhir_lastn",
         description:
           "Get the last N observations per code. Standard FHIR $lastn (since R4). Returns most recent observations by storage order.",
         tier: "read",
@@ -327,7 +327,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.permission_evaluate",
+        name: "fhir_permission_evaluate",
         description:
           "Evaluate R6 Permission resources for access control decisions. Returns permit/deny based on stored Permission rules. Separates access control (Permission) from consent records (Consent).",
         tier: "read",
@@ -353,7 +353,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "fhir.subscription_topics",
+        name: "fhir_subscription_topics",
         description:
           "List available SubscriptionTopics for event-driven subscriptions. R6 moves topic-based subscriptions toward Normative. Agents discover what events they can subscribe to.",
         tier: "read",
@@ -366,7 +366,7 @@ export class FHIRTools {
       },
       // --- Curatr: patient-facing data quality tools ---
       {
-        name: "curatr.evaluate",
+        name: "curatr_evaluate",
         description:
           "Evaluate a FHIR resource for data quality issues. Checks coding elements against public terminology services (tx.fhir.org for SNOMED/LOINC, NLM for ICD-10-CM, RXNAV for RxNorm) and structural rules. Returns issues in plain language with patient-facing impact descriptions and resolution suggestions. Read-only — no step-up required.",
         tier: "read",
@@ -387,7 +387,7 @@ export class FHIRTools {
         },
       },
       {
-        name: "curatr.apply_fix",
+        name: "curatr_apply_fix",
         description:
           "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token) and human confirmation (X-Human-Confirmed: true) for clinical resources like Condition.",
         tier: "write",
@@ -439,7 +439,7 @@ export class FHIRTools {
     }
 
     // Enforce step-up for commit_write
-    if (tool.tier === "write" && toolName === "fhir.commit_write") {
+    if (tool.tier === "write" && toolName === "fhir_commit_write") {
       const stepUpToken = headers?.["x-step-up-token"];
       if (!stepUpToken) {
         return {
@@ -461,17 +461,17 @@ export class FHIRTools {
     if (headers?.["authorization"]) fwdHeaders["Authorization"] = headers["authorization"];
 
     switch (toolName) {
-      case "context.get":
+      case "context_get":
         return this.getContext(input.context_id as string, fwdHeaders);
 
-      case "fhir.read":
+      case "fhir_read":
         return this.readResource(
           input.resource_type as string,
           input.resource_id as string,
           fwdHeaders
         );
 
-      case "fhir.search":
+      case "fhir_search":
         return this.searchResources(
           input.resource_type as string,
           {
@@ -485,17 +485,17 @@ export class FHIRTools {
           fwdHeaders
         );
 
-      case "fhir.validate":
+      case "fhir_validate":
         return this.validateResource(input.resource as Record<string, unknown>, fwdHeaders);
 
-      case "fhir.propose_write":
+      case "fhir_propose_write":
         return this.proposeWrite(
           input.resource as Record<string, unknown>,
           input.operation as string,
           fwdHeaders
         );
 
-      case "fhir.commit_write":
+      case "fhir_commit_write":
         return this.commitWrite(
           input.resource as Record<string, unknown>,
           input.operation as string,
@@ -503,14 +503,14 @@ export class FHIRTools {
         );
 
       // Additional tools (mix of R6-specific and standard FHIR)
-      case "fhir.stats":
+      case "fhir_stats":
         return this.observationStats(
           input.code as string | undefined,
           input.patient as string | undefined,
           fwdHeaders
         );
 
-      case "fhir.lastn":
+      case "fhir_lastn":
         return this.observationLastN(
           input.code as string | undefined,
           input.patient as string | undefined,
@@ -518,7 +518,7 @@ export class FHIRTools {
           fwdHeaders
         );
 
-      case "fhir.permission_evaluate":
+      case "fhir_permission_evaluate":
         return this.evaluatePermission(
           input.subject as string | undefined,
           input.action as string,
@@ -526,17 +526,17 @@ export class FHIRTools {
           fwdHeaders
         );
 
-      case "fhir.subscription_topics":
+      case "fhir_subscription_topics":
         return this.listSubscriptionTopics(fwdHeaders);
 
-      case "curatr.evaluate":
+      case "curatr_evaluate":
         return this.curatrEvaluate(
           input.resource_type as string,
           input.resource_id as string,
           fwdHeaders
         );
 
-      case "curatr.apply_fix":
+      case "curatr_apply_fix":
         return this.curatrApplyFix(
           input.resource_type as string,
           input.resource_id as string,

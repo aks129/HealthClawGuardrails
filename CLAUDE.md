@@ -241,8 +241,8 @@ In **upstream proxy mode**: All query parameters forwarded to the upstream serve
 
 ## MCP Tools (12)
 
-- **Read tools** (no step-up): `context.get`, `fhir.read`, `fhir.search`, `fhir.validate`, `fhir.stats`, `fhir.lastn`, `fhir.permission_evaluate`, `fhir.subscription_topics`, `curatr.evaluate`
-- **Write tools** (require step-up token): `fhir.propose_write`, `fhir.commit_write`, `curatr.apply_fix`
+- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
+- **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
 - `propose_write` identifies clinical types requiring human-in-the-loop
 - `permission_evaluate` returns reasoning explaining why permit/deny

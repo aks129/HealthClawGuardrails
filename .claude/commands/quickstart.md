@@ -287,12 +287,12 @@ If ready, start the MCP server (instruct user to run in a third terminal):
 cd services/agent-orchestrator && MCP_PORT=3001 FHIR_BASE_URL=http://localhost:5000/r6/fhir npm start
 ```
 
-Then demonstrate the `fhir.search` tool via the HTTP bridge:
+Then demonstrate the `fhir_search` tool via the HTTP bridge:
 ```bash
 curl -s -X POST http://localhost:3001/mcp/rpc \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: $TENANT_ID" \
-  -d '{"tool": "fhir.search", "params": {"resourceType": "Condition", "patient": "'$PATIENT_ID'"}}' \
+  -d '{"tool": "fhir_search", "params": {"resourceType": "Condition", "patient": "'$PATIENT_ID'"}}' \
   | python3 -m json.tool
 ```
 
@@ -398,12 +398,12 @@ Paste this into Claude Desktop to run the full demo:
 I want to test HealthClaw Guardrails. I have a patient named Maria Rivera (DOB 1985-03-15) with a diabetes diagnosis coded as ICD-9 250.00 and a blood glucose reading of 180 mg/dL.
 
 Please:
-1. Use fhir.search to check what Patient resources exist
-2. Create the patient record and condition using fhir.propose_write (use tenant "desktop-demo")
-3. Read back the patient with fhir.read and show me what PHI was redacted
-4. Run curatr.evaluate on the Condition and explain any data quality issues found
-5. Propose a fix (ICD-10 E11.9) using curatr.apply_fix — walk me through the step-up auth and human confirmation steps
-6. Show the audit trail with fhir.search on AuditEvent
+1. Use fhir_search to check what Patient resources exist
+2. Create the patient record and condition using fhir_propose_write (use tenant "desktop-demo")
+3. Read back the patient with fhir_read and show me what PHI was redacted
+4. Run curatr_evaluate on the Condition and explain any data quality issues found
+5. Propose a fix (ICD-10 E11.9) using curatr_apply_fix — walk me through the step-up auth and human confirmation steps
+6. Show the audit trail with fhir_search on AuditEvent
 ```
 
 Claude will use the 12 MCP tools, hit the real Flask guardrail stack, and walk you through each guardrail as it triggers.
