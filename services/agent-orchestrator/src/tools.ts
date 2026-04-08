@@ -425,6 +425,40 @@ export class FHIRTools {
           required: ["resource_type", "resource_id", "fixes", "patient_intent"],
         },
       },
+      {
+        name: "fhir_get_token",
+        description:
+          "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string — pass it as _stepUpToken in subsequent write tool calls.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            tenant_id: {
+              type: "string",
+              description: "Tenant ID to scope the token to",
+            },
+          },
+          required: ["tenant_id"],
+        },
+      },
+      {
+        name: "fhir_seed",
+        description:
+          "Seed a tenant with a realistic Patient + Observations + Condition bundle for live testing. Use this at the start of a demo session to populate data. Returns created resource IDs and a ready-to-use step_up_token.",
+        tier: "read",
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            tenant_id: {
+              type: "string",
+              description: "Tenant to seed (default: desktop-demo)",
+            },
+          },
+          required: [],
+        },
+      },
     ];
   }
 
@@ -544,6 +578,38 @@ export class FHIRTools {
           input.patient_intent as string,
           fwdHeaders
         );
+
+      case "fhir_get_token": {
+        const tenantId = (input.tenant_id as string) || "desktop-demo";
+        const resp = await fetch(`${this.baseUrl}/internal/step-up-token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...fwdHeaders },
+          body: JSON.stringify({ tenant_id: tenantId }),
+        });
+        const data = (await resp.json()) as Record<string, unknown>;
+        if (!resp.ok) return { error: "Failed to issue token", detail: data };
+        return {
+          token: data.token,
+          tenant_id: tenantId,
+          expires_in_seconds: 300,
+          _mcp_summary: "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, or curatr_apply_fix.",
+        };
+      }
+
+      case "fhir_seed": {
+        const tenantId = (input.tenant_id as string) || "desktop-demo";
+        const resp = await fetch(`${this.baseUrl}/internal/seed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...fwdHeaders },
+          body: JSON.stringify({ tenant_id: tenantId }),
+        });
+        const data = (await resp.json()) as Record<string, unknown>;
+        if (!resp.ok) return { error: "Seed failed", detail: data };
+        return {
+          ...data,
+          _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${tenantId}'. The step_up_token is ready for write operations.`,
+        };
+      }
 
       default:
         return { error: `Unimplemented tool: ${toolName}` };
