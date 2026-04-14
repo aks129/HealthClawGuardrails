@@ -32,8 +32,8 @@
     {
       "name": "smarthealthconnect",
       "source": {
-        "source": "github",
-        "repo": "aks129/SmartHealthConnect"
+        "source": "url",
+        "url": "https://github.com/aks129/SmartHealthConnect.git"
       },
       "description": "Personal health management skills — preventive care gap tracking (HEDIS), medication refill monitoring, healthy habits dashboard, diet & exercise analytics, pediatric immunization schedules, and biomedical research / clinical trial monitoring.",
       "version": "1.0.0",
