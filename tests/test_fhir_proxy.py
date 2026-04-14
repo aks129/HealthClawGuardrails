@@ -11,7 +11,10 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 
-from r6.fhir_proxy import FHIRUpstreamProxy, get_proxy, reset_proxy, is_proxy_enabled
+from r6.fhir_proxy import (
+    FHIRUpstreamProxy, MedplumProxy, get_proxy, reset_proxy, is_proxy_enabled,
+    _fetch_medplum_token, _medplum_cache,
+)
 
 
 # --- Unit tests for FHIRUpstreamProxy ---
@@ -405,3 +408,124 @@ class TestProxyRouteIntegration:
             assert resp.status_code == 200
             data = resp.get_json()
             assert 'local' in data['implementation']['description'].lower()
+
+
+# ---------------------------------------------------------------------------
+# Medplum proxy tests
+# ---------------------------------------------------------------------------
+
+class TestMedplumProxy:
+    """Tests for OAuth2 client-credentials token flow and MedplumProxy."""
+
+    def setup_method(self):
+        # Reset in-process token cache before each test
+        _medplum_cache['token'] = None
+        _medplum_cache['expires_at'] = 0.0
+        reset_proxy()
+        os.environ.pop('MEDPLUM_BASE_URL', None)
+        os.environ.pop('MEDPLUM_CLIENT_ID', None)
+        os.environ.pop('MEDPLUM_CLIENT_SECRET', None)
+
+    teardown_method = setup_method  # same cleanup on exit
+
+    # --- _fetch_medplum_token ---
+
+    def test_fetch_token_calls_token_endpoint(self):
+        """Token is fetched from Medplum OAuth endpoint when cache is cold."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'access_token': 'tok-abc123',
+            'expires_in': 3600,
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch('r6.fhir_proxy.httpx.post', return_value=mock_resp) as mock_post:
+            token = _fetch_medplum_token('client-id', 'client-secret')
+
+        assert token == 'tok-abc123'
+        call_kwargs = mock_post.call_args
+        assert 'https://api.medplum.com/oauth2/token' in call_kwargs[0]
+
+    def test_fetch_token_cached_in_process(self):
+        """Second call reuses in-process cache; token endpoint called only once."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {'access_token': 'tok-xyz', 'expires_in': 3600}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch('r6.fhir_proxy.httpx.post', return_value=mock_resp) as mock_post, \
+             patch('r6.fhir_proxy._get_redis', return_value=None):
+            _fetch_medplum_token('cid', 'csec')
+            token2 = _fetch_medplum_token('cid', 'csec')
+
+        assert token2 == 'tok-xyz'
+        assert mock_post.call_count == 1  # only one HTTP call
+
+    def test_fetch_token_redis_hit_skips_http(self):
+        """Token served from Redis — no HTTP call made."""
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = b'cached-redis-token'
+
+        with patch('r6.fhir_proxy._get_redis', return_value=mock_redis), \
+             patch('r6.fhir_proxy.httpx.post') as mock_post:
+            token = _fetch_medplum_token('cid', 'csec')
+
+        assert token == 'cached-redis-token'
+        mock_post.assert_not_called()
+
+    def test_fetch_token_stored_in_redis(self):
+        """Fresh token is written to Redis with correct TTL."""
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None  # cache miss
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {'access_token': 'new-tok', 'expires_in': 1800}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch('r6.fhir_proxy._get_redis', return_value=mock_redis), \
+             patch('r6.fhir_proxy.httpx.post', return_value=mock_resp):
+            _fetch_medplum_token('cid', 'csec')
+
+        mock_redis.setex.assert_called_once()
+        key, ttl, value = mock_redis.setex.call_args[0]
+        assert key == 'medplum:access_token'
+        assert ttl == 1800 - 60  # 60-second safety buffer
+        assert value == 'new-tok'
+
+    # --- get_proxy with MEDPLUM_BASE_URL ---
+
+    def test_get_proxy_returns_medplum_proxy(self):
+        """get_proxy() returns MedplumProxy when MEDPLUM_BASE_URL is set."""
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        os.environ['MEDPLUM_CLIENT_ID'] = 'cid'
+        os.environ['MEDPLUM_CLIENT_SECRET'] = 'csec'
+
+        proxy = get_proxy()
+        assert isinstance(proxy, MedplumProxy)
+        proxy.close()
+
+    def test_get_proxy_medplum_missing_credentials(self):
+        """get_proxy() returns None when Medplum credentials are missing."""
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        # CLIENT_ID / CLIENT_SECRET intentionally absent
+
+        proxy = get_proxy()
+        assert proxy is None
+
+    def test_is_proxy_enabled_with_medplum(self):
+        """is_proxy_enabled() returns True when MEDPLUM_BASE_URL is set."""
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        assert is_proxy_enabled() is True
+
+    def test_fhir_upstream_takes_priority_over_medplum(self):
+        """FHIR_UPSTREAM_URL takes priority; MedplumProxy is NOT created."""
+        os.environ['FHIR_UPSTREAM_URL'] = 'https://hapi.fhir.org/baseR4'
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        os.environ['MEDPLUM_CLIENT_ID'] = 'cid'
+        os.environ['MEDPLUM_CLIENT_SECRET'] = 'csec'
+
+        proxy = get_proxy()
+        assert isinstance(proxy, FHIRUpstreamProxy)
+        assert not isinstance(proxy, MedplumProxy)
+        proxy.close()
+        os.environ.pop('FHIR_UPSTREAM_URL', None)

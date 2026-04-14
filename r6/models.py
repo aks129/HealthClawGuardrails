@@ -29,6 +29,12 @@ class R6Resource(db.Model):
     is_deleted = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Curator promotion pipeline (action_policy.yaml: curation_policy)
+    # States: raw | in_review | curated | rejected
+    curation_state = db.Column(db.String(32), nullable=True, default='raw')
+    quality_score = db.Column(db.Float, nullable=True)   # 0.0–1.0
+    review_needed = db.Column(db.Boolean, default=False)  # issues found
+
     # Supported resource types for the showcase
     # Phase 1: Core FHIR resources (R4+)
     # Phase 2: R6-specific ballot resources

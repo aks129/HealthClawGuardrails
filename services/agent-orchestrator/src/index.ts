@@ -107,8 +107,13 @@ function extractHeaders(req: express.Request): Record<string, string> {
 }
 
 // --- MCP Server Factory (creates per-session server instances) ---
+//
+// sessionHeaders: HTTP request headers captured when the session was initiated.
+// For SSE these come from the GET /sse connection; for Streamable HTTP the
+// tools/call handler re-extracts headers per-request and bypasses this factory,
+// so sessionHeaders is only meaningfully used on the SSE path.
 
-function createMCPServer(): Server {
+function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
   const server = new Server(
     { name: "healthclaw-guardrails", version: "1.0.0" },
     { capabilities: { tools: {}, logging: {} } }
@@ -122,8 +127,10 @@ function createMCPServer(): Server {
     const { name, arguments: args } = request.params;
     const toolArgs = (args ?? {}) as Record<string, unknown>;
 
-    // Extract internal headers from tool args (set by transport layer)
-    const toolHeaders: Record<string, string> = {};
+    // Start with session-level headers (captured at connection time for SSE).
+    // Tool-arg headers (_tenantId, _stepUpToken, _authorization) override session
+    // headers, allowing per-call overrides without changing the connection.
+    const toolHeaders: Record<string, string> = { ...sessionHeaders };
     if (typeof toolArgs._tenantId === "string") {
       toolHeaders["x-tenant-id"] = toolArgs._tenantId as string;
       delete toolArgs._tenantId;
@@ -292,10 +299,11 @@ setInterval(() => {
 const activeSessions = new Map<string, { transport: SSEServerTransport; headers: Record<string, string> }>();
 
 app.get("/sse", async (req, res) => {
-  const server = createMCPServer();
-  const transport = new SSEServerTransport("/messages", res);
-  // Capture headers from initial SSE connection for forwarding
+  // Capture headers from the SSE connection request and pass them into the
+  // server instance so CallToolRequestSchema forwwards X-Tenant-ID on every tool call.
   const reqHeaders = extractHeaders(req);
+  const server = createMCPServer(reqHeaders);
+  const transport = new SSEServerTransport("/messages", res);
   activeSessions.set(transport.sessionId, { transport, headers: reqHeaders });
 
   res.on("close", () => {

@@ -41,31 +41,33 @@ function fakeResponse(body: Record<string, unknown>, status = 200) {
 }
 
 const EXPECTED_TOOL_NAMES = [
-  "context.get",
-  "curatr.apply_fix",
-  "curatr.evaluate",
-  "fhir.commit_write",
-  "fhir.lastn",
-  "fhir.permission_evaluate",
-  "fhir.propose_write",
-  "fhir.read",
-  "fhir.search",
-  "fhir.stats",
-  "fhir.subscription_topics",
-  "fhir.validate",
+  "context_get",
+  "curatr_apply_fix",
+  "curatr_evaluate",
+  "fhir_commit_write",
+  "fhir_get_token",
+  "fhir_lastn",
+  "fhir_permission_evaluate",
+  "fhir_propose_write",
+  "fhir_read",
+  "fhir_search",
+  "fhir_seed",
+  "fhir_stats",
+  "fhir_subscription_topics",
+  "fhir_validate",
 ];
 
 const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
 
 const READ_ONLY_TOOL_NAMES = [
-  "context.get",
-  "fhir.read",
-  "fhir.search",
-  "fhir.validate",
-  "fhir.stats",
-  "fhir.lastn",
-  "fhir.permission_evaluate",
-  "fhir.subscription_topics",
+  "context_get",
+  "fhir_read",
+  "fhir_search",
+  "fhir_validate",
+  "fhir_stats",
+  "fhir_lastn",
+  "fhir_permission_evaluate",
+  "fhir_subscription_topics",
 ];
 
 // ---------------------------------------------------------------------------
@@ -80,8 +82,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 12 tools", () => {
-    expect(schemas).toHaveLength(12);
+  it("getMCPToolSchemas() returns exactly 14 tools", () => {
+    expect(schemas).toHaveLength(14);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -100,7 +102,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 12 tool names match the expected set", () => {
+  it("all 14 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -122,14 +124,14 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("fhir.propose_write has readOnlyHint: true (preview only, no side effects)", () => {
-    const propose = schemas.find((t) => t.name === "fhir.propose_write")!;
+  it("fhir_propose_write has readOnlyHint: true (preview only, no side effects)", () => {
+    const propose = schemas.find((t) => t.name === "fhir_propose_write")!;
     expect(propose.annotations.readOnlyHint).toBe(true);
     expect(propose.annotations.destructiveHint).toBe(false);
   });
 
-  it("fhir.commit_write has destructiveHint: true and readOnlyHint: false", () => {
-    const commit = schemas.find((t) => t.name === "fhir.commit_write")!;
+  it("fhir_commit_write has destructiveHint: true and readOnlyHint: false", () => {
+    const commit = schemas.find((t) => t.name === "fhir_commit_write")!;
     expect(commit.annotations.readOnlyHint).toBe(false);
     expect(commit.annotations.destructiveHint).toBe(true);
   });
@@ -165,7 +167,7 @@ describe("Tool Execution Tests", () => {
     const fhirPatient = { resourceType: "Patient", id: "pt-1", name: [{ family: "Test" }] };
     mockFetch.mockResolvedValueOnce(fakeResponse(fhirPatient));
 
-    const result = await tools.executeTool("fhir.read", {
+    const result = await tools.executeTool("fhir_read", {
       resource_type: "Patient",
       resource_id: "pt-1",
     });
@@ -180,7 +182,7 @@ describe("Tool Execution Tests", () => {
   it("fhir.read returns error object when upstream returns non-OK status", async () => {
     mockFetch.mockResolvedValueOnce(fakeResponse({}, 404));
 
-    const result = await tools.executeTool("fhir.read", {
+    const result = await tools.executeTool("fhir_read", {
       resource_type: "Patient",
       resource_id: "nonexistent",
     });
@@ -200,7 +202,7 @@ describe("Tool Execution Tests", () => {
     };
     mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
 
-    const result = await tools.executeTool("fhir.search", {
+    const result = await tools.executeTool("fhir_search", {
       resource_type: "Observation",
       patient: "Patient/pt-1",
       code: "2339-0",
@@ -235,7 +237,7 @@ describe("Tool Execution Tests", () => {
     const bundle = { resourceType: "Bundle", type: "searchset", total: 0, entry: [] };
     mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
 
-    await tools.executeTool("fhir.search", {
+    await tools.executeTool("fhir_search", {
       resource_type: "Patient",
       _count: 999,
     });
@@ -248,7 +250,7 @@ describe("Tool Execution Tests", () => {
     const bundle = { resourceType: "Bundle", type: "searchset", total: 0, entry: [] };
     mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
 
-    const result = await tools.executeTool("fhir.search", {
+    const result = await tools.executeTool("fhir_search", {
       resource_type: "Observation",
       code: "nonexistent",
     });
@@ -263,7 +265,7 @@ describe("Tool Execution Tests", () => {
   it("fhir.commit_write requires step-up token (returns error without it)", async () => {
     const resource = { resourceType: "Observation", status: "final" };
     const result = await tools.executeTool(
-      "fhir.commit_write",
+      "fhir_commit_write",
       { resource, operation: "create" },
       {} // no step-up token
     );
@@ -274,7 +276,7 @@ describe("Tool Execution Tests", () => {
   });
 
   it("fhir.commit_write returns step-up error when headers are undefined", async () => {
-    const result = await tools.executeTool("fhir.commit_write", {
+    const result = await tools.executeTool("fhir_commit_write", {
       resource: { resourceType: "Observation", status: "final" },
       operation: "create",
     });
@@ -290,7 +292,7 @@ describe("Tool Execution Tests", () => {
     mockFetch.mockResolvedValueOnce(fakeResponse(created));
 
     const result = await tools.executeTool(
-      "fhir.commit_write",
+      "fhir_commit_write",
       { resource, operation: "create" },
       { "x-step-up-token": "valid-token-123" }
     );
@@ -308,7 +310,7 @@ describe("Tool Execution Tests", () => {
     mockFetch.mockResolvedValueOnce(fakeResponse(resource));
 
     await tools.executeTool(
-      "fhir.commit_write",
+      "fhir_commit_write",
       { resource, operation: "update" },
       { "x-step-up-token": "token-456" }
     );
@@ -322,7 +324,7 @@ describe("Tool Execution Tests", () => {
     const resource = { resourceType: "Patient", name: [{ family: "NoId" }] };
 
     const result = await tools.executeTool(
-      "fhir.commit_write",
+      "fhir_commit_write",
       { resource, operation: "update" },
       { "x-step-up-token": "token-789" }
     );
@@ -341,7 +343,7 @@ describe("Tool Execution Tests", () => {
     mockFetch.mockResolvedValueOnce(fakeResponse(operationOutcome));
 
     const resource = { resourceType: "Patient", name: [{ family: "Test" }] };
-    const result = await tools.executeTool("fhir.validate", { resource });
+    const result = await tools.executeTool("fhir_validate", { resource });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [url, opts] = mockFetch.mock.calls[0];
@@ -354,8 +356,8 @@ describe("Tool Execution Tests", () => {
   // -- Unknown tool --
 
   it("unknown tool returns error", async () => {
-    const result = await tools.executeTool("fhir.nonexistent", {});
-    expect(result).toHaveProperty("error", "Unknown tool: fhir.nonexistent");
+    const result = await tools.executeTool("fhir_nonexistent", {});
+    expect(result).toHaveProperty("error", "Unknown tool: fhir_nonexistent");
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -378,7 +380,7 @@ describe("Tool Execution Tests", () => {
     };
     mockFetch.mockResolvedValueOnce(fakeResponse(statsResult));
 
-    const result = await tools.executeTool("fhir.stats", {
+    const result = await tools.executeTool("fhir_stats", {
       code: "2339-0",
       patient: "Patient/pt-1",
     });
@@ -403,7 +405,7 @@ describe("Tool Execution Tests", () => {
     };
     mockFetch.mockResolvedValueOnce(fakeResponse(lastnResult));
 
-    const result = await tools.executeTool("fhir.lastn", {
+    const result = await tools.executeTool("fhir_lastn", {
       code: "8867-4",
       patient: "Patient/pt-1",
       max: 3,
@@ -423,7 +425,7 @@ describe("Tool Execution Tests", () => {
     const evaluateResult = { decision: "permit", reasoning: "Practitioner has access" };
     mockFetch.mockResolvedValueOnce(fakeResponse(evaluateResult));
 
-    const result = await tools.executeTool("fhir.permission_evaluate", {
+    const result = await tools.executeTool("fhir_permission_evaluate", {
       subject: "Practitioner/dr-1",
       action: "read",
       resource: "Patient/pt-1",
@@ -449,7 +451,7 @@ describe("Tool Execution Tests", () => {
     };
     mockFetch.mockResolvedValueOnce(fakeResponse(topicList));
 
-    const result = await tools.executeTool("fhir.subscription_topics", {});
+    const result = await tools.executeTool("fhir_subscription_topics", {});
 
     const [url] = mockFetch.mock.calls[0];
     expect(url).toBe(`${BASE}/SubscriptionTopic/$list`);
@@ -464,7 +466,7 @@ describe("Tool Execution Tests", () => {
     const envelope = { context_id: "ctx-123", patient: "Patient/pt-1", resources: [] };
     mockFetch.mockResolvedValueOnce(fakeResponse(envelope));
 
-    const result = await tools.executeTool("context.get", { context_id: "ctx-123" });
+    const result = await tools.executeTool("context_get", { context_id: "ctx-123" });
 
     const [url] = mockFetch.mock.calls[0];
     expect(url).toBe(`${BASE}/context/ctx-123`);
@@ -477,7 +479,7 @@ describe("Tool Execution Tests", () => {
     mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
 
     await tools.executeTool(
-      "fhir.read",
+      "fhir_read",
       { resource_type: "Patient", resource_id: "pt-1" },
       {
         "x-tenant-id": "tenant-abc",
@@ -492,6 +494,68 @@ describe("Tool Execution Tests", () => {
     expect(opts.headers["Authorization"]).toBe("Bearer tok123");
   });
 
+  // -- X-Tenant-Id forwarding and fallback --
+
+  it("X-Tenant-ID header is forwarded to Flask when present in the MCP request", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Patient", id: "pt-1" })
+    );
+
+    await tools.executeTool(
+      "fhir_read",
+      { resource_type: "Patient", resource_id: "pt-1" },
+      { "x-tenant-id": "test-tenant" }
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["X-Tenant-Id"]).toBe("test-tenant");
+  });
+
+  it("falls back to TENANT_ID env var when no X-Tenant-ID header is in the MCP request", async () => {
+    const prev = process.env.TENANT_ID;
+    process.env.TENANT_ID = "env-fallback-tenant";
+
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Patient", id: "pt-1" })
+    );
+
+    try {
+      await tools.executeTool(
+        "fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" },
+        {} // no x-tenant-id header
+      );
+
+      const [, opts] = mockFetch.mock.calls[0];
+      expect(opts.headers["X-Tenant-Id"]).toBe("env-fallback-tenant");
+    } finally {
+      if (prev === undefined) delete process.env.TENANT_ID;
+      else process.env.TENANT_ID = prev;
+    }
+  });
+
+  it("falls back to desktop-demo when no X-Tenant-ID header and no TENANT_ID env var", async () => {
+    const prev = process.env.TENANT_ID;
+    delete process.env.TENANT_ID;
+
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Patient", id: "pt-1" })
+    );
+
+    try {
+      await tools.executeTool(
+        "fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" }
+        // headers argument omitted entirely
+      );
+
+      const [, opts] = mockFetch.mock.calls[0];
+      expect(opts.headers["X-Tenant-Id"]).toBe("desktop-demo");
+    } finally {
+      if (prev !== undefined) process.env.TENANT_ID = prev;
+    }
+  });
+
   // -- propose_write does NOT require step-up --
 
   it("fhir.propose_write does NOT require step-up token", async () => {
@@ -502,7 +566,7 @@ describe("Tool Execution Tests", () => {
     mockFetch.mockResolvedValueOnce(fakeResponse(validationResponse));
 
     const result = await tools.executeTool(
-      "fhir.propose_write",
+      "fhir_propose_write",
       {
         resource: { resourceType: "Observation", status: "final" },
         operation: "create",
@@ -581,16 +645,16 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 10 tool schemas", async () => {
+    it("tools/list returns all 14 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(12);
+      expect(res.body.result.tools).toHaveLength(14);
 
-      const names = new Set(
+      const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
       );
       expect(names).toEqual(EXPECTED_TOOL_NAME_SET);
@@ -604,7 +668,7 @@ describe("Express App Tests", () => {
           id: 3,
           method: "tools/call",
           params: {
-            name: "fhir.read",
+            name: "fhir_read",
             arguments: { resource_type: "Patient", resource_id: "pt-1" },
           },
         });
@@ -638,7 +702,7 @@ describe("Express App Tests", () => {
           id: 4,
           method: "tools/call",
           params: {
-            name: "fhir.read",
+            name: "fhir_read",
             arguments: { resource_type: "Patient", resource_id: "pt-1" },
           },
         });
@@ -713,7 +777,7 @@ describe("Express App Tests", () => {
           id: 5,
           method: "tools/call",
           params: {
-            name: "fhir.read",
+            name: "fhir_read",
             arguments: { resource_type: "Patient", resource_id: "pt-1" },
           },
         });
@@ -763,13 +827,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 10 tool schemas", async () => {
+    it("tools/list returns all 14 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(12);
+      expect(res.body.result.tools).toHaveLength(14);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
@@ -783,7 +847,7 @@ describe("Express App Tests", () => {
           id: 1,
           method: "tools/call",
           params: {
-            name: "fhir.read",
+            name: "fhir_read",
             arguments: { resource_type: "Patient", resource_id: "pt-1" },
           },
         });

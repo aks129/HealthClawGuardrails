@@ -87,7 +87,7 @@ class TestStepUpToken:
                           data=json.dumps(sample_patient),
                           content_type='application/json',
                           headers=headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 401
         data = resp.get_json()
         assert 'token' in data['issue'][0]['diagnostics'].lower()
 
@@ -107,7 +107,7 @@ class TestR6CRUD:
                           data=json.dumps(sample_patient),
                           content_type='application/json',
                           headers=tenant_headers)
-        assert resp.status_code == 403
+        assert resp.status_code == 401
         data = resp.get_json()
         assert data['resourceType'] == 'OperationOutcome'
 
@@ -687,6 +687,97 @@ class TestDeidentification:
         resp = client.get('/r6/fhir/Patient/nonexistent/$deidentify',
                          headers=tenant_headers)
         assert resp.status_code == 404
+
+    def test_deidentify_patient_controlled_removes_name_telecom(
+        self, client, sample_patient, auth_headers, tenant_headers
+    ):
+        client.post('/r6/fhir/Patient',
+                    data=json.dumps(sample_patient),
+                    content_type='application/json',
+                    headers=auth_headers)
+
+        pid = sample_patient['id']
+        resp = client.get(
+            f'/r6/fhir/Patient/{pid}/$deidentify'
+            '?mode=patient-controlled&patient_id=hc-123',
+            headers=tenant_headers
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        # Direct identifiers removed
+        assert 'name' not in data
+        assert 'telecom' not in data
+        assert 'address' not in data
+        assert 'photo' not in data
+
+    def test_deidentify_patient_controlled_preserves_birthdate(
+        self, client, sample_patient, auth_headers, tenant_headers
+    ):
+        client.post('/r6/fhir/Patient',
+                    data=json.dumps(sample_patient),
+                    content_type='application/json',
+                    headers=auth_headers)
+
+        pid = sample_patient['id']
+        resp = client.get(
+            f'/r6/fhir/Patient/{pid}/$deidentify'
+            '?mode=patient-controlled&patient_id=hc-123',
+            headers=tenant_headers
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        # birthDate PRESERVED (differs from HIPAA Safe Harbor mode)
+        assert 'birthDate' in data
+        assert len(data['birthDate']) > 4  # full date, not year-only
+
+    def test_deidentify_patient_controlled_injects_healthclaw_id(
+        self, client, sample_patient, auth_headers, tenant_headers
+    ):
+        client.post('/r6/fhir/Patient',
+                    data=json.dumps(sample_patient),
+                    content_type='application/json',
+                    headers=auth_headers)
+
+        pid = sample_patient['id']
+        resp = client.get(
+            f'/r6/fhir/Patient/{pid}/$deidentify'
+            '?mode=patient-controlled&patient_id=hc-456',
+            headers=tenant_headers
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        identifiers = data.get('identifier', [])
+        hc_ids = [
+            i for i in identifiers
+            if i.get('system') == 'https://healthclaw.io/patient-id'
+        ]
+        assert len(hc_ids) == 1
+        assert hc_ids[0]['value'] == 'hc-456'
+
+    def test_deidentify_patient_controlled_stamps_meta_tag(
+        self, client, sample_patient, auth_headers, tenant_headers
+    ):
+        client.post('/r6/fhir/Patient',
+                    data=json.dumps(sample_patient),
+                    content_type='application/json',
+                    headers=auth_headers)
+
+        pid = sample_patient['id']
+        resp = client.get(
+            f'/r6/fhir/Patient/{pid}/$deidentify'
+            '?mode=patient-controlled&patient_id=hc-789',
+            headers=tenant_headers
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        tags = data.get('meta', {}).get('tag', [])
+        codes = {t.get('code') for t in tags}
+        assert 'ANONYED' in codes
+        assert 'patient-controlled' in codes
 
 
 class TestAuditExport:

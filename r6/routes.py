@@ -25,6 +25,7 @@ from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import record_audit_event
+from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
@@ -246,12 +247,12 @@ def create_resource(resource_type):
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _operation_outcome('error', 'security',
-                                  'Write operations require X-Step-Up-Token header'), 403
+                                  'Write operations require X-Step-Up-Token header'), 401
 
     valid, err = validate_step_up_token(step_up_token, tenant_id)
     if not valid:
         return _operation_outcome('error', 'security',
-                                  f'Step-up token rejected: {err}'), 403
+                                  f'Step-up token rejected: {err}'), 401
 
     # Validate before storing (agent proposals must pass $validate before commit)
     validation_result = validator.validate_resource(body)
@@ -386,12 +387,12 @@ def update_resource(resource_type, resource_id):
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _operation_outcome('error', 'security',
-                                  'Write operations require X-Step-Up-Token header'), 403
+                                  'Write operations require X-Step-Up-Token header'), 401
 
     valid, err = validate_step_up_token(step_up_token, tenant_id)
     if not valid:
         return _operation_outcome('error', 'security',
-                                  f'Step-up token rejected: {err}'), 403
+                                  f'Step-up token rejected: {err}'), 401
 
     body = request.get_json(silent=True)
     if not body:
@@ -1229,7 +1230,15 @@ def deidentify_endpoint(resource_type, resource_id):
                        detail='de-identification export')
 
     fhir_json = resource.to_fhir_json()
-    deidentified = deidentify_resource(fhir_json)
+    mode = request.args.get('mode', 'hipaa-safe-harbor')
+
+    if mode == 'patient-controlled':
+        patient_id = request.args.get('patient_id', resource_id)
+        deidentified = apply_patient_controlled_redaction(
+            fhir_json, patient_id
+        )
+    else:
+        deidentified = deidentify_resource(fhir_json)
 
     return jsonify(deidentified)
 

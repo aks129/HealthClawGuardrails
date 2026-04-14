@@ -486,10 +486,16 @@ export class FHIRTools {
     }
 
     // Build forwarded headers (tenant, auth, agent)
+    // X-Tenant-Id is always set: incoming header → TENANT_ID env var → "desktop-demo"
+    const tenantId =
+      headers?.["x-tenant-id"] ||
+      process.env.TENANT_ID ||
+      "desktop-demo";
+
     const fwdHeaders: Record<string, string> = {
       "Content-Type": "application/fhir+json",
+      "X-Tenant-Id": tenantId,
     };
-    if (headers?.["x-tenant-id"]) fwdHeaders["X-Tenant-Id"] = headers["x-tenant-id"];
     if (headers?.["x-step-up-token"]) fwdHeaders["X-Step-Up-Token"] = headers["x-step-up-token"];
     if (headers?.["x-agent-id"]) fwdHeaders["X-Agent-Id"] = headers["x-agent-id"];
     if (headers?.["authorization"]) fwdHeaders["Authorization"] = headers["authorization"];
