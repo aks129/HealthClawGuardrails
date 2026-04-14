@@ -1,57 +1,55 @@
 {
-  "name": "fhir-r6-guardrails",
-  "version": "0.9.0",
+  "name": "healthclaw-marketplace",
   "owner": {
-    "name": "FHIR IQ / Eugene Vestel",
-    "email": "contact@fhiriq.com",
-    "url": "https://www.fhiriq.com"
+    "name": "aks129",
+    "email": "dev@healthclaw.io"
   },
-  "description": "FHIR R6 MCP guardrail patterns for AI agent access to clinical data. Runtime security layer with PHI redaction, step-up authorization, immutable audit trails, tenant isolation, and upstream FHIR server proxy. Complements the Anthropic healthcare marketplace's fhir-developer knowledge skill with a live MCP server and guardrail enforcement.",
+  "metadata": {
+    "description": "Clinical AI skills for FHIR guardrails, PHI redaction, EHR integration, personal health management, and biomedical research — from healthclaw.io and SmartHealthConnect.",
+    "version": "1.0.0",
+    "pluginRoot": "./"
+  },
   "plugins": [
     {
-      "name": "fhir-r6-guardrails",
-      "description": "FHIR R6 MCP server with 10 tools for agent-safe clinical data access. Enforces PHI redaction, step-up auth for writes, immutable audit trails, and tenant isolation on every request.",
+      "name": "healthclaw-guardrails",
       "source": "./",
+      "description": "FHIR AI agent guardrails with 14 MCP tools. PHI redaction on every read, step-up authorization for writes, immutable audit trails, tenant isolation, Curatr data quality, Fasten Connect EHR ingestion, and HealthEx portable health record export. FHIR R4 US Core v9 + R6 ballot3.",
+      "version": "1.0.0",
+      "author": {
+        "name": "aks129"
+      },
+      "homepage": "https://healthclaw.io",
+      "repository": "https://github.com/aks129/HealthClawGuardrails",
+      "license": "MIT",
+      "keywords": [
+        "fhir", "fhir-r4", "fhir-r6", "hl7", "mcp", "healthcare",
+        "phi", "hipaa", "guardrails", "audit-trail", "step-up-auth",
+        "curatr", "ehr", "fasten", "medplum", "us-core"
+      ],
       "category": "healthcare",
-      "tags": [
-        "fhir",
-        "fhir-r6",
-        "hl7",
-        "mcp",
-        "phi-redaction",
-        "hipaa",
-        "guardrails",
-        "clinical-ai",
-        "audit-trail",
-        "step-up-auth"
-      ]
+      "tags": ["fhir", "hipaa", "mcp", "guardrails", "redaction", "ehr", "clinical-ai"]
     },
     {
-      "name": "fhir-upstream-proxy",
-      "description": "Connect to real FHIR servers (HAPI, SMART Health IT, Epic) while enforcing the full MCP guardrail stack. Redaction, audit, and URL rewriting applied to upstream responses.",
-      "source": "./",
+      "name": "smarthealthconnect",
+      "source": {
+        "source": "github",
+        "repo": "aks129/SmartHealthConnect"
+      },
+      "description": "Personal health management skills — preventive care gap tracking (HEDIS), medication refill monitoring, healthy habits dashboard, diet & exercise analytics, pediatric immunization schedules, and biomedical research / clinical trial monitoring.",
+      "version": "1.0.0",
+      "author": {
+        "name": "aks129"
+      },
+      "homepage": "https://github.com/aks129/SmartHealthConnect",
+      "repository": "https://github.com/aks129/SmartHealthConnect",
+      "license": "MIT",
+      "keywords": [
+        "fhir", "personal-health", "preventive-care", "hedis", "medications",
+        "pediatric", "immunizations", "wellness", "clinical-trials", "research"
+      ],
       "category": "healthcare",
-      "tags": [
-        "fhir",
-        "proxy",
-        "hapi",
-        "epic",
-        "smart-on-fhir",
-        "interoperability"
-      ]
-    },
-    {
-      "name": "phi-redaction",
-      "description": "PHI redaction patterns for FHIR resources. Names truncated to initials, identifiers masked, addresses stripped, birth dates truncated to year, photos removed. Applied automatically on all read paths.",
-      "source": "./",
-      "category": "healthcare",
-      "tags": [
-        "phi",
-        "redaction",
-        "hipaa",
-        "privacy",
-        "de-identification"
-      ]
+      "tags": ["fhir", "personal-health", "wellness", "preventive-care", "pediatric"],
+      "strict": false
     }
   ]
 }

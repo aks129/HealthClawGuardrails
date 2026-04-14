@@ -1,9 +1,7 @@
 ---
 name: fasten-connect
 description: "Use this skill whenever connecting a patient's real health records from EHR systems (Epic, Cerner, Athena) or the TEFCA national network into HealthClaw Guardrails. Covers: Fasten Stitch widget embed, org_connection_id registration, EHI export job tracking, NDJSON ingestion status, TEFCA IAS identity-verified multi-provider retrieval, and post-import Curatr quality scan workflow."
-homepage: https://docs.connect.fastenhealth.com
-disable-model-invocation: true
-metadata: {"openclaw":{"requires":{"env":["FASTEN_PUBLIC_KEY","FASTEN_PRIVATE_KEY"]},"primaryEnv":"FASTEN_PUBLIC_KEY"}}
+metadata: {"homepage":"https://docs.connect.fastenhealth.com","openclaw":{"requires":{"env":["FASTEN_PUBLIC_KEY","FASTEN_PRIVATE_KEY"]},"primaryEnv":"FASTEN_PUBLIC_KEY"}}
 ---
 
 # Fasten Connect — Patient Health Record Ingestion

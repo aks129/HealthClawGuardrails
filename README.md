@@ -2,7 +2,7 @@
 
 The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.1.0** | 266 tests | 12 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect
+**v1.0.0** | 288 tests | 14 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Claude Code plugin
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
@@ -26,6 +26,28 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
                          Step-up auth
                          Human-in-the-loop
 ```
+
+## Install as a Claude Plugin
+
+HealthClaw ships as a Claude Code plugin marketplace. Two plugins are available:
+
+```bash
+# Add the marketplace
+claude plugin marketplace add aks129/HealthClawGuardrails
+
+# Install the FHIR guardrail plugin (this repo)
+claude plugin install healthclaw-guardrails@healthclaw-marketplace
+
+# Install the personal-health companion plugin (SmartHealthConnect)
+claude plugin install smarthealthconnect@healthclaw-marketplace
+```
+
+| Plugin | Skills | Source |
+| --- | --- | --- |
+| `healthclaw-guardrails` | curatr, fasten-connect, fhir-r6-guardrails, fhir-upstream-proxy, healthex-export, phi-redaction | [aks129/HealthClawGuardrails](https://github.com/aks129/HealthClawGuardrails) |
+| `smarthealthconnect` | care-completion, diet-exercise, healthy-habits, kids-health, medication-refills, research-monitor | [aks129/SmartHealthConnect](https://github.com/aks129/SmartHealthConnect) |
+
+Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 
 ## Quick Start
 
@@ -55,29 +77,38 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (12)
+## MCP Tools (14)
+
+Tool names use underscores (not dots) for Claude Desktop / MCP client compatibility.
 
 **Read tools** (no step-up required):
 
 | Tool | Description |
 | --- | --- |
-| `context.get` | Retrieve pre-built context envelopes |
-| `fhir.read` | Read a FHIR resource (redacted) |
-| `fhir.search` | Search with patient, code, status, date filters |
-| `fhir.validate` | Structural validation |
-| `fhir.stats` | Observation statistics (count/min/max/mean) |
-| `fhir.lastn` | Most recent N observations per code |
-| `fhir.permission_evaluate` | R6 Permission access control evaluation |
-| `fhir.subscription_topics` | List available SubscriptionTopics |
-| `curatr.evaluate` | Evaluate a FHIR resource for data quality issues |
+| `context_get` | Retrieve pre-built context envelopes |
+| `fhir_read` | Read a FHIR resource (redacted) |
+| `fhir_search` | Search with patient, code, status, date filters |
+| `fhir_validate` | Structural validation |
+| `fhir_stats` | Observation statistics (count/min/max/mean) |
+| `fhir_lastn` | Most recent N observations per code |
+| `fhir_permission_evaluate` | R6 Permission access control evaluation |
+| `fhir_subscription_topics` | List available SubscriptionTopics |
+| `curatr_evaluate` | Evaluate a FHIR resource for data quality issues |
 
 **Write tools** (require step-up token):
 
 | Tool | Description |
 | --- | --- |
-| `fhir.propose_write` | Validate + preview without committing |
-| `fhir.commit_write` | Commit with step-up auth + human-in-the-loop |
-| `curatr.apply_fix` | Apply patient-approved fixes with Provenance tracking |
+| `fhir_propose_write` | Validate + preview without committing |
+| `fhir_commit_write` | Commit with step-up auth + human-in-the-loop |
+| `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
+
+**Utility tools:**
+
+| Tool | Description |
+| --- | --- |
+| `fhir_get_token` | Issue a 5-minute step-up token (call before any write) |
+| `fhir_seed` | Seed a tenant with demo Patient + Observations + Condition |
 
 All tools add `_mcp_summary` with reasoning, clinical context, and limitations.
 
@@ -261,6 +292,116 @@ static/                         CSS + JS for interactive dashboard
 skills/curatr/                  Curatr OpenClaw skill definition
 tests/                          266 pytest tests (8 files, incl. test_us_core_r4.py)
 ```
+
+## Personal FHIR data store — patient import flow
+
+This walkthrough shows how to go from a raw HealthEx export to querying your
+own records through Claude Code's MCP tools.
+
+### 1. Start the stack
+
+```bash
+uv sync
+uv run python main.py                         # Flask on :5000
+cd services/agent-orchestrator && npm ci && npm start  # MCP on :3001
+```
+
+### 2. Import your HealthEx / Flexpa / generic FHIR bundle
+
+```bash
+# Dry-run first to preview without writing
+python scripts/import_healthex.py \
+  --bundle-file ~/Downloads/my-records.json \
+  --dry-run
+
+# Real import — prints context_id on success
+python scripts/import_healthex.py \
+  --bundle-file ~/Downloads/my-records.json \
+  --tenant-id my-patient \
+  --step-up-secret "$STEP_UP_SECRET"
+```
+
+### 3. Connect Claude Code via MCP
+
+`.mcp.json` in this repo auto-configures Claude Code when you open the project.
+Update `X-Tenant-ID` to match your `--tenant-id`:
+
+```json
+{
+  "mcpServers": {
+    "healthclaw-local": {
+      "type": "http",
+      "url": "http://localhost:3001/mcp",
+      "headers": { "X-Tenant-ID": "my-patient" }
+    }
+  }
+}
+```
+
+Then in Claude Code:
+
+```text
+Use fhir_search to find all my Conditions
+Use context_get with context_id <ctx-id> to get my full context envelope
+Use curatr_evaluate on Condition/<id> to check data quality
+```
+
+### 4. Set up Fasten Connect (optional)
+
+```bash
+# .env additions
+FASTEN_PUBLIC_KEY=<key>
+FASTEN_PRIVATE_KEY=<key>
+FASTEN_WEBHOOK_SECRET=<secret>
+FASTEN_CURATR_SCAN=true    # auto-run Curatr after each import
+```
+
+Records arrive via webhook at `/r6/fasten/webhook` and are stored under the
+patient's canonical tenant ID.
+
+### 5. Deidentify for sharing
+
+```bash
+# HIPAA Safe Harbor
+curl -H "X-Tenant-ID: my-patient" \
+  http://localhost:5000/r6/fhir/Patient/pt-1/\$deidentify
+
+# Patient-controlled (preserves birthDate, strips institutional identifiers)
+curl -H "X-Tenant-ID: my-patient" \
+  "http://localhost:5000/r6/fhir/Patient/pt-1/\$deidentify?mode=patient-controlled&patient_id=my-patient"
+```
+
+### 6. Telegram bot (optional)
+
+```bash
+TELEGRAM_BOT_TOKEN=<token> TENANT_ID=my-patient \
+FHIR_BASE_URL=http://localhost:5000/r6/fhir \
+python openclaw/bot.py
+```
+
+Commands: `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr fix`, `/approve`.
+
+Or via Docker Compose:
+
+```bash
+docker-compose --profile openclaw up -d
+```
+
+### 7. Use Medplum as the backing FHIR store (optional)
+
+Set in `.env` (leave `FHIR_UPSTREAM_URL` empty):
+
+```bash
+MEDPLUM_BASE_URL=https://api.medplum.com/fhir/R4
+MEDPLUM_CLIENT_ID=<id>
+MEDPLUM_CLIENT_SECRET=<secret>
+```
+
+All guardrails apply to Medplum responses identically to local SQLite mode.
+Access tokens are cached in Redis (key `medplum:access_token`; falls back to
+in-process cache when Redis is unavailable).
+
+---
 
 ## Known Limitations
 

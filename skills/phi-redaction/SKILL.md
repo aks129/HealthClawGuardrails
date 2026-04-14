@@ -6,7 +6,6 @@ description: >
   (2) Implementing de-identification for clinical data pipelines,
   (3) Understanding what fields are stripped, masked, or truncated in FHIR resources,
   (4) Building read paths that automatically protect patient privacy.
-disable-model-invocation: true
 ---
 
 # PHI Redaction for FHIR Resources

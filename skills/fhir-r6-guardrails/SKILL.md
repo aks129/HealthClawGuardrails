@@ -7,8 +7,7 @@ description: >
   automatic PHI redaction, (2) Writing clinical resources with two-phase
   propose/commit and step-up authorization, (3) Querying observation statistics
   or recent lab results, (4) Evaluating R6 Permission resources for access control
-  decisions, (5) Auditing agent access to healthcare data. 12 MCP tools.
-disable-model-invocation: true
+  decisions, (5) Auditing agent access to healthcare data. 14 MCP tools.
 ---
 
 # HealthClaw Guardrails

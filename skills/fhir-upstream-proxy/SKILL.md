@@ -6,7 +6,6 @@ description: >
   (2) Proxying AI agent requests to production EHR systems with guardrails,
   (3) Ensuring upstream server URLs never leak to clients,
   (4) Understanding how redaction, audit, and step-up auth apply to upstream data.
-disable-model-invocation: true
 ---
 
 # FHIR Upstream Server Proxy
