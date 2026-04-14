@@ -74,6 +74,10 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy)
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
+/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, convert_fasten.py
+/openclaw/                Telegram bot (bot.py + Dockerfile) — conversational interface to the stack
+/skills/                  OpenClaw skill definitions (curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export)
+/exports/                 Output directory for export_healthex.py bundles (gitignored)
 /templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html)
 /static/css/              Dashboard styles (r6-dashboard.css)
 /static/js/               Dashboard JavaScript (r6-dashboard.js)
@@ -81,7 +85,10 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /e2e/                     Playwright end-to-end tests (landing.spec.ts, dashboard.spec.ts)
 /.github/workflows/       CI configuration (ci.yml)
 /.claude/rules/           Claude Code rules (build.md, security.md)
-/.mcp/                    MCP server manifest (server.json)
+/.claude/compliance/      HIPAA / SOC2 / HITRUST gate checklists (hipaa.md, soc2.md, hitrust.md)
+/.mcp/                    MCP server manifest (server.json) — server-side tool registry
+/.mcp.json                Claude Desktop client config (HTTP transport + X-Tenant-ID header)
+/INTEGRATION.md           Setup guides for SmartHealthConnect, Medplum, and upstream server testing
 ```
 
 ### Template notes
@@ -90,6 +97,8 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 - Flask route names for `url_for()`: `index`, `r6_dashboard`, `wiki`, `faq`, `privacy`, `terms`.
 
 ## Build & Run Commands
+
+Requires **Python 3.11+** and **Node 18+**.
 
 ```bash
 # Install Python dependencies
@@ -134,6 +143,18 @@ vercel deploy --prod                     # deploy current branch to production
 vercel logs healthclaw.io                # tail runtime logs
 vercel dns ls healthclaw.io              # inspect DNS records
 vercel project ls                        # list all projects
+
+# Railway (full-stack with Redis + MCP server)
+railway login && railway up              # deploy to Railway
+
+# Scripts — personal health data pipeline
+python scripts/export_healthex.py --tenant-id ev-personal --dry-run
+python scripts/export_healthex.py --tenant-id ev-personal --import --step-up-secret $STEP_UP_SECRET
+python scripts/import_healthex.py --bundle-file my.json --tenant-id ev-personal --step-up-secret $STEP_UP_SECRET
+python scripts/convert_fasten.py --input health-records*.json --output bundle.json
+
+# Telegram bot (requires TELEGRAM_BOT_TOKEN)
+docker-compose --profile openclaw up -d
 ```
 
 ## Environment Variables
@@ -160,6 +181,7 @@ vercel project ls                        # list all projects
 | --- | --- | --- |
 | `FASTEN_PUBLIC_KEY` | — | Stitch widget public key; exposes `<fasten-stitch-element>` in dashboard when set |
 | `FASTEN_PRIVATE_KEY` | — | Webhook verification secret |
+| `FASTEN_CURATR_SCAN` | `false` | Auto-run Curatr evaluation on Fasten-ingested Conditions |
 
 ### MCP Orchestrator (`services/agent-orchestrator/`)
 
@@ -169,6 +191,27 @@ vercel project ls                        # list all projects
 | `FHIR_BASE_URL` | `http://localhost:5000/r6/fhir` | Backend FHIR endpoint |
 | `ALLOWED_ORIGINS` | (empty = deny-all) | Comma-separated CORS allowlist |
 | `RATE_LIMIT_MAX` | `120` | Max requests per minute per IP |
+| `TENANT_ID` | `desktop-demo` | Default tenant when `X-Tenant-ID` header is absent (e.g. Claude Desktop) |
+
+### Medplum Upstream Proxy (optional)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MEDPLUM_BASE_URL` | — | Medplum project base URL (e.g. `https://api.medplum.com/fhir/R4/<project-id>`) |
+| `MEDPLUM_CLIENT_ID` | — | OAuth2 client ID |
+| `MEDPLUM_CLIENT_SECRET` | — | OAuth2 client secret |
+
+When `MEDPLUM_BASE_URL` is set and `FHIR_UPSTREAM_URL` is not, the proxy uses `MedplumProxy` (a subclass of `FHIRUpstreamProxy` in `r6/fhir_proxy.py`) that fetches OAuth2 tokens via client-credentials grant. Tokens are cached in Redis (key `medplum:access_token`, TTL = `expires_in - 60s`) with in-process fallback.
+
+### Openclaw Telegram Bot (`openclaw/`)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | (required) | BotFather token |
+| `TENANT_ID` | `desktop-demo` | Tenant to query |
+| `MCP_BASE_URL` | `http://localhost:3001` | MCP HTTP bridge base URL |
+| `FHIR_BASE_URL` | `http://localhost:5000/r6/fhir` | Flask FHIR base URL |
+| `STEP_UP_SECRET` | — | HMAC secret for step-up tokens |
 
 ## Upstream FHIR Proxy
 
@@ -183,6 +226,7 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 | HAPI FHIR R5 | `https://hapi.fhir.org/baseR5` | None (open) |
 | Local HAPI | `http://localhost:8080/fhir` | None |
 | Epic Sandbox | `https://open.epic.com/Interface/FHIR` | OAuth 2.0 |
+| Medplum | `https://api.medplum.com/fhir/R4/<project-id>` | OAuth2 client-credentials (auto) |
 
 ### What the Proxy Does
 
@@ -231,7 +275,7 @@ Curatr evaluates: AllergyIntolerance, MedicationRequest, Immunization, Procedure
 - **$stats** — Observation statistics (count/min/max/mean). Available since R4. Only supports valueQuantity.
 - **$lastn** — Most recent observations per code. Available since R4. Sorted by storage order, not effectiveDateTime.
 - **$validate** — Structural validation only. Falls back silently if external validator unavailable.
-- **$deidentify** — HIPAA Safe Harbor. Custom operation, not part of FHIR spec.
+- **$deidentify** — Custom operation, not part of FHIR spec. Supports `?mode=hipaa-safe-harbor` (default: strips name/address/identifiers/birthDate) and `?mode=patient-controlled` (preserves birthDate, strips only institutional identifiers, stamps `urn:healthclaw:patient` canonical ID).
 
 ## Search Capabilities (Honest)
 
@@ -239,14 +283,30 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (12)
+## MCP Tools (14)
 
 - **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
 - **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
+- **Utility tools**: `fhir_get_token` (issues a 5-min step-up token; call before any write), `fhir_seed` (seeds a tenant with demo Patient + Observations + Condition)
+- All tool names use underscores (`fhir_search`, not `fhir.search`) — dots are not valid in some MCP clients
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
-- `propose_write` identifies clinical types requiring human-in-the-loop
-- `permission_evaluate` returns reasoning explaining why permit/deny
+- `fhir_propose_write` identifies clinical types requiring human-in-the-loop
+- `fhir_permission_evaluate` returns reasoning explaining why permit/deny
 - Result entries capped at 50 to stay within token limits
+
+### MCP Transport Header Forwarding
+
+`X-Tenant-ID` must reach Flask on every tool call. The MCP server uses this priority order:
+
+1. `X-Tenant-ID` HTTP header on the incoming MCP request
+2. `TENANT_ID` environment variable
+3. `"desktop-demo"` hardcoded fallback
+
+For **Streamable HTTP** (`POST /mcp`): headers re-extracted per request — works transparently.
+For **SSE** (`GET /sse`): headers captured at connection time and bound to the session via `createMCPServer(sessionHeaders)` — the session's tenant is fixed at connect time.
+For **HTTP bridge** (`POST /mcp/rpc`): headers extracted per request — same as Streamable HTTP.
+
+Step-up tokens (`X-Step-Up-Token`) follow the same forwarding path. When calling write tools via Claude Desktop (no HTTP headers available), pass the token as `_stepUpToken` in the tool arguments — it is extracted before execution.
 
 ## Test Fixtures (`tests/conftest.py`)
 
@@ -281,6 +341,33 @@ The conftest provides an in-memory SQLite Flask test app and these fixtures:
 
 When `FASTEN_PUBLIC_KEY` is set, the dashboard shows a live `<fasten-stitch-element>` widget. On `widget.complete`, the JS calls `/fasten/demo` to simulate the backend flow using the returned `org_connection_id`.
 
+## Scripts (`scripts/`)
+
+| Script | Purpose |
+| --- | --- |
+| `import_healthex.py` | POST a FHIR R4 transaction Bundle to `/Bundle/$ingest-context` with step-up auth. Entry point for all bundle imports. |
+| `export_healthex.py` | Pull all clinical resources from a tenant via REST, de-identify (strips name/address/telecom/EHR identifiers, injects `urn:healthclaw:patient` ID), pre-tag Curatr patterns (smoking contradiction, H-flag titers, missing results), write `exports/healthex-<date>.json`. Pass `--import` to auto-ingest. |
+| `convert_fasten.py` | Convert Fasten Health export format (`providers[].fhir.ResourceType[]`) to a FHIR transaction Bundle. De-duplicates by `(resourceType, id)` using `meta.lastUpdated`. |
+| `demo_e2e.sh` | End-to-end gate test: liveness → seed → read with redaction → audit trail → cross-tenant isolation → curatr evaluate → human-in-the-loop. Exits 0 if all gates pass. Requires Flask (:5000) running. |
+
+Fasten Health exports are **not** standard FHIR Bundles — they use `providers[].fhir.ResourceType[]` structure. Always run `convert_fasten.py` before `import_healthex.py` when working with Fasten exports.
+
+## Telegram Bot (`openclaw/`)
+
+Conversational interface to the local stack via Telegram. Commands: `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr_fix` (apply first fix proposal from last `/curatr`), `/approve`, `/token`.
+
+Calls the MCP HTTP bridge (`POST /mcp/rpc`) using JSON-RPC 2.0 format:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fhir_search","arguments":{...}}}
+```
+
+Run via Docker Compose with the `openclaw` profile (opt-in — not started by default):
+
+```bash
+TELEGRAM_BOT_TOKEN=<token> docker-compose --profile openclaw up -d
+```
+
 ## SQLAlchemy Model Gotchas
 
 Column names differ from what you might guess — use these exactly:
@@ -292,7 +379,10 @@ Column names differ from what you might guess — use these exactly:
 | `AuditEventRecord` | `recorded` | ~~`recorded_at`~~ |
 | `FastenConnection` | `org_connection_id` | — |
 
-PHI redaction function: `from r6.redaction import apply_redaction` (not `redact_resource`).
+PHI redaction functions:
+
+- `from r6.redaction import apply_redaction` — HIPAA Safe Harbor (not `redact_resource`)
+- `from r6.redaction import apply_patient_controlled_redaction(resource, patient_id)` — patient-controlled mode
 
 ## Deployment (healthclaw.io)
 
@@ -315,8 +405,23 @@ Hosted on **Vercel** (project: `healthclaw`, team: `aks129s-projects`). `api/ind
 - Upstream proxy: no response caching, no cross-version translation
 - No Python linter or formatter configured; TypeScript uses strict mode with `tsc --noEmit` only
 
+## Action Policy (`action_policy.yaml`)
+
+Machine-readable allow/deny/approval matrix at repo root. Defines risk level and
+required gates per MCP tool × resource type. Key approval modes:
+
+- `auto` — read-only tools with PHI redaction + audit emit
+- `step_up` — requires `X-Step-Up-Token` (HMAC, 5-min TTL)
+- `human_review` — requires step-up token **and** `X-Human-Confirmed: true`
+- `deny` — never permitted (AuditEvent mutations, SubscriptionTopic writes)
+
+Curation states (stored in `R6Resource.curation_state`): `raw → in_review → curated | rejected`.
+Promotion requires `quality_score >= 0.7`, human confirmation, and linked Provenance.
+
 ## Important Rules
 
 - Always emit AuditEvent for FHIR resource access
 - Step-up authorization required for all write operations
+- Before any change touching PHI/audit/access-control: check `.claude/compliance/hipaa.md`
+- Before deploying: run `./scripts/demo_e2e.sh` — all 10 gates must pass
 - Run tests before committing: `uv run python -m pytest tests/ -v` and `cd services/agent-orchestrator && npm test`

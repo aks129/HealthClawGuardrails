@@ -1,0 +1,415 @@
+version: "1.0"
+description: >
+  Action policy matrix for HealthClaw Guardrails autonomous agent operations.
+  Defines risk level and required approval mode for each MCP tool × resource type combination.
+  Consumed by the compliance-gates CI job and referenced by the agent orchestrator.
+
+# approval modes:
+#   auto          — no human gate; executes immediately
+#   step_up       — HMAC step-up token required (X-Step-Up-Token header)
+#   human_review  — step-up token + X-Human-Confirmed: true header required
+#   deny          — never permitted; must be escalated out-of-band
+
+defaults:
+  unknown_action: deny
+  unknown_resource_type: human_review
+  session_ttl_seconds: 300       # step-up token lifetime
+  patient_lock_required: true    # all actions must be scoped to one patient session
+
+# ─────────────────────────────────────────────
+# READ OPERATIONS (no step-up required)
+# ─────────────────────────────────────────────
+policies:
+
+  - id: read-patient-demographics
+    tools: [fhir_read, fhir_search]
+    resource_types: [Patient]
+    risk_level: medium
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+    rationale: "PHI redacted at output layer; read-only; audit trail ensures accountability"
+
+  - id: read-clinical-observations
+    tools: [fhir_read, fhir_search, fhir_stats, fhir_lastn]
+    resource_types: [Observation, DiagnosticReport, Specimen]
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+      medical_disclaimer_injected: true
+    rationale: "Lab results are read-only; redacted; disclaimer injected"
+
+  - id: read-conditions-allergies
+    tools: [fhir_read, fhir_search]
+    resource_types: [Condition, AllergyIntolerance, FamilyMemberHistory]
+    risk_level: medium
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+      medical_disclaimer_injected: true
+    rationale: "Sensitive clinical history — redacted; disclaimer required"
+
+  - id: read-medications
+    tools: [fhir_read, fhir_search]
+    resource_types: [MedicationRequest, Medication, MedicationDispense]
+    risk_level: medium
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+      medical_disclaimer_injected: true
+    rationale: "Medication list is sensitive but read-only here"
+
+  - id: read-care-coordination
+    tools: [fhir_read, fhir_search]
+    resource_types:
+      - CarePlan
+      - CareTeam
+      - Goal
+      - ServiceRequest
+      - Coverage
+      - DocumentReference
+      - Immunization
+      - Procedure
+      - Encounter
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+    rationale: "Care coordination data — read-only; no direct clinical risk"
+
+  - id: read-providers-locations
+    tools: [fhir_read, fhir_search]
+    resource_types:
+      - Practitioner
+      - PractitionerRole
+      - Organization
+      - Location
+      - RelatedPerson
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      phi_redacted: true
+      audit_emitted: true
+    rationale: "Provider/location data — low sensitivity; directory information"
+
+  - id: curatr-evaluate
+    tools: [curatr_evaluate]
+    resource_types: [Condition, AllergyIntolerance, MedicationRequest, Immunization, Procedure, DiagnosticReport]
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      audit_emitted: true
+    rationale: "Quality evaluation is read-only; no data mutation"
+
+  - id: permission-evaluate
+    tools: [fhir_permission_evaluate]
+    resource_types: [Permission]
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      audit_emitted: true
+    rationale: "Access control evaluation — read-only policy check"
+
+  - id: context-get
+    tools: [context_get]
+    resource_types: ["*"]
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: true
+      context_expiry_enforced: true
+    rationale: "Context envelopes are pre-policy-stamped bundles; expiry enforced"
+
+  - id: validate-resource
+    tools: [fhir_validate]
+    resource_types: ["*"]
+    risk_level: low
+    approval: auto
+    gates:
+      tenant_header_required: false   # validate doesn't write; tenant not required
+    rationale: "Structural validation only; no PHI stored, no write"
+
+# ─────────────────────────────────────────────
+# UTILITY (token issuance, seeding)
+# ─────────────────────────────────────────────
+
+  - id: get-step-up-token
+    tools: [fhir_get_token]
+    resource_types: ["*"]
+    risk_level: medium
+    approval: auto
+    gates:
+      tenant_header_required: true
+    rationale: >
+      Token issuance is gated by tenant header; tokens expire in 5 min.
+      Rate limiting on /internal/step-up-token prevents abuse.
+
+  - id: seed-demo-data
+    tools: [fhir_seed]
+    resource_types: [Patient, Observation, Condition]
+    risk_level: medium
+    approval: step_up
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      audit_emitted: true
+    rationale: >
+      Seed writes resources into the tenant namespace; requires step-up to prevent
+      accidental population in production tenants.
+
+# ─────────────────────────────────────────────
+# WRITE OPERATIONS — PROPOSE PHASE
+# ─────────────────────────────────────────────
+
+  - id: propose-write-low-risk
+    tools: [fhir_propose_write]
+    resource_types:
+      - Location
+      - Organization
+      - Practitioner
+      - PractitionerRole
+      - RelatedPerson
+    risk_level: medium
+    approval: step_up
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      validate_before_propose: true
+      audit_emitted: true
+    rationale: "Administrative/directory resources — no direct patient safety risk"
+
+  - id: propose-write-clinical
+    tools: [fhir_propose_write]
+    resource_types:
+      - Patient
+      - Observation
+      - Condition
+      - AllergyIntolerance
+      - Immunization
+      - MedicationRequest
+      - Medication
+      - MedicationDispense
+      - Procedure
+      - DiagnosticReport
+      - DocumentReference
+      - CarePlan
+      - CareTeam
+      - Goal
+      - ServiceRequest
+      - Coverage
+      - Encounter
+      - FamilyMemberHistory
+      - Specimen
+    risk_level: high
+    approval: step_up
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      validate_before_propose: true
+      human_in_loop_flagged: true
+      audit_emitted: true
+    rationale: >
+      Proposal is safe (no write yet); step-up required to prevent accidental triggers.
+      human_in_loop_flagged means commit phase will additionally require X-Human-Confirmed.
+
+  - id: propose-write-consent
+    tools: [fhir_propose_write]
+    resource_types: [Consent, Permission]
+    risk_level: critical
+    approval: human_review
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      validate_before_propose: true
+      human_in_loop_flagged: true
+      audit_emitted: true
+      legal_review_recommended: true
+    rationale: >
+      Consent/Permission changes affect data access rights — highest risk category.
+      Human review of the proposal itself is required before commit phase begins.
+
+# ─────────────────────────────────────────────
+# WRITE OPERATIONS — COMMIT PHASE
+# ─────────────────────────────────────────────
+
+  - id: commit-write-administrative
+    tools: [fhir_commit_write]
+    resource_types:
+      - Location
+      - Organization
+      - Practitioner
+      - PractitionerRole
+      - RelatedPerson
+    risk_level: medium
+    approval: step_up
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      validate_before_commit: true
+      audit_emitted: true
+    rationale: "Administrative writes — step-up sufficient; no patient safety impact"
+
+  - id: commit-write-clinical
+    tools: [fhir_commit_write]
+    resource_types:
+      - Patient
+      - Observation
+      - Condition
+      - AllergyIntolerance
+      - Immunization
+      - MedicationRequest
+      - Medication
+      - MedicationDispense
+      - Procedure
+      - DiagnosticReport
+      - DocumentReference
+      - CarePlan
+      - CareTeam
+      - Goal
+      - ServiceRequest
+      - Coverage
+      - Encounter
+      - FamilyMemberHistory
+      - Specimen
+    risk_level: high
+    approval: human_review
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      human_confirmed_header: true
+      validate_before_commit: true
+      etag_concurrency_check: true
+      audit_emitted: true
+    rationale: >
+      Clinical writes affect patient record. Both machine (step-up token) and human
+      (X-Human-Confirmed) gates required. ETag prevents stale overwrites.
+
+  - id: commit-write-consent
+    tools: [fhir_commit_write]
+    resource_types: [Consent, Permission]
+    risk_level: critical
+    approval: human_review
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      human_confirmed_header: true
+      validate_before_commit: true
+      etag_concurrency_check: true
+      audit_emitted: true
+      legal_review_recommended: true
+    rationale: "Consent/Permission writes change access rights — maximum gate enforcement"
+
+# ─────────────────────────────────────────────
+# DATA QUALITY (CURATR) — COMMIT PHASE
+# ─────────────────────────────────────────────
+
+  - id: curatr-apply-fix
+    tools: [curatr_apply_fix]
+    resource_types: [Condition, AllergyIntolerance, MedicationRequest, Immunization, Procedure, DiagnosticReport]
+    risk_level: high
+    approval: human_review
+    gates:
+      tenant_header_required: true
+      step_up_token_required: true
+      human_confirmed_header: true
+      validate_before_commit: true
+      provenance_created: true
+      dual_audit_emitted: true     # one for resource update, one for Provenance creation
+    rationale: >
+      Patient-initiated data quality fixes modify clinical records.
+      Provenance chain is mandatory for legal traceability.
+
+# ─────────────────────────────────────────────
+# DENIED OPERATIONS
+# ─────────────────────────────────────────────
+
+  - id: deny-audit-mutation
+    tools: ["*"]
+    resource_types: [AuditEvent]
+    risk_level: critical
+    approval: deny
+    rationale: >
+      AuditEvent is append-only — enforced at the SQLAlchemy model layer.
+      No tool may update or delete audit records. New audit entries via
+      POST are permitted only through internal _emit_audit() calls, not
+      directly via MCP tools.
+
+  - id: deny-subscription-topic-write
+    tools: [fhir_commit_write, fhir_propose_write]
+    resource_types: [SubscriptionTopic]
+    risk_level: critical
+    approval: deny
+    rationale: >
+      SubscriptionTopic is storage-only in this implementation.
+      No notification dispatch exists — committing new topics would
+      create a misleading record. Use direct REST if storage is needed.
+
+# ─────────────────────────────────────────────
+# CURATOR PROMOTION PIPELINE
+# ─────────────────────────────────────────────
+curation_policy:
+  description: >
+    Contract governing promotion from raw ingested data to curated records.
+    Curated records have passed quality evaluation and human review.
+
+  states:
+    raw:
+      description: "Freshly ingested — no quality evaluation performed"
+      next: [in_review, rejected]
+      auto_transition: false
+    in_review:
+      description: "Curatr evaluation complete; awaiting human confirmation"
+      requires:
+        - curatr_evaluated: true
+        - quality_score_present: true
+        - issues_documented: true
+      next: [curated, rejected]
+      auto_transition: false
+    curated:
+      description: "Passed quality gate; ready for downstream use"
+      requires:
+        - quality_score: ">= 0.7"
+        - human_confirmed: true
+        - provenance_linked: true
+      next: []    # terminal state
+      auto_transition: false
+    rejected:
+      description: "Failed quality gate or human rejected"
+      requires:
+        - rejection_reason: required
+      next: [raw]  # can be re-ingested after source correction
+      auto_transition: false
+
+  quality_score_components:
+    - name: coding_validity
+      weight: 0.4
+      description: "SNOMED/LOINC/RxNorm code exists and is active in terminology service"
+    - name: required_fields
+      weight: 0.3
+      description: "All US Core v9 required fields present and non-empty"
+    - name: logical_consistency
+      weight: 0.2
+      description: "No internal contradictions (e.g. smoking status contradiction)"
+    - name: provenance_traceability
+      weight: 0.1
+      description: "Source system, import timestamp, and operator documented"
+
+  promotion_gate:
+    minimum_quality_score: 0.7
+    human_confirmation_required: true
+    provenance_required: true
+    review_ttl_hours: 72   # in_review items auto-reject after 72h without action
