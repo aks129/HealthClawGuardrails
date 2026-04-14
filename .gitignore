@@ -9,3 +9,11 @@ dist/
 .env
 *.egg-info/
 .vercel/
+
+# Local-only Claude Code settings
+.claude/settings.local.json
+
+# Personal health bundles (never commit real PHI)
+healthclaw-bundle-*.json
+exports/
+
