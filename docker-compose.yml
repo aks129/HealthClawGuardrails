@@ -5,6 +5,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5000:5000"
+    env_file:
+      - path: .env
+        required: false
     environment:
       - FLASK_ENV=development
       - SQLALCHEMY_DATABASE_URI=sqlite:///mcp_server.db
@@ -23,6 +26,12 @@ services:
       - FASTEN_WEBHOOK_SECRET=${FASTEN_WEBHOOK_SECRET:-}
       # Set to "true" to run Curatr quality scan after each import
       - FASTEN_CURATR_SCAN=${FASTEN_CURATR_SCAN:-false}
+      # Medplum upstream (optional — uncomment MEDPLUM_* vars in .env to use)
+      - MEDPLUM_BASE_URL=${MEDPLUM_BASE_URL:-}
+      - MEDPLUM_CLIENT_ID=${MEDPLUM_CLIENT_ID:-}
+      - MEDPLUM_CLIENT_SECRET=${MEDPLUM_CLIENT_SECRET:-}
+      # Telegram bot token (used by openclaw service)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
     depends_on:
       - redis
     volumes:
@@ -45,12 +54,33 @@ services:
     environment:
       - MCP_PORT=3001
       - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
+      - TENANT_ID=${TENANT_ID:-desktop-demo}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-120}
     depends_on:
       - fhir-mcp-guardrails
     networks:
       - fhir-net
+
+  # Openclaw Telegram bot (requires TELEGRAM_BOT_TOKEN in .env)
+  openclaw:
+    build:
+      context: ./openclaw
+      dockerfile: Dockerfile
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - MCP_BASE_URL=http://agent-orchestrator:3001
+      - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
+      - REDIS_URL=redis://redis:6379/0
+      - STEP_UP_SECRET=${STEP_UP_SECRET}
+      - TENANT_ID=${TENANT_ID:-desktop-demo}
+    depends_on:
+      - agent-orchestrator
+      - redis
+    networks:
+      - fhir-net
+    profiles:
+      - openclaw
 
   # HL7 FHIR Validator Wrapper (optional - for full $validate support)
   # Uncomment when validator-wrapper Docker image is available
