@@ -353,7 +353,7 @@
 <!-- ═══ STATS ═══ -->
 <div class="stats-row">
   <div class="stat">
-    <span class="stat-num" data-target="12">0</span>
+    <span class="stat-num" data-target="14">0</span>
     <div class="stat-label">MCP Tools</div>
   </div>
   <div class="stat">
@@ -361,7 +361,7 @@
     <div class="stat-label">FHIR Resource Types</div>
   </div>
   <div class="stat">
-    <span class="stat-num" data-target="266">0</span>
+    <span class="stat-num" data-target="288">0</span>
     <div class="stat-label">Tests Passing</div>
   </div>
   <div class="stat">
@@ -451,7 +451,7 @@
       <div class="audience-sub" style="color:var(--cyan)">Ship HIPAA-safe agents in minutes, not months</div>
       <ul class="audience-list" style="--dot:var(--cyan)">
         <li style="--before-color:var(--cyan)">14 MCP tools — drop into Claude Desktop or any MCP client</li>
-        <li style="--before-color:var(--cyan)">Claude Code plugin: <code style="font-size:12px;color:var(--cyan)">claude plugin marketplace add aks129/HealthClawGuardrails</code></li>
+        <li style="--before-color:var(--cyan)">One-line Claude Code install (marketplace below)</li>
         <li style="--before-color:var(--cyan)">Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
         <li style="--before-color:var(--cyan)">PHI redaction, audit, step-up auth — zero config</li>
       </ul>
@@ -481,11 +481,70 @@
         <li style="--before-color:var(--amber)">Vendor-neutral proxy — works with your existing FHIR stack</li>
         <li style="--before-color:var(--amber)">Tenant isolation, immutable audit, OAuth 2.1 + PKCE</li>
         <li style="--before-color:var(--amber)">Human-in-the-loop for clinical writes (HTTP 428 pattern)</li>
-        <li style="--before-color:var(--amber)">266 tests, Playwright e2e, open source (MIT)</li>
+        <li style="--before-color:var(--amber)">288 tests, Playwright e2e, open source (MIT)</li>
       </ul>
       <div class="audience-cta" style="color:var(--amber)">Architecture →</div>
     </a>
 
+  </div>
+</div>
+
+<!-- ═══ CLAUDE CODE PLUGIN MARKETPLACE ═══ -->
+<div style="background:linear-gradient(180deg,rgba(34,211,238,0.04) 0%,transparent 100%)">
+  <div class="section" style="padding-top:60px">
+    <div class="section-header fade-up">
+      <div class="section-tag">Claude Code Plugin</div>
+      <h2 class="section-title">Install HealthClaw skills into Claude Code in one line</h2>
+      <p class="section-desc">The <code style="color:var(--cyan);font-family:var(--font-mono);font-size:14px">healthclaw-marketplace</code> hosts two plugins that ship as auto-discoverable Claude Code skills. Add the marketplace once, install either plugin, and Claude invokes the right skill whenever your prompt matches its triggers — no manual tool wiring.</p>
+    </div>
+
+    <div class="fade-up" style="max-width:820px;margin:0 auto 36px;padding:24px 28px;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.2);border-radius:10px;font-family:var(--font-mono);font-size:14px;line-height:1.9">
+      <div style="color:var(--gray-dim);margin-bottom:8px;font-size:12px">&#47;&#47; Add the marketplace (once)</div>
+      <div><span style="color:var(--green)">$</span> claude plugin marketplace add <span style="color:var(--cyan)">aks129&#47;HealthClawGuardrails</span></div>
+      <div style="color:var(--gray-dim);margin-top:18px;margin-bottom:8px;font-size:12px">&#47;&#47; Install the guardrail plugin (FHIR + MCP + Curatr + Fasten Connect)</div>
+      <div><span style="color:var(--green)">$</span> claude plugin install <span style="color:var(--cyan)">healthclaw-guardrails@healthclaw-marketplace</span></div>
+      <div style="color:var(--gray-dim);margin-top:18px;margin-bottom:8px;font-size:12px">&#47;&#47; Or install the personal-health companion</div>
+      <div><span style="color:var(--green)">$</span> claude plugin install <span style="color:var(--cyan)">smarthealthconnect@healthclaw-marketplace</span></div>
+    </div>
+
+    <div class="audience-grid fade-up" style="transition-delay:0.15s">
+      <div class="audience-card" style="border-color:var(--border);cursor:default">
+        <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
+        <div class="audience-icon">🛡️</div>
+        <div class="audience-title">healthclaw-guardrails</div>
+        <div class="audience-sub" style="color:var(--cyan)">FHIR agent guardrails + EHR integration</div>
+        <ul class="audience-list" style="--dot:var(--cyan)">
+          <li style="--before-color:var(--cyan)"><strong>fhir-r6-guardrails</strong> — 14 MCP tools, PHI redaction, step-up auth, audit</li>
+          <li style="--before-color:var(--cyan)"><strong>curatr</strong> — data-quality evaluation + patient-approved fixes</li>
+          <li style="--before-color:var(--cyan)"><strong>fasten-connect</strong> — EHR + TEFCA ingestion</li>
+          <li style="--before-color:var(--cyan)"><strong>phi-redaction</strong> — HIPAA Safe Harbor de-identification</li>
+          <li style="--before-color:var(--cyan)"><strong>fhir-upstream-proxy</strong> — HAPI &middot; Epic &middot; Medplum</li>
+          <li style="--before-color:var(--cyan)"><strong>healthex-export</strong> — portable FHIR bundle export</li>
+        </ul>
+      </div>
+
+      <a href="https://github.com/aks129/SmartHealthConnect" target="_blank" rel="noopener" class="audience-card" style="border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(52,211,153,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
+        <div class="audience-icon">💚</div>
+        <div class="audience-title">smarthealthconnect</div>
+        <div class="audience-sub" style="color:var(--green)">Personal health management skills</div>
+        <ul class="audience-list">
+          <li style="--before-color:var(--green)"><strong>care-completion</strong> — HEDIS preventive-care gaps</li>
+          <li style="--before-color:var(--green)"><strong>medication-refills</strong> — refill windows + projections</li>
+          <li style="--before-color:var(--green)"><strong>healthy-habits</strong> — longitudinal health dashboard</li>
+          <li style="--before-color:var(--green)"><strong>diet-exercise</strong> — activity logging + correlations</li>
+          <li style="--before-color:var(--green)"><strong>kids-health</strong> — CDC schedules + school compliance</li>
+          <li style="--before-color:var(--green)"><strong>research-monitor</strong> — trials, preprints, FDA signals</li>
+        </ul>
+        <div class="audience-cta" style="color:var(--green)">View on GitHub →</div>
+      </a>
+    </div>
+
+    <p class="fade-up" style="text-align:center;color:var(--gray-dim);font-size:13px;margin-top:28px;transition-delay:0.3s">
+      Marketplace manifest: <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/.claude-plugin/marketplace.json" target="_blank" rel="noopener" style="color:var(--cyan)">.claude-plugin/marketplace.json</a>
+      &middot;
+      Skills authored against <a href="https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf" target="_blank" rel="noopener" style="color:var(--cyan)">Anthropic's Skill Authoring Guide</a>
+    </p>
   </div>
 </div>
 
