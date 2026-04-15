@@ -32,6 +32,10 @@ services:
       - MEDPLUM_CLIENT_SECRET=${MEDPLUM_CLIENT_SECRET:-}
       # Telegram bot token (used by openclaw service)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Wearables integration (optional — set to enable the poller)
+      - OPEN_WEARABLES_URL=${OPEN_WEARABLES_URL:-}
+      - OPEN_WEARABLES_API_KEY=${OPEN_WEARABLES_API_KEY:-}
+      - WEARABLES_POLL_INTERVAL=${WEARABLES_POLL_INTERVAL:-900}
     depends_on:
       - redis
     volumes:
@@ -93,6 +97,71 @@ services:
   #   networks:
   #     - fhir-net
 
+  # ─── Wearables integration (opt-in via `--profile wearables`) ───
+  # Runs the Open Wearables sidecar (https://github.com/the-momentum/open-wearables)
+  # alongside HealthClaw. HealthClaw's OPEN_WEARABLES_URL must be set to
+  # http://open-wearables:8000 in .env for the poller to activate.
+  open-wearables-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=openwearables
+      - POSTGRES_USER=openwearables
+      - POSTGRES_PASSWORD=${OPEN_WEARABLES_DB_PASSWORD:-openwearables-dev}
+    volumes:
+      - wearables-pg-data:/var/lib/postgresql/data
+    networks:
+      - fhir-net
+    profiles:
+      - wearables
+
+  open-wearables:
+    image: ghcr.io/the-momentum/open-wearables:latest
+    ports:
+      - "${OPEN_WEARABLES_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=postgresql://openwearables:${OPEN_WEARABLES_DB_PASSWORD:-openwearables-dev}@open-wearables-db:5432/openwearables
+      - REDIS_URL=redis://redis:6379/1
+      - API_KEY=${OPEN_WEARABLES_API_KEY:-}
+      # Per-provider OAuth app creds — see https://github.com/the-momentum/open-wearables
+      - GARMIN_CLIENT_ID=${GARMIN_CLIENT_ID:-}
+      - GARMIN_CLIENT_SECRET=${GARMIN_CLIENT_SECRET:-}
+      - OURA_CLIENT_ID=${OURA_CLIENT_ID:-}
+      - OURA_CLIENT_SECRET=${OURA_CLIENT_SECRET:-}
+      - POLAR_CLIENT_ID=${POLAR_CLIENT_ID:-}
+      - POLAR_CLIENT_SECRET=${POLAR_CLIENT_SECRET:-}
+      - SUUNTO_CLIENT_ID=${SUUNTO_CLIENT_ID:-}
+      - SUUNTO_CLIENT_SECRET=${SUUNTO_CLIENT_SECRET:-}
+      - WHOOP_CLIENT_ID=${WHOOP_CLIENT_ID:-}
+      - WHOOP_CLIENT_SECRET=${WHOOP_CLIENT_SECRET:-}
+      - FITBIT_CLIENT_ID=${FITBIT_CLIENT_ID:-}
+      - FITBIT_CLIENT_SECRET=${FITBIT_CLIENT_SECRET:-}
+      - STRAVA_CLIENT_ID=${STRAVA_CLIENT_ID:-}
+      - STRAVA_CLIENT_SECRET=${STRAVA_CLIENT_SECRET:-}
+    depends_on:
+      - open-wearables-db
+      - redis
+    networks:
+      - fhir-net
+    profiles:
+      - wearables
+
+  open-wearables-worker:
+    image: ghcr.io/the-momentum/open-wearables:latest
+    command: celery -A app.worker worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://openwearables:${OPEN_WEARABLES_DB_PASSWORD:-openwearables-dev}@open-wearables-db:5432/openwearables
+      - REDIS_URL=redis://redis:6379/1
+      - API_KEY=${OPEN_WEARABLES_API_KEY:-}
+    depends_on:
+      - open-wearables
+    networks:
+      - fhir-net
+    profiles:
+      - wearables
+
 networks:
   fhir-net:
     driver: bridge
+
+volumes:
+  wearables-pg-data:

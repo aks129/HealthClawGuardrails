@@ -364,6 +364,24 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- Wearables: connection + sync status surface ---
+      {
+        name: "wearables_sync_status",
+        description:
+          "List wearable connections (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman) for a tenant, with last sync time, observation count, and status. Use this to tell a patient what's connected, when data last arrived, and surface a connection-management UI (via _meta.ui.resourceUri) so they can connect more providers. Data flows into HealthClaw as FHIR Observations with LOINC codes — agents read it via fhir_search like any other Observation.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            tenant_id: {
+              type: "string",
+              description: "Tenant to inspect. Defaults to the incoming X-Tenant-Id header.",
+            },
+          },
+          required: [],
+        },
+      },
       // --- Compiled Truth: current state + evidence timeline ---
       {
         name: "fhir_compiled_truth",
@@ -595,6 +613,12 @@ export class FHIRTools {
         return this.compiledTruth(
           input.resource_type as string,
           input.resource_id as string,
+          fwdHeaders
+        );
+
+      case "wearables_sync_status":
+        return this.wearablesSyncStatus(
+          (input.tenant_id as string) || tenantId,
           fwdHeaders
         );
 
@@ -957,6 +981,90 @@ export class FHIRTools {
    */
   private compiledTruthAppUri(resourceType: string, resourceId: string): string {
     return `${this.baseUrl}/mcp-apps/compiled-truth/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`;
+  }
+
+  /**
+   * Server root URL (strips trailing /r6/fhir so /wearables/... resolves).
+   * baseUrl is always something like http://host:5000/r6/fhir.
+   */
+  private serverRoot(): string {
+    return this.baseUrl.replace(/\/r6\/fhir\/?$/, "");
+  }
+
+  private async wearablesSyncStatus(
+    tenantId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const url = `${root}/wearables/sync-status?tenant_id=${encodeURIComponent(tenantId)}`;
+    let status: Record<string, unknown>;
+    try {
+      const resp = await fetch(url, { headers });
+      status = (await resp.json()) as Record<string, unknown>;
+      if (!resp.ok) {
+        return {
+          error: `wearables status failed with ${resp.status}`,
+          detail: status,
+        };
+      }
+    } catch (e) {
+      return {
+        error: "wearables status request failed",
+        detail: String(e),
+      };
+    }
+
+    const conns = (status.connections as Array<Record<string, unknown>>) || [];
+    const enabled = !!status.enabled;
+    const narrative = conns.length
+      ? conns
+          .map((c) => {
+            const provider = c.provider;
+            const lastAt = c.last_sync_at as string | null;
+            const count = (c.observation_count as number) ?? 0;
+            const when = lastAt ? `synced ${this.timeAgo(lastAt)}` : "never synced";
+            return `${provider}: ${when}, ${count} observations`;
+          })
+          .join("; ")
+      : "no wearables connected for this tenant";
+
+    status._mcp_summary = {
+      tenant_id: tenantId,
+      enabled,
+      connection_count: conns.length,
+      narrative,
+      next_steps: enabled
+        ? conns.length > 0
+          ? [
+              "Use fhir_search(resource_type='Observation', code='<LOINC>') to query wearable data",
+              "Compiled Truth on a wearable Observation shows device provenance",
+              "Open the MCP App to connect more providers",
+            ]
+          : [
+              "Direct the patient to the MCP App to connect a provider",
+              "Connections require the operator to set <PROVIDER>_CLIENT_ID env vars",
+            ]
+        : [
+            "Operator has not set OPEN_WEARABLES_URL — integration disabled",
+          ],
+    };
+    status._meta = {
+      ui: {
+        resourceUri: `${root}/r6/fhir/mcp-apps/wearables/?tenant_id=${encodeURIComponent(tenantId)}`,
+        profile: "mcp-app",
+      },
+    };
+    return status;
+  }
+
+  private timeAgo(iso: string): string {
+    const d = new Date(iso);
+    const mins = Math.round((Date.now() - d.getTime()) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} h ago`;
+    return `${Math.round(hrs / 24)} d ago`;
   }
 
   private async compiledTruth(

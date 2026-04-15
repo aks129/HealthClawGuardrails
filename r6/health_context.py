@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONTEXT: dict[str, Any] = {
     "name": "HealthClaw Guardrails",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "role": "engine",
     "jurisdiction": "us",
     "regulations": ["hipaa"],

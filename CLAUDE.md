@@ -72,8 +72,9 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /                         Main Flask app (main.py, app.py, models.py)
 /api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
 /r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, curatr, health_context)
+/r6/wearables/            Open Wearables adapter (models, mapper, client, poller, routes) — opt-in via OPEN_WEARABLES_URL
 /.health-context.yaml     Engine/surface contract — jurisdiction, audience, defaults (loaded by r6/health_context.py)
-/templates/mcp_apps/      MCP App HTML surfaces (compiled_truth.html) — single-file, no build step
+/templates/mcp_apps/      MCP App HTML surfaces (compiled_truth.html, wearables.html) — single-file, no build step
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
 /scripts/                 CLI utilities: import_healthex.py, export_healthex.py, convert_fasten.py
@@ -286,9 +287,9 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (15)
+## MCP Tools (16)
 
-- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `fhir_compiled_truth`, `curatr_evaluate`
+- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `fhir_compiled_truth`, `wearables_sync_status`, `curatr_evaluate`
 - **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
 - **Utility tools**: `fhir_get_token` (issues a 5-min step-up token; call before any write), `fhir_seed` (seeds a tenant with demo Patient + Observations + Condition)
 - All tool names use underscores (`fhir_search`, not `fhir.search`) — dots are not valid in some MCP clients
@@ -301,6 +302,20 @@ In **upstream proxy mode**: All query parameters forwarded to the upstream serve
 ## Engine/surface contract (.health-context.yaml)
 
 `.health-context.yaml` at the repo root declares `{name, version, role, jurisdiction, regulations, audience, data_sensitivity, tenant_default, audit_agent_default}`. Loaded once at startup by [r6/health_context.py](r6/health_context.py), cached via `@lru_cache`, injected into Flask templates as `health_context`, and used by the audit layer to stamp the default agent. HealthClaw declares `role: engine`. Its sister surface SmartHealthConnect declares `role: surface` and lists HealthClaw as `engine`. Neither depends on the other at runtime — the file is a contract, not a coupling.
+
+## Wearables integration (v1.3.0)
+
+Opt-in adapter that ingests wearable data from [Open Wearables](https://github.com/the-momentum/open-wearables) (MIT) as FHIR Observations.
+
+- **Sidecar**: `docker-compose --profile wearables up` brings Open Wearables + its Postgres + Celery worker online. The Flask app does not depend on it at boot — integration activates only when `OPEN_WEARABLES_URL` is set.
+- **Model**: [r6/wearables/models.py](r6/wearables/models.py) defines `WearableConnection` — a mapping of `tenant_id + provider + ow_user_id` with last sync status. No OAuth tokens stored locally; Open Wearables owns those.
+- **Mapper**: [r6/wearables/mapper.py](r6/wearables/mapper.py) translates 13 metrics (heart_rate, hrv, spo2, steps, sleep_duration, body_weight, BP, glucose, etc.) to FHIR R4 Observations with LOINC codes + UCUM units. Unmapped metrics fall through to `code.text`.
+- **Poller**: [r6/wearables/poller.py](r6/wearables/poller.py) — daemon thread started from `main.py`. Every `WEARABLES_POLL_INTERVAL` seconds (default 900) it fetches deltas per connection, builds a collection Bundle, mints a step-up token with `agent_id=wearable-sync`, and POSTs to `/Bundle/$ingest-context`. Errors on one connection do not stop the loop. Not suitable for serverless — skipped on Vercel.
+- **Routes** at `/wearables/*`: provider discovery, OAuth start/callback with HMAC-signed state, sync status, manual sync-now (requires step-up).
+- **MCP tool**: `wearables_sync_status` returns connections + `_meta.ui.resourceUri` → `/r6/fhir/mcp-apps/wearables/`. Agents narrate: "Garmin: synced 8 min ago, 142 observations."
+- **Policy**: [action_policy.yaml](action_policy.yaml) `service_accounts.wearable-sync` — medium risk, step-up required, no human_review (device samples are device attestations, not AI proposals).
+
+Supported providers today: Garmin, Oura, Polar, Suunto, Whoop (partial), Fitbit (partial), Strava, Ultrahuman. Not supported in v1.3.0: Apple Health (requires iOS SDK), Samsung Health / Google Health Connect (Android SDK), Withings (missing from Open Wearables — tracked for a native fallback).
 
 ## Compiled Truth (flagship pattern, v1.2.0)
 

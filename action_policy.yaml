@@ -412,4 +412,51 @@ curation_policy:
     minimum_quality_score: 0.7
     human_confirmation_required: true
     provenance_required: true
+
+# ─────────────────────────────────────────────
+# SERVICE-ACCOUNT ACTORS (v1.3.0+)
+# ─────────────────────────────────────────────
+# Automated ingestion actors (Fasten Connect webhook ingester, Wearables
+# poller) operate under reduced gates compared to AI-proposed writes.
+# Device-sourced observations are attestations of what a device measured,
+# not an AI inference about the patient — so human_review is not required,
+# but step-up + audit + tenant isolation still apply.
+service_accounts:
+  - actor: wearable-sync
+    description: >
+      Background poller that fetches Open Wearables samples and posts them
+      as FHIR Observations via $ingest-context. One poll cycle per
+      WEARABLES_POLL_INTERVAL seconds.
+    allowed_resources: [Observation, Bundle, AuditEvent]
+    risk_level: medium
+    approval: step_up
+    required_headers:
+      - X-Tenant-Id
+      - X-Step-Up-Token
+      - X-Agent-Id   # must equal "wearable-sync"
+    audit_emitted: true
+    human_in_loop: false
+    rationale: >
+      Wearable samples are device attestations, not AI proposals. Each
+      Observation carries meta.tag 'wearable-sourced' and device.display
+      identifying the source. Step-up token scopes writes to the tenant.
+
+  - actor: fasten-connect
+    description: >
+      Webhook-triggered ingester for Fasten Connect / TEFCA EHI exports.
+      Runs as a background thread after the Fasten webhook fires.
+    allowed_resources: [AllergyIntolerance, Condition, MedicationRequest,
+                        Immunization, Procedure, DiagnosticReport,
+                        Bundle, AuditEvent]
+    risk_level: medium
+    approval: step_up
+    required_headers:
+      - X-Tenant-Id
+      - X-Step-Up-Token
+    audit_emitted: true
+    human_in_loop: false
+    rationale: >
+      EHR-sourced records have upstream provenance; duplicating them
+      through human_review would block normal ingestion. Redaction and
+      audit still apply on every read.
     review_ttl_hours: 72   # in_review items auto-reject after 72h without action

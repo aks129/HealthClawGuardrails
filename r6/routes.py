@@ -2237,6 +2237,31 @@ def mcp_app_compiled_truth(resource_type, resource_id):
     return resp
 
 
+@r6_blueprint.route('/mcp-apps/wearables/', methods=['GET'])
+@r6_blueprint.route('/mcp-apps/wearables', methods=['GET'])
+def mcp_app_wearables():
+    """
+    MCP App: Wearables Connection Manager.
+
+    Shows one card per supported provider with connection status, last
+    sync, observation count, and Connect / Sync / Re-auth actions. Linked
+    from the `wearables_sync_status` MCP tool via `_meta.ui.resourceUri`.
+    """
+    tenant_id = (
+        request.headers.get('X-Tenant-Id')
+        or request.args.get('tenant_id')
+        or ''
+    )
+    html = render_template(
+        'mcp_apps/wearables.html',
+        tenant_id=tenant_id,
+    )
+    resp = Response(html, mimetype='text/html')
+    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
+    resp.headers['X-MCP-App'] = 'wearables'
+    return resp
+
+
 # --- Helper Functions ---
 
 def _operation_outcome(severity, code, diagnostics):

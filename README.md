@@ -2,10 +2,22 @@
 
 The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.2.0** | 288 tests | 15 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Claude Code plugin
+**v1.3.0** | 288+ tests | 16 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Open Wearables | Claude Code plugin
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
+
+## What's new in v1.3.0 — Wearables
+
+Heart rate, HRV, SpO2, steps, sleep, BP, glucose, body weight — from **Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman** — flow into HealthClaw as FHIR Observations with correct LOINC codes and device Provenance. Compiled Truth timelines now include wearable-sourced data; SmartHealthConnect's `healthy-habits` + `diet-exercise` skills read them through the same `fhir_search` they already use.
+
+- **Open Wearables sidecar** ([the-momentum/open-wearables](https://github.com/the-momentum/open-wearables), MIT) runs under a new `wearables` docker-compose profile. It owns per-provider OAuth; we own the FHIR mapping.
+- **`r6/wearables/mapper.py`** translates 13 metrics to LOINC + UCUM FHIR Observations. Unknown fields fall through with `code.text` — no data loss.
+- **Daemon poller** syncs every `WEARABLES_POLL_INTERVAL` (default 900s), posts through `/Bundle/$ingest-context` with step-up + `X-Agent-Id: wearable-sync`.
+- **`wearables_sync_status`** MCP tool (16 tools total) returns connection status + `_meta.ui.resourceUri` pointing at the new Connection Manager MCP App.
+- **MCP App** at `/r6/fhir/mcp-apps/wearables/` — cards per provider: connect / re-auth / sync / view.
+
+Quick start: `OPEN_WEARABLES_URL=http://open-wearables:8000 docker-compose --profile wearables up -d`.
 
 ## What's new in v1.2.0 — Compiled Truth
 

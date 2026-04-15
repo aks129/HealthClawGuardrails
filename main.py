@@ -90,10 +90,11 @@ db.init_app(app)
 with app.app_context():
     from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
     from r6.fasten.models import FastenConnection, FastenJob
+    from r6.wearables.models import WearableConnection
     from sqlalchemy.exc import OperationalError
     try:
         db.create_all()
-        logger.info("Database tables created (R6 models + Fasten Connect)")
+        logger.info("Database tables created (R6 + Fasten + Wearables)")
     except OperationalError as e:
         # Concurrent gunicorn workers can race on first-boot table creation.
         # If another worker already created the tables, proceed.
@@ -111,6 +112,18 @@ logger.info("R6 FHIR Blueprint registered at /r6/fhir")
 from r6.fasten.routes import fasten_blueprint
 app.register_blueprint(fasten_blueprint)
 logger.info("Fasten Connect Blueprint registered at /fasten")
+
+# Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
+from r6.wearables.routes import wearables_blueprint
+app.register_blueprint(wearables_blueprint)
+logger.info("Wearables Blueprint registered at /wearables")
+
+# Start wearables poller daemon thread if configured. Safe no-op when
+# OPEN_WEARABLES_URL is unset or on serverless platforms.
+if not os.environ.get('VERCEL'):
+    from r6.wearables.poller import start_poller
+    if start_poller(app):
+        logger.info("Wearables poller started (background thread)")
 
 # Log upstream FHIR server configuration
 _upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()
