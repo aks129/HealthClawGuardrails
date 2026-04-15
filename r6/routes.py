@@ -19,7 +19,10 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from flask import (
+    Blueprint, request, jsonify, Response, stream_with_context,
+    render_template,
+)
 from models import db
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
@@ -35,7 +38,12 @@ from r6.health_compliance import (
     export_audit_trail, MEDICAL_DISCLAIMER
 )
 from r6.fhir_proxy import get_proxy, is_proxy_enabled
-from r6.curatr import CuratrEngine, apply_fix as _curatr_apply_fix
+from r6.curatr import (
+    CuratrEngine,
+    apply_fix as _curatr_apply_fix,
+    persist_curation_state as _persist_curation_state,
+)
+from r6.health_context import get as _hc_get
 
 _curatr_engine = CuratrEngine()
 
@@ -98,6 +106,10 @@ def enforce_tenant_id():
         return None
     if '/oauth/' in request.path:
         return None
+    # MCP App HTML renders without a tenant header; tenant arrives via
+    # query string or is supplied by the MCP client's outer session.
+    if '/mcp-apps/' in request.path:
+        return None
     tenant_id = request.headers.get('X-Tenant-Id')
     if not tenant_id:
         return jsonify({
@@ -145,7 +157,7 @@ def r6_metadata():
         'format': ['json'],
         'software': {
             'name': 'HealthClaw Guardrails',
-            'version': '1.0.0'
+            'version': _hc_get('version', '1.2.0'),
         },
         'implementation': {
             'description': (
@@ -1910,7 +1922,20 @@ def curatr_evaluate(resource_type, resource_id):
 
     fhir_json = resource.to_fhir_json()
     result = _curatr_engine.evaluate(fhir_json)
-    return jsonify(result.to_dict())
+
+    # Persist curation_state + quality_score on the row. This is what makes
+    # $compiled-truth reflect the latest quality signal without re-running
+    # terminology lookups on every read.
+    _persist_curation_state(
+        resource_type, resource_id, tenant_id, result, fixed=False,
+    )
+
+    body = result.to_dict()
+    # Surface persisted state alongside the result for callers that skip
+    # a separate $compiled-truth fetch.
+    body['curation_state'] = resource.curation_state
+    body['quality_score'] = resource.quality_score
+    return jsonify(body)
 
 
 @r6_blueprint.route(
@@ -1992,7 +2017,224 @@ def curatr_apply_fix(resource_type, resource_id):
     if 'error' in result:
         return _operation_outcome('error', 'not-found', result['error']), 404
 
+    # After a successful fix, re-evaluate and promote curation_state -> curated.
+    try:
+        from r6.curatr import compute_quality_score
+        fresh = result.get('updated_resource') or {}
+        if fresh:
+            fresh_result = _curatr_engine.evaluate(fresh)
+            _persist_curation_state(
+                resource_type, resource_id, tenant_id, fresh_result,
+                fixed=True,
+            )
+            result['curation_state'] = 'curated'
+            result['quality_score'] = compute_quality_score(fresh_result)
+    except Exception as exc:
+        logger.warning(
+            'curation state promotion failed (fix still committed): %s', exc,
+        )
+
     return jsonify(result)
+
+
+# --- Compiled Truth: current state + evidence timeline ------------
+
+@r6_blueprint.route(
+    '/<resource_type>/<resource_id>/$compiled-truth',
+    methods=['GET']
+)
+def compiled_truth(resource_type, resource_id):
+    """
+    Return the current best understanding of a resource plus the
+    append-only evidence trail of how it got there.
+
+    Pattern inspired by gbrain's "compiled truth + timeline" — every
+    resource has a canonical current state AND an immutable history
+    of agents/reasons/changes. Patients see exactly what their record
+    says now and why.
+
+    Output is a FHIR Parameters resource with:
+      - current: the redacted resource
+      - curation_state, quality_score, review_needed
+      - timeline: Provenance entries that target this resource,
+        newest first. Each carries recorded/agent/reason/summary.
+
+    Read-only. Redaction + audit + tenant isolation apply.
+    """
+    if not R6Resource.is_supported_type(resource_type):
+        return _operation_outcome(
+            'error', 'not-supported',
+            f'Resource type {resource_type} is not supported',
+        ), 400
+
+    tenant_id = request.headers.get('X-Tenant-Id')
+    if not tenant_id:
+        return _operation_outcome(
+            'error', 'security',
+            'X-Tenant-Id header is required',
+        ), 400
+
+    row = R6Resource.query.filter_by(
+        id=resource_id, resource_type=resource_type,
+        is_deleted=False, tenant_id=tenant_id,
+    ).first()
+
+    if not row:
+        return _operation_outcome(
+            'error', 'not-found',
+            f'{resource_type}/{resource_id} not found',
+        ), 404
+
+    record_audit_event(
+        'read', resource_type, resource_id,
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail='compiled-truth',
+    )
+
+    current_json = apply_redaction(row.to_fhir_json())
+
+    # Build timeline from Provenance resources targeting this reference.
+    # Note: Provenance.target[] is stored as JSON; we do a prefix scan on
+    # the JSON blob. Acceptable for the local store's scale.
+    target_ref = f'{resource_type}/{resource_id}'
+    prov_rows = R6Resource.query.filter_by(
+        resource_type='Provenance',
+        is_deleted=False,
+        tenant_id=tenant_id,
+    ).all()
+
+    timeline = []
+    for p in prov_rows:
+        try:
+            prov = json.loads(p.resource_json)
+        except Exception:
+            continue
+        targets = prov.get('target') or []
+        if not any(
+            t.get('reference') == target_ref for t in targets
+            if isinstance(t, dict)
+        ):
+            continue
+        agent_display = 'system'
+        for a in prov.get('agent', []) or []:
+            who = a.get('who') or {}
+            if isinstance(who, dict) and who.get('display'):
+                agent_display = who['display']
+                break
+        reason = ''
+        reasons = prov.get('reason') or []
+        if reasons and isinstance(reasons[0], dict):
+            codings = reasons[0].get('coding') or []
+            if codings:
+                reason = codings[0].get('display', '') or ''
+        # Extract curatr-correction extension summary if present
+        summary = ''
+        intent = ''
+        for ext in prov.get('extension', []) or []:
+            if 'curatr-correction' not in (ext.get('url') or ''):
+                continue
+            for inner in ext.get('extension', []) or []:
+                if inner.get('url') == 'change_summary':
+                    summary = inner.get('valueString', '') or ''
+                elif inner.get('url') == 'patient_intent':
+                    intent = inner.get('valueString', '') or ''
+        timeline.append({
+            'provenance_id': p.id,
+            'recorded': prov.get('recorded', ''),
+            'agent': agent_display,
+            'reason': reason,
+            'summary': summary,
+            'patient_intent': intent,
+        })
+
+    timeline.sort(key=lambda e: e.get('recorded', ''), reverse=True)
+
+    parameters = {
+        'resourceType': 'Parameters',
+        'parameter': [
+            {'name': 'current', 'resource': current_json},
+            {
+                'name': 'curation_state',
+                'valueString': row.curation_state or 'raw',
+            },
+            {
+                'name': 'quality_score',
+                'valueDecimal': (
+                    row.quality_score
+                    if row.quality_score is not None else 1.0
+                ),
+            },
+            {
+                'name': 'review_needed',
+                'valueBoolean': bool(row.review_needed),
+            },
+            {
+                'name': 'timeline_count',
+                'valueInteger': len(timeline),
+            },
+            {
+                'name': 'timeline',
+                'part': [
+                    {
+                        'name': 'event',
+                        'part': [
+                            {
+                                'name': k,
+                                'valueString': str(v) if v is not None else '',
+                            }
+                            for k, v in event.items()
+                        ],
+                    }
+                    for event in timeline
+                ],
+            },
+        ],
+    }
+    return jsonify(parameters)
+
+
+# --- MCP Apps (embedded HTML surfaces for MCP clients) ------------
+
+@r6_blueprint.route(
+    '/mcp-apps/compiled-truth/<resource_type>/<resource_id>',
+    methods=['GET']
+)
+def mcp_app_compiled_truth(resource_type, resource_id):
+    """
+    MCP App: Compiled Truth Review.
+
+    Single-page HTML surface that renders the $compiled-truth Parameters
+    response (current state + evidence timeline) with Approve / Re-evaluate
+    actions. Linked from the `fhir_compiled_truth` MCP tool response via
+    `_meta.ui.resourceUri`. MCP clients that understand the
+    `text/html;profile=mcp-app` content type render it inline; others
+    treat it as a normal web page.
+    """
+    if not R6Resource.is_supported_type(resource_type):
+        return _operation_outcome(
+            'error', 'not-supported',
+            f'Resource type {resource_type} is not supported',
+        ), 400
+
+    # Tenant is required but arrives as either header or ?tenant_id= query.
+    # MCP clients that open resource URIs in a browser won't send headers.
+    tenant_id = (
+        request.headers.get('X-Tenant-Id')
+        or request.args.get('tenant_id')
+        or ''
+    )
+
+    html = render_template(
+        'mcp_apps/compiled_truth.html',
+        resource_type=resource_type,
+        resource_id=resource_id,
+        tenant_id=tenant_id,
+    )
+    resp = Response(html, mimetype='text/html')
+    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
+    resp.headers['X-MCP-App'] = 'compiled-truth'
+    return resp
 
 
 # --- Helper Functions ---

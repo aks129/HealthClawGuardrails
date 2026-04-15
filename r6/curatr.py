@@ -872,6 +872,74 @@ class CuratrEngine:
 
 
 # ------------------------------------------------------------------ #
+# Curation state + quality score (persisted on R6Resource)            #
+# ------------------------------------------------------------------ #
+
+_SEVERITY_WEIGHTS = {
+    "critical": 0.4,
+    "warning": 0.2,
+    "info": 0.05,
+    "suggestion": 0.05,
+}
+
+
+def compute_quality_score(result: "CuratrResult") -> float:
+    """
+    Map a CuratrResult's issue list to a 0.0–1.0 quality score.
+
+    1.0 = no issues found. Each issue docks a weight by severity.
+    Floor at 0.0; ceiling at 1.0.
+    """
+    score = 1.0
+    for issue in result.issues:
+        score -= _SEVERITY_WEIGHTS.get(issue.severity, 0.05)
+    return max(0.0, min(1.0, round(score, 3)))
+
+
+def persist_curation_state(
+    resource_type: str,
+    resource_id: str,
+    tenant_id: str | None,
+    result: "CuratrResult",
+    *,
+    fixed: bool = False,
+) -> None:
+    """
+    Update R6Resource.curation_state, quality_score, review_needed
+    based on a Curatr evaluation.
+
+    States:
+      raw -> in_review when issues are found
+      raw|in_review -> curated when fixed=True (set after apply_fix)
+      stays curated once promoted (monotonic until explicitly rejected)
+    """
+    from models import db
+    from r6.models import R6Resource
+
+    row = R6Resource.query.filter_by(
+        id=resource_id,
+        resource_type=resource_type,
+        is_deleted=False,
+        tenant_id=tenant_id,
+    ).first()
+    if not row:
+        return
+
+    row.quality_score = compute_quality_score(result)
+    row.review_needed = bool(result.issues)
+
+    if fixed:
+        row.curation_state = "curated"
+    elif result.issues and row.curation_state in (None, "raw"):
+        row.curation_state = "in_review"
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+# ------------------------------------------------------------------ #
 # Fix application (writes to DB)                                      #
 # ------------------------------------------------------------------ #
 

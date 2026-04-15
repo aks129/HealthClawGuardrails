@@ -90,8 +90,17 @@ db.init_app(app)
 with app.app_context():
     from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
     from r6.fasten.models import FastenConnection, FastenJob
-    db.create_all()
-    logger.info("Database tables created (R6 models + Fasten Connect)")
+    from sqlalchemy.exc import OperationalError
+    try:
+        db.create_all()
+        logger.info("Database tables created (R6 models + Fasten Connect)")
+    except OperationalError as e:
+        # Concurrent gunicorn workers can race on first-boot table creation.
+        # If another worker already created the tables, proceed.
+        if "already exists" in str(e):
+            logger.info("Database tables already exist (created by another worker)")
+        else:
+            raise
 
 # Register R6 FHIR Blueprint
 from r6.routes import r6_blueprint
@@ -119,6 +128,13 @@ request_logger = logging.getLogger('request')
 def inject_fasten_public_key():
     """Expose FASTEN_PUBLIC_KEY to all templates (safe — public key only)."""
     return {'fasten_public_key': os.environ.get('FASTEN_PUBLIC_KEY', '')}
+
+
+@app.context_processor
+def inject_health_context():
+    """Expose health context to all templates (single-sourced version, etc.)."""
+    from r6.health_context import load_health_context
+    return {'health_context': load_health_context()}
 
 
 @app.before_request

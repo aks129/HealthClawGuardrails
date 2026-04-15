@@ -30,9 +30,9 @@ test.describe('Landing page', () => {
   });
 
   test('guardrail pipeline cards show all 6 layers', async ({ page }) => {
-    await expect(page.getByText('PHI Redacted')).toBeVisible();
-    await expect(page.getByText('$validate Gate')).toBeVisible();
-    await expect(page.getByText('Audit Trail')).toBeVisible();
+    await expect(page.locator('.pipeline-label', { hasText: 'PHI Redacted' })).toBeVisible();
+    await expect(page.locator('.pipeline-label', { hasText: '$validate Gate' })).toBeVisible();
+    await expect(page.locator('.pipeline-label', { hasText: 'Audit Trail' })).toBeVisible();
   });
 
   test('audience cards are visible', async ({ page }) => {

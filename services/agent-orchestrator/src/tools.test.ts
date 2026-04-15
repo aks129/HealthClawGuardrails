@@ -45,6 +45,7 @@ const EXPECTED_TOOL_NAMES = [
   "curatr_apply_fix",
   "curatr_evaluate",
   "fhir_commit_write",
+  "fhir_compiled_truth",
   "fhir_get_token",
   "fhir_lastn",
   "fhir_permission_evaluate",
@@ -68,6 +69,7 @@ const READ_ONLY_TOOL_NAMES = [
   "fhir_lastn",
   "fhir_permission_evaluate",
   "fhir_subscription_topics",
+  "fhir_compiled_truth",
 ];
 
 // ---------------------------------------------------------------------------
@@ -82,8 +84,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 14 tools", () => {
-    expect(schemas).toHaveLength(14);
+  it("getMCPToolSchemas() returns exactly 15 tools", () => {
+    expect(schemas).toHaveLength(15);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -102,7 +104,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 14 tool names match the expected set", () => {
+  it("all 15 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -645,14 +647,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 14 tool schemas", async () => {
+    it("tools/list returns all 15 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(14);
+      expect(res.body.result.tools).toHaveLength(15);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -827,13 +829,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 14 tool schemas", async () => {
+    it("tools/list returns all 15 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(14);
+      expect(res.body.result.tools).toHaveLength(15);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {

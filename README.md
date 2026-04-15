@@ -2,10 +2,20 @@
 
 The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.0.0** | 288 tests | 14 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Claude Code plugin
+**v1.2.0** | 288 tests | 15 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Claude Code plugin
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
+
+## What's new in v1.2.0 — Compiled Truth
+
+Every other health tool shows you data. HealthClaw shows you the **trail**.
+
+- **`GET /<type>/<id>/$compiled-truth`** — returns current redacted resource + curation state + quality score + full Provenance timeline (newest first).
+- **`fhir_compiled_truth`** MCP tool — agents call this before making resource-specific claims; responses carry `_meta.ui.resourceUri` pointing to an embeddable review surface.
+- **MCP App** at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>` — focused HTML page: current data, evidence timeline, approve / re-evaluate actions. Zero install.
+- **Activated schema** — `curation_state` (raw → in_review → curated) and `quality_score` (0.0–1.0) now persisted on every resource.
+- **`.health-context.yaml`** — single declaration of jurisdiction, audience, regulations, defaults. Read by the guardrail stack; mirrored in SmartHealthConnect.
 
 ## What It Does
 
@@ -17,6 +27,7 @@ This is a **vendor-neutral guardrail proxy** that sits between any AI agent and 
 - **Human-in-the-loop** — Clinical writes blocked until a human confirms (HTTP 428)
 - **Tenant isolation** — Every query scoped to tenant, cross-tenant access blocked
 - **Medical disclaimers** — Injected on all clinical resource reads
+- **Compiled Truth** — Current state + append-only evidence trail for every resource
 
 ```text
 AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Server

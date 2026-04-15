@@ -6,15 +6,15 @@
   },
   "metadata": {
     "description": "Clinical AI skills for FHIR guardrails, PHI redaction, EHR integration, personal health management, and biomedical research — from healthclaw.io and SmartHealthConnect.",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "pluginRoot": "./"
   },
   "plugins": [
     {
       "name": "healthclaw-guardrails",
       "source": "./",
-      "description": "FHIR AI agent guardrails with 14 MCP tools. PHI redaction on every read, step-up authorization for writes, immutable audit trails, tenant isolation, Curatr data quality, Fasten Connect EHR ingestion, and HealthEx portable health record export. FHIR R4 US Core v9 + R6 ballot3.",
-      "version": "1.0.0",
+      "description": "FHIR AI agent guardrails with 15 MCP tools including Compiled Truth (current state + append-only evidence timeline). PHI redaction on every read, step-up authorization for writes, immutable audit trails, tenant isolation, Curatr data quality, Fasten Connect EHR ingestion, HealthEx portable health record export. FHIR R4 US Core v9 + R6 ballot3.",
+      "version": "1.2.0",
       "author": {
         "name": "aks129"
       },

@@ -1,0 +1,44 @@
+# HealthClaw Guardrails — Health Context Declaration
+#
+# A single source of truth for who this deployment serves, under what rules.
+# Read by the guardrail stack (redaction, audit, step-up) and by any skill
+# or tool that needs to know jurisdiction/audience/sensitivity without
+# re-asking.
+#
+# Sister file lives in SmartHealthConnect declaring the patient-facing surface
+# that calls into this engine. See ENGINE_CONTRACT.md.
+
+name: HealthClaw Guardrails
+version: 1.2.0
+role: engine
+
+# Jurisdiction determines which regulatory overlay applies to reads/writes.
+# Supported today: us. Future: eu, us+eu.
+jurisdiction: us
+regulations:
+  - hipaa
+  - hitrust
+  - soc2
+
+# Audiences this deployment serves. Drives default redaction mode and
+# MCP App rendering choices.
+audience:
+  - patient
+  - developer
+
+# Sensitivity classification. `phi` = treat every resource as PHI by default.
+data_sensitivity: phi
+
+# Default tenant used when X-Tenant-Id header is absent (MCP clients like
+# Claude Desktop that don't let users set headers). Must match MCP server's
+# TENANT_ID env var for consistency.
+tenant_default: desktop-demo
+
+# The audit event agent string when no X-Agent-Id is supplied.
+audit_agent_default: healthclaw-guardrails
+
+# Surface products that call into this engine. Informational — not enforced.
+surfaces:
+  - name: SmartHealthConnect
+    repo: https://github.com/aks129/SmartHealthConnect
+    role: patient-facing PHR

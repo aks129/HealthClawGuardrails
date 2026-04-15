@@ -13,7 +13,7 @@
  * Two tiers:
  * - Read-only (no step-up): context.get, fhir.read, fhir.search, fhir.validate,
  *   fhir.stats, fhir.lastn, fhir.permission_evaluate, fhir.subscription_topics,
- *   curatr.evaluate
+ *   fhir.compiled_truth, curatr.evaluate
  * - Write (require step-up): fhir.propose_write, fhir.commit_write,
  *   curatr.apply_fix
  *
@@ -364,6 +364,28 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- Compiled Truth: current state + evidence timeline ---
+      {
+        name: "fhir_compiled_truth",
+        description:
+          "Return the current best understanding of a FHIR resource plus the append-only evidence trail (Provenance entries) of how it got there. Use this before presenting resource-specific facts to a patient — surfaces curation_state and quality_score so the agent can say not just WHAT the record says but WHY it says it. Redacted, audited. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            resource_type: {
+              type: "string",
+              description: "FHIR resource type (e.g. 'Condition', 'AllergyIntolerance')",
+            },
+            resource_id: {
+              type: "string",
+              description: "ID of the resource",
+            },
+          },
+          required: ["resource_type", "resource_id"],
+        },
+      },
       // --- Curatr: patient-facing data quality tools ---
       {
         name: "curatr_evaluate",
@@ -568,6 +590,13 @@ export class FHIRTools {
 
       case "fhir_subscription_topics":
         return this.listSubscriptionTopics(fwdHeaders);
+
+      case "fhir_compiled_truth":
+        return this.compiledTruth(
+          input.resource_type as string,
+          input.resource_id as string,
+          fwdHeaders
+        );
 
       case "curatr_evaluate":
         return this.curatrEvaluate(
@@ -919,6 +948,64 @@ export class FHIRTools {
     return result;
   }
 
+  // --- Compiled Truth: current state + evidence timeline ---
+
+  /**
+   * Build the MCP App URI for the Compiled Truth review page. MCP clients
+   * that understand `_meta.ui.resourceUri` render this inline; others
+   * treat it as a plain link.
+   */
+  private compiledTruthAppUri(resourceType: string, resourceId: string): string {
+    return `${this.baseUrl}/mcp-apps/compiled-truth/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`;
+  }
+
+  private async compiledTruth(
+    resourceType: string,
+    resourceId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const resp = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$compiled-truth`,
+      { headers }
+    );
+    if (!resp.ok) {
+      return { error: `Compiled truth failed with status ${resp.status}` };
+    }
+    const result = (await resp.json()) as Record<string, unknown>;
+
+    // Extract surface summary from the Parameters response for the agent.
+    const params = (result.parameter || []) as Array<Record<string, unknown>>;
+    const byName = (n: string) =>
+      params.find((p) => p.name === n) || ({} as Record<string, unknown>);
+    const state = byName("curation_state").valueString as string | undefined;
+    const score = byName("quality_score").valueDecimal as number | undefined;
+    const count = byName("timeline_count").valueInteger as number | undefined;
+    const reviewNeeded = byName("review_needed").valueBoolean as boolean | undefined;
+
+    result._mcp_summary = {
+      resource: `${resourceType}/${resourceId}`,
+      curation_state: state ?? "raw",
+      quality_score: score ?? 1.0,
+      timeline_events: count ?? 0,
+      review_needed: reviewNeeded ?? false,
+      note: (count ?? 0) === 0
+        ? "No corrections recorded yet. This is the raw record."
+        : `Record has ${count} recorded correction(s). The agent can narrate what changed, when, and why.`,
+      patient_facing: [
+        "Say WHAT the record currently says (the 'current' parameter).",
+        "Say WHY it says that (cite the timeline — recorded + agent + reason).",
+        "If review_needed=true, suggest reviewing outstanding quality issues.",
+      ],
+    };
+    result._meta = {
+      ui: {
+        resourceUri: this.compiledTruthAppUri(resourceType, resourceId),
+        profile: "mcp-app",
+      },
+    };
+    return result;
+  }
+
   // --- Curatr: patient-facing data quality tools ---
 
   private async curatrEvaluate(
@@ -958,6 +1045,14 @@ export class FHIRTools {
         "NLM Clinical Tables API (ICD-10-CM)",
         "RXNAV API (RxNorm)",
       ],
+    };
+    // Link to the Compiled Truth MCP App so the agent can surface a
+    // review UI straight from a quality check.
+    (result as Record<string, unknown>)._meta = {
+      ui: {
+        resourceUri: this.compiledTruthAppUri(resourceType, resourceId),
+        profile: "mcp-app",
+      },
     };
 
     return result;

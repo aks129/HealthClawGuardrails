@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compiled Truth · {{ resource_type }}/{{ resource_id }}</title>
+<meta name="mcp-app" content="compiled-truth">
+<style>
+  :root{
+    --bg:#0b0f14;--panel:#0f141b;--ink:#dbe3ef;--dim:#7b8496;
+    --border:#1c242f;--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;
+    --red:#f87171;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px}
+  header{display:flex;align-items:center;justify-content:space-between;
+    gap:16px;padding-bottom:16px;border-bottom:1px solid var(--border);
+    margin-bottom:20px;flex-wrap:wrap}
+  .title{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+  .title small{display:block;color:var(--dim);font-weight:400;font-size:12px;
+    margin-top:2px;font-family:var(--mono)}
+  .badges{display:flex;gap:8px;align-items:center}
+  .pill{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:500;
+    border:1px solid var(--border);background:var(--panel)}
+  .pill.state-raw{color:var(--dim)}
+  .pill.state-in_review{color:var(--amber);border-color:rgba(251,191,36,.3)}
+  .pill.state-curated{color:var(--green);border-color:rgba(52,211,153,.3)}
+  .pill.state-rejected{color:var(--red);border-color:rgba(248,113,113,.3)}
+  .score{font-family:var(--mono);font-size:12px;color:var(--cyan)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:800px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:16px 18px}
+  .card h2{font-size:13px;font-weight:600;color:var(--dim);
+    text-transform:uppercase;letter-spacing:0.05em;margin:0 0 12px}
+  .kv{font-family:var(--mono);font-size:12.5px;line-height:1.7}
+  .kv .k{color:var(--dim);display:inline-block;min-width:120px}
+  .kv .v{color:var(--ink);word-break:break-word}
+  .kv pre{margin:0;padding:10px 12px;background:#0a0e13;border-radius:6px;
+    font-size:11.5px;overflow:auto;max-height:360px;color:var(--ink)}
+  .timeline{list-style:none;padding:0;margin:0}
+  .tline{padding:12px 0;border-bottom:1px dashed var(--border)}
+  .tline:last-child{border-bottom:none}
+  .tline .when{font-family:var(--mono);font-size:11.5px;color:var(--cyan)}
+  .tline .agent{font-size:12.5px;color:var(--ink);margin-top:2px}
+  .tline .reason{font-size:12px;color:var(--dim);margin-top:2px}
+  .tline .summary{font-size:12.5px;color:var(--ink);margin-top:4px;
+    padding:6px 10px;background:#0a0e13;border-left:2px solid var(--green);
+    border-radius:2px;font-family:var(--mono)}
+  .tline .intent{font-size:12px;color:var(--amber);margin-top:4px;
+    font-style:italic}
+  .empty{color:var(--dim);font-size:13px;text-align:center;padding:24px 0}
+  footer{margin-top:24px;padding-top:16px;border-top:1px solid var(--border);
+    display:flex;justify-content:space-between;align-items:center;
+    flex-wrap:wrap;gap:12px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  button,.btn{background:var(--panel);color:var(--ink);
+    border:1px solid var(--border);padding:8px 14px;border-radius:6px;
+    font-size:13px;cursor:pointer;font-family:inherit}
+  button:hover,.btn:hover{border-color:var(--cyan);color:var(--cyan)}
+  button.primary{border-color:var(--green);color:var(--green)}
+  button.primary:hover{background:rgba(52,211,153,.08)}
+  button.danger{border-color:var(--red);color:var(--red)}
+  .note{color:var(--dim);font-size:11.5px;font-family:var(--mono)}
+  .error{color:var(--red);padding:12px;background:rgba(248,113,113,.06);
+    border:1px solid rgba(248,113,113,.2);border-radius:6px;margin:12px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="title">
+    Compiled Truth
+    <small>{{ resource_type }} / {{ resource_id }}</small>
+  </div>
+  <div class="badges" id="badges">
+    <span class="score" id="score-pill">loading…</span>
+    <span class="pill state-raw" id="state-pill">—</span>
+  </div>
+</header>
+
+<div id="err-slot"></div>
+
+<div class="grid">
+  <section class="card">
+    <h2>Current best understanding</h2>
+    <div id="current-view" class="kv">Loading…</div>
+  </section>
+
+  <section class="card">
+    <h2>Evidence timeline</h2>
+    <ul class="timeline" id="timeline-view">
+      <li class="empty">Loading…</li>
+    </ul>
+  </section>
+</div>
+
+<footer>
+  <div class="note">
+    Every correction is append-only. This record is derived from
+    Provenance resources — not a black box.
+  </div>
+  <div class="actions">
+    <button class="primary" id="btn-evaluate">Re-evaluate quality</button>
+    <button id="btn-copy">Copy JSON</button>
+    <a class="btn" href="/r6-dashboard">Open dashboard</a>
+  </div>
+</footer>
+</div>
+
+<script>
+  const RESOURCE_TYPE = {{ resource_type | tojson }};
+  const RESOURCE_ID   = {{ resource_id | tojson }};
+  const TENANT_ID     = {{ tenant_id | tojson }};
+
+  // Feature-detect MCP App host callback (langcare pattern). If present,
+  // tool calls flow through it; otherwise fall back to plain fetch.
+  const mcpHost = (typeof window !== 'undefined' && window.mcp) || null;
+
+  async function callServer(path, opts={}){
+    const headers = Object.assign(
+      {'Accept':'application/json','X-Tenant-Id':TENANT_ID},
+      opts.headers || {}
+    );
+    const res = await fetch(path, Object.assign({}, opts, {headers}));
+    if(!res.ok){
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text.slice(0,180)}`);
+    }
+    return res.json();
+  }
+
+  function pill(state){
+    const el = document.getElementById('state-pill');
+    el.className = 'pill state-' + (state||'raw');
+    el.textContent = state || 'raw';
+  }
+
+  function scorePill(score){
+    const el = document.getElementById('score-pill');
+    const v = (score == null) ? '—' : score.toFixed(2);
+    el.textContent = 'quality ' + v;
+  }
+
+  function renderKV(obj, container, depth=0){
+    if(obj == null){
+      container.textContent = 'null';
+      return;
+    }
+    if(typeof obj !== 'object' || Array.isArray(obj)){
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(obj, null, 2);
+      container.appendChild(pre);
+      return;
+    }
+    for(const [k,v] of Object.entries(obj)){
+      if(k.startsWith('_')) continue;
+      if(k === 'meta' && depth === 0) continue;
+      const row = document.createElement('div');
+      const kEl = document.createElement('span');
+      kEl.className = 'k'; kEl.textContent = k + ':';
+      row.appendChild(kEl);
+      if(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'){
+        const vEl = document.createElement('span');
+        vEl.className = 'v'; vEl.textContent = ' ' + v;
+        row.appendChild(vEl);
+      } else {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(v, null, 2);
+        row.appendChild(pre);
+      }
+      container.appendChild(row);
+    }
+  }
+
+  function renderTimeline(events){
+    const ul = document.getElementById('timeline-view');
+    ul.innerHTML = '';
+    if(!events || !events.length){
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'No corrections recorded yet. When the agent or patient approves a fix, a Provenance entry will appear here.';
+      ul.appendChild(li);
+      return;
+    }
+    for(const ev of events){
+      const li = document.createElement('li');
+      li.className = 'tline';
+      const when = document.createElement('div');
+      when.className = 'when'; when.textContent = ev.recorded || '(no timestamp)';
+      const agent = document.createElement('div');
+      agent.className = 'agent'; agent.textContent = ev.agent || 'system';
+      li.appendChild(when); li.appendChild(agent);
+      if(ev.reason){
+        const r = document.createElement('div');
+        r.className = 'reason'; r.textContent = ev.reason;
+        li.appendChild(r);
+      }
+      if(ev.summary){
+        const s = document.createElement('div');
+        s.className = 'summary'; s.textContent = ev.summary;
+        li.appendChild(s);
+      }
+      if(ev.patient_intent){
+        const p = document.createElement('div');
+        p.className = 'intent'; p.textContent = '"' + ev.patient_intent + '"';
+        li.appendChild(p);
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  function extractParam(parameters, name){
+    const p = (parameters||[]).find(x=>x.name===name);
+    if(!p) return undefined;
+    return p.resource || p.valueString || p.valueDecimal
+         || p.valueBoolean || p.valueInteger || p.part;
+  }
+
+  function extractTimeline(parameters){
+    const part = extractParam(parameters, 'timeline');
+    if(!Array.isArray(part)) return [];
+    return part.map(e=>{
+      const inner = (e.part||[]).reduce((acc,p)=>{
+        acc[p.name] = p.valueString != null ? p.valueString : '';
+        return acc;
+      }, {});
+      return inner;
+    });
+  }
+
+  let LAST_JSON = null;
+
+  async function load(){
+    try {
+      const url = `/r6/fhir/${encodeURIComponent(RESOURCE_TYPE)}/${encodeURIComponent(RESOURCE_ID)}/$compiled-truth`;
+      const data = await callServer(url);
+      LAST_JSON = data;
+      const params = data.parameter || [];
+      const current = extractParam(params, 'current');
+      const state = extractParam(params, 'curation_state');
+      const score = extractParam(params, 'quality_score');
+      const timeline = extractTimeline(params);
+      pill(state);
+      scorePill(typeof score === 'number' ? score : null);
+      const cur = document.getElementById('current-view');
+      cur.innerHTML = '';
+      renderKV(current, cur);
+      renderTimeline(timeline);
+    } catch (e) {
+      const slot = document.getElementById('err-slot');
+      slot.innerHTML = '<div class="error">' + e.message + '</div>';
+    }
+  }
+
+  document.getElementById('btn-evaluate').addEventListener('click', async ()=>{
+    try {
+      const url = `/r6/fhir/${encodeURIComponent(RESOURCE_TYPE)}/${encodeURIComponent(RESOURCE_ID)}/$curatr-evaluate`;
+      await callServer(url);
+      await load();
+    } catch (e) {
+      alert('Re-evaluation failed: ' + e.message);
+    }
+  });
+
+  document.getElementById('btn-copy').addEventListener('click', ()=>{
+    if(!LAST_JSON){ return; }
+    navigator.clipboard.writeText(JSON.stringify(LAST_JSON, null, 2));
+  });
+
+  load();
+</script>
+</body>
+</html>

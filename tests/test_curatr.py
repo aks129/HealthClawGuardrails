@@ -428,6 +428,167 @@ class TestCuratrApplyFixEndpoint:
         assert prov['resourceType'] == 'Provenance'
 
 
+class TestCompiledTruthEndpoint:
+    """
+    Compiled Truth returns current redacted state + curation signals +
+    append-only Provenance timeline. v1.2.0 flagship primitive.
+    """
+
+    def _create_icd9_condition(self, client, auth_headers):
+        condition = {
+            "resourceType": "Condition",
+            "code": {
+                "coding": [{
+                    "system": "http://hl7.org/fhir/sid/icd-9-cm",
+                    "code": "250.00",
+                    "display": "Diabetes mellitus without complication",
+                }]
+            },
+            "subject": {"reference": "Patient/pt-1"},
+        }
+        resp = client.post(
+            '/r6/fhir/Condition',
+            json=condition,
+            headers={**auth_headers, 'X-Human-Confirmed': 'true'},
+        )
+        assert resp.status_code == 201, resp.get_json()
+        return resp.get_json()['id']
+
+    def _param(self, body, name):
+        for p in body.get('parameter', []):
+            if p.get('name') == name:
+                return p
+        return None
+
+    def test_compiled_truth_returns_parameters_shape(
+        self, client, tenant_headers, auth_headers,
+    ):
+        resource_id = self._create_icd9_condition(client, auth_headers)
+        resp = client.get(
+            f'/r6/fhir/Condition/{resource_id}/$compiled-truth',
+            headers=tenant_headers,
+        )
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert body['resourceType'] == 'Parameters'
+        # Required parameters present
+        for name in (
+            'current', 'curation_state', 'quality_score',
+            'review_needed', 'timeline_count', 'timeline',
+        ):
+            assert self._param(body, name) is not None, (
+                f'missing parameter {name}'
+            )
+
+    def test_compiled_truth_empty_timeline_for_new_resource(
+        self, client, tenant_headers, auth_headers,
+    ):
+        resource_id = self._create_icd9_condition(client, auth_headers)
+        resp = client.get(
+            f'/r6/fhir/Condition/{resource_id}/$compiled-truth',
+            headers=tenant_headers,
+        )
+        body = resp.get_json()
+        timeline = self._param(body, 'timeline')
+        assert timeline['part'] == []
+        count = self._param(body, 'timeline_count')
+        assert count['valueInteger'] == 0
+
+    def test_compiled_truth_includes_provenance_after_fix(
+        self, client, tenant_headers, auth_headers,
+    ):
+        resource_id = self._create_icd9_condition(client, auth_headers)
+        fixes = [{
+            "field_path": "Condition.code.coding[0].system",
+            "new_value": "http://hl7.org/fhir/sid/icd-10-cm",
+        }, {
+            "field_path": "Condition.code.coding[0].code",
+            "new_value": "E11.9",
+        }]
+        fix_resp = client.post(
+            f'/r6/fhir/Condition/{resource_id}/$curatr-apply-fix',
+            json={"fixes": fixes, "patient_intent": "ICD-9 -> ICD-10"},
+            headers={**auth_headers, 'X-Human-Confirmed': 'true'},
+        )
+        assert fix_resp.status_code == 200
+
+        resp = client.get(
+            f'/r6/fhir/Condition/{resource_id}/$compiled-truth',
+            headers=tenant_headers,
+        )
+        body = resp.get_json()
+        timeline = self._param(body, 'timeline')
+        assert len(timeline['part']) >= 1, (
+            'timeline should have at least one Provenance entry'
+        )
+        # curation_state should have been promoted to 'curated'
+        assert self._param(body, 'curation_state')['valueString'] == 'curated'
+
+    def test_compiled_truth_404_for_missing_resource(
+        self, client, tenant_headers,
+    ):
+        resp = client.get(
+            '/r6/fhir/Condition/does-not-exist/$compiled-truth',
+            headers=tenant_headers,
+        )
+        assert resp.status_code == 404
+
+    def test_compiled_truth_requires_tenant_header(self, client):
+        resp = client.get('/r6/fhir/Condition/x/$compiled-truth')
+        assert resp.status_code == 400
+
+    def test_compiled_truth_unsupported_type_400(self, client, tenant_headers):
+        resp = client.get(
+            '/r6/fhir/FakeResource/x/$compiled-truth',
+            headers=tenant_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_curatr_evaluate_sets_curation_state_in_review(
+        self, client, tenant_headers, auth_headers,
+    ):
+        resource_id = self._create_icd9_condition(client, auth_headers)
+
+        with patch('r6.curatr.CuratrEngine._lookup_code',
+                   return_value={"valid": True, "display": None, "message": None}):
+            eval_resp = client.get(
+                f'/r6/fhir/Condition/{resource_id}/$curatr-evaluate',
+                headers=tenant_headers,
+            )
+        assert eval_resp.status_code == 200
+        # ICD-9 is in DEPRECATED_SYSTEMS — should produce issues
+        assert eval_resp.get_json()['issue_count'] >= 1
+
+        resp = client.get(
+            f'/r6/fhir/Condition/{resource_id}/$compiled-truth',
+            headers=tenant_headers,
+        )
+        body = resp.get_json()
+        state = self._param(body, 'curation_state')['valueString']
+        assert state == 'in_review'
+
+
+class TestCompiledTruthMCPApp:
+    """The MCP App is a single self-contained HTML page."""
+
+    def test_mcp_app_serves_html(self, client):
+        resp = client.get(
+            '/r6/fhir/mcp-apps/compiled-truth/Condition/abc-123'
+        )
+        assert resp.status_code == 200
+        assert 'text/html' in resp.headers['Content-Type']
+        assert resp.headers.get('X-MCP-App') == 'compiled-truth'
+        body = resp.get_data(as_text=True)
+        assert '<title>Compiled Truth' in body
+        assert 'abc-123' in body
+
+    def test_mcp_app_unsupported_type_400(self, client):
+        resp = client.get(
+            '/r6/fhir/mcp-apps/compiled-truth/FakeResource/abc-123'
+        )
+        assert resp.status_code == 400
+
+
 # ------------------------------------------------------------------ #
 # Condition CRUD tests                                                #
 # ------------------------------------------------------------------ #

@@ -71,7 +71,9 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 ```text
 /                         Main Flask app (main.py, app.py, models.py)
 /api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
-/r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy)
+/r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, curatr, health_context)
+/.health-context.yaml     Engine/surface contract — jurisdiction, audience, defaults (loaded by r6/health_context.py)
+/templates/mcp_apps/      MCP App HTML surfaces (compiled_truth.html) — single-file, no build step
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
 /scripts/                 CLI utilities: import_healthex.py, export_healthex.py, convert_fasten.py
@@ -276,6 +278,7 @@ Curatr evaluates: AllergyIntolerance, MedicationRequest, Immunization, Procedure
 - **$lastn** — Most recent observations per code. Available since R4. Sorted by storage order, not effectiveDateTime.
 - **$validate** — Structural validation only. Falls back silently if external validator unavailable.
 - **$deidentify** — Custom operation, not part of FHIR spec. Supports `?mode=hipaa-safe-harbor` (default: strips name/address/identifiers/birthDate) and `?mode=patient-controlled` (preserves birthDate, strips only institutional identifiers, stamps `urn:healthclaw:patient` canonical ID).
+- **$compiled-truth** — Custom operation, not part of FHIR spec. Returns FHIR Parameters containing: the redacted `current` resource, `curation_state` (raw|in_review|curated|rejected), `quality_score` (0.0–1.0), `review_needed`, and a newest-first `timeline` of Provenance events. Applies redaction + audit + tenant isolation like any other read.
 
 ## Search Capabilities (Honest)
 
@@ -283,16 +286,30 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (14)
+## MCP Tools (15)
 
-- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
+- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `fhir_compiled_truth`, `curatr_evaluate`
 - **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
 - **Utility tools**: `fhir_get_token` (issues a 5-min step-up token; call before any write), `fhir_seed` (seeds a tenant with demo Patient + Observations + Condition)
 - All tool names use underscores (`fhir_search`, not `fhir.search`) — dots are not valid in some MCP clients
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
+- `fhir_compiled_truth` and `curatr_evaluate` carry `_meta.ui.resourceUri` — a link to the Compiled Truth MCP App (HTML review surface served from Flask at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>`). MCP clients that understand `text/html;profile=mcp-app` render inline; others treat it as a normal web link.
 - `fhir_propose_write` identifies clinical types requiring human-in-the-loop
 - `fhir_permission_evaluate` returns reasoning explaining why permit/deny
 - Result entries capped at 50 to stay within token limits
+
+## Engine/surface contract (.health-context.yaml)
+
+`.health-context.yaml` at the repo root declares `{name, version, role, jurisdiction, regulations, audience, data_sensitivity, tenant_default, audit_agent_default}`. Loaded once at startup by [r6/health_context.py](r6/health_context.py), cached via `@lru_cache`, injected into Flask templates as `health_context`, and used by the audit layer to stamp the default agent. HealthClaw declares `role: engine`. Its sister surface SmartHealthConnect declares `role: surface` and lists HealthClaw as `engine`. Neither depends on the other at runtime — the file is a contract, not a coupling.
+
+## Compiled Truth (flagship pattern, v1.2.0)
+
+A single primitive: current state + append-only evidence trail for any R6Resource.
+
+- **REST**: `GET /r6/fhir/<type>/<id>/$compiled-truth` → FHIR Parameters with `current`, `curation_state`, `quality_score`, `review_needed`, `timeline` (Provenance events newest-first).
+- **MCP tool**: `fhir_compiled_truth(resource_type, resource_id)` — wraps the REST endpoint, adds `_mcp_summary` narrative guidance + `_meta.ui.resourceUri` pointing at the MCP App.
+- **MCP App**: self-contained HTML at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>` — no build step, no React, feature-detects `window.mcp` for the langcare-style host callback. Tenant passed via header OR `?tenant_id=` query.
+- **Curation states** (column on `R6Resource`): `raw` (default) → `in_review` (issues found by `$curatr-evaluate`) → `curated` (after `$curatr-apply-fix` creates Provenance). Transitions computed in `r6/curatr.py:persist_curation_state`. `quality_score` is `1.0 - Σ(severity_weights)`, clamped to [0, 1].
 
 ### MCP Transport Header Forwarding
 

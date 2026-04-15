@@ -9,6 +9,7 @@ operations, privacy, security, maintenance, and performance analysis.
 import logging
 from models import db
 from r6.models import AuditEventRecord
+from r6.health_context import get as _hc_get
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,10 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
             resource_id=resource_id,
             context_id=context_id,
             tenant_id=tenant_id,
-            agent_id=agent_id,
+            agent_id=(
+                agent_id
+                or _hc_get('audit_agent_default', 'healthclaw-guardrails')
+            ),
             outcome=outcome,
             detail=detail
         )

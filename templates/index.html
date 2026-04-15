@@ -317,7 +317,7 @@
   <div class="nav-inner">
     <a href="{{ url_for('index') }}" class="nav-brand" style="text-decoration:none">
       <span class="nav-brand-name">HealthClaw</span>
-      <span class="nav-badge">v1.1.0</span>
+      <span class="nav-badge">v{{ health_context.version }}</span>
     </a>
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="nav-link">Home</a>
@@ -353,7 +353,7 @@
 <!-- ═══ STATS ═══ -->
 <div class="stats-row">
   <div class="stat">
-    <span class="stat-num" data-target="14">0</span>
+    <span class="stat-num" data-target="15">0</span>
     <div class="stat-label">MCP Tools</div>
   </div>
   <div class="stat">
@@ -367,6 +367,56 @@
   <div class="stat">
     <span class="stat-num" data-target="6">0</span>
     <div class="stat-label">Guardrail Layers</div>
+  </div>
+</div>
+
+<!-- ═══ COMPILED TRUTH (flagship in v1.2.0) ═══ -->
+<div style="background:linear-gradient(180deg,rgba(34,211,238,0.045) 0%,transparent 100%);border-top:1px solid rgba(34,211,238,0.08);border-bottom:1px solid rgba(34,211,238,0.08)">
+  <div class="section" style="padding-top:72px">
+    <div class="section-header fade-up">
+      <div class="section-tag" style="color:var(--cyan)">New in v1.2.0 &middot; Compiled Truth</div>
+      <h2 class="section-title">See what your record says now &mdash; and why it says that.</h2>
+      <p class="section-desc">Every other health tool shows you data. HealthClaw shows you the <em>trail</em>. One FHIR operation, one MCP tool, one review surface. Built on the dead-simple primitive every PHR is missing: current state + append-only evidence.</p>
+    </div>
+
+    <div class="audience-grid fade-up" style="transition-delay:0.1s">
+      <div class="audience-card" style="border-color:var(--border);cursor:default">
+        <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
+        <div class="audience-icon">📖</div>
+        <div class="audience-title" style="color:var(--cyan)">One primitive</div>
+        <div class="audience-sub" style="color:var(--gray-dim)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">GET /$compiled-truth</code></div>
+        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">Returns a FHIR Parameters bundle: the redacted current resource, its curation state, quality score, and the full Provenance timeline &mdash; newest first. Nothing hidden.</p>
+      </div>
+
+      <div class="audience-card" style="border-color:var(--border);cursor:default">
+        <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
+        <div class="audience-icon">🧩</div>
+        <div class="audience-title" style="color:var(--green)">One MCP tool</div>
+        <div class="audience-sub" style="color:var(--gray-dim)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--green)">fhir_compiled_truth</code></div>
+        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">Agents call this before making resource-specific claims. Responses carry <code style="font-family:var(--font-mono);font-size:12px;color:var(--green)">_meta.ui.resourceUri</code> &mdash; an embeddable review surface. No more chat-text walls of fine print.</p>
+      </div>
+
+      <div class="audience-card" style="border-color:var(--border);cursor:default">
+        <div class="audience-glow" style="background:rgba(251,191,36,0.05)"></div>
+        <div class="audience-icon">🗂️</div>
+        <div class="audience-title" style="color:var(--amber)">One review surface</div>
+        <div class="audience-sub" style="color:var(--gray-dim)">MCP App &middot; native HTML</div>
+        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">A focused page renders exactly when the agent needs it: current data left, evidence right, approve / re-evaluate bottom. Zero install. No app-nobody-opens.</p>
+      </div>
+    </div>
+
+    <div class="fade-up" style="max-width:820px;margin:36px auto 0;padding:22px 24px;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.2);border-radius:10px;font-family:var(--font-mono);font-size:13px;line-height:1.85;color:var(--gray-dim)">
+      <div style="color:var(--cyan);margin-bottom:10px;font-size:11.5px">&#47;&#47; Example: agent reads the compiled truth before answering</div>
+      <div><span style="color:var(--green)">curl</span> -H <span style="color:var(--white)">"X-Tenant-Id: your-tenant"</span> \</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--white)">https://healthclaw.io/r6/fhir/Condition/&lt;id&gt;/$compiled-truth</span></div>
+      <div style="color:var(--cyan);margin-top:14px;margin-bottom:10px;font-size:11.5px">&#47;&#47; Or via MCP from Claude Desktop</div>
+      <div>&gt; <span style="color:var(--white)">fhir_compiled_truth(resource_type="Condition", resource_id="&lt;id&gt;")</span></div>
+    </div>
+
+    <p class="fade-up" style="text-align:center;color:var(--gray-dim);font-size:13px;margin-top:28px;transition-delay:0.2s">
+      Inspired by the compiled-truth + append-only-evidence pattern.
+      Backed by R6 Provenance. Patient-first by construction.
+    </p>
   </div>
 </div>
 
@@ -450,7 +500,7 @@
       <div class="audience-title">AI Agent Developer</div>
       <div class="audience-sub" style="color:var(--cyan)">Ship HIPAA-safe agents in minutes, not months</div>
       <ul class="audience-list" style="--dot:var(--cyan)">
-        <li style="--before-color:var(--cyan)">14 MCP tools — drop into Claude Desktop or any MCP client</li>
+        <li style="--before-color:var(--cyan)">15 MCP tools — drop into Claude Desktop or any MCP client</li>
         <li style="--before-color:var(--cyan)">One-line Claude Code install (marketplace below)</li>
         <li style="--before-color:var(--cyan)">Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
         <li style="--before-color:var(--cyan)">PHI redaction, audit, step-up auth — zero config</li>
@@ -514,7 +564,7 @@
         <div class="audience-title">healthclaw-guardrails</div>
         <div class="audience-sub" style="color:var(--cyan)">FHIR agent guardrails + EHR integration</div>
         <ul class="audience-list" style="--dot:var(--cyan)">
-          <li style="--before-color:var(--cyan)"><strong>fhir-r6-guardrails</strong> — 14 MCP tools, PHI redaction, step-up auth, audit</li>
+          <li style="--before-color:var(--cyan)"><strong>fhir-r6-guardrails</strong> — 15 MCP tools, PHI redaction, step-up auth, audit</li>
           <li style="--before-color:var(--cyan)"><strong>curatr</strong> — data-quality evaluation + patient-approved fixes</li>
           <li style="--before-color:var(--cyan)"><strong>fasten-connect</strong> — EHR + TEFCA ingestion</li>
           <li style="--before-color:var(--cyan)"><strong>phi-redaction</strong> — HIPAA Safe Harbor de-identification</li>
