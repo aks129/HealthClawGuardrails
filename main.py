@@ -92,15 +92,18 @@ with app.app_context():
     from r6.fasten.models import FastenConnection, FastenJob
     from r6.wearables.models import WearableConnection
     from r6.command_center.models import ConversationMessage, AgentTask
-    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.exc import OperationalError, IntegrityError, ProgrammingError
     try:
         db.create_all()
-        logger.info("Database tables created (R6 + Fasten + Wearables)")
-    except OperationalError as e:
+        logger.info("Database tables created (R6 + Fasten + Wearables + Command Center)")
+    except (OperationalError, IntegrityError, ProgrammingError) as e:
         # Concurrent gunicorn workers can race on first-boot table creation.
-        # If another worker already created the tables, proceed.
-        if "already exists" in str(e):
+        # Seen on Postgres as IntegrityError on pg_type_typname_nsp_index;
+        # on SQLite as OperationalError "already exists".
+        msg = str(e).lower()
+        if "already exists" in msg or "pg_type_typname" in msg or "duplicate key" in msg:
             logger.info("Database tables already exist (created by another worker)")
+            db.session.rollback()
         else:
             raise
 
