@@ -1,0 +1,11 @@
+# Per-service Railway config for the openclaw Telegram bot.
+# Used when deploying via `cd openclaw && railway up --service openclaw-bot`.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The bot is a long-poller, not an HTTP server — no healthcheck endpoint.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
