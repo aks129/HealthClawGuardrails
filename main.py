@@ -107,6 +107,16 @@ with app.app_context():
         else:
             raise
 
+    # Add any model columns missing from long-lived Postgres databases
+    # (no-op on SQLite). Safe to run every boot.
+    try:
+        from r6.schema_sync import reconcile_schema
+        added = reconcile_schema(db.engine, db.metadata)
+        if added:
+            logger.info("schema_sync added %d columns", len(added))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("schema_sync failed (non-fatal): %s", e)
+
     # Auto-seed demo tenant on first boot (Railway / Docker deployments)
     if os.environ.get('SEED_DEMO_TENANT'):
         _demo_tenant = os.environ.get('DEMO_TENANT_ID', 'desktop-demo')
