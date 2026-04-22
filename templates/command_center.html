@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Command Center — My Health in Good Hands{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/command-center.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="cc-container">
+    <!-- Hero banner -->
+    <section class="cc-hero" id="cc-hero" data-tenant="{{ tenant_id }}">
+        <div class="cc-hero-title">
+            <i class="fas fa-shield-heart cc-hero-icon"></i>
+            <div>
+                <h1>My Health in Good Hands</h1>
+                <p class="cc-hero-sub" id="cc-hero-summary">Loading agent state…</p>
+            </div>
+        </div>
+        <div class="cc-hero-stats">
+            <div class="cc-stat"><span class="cc-stat-val" id="cc-stat-records">—</span><span class="cc-stat-lbl">records</span></div>
+            <div class="cc-stat"><span class="cc-stat-val" id="cc-stat-flags">—</span><span class="cc-stat-lbl">flags</span></div>
+            <div class="cc-stat"><span class="cc-stat-val" id="cc-stat-tasks">—</span><span class="cc-stat-lbl">tasks</span></div>
+            <div class="cc-stat"><span class="cc-stat-val" id="cc-stat-activity">—</span><span class="cc-stat-lbl">actions/24h</span></div>
+        </div>
+        <div class="cc-tenant-selector">
+            <label for="cc-tenant-input">Tenant:</label>
+            <input id="cc-tenant-input" type="text" value="{{ tenant_id }}" />
+            <button type="button" id="cc-tenant-apply" class="btn btn-sm btn-outline-light">Switch</button>
+        </div>
+    </section>
+
+    <!-- Readiness pipeline -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-route"></i> Readiness Pipeline</h2>
+        <div class="cc-pipeline" id="cc-pipeline">
+            <div class="cc-loading">Loading…</div>
+        </div>
+    </section>
+
+    <!-- System status -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-server"></i> System Status</h2>
+        <div class="cc-system-grid" id="cc-system">
+            <div class="cc-loading">Loading…</div>
+        </div>
+    </section>
+
+    <!-- Agents -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-user-nurse"></i> Your Health Agents</h2>
+        <div class="cc-agents-grid" id="cc-agents">
+            {# Server-rendered initial grid; JS replaces with live state on load #}
+            {% for a in agents %}
+            <div class="cc-agent-card state-idle" style="--cc-agent-color:{{ a.color }}">
+                <div class="cc-agent-head">
+                    <span class="cc-agent-emoji">{{ a.emoji }}</span>
+                    <span class="cc-agent-name">{{ a.name }}</span>
+                </div>
+                <div class="cc-agent-desc">{{ a.description }}</div>
+                <div class="cc-agent-meta">
+                    <span>— actions/7d</span>
+                    <span>— chats</span>
+                    <span>— tasks</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <div class="cc-two-col">
+        <!-- Latest actions -->
+        <section class="cc-section">
+            <h2 class="cc-section-title"><i class="fas fa-bolt"></i> Latest Actions</h2>
+            <div class="cc-actions" id="cc-actions">
+                <div class="cc-loading">Loading…</div>
+            </div>
+        </section>
+
+        <!-- Conversations -->
+        <section class="cc-section">
+            <h2 class="cc-section-title"><i class="fas fa-comments"></i> Recent Conversations</h2>
+            <div class="cc-conversations" id="cc-conversations">
+                <div class="cc-loading">Loading…</div>
+            </div>
+        </section>
+    </div>
+
+    <div class="cc-two-col">
+        <!-- Pending tasks -->
+        <section class="cc-section">
+            <h2 class="cc-section-title"><i class="fas fa-list-check"></i> Pending Tasks</h2>
+            <div class="cc-tasks" id="cc-tasks">
+                <div class="cc-loading">Loading…</div>
+            </div>
+        </section>
+
+        <!-- Insights -->
+        <section class="cc-section">
+            <h2 class="cc-section-title"><i class="fas fa-lightbulb"></i> Active Insights</h2>
+            <div class="cc-insights" id="cc-insights">
+                <div class="cc-loading">Loading…</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Data sources -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-plug"></i> Data Sources</h2>
+        <div class="cc-sources-grid" id="cc-sources">
+            <div class="cc-loading">Loading…</div>
+        </div>
+    </section>
+
+    <!-- Skills -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-puzzle-piece"></i> Skills &amp; Capabilities</h2>
+        <div class="cc-skills-grid" id="cc-skills">
+            <div class="cc-loading">Loading…</div>
+        </div>
+    </section>
+
+    <div class="cc-footer">
+        <span>Polling every <span id="cc-poll-interval">5</span>s · Last refresh <span id="cc-last-refresh">—</span></span>
+        <button type="button" id="cc-refresh-now" class="btn btn-sm btn-outline-light"><i class="fas fa-rotate"></i> Refresh now</button>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/command-center.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,93 @@
+# Agent registry for the command center.
+#
+# Each agent is a named health persona that coordinates a subset of skills +
+# MCP tools. Audit events are attributed to an agent via `tool_patterns` (tool
+# names that this agent typically invokes) and/or an explicit agent_id recorded
+# on the event. Conversations and tasks carry agent_id so the dashboard can
+# group work by persona.
+
+agents:
+  - id: health-advisor
+    name: Health Advisor
+    emoji: "🩺"
+    color: "#2563eb"
+    description: >
+      Primary care coordinator. Reviews conditions, medications, lab trends
+      and flags care gaps against USPSTF guidelines. First-line agent for
+      "what's my overall health status?" and preventive screening questions.
+    skills:
+      - curatr
+      - personal-health-records
+      - fhir-r6-guardrails
+    tool_patterns:
+      - fhir_search
+      - fhir_read
+      - fhir_lastn
+      - fhir_stats
+    example_prompts:
+      - "What preventive care am I overdue for?"
+      - "Show me my HbA1c trend over the last 3 years"
+      - "Review my active conditions and flag anything concerning"
+
+  - id: fitness-dietician
+    name: Fitness & Dietician
+    emoji: "🏃"
+    color: "#16a34a"
+    description: >
+      Tracks vitals, wearables data, and nutrition intake to help with
+      fitness goals and diet coaching. Pulls from Open Wearables sidecar
+      (Fitbit, Oura, Whoop, Apple Health) and NutritionIntake resources.
+    skills:
+      - fhir-r6-guardrails
+    tool_patterns:
+      - fhir_search
+      - fhir_read
+      - fhir_stats
+      - wearable_sync_status
+    example_prompts:
+      - "How did I sleep this week?"
+      - "Am I on track with my weight goal?"
+      - "Summarize my activity and nutrition for the month"
+
+  - id: family-caretaker
+    name: Family Caretaker
+    emoji: "👨‍👩‍👧"
+    color: "#c2410c"
+    description: >
+      Coordinates health context for family members sharing the same
+      HealthClaw tenant. Tracks upcoming appointments, vaccinations due
+      for kids, caregiving tasks, and pending approvals.
+    skills:
+      - personal-health-records
+      - fasten-connect
+    tool_patterns:
+      - fhir_search
+      - fhir_read
+      - fhir_propose_write
+    example_prompts:
+      - "What appointments does the family have this month?"
+      - "When are the kids due for their next vaccines?"
+      - "Any pending approvals I need to act on?"
+
+  - id: record-curator
+    name: Record Curator
+    emoji: "📋"
+    color: "#7c3aed"
+    description: >
+      Data quality agent. Runs curatr evaluation, surfaces contradictions
+      (smoking history mismatches across EHRs), deprecated codes (ICD-9),
+      misleading interpretations (H-flag on antibody titers), and proposes
+      fixes with patient attestation.
+    skills:
+      - curatr
+      - phi-redaction
+      - healthex-export
+    tool_patterns:
+      - curatr_evaluate
+      - curatr_apply_fix
+      - fhir_validate
+      - fhir_commit_write
+    example_prompts:
+      - "What data quality issues are in my record?"
+      - "Fix the ICD-9 codes in my condition list"
+      - "Review the smoking-history contradictions"

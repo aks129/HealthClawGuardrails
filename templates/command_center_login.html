@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Command Center — Sign in{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/command-center.css') }}">
+<style>
+.cc-login {
+    max-width: 520px;
+    margin: 3rem auto;
+    text-align: center;
+    padding: 2rem;
+    background: var(--cc-card, #111a2e);
+    border: 1px solid var(--cc-border, #1f2b48);
+    border-radius: 14px;
+    color: var(--cc-text, #e2e8f0);
+}
+.cc-login h1 { margin-top: 0; font-size: 1.5rem; }
+.cc-login p { color: var(--cc-text-dim, #94a3b8); line-height: 1.5; }
+.cc-login-err {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: #fecaca;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+.cc-login-steps {
+    text-align: left;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-top: 1.25rem;
+    font-size: 0.9rem;
+}
+.cc-login-steps code {
+    background: rgba(56, 189, 248, 0.12);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    color: var(--cc-accent, #38bdf8);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cc-login">
+    <i class="fas fa-shield-heart" style="font-size:2.75rem;color:var(--cc-accent,#38bdf8);margin-bottom:0.5rem"></i>
+    <h1>Your personal health command center</h1>
+    <p>The dashboard for private tenants is protected. Ask your OpenClaw Telegram agent for a signed access link.</p>
+
+    {% if error %}
+    <div class="cc-login-err"><i class="fas fa-triangle-exclamation"></i> {{ error }}</div>
+    {% endif %}
+
+    <div class="cc-login-steps">
+        <strong>How to get in:</strong>
+        <ol style="margin:0.5rem 0 0 1rem;padding:0;line-height:1.8">
+            <li>Open your HealthClaw Telegram bot</li>
+            <li>Send <code>/dashboard</code> — the bot replies with a signed link</li>
+            <li>Click the link — valid for 24 hours</li>
+        </ol>
+    </div>
+
+    <p style="margin-top:1.5rem;font-size:0.85rem">
+        Trying the public demo?
+        <a href="{{ url_for('command_center.dashboard') }}?tenant=desktop-demo" style="color:var(--cc-accent,#38bdf8)">
+            View desktop-demo tenant
+        </a>
+    </p>
+</div>
+{% endblock %}

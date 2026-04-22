@@ -9,8 +9,10 @@ FHIR data via Model Context Protocol (MCP). Version 1.0.0. A [healthclaw.io](htt
 
 **Supports:**
 
-- FHIR R4 with US Core v9 profiles (stable, widely deployed US healthcare resources)
-- FHIR R6 v6.0.0-ballot3 (experimental ballot resources: Permission, SubscriptionTopic, DeviceAlert, NutritionIntake)
+- **FHIR R4 with US Core v6.1** profiles — the production standard (stable, widely deployed US healthcare resources). This is what the app primarily does.
+- FHIR R6 v6.0.0-ballot3 (experimental ballot resources only: Permission, SubscriptionTopic, DeviceAlert, NutritionIntake)
+
+**Why the `/r6/` route prefix:** The Flask Blueprint and directory are named `r6` from the project's origin as an R6 ballot resource showcase. The actual clinical data pipeline (Conditions, Observations, Immunizations, MedicationRequests, etc.) uses **R4 resources validated against US Core v6.1 required fields**. The R6 prefix is a route path, not a statement about which FHIR version the clinical resources use.
 
 **What this is:** A pattern library showing how tenant isolation, step-up authorization,
 audit trails, PHI redaction, and human-in-the-loop enforcement work together when an
@@ -26,7 +28,7 @@ no StructureDefinition conformance, no terminology binding).
 ```text
 ┌─────────────────────────────────────────────────┐
 │  Flask App (Python)                              │
-│  ├── /r6/fhir/* — R6 REST facade (Blueprint)    │
+│  ├── /r6/fhir/* — FHIR REST facade (Blueprint)   │
 │  ├── /r6/fhir/health — Liveness probe           │
 │  ├── /r6/fhir/oauth/* — OAuth 2.1 + SMART       │
 │  ├── /fasten/* — Fasten Connect EHR integration  │
@@ -71,10 +73,7 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 ```text
 /                         Main Flask app (main.py, app.py, models.py)
 /api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
-/r6/                      R6 Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, curatr, health_context)
-/r6/wearables/            Open Wearables adapter (models, mapper, client, poller, routes) — opt-in via OPEN_WEARABLES_URL
-/.health-context.yaml     Engine/surface contract — jurisdiction, audience, defaults (loaded by r6/health_context.py)
-/templates/mcp_apps/      MCP App HTML surfaces (compiled_truth.html, wearables.html) — single-file, no build step
+/r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
 /scripts/                 CLI utilities: import_healthex.py, export_healthex.py, convert_fasten.py
@@ -247,7 +246,7 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 - No cross-version translation (R4 responses stay R4)
 - Tenant isolation is enforced locally, not on the upstream server
 
-## What's R6-Specific (Experimental)
+## What's R6-Specific (Experimental Ballot Only)
 
 - **Permission** — R6 access control resource (separate from Consent). $evaluate operation.
 - **SubscriptionTopic** — Restructured pub/sub (introduced R5, maturing R6). Storage + discovery only, no notification dispatch.
@@ -255,9 +254,9 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 - **NutritionIntake** — Dietary consumption tracking (new in R6).
 - **DeviceAssociation, NutritionProduct, Requirements, ActorDefinition** — Additional R6 resources (CRUD only).
 
-## What's US Core v9 R4 (Stable)
+## What's US Core v6.1 R4 (Stable)
 
-Standard R4 resources added in Phase 4. All validated against US Core v9 required fields:
+Standard R4 resources added in Phase 4. All validated against US Core v6.1 required fields:
 
 - **AllergyIntolerance** — requires clinicalStatus, verificationStatus, patient
 - **Immunization** — requires status, vaccineCode, patient, occurrence[x]
@@ -279,7 +278,6 @@ Curatr evaluates: AllergyIntolerance, MedicationRequest, Immunization, Procedure
 - **$lastn** — Most recent observations per code. Available since R4. Sorted by storage order, not effectiveDateTime.
 - **$validate** — Structural validation only. Falls back silently if external validator unavailable.
 - **$deidentify** — Custom operation, not part of FHIR spec. Supports `?mode=hipaa-safe-harbor` (default: strips name/address/identifiers/birthDate) and `?mode=patient-controlled` (preserves birthDate, strips only institutional identifiers, stamps `urn:healthclaw:patient` canonical ID).
-- **$compiled-truth** — Custom operation, not part of FHIR spec. Returns FHIR Parameters containing: the redacted `current` resource, `curation_state` (raw|in_review|curated|rejected), `quality_score` (0.0–1.0), `review_needed`, and a newest-first `timeline` of Provenance events. Applies redaction + audit + tenant isolation like any other read.
 
 ## Search Capabilities (Honest)
 
@@ -287,44 +285,16 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (16)
+## MCP Tools (14)
 
-- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `fhir_compiled_truth`, `wearables_sync_status`, `curatr_evaluate`
+- **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
 - **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
 - **Utility tools**: `fhir_get_token` (issues a 5-min step-up token; call before any write), `fhir_seed` (seeds a tenant with demo Patient + Observations + Condition)
 - All tool names use underscores (`fhir_search`, not `fhir.search`) — dots are not valid in some MCP clients
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
-- `fhir_compiled_truth` and `curatr_evaluate` carry `_meta.ui.resourceUri` — a link to the Compiled Truth MCP App (HTML review surface served from Flask at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>`). MCP clients that understand `text/html;profile=mcp-app` render inline; others treat it as a normal web link.
 - `fhir_propose_write` identifies clinical types requiring human-in-the-loop
 - `fhir_permission_evaluate` returns reasoning explaining why permit/deny
 - Result entries capped at 50 to stay within token limits
-
-## Engine/surface contract (.health-context.yaml)
-
-`.health-context.yaml` at the repo root declares `{name, version, role, jurisdiction, regulations, audience, data_sensitivity, tenant_default, audit_agent_default}`. Loaded once at startup by [r6/health_context.py](r6/health_context.py), cached via `@lru_cache`, injected into Flask templates as `health_context`, and used by the audit layer to stamp the default agent. HealthClaw declares `role: engine`. Its sister surface SmartHealthConnect declares `role: surface` and lists HealthClaw as `engine`. Neither depends on the other at runtime — the file is a contract, not a coupling.
-
-## Wearables integration (v1.3.0)
-
-Opt-in adapter that ingests wearable data from [Open Wearables](https://github.com/the-momentum/open-wearables) (MIT) as FHIR Observations.
-
-- **Sidecar**: `docker-compose --profile wearables up` brings Open Wearables + its Postgres + Celery worker online. The Flask app does not depend on it at boot — integration activates only when `OPEN_WEARABLES_URL` is set.
-- **Model**: [r6/wearables/models.py](r6/wearables/models.py) defines `WearableConnection` — a mapping of `tenant_id + provider + ow_user_id` with last sync status. No OAuth tokens stored locally; Open Wearables owns those.
-- **Mapper**: [r6/wearables/mapper.py](r6/wearables/mapper.py) translates 13 metrics (heart_rate, hrv, spo2, steps, sleep_duration, body_weight, BP, glucose, etc.) to FHIR R4 Observations with LOINC codes + UCUM units. Unmapped metrics fall through to `code.text`.
-- **Poller**: [r6/wearables/poller.py](r6/wearables/poller.py) — daemon thread started from `main.py`. Every `WEARABLES_POLL_INTERVAL` seconds (default 900) it fetches deltas per connection, builds a collection Bundle, mints a step-up token with `agent_id=wearable-sync`, and POSTs to `/Bundle/$ingest-context`. Errors on one connection do not stop the loop. Not suitable for serverless — skipped on Vercel.
-- **Routes** at `/wearables/*`: provider discovery, OAuth start/callback with HMAC-signed state, sync status, manual sync-now (requires step-up).
-- **MCP tool**: `wearables_sync_status` returns connections + `_meta.ui.resourceUri` → `/r6/fhir/mcp-apps/wearables/`. Agents narrate: "Garmin: synced 8 min ago, 142 observations."
-- **Policy**: [action_policy.yaml](action_policy.yaml) `service_accounts.wearable-sync` — medium risk, step-up required, no human_review (device samples are device attestations, not AI proposals).
-
-Supported providers today: Garmin, Oura, Polar, Suunto, Whoop (partial), Fitbit (partial), Strava, Ultrahuman. Not supported in v1.3.0: Apple Health (requires iOS SDK), Samsung Health / Google Health Connect (Android SDK), Withings (missing from Open Wearables — tracked for a native fallback).
-
-## Compiled Truth (flagship pattern, v1.2.0)
-
-A single primitive: current state + append-only evidence trail for any R6Resource.
-
-- **REST**: `GET /r6/fhir/<type>/<id>/$compiled-truth` → FHIR Parameters with `current`, `curation_state`, `quality_score`, `review_needed`, `timeline` (Provenance events newest-first).
-- **MCP tool**: `fhir_compiled_truth(resource_type, resource_id)` — wraps the REST endpoint, adds `_mcp_summary` narrative guidance + `_meta.ui.resourceUri` pointing at the MCP App.
-- **MCP App**: self-contained HTML at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>` — no build step, no React, feature-detects `window.mcp` for the langcare-style host callback. Tenant passed via header OR `?tenant_id=` query.
-- **Curation states** (column on `R6Resource`): `raw` (default) → `in_review` (issues found by `$curatr-evaluate`) → `curated` (after `$curatr-apply-fix` creates Provenance). Transitions computed in `r6/curatr.py:persist_curation_state`. `quality_score` is `1.0 - Σ(severity_weights)`, clamped to [0, 1].
 
 ### MCP Transport Header Forwarding
 

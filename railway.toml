@@ -21,6 +21,13 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
+# Auto-seed the desktop-demo tenant on first boot so the public MCP
+# endpoint has data without any manual setup.  The seed is idempotent —
+# it only runs when the tenant has zero resources.
+[deploy.variables]
+SEED_DEMO_TENANT = "1"
+DEMO_TENANT_ID = "desktop-demo"
+
 # --timeout 300: allows 5-minute background threads to complete without
 # gunicorn killing the worker during large Fasten NDJSON downloads.
 # (Fasten exports can be 30MB–3GB; streaming runs in daemon threads, not

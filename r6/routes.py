@@ -1416,111 +1416,20 @@ def seed_tenant():
         tenant_id: str  — defaults to 'desktop-demo'
         bundle: dict    — custom FHIR Bundle; if omitted, uses built-in sample
     """
+    from r6.seed import seed_demo_data
+
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'desktop-demo')
 
-    # If caller supplied a full bundle, use it
+    # If caller supplied a full bundle, extract resources from it
     custom_bundle = body.get('bundle')
     if custom_bundle:
         entries = custom_bundle.get('entry', [])
         resources = [e.get('resource') for e in entries if e.get('resource')]
     else:
-        # Built-in sample: Patient + Condition (ICD-9) + 3 Observations + MedicationRequest
-        import datetime
-        resources = [
-            {
-                "resourceType": "Patient",
-                "name": [{"use": "official", "family": "Rivera", "given": ["Maria", "Elena"]}],
-                "birthDate": "1985-03-15",
-                "gender": "female",
-                "address": [{"line": ["123 Clinical Ave"], "city": "Boston", "state": "MA", "postalCode": "02101"}],
-                "telecom": [{"system": "phone", "value": "617-555-0198"}],
-                "identifier": [{"system": "http://example.org/mrn", "value": "MRN-2026-4471"}]
-            },
-            {
-                "resourceType": "Condition",
-                "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical", "code": "active"}]},
-                "verificationStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-ver-status", "code": "confirmed"}]},
-                "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-9-cm", "code": "250.00", "display": "Diabetes mellitus without mention of complication"}]},
-                "subject": {"reference": "Patient/__PATIENT_ID__"}
-            },
-            {
-                "resourceType": "Observation",
-                "status": "final",
-                "code": {"coding": [{"system": "http://loinc.org", "code": "2339-0", "display": "Glucose [Mass/volume] in Blood"}]},
-                "subject": {"reference": "Patient/__PATIENT_ID__"},
-                "valueQuantity": {"value": 180, "unit": "mg/dL", "system": "http://unitsofmeasure.org", "code": "mg/dL"},
-                "effectiveDateTime": datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-            },
-            {
-                "resourceType": "Observation",
-                "status": "final",
-                "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c/Hemoglobin.total in Blood"}]},
-                "subject": {"reference": "Patient/__PATIENT_ID__"},
-                "valueQuantity": {"value": 8.1, "unit": "%", "system": "http://unitsofmeasure.org", "code": "%"},
-                "effectiveDateTime": datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-            },
-            {
-                "resourceType": "Observation",
-                "status": "final",
-                "code": {"coding": [{"system": "http://loinc.org", "code": "55284-4", "display": "Blood pressure systolic and diastolic"}]},
-                "subject": {"reference": "Patient/__PATIENT_ID__"},
-                "component": [
-                    {"code": {"coding": [{"system": "http://loinc.org", "code": "8480-6", "display": "Systolic BP"}]}, "valueQuantity": {"value": 138, "unit": "mmHg"}},
-                    {"code": {"coding": [{"system": "http://loinc.org", "code": "8462-4", "display": "Diastolic BP"}]}, "valueQuantity": {"value": 88, "unit": "mmHg"}}
-                ],
-                "effectiveDateTime": datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-            },
-            {
-                "resourceType": "MedicationRequest",
-                "status": "active",
-                "intent": "order",
-                "subject": {"reference": "Patient/__PATIENT_ID__"},
-                "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "860975", "display": "Metformin 500 MG Oral Tablet"}]}
-            }
-        ]
+        resources = None  # use built-in defaults
 
-    created = []
-    errors = []
-    patient_id = None
-
-    for resource in resources:
-        rtype = resource.get('resourceType')
-        if not rtype:
-            errors.append({'error': 'missing resourceType', 'resource': resource})
-            continue
-
-        # Patch placeholder patient reference once patient is created
-        import json as _json
-        resource_str = _json.dumps(resource)
-        if patient_id and rtype != 'Patient':
-            resource_str = resource_str.replace('__PATIENT_ID__', patient_id)
-
-        try:
-            r = R6Resource(
-                resource_type=rtype,
-                resource_json=resource_str,
-                tenant_id=tenant_id
-            )
-            db.session.add(r)
-            db.session.flush()
-
-            if rtype == 'Patient':
-                patient_id = str(r.id)
-
-            record_audit_event(
-                event_type='create',
-                resource_type=rtype,
-                resource_id=str(r.id),
-                tenant_id=tenant_id,
-                agent_id='seed',
-                detail='seeded via /internal/seed'
-            )
-            created.append({'resourceType': rtype, 'id': str(r.id)})
-        except Exception as e:
-            errors.append({'resourceType': rtype, 'error': str(e)})
-
-    db.session.commit()
+    count = seed_demo_data(tenant_id, resources=resources)
 
     token = None
     try:
@@ -1530,8 +1439,7 @@ def seed_tenant():
 
     return jsonify({
         'tenant_id': tenant_id,
-        'created': created,
-        'errors': errors,
+        'created_count': count,
         'step_up_token': token,
         'note': 'Use step_up_token for write operations. Re-seed anytime to add more resources.'
     }), 201

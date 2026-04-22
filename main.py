@@ -91,6 +91,7 @@ with app.app_context():
     from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
     from r6.fasten.models import FastenConnection, FastenJob
     from r6.wearables.models import WearableConnection
+    from r6.command_center.models import ConversationMessage, AgentTask
     from sqlalchemy.exc import OperationalError
     try:
         db.create_all()
@@ -102,6 +103,17 @@ with app.app_context():
             logger.info("Database tables already exist (created by another worker)")
         else:
             raise
+
+    # Auto-seed demo tenant on first boot (Railway / Docker deployments)
+    if os.environ.get('SEED_DEMO_TENANT'):
+        _demo_tenant = os.environ.get('DEMO_TENANT_ID', 'desktop-demo')
+        _existing = R6Resource.query.filter_by(tenant_id=_demo_tenant).first()
+        if _existing is None:
+            from r6.seed import seed_demo_data
+            _count = seed_demo_data(_demo_tenant)
+            logger.info("Auto-seeded %d resources into tenant '%s'", _count, _demo_tenant)
+        else:
+            logger.info("Demo tenant '%s' already has data, skipping auto-seed", _demo_tenant)
 
 # Register R6 FHIR Blueprint
 from r6.routes import r6_blueprint
@@ -124,6 +136,11 @@ if not os.environ.get('VERCEL'):
     from r6.wearables.poller import start_poller
     if start_poller(app):
         logger.info("Wearables poller started (background thread)")
+
+# Register Command Center Blueprint — "My Health in Good Hands" dashboard
+from r6.command_center.routes import command_center_blueprint
+app.register_blueprint(command_center_blueprint)
+logger.info("Command Center Blueprint registered at /command-center")
 
 # Log upstream FHIR server configuration
 _upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()

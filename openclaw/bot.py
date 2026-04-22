@@ -53,10 +53,91 @@ MCP_BASE_URL = os.environ.get('MCP_BASE_URL', 'http://localhost:3001').rstrip('/
 FHIR_BASE_URL = os.environ.get('FHIR_BASE_URL', 'http://localhost:5000/r6/fhir').rstrip('/')
 STEP_UP_SECRET = os.environ.get('STEP_UP_SECRET', '')
 
+# Command Center persistence — if Flask is reachable, every chat turn is
+# logged to /command-center/api/conversations so the dashboard can show
+# recent Telegram activity per agent.
+CC_API_BASE = os.environ.get(
+    'COMMAND_CENTER_API',
+    FHIR_BASE_URL.replace('/r6/fhir', '') + '/command-center/api',
+).rstrip('/')
+
 _RPC_URL = f'{MCP_BASE_URL}/mcp/rpc'
 
 # Per-chat ephemeral state (pending writes, last curatr result)
 _chat_state: dict[int, dict] = {}
+
+# Telegram command → command-center agent id. Determines which agent
+# persona each bot interaction is attributed to in the dashboard.
+COMMAND_TO_AGENT = {
+    'start': 'health-advisor',
+    'health': 'health-advisor',
+    'conditions': 'health-advisor',
+    'labs': 'health-advisor',
+    'dashboard': 'health-advisor',
+    'curatr': 'record-curator',
+    'curatr_fix': 'record-curator',
+    'approve': 'record-curator',
+    'token': 'record-curator',
+}
+
+# Public base URL where the dashboard is reachable. Override for production
+# (e.g., https://healthclaw.io).
+DASHBOARD_BASE_URL = os.environ.get('DASHBOARD_BASE_URL', 'https://healthclaw.io').rstrip('/')
+
+
+def _persist_turn(update: Update, agent_id: str, role: str, text: str,
+                  metadata: dict | None = None) -> None:
+    """
+    POST a conversation turn to the command center API. Silent-on-failure —
+    the bot must keep working even if the dashboard API is down.
+    """
+    try:
+        msg = update.effective_message if update else None
+        user = update.effective_user if update else None
+        chat_id = str(msg.chat_id) if msg else None
+
+        payload = {
+            'tenant_id': TENANT_ID,
+            'agent_id': agent_id,
+            'channel': 'telegram',
+            'session_id': chat_id,
+            'user_id': str(user.id) if user else None,
+            'role': role,
+            'text': text,
+        }
+        if metadata:
+            payload['metadata'] = metadata
+        requests.post(
+            f'{CC_API_BASE}/conversations',
+            json=payload,
+            timeout=2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug('Command center persistence failed: %s', exc)
+
+
+async def _log_incoming(update: Update, command: str) -> str:
+    """Persist the inbound user command and return the chosen agent_id."""
+    agent_id = COMMAND_TO_AGENT.get(command, 'health-advisor')
+    if update and update.effective_message:
+        _persist_turn(
+            update,
+            agent_id,
+            'user',
+            f'/{command} {update.effective_message.text or ""}'.strip(),
+        )
+    return agent_id
+
+
+async def _reply(update: Update, text: str, agent_id: str,
+                 parse_mode: str | None = None) -> None:
+    """Send a Telegram reply and log the assistant turn to the dashboard."""
+    if update and update.effective_message:
+        if parse_mode:
+            await update.effective_message.reply_text(text, parse_mode=parse_mode)
+        else:
+            await update.effective_message.reply_text(text)
+    _persist_turn(update, agent_id, 'assistant', text[:1000])
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +223,11 @@ def _fmt_observation(entry: dict) -> str:
 # ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    agent_id = await _log_incoming(update, 'start')
     text = (
         '*HealthClaw Guardrails Bot*\n\n'
         'Commands:\n'
+        '/dashboard — open the command center (signed 24h link)\n'
         '/health — stack health check\n'
         '/conditions — list Conditions\n'
         '/labs — recent lab results\n'
@@ -154,11 +237,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/token — show current step-up token\n\n'
         f'Tenant: `{TENANT_ID}`'
     )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await _reply(update, text, agent_id, parse_mode='Markdown')
 
 
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Checking stack health…')
+    agent_id = await _log_incoming(update, 'health')
+    await _reply(update, 'Checking stack health…', agent_id)
     lines = []
 
     # Flask health
@@ -176,27 +260,29 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as exc:
         lines.append(f'MCP: ERROR — {exc}')
 
-    await update.message.reply_text('\n'.join(lines))
+    await _reply(update, '\n'.join(lines), agent_id)
 
 
 async def cmd_conditions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Fetching conditions…')
+    agent_id = await _log_incoming(update, 'conditions')
+    await _reply(update, 'Fetching conditions…', agent_id)
     try:
         result = _rpc('fhir_search', resource_type='Condition', params={})
         bundle = result.get('bundle', result)
         entries = bundle.get('entry', [])
         if not entries:
-            await update.message.reply_text('No conditions found.')
+            await _reply(update, 'No conditions found.', agent_id)
             return
         lines = [_fmt_condition(e) for e in entries[:20]]
-        await update.message.reply_text('*Conditions*\n' + '\n'.join(lines), parse_mode='Markdown')
+        await _reply(update, '*Conditions*\n' + '\n'.join(lines), agent_id, parse_mode='Markdown')
     except Exception as exc:
         logger.error('conditions error: %s', exc)
-        await update.message.reply_text(f'Error: {exc}')
+        await _reply(update, f'Error: {exc}', agent_id)
 
 
 async def cmd_labs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Fetching lab results…')
+    agent_id = await _log_incoming(update, 'labs')
+    await _reply(update, 'Fetching lab results…', agent_id)
     try:
         result = _rpc(
             'fhir_search',
@@ -206,13 +292,13 @@ async def cmd_labs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         bundle = result.get('bundle', result)
         entries = bundle.get('entry', [])
         if not entries:
-            await update.message.reply_text('No lab results found.')
+            await _reply(update, 'No lab results found.', agent_id)
             return
         lines = [_fmt_observation(e) for e in entries[:20]]
-        await update.message.reply_text('*Lab Results*\n' + '\n'.join(lines), parse_mode='Markdown')
+        await _reply(update, '*Lab Results*\n' + '\n'.join(lines), agent_id, parse_mode='Markdown')
     except Exception as exc:
         logger.error('labs error: %s', exc)
-        await update.message.reply_text(f'Error: {exc}')
+        await _reply(update, f'Error: {exc}', agent_id)
 
 
 async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -221,7 +307,8 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _curatr_fix(update, context)
         return
 
-    await update.message.reply_text('Running Curatr evaluation…')
+    agent_id = await _log_incoming(update, 'curatr')
+    await _reply(update, 'Running Curatr evaluation…', agent_id)
     chat_id = update.effective_chat.id
     try:
         result = _rpc('curatr_evaluate')
@@ -239,46 +326,67 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if proposals:
             lines.append(f'\n{len(proposals)} fix proposal(s) available — use /curatr\\_fix')
 
-        await update.message.reply_text('\n'.join(lines), parse_mode='Markdown')
+        await _reply(update, '\n'.join(lines), agent_id, parse_mode='Markdown')
     except Exception as exc:
         logger.error('curatr error: %s', exc)
-        await update.message.reply_text(f'Error: {exc}')
+        await _reply(update, f'Error: {exc}', agent_id)
 
 
 async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    agent_id = await _log_incoming(update, 'curatr_fix')
     chat_id = update.effective_chat.id
     state = _chat_state.get(chat_id, {})
     last = state.get('last_curatr')
 
     if not last:
-        await update.message.reply_text(
-            'No Curatr result in memory. Run /curatr first.'
-        )
+        await _reply(update, 'No Curatr result in memory. Run /curatr first.', agent_id)
         return
 
     proposals = last.get('fix_proposals', last.get('proposals', []))
     if not proposals:
-        await update.message.reply_text('No fix proposals in last Curatr result.')
+        await _reply(update, 'No fix proposals in last Curatr result.', agent_id)
         return
 
     fix = proposals[0]
-    await update.message.reply_text(
-        f'Applying fix: {fix.get("description", str(fix))}\n\nConfirm with /approve'
+    description = fix.get('description', str(fix))
+    await _reply(
+        update,
+        f'Applying fix: {description}\n\nConfirm with /approve',
+        agent_id,
     )
     state['pending_fix'] = fix
     state['pending_token'] = None  # will be set on /approve
 
+    # Create a pending task in the command center so the dashboard surfaces it
+    try:
+        requests.post(
+            f'{CC_API_BASE}/tasks',
+            json={
+                'tenant_id': TENANT_ID,
+                'agent_id': agent_id,
+                'title': f'Approve curatr fix: {description[:120]}',
+                'description': json.dumps(fix)[:1000],
+                'priority': 'high',
+                'source': 'telegram',
+                'resource_ref': fix.get('resource_ref'),
+            },
+            timeout=2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug('Could not create task: %s', exc)
+
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    agent_id = await _log_incoming(update, 'approve')
     chat_id = update.effective_chat.id
     state = _chat_state.get(chat_id, {})
     fix = state.get('pending_fix')
 
     if not fix:
-        await update.message.reply_text('No pending fix to approve.')
+        await _reply(update, 'No pending fix to approve.', agent_id)
         return
 
-    await update.message.reply_text('Obtaining step-up token and applying fix…')
+    await _reply(update, 'Obtaining step-up token and applying fix…', agent_id)
     try:
         token = _get_step_up_token()
         result = _rpc(
@@ -291,28 +399,79 @@ async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         state.pop('pending_token', None)
 
         status = result.get('status', result.get('resourceType', 'ok'))
-        await update.message.reply_text(f'Fix applied. Status: `{status}`', parse_mode='Markdown')
+        await _reply(update, f'Fix applied. Status: `{status}`', agent_id, parse_mode='Markdown')
     except Exception as exc:
         logger.error('approve error: %s', exc)
-        await update.message.reply_text(f'Error applying fix: {exc}')
+        await _reply(update, f'Error applying fix: {exc}', agent_id)
 
 
 async def cmd_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    agent_id = await _log_incoming(update, 'token')
     if not STEP_UP_SECRET:
-        await update.message.reply_text('STEP_UP_SECRET not configured.')
+        await _reply(update, 'STEP_UP_SECRET not configured.', agent_id)
         return
     try:
         token = _get_step_up_token()
-        await update.message.reply_text(
-            f'Step-up token (valid 5 min):\n`{token}`', parse_mode='Markdown'
+        await _reply(
+            update,
+            f'Step-up token (valid 5 min):\n`{token}`',
+            agent_id,
+            parse_mode='Markdown',
         )
     except Exception as exc:
-        await update.message.reply_text(f'Error: {exc}')
+        await _reply(update, f'Error: {exc}', agent_id)
+
+
+async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a signed, time-limited dashboard URL to the user."""
+    agent_id = await _log_incoming(update, 'dashboard')
+
+    # Need a step-up token so the API trusts the mint request
+    if not STEP_UP_SECRET:
+        await _reply(
+            update,
+            'STEP_UP_SECRET not configured — cannot mint dashboard link.',
+            agent_id,
+        )
+        return
+
+    try:
+        step_up = _get_step_up_token()
+        resp = requests.post(
+            f'{CC_API_BASE}/generate-link',
+            json={
+                'tenant_id': TENANT_ID,
+                'agent_id': agent_id,
+                'base_url': DASHBOARD_BASE_URL,
+            },
+            headers={'X-Step-Up-Token': step_up},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        url = data.get('url')
+        hours = data.get('expires_in_hours', 24)
+
+        text = (
+            '🔐 *Your dashboard link*\n\n'
+            f'{url}\n\n'
+            f'Valid for {hours} hours · Tenant: `{TENANT_ID}`\n'
+            '_Do not share — anyone with this link can view your command center._'
+        )
+        await _reply(update, text, agent_id, parse_mode='Markdown')
+    except Exception as exc:
+        logger.error('dashboard link error: %s', exc)
+        await _reply(update, f'Error generating link: {exc}', agent_id)
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        'Unknown command. Try /start for the command list.'
+    agent_id = 'health-advisor'
+    if update and update.effective_message:
+        _persist_turn(update, agent_id, 'user', update.effective_message.text or '')
+    await _reply(
+        update,
+        'Unknown command. Try /start for the command list.',
+        agent_id,
     )
 
 
@@ -330,6 +489,7 @@ def main() -> None:
     app.add_handler(CommandHandler('curatr', cmd_curatr))
     app.add_handler(CommandHandler('approve', cmd_approve))
     app.add_handler(CommandHandler('token', cmd_token))
+    app.add_handler(CommandHandler('dashboard', cmd_dashboard))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     logger.info('openclaw bot starting (tenant=%s)', TENANT_ID)

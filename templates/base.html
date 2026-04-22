@@ -38,6 +38,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.path.startswith('/command-center') %}active{% endif %}"
+                           href="/command-center">
+                           <i class="fas fa-shield-heart me-1"></i>Command Center
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.path == url_for('faq') %}active{% endif %}"
                            href="{{ url_for('faq') }}">
                            <i class="fas fa-question-circle me-1"></i>FAQ
