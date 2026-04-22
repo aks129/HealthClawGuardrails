@@ -327,7 +327,12 @@ def api_generate_link():
         if not valid:
             return jsonify({"error": f"step-up token rejected: {err}"}), 401
 
-    base_url = body.get("base_url") or request.host_url.rstrip("/")
+    import os
+    base_url = (
+        body.get("base_url")
+        or os.environ.get("DASHBOARD_BASE_URL", "").strip()
+        or request.host_url.rstrip("/")
+    )
     agent_id = body.get("agent_id")
     url = access.build_dashboard_url(base_url, tenant_id, agent_id=agent_id)
     token = access.generate_access_token(tenant_id, agent_id=agent_id)
