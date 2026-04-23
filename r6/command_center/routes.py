@@ -52,17 +52,27 @@ SESSION_KEY = "cc_tenant"
 def _tenant() -> str:
     """
     Resolve the active tenant for the current request. Priority:
-    1. Session (set after a signed-link login)
-    2. ?tenant= query param (allowed only for public tenants)
-    3. X-Tenant-Id header
+    1. Session (set after a signed-link login) — authoritative
+    2. ?tenant= query param — ONLY if it matches an explicitly public tenant
+    3. X-Tenant-Id header — same restriction
     4. DEFAULT_TENANT (desktop-demo)
+
+    Non-public tenants can NEVER be selected via query param or header —
+    they require a session obtained from a signed link. This prevents
+    ?tenant=ev-personal from returning personal data to anyone.
     """
-    return (
-        session.get(SESSION_KEY)
-        or request.args.get("tenant")
+    sess_tenant = session.get(SESSION_KEY)
+    if sess_tenant:
+        return sess_tenant
+
+    candidate = (
+        request.args.get("tenant")
         or request.headers.get("X-Tenant-Id")
         or DEFAULT_TENANT
     )
+    if access.is_public(candidate):
+        return candidate
+    return DEFAULT_TENANT
 
 
 def _authorized_for(tenant_id: str) -> bool:
@@ -72,6 +82,26 @@ def _authorized_for(tenant_id: str) -> bool:
     if session.get(SESSION_KEY) == tenant_id:
         return True
     return False
+
+
+def _require_session_or_public():
+    """
+    Guard for /api/* endpoints. Returns a (jsonify, code) tuple to abort with,
+    or None if the request is allowed to proceed.
+
+    Rule: the resolved tenant must either be public (desktop-demo) or match
+    the authenticated session. Personal-data endpoints without a session get
+    401 — never a silent fallback to the public tenant's data.
+    """
+    sess_tenant = session.get(SESSION_KEY)
+    candidate = (
+        request.args.get("tenant")
+        or request.headers.get("X-Tenant-Id")
+    )
+    # If a specific tenant is requested and it's not public, require matching session
+    if candidate and not access.is_public(candidate) and sess_tenant != candidate:
+        return jsonify({"error": "authentication required for this tenant"}), 401
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +126,17 @@ def dashboard():
             error="This link has expired or is invalid. Ask your Telegram agent for a fresh one.",
         ), 401
 
+    # Explicit request for a non-public tenant without a matching session
+    # gets 401, rather than silently falling back to a public tenant view.
+    requested = request.args.get("tenant") or request.headers.get("X-Tenant-Id")
+    if requested and not access.is_public(requested) and session.get(SESSION_KEY) != requested:
+        return render_template(
+            "command_center_login.html",
+            error=None,
+            tenant=requested,
+        ), 401
+
     tenant = _tenant()
-    # Non-public tenants require a valid session
     if not _authorized_for(tenant):
         return render_template(
             "command_center_login.html",
@@ -130,67 +169,100 @@ def logout():
 
 @command_center_blueprint.route("/api/overview", methods=["GET"])
 def api_overview():
+    if (err := _require_session_or_public()):
+        return err
     return jsonify(projector.overview(_tenant()))
 
 
 @command_center_blueprint.route("/api/readiness", methods=["GET"])
 def api_readiness():
+    if (err := _require_session_or_public()):
+        return err
     return jsonify(projector.readiness(_tenant()))
 
 
 @command_center_blueprint.route("/api/actions", methods=["GET"])
 def api_actions():
+    if (err := _require_session_or_public()):
+        return err
     limit = min(int(request.args.get("limit", "20")), 100)
     return jsonify(projector.latest_actions(_tenant(), limit=limit))
 
 
 @command_center_blueprint.route("/api/sources", methods=["GET"])
 def api_sources():
+    if (err := _require_session_or_public()):
+        return err
     return jsonify(projector.data_sources(_tenant()))
 
 
 @command_center_blueprint.route("/api/skills", methods=["GET"])
 def api_skills():
+    if (err := _require_session_or_public()):
+        return err
     return jsonify(projector.skills_status(_tenant()))
 
 
 @command_center_blueprint.route("/api/agents", methods=["GET"])
 def api_agents():
-    return jsonify(projector.agents_status(_tenant()))
+    if (err := _require_session_or_public()):
+        return err
+    agents = projector.agents_status(_tenant())
+    # Redact telegram handles for unauthenticated (public-tenant) responses.
+    # Personal bot handles are only shown to an authenticated session.
+    if not session.get(SESSION_KEY):
+        for a in agents:
+            a.pop("telegram", None)
+    return jsonify(agents)
 
 
 @command_center_blueprint.route("/api/conversations", methods=["GET"])
 def api_conversations_list():
+    if (err := _require_session_or_public()):
+        return err
     limit = min(int(request.args.get("limit", "15")), 100)
     return jsonify(projector.recent_conversations(_tenant(), limit=limit))
 
 
 @command_center_blueprint.route("/api/tasks", methods=["GET"])
 def api_tasks_list():
+    if (err := _require_session_or_public()):
+        return err
     limit = min(int(request.args.get("limit", "20")), 100)
     return jsonify(projector.pending_tasks(_tenant(), limit=limit))
 
 
 @command_center_blueprint.route("/api/insights", methods=["GET"])
 def api_insights():
+    if (err := _require_session_or_public()):
+        return err
     limit = min(int(request.args.get("limit", "10")), 50)
     return jsonify(projector.insights(_tenant(), limit=limit))
 
 
 @command_center_blueprint.route("/api/system", methods=["GET"])
 def api_system():
+    # System status reveals infrastructure URLs (OpenClaw gateway, MCP) —
+    # treat as sensitive; require a session.
+    if not session.get(SESSION_KEY):
+        return jsonify({"error": "authentication required"}), 401
     return jsonify(projector.system_status())
 
 
 @command_center_blueprint.route("/api/agent-templates", methods=["GET"])
 def api_agent_templates():
     """Return the full agent template catalog (templates + bundles)."""
+    # Template catalog is non-sensitive (doesn't reveal the active deployment).
     return jsonify(load_agent_templates())
 
 
 @command_center_blueprint.route("/api/openclaw/sessions", methods=["GET"])
 def api_openclaw_sessions():
     """Live list of OpenClaw chat sessions pulled from the gateway RPC."""
+    # Gateway URL + session list reveal the Mac mini's address and ongoing
+    # chats — require a session.
+    if not session.get(SESSION_KEY):
+        return jsonify({"error": "authentication required"}), 401
     return jsonify({
         "gateway": gateway.probe().to_dict(),
         "sessions": gateway.list_sessions(),
@@ -201,10 +273,33 @@ def api_openclaw_sessions():
 # Write APIs — used by Telegram bot + any future channel to persist activity
 # ---------------------------------------------------------------------------
 
+def _authz_write(tenant_id: str) -> tuple | None:
+    """
+    Allow a write to `tenant_id` if either:
+      (a) the request carries a valid X-Step-Up-Token for that tenant
+          (server-to-server clients — Telegram bot, OpenClaw, MCP), OR
+      (b) the request has an authenticated browser session for that tenant.
+
+    Returns (jsonify, code) to abort with, or None to proceed.
+    """
+    step_up = request.headers.get("X-Step-Up-Token")
+    if step_up:
+        valid, err = validate_step_up_token(step_up, tenant_id)
+        if valid:
+            return None
+        return jsonify({"error": f"step-up token rejected: {err}"}), 401
+    if session.get(SESSION_KEY) == tenant_id:
+        return None
+    return jsonify({
+        "error": "authentication required (session cookie or X-Step-Up-Token)"
+    }), 401
+
+
 @command_center_blueprint.route("/api/conversations", methods=["POST"])
 def api_conversations_create():
     """
-    Log a single conversation turn.
+    Log a single conversation turn. Requires either a valid step-up token
+    or a browser session for the target tenant.
 
     Body:
         tenant_id: str (required)
@@ -223,6 +318,9 @@ def api_conversations_create():
     text = body.get("text")
     if not tenant_id or not role or text is None:
         return jsonify({"error": "tenant_id, role, and text are required"}), 400
+
+    if (err := _authz_write(tenant_id)):
+        return err
 
     agent_id = body.get("agent_id")
     if agent_id and not get_agent(agent_id):
@@ -271,6 +369,9 @@ def api_tasks_create():
     if not get_agent(agent_id):
         return jsonify({"error": f"unknown agent_id: {agent_id}"}), 400
 
+    if (err := _authz_write(tenant_id)):
+        return err
+
     task = AgentTask(
         tenant_id=tenant_id,
         agent_id=agent_id,
@@ -298,6 +399,9 @@ def api_tasks_update(task_id: str):
     task = AgentTask.query.filter_by(id=task_id).first()
     if not task:
         return jsonify({"error": "task not found"}), 404
+
+    if (err := _authz_write(task.tenant_id)):
+        return err
 
     task.status = new_status
     task.updated_at = datetime.now(timezone.utc)

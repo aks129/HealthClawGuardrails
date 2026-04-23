@@ -25,6 +25,14 @@ from r6.command_center.models import ConversationMessage, AgentTask
 TENANT = "test-tenant"
 
 
+def _login_client(client, tenant: str = TENANT):
+    """Log the test client in by exchanging a signed token for a session."""
+    from r6.command_center import access
+    token = access.generate_access_token(tenant)
+    client.get("/command-center", query_string={"t": token}, follow_redirects=False)
+    return client
+
+
 # ---------------------------------------------------------------------------
 # Agent registry
 # ---------------------------------------------------------------------------
@@ -280,8 +288,14 @@ class TestRestEndpoints:
         assert "pcp-advisor" in template_ids
         assert len(body["bundles"]) >= 3
 
-    def test_api_openclaw_sessions_returns_structured_empty_when_unconfigured(self, client, monkeypatch):
+    def test_api_openclaw_sessions_requires_auth(self, client, monkeypatch):
         monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
+        resp = client.get("/command-center/api/openclaw/sessions")
+        assert resp.status_code == 401
+
+    def test_api_openclaw_sessions_with_session(self, client, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
+        _login_client(client)
         resp = client.get("/command-center/api/openclaw/sessions")
         assert resp.status_code == 200
         body = resp.get_json()
@@ -298,13 +312,18 @@ class TestRestEndpoints:
         resp = client.get("/command-center/api/skills", query_string={"tenant": TENANT})
         assert resp.status_code == 200
 
-    def test_api_system(self, client):
+    def test_api_system_requires_auth(self, client):
+        resp = client.get("/command-center/api/system")
+        assert resp.status_code == 401
+
+    def test_api_system_with_session(self, client):
+        _login_client(client)
         resp = client.get("/command-center/api/system")
         assert resp.status_code == 200
         body = resp.get_json()
         assert body["flask"]["up"] is True
 
-    def test_api_conversations_post_and_get(self, client):
+    def test_api_conversations_post_and_get(self, client, step_up_token):
         payload = {
             "tenant_id": TENANT,
             "agent_id": "sally",
@@ -314,7 +333,11 @@ class TestRestEndpoints:
             "role": "user",
             "text": "/health",
         }
-        resp = client.post("/command-center/api/conversations", json=payload)
+        resp = client.post(
+            "/command-center/api/conversations",
+            json=payload,
+            headers={"X-Step-Up-Token": step_up_token},
+        )
         assert resp.status_code == 201
         created = resp.get_json()
         assert created["tenant_id"] == TENANT
@@ -337,7 +360,7 @@ class TestRestEndpoints:
         )
         assert resp.status_code == 400
 
-    def test_api_conversations_post_rejects_unknown_agent(self, client):
+    def test_api_conversations_post_rejects_unknown_agent(self, client, step_up_token):
         resp = client.post(
             "/command-center/api/conversations",
             json={
@@ -346,10 +369,23 @@ class TestRestEndpoints:
                 "text": "hi",
                 "agent_id": "bogus",
             },
+            headers={"X-Step-Up-Token": step_up_token},
         )
         assert resp.status_code == 400
 
-    def test_api_tasks_create_list_and_update(self, client):
+    def test_api_conversations_post_rejects_without_auth(self, client):
+        resp = client.post(
+            "/command-center/api/conversations",
+            json={
+                "tenant_id": TENANT,
+                "role": "user",
+                "text": "hi",
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_api_tasks_create_list_and_update(self, client, step_up_token):
+        headers = {"X-Step-Up-Token": step_up_token}
         # Create
         create = client.post("/command-center/api/tasks", json={
             "tenant_id": TENANT,
@@ -357,7 +393,7 @@ class TestRestEndpoints:
             "title": "Approve ICD-9 fix",
             "priority": "high",
             "source": "curatr",
-        })
+        }, headers=headers)
         assert create.status_code == 201
         task = create.get_json()
         assert task["status"] == "pending"
@@ -368,10 +404,11 @@ class TestRestEndpoints:
         assert listed.status_code == 200
         assert any(t["id"] == task_id for t in listed.get_json())
 
-        # Update to completed
+        # Update to completed (also requires step-up)
         updated = client.patch(
             f"/command-center/api/tasks/{task_id}",
             json={"status": "completed"},
+            headers=headers,
         )
         assert updated.status_code == 200
         assert updated.get_json()["status"] == "completed"
@@ -380,12 +417,13 @@ class TestRestEndpoints:
         listed2 = client.get("/command-center/api/tasks", query_string={"tenant": TENANT})
         assert not any(t["id"] == task_id for t in listed2.get_json())
 
-    def test_api_tasks_update_rejects_bad_status(self, client):
+    def test_api_tasks_update_rejects_bad_status(self, client, step_up_token):
+        headers = {"X-Step-Up-Token": step_up_token}
         create = client.post("/command-center/api/tasks", json={
             "tenant_id": TENANT,
             "agent_id": "sally",
             "title": "X",
-        })
+        }, headers=headers)
         task_id = create.get_json()["id"]
 
         resp = client.patch(

@@ -9,6 +9,10 @@ import pytest
 os.environ['TESTING'] = '1'
 os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 os.environ['STEP_UP_SECRET'] = 'test-secret-for-hmac-validation'
+# Command-center tests assume desktop-demo is publicly readable (mirrors
+# the healthclaw.io demo host). In production on Railway this env var is
+# unset so PUBLIC_TENANTS is empty and everything requires a session.
+os.environ.setdefault('PUBLIC_TENANTS', 'desktop-demo,test-tenant')
 
 # Standard tenant ID for all tests
 TEST_TENANT_ID = 'test-tenant'

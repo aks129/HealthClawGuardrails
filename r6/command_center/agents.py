@@ -8,6 +8,7 @@ is read-only in code — edit agents.yaml to add or change agents.
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +18,25 @@ logger = logging.getLogger(__name__)
 
 _AGENTS_PATH = Path(__file__).parent / "agents.yaml"
 _TEMPLATES_PATH = Path(__file__).parent / "agent_templates.yaml"
+
+
+def _overlay_env_telegram(agents: list[dict]) -> list[dict]:
+    """
+    Populate each agent's `telegram` handle from env var (per agent) ONLY
+    when set. Env var name convention: AGENT_TELEGRAM_<UPPER_ID>.
+
+    Rationale: committing personal @bot handles to a public repo is a
+    data leak. Production (Railway) sets them; Vercel demo leaves them
+    unset so public /api/agents responses don't reveal personal bots.
+    """
+    for a in agents:
+        aid = (a.get("id") or "").upper().replace("-", "_")
+        if not aid:
+            continue
+        env_val = os.environ.get(f"AGENT_TELEGRAM_{aid}")
+        if env_val:
+            a["telegram"] = env_val
+    return agents
 
 
 @lru_cache(maxsize=1)
@@ -32,7 +52,8 @@ def load_agents() -> list[dict]:
         logger.error("Failed to parse agents.yaml: %s", e)
         return []
 
-    return data.get("agents", []) if data else []
+    agents = data.get("agents", []) if data else []
+    return _overlay_env_telegram(agents)
 
 
 @lru_cache(maxsize=1)

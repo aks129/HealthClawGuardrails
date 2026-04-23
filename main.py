@@ -150,10 +150,15 @@ if not os.environ.get('VERCEL'):
     if start_poller(app):
         logger.info("Wearables poller started (background thread)")
 
-# Register Command Center Blueprint — "My Health in Good Hands" dashboard
-from r6.command_center.routes import command_center_blueprint
-app.register_blueprint(command_center_blueprint)
-logger.info("Command Center Blueprint registered at /command-center")
+# Register Command Center Blueprint — "My Health in Good Hands" dashboard.
+# Skipped on Vercel (healthclaw.io is the public marketing/demo surface;
+# the command center lives on Railway behind auth).
+if os.environ.get('DISABLE_COMMAND_CENTER', '').lower() in ('1', 'true', 'yes'):
+    logger.info("Command Center disabled via DISABLE_COMMAND_CENTER env var")
+else:
+    from r6.command_center.routes import command_center_blueprint
+    app.register_blueprint(command_center_blueprint)
+    logger.info("Command Center Blueprint registered at /command-center")
 
 # Log upstream FHIR server configuration
 _upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()

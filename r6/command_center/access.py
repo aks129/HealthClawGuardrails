@@ -25,7 +25,22 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 logger = logging.getLogger(__name__)
 
-PUBLIC_TENANTS = frozenset({"desktop-demo"})
+def _public_tenants() -> frozenset[str]:
+    """
+    Tenants that are accessible without authentication.
+
+    Configurable via PUBLIC_TENANTS env var (comma-separated). Empty/unset
+    means NO public tenants — every dashboard request requires a signed
+    link or session. Set to "desktop-demo" on demo hosts (healthclaw.io)
+    to keep the synthetic demo tenant browsable.
+    """
+    raw = os.environ.get("PUBLIC_TENANTS", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
+PUBLIC_TENANTS = _public_tenants()
 DASHBOARD_TTL_HOURS = int(os.environ.get("DASHBOARD_TOKEN_TTL_HOURS", "24"))
 _SALT = "command-center-access-v1"
 
@@ -78,8 +93,11 @@ def verify_access_token(token: str) -> dict | None:
 
 
 def is_public(tenant_id: str) -> bool:
-    """Tenants in PUBLIC_TENANTS bypass auth entirely (demo use)."""
-    return tenant_id in PUBLIC_TENANTS
+    """Tenants in PUBLIC_TENANTS bypass auth entirely (demo use).
+
+    Re-reads env every call so changes without a restart take effect.
+    """
+    return tenant_id in _public_tenants()
 
 
 def build_dashboard_url(base_url: str, tenant_id: str,
