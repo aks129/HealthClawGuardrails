@@ -17,6 +17,7 @@ agents:
     role: PCP Advisor
     emoji: "🩺"
     color: "#2563eb"
+    telegram: "@sally_coopdoop_bot"
     description: >
       Your primary care coordinator. Sally reviews your conditions and
       vitals, flags preventive screening gaps against USPSTF guidelines,
@@ -41,6 +42,7 @@ agents:
     role: Pharmacy Helper
     emoji: "💊"
     color: "#9333ea"
+    telegram: "@mary_coopdoop_bot"
     description: >
       Medication coordinator. Mary tracks your active prescriptions,
       flags potential interactions, reminds you of refills, and can
@@ -61,6 +63,7 @@ agents:
     role: Fitness Coach
     emoji: "🏃"
     color: "#16a34a"
+    telegram: "@dom_coopdoop_bot"
     description: >
       Fitness and activity coach. Dom pulls your wearable data
       (Fitbit, Oura, Whoop, Apple Health) plus clinical vitals to

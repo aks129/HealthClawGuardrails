@@ -337,6 +337,35 @@
     font-style: italic;
 }
 
+.cc-agent-telegram {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.55rem;
+    font-size: 0.82rem;
+    color: #26a5e4;
+    text-decoration: none;
+    padding: 0.25rem 0.6rem;
+    background: rgba(38, 165, 228, 0.12);
+    border: 1px solid rgba(38, 165, 228, 0.3);
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.cc-agent-telegram:hover {
+    background: rgba(38, 165, 228, 0.22);
+    color: #60bff0;
+    text-decoration: none;
+}
+.cc-agent-telegram-off {
+    background: transparent;
+    color: var(--cc-text-muted);
+    border: 1px dashed var(--cc-border);
+    cursor: default;
+}
+.cc-agent-telegram-off:hover {
+    background: transparent;
+}
+
 /* ------- Action/event list ------- */
 .cc-actions, .cc-conversations, .cc-tasks, .cc-insights {
     background: var(--cc-card);

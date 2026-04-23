@@ -144,6 +144,9 @@
             const roleHtml = a.role
                 ? `<div class="cc-agent-role">${escape(a.role)}</div>`
                 : '';
+            const tgHtml = a.telegram
+                ? `<a class="cc-agent-telegram" href="https://t.me/${escape(a.telegram.replace(/^@/, ''))}" target="_blank" rel="noopener"><i class="fab fa-telegram"></i> ${escape(a.telegram)}</a>`
+                : '<span class="cc-agent-telegram cc-agent-telegram-off">no Telegram bot yet</span>';
             return `
                 <div class="cc-agent-card state-${escape(a.state)}" style="--cc-agent-color:${escape(a.color)}">
                     <div class="cc-agent-head">
@@ -159,6 +162,7 @@
                         <span><strong>${a.conversation_count}</strong> chats</span>
                         <span><strong>${a.pending_tasks}</strong> tasks</span>
                     </div>
+                    ${tgHtml}
                     ${lastMsgHtml}
                 </div>
             `;

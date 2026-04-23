@@ -475,6 +475,7 @@ def agents_status(tenant_id: str) -> list[dict]:
             "role": agent.get("role"),
             "emoji": agent.get("emoji", "🤖"),
             "color": agent.get("color", "#64748b"),
+            "telegram": agent.get("telegram"),
             "description": agent.get("description", "").strip(),
             "skills": agent.get("skills", []),
             "tool_patterns": agent.get("tool_patterns", []),
