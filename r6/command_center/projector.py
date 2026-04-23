@@ -472,6 +472,7 @@ def agents_status(tenant_id: str) -> list[dict]:
         out.append({
             "id": agent_id,
             "name": agent["name"],
+            "role": agent.get("role"),
             "emoji": agent.get("emoji", "🤖"),
             "color": agent.get("color", "#64748b"),
             "description": agent.get("description", "").strip(),
