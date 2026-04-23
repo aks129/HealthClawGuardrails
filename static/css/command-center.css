@@ -293,6 +293,24 @@
 .cc-agent-name {
     font-weight: 600;
     font-size: 1rem;
+    line-height: 1.2;
+}
+
+.cc-agent-role {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cc-agent-color, var(--cc-accent));
+    font-weight: 500;
+    margin-top: 0.1rem;
+}
+
+.cc-sessions {
+    background: var(--cc-card);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    max-height: 320px;
+    overflow-y: auto;
 }
 
 .cc-agent-desc {

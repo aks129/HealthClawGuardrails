@@ -32,9 +32,9 @@ from flask import (
 )
 
 from models import db
-from r6.command_center import projector, access
+from r6.command_center import projector, access, gateway
 from r6.command_center.models import ConversationMessage, AgentTask
-from r6.command_center.agents import load_agents, get_agent
+from r6.command_center.agents import load_agents, load_agent_templates, get_agent
 from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
@@ -180,6 +180,21 @@ def api_insights():
 @command_center_blueprint.route("/api/system", methods=["GET"])
 def api_system():
     return jsonify(projector.system_status())
+
+
+@command_center_blueprint.route("/api/agent-templates", methods=["GET"])
+def api_agent_templates():
+    """Return the full agent template catalog (templates + bundles)."""
+    return jsonify(load_agent_templates())
+
+
+@command_center_blueprint.route("/api/openclaw/sessions", methods=["GET"])
+def api_openclaw_sessions():
+    """Live list of OpenClaw chat sessions pulled from the gateway RPC."""
+    return jsonify({
+        "gateway": gateway.probe().to_dict(),
+        "sessions": gateway.list_sessions(),
+    })
 
 
 # ---------------------------------------------------------------------------

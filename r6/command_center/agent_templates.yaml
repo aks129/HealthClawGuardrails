@@ -1,0 +1,230 @@
+# Agent persona templates.
+#
+# Unlike agents.yaml (which defines the CURRENT roster of active agents for
+# this deployment), this file is a CATALOG of persona templates. Users setting
+# up their own HealthClaw + OpenClaw deployment can pick which personas they
+# want and compose a custom agents.yaml from these templates.
+#
+# Templates are grouped by theme so users can pick bundles that fit their
+# goals (e.g. "chronic condition management", "family caregiving", "athletic
+# performance").
+#
+# Consumed by:
+#   GET  /command-center/api/agent-templates        — list available templates
+#   POST /command-center/api/agent-templates/deploy — (future) generate a
+#                                                       custom agents.yaml
+
+templates:
+  # ── Primary care tier ────────────────────────────────────────────────
+  - id: pcp-advisor
+    name: PCP Advisor
+    emoji: "🩺"
+    category: primary-care
+    description: >
+      Primary care coordinator. Reviews conditions, vitals, and recent
+      labs; flags preventive screening gaps per USPSTF.
+    recommended_for:
+      - "Everyone — start here"
+    skills: [curatr, personal-health-records, fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, fhir_lastn, fhir_stats]
+
+  - id: pharmacy-helper
+    name: Pharmacy Helper
+    emoji: "💊"
+    category: medication
+    description: >
+      Tracks active prescriptions, flags interactions, reminds you of
+      refills, and explains medications in plain language.
+    recommended_for:
+      - "Anyone on more than one daily medication"
+      - "Chronic condition management"
+    skills: [curatr, fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read]
+
+  - id: specialist-liaison
+    name: Specialist Liaison
+    emoji: "🏥"
+    category: primary-care
+    description: >
+      Coordinates context for specialist visits. Bundles relevant
+      history for cardiology, endocrinology, orthopedics, etc.
+    recommended_for:
+      - "Multiple specialists involved in your care"
+    skills: [personal-health-records, fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, fhir_stats]
+
+  # ── Fitness & lifestyle tier ─────────────────────────────────────────
+  - id: fitness-coach
+    name: Fitness Coach
+    emoji: "🏃"
+    category: lifestyle
+    description: >
+      Tracks wearable data (Fitbit, Oura, Whoop, Apple Health) and
+      clinical vitals. Workouts, sleep, recovery, progress vs. goals.
+    recommended_for:
+      - "Active users with a wearable"
+      - "Anyone targeting fitness goals"
+    skills: [fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, fhir_stats, wearable_sync_status]
+
+  - id: nutrition-dietician
+    name: Nutrition & Dietician
+    emoji: "🥗"
+    category: lifestyle
+    description: >
+      Logs NutritionIntake, correlates diet with glucose / blood pressure
+      / weight trends, and suggests evidence-based adjustments.
+    recommended_for:
+      - "Diabetes, pre-diabetes, or cardiovascular risk"
+      - "Weight management goals"
+    skills: [fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, fhir_stats]
+
+  - id: sleep-specialist
+    name: Sleep Specialist
+    emoji: "😴"
+    category: lifestyle
+    description: >
+      Focuses on sleep architecture from wearables (duration, stages,
+      HRV). Correlates with mood, energy, and training load.
+    recommended_for:
+      - "Oura / Whoop / Apple Watch users"
+    skills: [fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, wearable_sync_status]
+
+  # ── Strategic / advisory tier ────────────────────────────────────────
+  - id: health-advisor
+    name: Health Advisor
+    emoji: "🧠"
+    category: advisory
+    description: >
+      Strategic view across the whole record — trend analysis, second
+      opinions, long-term preventive planning.
+    recommended_for:
+      - "Complex or chronic conditions"
+      - "Planning life-stage transitions (pregnancy, menopause, retirement)"
+    skills: [curatr, personal-health-records, fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read, fhir_lastn, fhir_stats]
+
+  - id: mental-health-companion
+    name: Mental Health Companion
+    emoji: "💙"
+    category: advisory
+    description: >
+      Tracks mood logs, sleep, and stress indicators. Surfaces patterns
+      between mental state and physical metrics. Does NOT replace a therapist.
+    recommended_for:
+      - "Mood tracking and self-awareness"
+    skills: [fhir-r6-guardrails]
+    tool_patterns: [fhir_search, fhir_read]
+
+  # ── Family / caregiving tier ─────────────────────────────────────────
+  - id: family-manager
+    name: Family Manager
+    emoji: "👨‍👩‍👧"
+    category: family
+    description: >
+      Coordinates health context for household members. Appointments,
+      pediatric vaccines, elder-care schedules, pending approvals.
+    recommended_for:
+      - "Parents managing kids' health"
+      - "Adult children coordinating elder parents' care"
+    skills: [personal-health-records, fasten-connect]
+    tool_patterns: [fhir_search, fhir_read, fhir_propose_write]
+
+  - id: eldercare-coordinator
+    name: Eldercare Coordinator
+    emoji: "👴"
+    category: family
+    description: >
+      Focused on aging-parent care — medication adherence, mobility,
+      falls risk, specialist appointments, Medicare coverage tracking.
+    recommended_for:
+      - "Adult children of aging parents"
+    skills: [personal-health-records, fasten-connect]
+    tool_patterns: [fhir_search, fhir_read]
+
+  - id: pediatric-tracker
+    name: Pediatric Tracker
+    emoji: "👶"
+    category: family
+    description: >
+      Vaccination schedule, growth percentiles, milestones, and school
+      forms for kids.
+    recommended_for:
+      - "Parents of children under 18"
+    skills: [personal-health-records]
+    tool_patterns: [fhir_search, fhir_read]
+
+  # ── Operations tier ──────────────────────────────────────────────────
+  - id: service-optimizer
+    name: Service Optimizer
+    emoji: "⚙️"
+    category: operations
+    description: >
+      Runs the plumbing. Monitors data source connections, flags stale
+      imports, curates data-quality issues, keeps the stack healthy.
+    recommended_for:
+      - "Power users with multiple data sources"
+      - "Anyone running HealthClaw long-term"
+    skills: [curatr, phi-redaction, healthex-export, fhir-upstream-proxy, fasten-connect]
+    tool_patterns: [curatr_evaluate, curatr_apply_fix, fhir_validate, fhir_commit_write]
+
+  - id: privacy-auditor
+    name: Privacy Auditor
+    emoji: "🛡️"
+    category: operations
+    description: >
+      Surfaces every access to your PHI, lets you review who queried
+      what, and enforces your access policies.
+    recommended_for:
+      - "Privacy-conscious users"
+      - "Multi-agent setups"
+    skills: [phi-redaction]
+    tool_patterns: [fhir_search]
+
+# ── Recommended bundles ──────────────────────────────────────────────────
+bundles:
+  - id: solo-essentials
+    name: "Solo Essentials"
+    description: >
+      Minimum useful setup for a single adult managing their own care.
+    agents: [pcp-advisor, pharmacy-helper, service-optimizer]
+
+  - id: athlete-plus
+    name: "Athlete+"
+    description: >
+      For active users with wearables and fitness goals.
+    agents: [pcp-advisor, fitness-coach, sleep-specialist, nutrition-dietician, service-optimizer]
+
+  - id: chronic-condition
+    name: "Chronic Condition Management"
+    description: >
+      Deep coordination for diabetes, cardiac, autoimmune, or similar
+      long-term conditions.
+    agents: [pcp-advisor, pharmacy-helper, specialist-liaison, health-advisor, nutrition-dietician, service-optimizer]
+
+  - id: family-complete
+    name: "Family Complete"
+    description: >
+      Multi-generational household — kids, adults, and aging parents.
+    agents: [pcp-advisor, pharmacy-helper, family-manager, pediatric-tracker, eldercare-coordinator, service-optimizer]
+
+  - id: full-coverage
+    name: "Full Coverage"
+    description: >
+      Every available persona. For maximum insight; higher token cost.
+    agents:
+      - pcp-advisor
+      - pharmacy-helper
+      - specialist-liaison
+      - fitness-coach
+      - nutrition-dietician
+      - sleep-specialist
+      - health-advisor
+      - mental-health-companion
+      - family-manager
+      - eldercare-coordinator
+      - pediatric-tracker
+      - service-optimizer
+      - privacy-auditor

@@ -141,11 +141,17 @@
             const lastMsgHtml = a.last_conversation
                 ? `<div class="cc-agent-last-msg">“${escape((a.last_conversation.text || '').slice(0, 140))}” · ${relativeTime(a.last_conversation.created_at)}</div>`
                 : '';
+            const roleHtml = a.role
+                ? `<div class="cc-agent-role">${escape(a.role)}</div>`
+                : '';
             return `
                 <div class="cc-agent-card state-${escape(a.state)}" style="--cc-agent-color:${escape(a.color)}">
                     <div class="cc-agent-head">
                         <span class="cc-agent-emoji">${escape(a.emoji)}</span>
-                        <span class="cc-agent-name">${escape(a.name)}</span>
+                        <div>
+                            <div class="cc-agent-name">${escape(a.name)}</div>
+                            ${roleHtml}
+                        </div>
                     </div>
                     <div class="cc-agent-desc">${escape(a.description)}</div>
                     <div class="cc-agent-meta">
@@ -267,6 +273,42 @@
         setHTML('cc-sources', html);
     }
 
+    function renderSessions(data) {
+        const gw = (data && data.gateway) || {};
+        const sessions = (data && data.sessions) || [];
+        if (!gw.configured) {
+            setHTML('cc-sessions',
+                `<div class="cc-empty">OpenClaw Gateway not configured — set <code>OPENCLAW_GATEWAY_URL</code> on the Flask service to pull live sessions from your Mac mini</div>`);
+            return;
+        }
+        if (!gw.reachable) {
+            setHTML('cc-sessions',
+                `<div class="cc-empty">Gateway unreachable at <code>${escape(gw.url || '?')}</code> — check tunnel / VPN / Tailscale</div>`);
+            return;
+        }
+        if (!sessions.length) {
+            setHTML('cc-sessions', '<div class="cc-empty">Gateway up but no active sessions</div>');
+            return;
+        }
+        const html = sessions.map((s) => `
+            <div class="cc-row">
+                <i class="cc-row-icon fas fa-circle-nodes"></i>
+                <div class="cc-row-body">
+                    <div class="cc-row-title">
+                        ${s.agent ? escape(s.agent) + ' · ' : ''}<span class="cc-badge">${escape(s.channel || 'unknown')}</span>
+                        ${s.peer ? `<span style="color:var(--cc-text-dim)">${escape(s.peer)}</span>` : ''}
+                    </div>
+                    <div class="cc-row-sub">
+                        ${s.started ? 'started ' + relativeTime(s.started) : ''}
+                        ${s.last_activity ? ' · last ' + relativeTime(s.last_activity) : ''}
+                        ${s.message_count != null ? ' · ' + s.message_count + ' msgs' : ''}
+                    </div>
+                </div>
+            </div>
+        `).join('');
+        setHTML('cc-sessions', html);
+    }
+
     function renderSkills(list) {
         if (!list || !list.length) {
             setHTML('cc-skills', '<div class="cc-empty">No skills found</div>');
@@ -290,6 +332,7 @@
             ['readiness', renderReadiness],
             ['system', renderSystem],
             ['agents', renderAgents],
+            ['openclaw/sessions', renderSessions],
             ['actions', renderActions],
             ['conversations', renderConversations],
             ['tasks', renderTasks],

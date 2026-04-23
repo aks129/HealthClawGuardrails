@@ -55,7 +55,10 @@
             <div class="cc-agent-card state-idle" style="--cc-agent-color:{{ a.color }}">
                 <div class="cc-agent-head">
                     <span class="cc-agent-emoji">{{ a.emoji }}</span>
-                    <span class="cc-agent-name">{{ a.name }}</span>
+                    <div>
+                        <div class="cc-agent-name">{{ a.name }}</div>
+                        {% if a.role %}<div class="cc-agent-role">{{ a.role }}</div>{% endif %}
+                    </div>
                 </div>
                 <div class="cc-agent-desc">{{ a.description }}</div>
                 <div class="cc-agent-meta">
@@ -65,6 +68,14 @@
                 </div>
             </div>
             {% endfor %}
+        </div>
+    </section>
+
+    <!-- OpenClaw live sessions -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-circle-nodes"></i> OpenClaw Live Sessions</h2>
+        <div class="cc-sessions" id="cc-sessions">
+            <div class="cc-loading">Loading…</div>
         </div>
     </section>
 

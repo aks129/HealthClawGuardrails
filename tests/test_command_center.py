@@ -31,31 +31,44 @@ TENANT = "test-tenant"
 
 class TestAgentRegistry:
 
-    def test_loads_four_agents(self):
+    def test_loads_six_agents(self):
         agents.load_agents.cache_clear()
         items = agents.load_agents()
         ids = {a["id"] for a in items}
-        assert {"health-advisor", "fitness-dietician", "family-caretaker", "record-curator"} <= ids
+        assert {"sally", "mary", "dom", "shervin", "ronny", "joe"} <= ids
 
     def test_get_agent_returns_dict(self):
-        a = agents.get_agent("health-advisor")
+        a = agents.get_agent("sally")
         assert a is not None
-        assert a["name"] == "Health Advisor"
+        assert a["name"] == "Sally"
+        assert a["role"] == "PCP Advisor"
         assert "emoji" in a
         assert isinstance(a.get("tool_patterns", []), list)
 
     def test_get_agent_unknown_returns_none(self):
         assert agents.get_agent("no-such-agent") is None
 
-    def test_agent_for_tool_maps_curatr_to_record_curator(self):
+    def test_agent_for_tool_curatr_goes_to_joe(self):
         a = agents.agent_for_tool("curatr_evaluate")
         assert a is not None
-        assert a["id"] == "record-curator"
+        assert a["id"] == "joe"
 
-    def test_agent_for_tool_maps_wearable_to_fitness(self):
+    def test_agent_for_tool_wearable_goes_to_dom(self):
         a = agents.agent_for_tool("wearable_sync_status")
         assert a is not None
-        assert a["id"] == "fitness-dietician"
+        assert a["id"] == "dom"
+
+    def test_agent_templates_load(self):
+        agents.load_agent_templates.cache_clear()
+        data = agents.load_agent_templates()
+        assert "templates" in data
+        assert "bundles" in data
+        template_ids = {t["id"] for t in data["templates"]}
+        # Spot-check a few well-known templates
+        assert {"pcp-advisor", "pharmacy-helper", "fitness-coach"} <= template_ids
+        # Bundles exist
+        bundle_ids = {b["id"] for b in data["bundles"]}
+        assert {"solo-essentials", "athlete-plus"} <= bundle_ids
 
 
 # ---------------------------------------------------------------------------
@@ -99,28 +112,28 @@ class TestActionsAndAgents:
                 event_type="read",
                 resource_type="Patient",
                 tenant_id=TENANT,
-                agent_id="health-advisor",
+                agent_id="sally",
                 detail="fhir_search",
             ))
             db.session.commit()
             out = projector.latest_actions(TENANT, limit=5)
             assert len(out) == 1
             assert out[0]["event_type"] == "read"
-            assert out[0]["agent_name"] == "Health Advisor"
+            assert out[0]["agent_name"] == "Sally"
             assert out[0]["agent_emoji"]
 
     def test_agents_status_includes_conversation_count(self, app):
         with app.app_context():
             db.session.add(ConversationMessage(
                 tenant_id=TENANT,
-                agent_id="health-advisor",
+                agent_id="sally",
                 channel="telegram",
                 role="user",
                 text="/health",
             ))
             db.session.commit()
             out = projector.agents_status(TENANT)
-            advisor = next(a for a in out if a["id"] == "health-advisor")
+            advisor = next(a for a in out if a["id"] == "sally")
             assert advisor["conversation_count"] == 1
             assert advisor["state"] == "active"
             assert advisor["last_conversation"] is not None
@@ -235,7 +248,7 @@ class TestRestEndpoints:
         resp = client.get("/command-center")
         assert resp.status_code == 200
         assert b"My Health in Good Hands" in resp.data
-        assert b"Health Advisor" in resp.data
+        assert b"Sally" in resp.data
 
     def test_api_overview(self, client):
         resp = client.get("/command-center/api/overview", query_string={"tenant": TENANT})
@@ -254,10 +267,27 @@ class TestRestEndpoints:
         resp = client.get("/command-center/api/agents", query_string={"tenant": TENANT})
         assert resp.status_code == 200
         body = resp.get_json()
-        assert len(body) == 4
+        assert len(body) == 6
         assert {a["id"] for a in body} == {
-            "health-advisor", "fitness-dietician", "family-caretaker", "record-curator"
+            "sally", "mary", "dom", "shervin", "ronny", "joe"
         }
+
+    def test_api_agent_templates(self, client):
+        resp = client.get("/command-center/api/agent-templates")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        template_ids = {t["id"] for t in body["templates"]}
+        assert "pcp-advisor" in template_ids
+        assert len(body["bundles"]) >= 3
+
+    def test_api_openclaw_sessions_returns_structured_empty_when_unconfigured(self, client, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_GATEWAY_URL", raising=False)
+        resp = client.get("/command-center/api/openclaw/sessions")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "gateway" in body
+        assert "sessions" in body
+        assert body["sessions"] == []
 
     def test_api_sources(self, client):
         resp = client.get("/command-center/api/sources", query_string={"tenant": TENANT})
@@ -277,7 +307,7 @@ class TestRestEndpoints:
     def test_api_conversations_post_and_get(self, client):
         payload = {
             "tenant_id": TENANT,
-            "agent_id": "health-advisor",
+            "agent_id": "sally",
             "channel": "telegram",
             "session_id": "chat-123",
             "user_id": "tg-456",
@@ -288,7 +318,7 @@ class TestRestEndpoints:
         assert resp.status_code == 201
         created = resp.get_json()
         assert created["tenant_id"] == TENANT
-        assert created["agent_id"] == "health-advisor"
+        assert created["agent_id"] == "sally"
 
         resp = client.get(
             "/command-center/api/conversations",
@@ -323,7 +353,7 @@ class TestRestEndpoints:
         # Create
         create = client.post("/command-center/api/tasks", json={
             "tenant_id": TENANT,
-            "agent_id": "record-curator",
+            "agent_id": "joe",
             "title": "Approve ICD-9 fix",
             "priority": "high",
             "source": "curatr",
@@ -353,7 +383,7 @@ class TestRestEndpoints:
     def test_api_tasks_update_rejects_bad_status(self, client):
         create = client.post("/command-center/api/tasks", json={
             "tenant_id": TENANT,
-            "agent_id": "health-advisor",
+            "agent_id": "sally",
             "title": "X",
         })
         task_id = create.get_json()["id"]
@@ -390,11 +420,11 @@ class TestAccessControl:
 
     def test_generate_and_verify_roundtrip(self):
         from r6.command_center import access
-        token = access.generate_access_token("ev-personal", agent_id="health-advisor")
+        token = access.generate_access_token("ev-personal", agent_id="sally")
         payload = access.verify_access_token(token)
         assert payload is not None
         assert payload["tenant_id"] == "ev-personal"
-        assert payload["agent_id"] == "health-advisor"
+        assert payload["agent_id"] == "sally"
 
     def test_bad_token_returns_none(self):
         from r6.command_center import access
@@ -475,7 +505,7 @@ class TestGenerateLinkEndpoint:
     def test_private_tenant_with_valid_stepup(self, client, tenant_id, step_up_token):
         resp = client.post(
             "/command-center/api/generate-link",
-            json={"tenant_id": tenant_id, "agent_id": "health-advisor"},
+            json={"tenant_id": tenant_id, "agent_id": "sally"},
             headers={"X-Step-Up-Token": step_up_token},
         )
         assert resp.status_code == 200
@@ -488,7 +518,7 @@ class TestGenerateLinkEndpoint:
         payload = access.verify_access_token(body["token"])
         assert payload is not None
         assert payload["tenant_id"] == tenant_id
-        assert payload["agent_id"] == "health-advisor"
+        assert payload["agent_id"] == "sally"
 
     def test_private_tenant_with_bad_stepup_rejected(self, client):
         resp = client.post(

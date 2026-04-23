@@ -16,6 +16,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 _AGENTS_PATH = Path(__file__).parent / "agents.yaml"
+_TEMPLATES_PATH = Path(__file__).parent / "agent_templates.yaml"
 
 
 @lru_cache(maxsize=1)
@@ -32,6 +33,25 @@ def load_agents() -> list[dict]:
         return []
 
     return data.get("agents", []) if data else []
+
+
+@lru_cache(maxsize=1)
+def load_agent_templates() -> dict:
+    """Return the parsed agent templates catalog (templates + bundles)."""
+    if not _TEMPLATES_PATH.exists():
+        logger.warning("agent_templates.yaml not found at %s", _TEMPLATES_PATH)
+        return {"templates": [], "bundles": []}
+
+    try:
+        data = yaml.safe_load(_TEMPLATES_PATH.read_text()) or {}
+    except yaml.YAMLError as e:
+        logger.error("Failed to parse agent_templates.yaml: %s", e)
+        return {"templates": [], "bundles": []}
+
+    return {
+        "templates": data.get("templates") or [],
+        "bundles": data.get("bundles") or [],
+    }
 
 
 def get_agent(agent_id: str) -> dict | None:

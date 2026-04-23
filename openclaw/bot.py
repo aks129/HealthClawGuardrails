@@ -69,15 +69,18 @@ _chat_state: dict[int, dict] = {}
 # Telegram command → command-center agent id. Determines which agent
 # persona each bot interaction is attributed to in the dashboard.
 COMMAND_TO_AGENT = {
-    'start': 'health-advisor',
-    'health': 'health-advisor',
-    'conditions': 'health-advisor',
-    'labs': 'health-advisor',
-    'dashboard': 'health-advisor',
-    'curatr': 'record-curator',
-    'curatr_fix': 'record-curator',
-    'approve': 'record-curator',
-    'token': 'record-curator',
+    # Maps /command → persona id in agents.yaml.
+    # sally (pcp-advisor) owns the "what's up with my health?" questions.
+    # mary (pharmacy) handles meds. dom does fitness/vitals. joe runs plumbing.
+    'start': 'sally',
+    'health': 'joe',          # stack health check — service optimizer
+    'conditions': 'sally',
+    'labs': 'sally',
+    'dashboard': 'sally',
+    'curatr': 'joe',
+    'curatr_fix': 'joe',
+    'approve': 'joe',
+    'token': 'joe',
 }
 
 # Public base URL where the dashboard is reachable. Override for production

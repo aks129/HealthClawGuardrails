@@ -13,6 +13,9 @@ the dashboard never breaks on gateway unavailability.
 Environment variables:
     OPENCLAW_GATEWAY_URL       Override probe URL (default: http://host.docker.internal:4319/healthz)
     OPENCLAW_GATEWAY_TIMEOUT   Seconds (default: 2)
+    OPENCLAW_GATEWAY_TOKEN     Bearer token for OpenClaw RPC endpoints (sessions)
+    OPENCLAW_SESSIONS_URL      Override sessions list URL
+                               (default: OPENCLAW_GATEWAY_URL base + /rpc/sessions_list)
 """
 
 from __future__ import annotations
@@ -135,3 +138,80 @@ def probe(force: bool = False) -> GatewayStatus:
 
     _cached_at = now
     return _cached
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw sessions — list active chat sessions across channels
+# ---------------------------------------------------------------------------
+
+_sessions_cache: list[dict] | None = None
+_sessions_cached_at: float = 0.0
+_SESSIONS_CACHE_TTL = 15
+
+
+def _sessions_url() -> str:
+    explicit = os.environ.get("OPENCLAW_SESSIONS_URL", "").strip()
+    if explicit:
+        return explicit
+    base = _gateway_url()
+    # Derive: healthz -> /rpc/sessions_list under the same origin
+    if "/healthz" in base:
+        return base.replace("/healthz", "/rpc/sessions_list")
+    return base.rstrip("/") + "/rpc/sessions_list"
+
+
+def list_sessions(force: bool = False) -> list[dict]:
+    """
+    Query the OpenClaw Gateway for active sessions across channels
+    (Telegram, WhatsApp, iMessage, etc.). Returns a list of sessions
+    normalized to {id, channel, peer, agent, last_activity, started}.
+
+    Cached for _SESSIONS_CACHE_TTL seconds. Returns [] on any error.
+    """
+    global _sessions_cache, _sessions_cached_at
+    now = time.time()
+    if not force and _sessions_cache is not None and (now - _sessions_cached_at) < _SESSIONS_CACHE_TTL:
+        return _sessions_cache
+
+    if not _is_configured():
+        _sessions_cache = []
+        _sessions_cached_at = now
+        return _sessions_cache
+
+    url = _sessions_url()
+    timeout = float(os.environ.get("OPENCLAW_GATEWAY_TIMEOUT", "3"))
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        # OpenClaw RPC uses JSON-RPC 2.0; empty params lists all sessions
+        resp = httpx.post(
+            url,
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 1, "method": "sessions_list", "params": {}},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data.get("result", []) if isinstance(data, dict) else []
+
+        normalized = []
+        for s in raw if isinstance(raw, list) else []:
+            normalized.append({
+                "id": s.get("id") or s.get("session_id"),
+                "channel": s.get("channel"),
+                "peer": s.get("peer") or s.get("account"),
+                "agent": s.get("agent") or s.get("agent_name"),
+                "last_activity": s.get("last_activity") or s.get("updated_at"),
+                "started": s.get("started") or s.get("created_at"),
+                "message_count": s.get("message_count"),
+            })
+        _sessions_cache = normalized
+    except Exception as e:  # noqa: BLE001
+        logger.debug("OpenClaw sessions_list failed: %s", e)
+        _sessions_cache = []
+
+    _sessions_cached_at = now
+    return _sessions_cache
