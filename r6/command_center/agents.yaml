@@ -101,6 +101,29 @@ agents:
       - "Help me think through a second opinion for X"
       - "Any patterns across my conditions I should discuss with a specialist?"
 
+  - id: kristy
+    name: Kristy
+    role: Family Scheduler
+    emoji: "🗓️"
+    color: "#db2777"
+    description: >
+      Family scheduler and optimizer. Kristy pulls the kids' team-sports
+      iCal feeds (football, lacrosse, etc.), the family calendar, and
+      household appointments. She builds the weekly plan, flags
+      conflicts, proposes who-drives-whom, and has a backup plan for
+      rainouts or overlaps. Works side-by-side with Ronny (family
+      coordination) and Sally (medical appointments).
+    skills:
+      - personal-health-records
+    tool_patterns:
+      - fhir_search
+      - fhir_read
+    example_prompts:
+      - "Show the family's week at a glance"
+      - "Any conflicts between the kids' practices next weekend?"
+      - "Backup plan if Henry's Saturday game gets rained out?"
+      - "Add the pediatrician appointment to the calendar"
+
   - id: ronny
     name: Ronny
     role: Family Manager

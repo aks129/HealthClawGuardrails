@@ -39,11 +39,11 @@ def _login_client(client, tenant: str = TENANT):
 
 class TestAgentRegistry:
 
-    def test_loads_six_agents(self):
+    def test_loads_seven_agents(self):
         agents.load_agents.cache_clear()
         items = agents.load_agents()
         ids = {a["id"] for a in items}
-        assert {"sally", "mary", "dom", "shervin", "ronny", "joe"} <= ids
+        assert {"sally", "mary", "dom", "kristy", "shervin", "ronny", "joe"} <= ids
 
     def test_get_agent_returns_dict(self):
         a = agents.get_agent("sally")
@@ -275,9 +275,9 @@ class TestRestEndpoints:
         resp = client.get("/command-center/api/agents", query_string={"tenant": TENANT})
         assert resp.status_code == 200
         body = resp.get_json()
-        assert len(body) == 6
+        assert len(body) == 7
         assert {a["id"] for a in body} == {
-            "sally", "mary", "dom", "shervin", "ronny", "joe"
+            "sally", "mary", "dom", "kristy", "shervin", "ronny", "joe"
         }
 
     def test_api_agent_templates(self, client):
