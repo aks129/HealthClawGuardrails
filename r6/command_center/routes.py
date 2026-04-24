@@ -53,13 +53,13 @@ def _tenant() -> str:
     """
     Resolve the active tenant for the current request. Priority:
     1. Session (set after a signed-link login) — authoritative
-    2. ?tenant= query param — ONLY if it matches an explicitly public tenant
-    3. X-Tenant-Id header — same restriction
+    2. Valid X-Step-Up-Token for the requested tenant — server-to-server auth
+    3. ?tenant= query param / X-Tenant-Id header — ONLY for public tenants
     4. DEFAULT_TENANT (desktop-demo)
 
-    Non-public tenants can NEVER be selected via query param or header —
-    they require a session obtained from a signed link. This prevents
-    ?tenant=ev-personal from returning personal data to anyone.
+    Non-public tenants require a session OR a valid step-up token. A bare
+    ?tenant=ev-personal with no auth silently falls back to the default —
+    it never leaks personal data.
     """
     sess_tenant = session.get(SESSION_KEY)
     if sess_tenant:
@@ -72,6 +72,14 @@ def _tenant() -> str:
     )
     if access.is_public(candidate):
         return candidate
+
+    # Trust the candidate tenant if the request carries a valid step-up for it
+    step_up = request.headers.get("X-Step-Up-Token")
+    if step_up:
+        valid, _ = validate_step_up_token(step_up, candidate)
+        if valid:
+            return candidate
+
     return DEFAULT_TENANT
 
 
