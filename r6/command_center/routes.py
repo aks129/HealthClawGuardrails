@@ -89,19 +89,29 @@ def _require_session_or_public():
     Guard for /api/* endpoints. Returns a (jsonify, code) tuple to abort with,
     or None if the request is allowed to proceed.
 
-    Rule: the resolved tenant must either be public (desktop-demo) or match
-    the authenticated session. Personal-data endpoints without a session get
-    401 — never a silent fallback to the public tenant's data.
+    Rule: the resolved tenant must either be public (desktop-demo), match
+    the authenticated session, OR the request must carry a valid step-up
+    token for that tenant (server-to-server clients — Telegram bot, Kristy
+    watcher, OpenClaw).
     """
     sess_tenant = session.get(SESSION_KEY)
     candidate = (
         request.args.get("tenant")
         or request.headers.get("X-Tenant-Id")
     )
-    # If a specific tenant is requested and it's not public, require matching session
-    if candidate and not access.is_public(candidate) and sess_tenant != candidate:
-        return jsonify({"error": "authentication required for this tenant"}), 401
-    return None
+    if not candidate:
+        return None
+    if access.is_public(candidate):
+        return None
+    if sess_tenant == candidate:
+        return None
+    # Allow step-up token as a server-to-server auth mechanism
+    step_up = request.headers.get("X-Step-Up-Token")
+    if step_up:
+        valid, _ = validate_step_up_token(step_up, candidate)
+        if valid:
+            return None
+    return jsonify({"error": "authentication required for this tenant"}), 401
 
 
 # ---------------------------------------------------------------------------
