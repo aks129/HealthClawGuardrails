@@ -18,16 +18,32 @@ Design goals:
   - Same STEP_UP_SECRET as Railway → tokens are accepted by the Flask API.
 
 Usage:
-  python3 ~/.healthclaw/commands.py <command> [--agent <id>] [--tenant <id>]
+  ~/.healthclaw/commands.py <command> [--agent <id>] [--tenant <id>]
 
-Commands:
-  dashboard   — mint a 24h signed dashboard URL
-  health      — probe Railway Flask + OpenClaw Gateway + Redis
-  tasks       — list pending tasks for the tenant
-  week        — run the Kristy watcher (kristy only)
-  conflicts   — list family-conflict:* pending tasks (kristy only)
-  token       — emit a fresh step-up token (5-min TTL)  [dev/debug]
-  help        — print command list
+Infra commands (every agent):
+  dashboard       — mint a 24h signed dashboard URL
+  health          — probe Railway Flask + OpenClaw Gateway + Redis
+  tasks           — list pending AgentTasks for the tenant
+  token           — emit a step-up token (5-min TTL)  [dev/debug]
+  help            — print command list
+
+FHIR read commands (every agent, answers depend on their specialty):
+  conditions      — active Conditions with codes + onset dates
+  labs            — recent lab Observations (category=laboratory)
+  vitals          — recent vital-signs Observations (BP, HR, weight, etc.)
+  meds            — active MedicationRequests
+  allergies       — AllergyIntolerance list
+  immunizations   — Immunization history
+  summary         — one-page clinical summary (counts by resource type)
+  fhir <type>     — generic FHIR search for any resource type
+
+Data pipeline:
+  import <path>   — POST a FHIR bundle (.json) to /Bundle/$ingest-context
+  import-help     — show step-by-step instructions for getting data in
+
+Kristy-only:
+  week            — run the Kristy watcher (pulls iCals + emits conflicts)
+  conflicts       — list family-conflict:* AgentTasks
 """
 
 from __future__ import annotations
@@ -275,14 +291,368 @@ def cmd_token(args) -> int:
 def cmd_help(args) -> int:
     print(
         "HealthClaw bot commands:\n"
-        "  /dashboard   — fresh 24h signed command-center link\n"
-        "  /health      — stack health (Flask, MCP, gateway, Redis)\n"
-        "  /tasks       — pending tasks for your tenant\n"
-        "  /token       — step-up token (5min) for dev/debug\n"
-        "  /help        — this list\n"
-        "\nPersona-specific commands:\n"
-        "  /week        — run Kristy's schedule scan (Kristy only)\n"
-        "  /conflicts   — family schedule conflicts (Kristy only)"
+        "  Core:\n"
+        "    /dashboard     fresh 24h signed command-center link\n"
+        "    /health        stack health (Flask, MCP, gateway, Redis)\n"
+        "    /tasks         pending AgentTasks for your tenant\n"
+        "    /help          this list\n"
+        "  FHIR reads:\n"
+        "    /conditions    active Conditions with codes + onset\n"
+        "    /labs          recent lab results\n"
+        "    /vitals        recent vitals (BP, HR, weight, etc.)\n"
+        "    /meds          active medications\n"
+        "    /allergies     allergies + intolerances\n"
+        "    /immunizations vaccine history\n"
+        "    /summary       one-page count-by-type summary\n"
+        "    /fhir <type>   generic FHIR search\n"
+        "  Data in:\n"
+        "    /import <path> ingest a bundle JSON file\n"
+        "    /import-help   step-by-step import instructions\n"
+        "  Kristy:\n"
+        "    /week          schedule scan\n"
+        "    /conflicts     family schedule conflicts\n"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# FHIR reads — GET /r6/fhir/<ResourceType>?...
+# ---------------------------------------------------------------------------
+
+def _fhir_base() -> str:
+    """Railway Flask's FHIR REST facade."""
+    return os.environ.get(
+        "FHIR_BASE_URL",
+        _dashboard_base() + "/r6/fhir",
+    ).rstrip("/")
+
+
+def _fhir_get(resource_type: str, params: dict, tenant: str) -> dict:
+    """Generic FHIR search, returns parsed Bundle or raises."""
+    r = requests.get(
+        f"{_fhir_base()}/{resource_type}",
+        params=params,
+        headers={"X-Tenant-Id": tenant, "Accept": "application/fhir+json"},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _code_display(coding_list: list, fallback: str = "—") -> str:
+    """From a FHIR coding list, pick a readable label."""
+    if not coding_list:
+        return fallback
+    for c in coding_list:
+        if c.get("display"):
+            return f"{c['display']} ({c.get('system','?').rsplit('/',1)[-1]}:{c.get('code','?')})"
+    first = coding_list[0]
+    return f"{first.get('system','?').rsplit('/',1)[-1]}:{first.get('code','?')}"
+
+
+def cmd_conditions(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get("Condition", {"_count": 50, "_sort": "-_lastUpdated"}, tenant)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No Conditions on file for tenant '{tenant}'.")
+        return 0
+    # Group by clinical status
+    active, resolved = [], []
+    for c in entries:
+        status_code = (c.get("clinicalStatus", {}).get("coding") or [{}])[0].get("code", "")
+        label = _code_display(c.get("code", {}).get("coding"),
+                              c.get("code", {}).get("text", "unnamed"))
+        onset = c.get("onsetDateTime") or c.get("recordedDate") or "?"
+        row = f"- {label} (onset {onset})"
+        (active if status_code in ("active", "recurrence", "relapse") else resolved).append(row)
+    if active:
+        print(f"Active conditions ({len(active)}):")
+        for r in active: print(r)
+    if resolved:
+        print(f"\nResolved/inactive conditions ({len(resolved)}):")
+        for r in resolved: print(r)
+    return 0
+
+
+def cmd_labs(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get(
+            "Observation",
+            {"category": "laboratory", "_count": 20, "_sort": "-_lastUpdated"},
+            tenant,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No lab Observations on file for tenant '{tenant}'.")
+        return 0
+    print(f"Recent labs ({len(entries)}):")
+    for obs in entries:
+        code = _code_display(obs.get("code", {}).get("coding"),
+                             obs.get("code", {}).get("text", "lab"))
+        when = obs.get("effectiveDateTime") or obs.get("issued") or "?"
+        value = _format_obs_value(obs)
+        interp = (obs.get("interpretation", [{}])[0].get("coding") or [{}])[0].get("code", "")
+        flag = f" [{interp}]" if interp and interp not in ("N", "NR") else ""
+        print(f"- {when} · {code}: {value}{flag}")
+    return 0
+
+
+def cmd_vitals(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get(
+            "Observation",
+            {"category": "vital-signs", "_count": 30, "_sort": "-_lastUpdated"},
+            tenant,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No vital-sign Observations on file for tenant '{tenant}'.")
+        return 0
+    print(f"Recent vitals ({len(entries)}):")
+    for obs in entries:
+        code = _code_display(obs.get("code", {}).get("coding"),
+                             obs.get("code", {}).get("text", "vital"))
+        when = (obs.get("effectiveDateTime") or obs.get("issued") or "?")[:10]
+        value = _format_obs_value(obs)
+        print(f"- {when} · {code}: {value}")
+    return 0
+
+
+def _format_obs_value(obs: dict) -> str:
+    """Render Observation.value[x] as a human-readable string."""
+    if "valueQuantity" in obs:
+        q = obs["valueQuantity"]
+        return f"{q.get('value','?')} {q.get('unit','')}".strip()
+    if "valueCodeableConcept" in obs:
+        return _code_display(obs["valueCodeableConcept"].get("coding"),
+                             obs["valueCodeableConcept"].get("text", "?"))
+    if "valueString" in obs:
+        return str(obs["valueString"])
+    if "component" in obs:
+        # Multi-component (e.g., BP = systolic + diastolic)
+        parts = []
+        for c in obs["component"]:
+            code = (c.get("code", {}).get("coding") or [{}])[0].get("display", "")
+            q = c.get("valueQuantity") or {}
+            parts.append(f"{code} {q.get('value','?')}{q.get('unit','')}".strip())
+        return ", ".join(parts)
+    return "(no value)"
+
+
+def cmd_meds(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get("MedicationRequest", {"_count": 50, "_sort": "-_lastUpdated"}, tenant)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No MedicationRequests on file for tenant '{tenant}'.")
+        return 0
+    active = [m for m in entries if m.get("status") == "active"]
+    inactive = [m for m in entries if m.get("status") != "active"]
+    if active:
+        print(f"Active medications ({len(active)}):")
+        for m in active:
+            med = (
+                _code_display(m.get("medicationCodeableConcept", {}).get("coding"),
+                              m.get("medicationCodeableConcept", {}).get("text", "medication"))
+                if m.get("medicationCodeableConcept") else m.get("medicationReference", {}).get("display", "?")
+            )
+            print(f"- {med}  · intent: {m.get('intent','?')}")
+    if inactive:
+        print(f"\nInactive medications ({len(inactive)}):")
+        for m in inactive[:10]:
+            med = (_code_display(m.get("medicationCodeableConcept", {}).get("coding"),
+                                 m.get("medicationCodeableConcept", {}).get("text", "medication"))
+                   if m.get("medicationCodeableConcept") else "?")
+            print(f"- {med}  · status: {m.get('status','?')}")
+    return 0
+
+
+def cmd_allergies(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get("AllergyIntolerance", {"_count": 50, "_sort": "-_lastUpdated"}, tenant)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No AllergyIntolerance records on file for tenant '{tenant}'.")
+        return 0
+    print(f"Allergies & intolerances ({len(entries)}):")
+    for a in entries:
+        code = _code_display(a.get("code", {}).get("coding"),
+                             a.get("code", {}).get("text", "allergen"))
+        status = (a.get("clinicalStatus", {}).get("coding") or [{}])[0].get("code", "?")
+        crit = a.get("criticality") or "?"
+        print(f"- {code}  · clinical:{status}, criticality:{crit}")
+    return 0
+
+
+def cmd_immunizations(args) -> int:
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get("Immunization", {"_count": 100, "_sort": "-_lastUpdated"}, tenant)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    if not entries:
+        print(f"No Immunizations on file for tenant '{tenant}'.")
+        return 0
+    print(f"Immunizations ({len(entries)}):")
+    for imm in entries[:30]:
+        vaccine = _code_display(imm.get("vaccineCode", {}).get("coding"),
+                                imm.get("vaccineCode", {}).get("text", "vaccine"))
+        when = (imm.get("occurrenceDateTime") or "?")[:10]
+        print(f"- {when} · {vaccine}  · status: {imm.get('status','?')}")
+    return 0
+
+
+def cmd_summary(args) -> int:
+    """Print record counts per resource type — handy 'what do I have on file' overview."""
+    tenant = args.tenant or _tenant_default()
+    kinds = [
+        ("Patient", "patients"),
+        ("Condition", "conditions"),
+        ("Observation", "observations"),
+        ("MedicationRequest", "medications"),
+        ("AllergyIntolerance", "allergies"),
+        ("Immunization", "immunizations"),
+        ("Procedure", "procedures"),
+        ("DiagnosticReport", "diagnostic reports"),
+        ("CarePlan", "care plans"),
+    ]
+    print(f"Clinical summary for tenant '{tenant}':")
+    any_data = False
+    for rtype, label in kinds:
+        try:
+            b = _fhir_get(rtype, {"_summary": "count"}, tenant)
+            n = b.get("total", 0)
+        except Exception:
+            n = "?"
+        if isinstance(n, int) and n > 0:
+            any_data = True
+        print(f"  {label:24s} {n}")
+    if not any_data:
+        print("\nNo clinical data yet. Run /import-help to see how to bring your records in.")
+    return 0
+
+
+def cmd_fhir(args) -> int:
+    """Generic FHIR search: /fhir <type> [--code X] — flexible escape hatch."""
+    if not args.resource_type:
+        print("usage: fhir <ResourceType> [--code CODE] [--patient ID] [--count N]",
+              file=sys.stderr)
+        return 1
+    params = {"_count": args.count or 20, "_sort": "-_lastUpdated"}
+    if args.code:    params["code"] = args.code
+    if args.patient: params["patient"] = args.patient
+    tenant = args.tenant or _tenant_default()
+    try:
+        bundle = _fhir_get(args.resource_type, params, tenant)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+    print(f"{len(entries)} × {args.resource_type} (of {bundle.get('total','?')} total):")
+    for r in entries[:10]:
+        summary = r.get("id", "?")
+        if r.get("code", {}).get("text"):
+            summary += f" · {r['code']['text']}"
+        elif r.get("meta", {}).get("tag"):
+            summary += f" · tag={r['meta']['tag'][0].get('code','?')}"
+        print(f"- {summary}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Data import — POST a bundle to /Bundle/$ingest-context
+# ---------------------------------------------------------------------------
+
+def cmd_import(args) -> int:
+    if not args.path:
+        print("usage: import <bundle.json>", file=sys.stderr)
+        return 1
+    path = Path(args.path).expanduser()
+    if not path.exists():
+        print(f"file not found: {path}", file=sys.stderr)
+        return 1
+    try:
+        bundle = json.loads(path.read_text())
+    except Exception as exc:
+        print(f"bundle parse error: {exc}", file=sys.stderr)
+        return 1
+
+    tenant = args.tenant or _tenant_default()
+    token = mint_step_up_token(tenant, args.agent or "bot")
+
+    try:
+        r = requests.post(
+            f"{_fhir_base()}/Bundle/$ingest-context",
+            json=bundle,
+            headers={
+                "X-Tenant-Id": tenant,
+                "X-Step-Up-Token": token,
+                "X-Human-Confirmed": "true",
+                "Content-Type": "application/fhir+json",
+            },
+            timeout=60,
+        )
+    except Exception as exc:
+        print(f"POST failed: {exc}", file=sys.stderr)
+        return 1
+
+    if r.status_code >= 400:
+        print(f"HTTP {r.status_code}: {r.text[:300]}", file=sys.stderr)
+        return 1
+
+    out = r.json() if r.headers.get("content-type", "").startswith("application/") else {}
+    entries_count = len(bundle.get("entry", []))
+    print(f"Imported {entries_count} entries into tenant '{tenant}'.")
+    if isinstance(out, dict):
+        if out.get("context_id"):
+            print(f"context_id: {out['context_id']}")
+        if out.get("items_ingested") is not None:
+            print(f"items_ingested: {out['items_ingested']}")
+    return 0
+
+
+def cmd_import_help(args) -> int:
+    print(
+        "Getting your health data into HealthClaw — two paths:\n"
+        "\n"
+        "A. HealthEx → HealthClaw (recommended):\n"
+        "   1. On your laptop, pull from HealthEx via Claude.ai:\n"
+        "      HEALTHEX_AUTH_TOKEN=<token> \\\n"
+        "      python3 scripts/export_healthex_mcp.py \\\n"
+        "        --tenant-id ev-personal \\\n"
+        "        --output exports/healthex-$(date +%Y-%m-%d).json\n"
+        "   2. Copy bundle to the Mac mini:\n"
+        "      scp exports/healthex-*.json coopeydoop@<mac>:~/bundle.json\n"
+        "   3. Tell any bot: /import ~/bundle.json\n"
+        "\n"
+        "B. Manual bundle (any FHIR R4 transaction bundle):\n"
+        "   1. Put the JSON file on the Mac mini at ~/bundle.json\n"
+        "   2. Tell any bot: /import ~/bundle.json\n"
+        "\n"
+        "After import: /summary confirms counts; /conditions /labs etc. work."
     )
     return 0
 
@@ -292,13 +662,25 @@ def cmd_help(args) -> int:
 # ---------------------------------------------------------------------------
 
 _COMMANDS = {
-    "dashboard": cmd_dashboard,
-    "health":    cmd_health,
-    "tasks":     cmd_tasks,
-    "conflicts": cmd_conflicts,
-    "week":      cmd_week,
-    "token":     cmd_token,
-    "help":      cmd_help,
+    "dashboard":     cmd_dashboard,
+    "health":        cmd_health,
+    "tasks":         cmd_tasks,
+    "conflicts":     cmd_conflicts,
+    "week":          cmd_week,
+    "token":         cmd_token,
+    "help":          cmd_help,
+    # FHIR reads
+    "conditions":    cmd_conditions,
+    "labs":          cmd_labs,
+    "vitals":        cmd_vitals,
+    "meds":          cmd_meds,
+    "allergies":     cmd_allergies,
+    "immunizations": cmd_immunizations,
+    "summary":       cmd_summary,
+    "fhir":          cmd_fhir,
+    # Data in
+    "import":        cmd_import,
+    "import-help":   cmd_import_help,
 }
 
 
@@ -307,10 +689,17 @@ def main() -> int:
 
     p = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     p.add_argument("command", choices=list(_COMMANDS.keys()))
+    p.add_argument("arg", nargs="?", default=None,
+                   help="positional arg — resource type for 'fhir', file path for 'import'")
     p.add_argument("--agent", default=None, help="agent id (sally, mary, dom, ...)")
     p.add_argument("--tenant", default=None, help="tenant id (default: $DEFAULT_TENANT)")
+    p.add_argument("--code", default=None, help="FHIR search param (fhir command)")
+    p.add_argument("--patient", default=None, help="FHIR search param (fhir command)")
+    p.add_argument("--count", type=int, default=None, help="FHIR _count (fhir command)")
     args = p.parse_args()
-
+    # Alias for commands that expect a specifically named positional
+    args.resource_type = args.arg
+    args.path = args.arg
     return _COMMANDS[args.command](args)
 
 
