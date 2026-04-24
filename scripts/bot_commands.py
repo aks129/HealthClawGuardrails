@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/coopeydoop/.healthclaw/venv/bin/python3
 """
 scripts/bot_commands.py
 
@@ -41,7 +41,12 @@ import os
 import secrets
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Silence the urllib3 "LibreSSL" warning — adds 2 lines of noise to every
+# agent-invoked run which the LLM then tries to paraphrase.
+warnings.filterwarnings("ignore", message=".*urllib3 v2 only supports OpenSSL.*")
 
 import requests
 

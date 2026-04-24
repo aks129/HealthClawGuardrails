@@ -37,16 +37,16 @@ paraphrase the result in-character.
 **Core commands every agent handles:**
 
 - \`/dashboard\` — mint a fresh 24-hour signed URL to the command center.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py dashboard --agent ${agent}\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py dashboard --agent ${agent}\`
   Take the first stdout line (the URL) and reply with: "Here's your fresh
   dashboard link (valid 24h): <URL>. Keep it private — it auto-logs you in."
 
 - \`/health\` — probe the HealthClaw stack.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py health --agent ${agent}\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py health --agent ${agent}\`
   Paraphrase the stdout lines into a readable status summary.
 
 - \`/tasks\` — list pending tasks for the active tenant.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py tasks --agent ${agent}\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py tasks --agent ${agent}\`
 
 - \`/help\` — print my capabilities (this list plus my persona's specialty).
 
@@ -77,18 +77,18 @@ shervin_extras=""
 ronny_extras=""
 joe_extras="
 - \`/conflicts\` — family-schedule conflicts pending.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py conflicts --agent joe\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py conflicts --agent joe\`
 "
 kristy_extras="
 **Kristy-specific commands:**
 
 - \`/week\` — run the family schedule scan end-to-end (fetches iCals, detects
   conflicts, emits new AgentTasks). Takes ~5 seconds.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py week --agent kristy\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py week --agent kristy\`
   Pastes the run summary; if conflicts were created, walk the user through each.
 
 - \`/conflicts\` — list family-conflict tasks currently pending.
-  Exec: \`python3 /Users/${SSH_USER}/.healthclaw/commands.py conflicts --agent kristy\`
+  Exec: \`/Users/${SSH_USER}/.healthclaw/commands.py conflicts --agent kristy\`
 "
 
 # Router (main) extras
