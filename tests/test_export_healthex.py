@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from export_healthex_mcp import (
+from export_healthex_legacy import (
     CuratrPreTagger,
     TabularParser,
     build_bundle,

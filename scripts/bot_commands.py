@@ -305,9 +305,10 @@ def cmd_help(args) -> int:
         "    /immunizations vaccine history\n"
         "    /summary       one-page count-by-type summary\n"
         "    /fhir <type>   generic FHIR search\n"
-        "  Data in:\n"
+        "  Data pipeline:\n"
+        "    /export        pull HealthEx → redact PHI → write bundle\n"
         "    /import <path> ingest a bundle JSON file\n"
-        "    /import-help   step-by-step import instructions\n"
+        "    /import-help   end-to-end import instructions\n"
         "  Kristy:\n"
         "    /week          schedule scan\n"
         "    /conflicts     family schedule conflicts\n"
@@ -638,15 +639,13 @@ def cmd_import_help(args) -> int:
     print(
         "Getting your health data into HealthClaw — two paths:\n"
         "\n"
-        "A. HealthEx → HealthClaw (recommended):\n"
-        "   1. On your laptop, pull from HealthEx via Claude.ai:\n"
-        "      HEALTHEX_AUTH_TOKEN=<token> \\\n"
-        "      python3 scripts/export_healthex_mcp.py \\\n"
-        "        --tenant-id ev-personal \\\n"
-        "        --output exports/healthex-$(date +%Y-%m-%d).json\n"
-        "   2. Copy bundle to the Mac mini:\n"
-        "      scp exports/healthex-*.json coopeydoop@<mac>:~/bundle.json\n"
-        "   3. Tell any bot: /import ~/bundle.json\n"
+        "A. /export end-to-end (recommended — runs on the Mac mini):\n"
+        "   1. Store your HealthEx OAuth token in the Mac mini Keychain:\n"
+        "      security add-generic-password -s healthex -a me -w '<token>'\n"
+        "   2. DM any bot: /export\n"
+        "      → pulls from HealthEx MCP, redacts PHI, writes a bundle\n"
+        "        to ~/.healthclaw/exports/healthex-<date>.json\n"
+        "   3. DM: /import <path printed by /export>\n"
         "\n"
         "B. Manual bundle (any FHIR R4 transaction bundle):\n"
         "   1. Put the JSON file on the Mac mini at ~/bundle.json\n"
@@ -654,6 +653,93 @@ def cmd_import_help(args) -> int:
         "\n"
         "After import: /summary confirms counts; /conditions /labs etc. work."
     )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# /export — wrap export_healthex_mcp.py so bots can run the pipeline
+# ---------------------------------------------------------------------------
+
+def cmd_export(args) -> int:
+    """Run scripts/export_healthex_mcp.py against HealthEx + redact in-process.
+
+    Token resolution order:
+      1. $HEALTHEX_AUTH_TOKEN (already exported)
+      2. macOS Keychain item with service 'healthex'
+    """
+    import subprocess
+    tenant = args.tenant or _tenant_default()
+
+    # Resolve token
+    token = os.environ.get("HEALTHEX_AUTH_TOKEN", "").strip()
+    if not token:
+        try:
+            r = subprocess.run(
+                ["/usr/bin/security", "find-generic-password", "-s", "healthex", "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                token = r.stdout.strip()
+        except Exception:
+            pass
+    if not token:
+        print(
+            "error: HEALTHEX_AUTH_TOKEN not set and not in Keychain.\n"
+            "fix: security add-generic-password -s healthex -a me -w '<token>'",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Script path (on the Mac mini this is ~/.healthclaw/export_healthex_mcp.py)
+    exports_dir = Path.home() / ".healthclaw" / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import date
+    out = exports_dir / f"healthex-{date.today().isoformat()}.json"
+
+    script = Path.home() / ".healthclaw" / "export_healthex_mcp.py"
+    if not script.exists():
+        # Fall back to the repo path (for laptop dev)
+        script = Path(__file__).parent / "export_healthex_mcp.py"
+    if not script.exists():
+        print(f"error: export script not found at {script}", file=sys.stderr)
+        return 1
+
+    # Use the same venv python that runs commands.py (has mcp + httpx + icalendar)
+    venv_python = Path.home() / ".healthclaw" / "venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+
+    env = {**os.environ, "HEALTHEX_AUTH_TOKEN": token}
+    cmd = [python, str(script), "--tenant-id", tenant, "--output", str(out)]
+
+    print(f"Running HealthEx export → {out}")
+    try:
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print("error: export timed out after 5 minutes", file=sys.stderr)
+        return 1
+
+    # Last line of stderr has the summary; stream it
+    for line in (r.stderr or "").splitlines()[-10:]:
+        print(line)
+    if r.returncode != 0:
+        print(f"error: export exited {r.returncode}", file=sys.stderr)
+        return r.returncode
+
+    # Summarize the output
+    try:
+        data = json.loads(out.read_text())
+        rs = data.get("_meta", {}).get("redaction_stats", {})
+        redacted_total = sum(rs.values())
+        print(f"\nOutput: {out}")
+        print(f"  size: {out.stat().st_size:,} bytes")
+        print(f"  tools ok: {len(data.get('records', {}))}")
+        print(f"  tools failed: {len(data.get('errors', {}))}")
+        print(f"  fields redacted: {redacted_total}")
+        if redacted_total == 0:
+            print("  WARNING: zero fields redacted — confirm redaction hook is wired")
+        print(f"\nNext: tell any bot `/import {out}` to ingest this bundle.")
+    except Exception as exc:
+        print(f"  (couldn't summarize: {exc})")
     return 0
 
 
@@ -678,7 +764,8 @@ _COMMANDS = {
     "immunizations": cmd_immunizations,
     "summary":       cmd_summary,
     "fhir":          cmd_fhir,
-    # Data in
+    # Data pipeline
+    "export":        cmd_export,
     "import":        cmd_import,
     "import-help":   cmd_import_help,
 }
