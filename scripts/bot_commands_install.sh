@@ -25,12 +25,19 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE" true \
 echo ">> Creating ~/.healthclaw on $REMOTE"
 ssh "$REMOTE" 'mkdir -p ~/.healthclaw && chmod 700 ~/.healthclaw'
 
-echo ">> scp commands.py"
+echo ">> Creating isolated venv at ~/.healthclaw/venv (if missing)"
+ssh "$REMOTE" '
+  if [ ! -x ~/.healthclaw/venv/bin/python3 ]; then
+    /usr/bin/python3 -m venv ~/.healthclaw/venv
+    ~/.healthclaw/venv/bin/pip install --quiet --upgrade pip >/dev/null 2>&1 || true
+  fi
+  ~/.healthclaw/venv/bin/pip install --quiet requests icalendar itsdangerous >/dev/null 2>&1 || true
+  ~/.healthclaw/venv/bin/python3 -c "import requests, icalendar, itsdangerous; print(\"venv deps:\", requests.__version__, icalendar.__version__)"
+'
+
+echo ">> scp commands.py (shebang points at the venv)"
 scp -q "$SCRIPT_DIR/bot_commands.py" "$REMOTE:~/.healthclaw/commands.py"
 ssh "$REMOTE" 'chmod 700 ~/.healthclaw/commands.py'
-
-echo ">> Ensure itsdangerous installed (user site)"
-ssh "$REMOTE" '/usr/bin/python3 -m pip install --user --quiet itsdangerous 2>/dev/null || true'
 
 echo ">> Smoke-test /help + /dashboard on the Mac mini"
 ssh "$REMOTE" '/usr/bin/python3 ~/.healthclaw/commands.py help'
