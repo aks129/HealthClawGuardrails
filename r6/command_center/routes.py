@@ -258,12 +258,27 @@ def api_insights():
     return jsonify(projector.insights(_tenant(), limit=limit))
 
 
+def _require_session_or_stepup():
+    """System status / sessions-list leak infra URLs — require session or step-up."""
+    if session.get(SESSION_KEY):
+        return None
+    step_up = request.headers.get("X-Step-Up-Token")
+    if step_up:
+        tenant = (
+            request.args.get("tenant")
+            or request.headers.get("X-Tenant-Id")
+            or DEFAULT_TENANT
+        )
+        valid, _ = validate_step_up_token(step_up, tenant)
+        if valid:
+            return None
+    return jsonify({"error": "authentication required"}), 401
+
+
 @command_center_blueprint.route("/api/system", methods=["GET"])
 def api_system():
-    # System status reveals infrastructure URLs (OpenClaw gateway, MCP) —
-    # treat as sensitive; require a session.
-    if not session.get(SESSION_KEY):
-        return jsonify({"error": "authentication required"}), 401
+    if (err := _require_session_or_stepup()):
+        return err
     return jsonify(projector.system_status())
 
 
@@ -278,9 +293,9 @@ def api_agent_templates():
 def api_openclaw_sessions():
     """Live list of OpenClaw chat sessions pulled from the gateway RPC."""
     # Gateway URL + session list reveal the Mac mini's address and ongoing
-    # chats — require a session.
-    if not session.get(SESSION_KEY):
-        return jsonify({"error": "authentication required"}), 401
+    # chats — require a session or step-up token.
+    if (err := _require_session_or_stepup()):
+        return err
     return jsonify({
         "gateway": gateway.probe().to_dict(),
         "sessions": gateway.list_sessions(),
