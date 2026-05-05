@@ -26,4 +26,5 @@ test = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "reportlab>=4.0",
 ]

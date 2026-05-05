@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Skills · HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<style>
+  :root {
+    --cyan:      #22d3ee;
+    --cyan-dim:  rgba(34,211,238,0.45);
+    --amber:     #fbbf24;
+    --green:     #34d399;
+    --bg-card:   #111827;
+    --border:    #1e293b;
+    --gray:      #94a3b8;
+    --gray-dim:  #64748b;
+    --white:     #f1f5f9;
+  }
+  .skills-hero {
+    text-align: center; padding: 24px 0 36px;
+  }
+  .skills-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--cyan); margin-bottom: 12px;
+  }
+  .skills-title {
+    font-size: 32px; font-weight: 700; color: var(--white);
+    letter-spacing: -0.01em; margin-bottom: 10px;
+  }
+  .skills-sub {
+    font-size: 15px; color: var(--gray); max-width: 640px; margin: 0 auto;
+    line-height: 1.6;
+  }
+  .skills-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 18px; margin-bottom: 40px;
+  }
+  .skill-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px;
+    transition: border-color 0.2s, transform 0.15s;
+    display: flex; flex-direction: column;
+  }
+  .skill-card:hover {
+    border-color: var(--cyan-dim);
+    transform: translateY(-2px);
+  }
+  .skill-card.entry {
+    border-color: var(--cyan-dim);
+    background: linear-gradient(180deg,
+      rgba(34,211,238,0.06) 0%, var(--bg-card) 60%);
+  }
+  .skill-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px; font-weight: 700; color: var(--cyan);
+    letter-spacing: -0.01em; margin-bottom: 8px;
+    word-break: break-word;
+  }
+  .skill-desc {
+    font-size: 13.5px; color: var(--gray); line-height: 1.55;
+    flex-grow: 1; margin-bottom: 14px;
+  }
+  .skill-footer {
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  }
+  .skill-meta { color: var(--gray-dim); }
+  .skill-link {
+    color: var(--cyan); text-decoration: none; font-weight: 600;
+  }
+  .skill-link:hover { color: var(--white); }
+
+  .quickstart-banner {
+    background: linear-gradient(135deg,
+      rgba(34,211,238,0.10) 0%, rgba(251,191,36,0.06) 100%);
+    border: 1px solid var(--cyan-dim);
+    border-radius: 14px; padding: 28px 32px; margin: 0 0 36px;
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  }
+  .quickstart-banner-text { flex: 1 1 280px; }
+  .quickstart-banner h3 {
+    color: var(--white); font-size: 20px; font-weight: 700;
+    margin: 0 0 6px;
+  }
+  .quickstart-banner p {
+    color: var(--gray); font-size: 14px; line-height: 1.55; margin: 0;
+  }
+  .quickstart-btn {
+    background: var(--cyan); color: #001218; border: none;
+    padding: 12px 22px; border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    font-weight: 700; letter-spacing: 0.04em; cursor: pointer;
+    text-decoration: none; display: inline-block;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  .quickstart-btn:hover { opacity: 0.88; color: #001218; }
+  .quickstart-btn:active { transform: translateY(1px); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="skills-hero">
+  <div class="skills-eyebrow">Skill catalogue · {{ skills|length }} loaded</div>
+  <h1 class="skills-title">OpenClaw skills</h1>
+  <p class="skills-sub">
+    Drop-in skills that teach Claude (and the OpenClaw personas — Sally, Mary,
+    Dom, Kristy) how to use HealthClaw guardrails, redact PHI, talk to upstream
+    FHIR servers, run data-quality curation, and pull personal health records.
+    Each skill triggers when its description matches the conversation.
+  </p>
+</div>
+
+<div class="quickstart-banner">
+  <div class="quickstart-banner-text">
+    <h3>New here? Start with the quickstart guide</h3>
+    <p>
+      A 30-minute walk from zero to a private, agent-mediated view of your own
+      records — OpenClaw, a FHIR server, your EHR connection, and HealthClaw,
+      all running on your machine.
+    </p>
+  </div>
+  <a class="quickstart-btn" href="{{ url_for('static', filename='healthclaw-quickstart.pdf') }}"
+     download>
+    <i class="fas fa-download me-1"></i>Download the PDF
+  </a>
+</div>
+
+<div class="skills-grid">
+  {% for s in skills %}
+  <div class="skill-card {% if s.slug == 'getting-started' %}entry{% endif %}">
+    <div class="skill-name">{{ s.name }}</div>
+    <div class="skill-desc">{{ s.description }}</div>
+    <div class="skill-footer">
+      <span class="skill-meta">
+        {% if s.version %}v{{ s.version }} · {% endif %}{{ s.license or 'MIT' }}
+      </span>
+      <a class="skill-link"
+         href="https://github.com/aks129/HealthClawGuardrails/blob/main/skills/{{ s.slug }}/SKILL.md"
+         target="_blank" rel="noopener">
+        SKILL.md →
+      </a>
+    </div>
+  </div>
+  {% else %}
+  <div class="skill-card">
+    <div class="skill-desc">No skills loaded.</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="text-center" style="color: var(--gray); font-size: 13px; margin-bottom: 40px;">
+  Source: <a href="https://github.com/aks129/HealthClawGuardrails/tree/main/skills"
+            class="skill-link" target="_blank" rel="noopener">github.com/aks129/HealthClawGuardrails/tree/main/skills</a>
+</div>
+{% endblock %}

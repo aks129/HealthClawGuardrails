@@ -55,6 +55,12 @@
                            <i class="fas fa-book me-1"></i>Wiki
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('skills_index') %}active{% endif %}"
+                           href="{{ url_for('skills_index') }}">
+                           <i class="fas fa-puzzle-piece me-1"></i>Skills
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex align-items-center gap-2">
                     <span class="badge bg-secondary" style="font-size:0.7rem">v1.1.0</span>

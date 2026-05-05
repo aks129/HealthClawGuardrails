@@ -329,6 +329,7 @@
       font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim);
       margin-top: 16px;
     }
+    .subscribe-fineprint + .subscribe-fineprint { margin-top: 6px; }
 
     /* ── Footer ── */
     footer {
@@ -373,6 +374,7 @@
     <div class="nav-links">
       <a href="{{ url_for('index') }}" class="nav-link">Home</a>
       <a href="{{ url_for('r6_dashboard') }}" class="nav-link">Health Data Dashboard</a>
+      <a href="{{ url_for('skills_index') }}" class="nav-link">Skills</a>
       <a href="{{ url_for('wiki') }}" class="nav-link">Docs</a>
       <a href="{{ url_for('faq') }}" class="nav-link">FAQ</a>
       <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="nav-link nav-cta">GitHub</a>
@@ -833,6 +835,12 @@
   </form>
   <div class="subscribe-msg" id="subscribe-msg" aria-live="polite"></div>
   <div class="subscribe-fineprint">
+    Subscribers get the quickstart guide PDF as a thank-you.
+    Or grab it now: <a href="{{ url_for('static', filename='healthclaw-quickstart.pdf') }}"
+       class="footer-ep" download>healthclaw-quickstart.pdf</a> ·
+    explore the <a href="{{ url_for('skills_index') }}" class="footer-ep">skill catalogue</a>.
+  </div>
+  <div class="subscribe-fineprint">
     We use <a href="https://resend.com" target="_blank" rel="noopener" class="footer-ep">Resend</a>
     to deliver mail from <code>updates@healthclaw.io</code>. One-click unsubscribe in every email.
   </div>
@@ -847,6 +855,7 @@
     </div>
     <div class="footer-links">
       <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="footer-link">GitHub</a>
+      <a href="{{ url_for('skills_index') }}" class="footer-link">Skills</a>
       <a href="{{ url_for('r6_dashboard') }}" class="footer-link">Dashboard</a>
       <a href="{{ url_for('privacy') }}" class="footer-link">Privacy</a>
       <a href="{{ url_for('terms') }}" class="footer-link">Terms</a>
