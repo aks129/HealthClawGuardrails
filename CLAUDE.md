@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A **reference implementation** of security and compliance patterns for AI agent access to
-FHIR data via Model Context Protocol (MCP). Version 1.0.0. A [healthclaw.io](https://healthclaw.io) project.
+FHIR data via Model Context Protocol (MCP). Version 1.3.0. A [healthclaw.io](https://healthclaw.io) project.
 
 **Supports:**
 
@@ -76,14 +76,14 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
-/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, convert_fasten.py
+/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py
 /openclaw/                Telegram bot (bot.py + Dockerfile) — conversational interface to the stack
-/skills/                  OpenClaw skill definitions (curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export)
+/skills/                  OpenClaw skill definitions (curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records)
 /exports/                 Output directory for export_healthex.py bundles (gitignored)
 /templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html)
 /static/css/              Dashboard styles (r6-dashboard.css)
 /static/js/               Dashboard JavaScript (r6-dashboard.js)
-/tests/                   Python tests (conftest.py, test_r6_routes.py, test_r6_dashboard.py, test_context_builder.py, test_fhir_proxy.py)
+/tests/                   Python tests (482 passing) — conftest.py + test_r6_routes, test_r6_dashboard, test_context_builder, test_fhir_proxy, test_us_core_r4, test_curatr, test_bot_commands, test_command_center, test_export_healthex (legacy), test_healthclaw_redact (MCP export + redaction), test_import_healthex, test_kristy_watcher, test_public_fhir_servers, test_wearables
 /e2e/                     Playwright end-to-end tests (landing.spec.ts, dashboard.spec.ts)
 /.github/workflows/       CI configuration (ci.yml)
 /.claude/rules/           Claude Code rules (build.md, security.md)
@@ -348,26 +348,60 @@ When `FASTEN_PUBLIC_KEY` is set, the dashboard shows a live `<fasten-stitch-elem
 | Script | Purpose |
 | --- | --- |
 | `import_healthex.py` | POST a FHIR R4 transaction Bundle to `/Bundle/$ingest-context` with step-up auth. Entry point for all bundle imports. |
-| `export_healthex.py` | Pull all clinical resources from a tenant via REST, de-identify (strips name/address/telecom/EHR identifiers, injects `urn:healthclaw:patient` ID), pre-tag Curatr patterns (smoking contradiction, H-flag titers, missing results), write `exports/healthex-<date>.json`. Pass `--import` to auto-ingest. |
+| `export_healthex.py` | Pull all clinical resources from the **local HealthClaw FHIR store** via REST, de-identify (strips name/address/telecom/EHR identifiers, injects `urn:healthclaw:patient` ID), pre-tag Curatr patterns (smoking contradiction, H-flag titers, missing results), write `exports/healthex-<date>.json`. Pass `--import` to auto-ingest. |
+| `export_healthex_mcp.py` | Pull from **HealthEx upstream** via the official `mcp>=1.2` Streamable HTTP client, then redact PHI in-process (`healthclaw_redact.py`) before anything hits disk. Outputs JSON or NDJSON. CLI flags: `--tenant-id`, `--output`, `--tools`, `--skip-refresh`, `--no-redact`, `--redact-mode {local,proxy}`, `--ndjson`, `--compact`. Reads `HEALTHEX_AUTH_TOKEN` env var. |
+| `export_healthex_legacy.py` | Pre-MCP-SDK version of the HealthEx pull (raw httpx + custom TabularParser). Kept for backward compat with the 47 tests in `test_export_healthex.py`. |
+| `healthclaw_redact.py` | In-process PHI redaction module mirroring the HealthClaw guardrail proxy rules. Public API: `redact(payload) -> (redacted, RedactionStats)` and `redact_via_proxy(payload, url, tenant)`. Used by `export_healthex_mcp.py`. |
+| `bot_commands.py` | OpenClaw slash-command dispatcher invoked by each Telegram bot persona. Handles `/dashboard`, `/health`, `/conditions`, `/labs`, `/vitals`, `/meds`, `/allergies`, `/immunizations`, `/summary`, `/fhir <type>`, `/export`, `/import <path>`, `/import-help`, `/week`, `/conflicts`, `/help`. Deployed to Mac mini at `~/.healthclaw/commands.py` by `bot_commands_install.sh`. |
+| `bot_commands_install.sh` | Bootstraps `~/.healthclaw/venv` (Python 3.13) on the Mac mini and installs `commands.py` + dependencies (requests, mcp>=1.2, httpx, icalendar, itsdangerous). |
+| `seed_openclaw_workspaces.sh` | Creates per-persona OpenClaw workspaces (Sally-PCP, Mary-pharmacy, Dom-fitness, Kristy-scheduler) with their AGENTS.md files. |
+| `update_agent_prompts.sh` | Re-syncs each persona's AGENTS.md so all bots know about the latest slash commands. |
+| `kristy_schedule_watcher.py` | Background daemon for Kristy bot — scans family calendar(s), surfaces conflicts. |
 | `convert_fasten.py` | Convert Fasten Health export format (`providers[].fhir.ResourceType[]`) to a FHIR transaction Bundle. De-duplicates by `(resourceType, id)` using `meta.lastUpdated`. |
 | `demo_e2e.sh` | End-to-end gate test: liveness → seed → read with redaction → audit trail → cross-tenant isolation → curatr evaluate → human-in-the-loop. Exits 0 if all gates pass. Requires Flask (:5000) running. |
+| `smoke_test.py` | Standalone (no pytest) smoke check for `export_healthex_mcp.py` + `healthclaw_redact.py` against a mocked MCP session. |
 
 Fasten Health exports are **not** standard FHIR Bundles — they use `providers[].fhir.ResourceType[]` structure. Always run `convert_fasten.py` before `import_healthex.py` when working with Fasten exports.
 
+**Two HealthEx pull paths**: Use `export_healthex.py` when copying tenant→tenant inside the local HealthClaw store. Use `export_healthex_mcp.py` when HealthEx is the source of truth and you need fresh upstream data; this is the path the OpenClaw `/export` slash command invokes.
+
 ## Telegram Bot (`openclaw/`)
 
-Conversational interface to the local stack via Telegram. Commands: `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr_fix` (apply first fix proposal from last `/curatr`), `/approve`, `/token`.
+Conversational interface to the local stack via Telegram. Two execution paths share the same slash-command surface:
 
-Calls the MCP HTTP bridge (`POST /mcp/rpc`) using JSON-RPC 2.0 format:
+1. **Docker `openclaw/bot.py`** — talks to the MCP HTTP bridge (`POST /mcp/rpc`) using JSON-RPC 2.0:
 
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fhir_search","arguments":{...}}}
+   ```json
+   {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fhir_search","arguments":{...}}}
+   ```
+
+   Run via Docker Compose with the `openclaw` profile (opt-in — not started by default):
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=<token> docker-compose --profile openclaw up -d
+   ```
+
+2. **OpenClaw on the Mac mini** — each persona (Sally-PCP, Mary-pharmacy, Dom-fitness, Kristy-scheduler) is a separate workspace whose `AGENTS.md` execs `~/.healthclaw/commands.py <command> <args>` (a copy of `scripts/bot_commands.py`). The dispatcher resolves secrets from `~/.healthclaw/env` and the macOS Keychain (service `healthex` for `HEALTHEX_AUTH_TOKEN`), then prints structured stdout the LLM paraphrases back to Telegram.
+
+### `/export` end-to-end (Mac mini)
+
+```text
+DM: /export
+  → bot_commands.cmd_export()
+  → ~/.healthclaw/venv/bin/python3 ~/.healthclaw/export_healthex_mcp.py \
+        --tenant-id ev-personal --output ~/.healthclaw/exports/healthex-<date>.json
+  → mcp ClientSession → https://api.healthex.io/mcp
+  → healthclaw_redact.redact() in-process (raw response never hits disk)
+  → file written, _meta.redaction_stats summarized back to chat
+
+DM: /import ~/.healthclaw/exports/healthex-<date>.json
+  → POST /Bundle/$ingest-context with step-up auth
 ```
 
-Run via Docker Compose with the `openclaw` profile (opt-in — not started by default):
+To set the HealthEx token on the Mac mini Keychain:
 
 ```bash
-TELEGRAM_BOT_TOKEN=<token> docker-compose --profile openclaw up -d
+security add-generic-password -s healthex -a me -w '<token>'
 ```
 
 ## SQLAlchemy Model Gotchas
