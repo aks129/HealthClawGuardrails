@@ -185,6 +185,20 @@ docker-compose --profile openclaw up -d
 | `FASTEN_PRIVATE_KEY` | — | Webhook verification secret |
 | `FASTEN_CURATR_SCAN` | `false` | Auto-run Curatr evaluation on Fasten-ingested Conditions |
 
+### Newsletter sign-up (Resend)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RESEND_API_KEY` | — | Resend secret API key. Without this, `POST /api/subscribe` returns 503. |
+| `RESEND_AUDIENCE_ID` | — | Resend Audience UUID; sign-ups become contacts in this audience. |
+
+The landing page form (`#subscribe-form`) POSTs to `/api/subscribe`, which calls
+`POST https://api.resend.com/audiences/{id}/contacts`. Sending domain is
+`updates@healthclaw.io` — uses the same DNS already verified for the
+`@healthclaw.io` aliases (privacy/security/legal). Duplicates surface as a 200
+with `already_subscribed: true` so the UI shows a friendly "already on the list"
+message rather than an error.
+
 ### MCP Orchestrator (`services/agent-orchestrator/`)
 
 | Variable | Default | Description |

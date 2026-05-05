@@ -279,6 +279,57 @@
     }
     .blog-cta { font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 500; }
 
+    /* ── Subscribe ── */
+    .subscribe-wrap {
+      max-width: 720px; margin: 0 auto; padding: 80px 24px 0;
+      text-align: center;
+    }
+    .subscribe-eyebrow {
+      font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em;
+      text-transform: uppercase; color: var(--cyan); margin-bottom: 14px;
+    }
+    .subscribe-title {
+      font-family: var(--font-sans); font-weight: 700; font-size: 28px;
+      color: var(--white); letter-spacing: -0.01em; margin-bottom: 10px;
+    }
+    .subscribe-sub {
+      font-family: var(--font-sans); font-size: 15px; color: var(--gray);
+      line-height: 1.6; margin-bottom: 28px;
+    }
+    .subscribe-form {
+      display: flex; gap: 10px; justify-content: center;
+      max-width: 480px; margin: 0 auto; flex-wrap: wrap;
+    }
+    .subscribe-input {
+      flex: 1 1 260px; min-width: 0;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+      color: var(--white); padding: 12px 16px; border-radius: 8px;
+      font-family: var(--font-sans); font-size: 14px; outline: none;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .subscribe-input::placeholder { color: var(--gray-dim); }
+    .subscribe-input:focus { border-color: var(--cyan); background: rgba(255,255,255,0.06); }
+    .subscribe-btn {
+      background: var(--cyan); color: #001218; border: none;
+      padding: 12px 22px; border-radius: 8px;
+      font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+      letter-spacing: 0.04em; cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .subscribe-btn:hover { opacity: 0.88; }
+    .subscribe-btn:active { transform: translateY(1px); }
+    .subscribe-btn[disabled] { opacity: 0.5; cursor: wait; }
+    .subscribe-msg {
+      margin-top: 14px; font-family: var(--font-mono); font-size: 12px;
+      min-height: 18px;
+    }
+    .subscribe-msg.ok    { color: var(--green); }
+    .subscribe-msg.error { color: #ff7b7b; }
+    .subscribe-fineprint {
+      font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim);
+      margin-top: 16px;
+    }
+
     /* ── Footer ── */
     footer {
       border-top: 1px solid var(--border);
@@ -760,6 +811,33 @@
   </div>
 </div>
 
+<!-- ═══ SUBSCRIBE ═══ -->
+<section class="subscribe-wrap fade-up" id="subscribe">
+  <div class="subscribe-eyebrow">Stay in the loop</div>
+  <h2 class="subscribe-title">Get release notes &amp; new guardrail patterns</h2>
+  <p class="subscribe-sub">
+    A short email when we ship a new MCP tool, redaction rule, or upstream-server
+    integration. No marketing — just what's actually changed in the repo.
+  </p>
+  <form class="subscribe-form" id="subscribe-form" novalidate>
+    <input
+      type="email"
+      name="email"
+      class="subscribe-input"
+      id="subscribe-input"
+      placeholder="you@example.com"
+      autocomplete="email"
+      required
+    >
+    <button type="submit" class="subscribe-btn" id="subscribe-btn">Subscribe</button>
+  </form>
+  <div class="subscribe-msg" id="subscribe-msg" aria-live="polite"></div>
+  <div class="subscribe-fineprint">
+    We use <a href="https://resend.com" target="_blank" rel="noopener" class="footer-ep">Resend</a>
+    to deliver mail from <code>updates@healthclaw.io</code>. One-click unsubscribe in every email.
+  </div>
+</section>
+
 <!-- ═══ FOOTER ═══ -->
 <footer>
   <div class="footer-inner">
@@ -843,6 +921,54 @@ function copyQuickstart() {
   btn.textContent = 'Copied!';
   setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
 }
+
+// ── Subscribe form ──
+(() => {
+  const form  = document.getElementById('subscribe-form');
+  const input = document.getElementById('subscribe-input');
+  const btn   = document.getElementById('subscribe-btn');
+  const msg   = document.getElementById('subscribe-msg');
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = input.value.trim();
+    msg.className = 'subscribe-msg';
+    msg.textContent = '';
+    if (!email) {
+      msg.textContent = 'Please enter your email.';
+      msg.classList.add('error');
+      return;
+    }
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Sending…';
+    try {
+      const r = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        msg.textContent = data.already_subscribed
+          ? "You're already on the list — thanks!"
+          : "Subscribed. Watch your inbox.";
+        msg.classList.add('ok');
+        form.reset();
+      } else {
+        msg.textContent = data.error || 'Something went wrong. Please try again.';
+        msg.classList.add('error');
+      }
+    } catch (err) {
+      msg.textContent = 'Network error. Please try again.';
+      msg.classList.add('error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+})();
 </script>
 
 </body>

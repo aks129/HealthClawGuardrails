@@ -6,12 +6,18 @@ Web UI routes:
 - /r6-dashboard (Health Data Dashboard — FHIR interactive showcase)
 - /faq (Frequently Asked Questions)
 - /wiki (Project Wiki)
+- POST /api/subscribe (newsletter sign-up via Resend Audiences API)
 """
 
+import logging
 import os
 
-from flask import Response, render_template, request
+import httpx
+from email_validator import EmailNotValidError, validate_email
+from flask import Response, jsonify, render_template, request
 from main import app
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -88,3 +94,61 @@ def privacy():
 def terms():
     """Terms & Conditions."""
     return render_template('terms.html')
+
+
+# ---------------------------------------------------------------------------
+# Newsletter sign-up — POSTs the email to a Resend Audience.
+#
+# Resend uses the same domain that already serves healthclaw.io email
+# (privacy@, security@, legal@). When sending verification or update emails,
+# we'd use updates@healthclaw.io as the From — but for now this endpoint only
+# stores the contact in the audience and lets Resend's broadcast UI handle the
+# outbound side.
+#
+# Required env: RESEND_API_KEY, RESEND_AUDIENCE_ID
+# If neither is set, the endpoint returns 503 so we never silently drop signups.
+# ---------------------------------------------------------------------------
+RESEND_CONTACTS_URL = "https://api.resend.com/audiences/{audience_id}/contacts"
+
+
+@app.route('/api/subscribe', methods=['POST'])
+def api_subscribe():
+    payload = request.get_json(silent=True) or request.form
+    raw_email = (payload.get("email") or "").strip()
+
+    if not raw_email:
+        return jsonify({"error": "email is required"}), 400
+
+    try:
+        email = validate_email(raw_email, check_deliverability=False).normalized
+    except EmailNotValidError as exc:
+        return jsonify({"error": f"invalid email: {exc}"}), 400
+
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    audience_id = os.environ.get("RESEND_AUDIENCE_ID", "").strip()
+    if not api_key or not audience_id:
+        logger.warning("subscribe: Resend not configured — RESEND_API_KEY/AUDIENCE_ID missing")
+        return jsonify({"error": "subscriptions are not configured"}), 503
+
+    try:
+        resp = httpx.post(
+            RESEND_CONTACTS_URL.format(audience_id=audience_id),
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"email": email, "unsubscribed": False},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.exception("subscribe: Resend network error: %s", exc)
+        return jsonify({"error": "could not reach the mail provider"}), 502
+
+    if resp.status_code in (200, 201):
+        return jsonify({"ok": True, "email": email}), 200
+
+    # Resend returns 422 with name=validation_error for duplicates — treat as success.
+    if resp.status_code == 422:
+        body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+        if "already exist" in (body.get("message") or "").lower():
+            return jsonify({"ok": True, "email": email, "already_subscribed": True}), 200
+
+    logger.warning("subscribe: Resend returned %s: %s", resp.status_code, resp.text[:200])
+    return jsonify({"error": "could not save subscription"}), 502
