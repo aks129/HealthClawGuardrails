@@ -6,9 +6,18 @@ whenever you want to refresh the PDF:
 
     uv run python scripts/build_quickstart_pdf.py
 
-The script keeps the PDF under 10 pages, light on prose, heavy on
-runnable command blocks. Brand palette mirrors the landing page
-(cyan #22d3ee, amber #fbbf24, dark navy #0A0E17).
+The PDF has two parallel sections so it works for any reader:
+
+  Path A — "No terminal needed"  (~3 pages, claude.ai + HealthEx,
+            paste-ready prompts, no install of anything)
+  Path B — "Self-host the stack" (~6 pages, the technical track —
+            OpenClaw, FHIR server, HealthClaw, agent personas)
+
+A "Pick your path" page after the cover lets the reader jump straight
+to whichever fits.
+
+Brand palette mirrors the landing page: cyan #22d3ee, amber #fbbf24,
+dark navy #0A0E17.
 """
 from __future__ import annotations
 
@@ -189,6 +198,48 @@ def hr(width=7.0):
     return t
 
 
+def _path_banner(label: str, title: str, accent, sty) -> list:
+    """A coloured ribbon that opens a Path A / Path B section."""
+    pal = Paragraph(
+        f'<font face="Helvetica-Bold" size="9" color="#0A0E17">'
+        f'{label}</font> &nbsp;&nbsp; '
+        f'<font face="Helvetica-Bold" size="14" color="#0A0E17">{title}</font>',
+        ParagraphStyle("path_banner_inner", fontName="Helvetica",
+                       fontSize=10, leading=18, alignment=TA_LEFT))
+    t = Table([[pal]], colWidths=[7.0 * inch])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), accent),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return [t, Spacer(1, 14)]
+
+
+def _prompt_box(text: str, sty) -> Table:
+    """Render a paste-ready prompt as a tinted card with a small label."""
+    label = Paragraph(
+        '<font face="Helvetica-Bold" size="8" color="#0e9aaf">PROMPT — paste into Claude</font>',
+        sty["body_sm"])
+    body = Paragraph(text, ParagraphStyle(
+        "prompt_body", parent=sty["body"],
+        fontName="Helvetica", fontSize=10.5, leading=15.5,
+        textColor=INK, leftIndent=0, rightIndent=0, spaceAfter=0))
+    t = Table([[label], [body]], colWidths=[6.4 * inch])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ecfeff")),
+        ("LINEABOVE", (0, 0), (-1, 0), 2, CYAN),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (0, 0), 8),
+        ("BOTTOMPADDING", (0, 0), (0, 0), 2),
+        ("TOPPADDING", (0, 1), (0, 1), 0),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 12),
+    ]))
+    return t
+
+
 # ── Build ───────────────────────────────────────────────────────────────────
 def build(out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -225,8 +276,9 @@ def build(out: Path) -> None:
     story.append(Spacer(1, 12))
     story.append(Paragraph("Your Health Records,<br/>On Your Terms.", sty["cover_title"]))
     story.append(Paragraph(
-        "A 30-minute quickstart for the private,<br/>"
-        "agent-mediated personal health stack.", sty["cover_sub"]))
+        "Two ways in:<br/>"
+        "a 3-minute chat-only path, or a 30-minute fully-private self-host.",
+        sty["cover_sub"]))
     story.append(Paragraph(
         "“ You own your records. The cloud is just a courier. ”",
         sty["cover_tagline"]))
@@ -238,17 +290,242 @@ def build(out: Path) -> None:
     story.append(NextPageTemplate("body"))
     story.append(PageBreak())
 
-    # ── PAGE 2 — What you're building ───────────────────────────────────────
-    story += step_header("0", "What you're about to build", sty)
+    # ── PAGE 2 — Pick your path ─────────────────────────────────────────────
+    story += step_header("→", "Pick your path", sty)
     story.append(Paragraph(
-        "By the end of this guide your machine — laptop, Mac mini, "
-        "Linux box — will hold a complete, private, agent-mediated view of "
-        "your own clinical records. Nothing leaves the box unless you say so.",
+        "There are two ways to get your records into a conversation with "
+        "Claude. Both keep your data under your control. Pick whichever "
+        "matches the time you have and how comfortable you are with a "
+        "terminal.",
+        sty["body"]))
+
+    paths = [
+        ["",                 "PATH A · No terminal",                       "PATH B · Self-host"],
+        ["Time",             "≈ 3 minutes",                                "≈ 30 minutes"],
+        ["What you do",      "Click around in claude.ai. That's it.",      "Run a few commands on your laptop"],
+        ["Tools you need",   "A claude.ai account. A health-system login.", "claude.ai + Docker + Python"],
+        ["Where your\nrecords live", "In your active Claude conversation. Closed when you close the chat.", "On your machine. Never leave."],
+        ["What you can do",  "Ask anything: care gaps, lab trends, prep for a visit",  "Same — plus Telegram bots, audit trail, full guardrails"],
+        ["Best for",         "“I want to talk to Claude about my records.”", "“I want my own private store with agents.”"],
+        ["Where it lives",   "Pages 3 – 5",                                 "Pages 6 – 11"],
+    ]
+    t = Table(paths, colWidths=[1.4 * inch, 2.5 * inch, 2.5 * inch])
+    t.setStyle(TableStyle([
+        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 10),
+        ("FONT", (0, 1), (0, -1), "Helvetica-Bold", 9.5),
+        ("FONT", (1, 0), (-1, -1), "Helvetica", 9.5),
+        ("BACKGROUND", (1, 0), (1, 0), CYAN),
+        ("BACKGROUND", (2, 0), (2, 0), AMBER),
+        ("TEXTCOLOR", (1, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (0, 0), colors.white),
+        ("BACKGROUND", (0, 0), (0, 0), SLATE),
+        ("TEXTCOLOR", (0, 1), (0, -1), INK),
+        ("TEXTCOLOR", (1, 1), (-1, -1), INK),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, CODE_BG]),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, NAVY),
+    ]))
+    story.append(t)
+
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(
+        "<b>Not sure?</b> Start with Path A. It takes 3 minutes and you'll "
+        "know within 10 if it's enough for what you want. Path B is always "
+        "there if you want to go deeper later — and many people end up "
+        "running both.",
+        sty["callout"]))
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Privacy guarantee (both paths)", sty["h2"]))
+    story.append(Paragraph(
+        "Records flow EHR → connector → wherever you chose to put them. "
+        "The cloud only ever appears as the OAuth provider that proves "
+        "you're you. PHI redaction is built in.",
+        sty["body"]))
+
+    story.append(PageBreak())
+
+    # ════════════════════════════════════════════════════════════════════════
+    # PATH A — NO TERMINAL NEEDED
+    # ════════════════════════════════════════════════════════════════════════
+    story += _path_banner("PATH A", "No terminal needed", CYAN, sty)
+
+    # ── PATH A · STEP 1 — Connect HealthEx ───────────────────────────────────
+    story += step_header("A · 1", "Connect HealthEx (3 minutes)", sty)
+    story.append(Paragraph(
+        "HealthEx is a free service that connects to the US health-data "
+        "exchange networks (Carequality, CommonWell, eHealth Exchange) and "
+        "pulls records from any participating EHR — Epic, Cerner, MEDITECH, "
+        "athenahealth, AllScripts, and most major US health systems.",
+        sty["body"]))
+
+    walk_steps = [
+        ("1.", "Go to <b>healthex.io</b> and create a free account."),
+        ("2.", "In HealthEx, connect each health system you've used. Each is "
+               "a browser SMART-on-FHIR login — same as logging into MyChart."),
+        ("3.", "Open <b>claude.ai</b> → <b>Settings</b> → <b>Integrations</b> "
+               "→ find <b>HealthEx</b> → click <b>Connect</b>."),
+        ("4.", "Authorize once more in the popup. The HealthEx tools are now "
+               "live in every Claude conversation you start."),
+    ]
+    walk_data = [[Paragraph(num, sty["h2"]), Paragraph(text, sty["body"])]
+                 for num, text in walk_steps]
+    t = Table(walk_data, colWidths=[0.4 * inch, 6.0 * inch])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("Confirm it worked", sty["h2"]))
+    story.append(Paragraph(
+        "In a fresh Claude conversation, paste:",
+        sty["body"]))
+    story.append(_prompt_box("Check when my health records were last updated.", sty))
+    story.append(Paragraph(
+        "Claude calls the <font face='Courier'>update_and_check_recent_records</font> "
+        "tool and reports your sync status. If you see a friendly summary, "
+        "you're done with setup — no terminal, no install, no Docker. "
+        "Skip to <b>Step A·2</b> for prompts to try next.",
+        sty["body"]))
+
+    story.append(Paragraph(
+        "<b>Privacy in Path A.</b> HealthEx reads your records read-only — it "
+        "<i>cannot write</i> to your EHR. Records arrive in the active Claude "
+        "conversation and are gone when you close it. Anthropic doesn't keep "
+        "them. Nothing is uploaded anywhere else.",
+        sty["callout"]))
+
+    story.append(PageBreak())
+
+    # ── PATH A · STEP 2 — Starter prompts ───────────────────────────────────
+    story += step_header("A · 2", "Prompts you can paste right now", sty)
+    story.append(Paragraph(
+        "Each block below is a complete prompt — copy it into Claude as-is. "
+        "Edit anything in [brackets] for your own situation.",
+        sty["body"]))
+
+    story.append(Paragraph("Get the lay of the land", sty["h2"]))
+    story.append(_prompt_box(
+        "Get my health summary. Show me active conditions, current "
+        "medications, recent labs, immunizations, and any allergies — "
+        "all on one page.", sty))
+    story.append(_prompt_box(
+        "Build a chronological timeline of my medical conditions from "
+        "first documented to present. For each active condition, note "
+        "how long I've had it and whether there's documented treatment.",
+        sty))
+
+    story.append(Paragraph("Trends over time", sty["h2"]))
+    story.append(_prompt_box(
+        "Pull my lab results for the last 5 years. Identify any values "
+        "that have been trending in a concerning direction, even if "
+        "still within the normal range. Flag anything that's been "
+        "consistently at the edge of the reference range.", sty))
+    story.append(_prompt_box(
+        "Compare my most recent labs to my results from 2 years ago. "
+        "What has improved? What has gotten worse?", sty))
+
+    story.append(Paragraph("Preventive care & gaps", sty["h2"]))
+    story.append(_prompt_box(
+        "Based on my age, gender, conditions, and immunization history, "
+        "identify any preventive care I may be overdue for. Reference "
+        "USPSTF guidelines for screening recommendations.", sty))
+
+    story.append(Paragraph("Pre-appointment prep", sty["h2"]))
+    story.append(_prompt_box(
+        "I have an appointment with a [cardiologist] on [date] for "
+        "[reason]. Pull my relevant history and prepare a 1-page summary "
+        "I can bring. Include relevant conditions, current medications, "
+        "recent labs, and 3 questions I should ask based on gaps in my "
+        "record.", sty))
+
+    story.append(Paragraph("Medication review", sty["h2"]))
+    story.append(_prompt_box(
+        "Review my medication history for the last 5 years. Identify any "
+        "meds that were started then stopped (and why if documented), "
+        "any dosage changes over time, and any gaps in chronic "
+        "medication coverage.", sty))
+
+    story.append(PageBreak())
+
+    # ── PATH A · STEP 3 — Try the public demo ───────────────────────────────
+    story += step_header("A · 3", "Want to see the guardrails? Try the public demo", sty)
+    story.append(Paragraph(
+        "If you're curious what the HealthClaw guardrails look like in action "
+        "— PHI redaction, data-quality flags, audit trails — there's a public "
+        "demo you can poke at without installing anything.",
+        sty["body"]))
+
+    story.append(Paragraph("In your browser (zero install)", sty["h2"]))
+    story.append(Paragraph(
+        "Open <b>healthclaw.io/r6-dashboard</b>. You'll see a live, interactive "
+        "dashboard pre-seeded with a sample patient (Maria Rivera) whose record "
+        "has intentional data-quality issues. Try the Curatr panel — it'll flag "
+        "an ICD-9 code that should be ICD-10, and propose the exact fix.",
+        sty["body"]))
+
+    story.append(Paragraph("In Claude Desktop (one config-file edit)", sty["h2"]))
+    story.append(Paragraph(
+        "If you want Claude to talk to the demo over MCP — same way it would "
+        "talk to your own self-hosted instance — paste this into your Claude "
+        "Desktop config:",
+        sty["body"]))
+    story.append(code_block(
+        "{\n"
+        '  "mcpServers": {\n'
+        '    "healthclaw-demo": {\n'
+        '      "type": "streamable-http",\n'
+        '      "url":  "https://healthclaw.up.railway.app/mcp",\n'
+        '      "headers": { "X-Tenant-ID": "desktop-demo" }\n'
+        "    }\n"
+        "  }\n"
+        "}", sty))
+    story.append(Paragraph(
+        "Restart Claude Desktop. Then ask:",
+        sty["body"]))
+    story.append(_prompt_box(
+        "Use the healthclaw-demo tools. Get a step-up token, then search "
+        "for all Patients in the demo store. Read the Condition for the "
+        "patient, then run curatr_evaluate on it — it has an ICD-9 code "
+        "that should be flagged.", sty))
+
+    story.append(Paragraph("That's the whole non-technical path", sty["h2"]))
+    story.append(Paragraph(
+        "Records connected. Prompts ready. Demo to play with. Zero terminal "
+        "commands. If that's enough for what you need — you're done. If you "
+        "want a fully-private store on your own machine plus Telegram bots "
+        "and an audit trail you control, the rest of this guide is Path B.",
+        sty["body"]))
+
+    story.append(Paragraph(
+        "<b>Hint:</b> Many people start in Path A, get comfortable, and "
+        "graduate to Path B for the records they really care about. "
+        "There's no wrong order.",
+        sty["callout"]))
+
+    story.append(PageBreak())
+
+    # ════════════════════════════════════════════════════════════════════════
+    # PATH B — SELF-HOST THE STACK
+    # ════════════════════════════════════════════════════════════════════════
+    story += _path_banner("PATH B", "Self-host the full stack", AMBER, sty)
+
+    story += step_header("B · 0", "What you're about to build", sty)
+    story.append(Paragraph(
+        "By the end of Path B your machine — laptop, Mac mini, Linux box — "
+        "will hold a complete, private, agent-mediated view of your records. "
+        "Nothing leaves the box unless you say so.",
         sty["body"]))
 
     story.append(Spacer(1, 8))
-    story.append(Paragraph(
-        "<b>The stack, top to bottom:</b>", sty["body"]))
+    story.append(Paragraph("<b>The stack, top to bottom:</b>", sty["body"]))
 
     stack_data = [
         ["You",          "Telegram · Claude Desktop · Claude Code · Web"],
@@ -270,7 +547,6 @@ def build(out: Path) -> None:
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
-        # Color the arrow rows
         ("TEXTCOLOR", (0, 1), (0, 1), CYAN),
         ("TEXTCOLOR", (0, 3), (0, 3), CYAN),
         ("TEXTCOLOR", (0, 5), (0, 5), CYAN),
@@ -278,16 +554,7 @@ def build(out: Path) -> None:
     ]))
     story.append(t)
 
-    story.append(Spacer(1, 14))
-    story.append(Paragraph("Privacy guarantee", sty["h2"]))
-    story.append(Paragraph(
-        "Records flow EHR → connector → your machine and stop there. PHI "
-        "redaction is applied <b>in-process</b> before any file is written. "
-        "The only outbound traffic during data pulls is the OAuth/SMART-on-FHIR "
-        "handshake your EHR requires.",
-        sty["body"]))
-
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 12))
     story.append(Paragraph("Prerequisites", sty["h2"]))
     prereq = [
         ["macOS / Linux",   "uname -sm"],
@@ -312,8 +579,8 @@ def build(out: Path) -> None:
 
     story.append(PageBreak())
 
-    # ── STEP 1a — OpenClaw ───────────────────────────────────────────────────
-    story += step_header("1a", "Install OpenClaw", sty)
+    # ── STEP B · 1a — OpenClaw ───────────────────────────────────────────────
+    story += step_header("B · 1a", "Install OpenClaw", sty)
     story.append(Paragraph(
         "OpenClaw is your local AI gateway. It runs the agent personas, "
         "exposes them on whichever channels you want — Telegram, WhatsApp, "
@@ -351,7 +618,7 @@ def build(out: Path) -> None:
     story.append(PageBreak())
 
     # ── STEP 1b — FHIR server ────────────────────────────────────────────────
-    story += step_header("1b", "Stand up an open-source FHIR server", sty)
+    story += step_header("B · 1b", "Stand up an open-source FHIR server", sty)
     story.append(Paragraph(
         "Your records need somewhere to live. Two solid choices — pick one.",
         sty["body"]))
@@ -391,7 +658,7 @@ def build(out: Path) -> None:
     story.append(PageBreak())
 
     # ── STEP 2 — Connect EHR ─────────────────────────────────────────────────
-    story += step_header("2", "Connect your real records (privacy-first)", sty)
+    story += step_header("B · 2", "Connect your real records (privacy-first)", sty)
     story.append(Paragraph(
         "Authenticate with your providers and pull records into the FHIR "
         "server you just stood up. Records flow EHR → connector → your "
@@ -438,7 +705,7 @@ def build(out: Path) -> None:
     story.append(PageBreak())
 
     # ── STEP 3 — HealthClaw ──────────────────────────────────────────────────
-    story += step_header("3", "Install HealthClaw Guardrails", sty)
+    story += step_header("B · 3", "Install HealthClaw Guardrails", sty)
     story.append(Paragraph(
         "HealthClaw sits between any agent and your FHIR server, enforcing "
         "PHI redaction, immutable audit trails, step-up auth on writes, and "
@@ -482,7 +749,7 @@ def build(out: Path) -> None:
     story.append(PageBreak())
 
     # ── STEP 4 — Pull data ───────────────────────────────────────────────────
-    story += step_header("4", "Pull data through HealthClaw", sty)
+    story += step_header("B · 4", "Pull data through HealthClaw", sty)
     story.append(Paragraph(
         "Three ways. Pick whichever fits your moment.",
         sty["body"]))
@@ -526,7 +793,7 @@ def build(out: Path) -> None:
     story.append(PageBreak())
 
     # ── STEP 5 — Verify ──────────────────────────────────────────────────────
-    story += step_header("5", "Verify everything works", sty)
+    story += step_header("B · 5", "Verify everything works", sty)
     story.append(Paragraph(
         "A 60-second checklist. Every line should green-light.",
         sty["body"]))
