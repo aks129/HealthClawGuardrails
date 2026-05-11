@@ -30,7 +30,10 @@ import { FHIRTools } from "./tools";
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.MCP_PORT || 3001;
+// Railway / Heroku / Fly inject PORT; honor that first so the platform's
+// public proxy can reach us, then fall back to the explicit MCP_PORT, then
+// the default development port.
+const PORT = process.env.PORT || process.env.MCP_PORT || 3001;
 const FHIR_BASE_URL =
   process.env.FHIR_BASE_URL || "http://localhost:5000/r6/fhir";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").filter(Boolean);
