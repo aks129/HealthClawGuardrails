@@ -66,7 +66,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Tenant-Id, X-Step-Up-Token, X-Agent-Id, X-Human-Confirmed, Mcp-Session-Id, X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID"
+    "Content-Type, Authorization, X-Tenant-Id, X-Step-Up-Token, X-Agent-Id, X-Human-Confirmed, Mcp-Session-Id, X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID, X-FHIR-Refresh-Token, X-FHIR-Refresh-Url"
   );
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   if (req.method === "OPTIONS") {
@@ -126,6 +126,12 @@ function extractHeaders(req: express.Request): Record<string, string> {
   if (typeof fhirAccessToken === "string") h["x-fhir-access-token"] = fhirAccessToken;
   const patientId = req.headers["x-patient-id"];
   if (typeof patientId === "string") h["x-patient-id"] = patientId;
+  // Optional refresh-token headers (PromptOpinion sends these when the agent
+  // host authorized offline_access). Forwarded but not yet acted on.
+  const refreshToken = req.headers["x-fhir-refresh-token"];
+  if (typeof refreshToken === "string") h["x-fhir-refresh-token"] = refreshToken;
+  const refreshUrl = req.headers["x-fhir-refresh-url"];
+  if (typeof refreshUrl === "string") h["x-fhir-refresh-url"] = refreshUrl;
   return h;
 }
 
@@ -136,12 +142,34 @@ function extractHeaders(req: express.Request): Record<string, string> {
 // tools/call handler re-extracts headers per-request and bypasses this factory,
 // so sessionHeaders is only meaningfully used on the SSE path.
 
-// SHARP-on-MCP capability — advertised in the initialize response so
-// SHARP-aware clients (Prompt Opinion, SMART-on-FHIR launchers) know to
-// forward X-FHIR-Server-URL / X-FHIR-Access-Token / X-Patient-ID on every call.
+// FHIR context advertisement.
+//
+// Two parallel declarations so both ecosystems auto-detect compliance:
+//
+//   1. SHARP-on-MCP (https://sharponmcp.com) — vendor-neutral. Lives under
+//      capabilities.experimental.{fhir_context_required, sharp}.
+//
+//   2. PromptOpinion FHIR extension
+//      (https://docs.promptopinion.ai/fhir-context/mcp-fhir-context) — lives
+//      under capabilities.extensions["ai.promptopinion/fhir-context"]. The
+//      "scopes" array declares the SMART-on-FHIR scopes Po should request
+//      from the agent host when launching us.
+//
+// Both specs converge on the same headers (X-FHIR-Server-URL,
+// X-FHIR-Access-Token, X-Patient-ID, optionally X-FHIR-Refresh-Token /
+// X-FHIR-Refresh-Url) so the underlying request flow is identical.
 const SHARP_CAPABILITIES = {
   tools: {},
   logging: {},
+  extensions: {
+    "ai.promptopinion/fhir-context": {
+      scopes: [
+        { name: "patient/*.read", required: true },
+        { name: "patient/*.write", required: false },
+        { name: "offline_access", required: false },
+      ],
+    },
+  },
   experimental: {
     fhir_context_required: { required: true },
     sharp: {
