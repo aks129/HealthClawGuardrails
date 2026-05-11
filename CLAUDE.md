@@ -9,10 +9,10 @@ FHIR data via Model Context Protocol (MCP). Version 1.3.0. A [healthclaw.io](htt
 
 **Supports:**
 
-- **FHIR R4 with US Core v6.1** profiles — the production standard (stable, widely deployed US healthcare resources). This is what the app primarily does.
+- **FHIR R4 with US Core v9** profiles — the production standard (stable, widely deployed US healthcare resources). This is what the app primarily does.
 - FHIR R6 v6.0.0-ballot3 (experimental ballot resources only: Permission, SubscriptionTopic, DeviceAlert, NutritionIntake)
 
-**Why the `/r6/` route prefix:** The Flask Blueprint and directory are named `r6` from the project's origin as an R6 ballot resource showcase. The actual clinical data pipeline (Conditions, Observations, Immunizations, MedicationRequests, etc.) uses **R4 resources validated against US Core v6.1 required fields**. The R6 prefix is a route path, not a statement about which FHIR version the clinical resources use.
+**Why the `/r6/` route prefix:** The Flask Blueprint and directory are named `r6` from the project's origin as an R6 ballot resource showcase. The actual clinical data pipeline (Conditions, Observations, Immunizations, MedicationRequests, etc.) uses **R4 resources validated against US Core v9 required fields**. The R6 prefix is a route path, not a statement about which FHIR version the clinical resources use.
 
 **What this is:** A pattern library showing how tenant isolation, step-up authorization,
 audit trails, PHI redaction, and human-in-the-loop enforcement work together when an
@@ -75,10 +75,12 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 ```text
 /                         Main Flask app (main.py, app.py, models.py)
 /api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
-/r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
+/r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, agent_client, health_context, schema_sync, seed). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
+/r6/wearables/            Wearable device sync MCP app (Apple Health / Fitbit poller + UI)
+/r6/command_center/       Command Center module (per-tenant ops dashboard)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
-/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py
+/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_demo_tenant.py (HTTP + DB seed entry points), seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py, kristy_install.sh, build_quickstart_pdf.py
 /openclaw/                Telegram bot (bot.py + Dockerfile) — conversational interface to the stack
 /skills/                  OpenClaw skill definitions (getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records). Also surfaced at /skills (auto-indexed from frontmatter).
 /exports/                 Output directory for export_healthex.py bundles (gitignored)
@@ -281,9 +283,9 @@ Connect to real FHIR servers while keeping the full guardrail stack active.
 - **NutritionIntake** — Dietary consumption tracking (new in R6).
 - **DeviceAssociation, NutritionProduct, Requirements, ActorDefinition** — Additional R6 resources (CRUD only).
 
-## What's US Core v6.1 R4 (Stable)
+## What's US Core v9 R4 (Stable)
 
-Standard R4 resources added in Phase 4. All validated against US Core v6.1 required fields:
+Standard R4 resources added in Phase 4. All validated against US Core v9 required fields:
 
 - **AllergyIntolerance** — requires clinicalStatus, verificationStatus, patient
 - **Immunization** — requires status, vaccineCode, patient, occurrence[x]
@@ -384,6 +386,8 @@ When `FASTEN_PUBLIC_KEY` is set, the dashboard shows a live `<fasten-stitch-elem
 | `seed_openclaw_workspaces.sh` | Creates per-persona OpenClaw workspaces (Sally-PCP, Mary-pharmacy, Dom-fitness, Kristy-scheduler) with their AGENTS.md files. |
 | `update_agent_prompts.sh` | Re-syncs each persona's AGENTS.md so all bots know about the latest slash commands. |
 | `kristy_schedule_watcher.py` | Background daemon for Kristy bot — scans family calendar(s), surfaces conflicts. |
+| `kristy_install.sh` | Mac mini installer for the Kristy persona — drops `kristy_schedule_watcher.py` into `~/.healthclaw/` alongside its launchd plist. |
+| `seed_demo_tenant.py` | Seed the `desktop-demo` tenant. Two modes: HTTP (`POST /r6/fhir/internal/seed` against a running server, used by deploy hooks) or `--db-mode` (writes directly via SQLAlchemy, no server required). Optional `--bundle-file` accepts an export bundle. |
 | `convert_fasten.py` | Convert Fasten Health export format (`providers[].fhir.ResourceType[]`) to a FHIR transaction Bundle. De-duplicates by `(resourceType, id)` using `meta.lastUpdated`. |
 | `demo_e2e.sh` | End-to-end gate test: liveness → seed → read with redaction → audit trail → cross-tenant isolation → curatr evaluate → human-in-the-loop. Exits 0 if all gates pass. Requires Flask (:5000) running. |
 | `smoke_test.py` | Standalone (no pytest) smoke check for `export_healthex_mcp.py` + `healthclaw_redact.py` against a mocked MCP session. |
