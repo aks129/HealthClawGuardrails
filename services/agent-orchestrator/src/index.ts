@@ -30,6 +30,17 @@ import { FHIRTools } from "./tools";
 const app = express();
 app.use(express.json());
 
+// Minimal request access log so we can see which probes from marketplace
+// platforms (PromptOpinion, Devpost reviewers, Claude Desktop) actually reach
+// us. Logs to stderr only; bodies are NOT logged.
+app.use((req, _res, next) => {
+  const origin = req.headers.origin || "-";
+  const ua = (req.headers["user-agent"] || "-").toString().slice(0, 80);
+  const ct = req.headers["content-type"] || "-";
+  console.error(`[req] ${req.method} ${req.url} origin=${origin} ct=${ct} ua=${ua}`);
+  next();
+});
+
 // Railway / Heroku / Fly inject PORT; honor that first so the platform's
 // public proxy can reach us, then fall back to the explicit MCP_PORT, then
 // the default development port.
