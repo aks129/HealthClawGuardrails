@@ -323,6 +323,21 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
+// GET /mcp — MCP Streamable HTTP spec says servers that don't expose a
+// server-to-client SSE stream on this endpoint MUST return 405 (not 404)
+// so spec-strict clients (PromptOpinion, MCP Inspector, etc.) can tell the
+// channel is intentionally unsupported and continue with POST-only.
+app.get("/mcp", (_req, res) => {
+  res.setHeader("Allow", "POST, DELETE, OPTIONS");
+  res.status(405).json({
+    jsonrpc: "2.0",
+    error: {
+      code: -32000,
+      message: "GET not supported on this MCP endpoint. Use POST for client-to-server JSON-RPC; DELETE for session cleanup.",
+    },
+  });
+});
+
 // DELETE /mcp — session cleanup
 app.delete("/mcp", (req, res) => {
   const sessionId = req.headers["mcp-session-id"] as string;
