@@ -171,6 +171,11 @@
   <a href="#fasten">Fasten Connect</a>
   <a class="toc-sub" href="#fasten-openclaw">OpenClaw</a>
   <a class="toc-sub" href="#fasten-claude">Claude Code / Desktop</a>
+  <a href="#gateways">Conversational Gateways</a>
+  <a class="toc-sub" href="#gateway-openclaw">OpenClaw (Telegram)</a>
+  <a class="toc-sub" href="#gateway-hermes">Hermes (Nous Research)</a>
+  <a class="toc-sub" href="#hermes-quickstart">Hermes Quick Start</a>
+  <a class="toc-sub" href="#gateway-promptopinion">PromptOpinion Marketplace</a>
   <a href="#proxy">Upstream Proxy</a>
   <a href="#deploy">Deployment</a>
   <a href="#limitations">Limitations</a>
@@ -488,6 +493,103 @@ cat skills/curatr/SKILL.md             # Curatr evaluation reference</pre>
 <div class="wiki-callout">
   <strong>TEFCA IAS (Claude platform):</strong> Enable TEFCA mode by setting <code>tefca-mode="true"</code> on the Stitch widget. For test mode, use synthetic patients from the Fasten test credentials page. Use <code>tefca_directory_id</code> (not <code>endpoint_id</code>) as the stable identifier when registering TEFCA connections.
 </div>
+
+<h2 id="gateways">Conversational Gateways</h2>
+<p>HealthClaw Guardrails is the data + compliance layer. Conversational gateways are how a human <em>talks</em> to it. The MCP server is the same in every case — every gateway connects to it, sends tool calls, and renders the redacted responses back to the user in chat.</p>
+
+<table class="wiki-table">
+  <thead><tr><th>Gateway</th><th>Where you chat</th><th>Auth model</th><th>Self-improving?</th></tr></thead>
+  <tbody>
+    <tr><td>OpenClaw</td><td>Telegram bot</td><td>JSON-RPC HTTP bridge (<code>/mcp/rpc</code>)</td><td>No — fixed slash commands</td></tr>
+    <tr><td>Hermes</td><td>Telegram · Discord · Slack · WhatsApp · Signal · CLI · HTTP</td><td>Native MCP Streamable HTTP</td><td>Yes — learns skills from conversation</td></tr>
+    <tr><td>PromptOpinion</td><td>Marketplace agent in browser</td><td>Native MCP + SHARP-on-MCP headers</td><td>No (platform-level evaluations only)</td></tr>
+    <tr><td>Claude Desktop / Code</td><td>Anthropic clients</td><td>Native MCP stdio or HTTP</td><td>No</td></tr>
+  </tbody>
+</table>
+
+<h3 id="gateway-openclaw">OpenClaw (Telegram)</h3>
+<p>The original integration — a Python Telegram bot in <code>openclaw/</code> that translates slash commands into MCP tool calls via the HTTP bridge. Best when you want exactly one chat channel with predictable commands and zero ambiguity.</p>
+<p>Setup is documented in the <a href="#fasten-openclaw">Fasten quick-start above</a> — same install path applies for any data source.</p>
+
+<h3 id="gateway-hermes">Hermes (Nous Research)</h3>
+<p><a href="https://github.com/nousresearch/hermes-agent" target="_blank" rel="noopener noreferrer">Hermes</a> is Nous Research's self-improving agent. It supports seven execution backends (local, Docker, SSH, Singularity, Modal, Daytona, Vercel Sandbox) and six messaging gateways (Telegram, Discord, Slack, WhatsApp, Signal, plus CLI / HTTP), and is a native MCP client over Streamable HTTP. No JSON-RPC bridge needed on the HealthClaw side.</p>
+
+<div class="wiki-callout success">
+  <strong>The learning loop is the point.</strong> Hermes captures every conversation, builds memory across sessions, and lets you save working tool-call patterns as new skills. The 10 skills HealthClaw ships are starting points — Hermes refines them in <code>~/.hermes/skills/healthclaw/</code> based on how you actually use them. The repo copy stays canonical.
+</div>
+
+<h3 id="hermes-quickstart">Hermes Quick Start</h3>
+
+<p><strong>Step 1 — Install Hermes</strong></p>
+<p>Follow the upstream instructions at <a href="https://github.com/nousresearch/hermes-agent" target="_blank" rel="noopener noreferrer">github.com/nousresearch/hermes-agent</a>. At the end you have a <code>hermes</code> CLI on PATH and a <code>~/.hermes/</code> directory.</p>
+
+<p><strong>Step 2 — Wire HealthClaw into Hermes</strong></p>
+<pre>git clone https://github.com/aks129/HealthClawGuardrails
+cd HealthClawGuardrails
+./hermes/install.sh</pre>
+<p>The installer is idempotent and does three things:</p>
+<ul>
+  <li>Copies every skill from <code>skills/</code> to <code>~/.hermes/skills/healthclaw/</code></li>
+  <li>Installs the HealthClaw <code>SOUL.md</code> persona at <code>~/.hermes/personas/healthclaw.md</code></li>
+  <li>Merges three MCP server entries (hosted demo, local Docker, SHARP-on-MCP) into <code>~/.hermes/config.json</code> via <code>jq</code></li>
+</ul>
+<p>Flags: <code>--dry-run</code> previews actions without touching anything; <code>--skills-only</code> refreshes just the skills if Hermes has edited them and you want the repo copy back.</p>
+
+<p><strong>Step 3 — Start a session</strong></p>
+<pre>hermes
+&gt; /persona healthclaw
+&gt; /mcp list                       # confirms healthclaw-hosted connected
+&gt; show me my conditions
+&gt; what's my last HbA1c?
+&gt; propose adding peanut allergy, moderate severity</pre>
+
+<p><strong>Step 4 — Pick a mode</strong></p>
+<table class="wiki-table">
+  <thead><tr><th>Mode</th><th>When to use</th><th>How to enable</th></tr></thead>
+  <tbody>
+    <tr><td><code>healthclaw-hosted</code></td><td>Try everything against synthetic Grover Keeling sample data — no install of HealthClaw stack needed</td><td>Default — installer enables</td></tr>
+    <tr><td><code>healthclaw-local</code></td><td>Your own data on your own machine</td><td><code>docker-compose up -d --build</code>, then rename <code>_healthclaw-local</code> → <code>healthclaw-local</code> in <code>~/.hermes/config.json</code></td></tr>
+    <tr><td><code>healthclaw-sharp</code></td><td>Hermes is the SMART-launched agent and you want HealthClaw guarding a real EHR (Epic, Cerner, MEDITECH, athenahealth, eClinicalWorks, HAPI, SMART Health IT)</td><td>Rename <code>_healthclaw-sharp</code> → <code>healthclaw-sharp</code>, fill in <code>X-FHIR-Server-URL</code>, <code>X-FHIR-Access-Token</code>, <code>X-Patient-ID</code></td></tr>
+  </tbody>
+</table>
+
+<p><strong>Step 5 — Let it learn</strong></p>
+<p>Save working patterns: <code>/skill save</code> after a good answer. Refine SOUL on misfires: tell Hermes <em>"that should have called <code>fhir_search</code> first"</em> and it'll update the persona for next time. Your <code>~/.hermes/skills/healthclaw/</code> directory drifts toward your usage pattern; the repo copy stays as the canonical seed.</p>
+
+<div class="wiki-callout">
+  <strong>Already have OpenClaw?</strong> Run both. They share the same MCP server, the same skills library, and the same guardrails. Hermes' built-in OpenClaw migration drops imported skills at <code>~/.hermes/skills/openclaw-imports/</code> — sitting alongside HealthClaw's skills at <code>~/.hermes/skills/healthclaw/</code>. Hermes surfaces whichever skill matches the user's question.
+</div>
+
+<h3 id="gateway-promptopinion">PromptOpinion Marketplace</h3>
+<p>HealthClaw is published on the <a href="https://app.promptopinion.ai/marketplace" target="_blank" rel="noopener noreferrer">PromptOpinion Marketplace</a> as both a Superpower (MCP server) and an Agent. PromptOpinion is a healthcare AI assembly platform built on MCP, A2A, and FHIR; HealthClaw was the FHIR IQ team's entry for the <a href="https://agents-assemble.devpost.com/" target="_blank" rel="noopener noreferrer">Agents Assemble Challenge</a>.</p>
+
+<table class="wiki-table">
+  <thead><tr><th>Listing</th><th>What it is</th><th>URL</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Agent</td>
+      <td>HealthClaw Clinical Reviewer — A2A-compatible agent that orchestrates the MCP tools and narrates the guardrails</td>
+      <td><a href="https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed" target="_blank" rel="noopener noreferrer">Open in Marketplace</a></td>
+    </tr>
+    <tr>
+      <td>Superpower (MCP)</td>
+      <td>The raw HealthClaw MCP server — 16 tools, declared scopes, full guardrail stack</td>
+      <td><a href="https://app.promptopinion.ai/marketplace/mcp/019e1831-3d6f-7f72-99c2-cb8f2efab57e" target="_blank" rel="noopener noreferrer">Open in Marketplace</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The PromptOpinion listing is "Open Access" — no credentials needed to add it to a workspace. The MCP server advertises both ecosystems' FHIR-context shapes in its <code>initialize</code> response:</p>
+
+<table class="wiki-table">
+  <thead><tr><th>Spec</th><th>Where in capabilities</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><a href="https://sharponmcp.com" target="_blank" rel="noopener noreferrer">SHARP-on-MCP</a></td><td><code>capabilities.experimental.{fhir_context_required, sharp}</code></td><td>Vendor-neutral header-forwarding contract — agent host obtains a SMART access token and forwards it on every call. No OAuth dance in HealthClaw itself.</td></tr>
+    <tr><td><a href="https://docs.promptopinion.ai/fhir-context/mcp-fhir-context" target="_blank" rel="noopener noreferrer">PromptOpinion FHIR Extension</a></td><td><code>capabilities.extensions["ai.promptopinion/fhir-context"]</code></td><td>Declares the SMART-on-FHIR scope manifest PromptOpinion should request from the agent host (<code>patient/*.read</code> required, <code>patient/*.write</code> and <code>offline_access</code> optional).</td></tr>
+  </tbody>
+</table>
+
+<p>Both specs land on the same headers — <code>X-FHIR-Server-URL</code>, <code>X-FHIR-Access-Token</code>, <code>X-Patient-ID</code>, plus optional <code>X-FHIR-Refresh-Token</code> / <code>X-FHIR-Refresh-Url</code> when <code>offline_access</code> is granted — so a single HealthClaw deployment satisfies both marketplaces.</p>
 
 <h2 id="proxy">Upstream FHIR Proxy</h2>
 <p>Set <code>FHIR_UPSTREAM_URL</code> to enable proxy mode. All guardrails remain active.</p>

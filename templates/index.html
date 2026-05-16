@@ -458,6 +458,68 @@
   </div>
 </div>
 
+<!-- ═══ WHERE TO USE IT ═══ -->
+<div class="section" style="padding-top:72px" id="gateways">
+  <div class="section-header fade-up">
+    <div class="section-tag" style="color:var(--amber)">Where to use it</div>
+    <h2 class="section-title">Pick your chat surface &mdash; HealthClaw is the same underneath</h2>
+    <p class="section-desc">HealthClaw is the data + guardrail layer. Three gateways are wired in today; all three call the same MCP server, get the same redacted responses, and emit the same audit trail. <a href="{{ url_for('wiki') }}#gateways" style="color:var(--cyan)">Compare them on the wiki</a>.</p>
+  </div>
+
+  <div class="fade-up" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:20px;max-width:1180px;margin:32px auto 0">
+
+    <!-- PROMPTOPINION -->
+    <a href="https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(251,191,36,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(251,191,36,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(251,191,36,0.22)';this.style.transform='translateY(0)'">
+      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--amber);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
+        <span>PromptOpinion Marketplace</span>
+        <span style="background:rgba(52,211,153,0.18);color:var(--green);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Open Access</span>
+        <span style="background:rgba(34,211,238,0.18);color:var(--cyan);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Po FHIR Context</span>
+      </div>
+      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">HealthClaw on PromptOpinion</div>
+      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">Published as both a Superpower (MCP server, 16 tools) and an Agent (Clinical Reviewer). Click <em>Add to Workspace</em>, pick a model, start chatting in the browser &mdash; synthetic Grover Keeling demo data preloaded.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:auto">
+        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);background:rgba(34,211,238,0.08);padding:3px 8px;border-radius:5px">Devpost: Agents Assemble</span>
+        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--gray-dim);background:rgba(255,255,255,0.04);padding:3px 8px;border-radius:5px">SHARP-on-MCP</span>
+      </div>
+      <div style="margin-top:14px;font-size:12.5px;color:var(--amber)">Open Agent listing &rarr;</div>
+    </a>
+
+    <!-- HERMES -->
+    <a href="{{ url_for('wiki') }}#hermes-quickstart" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(34,211,238,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(34,211,238,0.22)';this.style.transform='translateY(0)'">
+      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
+        <span>Hermes (Nous Research)</span>
+        <span style="background:rgba(52,211,153,0.18);color:var(--green);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">New</span>
+        <span style="background:rgba(34,211,238,0.18);color:var(--cyan);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Self-improving</span>
+      </div>
+      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">Multi-gateway chat that learns</div>
+      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">Telegram &middot; Discord &middot; Slack &middot; WhatsApp &middot; Signal &middot; CLI &middot; HTTP. Native MCP client. Skills get better as you use them &mdash; the 10 HealthClaw skills ship as starting points.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);background:rgba(34,211,238,0.08);padding:3px 8px;border-radius:5px">./hermes/install.sh</span>
+        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--gray-dim);background:rgba(255,255,255,0.04);padding:3px 8px;border-radius:5px">agentskills.io</span>
+      </div>
+      <div style="margin-top:14px;font-size:12.5px;color:var(--cyan)">Hermes Quick Start &rarr;</div>
+    </a>
+
+    <!-- OPENCLAW -->
+    <a href="{{ url_for('wiki') }}#gateway-openclaw" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(52,211,153,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(52,211,153,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(52,211,153,0.22)';this.style.transform='translateY(0)'">
+      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--green);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
+        <span>OpenClaw</span>
+        <span style="background:rgba(255,255,255,0.07);color:var(--gray-dim);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Telegram</span>
+      </div>
+      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">One bot, fixed commands, zero ambiguity</div>
+      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">The original integration. Telegram bot with slash commands (<code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/conditions</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/labs</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/curatr</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/approve</code>). Best when you want exactly one chat channel and predictable behavior.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--green);background:rgba(52,211,153,0.08);padding:3px 8px;border-radius:5px">docker-compose --profile openclaw up</span>
+      </div>
+      <div style="margin-top:14px;font-size:12.5px;color:var(--green)">OpenClaw setup &rarr;</div>
+    </a>
+  </div>
+
+  <div class="fade-up" style="text-align:center;margin-top:28px;color:var(--gray-dim);font-size:13px">
+    Need raw MCP &mdash; Claude Desktop, MCP Inspector, or your own client? Point it at <code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">https://mcp-server-production-5112.up.railway.app/mcp</code> with header <code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">X-Tenant-Id: desktop-demo</code>.
+  </div>
+</div>
+
 <!-- ═══ COMPILED TRUTH (flagship in v1.2.0) ═══ -->
 <div style="background:linear-gradient(180deg,rgba(34,211,238,0.045) 0%,transparent 100%);border-top:1px solid rgba(34,211,238,0.08);border-bottom:1px solid rgba(34,211,238,0.08)">
   <div class="section" style="padding-top:72px">

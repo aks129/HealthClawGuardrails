@@ -250,6 +250,117 @@
   </div>
 </div>
 
+<!-- ===== CONVERSATIONAL GATEWAYS ===== -->
+<div class="faq-section-title">Conversational Gateways</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    How do I actually <em>talk</em> to HealthClaw?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p>HealthClaw is the data + guardrail layer. You chat with it through a <strong>gateway</strong> — anything that's an MCP client and renders responses in a UI you have. Four supported gateways today:</p>
+    <ul>
+      <li><strong>OpenClaw</strong> — a Telegram bot. Fixed slash commands (<code>/conditions</code>, <code>/labs</code>, <code>/curatr</code>, <code>/approve</code>). Best if you only want one chat channel with predictable behavior.</li>
+      <li><strong>Hermes</strong> (Nous Research) — multi-gateway agent. Telegram + Discord + Slack + WhatsApp + Signal + CLI + HTTP. Self-improving: skills get better as you use them.</li>
+      <li><strong>PromptOpinion</strong> — a healthcare AI assembly platform. HealthClaw is published there as a Superpower + Agent; you "Add to Workspace" and chat in the browser.</li>
+      <li><strong>Claude Desktop / Claude Code</strong> — Anthropic's clients connect over native MCP. Use the published <code>.mcp.json</code> config or the hosted Railway URL.</li>
+    </ul>
+    <p>All four use the same MCP server, the same skills library, and the same guardrails. Pick by where you want to type, not by what you can do.</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    What is Hermes and how is it different from OpenClaw?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p><strong>Hermes</strong> is Nous Research's self-improving agent (<a href="https://github.com/nousresearch/hermes-agent" target="_blank" rel="noopener noreferrer">github.com/nousresearch/hermes-agent</a>). Two practical differences from OpenClaw:</p>
+    <ul>
+      <li><strong>Many chat channels, one agent.</strong> OpenClaw is Telegram. Hermes is Telegram + Discord + Slack + WhatsApp + Signal + CLI + HTTP. Same persona, same skills, same MCP server — different surfaces.</li>
+      <li><strong>It learns.</strong> Hermes captures every conversation and lets you save working call patterns as skills, refine the persona on misfires, and search past sessions. The skills HealthClaw ships are starting points; Hermes refines them in <code>~/.hermes/skills/healthclaw/</code> as you use it.</li>
+    </ul>
+    <p>OpenClaw and Hermes can run side-by-side. They share the same MCP server, so there's no migration cost.</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    How do I set up Hermes with HealthClaw?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p>Two commands once Hermes itself is installed:</p>
+    <pre>git clone https://github.com/aks129/HealthClawGuardrails
+cd HealthClawGuardrails
+./hermes/install.sh</pre>
+    <p>That installer is idempotent. It copies all skills to <code>~/.hermes/skills/healthclaw/</code>, installs the HealthClaw <code>SOUL.md</code> persona at <code>~/.hermes/personas/healthclaw.md</code>, and merges three MCP server entries (hosted demo, local Docker, SHARP-on-MCP) into <code>~/.hermes/config.json</code>.</p>
+    <p>Then:</p>
+    <pre>hermes
+&gt; /persona healthclaw
+&gt; show me my conditions</pre>
+    <p>Full walkthrough including the three connection modes (hosted, local, SHARP) is on the <a href="{{ url_for('wiki') }}#hermes-quickstart">Wiki — Hermes Quick Start</a>. Flags: <code>--dry-run</code> previews; <code>--skills-only</code> refreshes just the skills if Hermes has edited them.</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    What is SOUL.md? Is it the same as AGENTS.md?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p>Same purpose, different ecosystem.</p>
+    <ul>
+      <li><code>AGENTS.md</code> — OpenClaw's persona format. One per persona workspace (Sally-PCP, Mary-pharmacy, Dom-fitness, Kristy-scheduler).</li>
+      <li><code>SOUL.md</code> — Hermes' persona format. One per persona, loaded via <code>/persona &lt;name&gt;</code> at the start of a session.</li>
+    </ul>
+    <p>HealthClaw ships its Hermes persona at <code>hermes/SOUL.md</code>. The installer puts it at <code>~/.hermes/personas/healthclaw.md</code>. It covers tool selection, step-up token acquisition, the human-in-the-loop confirm flow, guardrail narration, and hard rules (no inventing FHIR resource types, no bypassing step-up auth, no claiming demo data is real).</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    What is agentskills.io?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p>The open standard for skill definitions that Hermes uses natively. A skill is a markdown file with YAML frontmatter declaring its <code>name</code>, <code>description</code>, <code>references</code>, optional <code>tools</code> list, and version. The body is a natural-language playbook.</p>
+    <p>HealthClaw's <code>/skills</code> directory ships ten of these — getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records, and hermes. They're auto-indexed at <a href="{{ url_for('skills_index') }}">/skills</a> on this site, and the same files install into both OpenClaw and Hermes.</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    Is HealthClaw on the PromptOpinion Marketplace?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p>Yes — both as an <strong>Agent</strong> and as an <strong>MCP Superpower</strong>. HealthClaw was the FHIR IQ team's submission to the PromptOpinion <a href="https://agents-assemble.devpost.com/" target="_blank" rel="noopener noreferrer">Agents Assemble Challenge</a> on Devpost.</p>
+    <ul>
+      <li><strong>Agent</strong> — <a href="https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed" target="_blank" rel="noopener noreferrer">HealthClaw Clinical Reviewer</a> orchestrates the MCP tools and narrates what the guardrails did.</li>
+      <li><strong>Superpower (MCP server)</strong> — <a href="https://app.promptopinion.ai/marketplace/mcp/019e1831-3d6f-7f72-99c2-cb8f2efab57e" target="_blank" rel="noopener noreferrer">HealthClaw</a> exposes 16 tools with the full guardrail stack.</li>
+    </ul>
+    <p>Both listings are Open Access — no credentials to add to a PromptOpinion workspace. Click <em>Add to Workspace</em>, pick a model, start chatting. The hosted MCP server is seeded with synthetic Grover Keeling sample data so you can try everything without standing up anything locally.</p>
+  </div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-question" onclick="toggleFaq(this)">
+    What is SHARP-on-MCP and why does HealthClaw advertise it?
+    <span class="faq-icon"><i class="fas fa-plus"></i></span>
+  </div>
+  <div class="faq-answer">
+    <p><a href="https://sharponmcp.com" target="_blank" rel="noopener noreferrer">SHARP-on-MCP</a> (Standardised Healthcare Agent Remote Protocol) is a vendor-neutral spec for how an MCP server in healthcare receives its FHIR context. Instead of every MCP server running its own OAuth dance against every EHR, the <em>agent host</em> obtains a SMART-on-FHIR access token and forwards it on every call via three headers:</p>
+    <ul>
+      <li><code>X-FHIR-Server-URL</code> — the upstream FHIR base (Epic, Cerner, MEDITECH, etc.)</li>
+      <li><code>X-FHIR-Access-Token</code> — the SMART access token</li>
+      <li><code>X-Patient-ID</code> — optional patient banner / launch context</li>
+    </ul>
+    <p>HealthClaw's MCP server advertises SHARP compliance in its <code>initialize</code> response under <code>capabilities.experimental.{fhir_context_required, sharp}</code>, and PromptOpinion compliance under <code>capabilities.extensions["ai.promptopinion/fhir-context"]</code>. Both specs use the same headers, so one HealthClaw deployment works against any SMART-launched agent host in either ecosystem.</p>
+  </div>
+</div>
+
 <!-- ===== SETUP & DEPLOYMENT ===== -->
 <div class="faq-section-title">Setup &amp; Deployment</div>
 
