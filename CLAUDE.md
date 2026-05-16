@@ -82,7 +82,8 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
 /scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_demo_tenant.py (HTTP + DB seed entry points), seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py, kristy_install.sh, build_quickstart_pdf.py
 /openclaw/                Telegram bot (bot.py + Dockerfile) — conversational interface to the stack
-/skills/                  OpenClaw skill definitions (getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records). Also surfaced at /skills (auto-indexed from frontmatter).
+/hermes/                  Hermes (Nous Research) integration — SOUL persona, MCP config, idempotent install.sh that wires HealthClaw skills into ~/.hermes/. Parallel to /openclaw/; both share the same MCP server.
+/skills/                  Skill definitions consumable by Hermes (agentskills.io standard) AND OpenClaw — getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records, hermes. Also surfaced at /skills (auto-indexed from frontmatter).
 /exports/                 Output directory for export_healthex.py bundles (gitignored)
 /templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html)
 /static/css/              Dashboard styles (r6-dashboard.css)
@@ -435,6 +436,22 @@ To set the HealthEx token on the Mac mini Keychain:
 ```bash
 security add-generic-password -s healthex -a me -w '<token>'
 ```
+
+## Hermes Gateway (`hermes/`)
+
+Parallel to OpenClaw — [Hermes](https://github.com/nousresearch/hermes-agent) is Nous Research's self-improving agent that learns skills from conversation. It connects to HealthClaw via native MCP (Streamable HTTP), not via the JSON-RPC bridge OpenClaw uses, so no transport adapter is needed on the HealthClaw side.
+
+| File | Purpose |
+| --- | --- |
+| `hermes/SOUL.md` | HealthClaw persona — tool selection, step-up flow, HITL confirm, guardrail narration, hard rules. Loaded as `/persona healthclaw`. |
+| `hermes/mcp.json` | MCP server config fragment with three entries (hosted demo, local Docker, SHARP-on-MCP). Installer merges into `~/.hermes/config.json` under `mcp_servers`. |
+| `hermes/install.sh` | Idempotent installer. Copies `skills/` → `~/.hermes/skills/healthclaw/`, persona → `~/.hermes/personas/healthclaw.md`, merges MCP config via `jq`. Flags: `--dry-run`, `--skills-only`. |
+| `hermes/README.md` | User-facing setup + the OpenClaw vs Hermes comparison. |
+| `skills/hermes/SKILL.md` | The Hermes integration written as a HealthClaw skill (auto-indexed at `/skills`). |
+
+Hermes' "learns and iterates" loop means skills shipped in `skills/` are starting points, not final forms — Hermes will refine them in `~/.hermes/skills/healthclaw/` based on usage. The repo copy stays canonical; `./hermes/install.sh --skills-only` refreshes from repo without touching the rest of the config.
+
+OpenClaw and Hermes can run side-by-side — they share the same MCP server, the same skills library, and the same guardrail layer. Choose by gateway preference: OpenClaw if you only want one Telegram bot with fixed slash commands; Hermes if you want multi-gateway chat (Telegram + Discord + Slack + WhatsApp + Signal + CLI + HTTP) with cross-session memory.
 
 ## SQLAlchemy Model Gotchas
 

@@ -1,0 +1,31 @@
+{
+  "comment_": "Drop this into your Hermes config (typically merged into ~/.hermes/config.json under mcp_servers) so Hermes picks up the HealthClaw guardrail layer. Both the hosted Railway URL and the local Docker URL are listed; uncomment whichever you're running.",
+  "mcp_servers": {
+    "healthclaw-hosted": {
+      "transport": "streamable_http",
+      "url": "https://mcp-server-production-5112.up.railway.app/mcp",
+      "headers": {
+        "X-Tenant-Id": "desktop-demo"
+      },
+      "description": "Public hosted HealthClaw MCP server seeded with synthetic Grover Keeling sample data. Good for trying everything out without standing up the stack locally."
+    },
+    "_healthclaw-local": {
+      "transport": "streamable_http",
+      "url": "http://localhost:3001/mcp",
+      "headers": {
+        "X-Tenant-Id": "my-health"
+      },
+      "description": "Local HealthClaw stack. Rename to 'healthclaw-local' (drop the leading underscore) once you've started the Docker compose stack from the repo root."
+    },
+    "_healthclaw-sharp": {
+      "transport": "streamable_http",
+      "url": "https://mcp-server-production-5112.up.railway.app/mcp",
+      "headers": {
+        "X-FHIR-Server-URL": "https://hapi.fhir.org/baseR4",
+        "X-FHIR-Access-Token": "Bearer YOUR_SMART_ON_FHIR_TOKEN",
+        "X-Patient-ID": "YOUR_PATIENT_ID"
+      },
+      "description": "SHARP-on-MCP mode. Hermes forwards a SMART-on-FHIR access token from the agent host to HealthClaw, which proxies the call to any FHIR endpoint (Epic, Cerner, MEDITECH, athenahealth, eClinicalWorks, HAPI, SMART Health IT) while applying the full guardrail stack on the response. Rename to 'healthclaw-sharp' once your agent host wiring forwards real tokens."
+    }
+  }
+}
