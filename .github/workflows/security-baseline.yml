@@ -1,0 +1,5 @@
+name: security-baseline
+on: [pull_request, push]
+jobs:
+  scan:
+    uses: aks129/security-baseline/.github/workflows/scan-reusable.yml@main

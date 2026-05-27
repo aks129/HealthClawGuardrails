@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Keep CI actions up to date — minimal risk, weekly cadence
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - github-actions
+
+  # If this repo has Node dependencies, uncomment the block below + remove the comment marker
+  # - package-ecosystem: npm
+  #   directory: "/"
+  #   schedule:
+  #     interval: weekly
+  #   open-pull-requests-limit: 5
+  #   labels:
+  #     - dependencies
+  #   groups:
+  #     minor-and-patch:
+  #       update-types:
+  #         - minor
+  #         - patch
+
+  # If this repo has Python dependencies, uncomment + adapt path:
+  # - package-ecosystem: pip
+  #   directory: "/"
+  #   schedule:
+  #     interval: weekly
