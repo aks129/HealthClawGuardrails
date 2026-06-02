@@ -113,6 +113,28 @@ def r6_dashboard():
     return render_template('r6_dashboard.html')
 
 
+# Valid tenant_id pattern: alphanumeric, hyphens, underscores, 1-64 chars
+import re as _re
+_TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
+
+
+@app.route('/connect/<tenant_id>')
+def fasten_connect(tenant_id):
+    """
+    Lean Fasten-Connect TEFCA verification page bound to a specific tenant.
+    The Stitch widget renders only when FASTEN_PUBLIC_KEY is set; otherwise
+    we show a "configure server first" banner so demos fail loudly.
+    """
+    if not _TENANT_ID_PATTERN.match(tenant_id):
+        return 'Invalid tenant id', 400
+    return render_template(
+        'fasten_connect.html',
+        tenant_id=tenant_id,
+        fasten_public_key=os.environ.get('FASTEN_PUBLIC_KEY', '').strip(),
+        tefca_mode=os.environ.get('FASTEN_TEFCA_MODE', 'true').strip().lower() == 'true',
+    )
+
+
 @app.route('/faq')
 def faq():
     """Frequently Asked Questions."""

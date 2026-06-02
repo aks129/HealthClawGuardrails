@@ -246,3 +246,48 @@ def _prevent_audit_update(mapper, connection, target):
 @db.event.listens_for(AuditEventRecord, 'before_delete')
 def _prevent_audit_delete(mapper, connection, target):
     raise RuntimeError('AuditEvent records are immutable and cannot be deleted')
+
+
+class TelegramBinding(db.Model):
+    """
+    Maps a HealthClaw tenant_id to a Telegram chat_id so the Fasten ingest
+    webhook can push a "your records are ready" notification back through
+    OpenClaw without polling. Created on /start; deleted on /unbind.
+
+    A single tenant may have multiple bindings (shared family tenant where
+    several people want notifications); a single chat may bind to multiple
+    tenants (e.g. a clinician chat covering several patients) — the (tenant_id,
+    chat_id) pair is unique, but neither side alone is.
+    """
+    __tablename__ = 'telegram_bindings'
+
+    id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(64), nullable=False, index=True)
+    chat_id = db.Column(db.BigInteger, nullable=False, index=True)
+    username = db.Column(db.String(64), nullable=True)
+    bound_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'chat_id', name='uq_tenant_chat'),
+    )
+
+    @classmethod
+    def bind(cls, tenant_id: str, chat_id: int, username: str | None = None) -> 'TelegramBinding':
+        """Idempotent bind. Returns the existing row if (tenant, chat) is already mapped."""
+        existing = cls.query.filter_by(tenant_id=tenant_id, chat_id=chat_id).first()
+        if existing:
+            existing.last_seen = datetime.now(timezone.utc)
+            if username and existing.username != username:
+                existing.username = username
+            return existing
+        row = cls(tenant_id=tenant_id, chat_id=chat_id, username=username)
+        db.session.add(row)
+        return row
+
+    @classmethod
+    def chat_ids_for_tenant(cls, tenant_id: str) -> list[int]:
+        """Return all chat_ids currently bound to a tenant."""
+        return [
+            r.chat_id for r in cls.query.filter_by(tenant_id=tenant_id).all()
+        ]

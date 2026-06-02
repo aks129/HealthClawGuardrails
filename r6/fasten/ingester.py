@@ -120,8 +120,30 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
             )
 
             # Optional: run Curatr quality scan on clinical resources
+            curatr_issues = 0
             if os.environ.get('FASTEN_CURATR_SCAN', '').lower() == 'true':
-                _run_curatr_scan(curatr_eligible_ids, tenant_id, job.task_id)
+                curatr_issues = _run_curatr_scan(curatr_eligible_ids, tenant_id, job.task_id) or 0
+
+            # Push a Telegram notification to every chat bound to this tenant.
+            # Summary-level only; no PHI. Failures are swallowed — notify is a
+            # nice-to-have, not a blocker on the ingest commit.
+            try:
+                from r6.telegram_push import notify_tenant
+                msg_lines = [
+                    '📥 *Records imported*',
+                    f'• {ingested} resources ingested',
+                ]
+                if skipped:
+                    msg_lines.append(f'• {skipped} skipped (unsupported types)')
+                if failed:
+                    msg_lines.append(f'• {failed} failed')
+                if curatr_issues:
+                    msg_lines.append(f'• {curatr_issues} data-quality issues flagged')
+                msg_lines.append('')
+                msg_lines.append('Try `/summary`, `/conditions`, `/curatr`, or `/dashboard`.')
+                notify_tenant(tenant_id, '\n'.join(msg_lines))
+            except Exception as notify_exc:  # pragma: no cover - defensive
+                logger.warning('Fasten notify push failed: %s', notify_exc)
 
         except Exception as exc:
             job.status = 'failed'
@@ -137,6 +159,16 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 detail=f'job={job.task_id}',
             )
             logger.error('Fasten job %d failed: %s', job_id, exc)
+            try:
+                from r6.telegram_push import notify_tenant
+                notify_tenant(
+                    tenant_id,
+                    '⚠️ *Import failed*\n'
+                    'Your last data pull did not complete. '
+                    'Try `/health` to diagnose, or run /connect again.',
+                )
+            except Exception:  # pragma: no cover - defensive
+                pass
 
 
 def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
@@ -183,13 +215,14 @@ def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
 
 def _run_curatr_scan(
     eligible: list[tuple[str, str]], tenant_id: str, task_id: str
-) -> None:
+) -> int:
     """
     Run Curatr quality evaluation on ingested clinical resources.
     Results are logged and audited; no auto-fix is applied (patient must approve).
+    Returns total issue count surfaced (used by the post-ingest Telegram push).
     """
     if not eligible:
-        return
+        return 0
 
     from r6.curatr import CuratrEvaluator  # local import to keep module lightweight
 
@@ -222,3 +255,4 @@ def _run_curatr_scan(
         'Fasten job %s Curatr scan complete: %d issues across %d resources',
         task_id, issues_found, len(eligible),
     )
+    return issues_found

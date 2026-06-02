@@ -1427,6 +1427,66 @@ def issue_step_up_token():
         return jsonify({'error': str(e)}), 500
 
 
+@r6_blueprint.route('/internal/bind-telegram', methods=['POST'])
+def bind_telegram_chat():
+    """
+    Bind a Telegram chat to a tenant so the Fasten ingest webhook can push
+    'your records are ready' notifications back through OpenClaw without
+    polling. Called by the OpenClaw bot from its /start handler.
+
+    Body:
+        tenant_id: str   — required
+        chat_id:   int   — required (Telegram chat id)
+        username:  str   — optional, for audit/UI
+        step_up_token: str — required (HMAC tenant-bound, 5-min TTL)
+
+    Returns the binding id + bound_at timestamp.
+    """
+    body = request.get_json(silent=True) or {}
+    tenant_id = (body.get('tenant_id') or '').strip()
+    chat_id_raw = body.get('chat_id')
+    username = (body.get('username') or '').strip() or None
+    token = (body.get('step_up_token')
+             or request.headers.get('X-Step-Up-Token', '')).strip()
+
+    if not tenant_id or chat_id_raw is None:
+        return jsonify({'error': 'tenant_id and chat_id are required'}), 400
+    try:
+        chat_id = int(chat_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'chat_id must be an integer'}), 400
+    if not _TENANT_ID_PATTERN.match(tenant_id):
+        return jsonify({'error': 'invalid tenant_id format'}), 400
+
+    from r6.stepup import validate_step_up_token
+    if not token:
+        return jsonify({'error': 'valid step-up token required'}), 401
+    valid, err = validate_step_up_token(token, tenant_id)
+    if not valid:
+        return jsonify({'error': err or 'invalid step-up token'}), 401
+
+    from r6.telegram_push import bind as bind_chat
+    try:
+        row = bind_chat(tenant_id=tenant_id, chat_id=chat_id, username=username)
+    except Exception as exc:
+        logger.exception('bind-telegram failed: %s', exc)
+        return jsonify({'error': 'binding failed'}), 500
+
+    record_audit_event(
+        'create', 'TelegramBinding', row.id,
+        agent_id='openclaw',
+        tenant_id=tenant_id,
+        detail=f'chat_id={chat_id} username={username or ""}',
+    )
+
+    return jsonify({
+        'binding_id': row.id,
+        'tenant_id': tenant_id,
+        'chat_id': chat_id,
+        'bound_at': row.bound_at.isoformat() if row.bound_at else None,
+    }), 201
+
+
 @r6_blueprint.route('/internal/seed', methods=['POST'])
 def seed_tenant():
     """

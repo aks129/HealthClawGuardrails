@@ -5,7 +5,8 @@ Provides a conversational interface to the local MCP FHIR guardrail stack.
 
 Commands
 --------
-/start          Welcome message + command list
+/start          Welcome + bind this chat to TENANT_ID (idempotent)
+/connect        Get the Fasten TEFCA verification URL for this tenant
 /health         Stack health check (Flask + MCP reachability)
 /conditions     List Conditions for the configured tenant
 /labs           Recent lab results (Observation search)
@@ -73,6 +74,7 @@ COMMAND_TO_AGENT = {
     # sally (pcp-advisor) owns the "what's up with my health?" questions.
     # mary (pharmacy) handles meds. dom does fitness/vitals. joe runs plumbing.
     'start': 'sally',
+    'connect': 'sally',       # data-onboarding flow lives with PCP advisor
     'health': 'joe',          # stack health check — service optimizer
     'conditions': 'sally',
     'labs': 'sally',
@@ -225,20 +227,89 @@ def _fmt_observation(entry: dict) -> str:
 # Handlers
 # ---------------------------------------------------------------------------
 
+def _bind_chat_to_tenant(chat_id: int, username: str | None) -> tuple[bool, str]:
+    """
+    Tell Flask to bind this Telegram chat to TENANT_ID so the Fasten ingest
+    webhook can push back. Idempotent; returns (ok, detail) — detail is
+    safe to surface in chat ("bound", "already bound", or an error class).
+    """
+    if not STEP_UP_SECRET:
+        return False, 'STEP_UP_SECRET not configured'
+    try:
+        step_up = _get_step_up_token()
+        resp = requests.post(
+            f'{FHIR_BASE_URL}/internal/bind-telegram',
+            json={
+                'tenant_id': TENANT_ID,
+                'chat_id': chat_id,
+                'username': username,
+                'step_up_token': step_up,
+            },
+            timeout=5,
+        )
+        if resp.status_code == 201:
+            return True, 'bound'
+        return False, f'http {resp.status_code}'
+    except requests.RequestException as exc:
+        return False, f'network: {exc.__class__.__name__}'
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = await _log_incoming(update, 'start')
+
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    username = (update.effective_user.username if update.effective_user else None) or None
+    bind_ok, bind_detail = (False, 'no chat_id')
+    if chat_id is not None:
+        bind_ok, bind_detail = _bind_chat_to_tenant(chat_id, username)
+        logger.info('bind chat=%s tenant=%s ok=%s detail=%s',
+                    chat_id, TENANT_ID, bind_ok, bind_detail)
+
+    bind_line = (
+        f'✅ Chat bound to tenant `{TENANT_ID}` — you will get a ping when records arrive.'
+        if bind_ok else
+        f'⚠️ Could not bind chat (`{bind_detail}`). You can still use commands; notifications are off.'
+    )
+
     text = (
         '*HealthClaw Guardrails Bot*\n\n'
+        f'{bind_line}\n\n'
         'Commands:\n'
+        '/connect — pull your records (Fasten + TEFCA)\n'
         '/dashboard — open the command center (signed 24h link)\n'
-        '/health — stack health check\n'
+        '/summary — high-level review of your record\n'
         '/conditions — list Conditions\n'
         '/labs — recent lab results\n'
-        '/curatr — run Curatr evaluation\n'
+        '/curatr — run Curatr data-quality evaluation\n'
         '/curatr\\_fix — apply first Curatr fix proposal\n'
         '/approve — confirm pending write\n'
+        '/health — stack health check\n'
         '/token — show current step-up token\n\n'
         f'Tenant: `{TENANT_ID}`'
+    )
+    await _reply(update, text, agent_id, parse_mode='Markdown')
+
+
+async def cmd_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Reply with the lean Fasten TEFCA verification URL for TENANT_ID.
+
+    The page itself handles the Stitch widget + the /fasten/connections
+    callback; once verification finishes, Fasten pushes records to
+    /fasten/webhook, the ingester runs, and r6.telegram_push.notify_tenant
+    DMs this chat (because /start already bound chat ↔ tenant).
+    """
+    agent_id = await _log_incoming(update, 'connect')
+
+    connect_url = f'{DASHBOARD_BASE_URL}/connect/{TENANT_ID}'
+    text = (
+        '🔗 *Connect your health records*\n\n'
+        f'Open this once and verify with **CLEAR** or **ID.me** (TEFCA mode).\n'
+        'Records start streaming from every QHIN that holds them — '
+        'usually 5–45 minutes depending on the network.\n\n'
+        f'{connect_url}\n\n'
+        f'_Tenant_ `{TENANT_ID}`\n'
+        '_I\'ll DM you when your records land. Type /summary or /curatr after the ping._'
     )
     await _reply(update, text, agent_id, parse_mode='Markdown')
 
@@ -486,6 +557,7 @@ def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler('start', cmd_start))
+    app.add_handler(CommandHandler('connect', cmd_connect))
     app.add_handler(CommandHandler('health', cmd_health))
     app.add_handler(CommandHandler('conditions', cmd_conditions))
     app.add_handler(CommandHandler('labs', cmd_labs))

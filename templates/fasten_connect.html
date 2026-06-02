@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+
+{% block title %}Connect your records · HealthClaw{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://stitch.fastenhealth.com/v0.4/bundle.css">
+<script src="https://stitch.fastenhealth.com/v0.4/bundle.js"></script>
+<style>
+  .connect-shell {
+    max-width: 760px;
+    margin: 60px auto 80px;
+    padding: 0 24px;
+    color: var(--white);
+  }
+  .connect-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--cyan);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .connect-title {
+    font-size: 32px;
+    line-height: 1.18;
+    font-weight: 700;
+    margin: 0 0 16px;
+  }
+  .connect-sub {
+    color: var(--gray-dim);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0 0 28px;
+  }
+  .connect-tenant {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(34, 211, 238, 0.10);
+    border: 1px solid rgba(34, 211, 238, 0.30);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--cyan);
+    margin-bottom: 28px;
+  }
+  .stitch-card {
+    background: rgba(13, 17, 23, 0.6);
+    border: 1px solid rgba(34, 211, 238, 0.18);
+    border-radius: 12px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  .stitch-card h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 10px;
+    color: var(--white);
+  }
+  .stitch-card p {
+    color: var(--gray-dim);
+    font-size: 13.5px;
+    line-height: 1.6;
+    margin: 0 0 18px;
+  }
+  .stitch-status {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-radius: 8px;
+    background: rgba(34, 211, 238, 0.08);
+    border: 1px solid rgba(34, 211, 238, 0.20);
+    color: var(--cyan);
+    font-size: 13px;
+    line-height: 1.55;
+    display: none;
+  }
+  .stitch-status.error {
+    background: rgba(248, 113, 113, 0.10);
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #fda4a4;
+  }
+  .stitch-status.success {
+    background: rgba(52, 211, 153, 0.10);
+    border-color: rgba(52, 211, 153, 0.35);
+    color: var(--green);
+  }
+  .next-steps {
+    font-size: 13px;
+    color: var(--gray-dim);
+    line-height: 1.7;
+  }
+  .next-steps code {
+    color: var(--cyan);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: rgba(34, 211, 238, 0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .config-warn {
+    margin-top: 18px;
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: rgba(251, 191, 36, 0.10);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    color: var(--amber);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="connect-shell">
+  <div class="connect-eyebrow">Fasten Connect{% if tefca_mode %} · TEFCA mode{% endif %}</div>
+  <h1 class="connect-title">Verify once. Records arrive automatically.</h1>
+  <p class="connect-sub">
+    Identity verification through CLEAR or ID.me satisfies every QHIN on the
+    nationwide TEFCA network in a single step. You won't be asked to log in to
+    every health system individually. After verification, records stream in
+    over the next 5–45 minutes and HealthClaw applies the full guardrail stack
+    (PHI redaction, audit, step-up, human-in-the-loop) before any AI agent
+    sees them.
+  </p>
+
+  <span class="connect-tenant">Tenant: <strong>{{ tenant_id }}</strong></span>
+
+  <div class="stitch-card">
+    <h3>Step 1 — Verify your identity</h3>
+    <p>Click the button below. A modal will open with the CLEAR / ID.me flow.</p>
+
+    {% if fasten_public_key %}
+      {% if tefca_mode %}
+        <fasten-stitch-element
+          id="stitch-widget"
+          public-id="{{ fasten_public_key }}"
+          tefca-mode="true"></fasten-stitch-element>
+      {% else %}
+        <fasten-stitch-element
+          id="stitch-widget"
+          public-id="{{ fasten_public_key }}"></fasten-stitch-element>
+      {% endif %}
+    {% else %}
+      <div class="config-warn">
+        <strong>FASTEN_PUBLIC_KEY is not set on this deployment.</strong><br>
+        Set it on the Railway service so the Stitch widget can render. Without
+        a public key the widget is a no-op. See the
+        <a href="{{ url_for('wiki') }}#fasten" style="color:var(--amber);text-decoration:underline">wiki</a>
+        for the portal setup.
+      </div>
+    {% endif %}
+
+    <div id="stitch-status" class="stitch-status"></div>
+  </div>
+
+  <div class="stitch-card">
+    <h3>Step 2 — Records flow in the background</h3>
+    <p>
+      The widget posts an <code style="color:var(--cyan);font-family:var(--font-mono);font-size:12px">org_connection_id</code>
+      back to HealthClaw, which registers it against tenant
+      <strong>{{ tenant_id }}</strong>. From then on, every record export from
+      Fasten arrives at <code style="color:var(--cyan);font-family:var(--font-mono);font-size:12px">/fasten/webhook</code>,
+      gets ingested, scanned by Curatr for data-quality issues, and emits a
+      Telegram notification (if the chat is bound via <code>/start</code>).
+    </p>
+    <div class="next-steps">
+      When you see the Telegram ping, try:<br>
+      &nbsp;&nbsp;<code>/summary</code> — high-level review<br>
+      &nbsp;&nbsp;<code>/conditions</code> — list with redacted IDs<br>
+      &nbsp;&nbsp;<code>/curatr</code> — data-quality findings<br>
+      &nbsp;&nbsp;<code>/dashboard</code> — visual review surface
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var widget = document.getElementById('stitch-widget');
+  var statusEl = document.getElementById('stitch-status');
+  if (!widget) return;
+
+  function showStatus(message, kind) {
+    statusEl.textContent = message;
+    statusEl.className = 'stitch-status' + (kind ? ' ' + kind : '');
+    statusEl.style.display = 'block';
+  }
+
+  widget.addEventListener('widget.complete', async function (event) {
+    var detail = (event && event.detail) || {};
+    showStatus('Identity verified. Registering connection…', '');
+    try {
+      var resp = await fetch('/fasten/connections', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Tenant-Id': {{ tenant_id | tojson }}
+        },
+        body: JSON.stringify({
+          org_connection_id: detail.org_connection_id || null,
+          endpoint_id: detail.endpoint_id || null,
+          tefca_directory_id: detail.tefca_directory_id || null,
+          platform_type: detail.platform_type || null,
+          brand_id: detail.brand_id || null,
+          portal_id: detail.portal_id || null
+        })
+      });
+      if (resp.ok) {
+        showStatus(
+          'Connection registered. Records will stream in over the next 5–45 minutes. '
+          + "I'll DM you on Telegram when they land.",
+          'success'
+        );
+      } else {
+        showStatus('Connection registration failed (HTTP ' + resp.status + '). '
+          + 'You can still receive records — but Telegram notifications will not fire.',
+          'error');
+      }
+    } catch (err) {
+      showStatus('Network error during connection registration: ' + err.message, 'error');
+    }
+  });
+
+  widget.addEventListener('widget.error', function (event) {
+    var detail = (event && event.detail) || {};
+    showStatus('Widget error: ' + (detail.message || 'unknown'), 'error');
+  });
+})();
+</script>
+{% endblock %}
