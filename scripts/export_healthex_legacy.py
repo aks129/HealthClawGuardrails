@@ -647,11 +647,18 @@ class CuratrPreTagger:
             for o in smoking_obs:
                 o_date = o.get("effectiveDateTime", "")
                 other_dates = [x.get("effectiveDateTime") for x in smoking_obs if x["id"] != o["id"]]
+                # Pulled out of the f-string because Python 3.11 (CI) rejects
+                # backslash escapes inside f-string expressions; PEP 701 only
+                # landed in 3.12.
+                reason = (
+                    "This older entry is likely incorrect \u2014 patient attestation required."
+                    if o is oldest
+                    else "This newer entry is likely authoritative."
+                )
                 self._tag(
                     o,
                     "contradiction",
-                    f"LOINC 72166-2 tobacco status contradicts {other_dates}. "
-                    f"{'This older entry is likely incorrect \u2014 patient attestation required.' if o is oldest else 'This newer entry is likely authoritative.'}",
+                    f"LOINC 72166-2 tobacco status contradicts {other_dates}. {reason}",
                     severity="HIGH",
                 )
 
