@@ -318,7 +318,7 @@ jobs:
           print(entries[0]['resource']['id'] if entries else '')
           ")
           if [ -n "$PID" ]; then
-            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               "http://localhost:5000/r6/fhir/Patient/$PID" \
               -H "X-Tenant-ID: different-tenant-xyz")
             python3 -c "
@@ -329,7 +329,7 @@ jobs:
 
       - name: H4-a — Step-up required for writes
         run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST http://localhost:5000/r6/fhir/Patient \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
@@ -345,7 +345,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
             -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST http://localhost:5000/r6/fhir/Condition \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
@@ -359,7 +359,7 @@ jobs:
 
       - name: S1 — Validation on invalid resource
         run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST http://localhost:5000/r6/fhir/Patient \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
