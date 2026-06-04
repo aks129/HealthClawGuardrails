@@ -75,7 +75,7 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 ```text
 /                         Main Flask app (main.py, app.py, models.py)
 /api/                     Vercel serverless entry point (index.py wraps Flask WSGI app)
-/r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, agent_client, health_context, schema_sync, seed). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
+/r6/                      FHIR Python modules (routes, models, validator, oauth, stepup, audit, redaction, health_compliance, context_builder, rate_limit, fhir_proxy, agent_client, health_context, schema_sync, seed, telegram_push). Named r6/ for historical reasons; handles both R4 US Core and experimental R6 resources.
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /r6/wearables/            Wearable device sync MCP app (Apple Health / Fitbit poller + UI)
 /r6/command_center/       Command Center module (per-tenant ops dashboard)
@@ -85,10 +85,10 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /hermes/                  Hermes (Nous Research) integration — SOUL persona, MCP config, idempotent install.sh that wires HealthClaw skills into ~/.hermes/. Parallel to /openclaw/; both share the same MCP server.
 /skills/                  Skill definitions consumable by Hermes (agentskills.io standard) AND OpenClaw — getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records, hermes. Also surfaced at /skills (auto-indexed from frontmatter).
 /exports/                 Output directory for export_healthex.py bundles (gitignored)
-/templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html)
+/templates/               Jinja2 templates (base.html, index.html, r6_dashboard.html, fasten_connect.html, wiki.html, faq.html, skills.html, command_center*.html, privacy.html, terms.html, mcp_apps/*)
 /static/css/              Dashboard styles (r6-dashboard.css)
 /static/js/               Dashboard JavaScript (r6-dashboard.js)
-/tests/                   Python tests (506 passing) — conftest.py + test_r6_routes, test_r6_dashboard, test_context_builder, test_fhir_proxy, test_us_core_r4, test_curatr, test_bot_commands, test_command_center, test_export_healthex (legacy), test_healthclaw_redact (MCP export + redaction), test_import_healthex, test_kristy_watcher, test_public_fhir_servers, test_wearables, test_subscribe (Resend signup + welcome email), test_skills_page (/skills route)
+/tests/                   Python tests (531 passing) — conftest.py + test_r6_routes, test_r6_dashboard, test_context_builder, test_fhir_proxy, test_us_core_r4, test_curatr, test_bot_commands, test_command_center, test_export_healthex (legacy), test_healthclaw_redact (MCP export + redaction), test_import_healthex, test_kristy_watcher, test_public_fhir_servers, test_wearables, test_subscribe (Resend signup + welcome email), test_skills_page (/skills route), test_sharp_on_mcp (SHARP context headers + per-request upstream proxy), test_telegram_connect_flow (bind-telegram, /connect/<tenant> render, notify_tenant fan-out)
 /e2e/                     Playwright end-to-end tests (landing.spec.ts, dashboard.spec.ts)
 /.github/workflows/       CI configuration (ci.yml)
 /.claude/rules/           Claude Code rules (build.md, security.md)
@@ -101,7 +101,7 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 ### Template notes
 
 - `templates/index.html` is a **standalone page** — it does NOT `{% extends "base.html" %}`. It has its own `<html>`, nav, and footer. All other templates extend `base.html`.
-- Flask route names for `url_for()`: `index`, `r6_dashboard`, `wiki`, `faq`, `privacy`, `terms`.
+- Flask route names for `url_for()`: `index`, `r6_dashboard`, `wiki`, `faq`, `privacy`, `terms`, `skills_index` (not `skills`), `fasten_connect`.
 
 ## Build & Run Commands
 
@@ -181,14 +181,18 @@ docker-compose --profile openclaw up -d
 | `SESSION_SECRET` | dev default | Flask session key |
 | `LOG_LEVEL` | `DEBUG` (dev) | Log verbosity |
 | `LOG_FORMAT` | — | Set to `json` for structured logging in production |
+| `TELEGRAM_BOT_TOKEN` | — | Set on Flask so `r6.telegram_push.notify_tenant` can push post-ingest notifications directly via the Telegram Bot API (no IPC with OpenClaw). Same token OpenClaw polls with. |
+| `DASHBOARD_BASE_URL` | `https://healthclaw.io` | Public base URL OpenClaw advertises in `/connect` / `/dashboard` replies. Set to the host that serves `/connect/<tenant_id>` and the dashboard. |
 
 ### Fasten Connect
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FASTEN_PUBLIC_KEY` | — | Stitch widget public key; exposes `<fasten-stitch-element>` in dashboard when set |
+| `FASTEN_PUBLIC_KEY` | — | Stitch widget public key; exposes `<fasten-stitch-element>` in dashboard + `/connect/<tenant>` when set |
 | `FASTEN_PRIVATE_KEY` | — | Webhook verification secret |
-| `FASTEN_CURATR_SCAN` | `false` | Auto-run Curatr evaluation on Fasten-ingested Conditions |
+| `FASTEN_WEBHOOK_SECRET` | — | Standard-Webhooks signing secret (starts `whsec_`) used by `verify_webhook` |
+| `FASTEN_CURATR_SCAN` | `false` | Auto-run Curatr evaluation after ingest; issue count surfaces in the Telegram post-ingest notification |
+| `FASTEN_TEFCA_MODE` | `true` | When truthy, `/connect/<tenant>` renders the Stitch widget with `tefca-mode="true"` so one CLEAR/ID.me verification pulls across all QHINs |
 
 ### Newsletter sign-up (Resend)
 
@@ -239,11 +243,12 @@ When `MEDPLUM_BASE_URL` is set and `FHIR_UPSTREAM_URL` is not, the proxy uses `M
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | (required) | BotFather token |
-| `TENANT_ID` | `desktop-demo` | Tenant to query |
+| `TELEGRAM_BOT_TOKEN` | (required) | BotFather token. Same value must be set on Flask service so post-ingest pushes work. |
+| `TENANT_ID` | `desktop-demo` | Tenant to query and bind chats to on `/start` |
 | `MCP_BASE_URL` | `http://localhost:3001` | MCP HTTP bridge base URL |
 | `FHIR_BASE_URL` | `http://localhost:5000/r6/fhir` | Flask FHIR base URL |
-| `STEP_UP_SECRET` | — | HMAC secret for step-up tokens |
+| `STEP_UP_SECRET` | — | HMAC secret for step-up tokens. Must match Flask service so `/start` → `/internal/bind-telegram` auth succeeds. |
+| `DASHBOARD_BASE_URL` | `https://healthclaw.io` | Used to build the `/connect/<tenant>` URL `/connect` replies with. |
 
 ## Upstream FHIR Proxy
 
@@ -315,10 +320,11 @@ In **local mode**: Supported parameters: `patient` (reference), `code` (token), 
 
 In **upstream proxy mode**: All query parameters forwarded to the upstream server. The upstream server's full search capabilities are available (chaining, _include, etc. if the upstream supports them).
 
-## MCP Tools (14)
+## MCP Tools (16)
 
 - **Read tools** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
 - **Write tools** (require step-up token): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
+- **Compiled-truth tool**: `fhir_compiled_truth` — returns redacted current resource + curation state + Provenance timeline (the v1.2.0 flagship; backs the `mcp-apps/compiled-truth` UI)
 - **Utility tools**: `fhir_get_token` (issues a 5-min step-up token; call before any write), `fhir_seed` (seeds a tenant with demo Patient + Observations + Condition)
 - All tool names use underscores (`fhir_search`, not `fhir.search`) — dots are not valid in some MCP clients
 - Tools add `_mcp_summary` with reasoning, clinical context, and limitations
@@ -339,6 +345,57 @@ For **SSE** (`GET /sse`): headers captured at connection time and bound to the s
 For **HTTP bridge** (`POST /mcp/rpc`): headers extracted per request — same as Streamable HTTP.
 
 Step-up tokens (`X-Step-Up-Token`) follow the same forwarding path. When calling write tools via Claude Desktop (no HTTP headers available), pass the token as `_stepUpToken` in the tool arguments — it is extracted before execution.
+
+## SHARP-on-MCP + PromptOpinion FHIR Context
+
+The MCP server advertises **two parallel FHIR-context shapes** in its `initialize` response so it auto-detects as compliant on both ecosystems:
+
+- **[SHARP-on-MCP](https://sharponmcp.com)** → `capabilities.experimental.fhir_context_required` + `capabilities.experimental.sharp` — vendor-neutral header-forwarding contract.
+- **[PromptOpinion FHIR Extension](https://docs.promptopinion.ai/fhir-context/mcp-fhir-context)** → `capabilities.extensions["ai.promptopinion/fhir-context"]` declaring SMART-on-FHIR scopes (`patient/*.read` required, `patient/*.write` / `offline_access` optional).
+
+Both specs converge on the same per-request headers:
+
+| Header | Sent by agent host | Effect |
+| --- | --- | --- |
+| `X-FHIR-Server-URL` | Always when SHARP context is active | MCP server forwards to Flask; Flask builds a transient `FHIRUpstreamProxy` per request (see `r6.fhir_proxy.get_proxy_for_request`) |
+| `X-FHIR-Access-Token` | When agent host holds a SMART token | Set as `Authorization: Bearer …` on the upstream proxy client |
+| `X-Patient-ID` | Optional | Forwarded; not currently used to constrain queries |
+| `X-FHIR-Refresh-Token` / `X-FHIR-Refresh-Url` | When `offline_access` was granted | Forwarded but not yet acted on |
+
+**Per-request proxy lifecycle**: the SHARP proxy is created lazily on first call to `get_proxy_for_request()`, cached on `flask.g._sharp_proxy`, and closed by the `teardown_request` handler `close_request_proxy` registered on the blueprint. When SHARP headers are absent, the singleton env-var proxy is returned (FHIR_UPSTREAM_URL / MEDPLUM_BASE_URL), or `None` for local mode.
+
+**Synthetic tenant fallback**: SHARP requests may omit `X-Tenant-ID`. When the SHARP server URL is present and the tenant header is missing, the `enforce_tenant_id` `before_request` derives a stable `sharp-<sha256-prefix-of-server-url>` tenant so audit + redaction scope correctly.
+
+**Tool-arg overrides** (for clients that can't set HTTP headers like Claude Desktop): `_fhirServerUrl`, `_fhirAccessToken`, `_patientId` on any tool's `arguments` are lifted into the equivalent headers before the tool runs. Same pattern as `_stepUpToken` / `_tenantId` / `_authorization`.
+
+The MCP server is publicly hosted at `https://mcp-server-published-5112.up.railway.app/mcp` (Railway service `mcp-server`, `FHIR_BASE_URL=https://app.healthclaw.io/r6/fhir`). PromptOpinion marketplace listings (Agent + Superpower) point at this URL.
+
+## Telegram ↔ Fasten Connect Flow
+
+End-to-end "type `/connect` in Telegram → records arrive → review in chat" flow, used for live patient-empowerment demos. Components:
+
+| Piece | Where |
+| --- | --- |
+| `TelegramBinding` model — `(tenant_id, chat_id)` with `bind()` / `chat_ids_for_tenant()` classmethods | `r6/models.py` |
+| `r6.telegram_push.notify_tenant(tenant_id, message)` | `r6/telegram_push.py` — calls `api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage` directly; no IPC with OpenClaw |
+| `POST /r6/fhir/internal/bind-telegram` (step-up gated) | `r6/routes.py` — OpenClaw `/start` calls this; auth is `validate_step_up_token` which returns `(bool, str)` — destructure both, never coerce the tuple to bool |
+| `GET /connect/<tenant_id>` | `app.py` — renders `templates/fasten_connect.html` with the Stitch widget; respects `FASTEN_TEFCA_MODE` (default true) |
+| `templates/fasten_connect.html` | Lean page — no nav chrome; renders a config-missing warning when `FASTEN_PUBLIC_KEY` is unset rather than failing silently |
+| `widget.complete` → `POST /fasten/connections` with `X-Tenant-Id` | Inline JS in `fasten_connect.html` |
+| Post-ingest push | `r6/fasten/ingester.py::stream_ingest` calls `notify_tenant` on success and failure with summary counts (no PHI). `_run_curatr_scan` now returns the issue count so the success message can include it. |
+| OpenClaw `/start` | Binds chat to `TENANT_ID` via `_bind_chat_to_tenant` → POSTs to `/internal/bind-telegram` |
+| OpenClaw `/connect` | Replies with `{DASHBOARD_BASE_URL}/connect/{TENANT_ID}` — no token in the URL; security is via the Stitch widget itself |
+
+Flow:
+
+```text
+/start in TG → openclaw → POST /internal/bind-telegram → TelegramBinding row
+/connect in TG → openclaw replies with /connect/<tenant> URL
+user opens URL → Stitch widget loads (TEFCA mode by default)
+widget.complete → POST /fasten/connections (tenant scoped)
+Fasten back-channel → POST /fasten/webhook → background stream_ingest
+ingest complete → r6.telegram_push.notify_tenant(tenant) → DM every bound chat
+```
 
 ## Test Fixtures (`tests/conftest.py`)
 
@@ -400,7 +457,9 @@ Fasten Health exports are **not** standard FHIR Bundles — they use `providers[
 
 ## Telegram Bot (`openclaw/`)
 
-Conversational interface to the local stack via Telegram. Two execution paths share the same slash-command surface:
+Conversational interface to the local stack via Telegram. Two execution paths share the same slash-command surface.
+
+`openclaw/bot.py` commands: `/start` (binds chat to `TENANT_ID` via `/internal/bind-telegram`), `/connect` (replies with `${DASHBOARD_BASE_URL}/connect/${TENANT_ID}` — the lean TEFCA Stitch page), `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr_fix`, `/approve`, `/token`, `/dashboard`. The Mac-mini dispatcher in `scripts/bot_commands.py` adds: `/summary`, `/meds`, `/vitals`, `/allergies`, `/immunizations`, `/fhir <type>`, `/export`, `/import <path>`, `/import-help`, `/week`, `/conflicts`, `/help`.
 
 1. **Docker `openclaw/bot.py`** — talks to the MCP HTTP bridge (`POST /mcp/rpc`) using JSON-RPC 2.0:
 
@@ -463,20 +522,36 @@ Column names differ from what you might guess — use these exactly:
 | `R6Resource` | `resource_json` | ~~`data`~~ |
 | `AuditEventRecord` | `recorded` | ~~`recorded_at`~~ |
 | `FastenConnection` | `org_connection_id` | — |
+| `TelegramBinding` | `chat_id` is `BigInteger` (Telegram IDs can exceed 2^31), unique with `tenant_id` via `uq_tenant_chat`. Use the `bind()` and `chat_ids_for_tenant()` classmethods, not raw `query.filter_by`. | — |
 
 PHI redaction functions:
 
 - `from r6.redaction import apply_redaction` — HIPAA Safe Harbor (not `redact_resource`)
 - `from r6.redaction import apply_patient_controlled_redaction(resource, patient_id)` — patient-controlled mode
 
-## Deployment (healthclaw.io)
+## Deployment
 
-Hosted on **Vercel** (project: `healthclaw`, team: `aks129s-projects`). `api/index.py` is the serverless WSGI entry point. `vercel.json` routes all traffic to it.
+Multi-host. Each surface lives where it makes sense:
 
-- Production URL: `https://healthclaw.io`
-- Railway is also configured (`railway.toml`) for full-stack Docker deployment with Redis; use Railway when persistent SQLite or the MCP server is needed.
-- Vercel serverless has no persistent filesystem — SQLite writes don't persist between invocations. Suitable for demo/read-only use.
-- SSO/deployment protection should remain **disabled** (`ssoProtection: null`) so public visitors can access the site without Vercel auth.
+| Surface | Host | URL | Purpose |
+| --- | --- | --- | --- |
+| Marketing site | Vercel (`healthclaw` project in team `aks129s-projects`) | `https://healthclaw.io` | Landing, wiki, FAQ, skills index, video walkthroughs |
+| Flask app (FHIR REST + guardrails + Fasten webhook + OAuth) | Railway service `HealthClawGuardrails` in project `awake-serenity` | `https://app.healthclaw.io` | Persistent storage (PostgreSQL), webhook receiver, dashboard |
+| MCP server (Node.js, Streamable HTTP) | Railway service `mcp-server` in project `awake-serenity` | `https://mcp-server-production-5112.up.railway.app/mcp` | Public MCP endpoint — what Claude Desktop, PromptOpinion, and Hermes connect to. `FHIR_BASE_URL` points at `https://app.healthclaw.io/r6/fhir`. |
+| OpenClaw Telegram bot | Railway service `openclaw-bot` in project `awake-serenity` | n/a (long-poller) | Conversational interface; binds chats to tenants via `/start` |
+
+Both Vercel and Railway auto-deploy on push to `main`. The Vercel project serves `api/index.py` (serverless WSGI) and static files; SQLite writes don't persist across invocations, so use Railway for anything stateful. SSO/deployment protection on Vercel must remain disabled (`ssoProtection: null`) so the public site is reachable.
+
+PromptOpinion marketplace listings point at the Railway MCP URL:
+
+- Agent: `https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed`
+- Superpower (MCP): `https://app.promptopinion.ai/marketplace/mcp/019e1831-3d6f-7f72-99c2-cb8f2efab57e`
+
+### CI (`.github/workflows/ci.yml`)
+
+Seven jobs: `python-tests`, `node-tests`, `playwright-tests`, `compose-smoke`, `compliance-gates`, `secret-scan`, `dependency-audit`. **The compliance-gates job uses `curl -s -o /dev/null -w "%{http_code}"` (no `-f`) when verifying a 4xx response code** — `-f` makes curl exit 22 on 4xx and `set -e` then kills the step before the python assert can inspect `$STATUS`. Don't add `-f` to any gate that captures `%{http_code}` from a 4xx response.
+
+`python-tests` runs on Python 3.11 even though local dev is usually 3.13. **Don't use backslash escapes (`\n`, `—`, etc.) inside f-string `{...}` expressions** — PEP 701 only landed in 3.12, so 3.11 raises `SyntaxError: f-string expression part cannot include a backslash`. Lift the expression into a variable instead.
 
 ## Known Limitations
 
@@ -507,6 +582,9 @@ Promotion requires `quality_score >= 0.7`, human confirmation, and linked Proven
 
 - Always emit AuditEvent for FHIR resource access
 - Step-up authorization required for all write operations
+- `validate_step_up_token` returns `(bool, str)` — destructure both values; never coerce the tuple to a single boolean (non-empty tuples are truthy → silent auth bypass)
 - Before any change touching PHI/audit/access-control: check `.claude/compliance/hipaa.md`
 - Before deploying: run `./scripts/demo_e2e.sh` — all 10 gates must pass
 - Run tests before committing: `uv run python -m pytest tests/ -v` and `cd services/agent-orchestrator && npm test`
+- Local Python is 3.13 but CI is 3.11 — backslash escapes inside f-string `{...}` expressions parse locally and break CI. Lift into a variable.
+- `r6.telegram_push.notify_tenant` is for summary-level messages only — never include PHI (names, identifiers, values). Counts, status, tenant ids, "type `/summary`" prompts are fine.
