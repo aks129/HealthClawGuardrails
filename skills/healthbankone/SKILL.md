@@ -8,10 +8,10 @@ description: >
   HealthClaw tenant. Use when the user wants to add HBO as a source alongside
   HealthEx and Fasten Connect. Triggers on prompts like "connect Health Bank
   One", "pull from HBO", "verify identity through Health Bank One".
-version: 0.1.0-scaffold
+version: 0.2.0
 author: Eugene Vestel (fhiriq.com)
 license: MIT
-status: scaffold — endpoints + scopes + tool names TBD after 2026-06-04 call
+status: live — MCP endpoint confirmed 2026-06-10 (Bootstrap Developer Program)
 references:
   hbo_home: https://www.healthbankone.com
   hbo_developer_program: https://www.healthbankone.com/MCP
@@ -23,10 +23,13 @@ references:
 
 # Health Bank One — pull verified records via MCP
 
-> **Status:** scaffold. Endpoints, scopes, and tool names will be filled in
-> after the 2026-06-04 developer call. See
-> [`docs/healthbankone-call-prep.md`](../../docs/healthbankone-call-prep.md)
-> for what we already know and the call agenda.
+> **Status:** live. Bootstrap Developer Program onboarded 2026-06-10.
+>
+> **MCP endpoint:** `https://mcp.app.healthbankone.com/mcp`
+>
+> **Self-access auth:** OAuth via browser/QR code — no `client_secret` needed for
+> your own records. Claude Code: add to `.mcp.json` and run `/mcp` to authorize.
+> Multi-patient (commercial) auth uses Open Dynamic Client Registration (RFC 7591).
 
 HBO sits in our health-data source matrix as the **OAuth-pulled, identity-verified** equivalent of:
 
@@ -40,32 +43,50 @@ HBO sits in our health-data source matrix as the **OAuth-pulled, identity-verifi
 - **Writebacks.** The Engagement service exposes authorized writebacks; HealthClaw can publish curatr fixes or annotated documents back to the consumer's HBO account.
 - **Insurance Context.** Verified payer details — possibly the strongest case for HBO over the other two sources.
 
-## Setup (post-call)
+## Setup
 
-> The bracketed values are placeholders until the call.
+### 1. Self-access (Bootstrap — your own records)
 
-### 1. Register HealthClaw as an HBO client
+**Claude Code** — add to project `.mcp.json` (already done in this repo):
 
-`<TODO: developer portal URL>`. Probably requires:
-- Business name + use case description
-- Redirect URIs: `https://app.healthclaw.io/hbo/callback` (Railway) and `http://localhost:5000/hbo/callback` (local dev)
-- Scopes requested: `<TODO: list from call>` — likely something like `identity.read patient.read patient.write offline_access`
-
-Store `HBO_CLIENT_ID` and `HBO_CLIENT_SECRET` on the Railway HealthClawGuardrails service.
-
-### 2. Run the authorization dance
-
-```bash
-# Will be invoked from Telegram as /hbo-connect
-python scripts/healthbankone_oauth.py authorize \
-  --tenant-id ev-personal-hbo \
-  --client-id "$HBO_CLIENT_ID" \
-  --scopes "<TODO>"
+```json
+"healthbankone": {
+  "type": "http",
+  "url": "https://mcp.app.healthbankone.com/mcp"
+}
 ```
 
-Opens the HBO authorize URL in a browser; consumer logs in + grants; HBO redirects back to our callback with an `authorization_code`; we exchange for `access_token` + `refresh_token`; tokens cached in Redis (Railway) or macOS Keychain (Mac mini).
+Then in a new session run `/mcp` → browser opens with QR code → scan with the
+Health Bank One digital ID app → approve → connected.
 
-### 3. Pull the records
+**Claude Desktop** — `+ → Connectors → Manage Connectors → Add custom connector`
+→ enter `https://mcp.app.healthbankone.com/mcp` → Connect → scan QR.
+
+**Script pull** (for export → redact → ingest pipeline):
+
+```bash
+export HBO_MCP_URL=https://mcp.app.healthbankone.com/mcp
+# Authorize once (opens browser + QR):
+python scripts/healthbankone_oauth.py authorize --tenant-id ev-personal-hbo
+# Then pull + redact + ingest:
+python scripts/export_healthbankone_mcp.py --tenant-id ev-personal-hbo --discover
+```
+
+### 2. Multi-patient access (Commercial license required)
+
+Uses **Open Dynamic Client Registration** (RFC 7591) to obtain `client_id` +
+`client_secret`. Then standard authorization-code + PKCE per patient. Contact
+`developer@healthbankone.com` to start a commercial conversation.
+
+For the HealthClaw pipeline:
+
+1. Register via DCR at the HBO registration endpoint (URL TBD)
+2. Store `HBO_CLIENT_ID`, `HBO_CLIENT_SECRET` on Railway HealthClawGuardrails service
+3. `python scripts/healthbankone_oauth.py authorize --tenant-id <patient-tenant>`
+   — opens authorize URL; callback at `https://app.healthclaw.io/hbo/callback`
+4. Tokens cached in `~/.healthclaw/hbo_tokens.json` (local) or Redis (Railway)
+
+### 3. Pull the records (script pipeline)
 
 ```bash
 python scripts/export_healthbankone_mcp.py \
@@ -73,14 +94,13 @@ python scripts/export_healthbankone_mcp.py \
   --output ~/.healthclaw/exports/hbo-$(date +%Y-%m-%d).json
 ```
 
-What the script does (mirrors `export_healthex_mcp.py`):
+What the script does:
 
-1. Loads access token from cache; refreshes if expired
-2. Opens an MCP Streamable HTTP session to `<TODO: HBO MCP URL>` with `Authorization: Bearer <access_token>`
-3. Calls each tool in the Health Context category (`<TODO: health.summary, health.medications, …>`)
-4. Optionally calls Digital Identity tools (`<TODO: identity.verify, …>`) for the identity bundle
-5. Redacts PHI in-process via `scripts/healthclaw_redact.py` — raw MCP response never touches disk
-6. Writes the redacted snapshot to disk
+1. Loads access token from cache (`~/.healthclaw/hbo_tokens.json`); refreshes if expired
+2. Opens MCP Streamable HTTP session to `https://mcp.app.healthbankone.com/mcp` with `Authorization: Bearer <token>`
+3. `--discover` mode: calls `tools/list`, invokes every read-safe tool (filters on `readOnlyHint` annotation + name heuristics)
+4. Redacts PHI in-process via `scripts/healthclaw_redact.py` — raw response never touches disk
+5. Writes the redacted snapshot to disk
 
 ### 4. Ingest into HealthClaw
 
@@ -93,25 +113,26 @@ python scripts/import_healthex.py \
 
 The `import_healthex.py` script is source-agnostic — it just POSTs a FHIR Bundle to `/Bundle/$ingest-context`. Works for HBO output unchanged.
 
-## OpenClaw slash commands (to be added)
+## OpenClaw slash commands
 
 | Command | What it does |
 |---|---|
-| `/hbo-connect` | Returns the HBO authorization URL; user clicks, logs in, grants; webhook callback persists the tokens |
-| `/hbo-pull` | Runs the export + redact + ingest pipeline; pings the chat when records arrive |
-| `/hbo-revoke` | Calls HBO's revoke endpoint to terminate the grant; deletes cached tokens |
+| `/hbo_connect` | Builds the OAuth authorization URL (PKCE S256); user opens link, logs in, grants; tokens cached |
+| `/hbo_pull` | Runs the export + redact + ingest pipeline in background; pings Telegram when records arrive |
 
-## Environment variables (to add)
+(Implemented in `openclaw/bot.py` and `scripts/bot_commands.py`.)
+
+## Environment variables
 
 | Variable | Required | Notes |
 |---|---|---|
-| `HBO_CLIENT_ID` | Yes | From HBO developer portal |
-| `HBO_CLIENT_SECRET` | Yes | Same |
-| `HBO_AUTHORIZATION_ENDPOINT` | Yes | `<TODO from call>` |
-| `HBO_TOKEN_ENDPOINT` | Yes | `<TODO from call>` |
-| `HBO_MCP_URL` | Yes | `<TODO from call>` |
-| `HBO_REDIRECT_URI` | Yes | Defaults to `https://app.healthclaw.io/hbo/callback` |
-| `HBO_SCOPES` | Optional | Space-separated scope list; default from call |
+| `HBO_MCP_URL` | Yes | `https://mcp.app.healthbankone.com/mcp` |
+| `HBO_CLIENT_ID` | Commercial only | From HBO DCR registration |
+| `HBO_CLIENT_SECRET` | Commercial only | Same |
+| `HBO_AUTHORIZATION_ENDPOINT` | Commercial only | From HBO DCR metadata |
+| `HBO_TOKEN_ENDPOINT` | Commercial only | From HBO DCR metadata |
+| `HBO_REDIRECT_URI` | Commercial only | Default: `https://app.healthclaw.io/hbo/callback` |
+| `HBO_SCOPES` | Optional | Space-separated; default: `openid offline_access` |
 
 ## SHARP-on-MCP compatibility check
 

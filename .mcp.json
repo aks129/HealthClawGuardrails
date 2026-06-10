@@ -6,6 +6,10 @@
       "headers": {
         "X-Tenant-ID": "desktop-demo"
       }
+    },
+    "healthbankone": {
+      "type": "http",
+      "url": "https://mcp.app.healthbankone.com/mcp"
     }
   }
 }

@@ -83,11 +83,23 @@ COMMAND_TO_AGENT = {
     'curatr_fix': 'joe',
     'approve': 'joe',
     'token': 'joe',
+    'hbo_connect': 'sally',   # Health Bank One OAuth consent
+    'hbo_pull': 'joe',        # HBO MCP pull + ingest
 }
 
 # Public base URL where the dashboard is reachable. Override for production
 # (e.g., https://healthclaw.io).
 DASHBOARD_BASE_URL = os.environ.get('DASHBOARD_BASE_URL', 'https://healthclaw.io').rstrip('/')
+
+# Health Bank One — optional config. If HBO_AUTHORIZATION_ENDPOINT is unset,
+# /hbo-connect tells the user to configure it.
+HBO_AUTHORIZATION_ENDPOINT = os.environ.get('HBO_AUTHORIZATION_ENDPOINT', '').strip()
+HBO_CLIENT_ID = os.environ.get('HBO_CLIENT_ID', '').strip()
+HBO_REDIRECT_URI = os.environ.get(
+    'HBO_REDIRECT_URI', f'{DASHBOARD_BASE_URL}/hbo/callback').strip()
+HBO_SCOPES = os.environ.get('HBO_SCOPES', 'openid offline_access').strip()
+HBO_MCP_URL = os.environ.get(
+    'HBO_MCP_URL', 'https://mcp.app.healthbankone.com/mcp').strip()
 
 
 def _persist_turn(update: Update, agent_id: str, role: str, text: str,
@@ -276,6 +288,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f'{bind_line}\n\n'
         'Commands:\n'
         '/connect — pull your records (Fasten + TEFCA)\n'
+        '/hbo\\_connect — authorize Health Bank One (OAuth)\n'
+        '/hbo\\_pull — pull + ingest HBO verified records\n'
         '/dashboard — open the command center (signed 24h link)\n'
         '/summary — high-level review of your record\n'
         '/conditions — list Conditions\n'
@@ -538,6 +552,113 @@ async def cmd_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await _reply(update, f'Error generating link: {exc}', agent_id)
 
 
+async def cmd_hbo_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return the HBO OAuth authorization URL so the user can grant access."""
+    agent_id = await _log_incoming(update, 'hbo_connect')
+
+    if not HBO_AUTHORIZATION_ENDPOINT:
+        await _reply(
+            update,
+            '⚠️ *Health Bank One not configured*\n\n'
+            'Ask your admin to set:\n'
+            '  `HBO_AUTHORIZATION_ENDPOINT`\n'
+            '  `HBO_CLIENT_ID`\n'
+            '  `HBO_SCOPES`\n\n'
+            'Or run `python scripts/healthbankone_oauth.py authorize` locally.',
+            agent_id,
+            parse_mode='Markdown',
+        )
+        return
+
+    import urllib.parse as _up
+    import secrets as _sec
+    import hashlib as _hl
+    import base64 as _b64
+
+    # Build PKCE pair inline (avoids a subprocess just to get the URL)
+    verifier_bytes = _sec.token_bytes(48)
+    verifier = _b64.urlsafe_b64encode(verifier_bytes).rstrip(b'=').decode('ascii')
+    digest = _hl.sha256(verifier.encode('ascii')).digest()
+    challenge = _b64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
+    state = _sec.token_urlsafe(24)
+
+    # Stash verifier in chat state so /hbo-callback (future) can finish exchange
+    chat_id = update.effective_chat.id
+    _chat_state.setdefault(chat_id, {})['hbo_pkce'] = {
+        'verifier': verifier, 'state': state}
+
+    params = {
+        'response_type': 'code',
+        'client_id': HBO_CLIENT_ID,
+        'redirect_uri': HBO_REDIRECT_URI,
+        'scope': HBO_SCOPES,
+        'state': state,
+        'code_challenge': challenge,
+        'code_challenge_method': 'S256',
+    }
+    auth_url = f'{HBO_AUTHORIZATION_ENDPOINT}?{_up.urlencode(params)}'
+
+    text = (
+        '🔑 *Health Bank One authorization*\n\n'
+        'Click the link below, log in with Health Bank One, '
+        'and grant HealthClaw access to your verified records.\n\n'
+        f'{auth_url}\n\n'
+        '_After you authorize, run /hbo\\_pull to fetch your records._'
+    )
+    await _reply(update, text, agent_id, parse_mode='Markdown')
+
+
+async def cmd_hbo_pull(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pull + redact + ingest Health Bank One records into this tenant."""
+    agent_id = await _log_incoming(update, 'hbo_pull')
+
+    await _reply(
+        update,
+        '⏳ Starting HBO pull for tenant `' + TENANT_ID + '`…\n'
+        '_This runs in the background. I\'ll message you when records land._',
+        agent_id,
+        parse_mode='Markdown',
+    )
+
+    import subprocess
+    import sys as _sys
+    import threading as _thr
+
+    def _run_pull():
+        try:
+            result = subprocess.run(
+                [_sys.executable,
+                 'scripts/export_healthbankone_mcp.py',
+                 '--tenant-id', TENANT_ID,
+                 '--discover',
+                 '--pretty'],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode == 0:
+                # Best-effort: parse the last line of stdout for summary
+                last_line = (result.stdout.strip().splitlines() or ['done'])[-1]
+                requests.post(
+                    f'{FHIR_BASE_URL.replace("/r6/fhir", "")}/r6/telegram_push/send',
+                    json={'tenant_id': TENANT_ID,
+                          'message': f'✅ *HBO pull complete*\n{last_line}'},
+                    timeout=5,
+                )
+            else:
+                err = (result.stderr.strip().splitlines() or ['unknown error'])[-1]
+                requests.post(
+                    f'{FHIR_BASE_URL.replace("/r6/fhir", "")}/r6/telegram_push/send',
+                    json={'tenant_id': TENANT_ID,
+                          'message': f'❌ HBO pull failed: {err}'},
+                    timeout=5,
+                )
+        except Exception as exc:
+            logger.error('hbo_pull background error: %s', exc)
+
+    _thr.Thread(target=_run_pull, daemon=True).start()
+
+
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = 'health-advisor'
     if update and update.effective_message:
@@ -565,6 +686,8 @@ def main() -> None:
     app.add_handler(CommandHandler('approve', cmd_approve))
     app.add_handler(CommandHandler('token', cmd_token))
     app.add_handler(CommandHandler('dashboard', cmd_dashboard))
+    app.add_handler(CommandHandler('hbo_connect', cmd_hbo_connect))
+    app.add_handler(CommandHandler('hbo_pull', cmd_hbo_pull))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     logger.info('openclaw bot starting (tenant=%s)', TENANT_ID)

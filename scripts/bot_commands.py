@@ -743,6 +743,89 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_hbo_connect(args) -> int:
+    """Print the Health Bank One OAuth authorization URL.
+
+    Opens the browser if running interactively (the persona will relay the
+    link to the user). Stashes the PKCE verifier in ~/.healthclaw/hbo_pkce.json
+    so the callback handler can finish the exchange.
+    """
+    script = Path(__file__).parent / "healthbankone_oauth.py"
+    if not script.exists():
+        script = Path.home() / ".healthclaw" / "healthbankone_oauth.py"
+    if not script.exists():
+        print("error: healthbankone_oauth.py not found", file=sys.stderr)
+        return 1
+
+    venv_python = Path.home() / ".healthclaw" / "venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+    tenant = args.tenant or _tenant_default()
+
+    import subprocess
+    r = subprocess.run(
+        [python, str(script), "authorize",
+         "--tenant-id", tenant, "--no-browser"],
+        capture_output=False, timeout=30,
+    )
+    return r.returncode
+
+
+def cmd_hbo_pull(args) -> int:
+    """Pull + redact + ingest Health Bank One records via their MCP server.
+
+    Token resolution: HBO_ACCESS_TOKEN env var or ~/.healthclaw/hbo_tokens.json
+    (written by healthbankone_oauth.py authorize).
+    """
+    import subprocess
+    tenant = args.tenant or _tenant_default()
+
+    mcp_url = os.environ.get(
+        "HBO_MCP_URL", "https://mcp.app.healthbankone.com/mcp").strip()
+
+    script = Path(__file__).parent / "export_healthbankone_mcp.py"
+    if not script.exists():
+        script = Path.home() / ".healthclaw" / "export_healthbankone_mcp.py"
+    if not script.exists():
+        print("error: export_healthbankone_mcp.py not found", file=sys.stderr)
+        return 1
+
+    exports_dir = Path.home() / ".healthclaw" / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import date
+    out = exports_dir / f"hbo-{date.today().isoformat()}.json"
+
+    venv_python = Path.home() / ".healthclaw" / "venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+
+    cmd = [python, str(script), "--tenant-id", tenant,
+           "--discover", "--output", str(out), "--pretty"]
+    print(f"Running HBO export → {out}")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print("error: HBO export timed out", file=sys.stderr)
+        return 1
+
+    for line in (r.stderr or "").splitlines()[-10:]:
+        print(line)
+    if r.returncode not in (0, 1):
+        print(f"error: export exited {r.returncode}", file=sys.stderr)
+        return r.returncode
+
+    try:
+        data = json.loads(out.read_text())
+        rs = data.get("_meta", {}).get("redaction_stats", {})
+        print(f"\nOutput: {out}")
+        print(f"  size: {out.stat().st_size:,} bytes")
+        print(f"  tools ok: {len(data.get('records', {}))}")
+        print(f"  tools failed: {len(data.get('errors', {}))}")
+        print(f"  fields redacted: {sum(rs.values())}")
+        print(f"\nNext: /import {out}")
+    except Exception as exc:
+        print(f"  (couldn't summarize: {exc})")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
@@ -768,6 +851,9 @@ _COMMANDS = {
     "export":        cmd_export,
     "import":        cmd_import,
     "import-help":   cmd_import_help,
+    # Health Bank One
+    "hbo-connect":   cmd_hbo_connect,
+    "hbo-pull":      cmd_hbo_pull,
 }
 
 
