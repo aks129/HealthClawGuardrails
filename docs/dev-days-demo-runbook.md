@@ -2,9 +2,16 @@
 
 **Presentation:** "OpenClaw for Healthcare: Guardrails, Trust, and Patient Empowerment"
 **Format:** 10–15 min live demo + Q&A
+**One-line pitch (from Bo Holland, CEO Health Bank One):**
+> "With one connection, users would never need to manually fill out forms or remember passwords again."
+
 **Goal:** show the full end-to-end flow in a single Telegram session — patient consent →
-records streaming in → Curatr quality check → approved fix → /summary — while narrating
-every guardrail that fires along the way.
+records streaming in → Curatr quality check → approved fix → /summary → **form auto-fill** —
+while narrating every guardrail that fires along the way.
+
+**Demo theme:** HealthClaw is the guardrail OS between Health Bank One (data + identity) and
+AI agents. HBO owns the data pipeline; HealthClaw enforces who can see it, when, and under
+what authorization.
 
 ---
 
@@ -138,18 +145,46 @@ In [portal.connect.fastenhealth.com/developers](https://portal.connect.fastenhea
 
 ---
 
-### Act 5 — Health Bank One (1 min, if endpoint is live)
+### Act 5 — Health Bank One + Form Auto-Fill (3 min) ⭐ STRONGEST DEMO
 
-10. If HBO MCP URL was received on the call:
-    ```bash
-    export HBO_MCP_URL=https://<their-host>/mcp
-    python scripts/export_healthbankone_mcp.py --tenant-id ev-personal-hbo --discover
-    ```
-    - **Show:** tool catalog discovered at runtime, records redacted before disk write
-    - **Say:** "Same redact-in-process pipeline. Raw MCP response never touches disk."
+**Setup:** you've already authorized via QR code on your phone. HBO has pulled your full
+record (conditions, meds, insurance, identity) from every provider/payer.
 
-    Or in Telegram: send `/hbo_connect` → show the OAuth URL structure (PKCE, S256)
-    and `/hbo_pull` → show background pull starting.
+1. Show the HBO connection in Claude Code or Desktop:
+   - **Say:** "Health Bank One's MCP server is running at `mcp.app.healthbankone.com/mcp`.
+     I authorized once by scanning a QR code with their banking-grade digital ID app.
+     Now every AI tool I authorize — Claude, ChatGPT, Hermes — can query my records."
+
+2. Pull the tool catalog live:
+
+   ```bash
+   python scripts/export_healthbankone_mcp.py \
+     --tenant-id ev-personal-hbo --discover --pretty
+   ```
+
+   - **Show:** tools listed at runtime (health.summary, medications, conditions, identity, …)
+   - **Say:** "No hardcoded API calls. The script discovers whatever HBO exposes at runtime —
+     same pattern we use with HealthEx."
+
+3. **Form auto-fill demo (the money shot):**
+   - Show a 40-page patient intake form URL (any publicly accessible form — Epic MyChart
+     registration, insurance prior auth, or a simple Google Form for demo purposes)
+   - **Say:** "Healthcare's biggest patient burden is paperwork. The average intake form
+     is 40 pages. Bo Holland — HBO's CEO — put it best on our call yesterday:
+     *'With one connection, users would never need to manually fill out a form or
+     remember a password again.'*"
+   - Narrate (or if live connection: demonstrate) HealthClaw querying HBO via MCP,
+     mapping fields to form inputs, and submitting on the patient's behalf
+   - **Say:** "HealthClaw takes the form URL, queries HBO for the relevant data,
+     auto-populates every field, and submits with an audit trail. The patient approves
+     in Telegram with one tap."
+
+4. Show Curatr correction loop (if time):
+   - **Say:** "When Curatr finds a data error — say a tobacco status that contradicts
+     immunization titers — it generates a correction letter. In the HBO model, that letter
+     goes back through HBO's fax pipeline to the provider who wrote the bad record.
+     Healthcare has never had a dispute resolution mechanism like this. Financial services
+     has had it for 50 years."
 
 ---
 
@@ -157,9 +192,11 @@ In [portal.connect.fastenhealth.com/developers](https://portal.connect.fastenhea
 
 - **Open source** — fork it, deploy on Railway in 5 minutes
 - **Vendor-neutral** — HealthEx, Fasten, Health Bank One, any SMART/FHIR server
+- **Three data sources, one guardrail layer** — HealthEx (pull), Fasten (push), HBO (identity-verified pull)
 - **Pattern library, not a product** — copy the guardrail patterns into your own stack
 - **PromptOpinion marketplace** — live today at `app.promptopinion.ai/marketplace`
 - **GitHub** — `github.com/aks129/HealthClawGuardrails`
+- **Contact:** `developer@healthbankone.com` if you want into the Bootstrap Program
 
 ---
 
