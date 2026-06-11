@@ -150,6 +150,11 @@ if not os.environ.get('VERCEL'):
     if start_poller(app):
         logger.info("Wearables poller started (background thread)")
 
+# Register SmartHealthConnect Bridge Blueprint
+from r6.shc.routes import shc_blueprint
+app.register_blueprint(shc_blueprint)
+logger.info("SmartHealthConnect bridge registered at /shc")
+
 # Register Command Center Blueprint — "My Health in Good Hands" dashboard.
 # Skipped on Vercel (healthclaw.io is the public marketing/demo surface;
 # the command center lives on Railway behind auth).

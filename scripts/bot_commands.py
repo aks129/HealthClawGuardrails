@@ -278,6 +278,18 @@ def cmd_week(args) -> int:
     return 0  # unreachable
 
 
+def cmd_connect(args) -> int:
+    """Print the Fasten TEFCA connect URL for this tenant."""
+    tenant = args.tenant or _tenant_default()
+    base = _dashboard_base()
+    url = f"{base}/connect/{tenant}"
+    print(f"Open this link to connect your health records via TEFCA:")
+    print(url)
+    print("The Stitch widget will let you authorize one or more EHR / payer connections.")
+    print("Records arrive automatically once you complete the flow.")
+    return 0
+
+
 def cmd_token(args) -> int:
     """Emit a fresh step-up token — useful for curl debugging."""
     tenant = args.tenant or _tenant_default()
@@ -292,6 +304,7 @@ def cmd_help(args) -> int:
     print(
         "HealthClaw bot commands:\n"
         "  Core:\n"
+        "    /connect       get the Fasten TEFCA link to connect health records\n"
         "    /dashboard     fresh 24h signed command-center link\n"
         "    /health        stack health (Flask, MCP, gateway, Redis)\n"
         "    /tasks         pending AgentTasks for your tenant\n"
@@ -309,6 +322,15 @@ def cmd_help(args) -> int:
         "    /export        pull HealthEx → redact PHI → write bundle\n"
         "    /import <path> ingest a bundle JSON file\n"
         "    /import-help   end-to-end import instructions\n"
+        "  Health Bank One (HBO):\n"
+        "    /hbo-connect   authorize HBO OAuth (URL → browser → QR → approve)\n"
+        "    /hbo-pull      pull + redact all HBO records + clinical summary\n"
+        "  MEDENT (PCP EHR):\n"
+        "    /medent-connect  authorize MEDENT patient portal (SMART on FHIR)\n"
+        "    /medent-pull     pull + redact FHIR records from your PCP's MEDENT system\n"
+        "  SmartHealthConnect (Flexpa + Epic):\n"
+        "    /flexpa-connect  connect insurance/payer records via Flexpa (200+ insurers)\n"
+        "    /epic-connect    connect Epic / patient portal via Health Skillz\n"
         "  Kristy:\n"
         "    /week          schedule scan\n"
         "    /conflicts     family schedule conflicts\n"
@@ -762,12 +784,158 @@ def cmd_hbo_connect(args) -> int:
     tenant = args.tenant or _tenant_default()
 
     import subprocess
+    # timeout=300 so the local :8742 callback server stays alive while the
+    # user opens the URL and completes the OAuth flow in their browser
     r = subprocess.run(
         [python, str(script), "authorize",
          "--tenant-id", tenant, "--no-browser"],
-        capture_output=False, timeout=30,
+        capture_output=False, timeout=300,
     )
     return r.returncode
+
+
+def _shc_base() -> str:
+    return os.environ.get("SHC_BASE_URL", "").rstrip("/")
+
+
+def cmd_flexpa_connect(args) -> int:
+    """Send the SmartHealthConnect Flexpa connection URL (200+ payers/insurers)."""
+    base = _shc_base()
+    if not base:
+        print(
+            "error: SHC_BASE_URL not set in ~/.healthclaw/env\n"
+            "  Set it to where SmartHealthConnect is running, e.g.:\n"
+            "  SHC_BASE_URL=https://smarthealthconnect.app",
+            file=sys.stderr,
+        )
+        return 1
+    tenant = args.tenant or _tenant_default()
+    url = f"{base}/connections?source=flexpa&tenant={tenant}"
+    print("Open this link to connect your insurance/payer records via Flexpa:")
+    print(url)
+    print()
+    print("Flexpa covers 200+ US insurers (Blue Cross, Aetna, Cigna, UHC, Medicare, etc.).")
+    print("After connecting, records auto-ingest into HealthClaw and you'll get a Telegram ping.")
+    return 0
+
+
+def cmd_epic_connect(args) -> int:
+    """Send the SmartHealthConnect Health Skillz URL (Epic + major patient portals)."""
+    base = _shc_base()
+    if not base:
+        print(
+            "error: SHC_BASE_URL not set in ~/.healthclaw/env\n"
+            "  Set it to where SmartHealthConnect is running, e.g.:\n"
+            "  SHC_BASE_URL=https://smarthealthconnect.app",
+            file=sys.stderr,
+        )
+        return 1
+    tenant = args.tenant or _tenant_default()
+    url = f"{base}/connections?source=healthskillz&tenant={tenant}"
+    print("Open this link to connect your Epic / patient portal records via Health Skillz:")
+    print(url)
+    print()
+    print("Health Skillz supports Epic MyChart and other major patient portals.")
+    print("After connecting, records auto-ingest into HealthClaw and you'll get a Telegram ping.")
+    return 0
+
+
+def cmd_medent_connect(args) -> int:
+    """Run MEDENT OAuth authorize — opens browser to patient portal."""
+    script = Path(__file__).parent / "medent_oauth.py"
+    if not script.exists():
+        script = Path.home() / ".healthclaw" / "medent_oauth.py"
+    if not script.exists():
+        print("error: medent_oauth.py not found", file=sys.stderr)
+        return 1
+
+    venv_python = Path.home() / ".healthclaw" / "venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+    tenant = args.tenant or _tenant_default()
+
+    import subprocess
+    practice_id = os.environ.get("MEDENT_PRACTICE_ID", "").strip()
+    cmd_parts = [python, str(script), "authorize",
+                 "--tenant-id", tenant, "--no-browser"]
+    if practice_id:
+        cmd_parts += ["--practice-id", practice_id]
+
+    if not practice_id:
+        print("Looking up your MEDENT practice ID first ...")
+        r = subprocess.run(
+            [python, str(script), "practices"],
+            capture_output=False, timeout=30,
+        )
+        if r.returncode != 0:
+            print(
+                "\nSet MEDENT_PRACTICE_ID in ~/.healthclaw/env and retry.\n"
+                "  Example: MEDENT_PRACTICE_ID=12345",
+                file=sys.stderr,
+            )
+            return r.returncode
+        practice_id = input("\nEnter practice_id from the list above: ").strip()
+        if not practice_id:
+            print("error: no practice_id provided", file=sys.stderr)
+            return 1
+        cmd_parts += ["--practice-id", practice_id]
+
+    # timeout=300 — patient portal login can be slow
+    r = subprocess.run(cmd_parts, capture_output=False, timeout=300)
+    return r.returncode
+
+
+def cmd_medent_pull(args) -> int:
+    """Pull + redact MEDENT FHIR records using cached OAuth token."""
+    import subprocess
+    tenant = args.tenant or _tenant_default()
+
+    script = Path(__file__).parent / "export_medent_fhir.py"
+    if not script.exists():
+        script = Path.home() / ".healthclaw" / "export_medent_fhir.py"
+    if not script.exists():
+        print("error: export_medent_fhir.py not found", file=sys.stderr)
+        return 1
+
+    exports_dir = Path.home() / ".healthclaw" / "exports"
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import date
+    out = exports_dir / f"medent-{date.today().isoformat()}.json"
+
+    venv_python = Path.home() / ".healthclaw" / "venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+
+    cmd_parts = [python, str(script), "--tenant-id", tenant, "--output", str(out)]
+    print(f"Running MEDENT export → {out}")
+    try:
+        r = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        print("error: MEDENT export timed out", file=sys.stderr)
+        return 1
+
+    for line in (r.stdout or "").splitlines():
+        print(line)
+    for line in (r.stderr or "").splitlines()[-10:]:
+        print(line)
+
+    if r.returncode != 0:
+        print(f"error: export exited {r.returncode}", file=sys.stderr)
+        return r.returncode
+
+    if out.exists():
+        try:
+            data = json.loads(out.read_text())
+            records = data.get("records", {})
+            rs = data.get("_meta", {}).get("redaction_stats", {})
+            print(f"\nOutput: {out}")
+            print(f"  size: {out.stat().st_size:,} bytes")
+            total = sum(len(v) for v in records.values() if isinstance(v, list))
+            print(f"  resources: {total}")
+            print(f"  fields redacted: {sum(rs.values())}")
+            if total > 0:
+                print(f"\nNext: `/import {out}` to ingest, then `/summary` to verify.")
+        except Exception as exc:
+            print(f"  (couldn't summarize: {exc})")
+    return 0
 
 
 def cmd_hbo_pull(args) -> int:
@@ -815,12 +983,36 @@ def cmd_hbo_pull(args) -> int:
     try:
         data = json.loads(out.read_text())
         rs = data.get("_meta", {}).get("redaction_stats", {})
+        records = data.get("records", {})
         print(f"\nOutput: {out}")
         print(f"  size: {out.stat().st_size:,} bytes")
-        print(f"  tools ok: {len(data.get('records', {}))}")
+        print(f"  tools ok: {len(records)}")
         print(f"  tools failed: {len(data.get('errors', {}))}")
         print(f"  fields redacted: {sum(rs.values())}")
-        print(f"\nNext: /import {out}")
+
+        # Print clinical sections so the LLM persona can synthesize findings
+        _CLINICAL_TOOLS = [
+            ("get_conditions", "Conditions"),
+            ("get_medications", "Medications"),
+            ("get_lab_results", "Lab Results"),
+            ("get_vital_signs", "Vital Signs"),
+            ("get_allergies", "Allergies"),
+            ("get_immunizations", "Immunizations"),
+            ("get_procedures", "Procedures"),
+            ("get_encounters", "Recent Encounters"),
+        ]
+        has_clinical = any(t in records for t, _ in _CLINICAL_TOOLS)
+        if has_clinical:
+            print("\n=== Clinical Snapshot (redacted) ===")
+            for tool_name, label in _CLINICAL_TOOLS:
+                if tool_name not in records:
+                    continue
+                content = records[tool_name]
+                text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+                print(f"\n[{label}]")
+                print(text[:1200] + (" [truncated]" if len(text) > 1200 else ""))
+            print("\n=== End Clinical Snapshot ===")
+            print("Analyze the above for: unmonitored chronic conditions, stale medications, gaps in follow-up, and flag any Curatr-worthy findings.")
     except Exception as exc:
         print(f"  (couldn't summarize: {exc})")
     return 0
@@ -848,12 +1040,19 @@ _COMMANDS = {
     "summary":       cmd_summary,
     "fhir":          cmd_fhir,
     # Data pipeline
+    "connect":       cmd_connect,
     "export":        cmd_export,
     "import":        cmd_import,
     "import-help":   cmd_import_help,
     # Health Bank One
     "hbo-connect":   cmd_hbo_connect,
     "hbo-pull":      cmd_hbo_pull,
+    # MEDENT (PCP EHR)
+    "medent-connect": cmd_medent_connect,
+    "medent-pull":    cmd_medent_pull,
+    # SmartHealthConnect bridge (Flexpa + Health Skillz / Epic)
+    "flexpa-connect":  cmd_flexpa_connect,
+    "epic-connect":    cmd_epic_connect,
 }
 
 

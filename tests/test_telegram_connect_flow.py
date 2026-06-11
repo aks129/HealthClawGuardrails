@@ -118,8 +118,9 @@ class TestConnectPage:
         resp = client.get('/connect/ev-personal')
         assert resp.status_code == 200
         html = resp.get_data(as_text=True)
-        assert 'public-id="public_test_XYZ"' in html
-        assert 'tefca-mode="true"' in html
+        # key and tefca flag appear as iframe URL query params
+        assert 'public-id=public_test_XYZ' in html
+        assert 'tefca-mode=true' in html
         assert 'ev-personal' in html
 
     def test_omits_tefca_attribute_when_disabled(self, client, monkeypatch):
@@ -128,8 +129,8 @@ class TestConnectPage:
         resp = client.get('/connect/ev-personal')
         assert resp.status_code == 200
         html = resp.get_data(as_text=True)
-        assert 'tefca-mode="true"' not in html
-        assert 'public-id="public_test_XYZ"' in html
+        assert 'tefca-mode=true' not in html
+        assert 'public-id=public_test_XYZ' in html
 
     def test_shows_warning_when_key_missing(self, client, monkeypatch):
         monkeypatch.delenv('FASTEN_PUBLIC_KEY', raising=False)
