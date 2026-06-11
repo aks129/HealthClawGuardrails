@@ -375,6 +375,24 @@ def cmd_authorize(args: argparse.Namespace) -> int:
 
     expires_in = int(body.get("expires_in", 900))
     patient_mrn = body.get("patient", "")
+
+    # MEDENT quirk: token exchange response omits `patient` claim even though
+    # the token IS bound to a patient. Resolve via introspect endpoint.
+    if not patient_mrn:
+        try:
+            import httpx as _httpx
+            intr = _httpx.post(
+                f"{_MEDENT_BASE}/introspection/?medent_practice_id={practice_id}",
+                data={"token": body["access_token"]},
+                headers={"Accept": "application/json"},
+                auth=(client_id, ""),
+                timeout=10,
+            )
+            if intr.status_code == 200:
+                patient_mrn = intr.json().get("patient", "")
+        except Exception:
+            pass
+
     cached = {
         "access_token": body["access_token"],
         "refresh_token": body.get("refresh_token"),
@@ -393,7 +411,7 @@ def cmd_authorize(args: argparse.Namespace) -> int:
     print(f"  access_token: ...{cached['access_token'][-8:]}")
     print(f"  expires:      {expiry.isoformat(timespec='seconds')}")
     print(f"  refresh_token: {'yes' if cached.get('refresh_token') else 'no'}")
-    print(f"  patient_mrn:  {patient_mrn or '(not returned)'}")
+    print(f"  patient_mrn:  {patient_mrn or '(not returned — introspect also empty)'}")
     print(f"  practice_id:  {practice_id}")
     print()
     print("next step:")

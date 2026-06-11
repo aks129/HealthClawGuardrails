@@ -236,7 +236,8 @@ def main() -> int:
                     for entry in entries:
                         redacted_entry, stats = redact(entry)
                         cleaned.append(redacted_entry)
-                        for k, v in stats.items():
+                        import dataclasses as _dc
+                        for k, v in _dc.asdict(stats).items():
                             redaction_stats[k] = redaction_stats.get(k, 0) + v
                     redacted_records[rtype] = cleaned
                 records = redacted_records
