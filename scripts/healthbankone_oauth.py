@@ -280,7 +280,7 @@ def cmd_register(args: argparse.Namespace) -> int:
     payload = {
         "client_name": args.client_name,
         "redirect_uris": [
-            os.environ.get("HBO_REDIRECT_URI", DEFAULT_REDIRECT_URI).strip()
+            os.environ.get("HBO_REDIRECT_URI", BROKER_REDIRECT_URI).strip()
         ],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
