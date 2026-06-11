@@ -3,8 +3,6 @@
 {% block title %}Connect your records · HealthClaw{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="https://cdn.fastenhealth.com/stitch/bundle.css">
-<script src="https://cdn.fastenhealth.com/stitch/bundle.js"></script>
 <style>
   .connect-shell {
     max-width: 760px;
@@ -108,6 +106,59 @@
     font-size: 13px;
     line-height: 1.55;
   }
+  .connect-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--cyan);
+    color: #0d1117;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 11px 24px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .connect-btn:hover { opacity: 0.88; }
+  .fasten-modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  .fasten-modal-backdrop.open { display: flex; }
+  .fasten-modal {
+    background: #161b22;
+    border-radius: 14px;
+    border: 1px solid rgba(34,211,238,0.2);
+    width: min(680px, 96vw);
+    height: min(640px, 90vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .fasten-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    background: none;
+    border: none;
+    color: var(--gray-dim);
+    font-size: 22px;
+    cursor: pointer;
+    z-index: 10;
+    line-height: 1;
+  }
+  .fasten-modal iframe {
+    flex: 1;
+    width: 100%;
+    border: none;
+  }
 </style>
 {% endblock %}
 
@@ -131,28 +182,29 @@
     <p>Click the button below. A modal will open with the CLEAR / ID.me flow.</p>
 
     {% if fasten_public_key %}
-      {% if tefca_mode %}
-        <fasten-stitch-element
-          id="stitch-widget"
-          public-id="{{ fasten_public_key }}"
-          tefca-mode="true"></fasten-stitch-element>
-      {% else %}
-        <fasten-stitch-element
-          id="stitch-widget"
-          public-id="{{ fasten_public_key }}"></fasten-stitch-element>
-      {% endif %}
+      <button type="button" class="connect-btn" id="open-stitch">Share Records</button>
     {% else %}
       <div class="config-warn">
         <strong>FASTEN_PUBLIC_KEY is not set on this deployment.</strong><br>
-        Set it on the Railway service so the Stitch widget can render. Without
-        a public key the widget is a no-op. See the
-        <a href="{{ url_for('wiki') }}#fasten" style="color:var(--amber);text-decoration:underline">wiki</a>
-        for the portal setup.
+        Set it on the Railway service so the Stitch widget can render.
       </div>
     {% endif %}
 
     <div id="stitch-status" class="stitch-status"></div>
   </div>
+
+{% if fasten_public_key %}
+<div class="fasten-modal-backdrop" id="stitch-backdrop">
+  <div class="fasten-modal">
+    <button type="button" class="fasten-modal-close" id="close-stitch" title="Close">&times;</button>
+    <iframe
+      id="stitch-iframe"
+      src="https://embed.connect.fastenhealth.com/?publicId={{ fasten_public_key }}{% if tefca_mode %}&tefcaMode=true{% endif %}&externalId={{ tenant_id }}"
+      allow="camera; microphone; clipboard-write"
+    ></iframe>
+  </div>
+</div>
+{% endif %}
 
   <div class="stitch-card">
     <h3>Step 2 — Records flow in the background</h3>
@@ -176,9 +228,11 @@
 
 <script>
 (function () {
-  var widget = document.getElementById('stitch-widget');
+  var backdrop = document.getElementById('stitch-backdrop');
+  var openBtn  = document.getElementById('open-stitch');
+  var closeBtn = document.getElementById('close-stitch');
   var statusEl = document.getElementById('stitch-status');
-  if (!widget) return;
+  if (!openBtn || !backdrop) return;
 
   function showStatus(message, kind) {
     statusEl.textContent = message;
@@ -186,44 +240,52 @@
     statusEl.style.display = 'block';
   }
 
-  widget.addEventListener('widget.complete', async function (event) {
-    var detail = (event && event.detail) || {};
-    showStatus('Identity verified. Registering connection…', '');
-    try {
-      var resp = await fetch('/fasten/connections', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Tenant-Id': {{ tenant_id | tojson }}
-        },
-        body: JSON.stringify({
-          org_connection_id: detail.org_connection_id || null,
-          endpoint_id: detail.endpoint_id || null,
-          tefca_directory_id: detail.tefca_directory_id || null,
-          platform_type: detail.platform_type || null,
-          brand_id: detail.brand_id || null,
-          portal_id: detail.portal_id || null
-        })
-      });
-      if (resp.ok) {
-        showStatus(
-          'Connection registered. Records will stream in over the next 5–45 minutes. '
-          + "I'll DM you on Telegram when they land.",
-          'success'
-        );
-      } else {
-        showStatus('Connection registration failed (HTTP ' + resp.status + '). '
-          + 'You can still receive records — but Telegram notifications will not fire.',
-          'error');
-      }
-    } catch (err) {
-      showStatus('Network error during connection registration: ' + err.message, 'error');
-    }
+  openBtn.addEventListener('click', function () {
+    backdrop.classList.add('open');
   });
 
-  widget.addEventListener('widget.error', function (event) {
-    var detail = (event && event.detail) || {};
-    showStatus('Widget error: ' + (detail.message || 'unknown'), 'error');
+  closeBtn.addEventListener('click', function () {
+    backdrop.classList.remove('open');
+  });
+
+  backdrop.addEventListener('click', function (e) {
+    if (e.target === backdrop) backdrop.classList.remove('open');
+  });
+
+  window.addEventListener('message', async function (event) {
+    if (!event.origin.includes('fastenhealth.com')) return;
+    var data = event.data || {};
+    var type = data.type || data.event || '';
+
+    if (type === 'widget.complete' || type === 'complete') {
+      backdrop.classList.remove('open');
+      showStatus('Identity verified. Registering connection…', '');
+      try {
+        var resp = await fetch('/fasten/connections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': {{ tenant_id | tojson }} },
+          body: JSON.stringify({
+            org_connection_id: data.org_connection_id || null,
+            endpoint_id: data.endpoint_id || null,
+            tefca_directory_id: data.tefca_directory_id || null,
+            platform_type: data.platform_type || null,
+            brand_id: data.brand_id || null,
+            portal_id: data.portal_id || null
+          })
+        });
+        showStatus(
+          resp.ok
+            ? 'Connection registered. Records will stream in over the next 5–45 minutes. Check Telegram for a ping when they land.'
+            : 'Connection registration failed (HTTP ' + resp.status + ').',
+          resp.ok ? 'success' : 'error'
+        );
+      } catch (err) {
+        showStatus('Network error: ' + err.message, 'error');
+      }
+    } else if (type === 'widget.error' || type === 'error') {
+      backdrop.classList.remove('open');
+      showStatus('Widget error: ' + (data.message || 'unknown'), 'error');
+    }
   });
 })();
 </script>
