@@ -196,7 +196,6 @@
     {% endif %}
 
     <div id="stitch-status" class="stitch-status"></div>
-    <div id="stitch-debug" style="display:none;margin-top:12px;padding:8px;background:#111;color:#0f0;border-radius:4px;max-height:160px;overflow-y:auto"></div>
   </div>
 
 {% if fasten_public_key %}
@@ -284,23 +283,9 @@
     }
   }
 
-  // Debug panel — shows all received postMessages so we can identify the real event type
-  var debugEl = document.getElementById('stitch-debug');
-  function _logDebug(origin, data) {
-    if (!debugEl) return;
-    var line = document.createElement('div');
-    line.style.cssText = 'font-size:11px;font-family:monospace;padding:2px 0;border-bottom:1px solid #333';
-    line.textContent = new Date().toISOString().substr(11,8) + ' ' + origin + ' → ' + JSON.stringify(data).substr(0,200);
-    debugEl.appendChild(line);
-    debugEl.style.display = 'block';
-  }
-
   window.addEventListener('message', async function (event) {
     var data = event.data || {};
     var type = data.type || data.event || data.action || '';
-
-    // Log everything — helps diagnose which event type TEFCA mode actually sends
-    if (type) _logDebug(event.origin, {type: type, keys: Object.keys(data)});
 
     // Accept messages from any fastenhealth.com subdomain (embed, app, etc.)
     if (!event.origin.includes('fastenhealth.com')) return;

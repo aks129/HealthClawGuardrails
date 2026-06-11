@@ -173,12 +173,18 @@ def _handle_revoked(payload: dict) -> None:
 
 def _handle_connection_success(payload: dict) -> None:
     """
-    Handle patient.connection_success (optional event, disabled by default).
-    Auto-registers the connection if tenant_id is present in the payload.
+    Handle patient.connection_success (optional event, must be enabled in Fasten portal).
+    external_id is the value passed as &external-id= in the Stitch widget URL (our tenant_id).
     """
     org_connection_id = payload.get('org_connection_id', '')
-    tenant_id = payload.get('tenant_id', '')  # custom field — may not be present
+    # Fasten echoes back the external-id widget param as external_id — that's our tenant_id
+    tenant_id = payload.get('external_id', '') or payload.get('tenant_id', '')
     if not org_connection_id or not tenant_id:
+        logger.warning(
+            'Fasten connection_success: missing org_connection_id or external_id — '
+            'enable patient.connection_success in the Fasten developer portal and '
+            'pass external-id=<tenant> in the widget URL'
+        )
         return
 
     if FastenConnection.query.filter_by(org_connection_id=org_connection_id).first():
