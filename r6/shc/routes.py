@@ -138,6 +138,61 @@ def medent_poll_code():
     return jsonify({'code': entry['code'], 'state': state}), 200
 
 
+# ── Health Bank One OAuth callback broker ─────────────────────────────────────
+# Same pattern as MEDENT broker above — Railway captures the code so any
+# browser (phone, laptop, VPS) can complete the flow without localhost:8742.
+#   1. Script builds auth URL with redirect_uri=https://app.healthclaw.io/shc/hbo/callback
+#   2. User opens URL, approves in HBO app
+#   3. Browser redirects here — code stored keyed by state
+#   4. Script polls GET /shc/hbo/code?state=<state> to pick up the code
+#   5. Script exchanges code for tokens locally
+
+@shc_blueprint.route('/hbo/callback', methods=['GET'])
+def hbo_callback():
+    """OAuth callback broker — captures HBO authorization code."""
+    code = request.args.get('code', '')
+    state = request.args.get('state', '')
+    error = request.args.get('error', '')
+
+    if error:
+        logger.warning('HBO callback error: %s', error)
+        return f"""
+        <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
+        <h2 style="color:#f87171">Authorization error: {error}</h2>
+        <p>You can close this tab.</p>
+        </body></html>
+        """, 400
+
+    if not code or not state:
+        return 'Missing code or state', 400
+
+    _pending_codes[f'hbo:{state}'] = {
+        'code': code,
+        'received_at': datetime.now(timezone.utc).isoformat(),
+    }
+    logger.info('HBO callback: stored code for state=%s...', state[:8])
+
+    return """
+    <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
+    <h2 style="color:#34d399">Health Bank One connected!</h2>
+    <p>You can close this tab and return to Telegram.<br>
+    Your records will start pulling in a moment.</p>
+    </body></html>
+    """, 200
+
+
+@shc_blueprint.route('/hbo/code', methods=['GET'])
+def hbo_poll_code():
+    """Script polls this to pick up the HBO authorization code after browser redirect."""
+    state = request.args.get('state', '')
+    if not state:
+        return jsonify({'error': 'state required'}), 400
+    entry = _pending_codes.pop(f'hbo:{state}', None)
+    if not entry:
+        return jsonify({'pending': True}), 202
+    return jsonify({'code': entry['code'], 'state': state}), 200
+
+
 @shc_blueprint.route('/ingest', methods=['POST'])
 def ingest():
     """Accept a FHIR R4 transaction Bundle from SmartHealthConnect."""

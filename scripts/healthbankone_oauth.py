@@ -19,7 +19,7 @@ PKCE S256 required. Multi-patient access requires Dynamic Client Registration
 
 Subcommands:
 
-  authorize   -- open browser → wait for callback → exchange code → cache tokens
+  authorize   -- print auth URL → wait for Railway broker callback → exchange code → cache tokens
   status      -- show cached token state and expiry
   revoke      -- call HBO revoke endpoint and delete cached tokens
   refresh     -- force a token refresh using the cached refresh_token
@@ -33,7 +33,8 @@ Environment variables (defaults point at the live HBO endpoints):
   HBO_TOKEN_ENDPOINT          Default: https://oauth.app.healthbankone.com/token
   HBO_REVOCATION_ENDPOINT     Default: https://oauth.app.healthbankone.com/revoke
   HBO_REGISTRATION_ENDPOINT   Default: https://oauth.app.healthbankone.com/register
-  HBO_REDIRECT_URI            Default: http://localhost:8742/hbo/callback
+  HBO_REDIRECT_URI            Default: https://app.healthclaw.io/shc/hbo/callback (Railway broker)
+                              Set to http://localhost:8742/hbo/callback for local-only use
   HBO_SCOPES                  Space-separated; default: openid offline_access
   HBO_TOKEN_CACHE             Path to token JSON; default: ~/.healthclaw/hbo_tokens.json
 
@@ -65,8 +66,10 @@ TOKEN_CACHE = Path(os.environ.get(
     "HBO_TOKEN_CACHE", str(Path.home() / ".healthclaw" / "hbo_tokens.json")))
 
 DEFAULT_REDIRECT_URI = "http://localhost:8742/hbo/callback"
+BROKER_REDIRECT_URI = "https://app.healthclaw.io/shc/hbo/callback"
+BROKER_POLL_URL = "https://app.healthclaw.io/shc/hbo/code"
 DEFAULT_SCOPES = "openid offline_access"
-CALLBACK_TIMEOUT = 120  # seconds to wait for browser callback
+CALLBACK_TIMEOUT = 300  # seconds to wait for browser callback
 
 
 # ── PKCE helpers ───────────────────────────────────────────────────────────────
@@ -200,6 +203,9 @@ def _exchange_code(code: str, code_verifier: str, redirect_uri: str,
         "token_type": body.get("token_type", "Bearer"),
         "tenant_id": tenant_id,
         "obtained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # Store endpoints so refresh works without env vars
+        "token_endpoint": token_endpoint,
+        "client_id": client_id,
     }
     _save_cached(cached)
     return cached
@@ -305,23 +311,43 @@ def cmd_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def _poll_broker(state: str, timeout: int) -> str | None:
+    """Poll the Railway callback broker until the code arrives or timeout."""
+    import time
+    import urllib.request
+    deadline = time.monotonic() + timeout
+    interval = 3
+    while time.monotonic() < deadline:
+        try:
+            url = f"{BROKER_POLL_URL}?state={urllib.parse.quote(state)}"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                body = json.loads(resp.read())
+                if body.get("code"):
+                    return body["code"]
+        except Exception:
+            pass
+        print(".", end="", flush=True)
+        time.sleep(interval)
+    print()
+    return None
+
+
 def cmd_authorize(args: argparse.Namespace) -> int:
     auth_endpoint = os.environ.get(
         "HBO_AUTHORIZATION_ENDPOINT", _HBO_AUTH_ENDPOINT).strip()
-    # HBO Bootstrap is a public client — client_id not required for self-access
     client_id = os.environ.get("HBO_CLIENT_ID", "").strip()
 
-    redirect_uri = os.environ.get("HBO_REDIRECT_URI", DEFAULT_REDIRECT_URI).strip()
+    # Default to Railway broker so any browser works (phone, laptop, VPS).
+    # Set HBO_REDIRECT_URI=http://localhost:8742/hbo/callback to use local flow.
+    redirect_uri = os.environ.get("HBO_REDIRECT_URI", BROKER_REDIRECT_URI).strip()
+    use_broker = redirect_uri == BROKER_REDIRECT_URI
+
     scopes = os.environ.get("HBO_SCOPES", DEFAULT_SCOPES).strip()
     if args.scopes:
         scopes = args.scopes
 
     code_verifier, code_challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
-
-    # Parse the redirect URI to get the callback port
-    parsed = urllib.parse.urlparse(redirect_uri)
-    port = parsed.port or 80
 
     params: dict[str, str] = {
         "response_type": "code",
@@ -335,21 +361,28 @@ def cmd_authorize(args: argparse.Namespace) -> int:
         params["client_id"] = client_id
     auth_url = f"{auth_endpoint}?{urllib.parse.urlencode(params)}"
 
-    print(f"Opening authorization URL in browser:")
-    print(f"  {auth_url}")
-    print(f"\nWaiting for callback on {redirect_uri} ...")
-    print(f"(timeout: {CALLBACK_TIMEOUT}s)\n")
+    print("Open this URL in any browser (phone, laptop, or desktop) to connect Health Bank One:")
+    print(f"\n  {auth_url}\n")
+    print("After approving in the HBO app, your browser will redirect to HealthClaw.")
+    print(f"(polling for callback, timeout: {CALLBACK_TIMEOUT}s)\n")
 
-    if not args.no_browser:
+    if not use_broker and not args.no_browser:
         webbrowser.open(auth_url)
 
-    try:
-        callback = _wait_for_callback(port, CALLBACK_TIMEOUT)
-    except TimeoutError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        print("  Copy the authorization URL above and open it manually if needed.",
-              file=sys.stderr)
-        return 1
+    if use_broker:
+        code = _poll_broker(state, CALLBACK_TIMEOUT)
+        if code is None:
+            print("error: timed out waiting for authorization callback", file=sys.stderr)
+            return 1
+        callback = {"code": code, "state": state}
+    else:
+        parsed = urllib.parse.urlparse(redirect_uri)
+        port = parsed.port or 80
+        try:
+            callback = _wait_for_callback(port, CALLBACK_TIMEOUT)
+        except TimeoutError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     if "error" in callback:
         print(f"error: {callback['error']}: {callback.get('error_description', '')}",

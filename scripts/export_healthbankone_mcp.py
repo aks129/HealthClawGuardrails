@@ -76,18 +76,30 @@ def _resolve_token() -> str | None:
 
 
 def _try_refresh(cached: dict) -> str | None:
-    """Refresh via HBO_TOKEN_ENDPOINT using the cached refresh_token."""
+    """Refresh via HBO token endpoint using the cached refresh_token.
+
+    client_id is optional — HBO Bootstrap is a public client (no client_id).
+    Falls back to cached token_endpoint so no env vars are required.
+    """
     refresh_token = cached.get("refresh_token")
-    token_endpoint = os.environ.get("HBO_TOKEN_ENDPOINT", "").strip()
-    client_id = os.environ.get("HBO_CLIENT_ID", "").strip()
-    if not (refresh_token and token_endpoint and client_id):
+    if not refresh_token:
         return None
+    token_endpoint = (
+        os.environ.get("HBO_TOKEN_ENDPOINT", "").strip()
+        or cached.get("token_endpoint", "").strip()
+        or "https://oauth.app.healthbankone.com/token"
+    )
+    client_id = (
+        os.environ.get("HBO_CLIENT_ID", "").strip()
+        or cached.get("client_id", "").strip()
+    )
     import httpx
-    data = {
+    data: dict = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": client_id,
     }
+    if client_id:
+        data["client_id"] = client_id
     secret = os.environ.get("HBO_CLIENT_SECRET", "").strip()
     if secret:
         data["client_secret"] = secret
