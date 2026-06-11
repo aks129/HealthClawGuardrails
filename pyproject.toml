@@ -15,16 +15,16 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "pyyaml>=6.0",
     "redis>=4.6.0",
-    "requests>=2.32.3",
+    "requests>=2.33.0",
 ]
 
 [project.optional-dependencies]
 test = [
-    "pytest>=7.4.0",
+    "pytest>=9.0.3",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "reportlab>=4.0",
 ]
