@@ -29,9 +29,10 @@ import logging
 import os
 
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -305,27 +306,83 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Reply with the lean Fasten TEFCA verification URL for TENANT_ID.
-
-    The page itself handles the Stitch widget + the /fasten/connections
-    callback; once verification finishes, Fasten pushes records to
-    /fasten/webhook, the ingester runs, and r6.telegram_push.notify_tenant
-    DMs this chat (because /start already bound chat ↔ tenant).
-    """
+    """Show a menu of available health data connection options."""
     agent_id = await _log_incoming(update, 'connect')
 
-    connect_url = f'{DASHBOARD_BASE_URL}/connect/{TENANT_ID}'
+    keyboard = [
+        [InlineKeyboardButton(
+            'Fasten TEFCA — hospitals, labs, EHRs (nationwide)',
+            callback_data='connect:fasten',
+        )],
+        [InlineKeyboardButton(
+            'Health Bank One — verified records + insurance',
+            callback_data='connect:hbo',
+        )],
+        [InlineKeyboardButton(
+            'Flexpa — 200+ payers/insurers (CMS-9115)',
+            callback_data='connect:flexpa',
+        )],
+        [InlineKeyboardButton(
+            'Epic / patient portals (Health Skillz)',
+            callback_data='connect:epic',
+        )],
+        [InlineKeyboardButton(
+            'MEDENT — small-practice EHR (SMART on FHIR)',
+            callback_data='connect:medent',
+        )],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     text = (
-        '🔗 *Connect your health records*\n\n'
-        f'Open this once and verify with **CLEAR** or **ID.me** (TEFCA mode).\n'
-        'Records start streaming from every QHIN that holds them — '
-        'usually 5–45 minutes depending on the network.\n\n'
-        f'{connect_url}\n\n'
-        f'_Tenant_ `{TENANT_ID}`\n'
-        '_I\'ll DM you when your records land. Type /summary or /curatr after the ping._'
+        '*Connect your health records*\n\n'
+        'Choose a source to connect. You can connect multiple — '
+        'all records flow into the same tenant and are deduplicated.'
     )
-    await _reply(update, text, agent_id, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def _connect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button presses from /connect menu."""
+    query = update.callback_query
+    await query.answer()
+    choice = query.data  # e.g. 'connect:fasten'
+
+    connect_url = f'{DASHBOARD_BASE_URL}/connect/{TENANT_ID}'
+
+    if choice == 'connect:fasten':
+        text = (
+            '*Fasten TEFCA*\n\n'
+            'Verify once with CLEAR or ID.me — records stream from every QHIN '
+            '(hospitals, labs, EHRs). Usually 5–45 min.\n\n'
+            f'{connect_url}'
+        )
+    elif choice == 'connect:hbo':
+        text = (
+            '*Health Bank One*\n\n'
+            'Identity-verified records + insurance context.\n\n'
+            'Run /hbo\\_connect to start the OAuth flow.'
+        )
+    elif choice == 'connect:flexpa':
+        text = (
+            '*Flexpa — 200+ payers*\n\n'
+            'Connects claims, EOBs, coverage from major US insurers (CMS-9115).\n\n'
+            'Run /flexpa\\_connect to get the authorization link.'
+        )
+    elif choice == 'connect:epic':
+        text = (
+            '*Epic / patient portals*\n\n'
+            'Connects MyChart and most major patient portals via Health Skillz.\n\n'
+            'Run /epic\\_connect to get the authorization link.'
+        )
+    elif choice == 'connect:medent':
+        text = (
+            '*MEDENT*\n\n'
+            'Small-practice EHR with SMART on FHIR (v23.5+).\n\n'
+            'Run /medent\\_connect to authorize via your patient portal.'
+        )
+    else:
+        text = 'Unknown option.'
+
+    await query.edit_message_text(text, parse_mode='Markdown')
 
 
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -679,6 +736,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler('start', cmd_start))
     app.add_handler(CommandHandler('connect', cmd_connect))
+    app.add_handler(CallbackQueryHandler(_connect_callback, pattern='^connect:'))
     app.add_handler(CommandHandler('health', cmd_health))
     app.add_handler(CommandHandler('conditions', cmd_conditions))
     app.add_handler(CommandHandler('labs', cmd_labs))

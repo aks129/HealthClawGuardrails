@@ -279,14 +279,24 @@ def cmd_week(args) -> int:
 
 
 def cmd_connect(args) -> int:
-    """Print the Fasten TEFCA connect URL for this tenant."""
+    """Show all available health data connection options."""
     tenant = args.tenant or _tenant_default()
     base = _dashboard_base()
-    url = f"{base}/connect/{tenant}"
-    print(f"Open this link to connect your health records via TEFCA:")
-    print(url)
-    print("The Stitch widget will let you authorize one or more EHR / payer connections.")
-    print("Records arrive automatically once you complete the flow.")
+    fasten_url = f"{base}/connect/{tenant}"
+
+    print("Connect your health records — available sources:\n")
+    print(f"  1. Fasten TEFCA (hospitals, labs, EHRs — nationwide)")
+    print(f"     {fasten_url}")
+    print(f"     Verify once with CLEAR / ID.me — records stream from all QHINs.\n")
+    print(f"  2. Health Bank One (verified records + insurance)")
+    print(f"     Run: /hbo-connect\n")
+    print(f"  3. Flexpa (200+ payers/insurers, CMS-9115)")
+    print(f"     Run: /flexpa-connect\n")
+    print(f"  4. Epic / patient portals (Health Skillz)")
+    print(f"     Run: /epic-connect\n")
+    print(f"  5. MEDENT (small-practice EHR, SMART on FHIR)")
+    print(f"     Run: /medent-connect\n")
+    print("All sources feed into the same tenant — records are deduplicated.")
     return 0
 
 
