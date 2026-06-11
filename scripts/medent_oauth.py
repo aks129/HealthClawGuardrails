@@ -7,12 +7,12 @@ drives the complete authorization dance and caches tokens for
 export_medent_fhir.py to reuse.
 
 MEDENT endpoints (v23.5+):
-  Dynamic Registration: https://www.medentfhir.com/fhir/R4/dynamicregistration/
-  Practice list:        https://www.medentfhir.com/fhir/resources/practices.php
-  Authorization:        https://www.medentfhir.com/fhir/R4/{PRACTICE_ID}/authorize
-  Token (initial):      https://www.medentfhir.com/fhir/R4/token/index.php?medent_practice_id={PRACTICE_ID}
-  Token (refresh):      https://www.medentfhir.com/fhir/R4/{PRACTICE_ID}/token
-  FHIR base:            https://www.medentfhir.com/fhir/R4/{PRACTICE_ID}/
+  Dynamic Registration: https://fhir.medent.com/fhir/R4/dynamicregistration/
+  Practice list:        https://fhir.medent.com/fhir/resources/practices.php
+  Authorization:        https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/authorize
+  Token (initial):      https://fhir.medent.com/fhir/R4/token/index.php?medent_practice_id={PRACTICE_ID}
+  Token (refresh):      https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/token
+  FHIR base:            https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/
 
 Auth flow:
   1. register  — DCR once to get client_id; saves to ~/.healthclaw/medent_client.json
@@ -63,9 +63,9 @@ import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
-_MEDENT_BASE = "https://www.medentfhir.com/fhir/R4"
+_MEDENT_BASE = "https://fhir.medent.com/fhir/R4"
 _DCR_URL = f"{_MEDENT_BASE}/dynamicregistration/"
-_PRACTICES_URL = "https://www.medentfhir.com/fhir/resources/practices.php"
+_PRACTICES_URL = "https://fhir.medent.com/fhir/resources/practices.php"
 _DEFAULT_SCOPES = "patient/*.read openid profile offline_access"
 # MEDENT validates redirect_uris are publicly reachable — use Railway broker.
 # The broker stores the code at /shc/medent/callback; we poll /shc/medent/code.
@@ -177,19 +177,14 @@ def _wait_for_callback(port: int, timeout: int) -> dict:
 
 def _post(url: str, **kwargs) -> dict:
     import httpx
-    # MEDENT serves medentfhir.com with a *.medent.com wildcard cert — hostname
-    # mismatch is a known infrastructure quirk on their side; verified IP is
-    # 65.114.41.77 (Community Computer Service, Inc.), same org as medent.com.
-    verify = "medentfhir.com" not in url
-    resp = httpx.post(url, timeout=30, verify=verify, **kwargs)
+    resp = httpx.post(url, timeout=30, **kwargs)
     resp.raise_for_status()
     return resp.json()
 
 
 def _get(url: str, **kwargs) -> dict:
     import httpx
-    verify = "medentfhir.com" not in url
-    resp = httpx.get(url, timeout=30, verify=verify, **kwargs)
+    resp = httpx.get(url, timeout=30, **kwargs)
     resp.raise_for_status()
     return resp.json()
 

@@ -25,7 +25,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-_MEDENT_FHIR_BASE = "https://www.medentfhir.com/fhir/R4"
+_MEDENT_FHIR_BASE = "https://fhir.medent.com/fhir/R4"
 
 # US Core STU3 resource types MEDENT supports
 _RESOURCE_TYPES = [
