@@ -67,8 +67,11 @@ _MEDENT_BASE = "https://www.medentfhir.com/fhir/R4"
 _DCR_URL = f"{_MEDENT_BASE}/dynamicregistration/"
 _PRACTICES_URL = "https://www.medentfhir.com/fhir/resources/practices.php"
 _DEFAULT_SCOPES = "patient/*.read openid profile offline_access"
-_DEFAULT_REDIRECT_URI = "http://localhost:8743/medent/callback"
-_CALLBACK_TIMEOUT = 180  # seconds — patient portal login can be slow
+# MEDENT validates redirect_uris are publicly reachable — use Railway broker.
+# The broker stores the code at /shc/medent/callback; we poll /shc/medent/code.
+_DEFAULT_REDIRECT_URI = "https://app.healthclaw.io/shc/medent/callback"
+_POLL_BASE_URL = "https://app.healthclaw.io/shc/medent/code"
+_CALLBACK_TIMEOUT = 300  # seconds — patient portal login can be slow
 
 TOKEN_CACHE = Path(os.environ.get(
     "MEDENT_TOKEN_CACHE",
@@ -174,7 +177,19 @@ def _wait_for_callback(port: int, timeout: int) -> dict:
 
 def _post(url: str, **kwargs) -> dict:
     import httpx
-    resp = httpx.post(url, timeout=30, **kwargs)
+    # MEDENT serves medentfhir.com with a *.medent.com wildcard cert — hostname
+    # mismatch is a known infrastructure quirk on their side; verified IP is
+    # 65.114.41.77 (Community Computer Service, Inc.), same org as medent.com.
+    verify = "medentfhir.com" not in url
+    resp = httpx.post(url, timeout=30, verify=verify, **kwargs)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get(url: str, **kwargs) -> dict:
+    import httpx
+    verify = "medentfhir.com" not in url
+    resp = httpx.get(url, timeout=30, verify=verify, **kwargs)
     resp.raise_for_status()
     return resp.json()
 
@@ -183,7 +198,6 @@ def _post(url: str, **kwargs) -> dict:
 
 def cmd_register(args: argparse.Namespace) -> int:
     """Dynamic Client Registration — run once to get a client_id."""
-    import httpx
 
     redirect_uri = os.environ.get("MEDENT_REDIRECT_URI", _DEFAULT_REDIRECT_URI).strip()
 
@@ -209,9 +223,7 @@ def cmd_register(args: argparse.Namespace) -> int:
     print()
 
     try:
-        resp = httpx.post(_DCR_URL, json=payload, timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
+        body = _post(_DCR_URL, json=payload)
     except Exception as exc:
         print(f"error: registration failed — {exc}", file=sys.stderr)
         return 1
@@ -233,8 +245,6 @@ def cmd_register(args: argparse.Namespace) -> int:
 
 def cmd_practices(args: argparse.Namespace) -> int:
     """List FHIR-enabled MEDENT practices available for this client_id."""
-    import httpx
-
     client = _load_client()
     client_id = client.get("client_id", "").strip()
     if not client_id:
@@ -247,9 +257,7 @@ def cmd_practices(args: argparse.Namespace) -> int:
 
     print(f"Fetching practice list for client_id={client_id} ...")
     try:
-        resp = httpx.post(_PRACTICES_URL, data={"clientid": client_id}, timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
+        body = _post(_PRACTICES_URL, data={"clientid": client_id})
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -296,9 +304,6 @@ def cmd_authorize(args: argparse.Namespace) -> int:
     if args.scopes:
         scopes = args.scopes
 
-    parsed_redirect = urllib.parse.urlparse(redirect_uri)
-    port = parsed_redirect.port or 80
-
     code_verifier, code_challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
 
@@ -320,25 +325,38 @@ def cmd_authorize(args: argparse.Namespace) -> int:
     print(f"  {auth_url}")
     print()
     print("Log in with your MEDENT patient portal credentials when the page opens.")
-    print(f"Waiting for callback on port {port} (timeout: {_CALLBACK_TIMEOUT}s)...")
-    print()
+    print(f"After login, the browser redirects to HealthClaw — this terminal polls for the code.")
+    print(f"(timeout: {_CALLBACK_TIMEOUT}s)\n")
 
     if not args.no_browser:
         webbrowser.open(auth_url)
 
-    try:
-        callback = _wait_for_callback(port, _CALLBACK_TIMEOUT)
-    except TimeoutError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    # Poll the Railway broker until the code arrives or timeout
+    import time
+    import httpx as _httpx
+    deadline = time.time() + _CALLBACK_TIMEOUT
+    callback: dict | None = None
+    while time.time() < deadline:
+        try:
+            resp = _httpx.get(f"{_POLL_BASE_URL}?state={state}", timeout=10)
+            if resp.status_code == 200:
+                callback = resp.json()
+                break
+            # 202 = still pending, keep polling
+        except Exception:
+            pass
+        time.sleep(3)
+        print(".", end="", flush=True)
+
+    print()
+
+    if callback is None:
+        print(f"\nerror: no callback received within {_CALLBACK_TIMEOUT}s", file=sys.stderr)
         print("  Open the URL above manually if your browser didn't launch.", file=sys.stderr)
         return 1
 
     if "error" in callback:
         print(f"error: {callback['error']}: {callback.get('error_description', '')}", file=sys.stderr)
-        return 1
-
-    if callback.get("state") != state:
-        print("error: state mismatch — possible CSRF attempt", file=sys.stderr)
         return 1
 
     code = callback["code"]

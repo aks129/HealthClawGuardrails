@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__)
 
 shc_blueprint = Blueprint('shc', __name__, url_prefix='/shc')
 
+# In-memory pending code store: state -> {code, received_at}
+# Short-lived — the Mac mini polls within CALLBACK_TIMEOUT seconds.
+_pending_codes: dict = {}
+
 _CURATR_ELIGIBLE = frozenset({
     'Condition', 'AllergyIntolerance', 'MedicationRequest',
     'Immunization', 'Procedure', 'DiagnosticReport',
@@ -76,6 +80,62 @@ def _verify_secret() -> bool:
 @shc_blueprint.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'healthclaw-shc-bridge'}), 200
+
+
+# ── MEDENT OAuth callback broker ──────────────────────────────────────────────
+# MEDENT validates redirect_uris must be publicly reachable.
+# The Mac mini runs a local server but MEDENT can't reach it.
+# Solution: Railway acts as the callback broker.
+#   1. Mac mini starts authorize flow with redirect_uri=https://app.healthclaw.io/medent/callback
+#   2. After patient portal login, MEDENT redirects browser to this endpoint
+#   3. This endpoint stores code keyed by state
+#   4. Mac mini polls GET /medent/code?state=<state> to pick up the code
+#   5. Mac mini exchanges code for tokens locally
+
+@shc_blueprint.route('/medent/callback', methods=['GET'])
+def medent_callback():
+    """OAuth callback broker — captures MEDENT authorization code for Mac mini to pick up."""
+    code = request.args.get('code', '')
+    state = request.args.get('state', '')
+    error = request.args.get('error', '')
+
+    if error:
+        logger.warning('MEDENT callback error: %s', error)
+        return f"""
+        <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
+        <h2 style="color:#f87171">Authorization error: {error}</h2>
+        <p>You can close this tab.</p>
+        </body></html>
+        """, 400
+
+    if not code or not state:
+        return 'Missing code or state', 400
+
+    _pending_codes[state] = {
+        'code': code,
+        'received_at': datetime.now(timezone.utc).isoformat(),
+    }
+    logger.info('MEDENT callback: stored code for state=%s...', state[:8])
+
+    return """
+    <html><body style="font-family:sans-serif;max-width:500px;margin:60px auto;color:#d1d5db;background:#0d1117">
+    <h2 style="color:#34d399">Authorization successful!</h2>
+    <p>You can close this tab and return to Telegram.<br>
+    Your records will start pulling in a moment.</p>
+    </body></html>
+    """, 200
+
+
+@shc_blueprint.route('/medent/code', methods=['GET'])
+def medent_poll_code():
+    """Mac mini polls this to pick up the authorization code after browser redirect."""
+    state = request.args.get('state', '')
+    if not state:
+        return jsonify({'error': 'state required'}), 400
+    entry = _pending_codes.pop(state, None)
+    if not entry:
+        return jsonify({'pending': True}), 202
+    return jsonify({'code': entry['code'], 'state': state}), 200
 
 
 @shc_blueprint.route('/ingest', methods=['POST'])
