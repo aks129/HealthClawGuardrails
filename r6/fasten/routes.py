@@ -202,6 +202,33 @@ def _handle_connection_success(payload: dict) -> None:
 # Connection registry
 # ---------------------------------------------------------------------------
 
+@fasten_blueprint.route('/connections', methods=['GET'])
+def list_connections():
+    """List EHR connections for the requesting tenant (max 50, newest first)."""
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    if not tenant_id:
+        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+
+    conns = (
+        FastenConnection.query
+        .filter_by(tenant_id=tenant_id)
+        .order_by(FastenConnection.connected_at.desc())
+        .limit(50)
+        .all()
+    )
+    return jsonify({
+        'connections': [{
+            'org_connection_id': c.org_connection_id,
+            'connection_status': c.connection_status,
+            'platform_type': c.platform_type,
+            'tefca_mode': c.tefca_directory_id is not None,
+            'connected_at': c.connected_at.isoformat() if c.connected_at else None,
+            'last_export_at': c.last_export_at.isoformat() if c.last_export_at else None,
+        } for c in conns],
+        'count': len(conns),
+    }), 200
+
+
 @fasten_blueprint.route('/connections', methods=['POST'])
 def register_connection():
     """

@@ -257,36 +257,50 @@
     if (e.target === backdrop) backdrop.classList.remove('open');
   });
 
-  window.addEventListener('message', async function (event) {
-    if (!event.origin.includes('fastenhealth.com')) return;
-    var data = event.data || {};
-    var type = data.type || data.event || '';
+  async function _registerConnection(data) {
+    showStatus('Identity verified. Registering connection…', '');
+    try {
+      var resp = await fetch('/fasten/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': {{ tenant_id | tojson }} },
+        body: JSON.stringify({
+          org_connection_id: data.org_connection_id || null,
+          endpoint_id: data.endpoint_id || null,
+          tefca_directory_id: data.tefca_directory_id || null,
+          platform_type: data.platform_type || null,
+          brand_id: data.brand_id || null,
+          portal_id: data.portal_id || null
+        })
+      });
+      showStatus(
+        resp.ok
+          ? 'Connection registered. Records will stream in over the next 5–45 minutes. Check Telegram for a ping when they land.'
+          : 'Connection registration failed (HTTP ' + resp.status + ').',
+        resp.ok ? 'success' : 'error'
+      );
+    } catch (err) {
+      showStatus('Network error: ' + err.message, 'error');
+    }
+  }
 
-    if (type === 'widget.complete' || type === 'complete') {
-      backdrop.classList.remove('open');
-      showStatus('Identity verified. Registering connection…', '');
-      try {
-        var resp = await fetch('/fasten/connections', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': {{ tenant_id | tojson }} },
-          body: JSON.stringify({
-            org_connection_id: data.org_connection_id || null,
-            endpoint_id: data.endpoint_id || null,
-            tefca_directory_id: data.tefca_directory_id || null,
-            platform_type: data.platform_type || null,
-            brand_id: data.brand_id || null,
-            portal_id: data.portal_id || null
-          })
-        });
-        showStatus(
-          resp.ok
-            ? 'Connection registered. Records will stream in over the next 5–45 minutes. Check Telegram for a ping when they land.'
-            : 'Connection registration failed (HTTP ' + resp.status + ').',
-          resp.ok ? 'success' : 'error'
-        );
-      } catch (err) {
-        showStatus('Network error: ' + err.message, 'error');
+  window.addEventListener('message', async function (event) {
+    // Accept messages from any fastenhealth.com subdomain (embed, app, etc.)
+    if (!event.origin.includes('fastenhealth.com')) {
+      // Log unexpected origins in case the widget domain changes
+      if (event.data && (event.data.type || event.data.event)) {
+        console.debug('[fasten-connect] ignored message from', event.origin, event.data);
       }
+      return;
+    }
+    var data = event.data || {};
+    var type = data.type || data.event || data.action || '';
+
+    // Fasten Stitch widget completion (standard + TEFCA mode variants)
+    if (type === 'widget.complete' || type === 'complete' ||
+        type === 'tefca.complete' || type === 'connection.complete' ||
+        type === 'authorization.complete') {
+      backdrop.classList.remove('open');
+      await _registerConnection(data);
     } else if (type === 'widget.error' || type === 'error') {
       backdrop.classList.remove('open');
       showStatus('Widget error: ' + (data.message || 'unknown'), 'error');
