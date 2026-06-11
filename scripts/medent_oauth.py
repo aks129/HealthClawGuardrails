@@ -212,7 +212,7 @@ def cmd_register(args: argparse.Namespace) -> int:
         # Required for Patient Launch — must be a reachable URL (not 400)
         "initiate_login_uri": "https://healthclaw.io",
         "scope": _DEFAULT_SCOPES,
-        "response_types": ["code"],
+        "response_types": "code",   # MEDENT wants a string, not an array
         "grant_types": ["authorization_code"],
         "token_endpoint_auth_method": "none",
     }

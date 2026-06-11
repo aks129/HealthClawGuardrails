@@ -2,10 +2,33 @@
 
 The security layer between AI agents and clinical data. A [healthclaw.io](https://healthclaw.io) open source project.
 
-**v1.3.0** | 288+ tests | 16 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten Connect | Open Wearables | Claude Code plugin
+**v1.4.0** | 553 tests | 16 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT | Open Wearables | Claude Code plugin
 
 > FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
 > Nobody standardized the guardrails in between. This project does.
+
+## What's new in v1.4.0 — Multi-Connector Health Data Pipeline
+
+One Telegram bot. All your health records. Every major source, automatically.
+
+The v1.4.0 release wires **five distinct health data pipelines** into HealthClaw — each with its own auth model, transport, and data format — and exposes them as unified Telegram slash commands so you never leave the chat.
+
+| Source | Coverage | Transport | Telegram command |
+| --- | --- | --- | --- |
+| **Fasten TEFCA** | Nationwide — all QHINs (hospitals, EHRs, labs) via CLEAR/ID.me | Webhook push | `/connect` |
+| **HealthEx** | Lab + clinical aggregator | MCP Streamable HTTP pull | `/export` |
+| **Health Bank One** | Identity-verified records + insurance context | MCP Streamable HTTP pull | `/hbo-connect`, `/hbo-pull` |
+| **Flexpa** | 200+ payers/insurers (CMS-9115 mandate) | SmartHealthConnect bridge | `/flexpa-connect` |
+| **Health Skillz (Epic)** | Epic MyChart + major patient portals | SmartHealthConnect bridge | `/epic-connect` |
+| **MEDENT** | Small-practice EHR (SMART on FHIR direct) | Direct SMART on FHIR pull | `/medent-connect`, `/medent-pull` |
+
+**New infrastructure:**
+
+- **`/shc/ingest` endpoint** — SmartHealthConnect bridge receives FHIR bundles from Flexpa and Health Skillz pulls, applies the full guardrail stack, fires Telegram notification
+- **`/shc/medent/callback` broker** — MEDENT's OAuth validator requires a public HTTPS redirect URI; Railway acts as the callback broker so the Mac mini agent can still drive the flow
+- **`scripts/medent_oauth.py`** — SMART on FHIR Patient Standalone Launch (Dynamic Client Registration + PKCE + token caching + auto-refresh)
+- **`scripts/export_medent_fhir.py`** — Pulls US Core R4 resources from any MEDENT practice, redacts PHI in-process
+- **Telegram**: all 6 new commands deployed to all 7 OpenClaw personas (Sally, Mary, Dom, Kristy, Joe, Ronny, Shervin)
 
 ## What's new in v1.3.0 — Wearables
 

@@ -79,8 +79,9 @@ Client → MCP Server → Flask (guardrails) → Upstream FHIR Server
 /r6/fasten/               Fasten Connect EHR integration (routes, models, ingester, verify)
 /r6/wearables/            Wearable device sync MCP app (Apple Health / Fitbit poller + UI)
 /r6/command_center/       Command Center module (per-tenant ops dashboard)
+/r6/shc/                  SmartHealthConnect bridge (routes.py: /shc/ingest, /shc/medent/callback, /shc/medent/code, /shc/health)
 /services/agent-orchestrator/  Node.js MCP server (TypeScript)
-/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, export_healthbankone_mcp.py (HBO MCP pull + in-process redaction), healthbankone_oauth.py (HBO OAuth 2.x PKCE helper — authorize/status/refresh/revoke/register), healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_demo_tenant.py (HTTP + DB seed entry points), seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py, kristy_install.sh, build_quickstart_pdf.py
+/scripts/                 CLI utilities: import_healthex.py, export_healthex.py, export_healthex_mcp.py (MCP-SDK pull from HealthEx), export_healthex_legacy.py, export_healthbankone_mcp.py (HBO MCP pull + in-process redaction), healthbankone_oauth.py (HBO OAuth 2.x PKCE helper — authorize/status/refresh/revoke/register), medent_oauth.py (MEDENT SMART on FHIR — DCR + PKCE + token cache; subcommands: register/practices/authorize/status/refresh), export_medent_fhir.py (pulls US Core R4 resources from MEDENT, redacts PHI in-process), healthclaw_redact.py (in-process PHI redaction), bot_commands.py (OpenClaw slash-command dispatcher — includes /flexpa-connect /epic-connect /medent-connect /medent-pull), convert_fasten.py, demo_e2e.sh, smoke_test.py, seed_demo_tenant.py (HTTP + DB seed entry points), seed_openclaw_workspaces.sh, update_agent_prompts.sh, kristy_schedule_watcher.py, kristy_install.sh, build_quickstart_pdf.py
 /openclaw/                Telegram bot (bot.py + Dockerfile) — conversational interface to the stack
 /hermes/                  Hermes (Nous Research) integration — SOUL persona, MCP config, idempotent install.sh that wires HealthClaw skills into ~/.hermes/. Parallel to /openclaw/; both share the same MCP server.
 /skills/                  Skill definitions consumable by Hermes (agentskills.io standard) AND OpenClaw — getting-started, curatr, fhir-r6-guardrails, phi-redaction, fhir-upstream-proxy, fasten-connect, healthex-export, healthex-export-redacted, personal-health-records, hermes. Also surfaced at /skills (auto-indexed from frontmatter).
@@ -183,6 +184,20 @@ docker-compose --profile openclaw up -d
 | `LOG_FORMAT` | — | Set to `json` for structured logging in production |
 | `TELEGRAM_BOT_TOKEN` | — | Set on Flask so `r6.telegram_push.notify_tenant` can push post-ingest notifications directly via the Telegram Bot API (no IPC with OpenClaw). Same token OpenClaw polls with. |
 | `DASHBOARD_BASE_URL` | `https://healthclaw.io` | Public base URL OpenClaw advertises in `/connect` / `/dashboard` replies. Set to the host that serves `/connect/<tenant_id>` and the dashboard. |
+
+### SmartHealthConnect Bridge (`/shc/`)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SHC_WEBHOOK_SECRET` | — | Bearer token SmartHealthConnect sends with `POST /shc/ingest`. Must match `HEALTHCLAW_WEBHOOK_SECRET` in the SHC deployment. |
+| `SHC_BASE_URL` | — | Where SmartHealthConnect is deployed (e.g. `https://shc.yourdomain.com`). Used by Telegram `/flexpa-connect` and `/epic-connect` to build OAuth redirect links. |
+
+### MEDENT OAuth (`scripts/medent_oauth.py`)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MEDENT_CLIENT_ID` | — | Registered MEDENT client ID (DCR response). Cached in `~/.healthclaw/medent_client.json`; set as env var when running `export_medent_fhir.py` in CI. |
+| `MEDENT_PRACTICE_ID` | — | Practice ID selected after MEDENT approves your registration. Obtain via `medent_oauth.py practices`. |
 
 ### Fasten Connect
 
@@ -449,6 +464,8 @@ When `FASTEN_PUBLIC_KEY` is set, the dashboard shows a live `<fasten-stitch-elem
 | `kristy_install.sh` | Mac mini installer for the Kristy persona — drops `kristy_schedule_watcher.py` into `~/.healthclaw/` alongside its launchd plist. |
 | `seed_demo_tenant.py` | Seed the `desktop-demo` tenant. Two modes: HTTP (`POST /r6/fhir/internal/seed` against a running server, used by deploy hooks) or `--db-mode` (writes directly via SQLAlchemy, no server required). Optional `--bundle-file` accepts an export bundle. |
 | `convert_fasten.py` | Convert Fasten Health export format (`providers[].fhir.ResourceType[]`) to a FHIR transaction Bundle. De-duplicates by `(resourceType, id)` using `meta.lastUpdated`. |
+| `medent_oauth.py` | SMART on FHIR Patient Standalone Launch for MEDENT EHR. Subcommands: `register` (DCR via RFC 7591 — yields `client_id`, cached in `~/.healthclaw/medent_client.json`), `practices` (list approved practices — requires MEDENT staff approval), `authorize` (PKCE S256 flow; redirects to Railway callback broker; polls `/shc/medent/code` for the code), `status`, `refresh`. SSL: `medentfhir.com` TLS cert is `*.medent.com` wildcard — verify disabled for that host only (known infrastructure quirk). DCR requires `"response_types": "code"` (string, not array). Redirect URI must be public HTTPS — use `https://app.healthclaw.io/shc/medent/callback`. |
+| `export_medent_fhir.py` | Pull US Core R4 resources from a MEDENT practice (Patient, AllergyIntolerance, Condition, DiagnosticReport, DocumentReference, Immunization, MedicationRequest, Observation, Procedure). Auto-refreshes expired tokens. Redacts PHI in-process via `healthclaw_redact.py`. Output compatible with `import_healthex.py`. |
 | `demo_e2e.sh` | End-to-end gate test: liveness → seed → read with redaction → audit trail → cross-tenant isolation → curatr evaluate → human-in-the-loop. Exits 0 if all gates pass. Requires Flask (:5000) running. |
 | `smoke_test.py` | Standalone (no pytest) smoke check for `export_healthex_mcp.py` + `healthclaw_redact.py` against a mocked MCP session. |
 | `build_quickstart_pdf.py` | Source of truth for `static/healthclaw-quickstart.pdf` (the downloadable quickstart guide attached to subscribe welcome emails). Reportlab-based, 14 pages, two parallel paths (A: chat-only via claude.ai + HealthEx, B: full self-host). Re-run to refresh. |
@@ -457,11 +474,13 @@ Fasten Health exports are **not** standard FHIR Bundles — they use `providers[
 
 **Two HealthEx pull paths**: Use `export_healthex.py` when copying tenant→tenant inside the local HealthClaw store. Use `export_healthex_mcp.py` when HealthEx is the source of truth and you need fresh upstream data; this is the path the OpenClaw `/export` slash command invokes.
 
+**MEDENT pull path**: `medent_oauth.py authorize` → browser to MEDENT patient portal → Railway callback broker captures code → `export_medent_fhir.py --tenant-id <id>` → `import_healthex.py`. Triggered by Telegram `/medent-connect` + `/medent-pull`.
+
 ## Telegram Bot (`openclaw/`)
 
 Conversational interface to the local stack via Telegram. Two execution paths share the same slash-command surface.
 
-`openclaw/bot.py` commands: `/start` (binds chat to `TENANT_ID` via `/internal/bind-telegram`), `/connect` (replies with `${DASHBOARD_BASE_URL}/connect/${TENANT_ID}` — the lean TEFCA Stitch page), `/hbo_connect` (builds HBO OAuth URL with PKCE), `/hbo_pull` (background HBO MCP pull + ingest), `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr_fix`, `/approve`, `/token`, `/dashboard`. The Mac-mini dispatcher in `scripts/bot_commands.py` adds: `/summary`, `/meds`, `/vitals`, `/allergies`, `/immunizations`, `/fhir <type>`, `/export`, `/import <path>`, `/import-help`, `/week`, `/conflicts`, `/hbo-connect`, `/hbo-pull`, `/help`.
+`openclaw/bot.py` commands: `/start` (binds chat to `TENANT_ID` via `/internal/bind-telegram`), `/connect` (replies with `${DASHBOARD_BASE_URL}/connect/${TENANT_ID}` — the lean TEFCA Stitch page), `/hbo_connect` (builds HBO OAuth URL with PKCE), `/hbo_pull` (background HBO MCP pull + ingest), `/health`, `/conditions`, `/labs`, `/curatr`, `/curatr_fix`, `/approve`, `/token`, `/dashboard`. The Mac-mini dispatcher in `scripts/bot_commands.py` adds: `/summary`, `/meds`, `/vitals`, `/allergies`, `/immunizations`, `/fhir <type>`, `/export`, `/import <path>`, `/import-help`, `/week`, `/conflicts`, `/hbo-connect`, `/hbo-pull`, `/flexpa-connect`, `/epic-connect`, `/medent-connect`, `/medent-pull`, `/help`.
 
 1. **Docker `openclaw/bot.py`** — talks to the MCP HTTP bridge (`POST /mcp/rpc`) using JSON-RPC 2.0:
 
