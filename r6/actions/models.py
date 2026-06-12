@@ -33,7 +33,7 @@ _TRANSITIONS = {
 
 
 def _utcnow():
-    # Stored naive-UTC, matching every other model in this codebase
+    # Stored naive-UTC; columns aren't timezone-aware, so this matches what other models' aware defaults become after DB round-trip.
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -85,7 +85,7 @@ class ProposedAction(db.Model):
             'kind': self.kind,
             'to': p.get('to'),          # recipient label, e.g. "CVS Pharmacy"
             'status': self.status,
-            'expires_at': self.expires_at.isoformat() + 'Z',
+            'expires_at': self.expires_at.replace(tzinfo=None).isoformat() + 'Z',
         }
 
     def to_dict(self):
