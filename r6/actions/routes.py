@@ -10,8 +10,10 @@ Contract mirrors FHIR writes:
 Audit detail and Telegram pushes use ProposedAction.summary() ONLY (no PHI).
 """
 
+import hmac
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 
@@ -23,6 +25,7 @@ from r6.actions.models import ProposedAction, VALID_KINDS
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.stepup import validate_step_up_token
+from r6.telegram_push import notify_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -220,10 +223,70 @@ def action_status(action_id):
     # Lazy expiry: a stale proposal flips to expired on read (guarded — never
     # clobbers a concurrent claim that moved the row past 'proposed').
     if action.status == 'proposed' and action.is_expired():
-        ProposedAction.query.filter_by(
+        expired = ProposedAction.query.filter_by(
             id=action_id, tenant_id=tenant_id, status='proposed'
         ).update({'status': 'expired'}, synchronize_session=False)
         db.session.commit()
         db.session.refresh(action)
+        if expired:
+            record_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action_id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                detail='proposal expired',
+            )
 
     return jsonify(action.to_dict()), 200
+
+
+@actions_blueprint.route('/callback/<provider>', methods=['POST'])
+def action_callback(provider):
+    if provider not in ('bland', 'twilio'):
+        return _error(404, 'Unknown provider')
+
+    # Shared-secret verification (constant-time). The secret rides in the
+    # webhook URL registered with the provider at execution time. An
+    # unconfigured secret rejects ALL callbacks — fail closed.
+    expected = os.environ.get('ACTIONS_WEBHOOK_SECRET', '')
+    supplied = request.args.get('secret', '')
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return _error(403, 'Webhook verification failed')
+
+    action_id = request.args.get('action_id', '')
+    action = ProposedAction.query.filter_by(id=action_id).first()
+    if action is None:
+        return _error(404, 'Unknown action')
+
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    provider_status = str(body.get('status') or '').lower()
+    new_status = 'completed' if provider_status in ('completed', 'success') \
+        else 'failed'
+    summary = str(body.get('summary') or '')[:2000]
+
+    # Atomic first-verdict-wins: only resolves rows still in flight. A late
+    # or duplicate webhook (or one racing the commit route) changes nothing.
+    updated = ProposedAction.query.filter(
+        ProposedAction.id == action_id,
+        ProposedAction.status.in_(('executing', 'unknown')),
+    ).update({'status': new_status, 'outcome_summary': summary},
+             synchronize_session=False)
+    db.session.commit()
+    db.session.refresh(action)
+    if not updated:
+        return jsonify({'ok': True, 'note': 'no state change'}), 200
+
+    record_audit_event(
+        'update', resource_type='ProposedAction', resource_id=action.id,
+        tenant_id=action.tenant_id,
+        outcome='success' if new_status == 'completed' else 'failure',
+        detail=json.dumps(action.summary()),
+    )
+
+    # Telegram push: summary-level ONLY (kind + recipient label + status)
+    label = action.summary().get('to') or 'recipient'
+    icon = '✅' if new_status == 'completed' else '⚠️'
+    notify_tenant(action.tenant_id,
+                  '%s %s to %s: %s' % (icon, action.kind, label, new_status))
+
+    return jsonify({'ok': True}), 200
