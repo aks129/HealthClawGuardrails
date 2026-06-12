@@ -127,12 +127,25 @@ def test_interim_status_does_not_resolve(client, tenant_headers, app, monkeypatc
     action_id = _executing_action(client, tenant_headers, app)
     resp = client.post(
         '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
-        json={'MessageSid': 'bl-123', 'status': 'queued'})
+        data={'MessageSid': 'bl-123', 'MessageStatus': 'queued'})
     assert resp.status_code == 200
     with app.app_context():
         from models import db
         row = db.session.get(ProposedAction, action_id)
         assert row.status == 'executing'
+
+
+def test_twilio_form_encoded_delivered_completes(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    resp = client.post(
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
+        data={'MessageSid': 'bl-123', 'MessageStatus': 'delivered'})
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        assert row.status == 'completed'
 
 
 def test_mismatched_provider_ref_rejected(client, tenant_headers, app, monkeypatch):

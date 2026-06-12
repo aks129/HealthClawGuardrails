@@ -256,14 +256,15 @@ def action_callback(provider):
     if action is None:
         return _error(404, 'Unknown action')
 
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        body = {}
+        # Twilio status callbacks are form-encoded (MessageStatus/MessageSid)
+        body = request.form.to_dict() if request.form else {}
 
     provider_ref = str(body.get('call_id') or body.get('MessageSid') or '')
     if provider_ref and action.external_ref and provider_ref != action.external_ref:
         return _error(404, 'Unknown action')
-    provider_status = str(body.get('status') or '').lower()
+    provider_status = str(body.get('status') or body.get('MessageStatus') or '').lower()
     if provider_status in ('completed', 'success', 'delivered'):
         new_status = 'completed'
     elif provider_status in ('failed', 'error', 'no-answer', 'busy', 'canceled',

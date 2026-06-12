@@ -238,7 +238,7 @@ PROPOSE_RESP=$(curl -s -X POST "$APP_BASE/r6/actions/propose" \
   -d '{"kind":"phone-call","payload":{"to":"Demo Pharmacy","phone":"617-555-0100","body":"Demo refill call script"}}' \
   2>/dev/null || echo '{}')
 ACTION_ID=$(echo "$PROPOSE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-check "Action proposed — id returned" "." "${ACTION_ID:-none}"
+check "Action proposed — id returned" "^[0-9a-f-]\{36\}$" "${ACTION_ID:-none}"
 
 if [ -n "$ACTION_ID" ]; then
   # Commit the action (simulation mode — no provider keys → completes synchronously)
