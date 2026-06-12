@@ -102,3 +102,69 @@ def test_callback_notifies_tenant_summary_only(client, tenant_headers, app,
     assert sent['tenant'] == tenant_headers['X-Tenant-Id']
     # PHI-safe: recipient label OK, phone number NOT
     assert '617-555-0100' not in sent['message']
+
+
+def test_unknown_resolved_by_late_webhook(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        row.transition('unknown')
+        db.session.commit()
+    resp = client.post(
+        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'late but done'})
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        assert row.status == 'completed'
+
+
+def test_interim_status_does_not_resolve(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    resp = client.post(
+        '/r6/actions/callback/twilio?action_id=%s&secret=hook-secret' % action_id,
+        json={'MessageSid': 'bl-123', 'status': 'queued'})
+    assert resp.status_code == 200
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        assert row.status == 'executing'
+
+
+def test_mismatched_provider_ref_rejected(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    resp = client.post(
+        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        json={'call_id': 'DIFFERENT-REF', 'status': 'completed'})
+    assert resp.status_code == 404
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        assert row.status == 'executing'
+
+
+def test_non_ascii_secret_returns_403_not_500(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    resp = client.post(
+        '/r6/actions/callback/bland?action_id=%s&secret=%%C3%%BC' % action_id,
+        json={'status': 'completed'})
+    assert resp.status_code == 403
+
+
+def test_callback_emits_audit(client, tenant_headers, app, monkeypatch):
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    client.post(
+        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'secret transcript'})
+    with app.app_context():
+        from r6.models import AuditEventRecord
+        events = AuditEventRecord.query.filter_by(resource_id=action_id).all()
+        details = ' '.join(e.detail or '' for e in events)
+        assert 'secret transcript' not in details  # transcript never in audit

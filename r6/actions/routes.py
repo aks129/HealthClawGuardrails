@@ -248,7 +248,7 @@ def action_callback(provider):
     # unconfigured secret rejects ALL callbacks — fail closed.
     expected = os.environ.get('ACTIONS_WEBHOOK_SECRET', '')
     supplied = request.args.get('secret', '')
-    if not expected or not hmac.compare_digest(supplied, expected):
+    if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
         return _error(403, 'Webhook verification failed')
 
     action_id = request.args.get('action_id', '')
@@ -259,9 +259,20 @@ def action_callback(provider):
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
         body = {}
+
+    provider_ref = str(body.get('call_id') or body.get('MessageSid') or '')
+    if provider_ref and action.external_ref and provider_ref != action.external_ref:
+        return _error(404, 'Unknown action')
     provider_status = str(body.get('status') or '').lower()
-    new_status = 'completed' if provider_status in ('completed', 'success') \
-        else 'failed'
+    if provider_status in ('completed', 'success', 'delivered'):
+        new_status = 'completed'
+    elif provider_status in ('failed', 'error', 'no-answer', 'busy', 'canceled',
+                             'cancelled', 'undelivered'):
+        new_status = 'failed'
+    else:
+        # Interim or unrecognized event (queued/sent/in-progress/ringing/...):
+        # acknowledge without resolving — the terminal webhook decides.
+        return jsonify({'ok': True, 'note': 'non-terminal status ignored'}), 200
     summary = str(body.get('summary') or '')[:2000]
 
     # Atomic first-verdict-wins: only resolves rows still in flight. A late

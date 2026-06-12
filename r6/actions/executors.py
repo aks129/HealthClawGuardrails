@@ -95,7 +95,8 @@ def _execute_sms(payload, action_id):
     resp = requests.post(
         'https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json' % sid,
         headers={'Authorization': 'Basic ' + auth},
-        data={'To': phone, 'From': from_num, 'Body': payload.get('body', '')},
+        data={'To': phone, 'From': from_num, 'Body': payload.get('body', ''),
+              'StatusCallback': _webhook_url('twilio', action_id)},
         timeout=REQUEST_TIMEOUT,
     )
     if resp.status_code >= 500:
