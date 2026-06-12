@@ -35,7 +35,7 @@ Environment variables:
   MEDENT_CLIENT_SECRET   From registration if not public client
   MEDENT_PRACTICE_ID     Your practice's MEDENT ID (find via 'practices')
   MEDENT_REDIRECT_URI    Default: http://localhost:8743/medent/callback
-  MEDENT_SCOPES          Default: patient/*.read openid profile offline_access
+  MEDENT_SCOPES          Default: patient/*.read openid fhirUser profile offline_access
   MEDENT_TOKEN_CACHE     Default: ~/.healthclaw/medent_tokens.json
   MEDENT_CLIENT_CACHE    Default: ~/.healthclaw/medent_client.json
 
@@ -66,7 +66,10 @@ from pathlib import Path
 _MEDENT_BASE = "https://fhir.medent.com/fhir/R4"
 _DCR_URL = f"{_MEDENT_BASE}/dynamicregistration/"
 _PRACTICES_URL = "https://fhir.medent.com/fhir/resources/practices.php"
-_DEFAULT_SCOPES = "patient/*.read openid profile offline_access"
+# MEDENT identifies the logged-in patient via SMART's fhirUser claim (their
+# spec supports fhirUser, not the bare `patient` launch-context parameter) —
+# fhirUser MUST be in scope or the ID token carries no patient identity.
+_DEFAULT_SCOPES = "patient/*.read openid fhirUser profile offline_access"
 # MEDENT validates redirect_uris are publicly reachable — use Railway broker.
 # The broker stores the code at /shc/medent/callback; we poll /shc/medent/code.
 _DEFAULT_REDIRECT_URI = "https://app.healthclaw.io/shc/medent/callback"
