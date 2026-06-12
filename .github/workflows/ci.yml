@@ -84,7 +84,7 @@ jobs:
           STEP_UP_SECRET: e2e-test-secret-not-for-production
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
