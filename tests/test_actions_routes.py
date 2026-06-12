@@ -114,7 +114,7 @@ def test_commit_executes_in_simulation(client, tenant_headers, auth_headers,
         commits = AuditEventRecord.query.filter_by(
             event_type='update', resource_type='ProposedAction',
             resource_id=action_id).all()
-        assert len(commits) == 1
+        assert len(commits) == 2  # claim->executing + completed
 
 
 def test_commit_expired_returns_410(client, tenant_headers, auth_headers, app):
@@ -168,4 +168,43 @@ def test_commit_outcome_unknown_maps_to_unknown_status(client, tenant_headers,
         from models import db
         row = db.session.get(ProposedAction, action_id)
         # NEVER 'failed' on ambiguity — re-propose could double-place the call
+        assert row.status == 'unknown'
+
+
+def test_commit_4xx_provider_error_is_failed(client, tenant_headers,
+                                             auth_headers, app, monkeypatch):
+    from unittest.mock import patch as mock_patch, MagicMock
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    action_id = _propose(client, tenant_headers)
+    headers = dict(auth_headers)
+    headers['X-Human-Confirmed'] = 'true'
+    fake = MagicMock(); fake.status_code = 400
+    with mock_patch('r6.actions.executors.requests.post', return_value=fake):
+        resp = client.post('/r6/actions/%s/commit' % action_id, headers=headers)
+    assert resp.status_code == 502
+    with app.app_context():
+        from models import db
+        from r6.models import AuditEventRecord
+        row = db.session.get(ProposedAction, action_id)
+        assert row.status == 'failed'
+        failures = AuditEventRecord.query.filter_by(
+            resource_id=action_id, outcome='failure').all()
+        assert len(failures) == 1
+        assert '617-555-0100' not in (failures[0].detail or '')
+
+
+def test_commit_5xx_provider_error_is_unknown(client, tenant_headers,
+                                              auth_headers, app, monkeypatch):
+    from unittest.mock import patch as mock_patch, MagicMock
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    action_id = _propose(client, tenant_headers)
+    headers = dict(auth_headers)
+    headers['X-Human-Confirmed'] = 'true'
+    fake = MagicMock(); fake.status_code = 503
+    with mock_patch('r6.actions.executors.requests.post', return_value=fake):
+        resp = client.post('/r6/actions/%s/commit' % action_id, headers=headers)
+    assert resp.status_code == 502
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
         assert row.status == 'unknown'

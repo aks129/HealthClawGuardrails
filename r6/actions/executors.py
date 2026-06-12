@@ -63,6 +63,10 @@ def _execute_call(payload, action_id):
         },
         timeout=REQUEST_TIMEOUT,
     )
+    if resp.status_code >= 500:
+        logger.error('Bland.ai error %s', resp.status_code)
+        return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
+                               error='Call provider error (HTTP %s) — outcome unknown' % resp.status_code)
     if resp.status_code != 200:
         logger.error('Bland.ai error %s', resp.status_code)
         return ExecutionResult(ok=False, simulated=False,
@@ -94,6 +98,10 @@ def _execute_sms(payload, action_id):
         data={'To': phone, 'From': from_num, 'Body': payload.get('body', '')},
         timeout=REQUEST_TIMEOUT,
     )
+    if resp.status_code >= 500:
+        logger.error('Twilio error %s', resp.status_code)
+        return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
+                               error='SMS provider error (HTTP %s) — outcome unknown' % resp.status_code)
     if resp.status_code not in (200, 201):
         logger.error('Twilio error %s', resp.status_code)
         return ExecutionResult(ok=False, simulated=False,
@@ -121,6 +129,12 @@ def execute_action(kind, payload, action_id=None):
         logger.error('Executor timeout: %s', type(exc).__name__)
         return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
                                error='Provider timed out — outcome unknown')
+    except requests.ConnectionError as exc:
+        # A TCP reset can occur after the request was received by the provider;
+        # conservative mapping prevents a duplicate call on re-propose.
+        logger.error('Executor connection error: %s', type(exc).__name__)
+        return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
+                               error='Connection error — outcome unknown')
     except requests.exceptions.JSONDecodeError as exc:
         logger.error('Executor bad response: %s', type(exc).__name__)
         return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,

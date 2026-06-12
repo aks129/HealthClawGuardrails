@@ -89,3 +89,16 @@ def test_partial_twilio_config_fails_not_simulates(monkeypatch):
     assert result.ok is False
     assert result.simulated is False
     assert 'misconfigured' in result.error
+
+
+def test_connection_error_is_outcome_unknown(monkeypatch):
+    import requests as req
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    with patch('r6.actions.executors.requests.post',
+               side_effect=req.ConnectionError('reset')):
+        result = execute_action(
+            kind='phone-call',
+            payload={'phone': '617-555-0100', 'body': 'script'},
+        )
+    assert result.ok is False
+    assert result.outcome_unknown is True

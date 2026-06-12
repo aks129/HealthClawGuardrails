@@ -22,7 +22,7 @@ VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call')
 
 # Legal status transitions
 _TRANSITIONS = {
-    'proposed': {'confirmed', 'expired'},
+    'proposed': {'confirmed', 'executing', 'expired'},  # proposed->executing: atomic single-UPDATE claim path in commit route
     'confirmed': {'executing', 'failed'},
     'executing': {'completed', 'failed', 'unknown'},
     'completed': set(),

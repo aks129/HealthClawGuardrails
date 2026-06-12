@@ -13,6 +13,7 @@ Audit detail and Telegram pushes use ProposedAction.summary() ONLY (no PHI).
 import json
 import logging
 import re
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -107,24 +108,45 @@ def commit_action(action_id):
         id=action_id, tenant_id=tenant_id).first()
     if action is None:
         return _error(404, 'Unknown action')
-    if action.is_expired() and action.status == 'proposed':
-        action.transition('expired')
-        db.session.commit()
-        return _error(410, 'Proposal expired — propose the action again')
 
-    # ATOMIC claim: guarded UPDATE prevents two concurrent commits from both
-    # executing (a double-placed phone call is worse than a failed one).
-    claimed = ProposedAction.query.filter_by(
-        id=action_id, tenant_id=tenant_id, status='proposed'
-    ).update({'status': 'confirmed'}, synchronize_session=False)
-    db.session.commit()
-    if not claimed:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    if action.status == 'proposed' and action.expires_at <= now:
+        # Guarded expiry: only flips rows still 'proposed' — never clobbers a
+        # concurrently claimed/executing action (double-call vector otherwise).
+        expired = ProposedAction.query.filter_by(
+            id=action_id, tenant_id=tenant_id, status='proposed'
+        ).update({'status': 'expired'}, synchronize_session=False)
+        db.session.commit()
+        if expired:
+            record_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action_id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                detail='proposal expired',
+            )
+            return _error(410, 'Proposal expired — propose the action again')
         db.session.refresh(action)
         return _error(409, 'Action is %s, not proposed' % action.status)
 
-    db.session.refresh(action)
-    action.transition('executing')
+    # ATOMIC claim straight to 'executing': single guarded UPDATE whose WHERE
+    # re-checks both status and expiry, closing the TOCTOU between the check
+    # above and the claim. Two concurrent commits cannot both pass (a
+    # double-placed phone call is worse than a failed one).
+    claimed = ProposedAction.query.filter(
+        ProposedAction.id == action_id,
+        ProposedAction.tenant_id == tenant_id,
+        ProposedAction.status == 'proposed',
+        ProposedAction.expires_at > now,
+    ).update({'status': 'executing'}, synchronize_session=False)
     db.session.commit()
+    if not claimed:
+        db.session.refresh(action)
+        if action.status == 'proposed':
+            # only possible reason: expired between check and claim
+            return _error(410, 'Proposal expired — propose the action again')
+        return _error(409, 'Action is %s, not proposed' % action.status)
+
+    db.session.refresh(action)
 
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
@@ -135,25 +157,49 @@ def commit_action(action_id):
     result = execute_action(action.kind, action.payload, action_id=action.id)
 
     if not result.ok:
-        # Post-send ambiguity (timeout/garbled response) -> 'unknown', never
-        # 'failed': a failed status invites re-propose -> duplicate call.
+        # Post-send ambiguity (timeout/garbled response/5xx) -> 'unknown',
+        # never 'failed': failed invites re-propose -> duplicate call.
         new_status = 'unknown' if result.outcome_unknown else 'failed'
-        action.transition(new_status)
-        action.outcome_summary = result.error
+        updated = ProposedAction.query.filter_by(
+            id=action_id, status='executing'
+        ).update({'status': new_status, 'outcome_summary': result.error},
+                 synchronize_session=False)
         db.session.commit()
+        db.session.refresh(action)
+        if not updated:
+            # A provider webhook resolved the action while we were waiting —
+            # its verdict wins; report the authoritative state.
+            return jsonify(action.to_dict()), 200
         record_audit_event(
             'update', resource_type='ProposedAction', resource_id=action.id,
-            tenant_id=tenant_id, outcome='failure', detail=result.error,
+            agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+            outcome='failure', detail=result.error,
         )
         return jsonify({'id': action.id, 'status': new_status,
                         'error': result.error}), 502
 
-    action.external_ref = result.external_ref
     if result.simulated:
-        # No webhook will ever arrive — resolve synchronously
-        action.transition('completed')
-        action.outcome_summary = 'Simulated (no provider keys configured)'
-    db.session.commit()
+        # No webhook will ever arrive — resolve synchronously (guarded).
+        ProposedAction.query.filter_by(
+            id=action_id, status='executing'
+        ).update({'status': 'completed',
+                  'external_ref': result.external_ref,
+                  'outcome_summary': 'Simulated (no provider keys configured)'},
+                 synchronize_session=False)
+        db.session.commit()
+        db.session.refresh(action)
+        record_audit_event(
+            'update', resource_type='ProposedAction', resource_id=action.id,
+            agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+            detail=json.dumps(action.summary()),
+        )
+    else:
+        # Store the provider ref WITHOUT touching status — a fast webhook may
+        # already have resolved the action; never clobber its verdict.
+        ProposedAction.query.filter_by(id=action_id).update(
+            {'external_ref': result.external_ref}, synchronize_session=False)
+        db.session.commit()
+        db.session.refresh(action)
 
     response = action.to_dict()
     response['simulated'] = result.simulated
