@@ -136,7 +136,7 @@ In [portal.connect.fastenhealth.com/developers](https://portal.connect.fastenhea
 
 9. Switch to PromptOpinion or Claude Desktop
    - **Say:** "HealthClaw also speaks the MCP protocol directly. Any compliant AI host —
-     PromptOpinion, Hermes, Claude Desktop — can call our 16 tools with the same
+     PromptOpinion, Hermes, Claude Desktop — can call our 19 tools with the same
      guardrails active."
    - Call `fhir_search` for Conditions live, show the redacted result with `_mcp_summary`
    - **Say:** "The SHARP-on-MCP standard lets the AI host pass `X-FHIR-Server-URL` and
