@@ -32,12 +32,28 @@ def test_rosa_has_escalation_reading():
 
 
 def test_marcus_has_no_htn_condition():
+    marcus_conditions = []
     for entry in BUNDLE['entry']:
         r = entry['resource']
         if (r['resourceType'] == 'Condition'
                 and r['subject']['reference'] == 'Patient/marcus-webb'):
+            marcus_conditions.append(r)
             codes = [c['code'] for c in r['code']['coding']]
             assert 'I10' not in codes
+    # Marcus must have at least one Condition (diabetes) — prevents vacuous pass
+    assert len(marcus_conditions) >= 1
+
+
+def test_rosa_has_i10_condition():
+    rosa_i10_conditions = []
+    for entry in BUNDLE['entry']:
+        r = entry['resource']
+        if (r['resourceType'] == 'Condition'
+                and r['subject']['reference'] == 'Patient/rosa-delgado'):
+            codes = [c['code'] for c in r['code']['coding']]
+            if 'I10' in codes:
+                rosa_i10_conditions.append(r)
+    assert len(rosa_i10_conditions) >= 1, "Rosa must have an I10 hypertension Condition"
 
 
 def test_seed_db_mode_ingests(app):
@@ -48,4 +64,4 @@ def test_seed_db_mode_ingests(app):
     from r6.seed import seed_demo_data
     with app.app_context():
         count = seed_demo_data(tenant_id='winters-demo', resources=resources)
-        assert count >= 14  # 2 patients + 2 conditions + 1 med + 6 obs + 3 orgs + 1 practitioner = 15
+        assert count == 15  # 2 patients + 2 conditions + 1 med + 6 obs + 3 orgs + 1 practitioner = 15

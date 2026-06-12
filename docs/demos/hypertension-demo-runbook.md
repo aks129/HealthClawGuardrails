@@ -54,7 +54,10 @@ curl -s -H "X-Tenant-Id: winters-demo" \
 ### 3. Check env vars
 
 ```bash
-# Required for action commits (step-up HMAC):
+# Required for action commits (step-up HMAC — every commit 401s without this):
+echo $STEP_UP_SECRET           # must be non-empty on Railway
+
+# Required for webhook callbacks (callbacks 403 without this):
 echo $ACTIONS_WEBHOOK_SECRET   # must be non-empty on Railway
 
 # Live voice calls (set ONLY if doing the live Bland.ai call):
@@ -147,7 +150,7 @@ Type in Telegram:
 yes confirm
 ```
 
-- **Say:** "Sally now needs a step-up token — a short-lived HMAC-signed credential that authorizes this specific write. It calls `fhir_get_token`, then `action_commit`. The server checks `X-Human-Confirmed: true` in the header — without it, you get HTTP 428 Precondition Required."
+- **Say:** "Sally now needs a step-up token — a short-lived HMAC-signed credential that authorizes this specific write. It calls `fhir_get_token`, then `action_commit`. The MCP bridge sets `X-Human-Confirmed: true` on every commit request — the human gate is the skill's mandatory rule that action_commit is only CALLED after explicit confirmation in this conversation. Any direct caller that omits the header gets HTTP 428 Precondition Required."
 - Watch the call connect. **Let the handset ring. Answer on speaker.**
 - The AI voice runs the check-in script live.
 - **Say:** "Rosa never installed anything. The system called her."
@@ -159,11 +162,12 @@ yes confirm
 After the call ends, Bland.ai fires a webhook to Railway. Within a few seconds, Telegram shows:
 
 ```
-✅ phone-call to Rosa Delgado's home line: completed
+✅ phone-call to Rosa's landline: completed
 ```
 
 - **Point out:** No phone numbers. No medication names. No readings. Just status and a recipient label.
 - **Say:** "That's PHI rule four in the skill: notification summaries are counts and status labels only. The full outcome — what Rosa reported, any notes — lives in the tenant store behind the same guardrail stack."
+- **Simulation mode caveat:** If `BLAND_AI_API_KEY` is not set, there is NO outbound call and therefore NO webhook callback and NO Telegram push. The commit resolves synchronously with a synthetic outcome, but the push beat does not happen. This is expected — narrate: "In simulation mode, the commit returns a synthetic completed status directly; in production the webhook fires from Bland.ai and the Telegram push follows."
 
 ---
 
@@ -203,7 +207,7 @@ Recipient: Winters Healthcare scheduling line (617-555-0100)
 
 **Setup framing:**
 
-> "Marcus is 48. He has a smartphone and he's connected through Telegram. He has a diabetes diagnosis but no hypertension diagnosis — yet. Here's the thing: he has three elevated BP readings in the record, from two different organizations."
+> "Marcus is 47. He has a smartphone and he's connected through Telegram. He has a diabetes diagnosis but no hypertension diagnosis — yet. Here's the thing: he has three elevated BP readings in the record, from two different organizations."
 
 ---
 
@@ -286,21 +290,21 @@ Please call Marcus's mobile at your convenience.
 
 Switch to the dashboard tab (`https://app.healthclaw.io/r6-dashboard`).
 
-Filter audit trail to tenant `winters-demo`, event type `ProposedAction` and `CommittedAction`.
+Filter audit trail to tenant `winters-demo`, event type `ProposedAction` — all action audit events use `resource_type='ProposedAction'`; create (propose) and update (claim, resolve) events all appear under this type.
 
 **Point out each entry:**
 
-1. `ProposedAction — phone-call — winters-demo` (Rosa check-in)
-2. `CommittedAction — phone-call — winters-demo — status: completed`
-3. `ProposedAction — phone-call — winters-demo` (Rosa escalation)
-4. `ProposedAction — phone-call — winters-demo` (Marcus scheduling)
-5. `CommittedAction — phone-call — winters-demo — status: completed`
+1. `ProposedAction — create — phone-call — winters-demo` (Rosa check-in proposed)
+2. `ProposedAction — update — phone-call — winters-demo — status: completed` (Rosa check-in resolved)
+3. `ProposedAction — create — phone-call — winters-demo` (Rosa escalation proposed)
+4. `ProposedAction — create — phone-call — winters-demo` (Marcus scheduling proposed)
+5. `ProposedAction — update — phone-call — winters-demo — status: completed` (Marcus scheduling resolved)
 
 **Say:** "This is an append-only audit log. There is no UPDATE, no DELETE on AuditEvent rows — enforced at the SQLAlchemy layer. Every action that touched a patient has a record: who proposed it, what step-up token authorized it, what the outcome was."
 
 **On the step-up token:**
 
-> "The commit endpoint returns HTTP 428 Precondition Required if `X-Human-Confirmed: true` is absent. That header is what 'yes confirm' adds — it's the human-in-the-loop gate, enforced server-side, not in the prompt."
+> "The commit endpoint returns HTTP 428 Precondition Required if `X-Human-Confirmed: true` is absent. The MCP bridge sets that header on every commit call — the human gate is the skill's mandatory rule that action_commit is only CALLED after explicit confirmation in this conversation. Any direct API caller that omits the header gets 428. Two layers: the skill (prompt-level) and the server (protocol-level)."
 
 **On atomic claim:**
 
@@ -316,7 +320,7 @@ Filter audit trail to tenant `winters-demo`, event type `ProposedAction` and `Co
 
 | Situation | Recovery |
 |---|---|
-| Bland key not set | Simulation mode — `action_commit` returns `status: completed` with synthetic outcome. Narrate: "In production this is a live Bland.ai call. The outcome handling is identical." |
+| Bland key not set | Simulation mode — `action_commit` returns `status: completed` with synthetic outcome synchronously. **No webhook fires, no Telegram push.** Narrate: "In simulation mode there is no outbound call and no webhook callback — the commit resolves immediately with a synthetic outcome. In production, Bland.ai places the real call, the webhook fires on completion, and the Telegram push follows." |
 | Live call fails on stage (wrong number, no answer) | `status: failed` or `unknown` appears in Telegram. **Narrate this as a feature:** "This is exactly the outcome the guardrail stack handles — failed shows the number to dial manually, unknown means don't retry. The system never auto-retries a phone call." |
 | Railway down | Run locally: `python main.py` + seed with `--db-mode`. Update `--base-url` to `http://localhost:5000`. Demo is identical. |
 | Webhook slow / action stays `executing` | Poll manually: `action_status(action_id)` in Telegram, or show the dashboard ProposedAction entry and narrate the polling pattern. Webhook latency is also a feature story: the system waits for ground truth, doesn't assume success. |
@@ -331,7 +335,7 @@ Filter audit trail to tenant `winters-demo`, event type `ProposedAction` and `Co
 - **Bland production key + per-minute cost:** Confirm key is live on Railway before demo day. Bland.ai outbound calls bill per minute — budget ~5 minutes of call time for rehearsals + 2-3 minutes on stage. Note the cost in the Winters Healthcare follow-up email so there are no surprises in production.
 - **Rehearse the live call twice:** Dial the real handset at least twice before going on stage. Check that the Bland voice completes the full script (it sometimes truncates on first attempt if the call connects before the script is fully loaded). Verify the webhook fires and Telegram push appears within 10 seconds.
 - **Staff-confirmer vs. family-confirmer for Rosa:** The demo has a care coordinator (staff) confirming Rosa's actions. Open question for Gigi: does Winters Healthcare want to show a family member holding the Telegram chat instead — a son or daughter who is listed as a care partner? Changes who the "yes confirm" comes from; the action layer supports both patterns. Flag this in the follow-up call.
-- **Spanish script variant:** Bland.ai supports `language: "es-US"` in the action payload. If Winters Healthcare's patient population has a significant Spanish-speaking segment, a 30-second detour showing the same script in Spanish is a strong equity close. Good question to ask Gigi before finalizing the demo.
+- **Spanish script variant:** Spanish-language calls are planned but not yet wired — forwarding a language parameter to the call provider is not yet implemented; do not promise this in the demo until confirmed available. Good question to raise with Gigi but flag it as roadmap, not current.
 - **Escalation call target:** The scheduling call in Act 1 Step 5 dials `617-555-0100` (winters-clinic). That's a synthetic number — confirm with Gigi whether they want to see a real practice scheduling line dialed, or whether the simulation narration is sufficient for that beat.
 
 ---

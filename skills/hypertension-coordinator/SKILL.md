@@ -115,7 +115,7 @@ fhir_search(
 ```
 
 ICD-10-CM `I10` is Essential (primary) hypertension. If no Condition with I10
-(or SNOMED 38341003) is on file, the patient is undiagnosed.
+(or SNOMED 38341003 or 59621000) is on file, the patient is undiagnosed.
 
 ### Medications
 
@@ -184,6 +184,10 @@ Is there anything else you'd like me to pass along to your care team?
 
 Great — thank you so much for your time, [FIRST_NAME]. We'll be in
 touch. Take care!
+
+And one more thing — if at any point you feel chest pain, a severe
+headache, vision changes, or numbness, please hang up and dial 911
+right away.
 ─────────────────────────────────────────────────────────────────────
 ```
 
@@ -206,12 +210,12 @@ confirmation.
 ### Step 3 — Get step-up token and commit
 
 ```
-fhir_get_token(_tenantId: "<tenant>")
-→ returns { step_up_token: "..." }
+fhir_get_token(tenant_id: "<tenant>")
+→ returns { token: "..." }
 
 action_commit(
   action_id: "<id from propose>",
-  _stepUpToken: "<token>"
+  _stepUpToken: "<token from fhir_get_token response>"
 )
 ```
 
@@ -269,7 +273,7 @@ action_propose(
 )
 ```
 
-After staff confirms → `fhir_get_token` → `action_commit`.
+After staff confirms → `fhir_get_token(tenant_id: ...)` returns `{ token }` → `action_commit`.
 
 ---
 
@@ -294,7 +298,7 @@ or any clinical interpretation.
 ### Step 2 — Scheduling call (same as Playbook B)
 
 Patient says yes → propose a call to the scheduling line → patient sees
-the draft → explicit "yes confirm" → fhir_get_token → action_commit.
+the draft → explicit "yes confirm" → fhir_get_token(tenant_id: ...) → action_commit.
 
 ### Step 3 — SMS variant (nurse-line follow-up)
 
@@ -374,17 +378,18 @@ Winters Healthcare:
 ─── DRAFT CALL ───────────────────────────────────────────────────────
 Hello, may I speak with Rosa? … [full script] … Your lisinopril
 refill should be ready in about two weeks at your pharmacy. Call us
-at 555-WINTERS if you need anything. Thank you!
+at 617-555-0100 if you need anything. Thank you!
 ──────────────────────────────────────────────────────────────────────
+
+  [action_propose kind=phone-call to="Rosa's landline" — returns action_id: act-00142]
 
 Recipient: Rosa's landline
 Shall I proceed? Reply "yes confirm" to place the call.
 
 Staff: yes confirm
 
-Sally: [fhir_get_token — returns step_up_token]
-  [action_propose kind=phone-call — returns action_id: act-00142]
-  [action_commit action_id=act-00142 _stepUpToken=... ]
+Sally: [fhir_get_token(tenant_id: "winters-demo") — returns { token: "..." }]
+  [action_commit action_id=act-00142 _stepUpToken=<token> ]
 
 The call is in progress. I'll check the outcome.
   [action_status act-00142 — returns status: completed,
@@ -407,7 +412,7 @@ Sally: The proposed action expired before it could be sent — this
 
 Staff: yes confirm
 
-Sally: [fhir_get_token] [action_commit act-00143] …
+Sally: [fhir_get_token(tenant_id: "winters-demo") → { token }] [action_commit act-00143 _stepUpToken=<token>] …
 ```
 
 ---
@@ -419,7 +424,7 @@ enabled (`feature/action-core` merged).
 
 ```bash
 export STEP_UP_SECRET=$(openssl rand -hex 32)
-export BLAND_API_KEY=...          # for live voice calls
+export BLAND_AI_API_KEY=...        # for live voice calls
 export TWILIO_ACCOUNT_SID=...     # for SMS actions
 export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+1...
@@ -440,6 +445,5 @@ credentials.
 - The skill does not maintain call history across sessions — pull
   `action_status` within the same conversation, or query the audit trail via
   the dashboard.
-- Spanish-language call scripts are supported by Bland if the `language`
-  payload field is set — pass `language: "es-US"` in the action payload for
-  Spanish-speaking patients.
+- Spanish-language calls: planned — requires forwarding a language parameter
+  to the call provider; do not promise until wired.
