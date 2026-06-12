@@ -50,3 +50,23 @@ def test_propose_emits_audit_event(client, tenant_headers, app):
         # PHI-safe: no script text or phone number in audit detail
         assert '617-555-0100' not in (events[0].detail or '')
         assert 'metformin' not in (events[0].detail or '')
+
+
+def test_propose_non_object_body_returns_400(client, tenant_headers):
+    resp = client.post('/r6/actions/propose', data='[1,2]',
+                       content_type='application/json', headers=tenant_headers)
+    assert resp.status_code == 400
+
+
+def test_propose_non_string_body_returns_400(client, tenant_headers):
+    resp = client.post('/r6/actions/propose',
+                       json={'kind': 'sms', 'payload': {'body': {'x': 1}}},
+                       headers=tenant_headers)
+    assert resp.status_code == 400
+
+
+def test_propose_oversize_payload_returns_400(client, tenant_headers):
+    resp = client.post('/r6/actions/propose',
+                       json={'kind': 'sms', 'payload': {'body': 'x' * 70000}},
+                       headers=tenant_headers)
+    assert resp.status_code == 400

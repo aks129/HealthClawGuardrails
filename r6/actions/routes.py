@@ -19,10 +19,14 @@ from flask import Blueprint, jsonify, request
 from models import db
 from r6.actions.models import ProposedAction, VALID_KINDS
 from r6.audit import record_audit_event
+from r6.rate_limit import rate_limit_middleware
 
 logger = logging.getLogger(__name__)
 
 actions_blueprint = Blueprint('actions', __name__, url_prefix='/r6/actions')
+
+# Register rate limiting (same pattern as r6_blueprint in r6/routes.py)
+rate_limit_middleware(actions_blueprint)
 
 _TENANT_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
@@ -45,12 +49,21 @@ def propose_action():
         return _error(400, 'X-Tenant-Id header is required')
 
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return _error(400, 'request body must be a JSON object')
     kind = body.get('kind')
-    payload = body.get('payload')
     if kind not in VALID_KINDS:
         return _error(400, 'kind must be one of: %s' % ', '.join(VALID_KINDS))
+    payload = body.get('payload')
     if not isinstance(payload, dict) or not payload.get('body'):
         return _error(400, 'payload.body is required')
+    if not isinstance(payload.get('body'), str):
+        return _error(400, 'payload.body must be a string')
+    to_label = payload.get('to')
+    if to_label is not None and (not isinstance(to_label, str) or len(to_label) > 128):
+        return _error(400, 'payload.to must be a string of at most 128 chars')
+    if len(json.dumps(payload)) > 65536:
+        return _error(400, 'payload too large (64KB max)')
 
     action = ProposedAction(tenant_id=tenant_id, kind=kind, payload=payload)
     db.session.add(action)
