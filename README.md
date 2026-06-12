@@ -275,6 +275,86 @@ changes, and agent attribution. All changes are audited in the immutable trail.
 
 **OpenClaw skill:** `skills/curatr/SKILL.md`
 
+## SMART Health Links (Kill the Clipboard)
+
+Patient-controlled encrypted record sharing via QR code, implemented on top of
+**[jmandel/kill-the-clipboard-skill](https://github.com/jmandel/kill-the-clipboard-skill)**
+(MIT, pinned `fa0020d`) — credit Josh Mandel. HealthClaw governs what enters the
+bundle (step-up auth, profiles, guardrails, audit trail); KTC governs sharing
+(zero-knowledge server-side storage, SHL STU 1 protocol, revocation, in-browser
+viewer).
+
+**What it does:** The `shl_generate` MCP tool (Write group, step-up required)
+fetches the patient's guardrailed FHIR bundle, encrypts it client-side in the MCP
+server (the SHL server never sees plaintext), uploads ciphertext, and returns:
+
+- `shlink` — the `shlink:/` URI to encode in a QR (an encrypted pointer, not data)
+- `viewer_link` — browser URL for clinic staff
+- `manage_link` — patient-only revocation + access-log URL
+
+**Security:** The QR encodes only the encrypted pointer. PHI never appears in the
+QR image. The SHL server stores only ciphertext + `sha256(auth_token)`. Persona
+hard rule: see `skills/share-health-qr/SKILL.md` — never direct-encode PHI into
+QR images (incident 2026-06-12).
+
+### Quick Start (local)
+
+```bash
+# Start the SHL storage server (profile `shl`)
+docker-compose --profile shl up -d
+
+# Tell the MCP server where the SHL server lives
+# Add to services/agent-orchestrator/.env or export:
+export SHL_SERVER_URL=http://localhost:8000
+```
+
+Without `SHL_SERVER_URL`, `shl_generate` returns an explicit simulation stub
+(`simulated: true`) — never a fake link.
+
+### Railway Deploy
+
+```bash
+# 1. Add the SHL service
+railway add --service shl-server
+
+# 2. Attach a persistent volume (SQLite lives here)
+railway service shl-server && railway volume add --mount-path /data
+
+# 3. Configure the SHL server
+railway variables --service shl-server \
+  --set BASE_URL=<public-url-of-shl-server> \
+  --set DB_PATH=/data/db.sqlite
+
+# 4. Expose a public domain
+railway domain --service shl-server
+
+# 5. Deploy — MUST run from the shl-server directory
+cd services/shl-server && railway up --service shl-server
+
+# 6. Wire the MCP server to the SHL server
+railway variables --service mcp-server \
+  --set SHL_SERVER_URL=<public-url-of-shl-server>
+```
+
+> **Caveat 1 — deploy from the right directory:** The repo-root `railway.toml`
+> targets the Flask Dockerfile. If you run `railway up --service shl-server`
+> from the repo root, Railway uses the wrong Dockerfile and the deploy fails.
+> Always `cd services/shl-server` first — that directory has its own
+> `railway.toml` that points to the correct image.
+>
+> **Caveat 2 — watchPatterns skip:** A service that inherited `watchPatterns`
+> from the root config may silently skip Dockerfile-only deploys (no source
+> file changes detected). The per-service `railway.toml` in `services/shl-server/`
+> overrides this after the first successful build. If deploys are skipped, force
+> one with `railway up --service shl-server` from the shl-server directory.
+>
+> **Caveat 3 — simulation mode:** Without `SHL_SERVER_URL` on the MCP server,
+> `shl_generate` returns `{ simulated: true, note: "SHL_SERVER_URL not
+> configured — returned stub." }`. Personas surface this note verbatim and
+> never improvise an alternative.
+
+**OpenClaw skill:** `skills/share-health-qr/SKILL.md`
+
 ## R6-Specific Resources (Experimental)
 
 These resources are part of the FHIR R6 ballot3 specification and may change before final release.
