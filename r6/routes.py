@@ -2297,6 +2297,14 @@ def share_bundle():
     body = request.get_json(silent=True) or {}
     patient_id = body.get('patient_id') or None
     requested_types = body.get('resource_types')
+    profile = body.get('profile', 'intake')
+
+    VALID_PROFILES = ('intake', 'deidentified')
+    if profile not in VALID_PROFILES:
+        return _operation_outcome(
+            'error', 'invalid',
+            f'Invalid profile "{profile}". Valid values: {", ".join(VALID_PROFILES)}'
+        ), 400
 
     if requested_types is None:
         resource_types = list(DEFAULT_TYPES)
@@ -2341,16 +2349,33 @@ def share_bundle():
                     filtered.append(row)
         all_rows = filtered
 
-    # Apply patient-controlled redaction to every resource
+    # Apply profile-appropriate handling to every resource
     entries = []
     type_set = set()
     for row in all_rows:
         fhir_json = row.to_fhir_json()
-        # Determine the patient_id to pass to redaction; for Patient resources
-        # the resource itself is the patient.
-        redact_pid = patient_id or fhir_json.get('id') if row.resource_type == 'Patient' else patient_id or ''
-        redacted = apply_patient_controlled_redaction(fhir_json, redact_pid)
-        entries.append({'resource': redacted})
+        if profile == 'deidentified':
+            # Determine the patient_id to pass to redaction; for Patient resources
+            # the resource itself is the patient.
+            redact_pid = (
+                (patient_id or fhir_json.get('id'))
+                if row.resource_type == 'Patient'
+                else (patient_id or '')
+            )
+            resource = apply_patient_controlled_redaction(fhir_json, redact_pid)
+        else:
+            # intake profile: pass through unredacted; stamp meta.tag so
+            # receivers know this is an identified share.
+            resource = fhir_json
+            meta = resource.setdefault('meta', {})
+            tags = meta.setdefault('tag', [])
+            intake_tag = {
+                'system': 'https://healthclaw.io/share-profile',
+                'code': 'intake-identified',
+            }
+            if intake_tag not in tags:
+                tags.append(intake_tag)
+        entries.append({'resource': resource})
         type_set.add(row.resource_type)
 
     bundle = {
@@ -2367,7 +2392,7 @@ def share_bundle():
         agent_id=request.headers.get('X-Agent-Id'),
         tenant_id=tenant_id,
         detail=(
-            f'share-bundle export: {len(entries)} resources '
+            f'share-bundle export (profile={profile}): {len(entries)} resources '
             f'across {len(type_set)} type(s)'
         ),
     )

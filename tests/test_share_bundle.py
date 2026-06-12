@@ -118,13 +118,13 @@ def test_share_bundle_returns_collection(client, auth_headers, app):
 
 
 def test_share_bundle_patient_controlled_redaction_applied(client, auth_headers, app):
-    """Patient-controlled redaction: name/telecom/address removed, birthDate preserved."""
+    """Deidentified profile: name/telecom/address removed, birthDate preserved."""
     _seed_resource(app, 'Patient', PATIENT_RESOURCE)
 
     resp = client.post(
         '/r6/fhir/$share-bundle',
         headers=auth_headers,
-        json={'patient_id': PATIENT_ID, 'resource_types': ['Patient']},
+        json={'patient_id': PATIENT_ID, 'resource_types': ['Patient'], 'profile': 'deidentified'},
     )
     assert resp.status_code == 200
     bundle = json.loads(resp.data)
@@ -144,6 +144,44 @@ def test_share_bundle_patient_controlled_redaction_applied(client, auth_headers,
     tags = patient.get('meta', {}).get('tag', [])
     codes = {t.get('code') for t in tags}
     assert 'patient-controlled' in codes
+
+
+def test_share_bundle_intake_profile_keeps_demographics(client, auth_headers, app):
+    """Default (intake) profile: Patient.name survives and meta.tag contains intake-identified."""
+    _seed_resource(app, 'Patient', PATIENT_RESOURCE)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'patient_id': PATIENT_ID, 'resource_types': ['Patient']},
+    )
+    assert resp.status_code == 200
+    bundle = json.loads(resp.data)
+    assert len(bundle['entry']) == 1
+
+    patient = bundle['entry'][0]['resource']
+    # Demographics must be preserved
+    assert 'name' in patient
+    assert patient['name'][0]['family'] == 'Vestel'
+    # meta.tag must flag identified share
+    tags = patient.get('meta', {}).get('tag', [])
+    tagged_systems = {t.get('system') for t in tags}
+    tagged_codes = {t.get('code') for t in tags}
+    assert 'https://healthclaw.io/share-profile' in tagged_systems
+    assert 'intake-identified' in tagged_codes
+
+
+def test_share_bundle_bogus_profile_400(client, auth_headers):
+    """Unknown profile value must return 400 OperationOutcome."""
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'resource_types': ['Patient'], 'profile': 'bogus'},
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data['resourceType'] == 'OperationOutcome'
+    assert 'bogus' in data['issue'][0]['diagnostics']
 
 
 def test_share_bundle_rejects_unknown_type(client, auth_headers):
