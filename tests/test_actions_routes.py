@@ -208,3 +208,34 @@ def test_commit_5xx_provider_error_is_unknown(client, tenant_headers,
         from models import db
         row = db.session.get(ProposedAction, action_id)
         assert row.status == 'unknown'
+
+
+# ---------------------------------------------------------------------------
+# Status route tests
+# ---------------------------------------------------------------------------
+
+def test_status_returns_action(client, tenant_headers):
+    action_id = _propose(client, tenant_headers)
+    resp = client.get('/r6/actions/%s' % action_id, headers=tenant_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()['status'] == 'proposed'
+
+
+def test_status_tenant_isolation(client, tenant_headers):
+    action_id = _propose(client, tenant_headers)
+    other = dict(tenant_headers)
+    other['X-Tenant-Id'] = 'other-tenant'
+    resp = client.get('/r6/actions/%s' % action_id, headers=other)
+    assert resp.status_code == 404
+
+
+def test_status_marks_overdue_expiry(client, tenant_headers, app):
+    from datetime import datetime, timedelta, timezone
+    action_id = _propose(client, tenant_headers)
+    with app.app_context():
+        from models import db
+        row = db.session.get(ProposedAction, action_id)
+        row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
+        db.session.commit()
+    resp = client.get('/r6/actions/%s' % action_id, headers=tenant_headers)
+    assert resp.get_json()['status'] == 'expired'

@@ -204,3 +204,26 @@ def commit_action(action_id):
     response = action.to_dict()
     response['simulated'] = result.simulated
     return jsonify(response), 200
+
+
+@actions_blueprint.route('/<action_id>', methods=['GET'])
+def action_status(action_id):
+    tenant_id = _tenant_or_none()
+    if not tenant_id:
+        return _error(400, 'X-Tenant-Id header is required')
+
+    action = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    if action is None:
+        return _error(404, 'Unknown action')
+
+    # Lazy expiry: a stale proposal flips to expired on read (guarded — never
+    # clobbers a concurrent claim that moved the row past 'proposed').
+    if action.status == 'proposed' and action.is_expired():
+        ProposedAction.query.filter_by(
+            id=action_id, tenant_id=tenant_id, status='proposed'
+        ).update({'status': 'expired'}, synchronize_session=False)
+        db.session.commit()
+        db.session.refresh(action)
+
+    return jsonify(action.to_dict()), 200
