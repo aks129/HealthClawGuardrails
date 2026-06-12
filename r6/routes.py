@@ -2252,6 +2252,133 @@ def mcp_app_wearables():
     return resp
 
 
+# --- $share-bundle Export (SMART Health Link feed) ---
+
+@r6_blueprint.route('/$share-bundle', methods=['POST'])
+def share_bundle():
+    """
+    Export a patient-controlled FHIR collection Bundle for SMART Health Link
+    generation.  The bundle is IDENTIFIED data released under step-up
+    authorisation with patient-controlled redaction: institutional identifiers
+    and free-text notes are stripped, but name/DOB/clinical codes are
+    preserved so a receiving clinic can intake the record.
+
+    Body (all optional JSON):
+        patient_id      — if given, restrict to resources whose subject/patient
+                          reference resolves to this patient id, plus the
+                          Patient resource itself.
+        resource_types  — list of FHIR resource types to include; defaults to
+                          the SHL intake set.
+
+    Returns: application/fhir+json  Bundle{type:collection}
+    """
+    DEFAULT_TYPES = [
+        'Patient', 'Condition', 'AllergyIntolerance',
+        'MedicationRequest', 'Immunization', 'Observation', 'Coverage',
+    ]
+
+    tenant_id = request.headers.get('X-Tenant-Id')
+
+    # Step-up required — this bundle carries identified patient data
+    step_up_token = request.headers.get('X-Step-Up-Token')
+    if not step_up_token:
+        return _operation_outcome(
+            'error', 'security',
+            '$share-bundle requires X-Step-Up-Token header'
+        ), 401
+
+    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _operation_outcome(
+            'error', 'security',
+            f'Step-up token rejected: {err}'
+        ), 401
+
+    body = request.get_json(silent=True) or {}
+    patient_id = body.get('patient_id') or None
+    requested_types = body.get('resource_types')
+
+    if requested_types is None:
+        resource_types = list(DEFAULT_TYPES)
+    else:
+        if not isinstance(requested_types, list):
+            return _operation_outcome(
+                'error', 'invalid',
+                'resource_types must be a JSON array'
+            ), 400
+        unknown = [t for t in requested_types if t not in R6Resource.SUPPORTED_TYPES]
+        if unknown:
+            return _operation_outcome(
+                'error', 'not-supported',
+                f'Unknown resource type(s): {", ".join(unknown)}'
+            ), 400
+        resource_types = list(requested_types)
+
+    # Query resources for this tenant
+    query = R6Resource.query.filter(
+        R6Resource.tenant_id == tenant_id,
+        R6Resource.is_deleted == False,  # noqa: E712
+        R6Resource.resource_type.in_(resource_types),
+    )
+
+    all_rows = query.all()
+
+    # Apply patient filter when patient_id is supplied
+    if patient_id:
+        filtered = []
+        for row in all_rows:
+            if row.resource_type == 'Patient':
+                # Include the Patient resource whose stored id matches
+                data = json.loads(row.resource_json)
+                if data.get('id') == patient_id or row.id == patient_id:
+                    filtered.append(row)
+            else:
+                data = json.loads(row.resource_json)
+                subject = data.get('subject', {}) or {}
+                patient_ref = data.get('patient', {}) or {}
+                ref = subject.get('reference') or patient_ref.get('reference') or ''
+                if ref == f'Patient/{patient_id}':
+                    filtered.append(row)
+        all_rows = filtered
+
+    # Apply patient-controlled redaction to every resource
+    entries = []
+    type_set = set()
+    for row in all_rows:
+        fhir_json = row.to_fhir_json()
+        # Determine the patient_id to pass to redaction; for Patient resources
+        # the resource itself is the patient.
+        redact_pid = patient_id or fhir_json.get('id') if row.resource_type == 'Patient' else patient_id or ''
+        redacted = apply_patient_controlled_redaction(fhir_json, redact_pid)
+        entries.append({'resource': redacted})
+        type_set.add(row.resource_type)
+
+    bundle = {
+        'resourceType': 'Bundle',
+        'type': 'collection',
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        'entry': entries,
+    }
+
+    record_audit_event(
+        'read',
+        resource_type='Bundle',
+        resource_id='share-bundle',
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail=(
+            f'share-bundle export: {len(entries)} resources '
+            f'across {len(type_set)} type(s)'
+        ),
+    )
+
+    return Response(
+        json.dumps(bundle),
+        status=200,
+        mimetype='application/fhir+json',
+    )
+
+
 # --- Helper Functions ---
 
 def _operation_outcome(severity, code, diagnostics):
