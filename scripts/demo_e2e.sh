@@ -217,6 +217,54 @@ HITL_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "$FHIR_BASE/Condit
 check "Clinical write without X-Human-Confirmed returns 428" "428" "$HITL_STATUS"
 
 # ─────────────────────────────────────────────────────
+# GATE 11: Action propose / commit in simulation mode
+# ─────────────────────────────────────────────────────
+_blue "Gate 11: Action propose/commit (simulation mode)"
+
+# Derive the Flask app root from FHIR_BASE (strip /r6/fhir suffix)
+APP_BASE="${FHIR_BASE%/r6/fhir}"
+
+# Refresh step-up token for action commit
+TOKEN_RESP3=$(curl -s -X POST "$FHIR_BASE/internal/step-up-token" \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: $TENANT_ID" \
+  -d '{}' 2>/dev/null || echo '{}')
+STEP_UP_TOKEN3=$(echo "$TOKEN_RESP3" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+
+# Propose a phone-call action
+PROPOSE_RESP=$(curl -s -X POST "$APP_BASE/r6/actions/propose" \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-Id: $TENANT_ID" \
+  -d '{"kind":"phone-call","payload":{"to":"Demo Pharmacy","phone":"617-555-0100","body":"Demo refill call script"}}' \
+  2>/dev/null || echo '{}')
+ACTION_ID=$(echo "$PROPOSE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+check "Action proposed — id returned" "^[0-9a-f-]\{36\}$" "${ACTION_ID:-none}"
+
+if [ -n "$ACTION_ID" ]; then
+  # Commit the action (simulation mode — no provider keys → completes synchronously)
+  COMMIT_RESP=$(curl -s -X POST "$APP_BASE/r6/actions/$ACTION_ID/commit" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: $TENANT_ID" \
+    -H "X-Step-Up-Token: $STEP_UP_TOKEN3" \
+    -H "X-Human-Confirmed: true" \
+    2>/dev/null || echo '{}')
+  COMMIT_STATUS=$(echo "$COMMIT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+  check "Action commit returns status=completed" "completed" "$COMMIT_STATUS"
+
+  # Verify audit trail recorded ProposedAction events (propose + commit = ≥ 2)
+  AUDIT_ACTIONS=$(curl -s "$FHIR_BASE/AuditEvent?_count=50" \
+    -H "X-Tenant-ID: $TENANT_ID" 2>/dev/null || echo '{}')
+  AUDIT_ACTION_COUNT=$(echo "$AUDIT_ACTIONS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+entries = d.get('entry', [])
+count = sum(1 for e in entries if 'ProposedAction' in json.dumps(e))
+print(count)
+" 2>/dev/null || echo "0")
+  check "Audit trail contains ≥ 2 ProposedAction entries" "[2-9]\|[1-9][0-9]" "$AUDIT_ACTION_COUNT"
+fi
+
+# ─────────────────────────────────────────────────────
 # SUMMARY
 # ─────────────────────────────────────────────────────
 echo ""

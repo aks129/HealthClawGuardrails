@@ -77,6 +77,8 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 /r6/                    FHIR modules: routes, models, validator, oauth, stepup, audit,
                         redaction, health_compliance, context_builder, rate_limit,
                         fhir_proxy, agent_client, seed, telegram_push
+/r6/actions/            Real-world action layer — propose/commit/status/callbacks for
+                        phone calls (Bland.ai) + SMS (Twilio), simulation mode without keys
 /r6/fasten/             Fasten Connect integration (routes, models, ingester, verify)
 /r6/shc/                SmartHealthConnect bridge + OAuth callback brokers for MEDENT and HBO
 /r6/wearables/          Wearable device sync (Apple Health / Fitbit)
@@ -86,7 +88,7 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 /openclaw/              Telegram bot (bot.py + Dockerfile)
 /hermes/                Nous Research Hermes agent config + persona
 /skills/                Skill definitions (agentskills.io standard, auto-indexed at /skills)
-/tests/                 Python tests (553 passing)
+/tests/                 Python tests (597 passing)
 /e2e/                   Playwright tests
 ```
 
@@ -143,10 +145,10 @@ Column names differ from what you might guess:
 
 ## MCP Server
 
-**16 tools in three groups:**
+**19 tools in three groups:**
 
-- **Read** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`
-- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`
+- **Read** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`
+- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`
 - **Utility**: `fhir_compiled_truth`, `fhir_get_token`, `fhir_seed`
 
 Tool names use underscores (`fhir_search`, not `fhir.search`).
@@ -218,4 +220,25 @@ Post-ingest Telegram push: `r6.telegram_push.notify_tenant` is called directly v
 
 Seven jobs: `python-tests`, `node-tests`, `playwright-tests`, `compose-smoke`, `compliance-gates`, `secret-scan`, `dependency-audit`.
 
-Before deploying: run `./scripts/demo_e2e.sh` — all 10 gates must pass.
+Before deploying: run `./scripts/demo_e2e.sh` — all 11 gates must pass (gate 11 exercises the action layer in simulation mode).
+
+## Action Layer (`r6/actions/`)
+
+Real-world actions (phone calls, SMS) behind the same guardrails as FHIR writes. Lifecycle: `proposed → executing → completed | failed | unknown | expired` (the `confirmed` state exists in the transition graph but the commit route claims straight to `executing` atomically).
+
+- `POST /r6/actions/propose` — tenant header only; returns draft + 30-min-TTL action id.
+- `POST /r6/actions/<id>/commit` — requires `X-Step-Up-Token` AND `X-Human-Confirmed: true` (401/428 otherwise). Claims via a single guarded UPDATE (`WHERE status='proposed' AND expires_at > now`) — concurrent commits get 409.
+- `GET /r6/actions/<id>` — status poll, tenant-isolated, lazy expiry.
+- `POST /r6/actions/callback/<bland|twilio>` — fail-closed shared-secret (`ACTIONS_WEBHOOK_SECRET`); Twilio sends form-encoded `MessageStatus`/`MessageSid`, Bland sends JSON.
+
+**House rules (from review — keep them):**
+
+- Every status write is a guarded query-level UPDATE whose WHERE includes the expected current status. Never a bare ORM `transition()` write — stale in-memory state can clobber a webhook's verdict and cause a duplicate call.
+- Post-send ambiguity (timeout, 5xx, ConnectionError, garbled response) maps to `outcome_unknown=True` → status `unknown`, NEVER `failed`. A `failed` status invites re-propose → double-placed phone call.
+- Audit `detail` and `notify_tenant` use `ProposedAction.summary()` only (id/kind/recipient-label/status) — never payload, phone numbers, or provider transcripts.
+- Executors log `type(exc).__name__` and HTTP status codes only — `str(exc)` can leak the secret-bearing webhook URL.
+- No retries on calls — by design.
+
+**Env vars:** `BLAND_AI_API_KEY` (calls), `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` (SMS — all three or hard-fail), `ACTIONS_WEBHOOK_SECRET` (callbacks 403 without it), `PUBLIC_BASE_URL` (webhook base, defaults to app.healthclaw.io). Absent provider keys → simulation mode (commit completes synchronously).
+
+**Design docs:** `docs/superpowers/specs/2026-06-12-unified-action-layer-design.md` (full integration spec — phases 2-6 cover skills, Flexpa, ainpi.dev lookup, SHL QR, careagents.cloud rewire) and `docs/superpowers/plans/2026-06-12-action-core.md` (Phase 1 plan, executed).

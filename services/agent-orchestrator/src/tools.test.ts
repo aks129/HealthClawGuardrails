@@ -41,6 +41,9 @@ function fakeResponse(body: Record<string, unknown>, status = 200) {
 }
 
 const EXPECTED_TOOL_NAMES = [
+  "action_commit",
+  "action_propose",
+  "action_status",
   "context_get",
   "curatr_apply_fix",
   "curatr_evaluate",
@@ -62,6 +65,7 @@ const EXPECTED_TOOL_NAMES = [
 const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
 
 const READ_ONLY_TOOL_NAMES = [
+  "action_status",
   "context_get",
   "fhir_read",
   "fhir_search",
@@ -86,8 +90,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 16 tools", () => {
-    expect(schemas).toHaveLength(16);
+  it("getMCPToolSchemas() returns exactly 19 tools", () => {
+    expect(schemas).toHaveLength(19);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -106,7 +110,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 16 tool names match the expected set", () => {
+  it("all 19 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -581,6 +585,128 @@ describe("Tool Execution Tests", () => {
     expect(result.error).toBeUndefined();
     expect(result.proposal_status).toBe("ready");
   });
+
+  // -- action_propose --
+
+  it("action_propose forwards tenant header and posts to /r6/actions/propose", async () => {
+    const draft = { id: "act-001", kind: "phone-call", status: "proposed", script: "Hi, this is a call." };
+    mockFetch.mockResolvedValueOnce(fakeResponse(draft));
+
+    const result = await tools.executeTool(
+      "action_propose",
+      { kind: "phone-call", payload: { to: "Dr. Smith", phone: "+15551234567", body: "Requesting referral." } },
+      { "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/r6/actions/propose");
+    expect(opts.method).toBe("POST");
+    expect(opts.headers["X-Tenant-Id"]).toBe("tenant-xyz");
+    const body = JSON.parse(opts.body);
+    expect(body.kind).toBe("phone-call");
+    expect(result).toEqual(draft);
+  });
+
+  // -- action_commit without step-up --
+
+  it("action_commit requires step-up token (returns error without it, no fetch made)", async () => {
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      {} // no step-up token
+    );
+
+    expect(result).toHaveProperty("error", "Step-up authorization required");
+    expect(result).toHaveProperty("requires_step_up", true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("action_commit returns step-up error when headers are undefined", async () => {
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" }
+      // headers argument omitted
+    );
+
+    expect(result).toHaveProperty("error", "Step-up authorization required");
+    expect(result).toHaveProperty("requires_step_up", true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // -- action_commit with step-up --
+
+  it("action_commit with step-up token sends X-Step-Up-Token and X-Human-Confirmed: true", async () => {
+    const committed = { id: "act-001", status: "executing" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(committed));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/r6/actions/act-001/commit");
+    expect(opts.method).toBe("POST");
+    expect(opts.headers["X-Step-Up-Token"]).toBe("valid-token-abc");
+    expect(opts.headers["X-Human-Confirmed"]).toBe("true");
+    expect(result).toEqual(committed);
+  });
+
+  it("action_commit on 410 returns error + detail containing 'expired'", async () => {
+    const body = { error: "Proposal expired — propose the action again" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(body, 410));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-expired" },
+      { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("410");
+    expect(result).toHaveProperty("detail");
+    const detail = result.detail as Record<string, unknown>;
+    expect((detail.error as string).toLowerCase()).toContain("expired");
+    expect(result).not.toHaveProperty("requires_step_up");
+  });
+
+  it("action_commit on 401 includes requires_step_up: true", async () => {
+    const body = { error: "Step-up token rejected: token expired" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(body, 401));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      { "x-step-up-token": "expired-token", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("401");
+    expect(result).toHaveProperty("requires_step_up", true);
+    expect(result).toHaveProperty("detail");
+  });
+
+  // -- action_status --
+
+  it("action_status fetches /r6/actions/<id> and returns parsed status", async () => {
+    const statusBody = { id: "act-001", status: "completed", outcome: "sent" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(statusBody));
+
+    const result = await tools.executeTool(
+      "action_status",
+      { action_id: "act-001" },
+      { "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("/r6/actions/act-001");
+    expect(url).not.toContain("/commit");
+    expect(result).toEqual(statusBody);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -649,14 +775,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 16 tool schemas", async () => {
+    it("tools/list returns all 19 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(16);
+      expect(res.body.result.tools).toHaveLength(19);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -831,13 +957,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 16 tool schemas", async () => {
+    it("tools/list returns all 19 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(16);
+      expect(res.body.result.tools).toHaveLength(19);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {

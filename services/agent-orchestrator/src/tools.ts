@@ -499,6 +499,58 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- Real-world action tools (Phase 1: action core) ---
+      {
+        name: "action_propose",
+        description:
+          "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before commit. Does not execute anything.",
+        tier: "write",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["phone-call", "sms", "insurance-call"],
+              description: "Action type",
+            },
+            payload: {
+              type: "object",
+              description:
+                "Action content: { to: recipient label, phone: number to dial/text, body: call script or message text }",
+            },
+          },
+          required: ["kind", "payload"],
+        },
+      },
+      {
+        name: "action_commit",
+        description:
+          "Execute a previously proposed action AFTER the patient has explicitly approved the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). Only call this after the patient says yes.",
+        tier: "write",
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            action_id: { type: "string", description: "ID returned by action_propose" },
+          },
+          required: ["action_id"],
+        },
+      },
+      {
+        name: "action_status",
+        description:
+          "Check the status and outcome of an action (proposed/executing/completed/failed). Use after commit to report the result back to the patient.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            action_id: { type: "string", description: "ID returned by action_propose" },
+          },
+          required: ["action_id"],
+        },
+      },
     ];
   }
 
@@ -512,8 +564,8 @@ export class FHIRTools {
       return { error: `Unknown tool: ${toolName}` };
     }
 
-    // Enforce step-up for commit_write
-    if (tool.tier === "write" && toolName === "fhir_commit_write") {
+    // Enforce step-up for commit_write and action_commit
+    if (tool.tier === "write" && (toolName === "fhir_commit_write" || toolName === "action_commit")) {
       const stepUpToken = headers?.["x-step-up-token"];
       if (!stepUpToken) {
         return {
@@ -675,6 +727,19 @@ export class FHIRTools {
           _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${tenantId}'. The step_up_token is ready for write operations.`,
         };
       }
+
+      case "action_propose":
+        return this.proposeAction(
+          input.kind as string,
+          input.payload as Record<string, unknown>,
+          fwdHeaders
+        );
+
+      case "action_commit":
+        return this.commitAction(input.action_id as string, fwdHeaders);
+
+      case "action_status":
+        return this.getActionStatus(input.action_id as string, fwdHeaders);
 
       default:
         return { error: `Unimplemented tool: ${toolName}` };
@@ -1217,5 +1282,75 @@ export class FHIRTools {
     };
 
     return result;
+  }
+
+  // --- Real-world action tools ---
+
+  private async proposeAction(
+    kind: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const resp = await fetch(`${root}/r6/actions/propose`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, payload }),
+    });
+    if (!resp.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await resp.json();
+      } catch {
+        try { detail = await resp.text(); } catch { detail = null; }
+      }
+      return { error: `action_propose failed with status ${resp.status}`, detail };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  private async commitAction(
+    actionId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const resp = await fetch(`${root}/r6/actions/${encodeURIComponent(actionId)}/commit`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json", "X-Human-Confirmed": "true" },
+    });
+    if (!resp.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await resp.json();
+      } catch {
+        try { detail = await resp.text(); } catch { detail = null; }
+      }
+      const result: Record<string, unknown> = { error: `action_commit failed with status ${resp.status}`, detail };
+      if (resp.status === 401) {
+        result.requires_step_up = true;
+      }
+      return result;
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  private async getActionStatus(
+    actionId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const resp = await fetch(`${root}/r6/actions/${encodeURIComponent(actionId)}`, {
+      headers,
+    });
+    if (!resp.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await resp.json();
+      } catch {
+        try { detail = await resp.text(); } catch { detail = null; }
+      }
+      return { error: `action_status failed with status ${resp.status}`, detail };
+    }
+    return (await resp.json()) as Record<string, unknown>;
   }
 }

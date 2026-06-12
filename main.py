@@ -92,6 +92,7 @@ with app.app_context():
     from r6.fasten.models import FastenConnection, FastenJob
     from r6.wearables.models import WearableConnection
     from r6.command_center.models import ConversationMessage, AgentTask
+    import r6.actions.models  # noqa: F401 — registers ProposedAction table
     from sqlalchemy.exc import OperationalError, IntegrityError, ProgrammingError
     try:
         db.create_all()
@@ -137,6 +138,11 @@ logger.info("R6 FHIR Blueprint registered at /r6/fhir")
 from r6.fasten.routes import fasten_blueprint
 app.register_blueprint(fasten_blueprint)
 logger.info("Fasten Connect Blueprint registered at /fasten")
+
+# Register Actions Blueprint
+from r6.actions.routes import actions_blueprint
+app.register_blueprint(actions_blueprint)
+logger.info("Actions Blueprint registered at /r6/actions")
 
 # Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
 from r6.wearables.routes import wearables_blueprint
