@@ -111,6 +111,7 @@ skills stop asking.
 8. **QR share** — `shl_generate`: clinical export + Coverage + latest
    wearable Observations → patient-controlled redaction → encrypted SHL with
    TTL + revocation ("revoke that QR" kills the link) → QR PNG to chat/web.
+   Implemented 2026-06-12 by adopting jmandel/kill-the-clipboard-skill (SHL STU 1, zero-knowledge storage) rather than building bespoke — see CLAUDE.md SMART Health Links section.
 
 ## Action lifecycle
 
