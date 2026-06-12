@@ -145,10 +145,10 @@ Column names differ from what you might guess:
 
 ## MCP Server
 
-**19 tools in three groups:**
+**20 tools in three groups:**
 
 - **Read** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`
-- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`
+- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`
 - **Utility**: `fhir_compiled_truth`, `fhir_get_token`, `fhir_seed`
 
 Tool names use underscores (`fhir_search`, not `fhir.search`).
@@ -242,3 +242,14 @@ Real-world actions (phone calls, SMS) behind the same guardrails as FHIR writes.
 **Env vars:** `BLAND_AI_API_KEY` (calls), `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` (SMS — all three or hard-fail), `ACTIONS_WEBHOOK_SECRET` (callbacks 403 without it), `PUBLIC_BASE_URL` (webhook base, defaults to app.healthclaw.io). Absent provider keys → simulation mode (commit completes synchronously).
 
 **Design docs:** `docs/superpowers/specs/2026-06-12-unified-action-layer-design.md` (full integration spec — phases 2-6 cover skills, Flexpa, ainpi.dev lookup, SHL QR, careagents.cloud rewire) and `docs/superpowers/plans/2026-06-12-action-core.md` (Phase 1 plan, executed).
+
+## SMART Health Links
+
+Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `fa0020d`) as the SHL storage server rather than building bespoke — it implements SHL STU 1 and is zero-knowledge (the server stores only ciphertext + `sha256(auth)`; it can never read PHI).
+
+- **Storage server** — Docker Compose service `shl-server` (profile `shl`); exposes port 8000; SQLite at `/data/db.sqlite` (named volume `shl-data`); `SHL_PUBLIC_URL` env sets `BASE_URL`.
+- **MCP client-side crypto** — vendored into `src/ktc/`; keep diffable against upstream. AES-256-GCM encryption happens in the MCP server before anything is uploaded to the storage server.
+- **Flask `$share-bundle`** operation — profiles: `intake` (default, US Core R4 clinical; name/DOB/address preserved, SSN-class identifiers and free-text stripped) and `deidentified` (apply_patient_controlled_redaction — preserves birthDate, differs from HIPAA Safe Harbor). Feeds the SHL server.
+- **`shl_generate` MCP tool** — step-up gated (Write group); clinical export + Coverage + Observations (incl. wearable-sourced) → patient-controlled redaction → encrypted SHL with TTL; returns shlink/viewer/manage links. QR-image rendering and link revocation via the manage page on the SHL server are PLANNED.
+- **`SHL_SERVER_URL` env** on the MCP server — absent → simulation mode (link generated locally, not persisted).
+- **Zero-knowledge property:** storage server sees only ciphertext + `sha256(auth)`; PHI never leaves the MCP server unencrypted.

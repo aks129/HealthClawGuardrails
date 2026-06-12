@@ -2252,6 +2252,196 @@ def mcp_app_wearables():
     return resp
 
 
+# --- $share-bundle Export (SMART Health Link feed) ---
+
+def _intake_strip(res):
+    """Intake profile: identified for clinic check-in (name/DOB/address/telecom
+    preserved) but SSN-class identifiers and clinician free-text never ship."""
+    res.pop('note', None)
+    res.pop('text', None)
+    _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn', 'urn:oid:2.16.840.1.113883.4.1')
+    idents = res.get('identifier')
+    if isinstance(idents, list):
+        kept = [i for i in idents if not (isinstance(i, dict) and i.get('system') in _SSN_SYSTEMS)]
+        if kept:
+            res['identifier'] = kept
+        else:
+            res.pop('identifier', None)
+    return res
+
+
+@r6_blueprint.route('/$share-bundle', methods=['POST'])
+def share_bundle():
+    """
+    Export a patient-controlled FHIR collection Bundle for SMART Health Link
+    generation.
+
+    Profiles:
+        intake (default) — identified; name/DOB/address/insurance preserved;
+                           SSN-class identifiers (http://hl7.org/fhir/sid/us-ssn
+                           and urn:oid:2.16.840.1.113883.4.1), narrative text
+                           (text), and free-text notes (note) stripped; meta.tag
+                           stamped intake-identified.
+        deidentified    — apply_patient_controlled_redaction; strips name/
+                          telecom/address/notes, preserves birthDate and clinical
+                          codes, injects healthclaw canonical identifier; stamps
+                          meta.tag patient-controlled.  NOTE: this is
+                          patient-controlled redaction, not HIPAA Safe Harbor
+                          (birthDate is preserved, which Safe Harbor strips).
+
+    Body (all optional JSON):
+        patient_id      — if given, restrict to resources whose subject/patient/
+                          beneficiary reference resolves to this patient id, plus
+                          the Patient resource itself.
+        resource_types  — list of FHIR resource types to include; defaults to
+                          the SHL intake set.
+
+    Returns: application/fhir+json  Bundle{type:collection}
+    """
+    DEFAULT_TYPES = [
+        'Patient', 'Condition', 'AllergyIntolerance',
+        'MedicationRequest', 'Immunization', 'Observation', 'Coverage',
+    ]
+
+    tenant_id = request.headers.get('X-Tenant-Id')
+
+    # Step-up required — this bundle carries identified patient data
+    step_up_token = request.headers.get('X-Step-Up-Token')
+    if not step_up_token:
+        return _operation_outcome(
+            'error', 'security',
+            '$share-bundle requires X-Step-Up-Token header'
+        ), 401
+
+    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _operation_outcome(
+            'error', 'security',
+            f'Step-up token rejected: {err}'
+        ), 401
+
+    body = request.get_json(silent=True) or {}
+    patient_id = body.get('patient_id') or None
+    requested_types = body.get('resource_types')
+    profile = body.get('profile', 'intake')
+
+    VALID_PROFILES = ('intake', 'deidentified')
+    if profile not in VALID_PROFILES:
+        return _operation_outcome(
+            'error', 'invalid',
+            f'Invalid profile "{profile}". Valid values: {", ".join(VALID_PROFILES)}'
+        ), 400
+
+    if requested_types is None:
+        resource_types = list(DEFAULT_TYPES)
+    else:
+        if not isinstance(requested_types, list):
+            return _operation_outcome(
+                'error', 'invalid',
+                'resource_types must be a JSON array'
+            ), 400
+        unknown = [t for t in requested_types if t not in R6Resource.SUPPORTED_TYPES]
+        if unknown:
+            return _operation_outcome(
+                'error', 'not-supported',
+                f'Unknown resource type(s): {", ".join(unknown)}'
+            ), 400
+        resource_types = list(requested_types)
+
+    # Query resources for this tenant
+    query = R6Resource.query.filter(
+        R6Resource.tenant_id == tenant_id,
+        R6Resource.is_deleted == False,  # noqa: E712
+        R6Resource.resource_type.in_(resource_types),
+    )
+
+    all_rows = query.all()
+
+    # Apply patient filter when patient_id is supplied
+    if patient_id:
+        filtered = []
+        for row in all_rows:
+            if row.resource_type == 'Patient':
+                # Include the Patient resource whose stored id matches
+                data = json.loads(row.resource_json)
+                if data.get('id') == patient_id or row.id == patient_id:
+                    filtered.append(row)
+            else:
+                data = json.loads(row.resource_json)
+                subject = data.get('subject', {}) or {}
+                patient_ref = data.get('patient', {}) or {}
+                beneficiary_ref = data.get('beneficiary', {}) or {}
+                ref = (
+                    subject.get('reference')
+                    or patient_ref.get('reference')
+                    or beneficiary_ref.get('reference')
+                    or ''
+                )
+                if ref == f'Patient/{patient_id}':
+                    filtered.append(row)
+        all_rows = filtered
+
+    # Apply profile-appropriate handling to every resource
+    entries = []
+    type_set = set()
+    for row in all_rows:
+        fhir_json = row.to_fhir_json()
+        if profile == 'deidentified':
+            # Determine the patient_id to pass to redaction; for Patient resources
+            # the resource itself is the patient.
+            redact_pid = (
+                (patient_id or fhir_json.get('id'))
+                if row.resource_type == 'Patient'
+                else (patient_id or '')
+            )
+            resource = apply_patient_controlled_redaction(fhir_json, redact_pid)
+        else:
+            # intake profile: strip SSN-class identifiers and free-text, then
+            # stamp meta.tag so receivers know this is an identified share.
+            resource = _intake_strip(fhir_json)
+            meta = resource.setdefault('meta', {})
+            tags = meta.setdefault('tag', [])
+            intake_tag = {
+                'system': 'https://healthclaw.io/share-profile',
+                'code': 'intake-identified',
+            }
+            if intake_tag not in tags:
+                tags.append(intake_tag)
+        entries.append({'resource': resource})
+        type_set.add(row.resource_type)
+
+    # Detect multi-patient tenant when no patient_id filter was applied
+    patient_rows = [r for r in all_rows if r.resource_type == 'Patient']
+    multi_patient_note = ''
+    if not patient_id and len(patient_rows) > 1:
+        multi_patient_note = ' [multi-patient tenant, no patient filter]'
+
+    bundle = {
+        'resourceType': 'Bundle',
+        'type': 'collection',
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        'entry': entries,
+    }
+
+    record_audit_event(
+        'read',
+        resource_type='Bundle',
+        resource_id='share-bundle',
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail=(
+            f'share-bundle export (profile={profile}): {len(entries)} resources '
+            f'across {len(type_set)} type(s){multi_patient_note}'
+        ),
+    )
+
+    return Response(
+        json.dumps(bundle),
+        status=200,
+        mimetype='application/fhir+json',
+    )
+
+
 # --- Helper Functions ---
 
 def _operation_outcome(severity, code, diagnostics):

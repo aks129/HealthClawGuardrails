@@ -159,9 +159,31 @@ services:
     profiles:
       - wearables
 
+  # ─── SMART Health Links storage server (opt-in via `--profile shl`) ───
+  # jmandel/kill-the-clipboard-skill (MIT, pinned fa0020d).
+  # Zero-knowledge: the server stores only ciphertext + sha256(auth) — it
+  # cannot read PHI. MCP does client-side AES-256-GCM before uploading.
+  shl-server:
+    build:
+      context: ./services/shl-server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - BASE_URL=${SHL_PUBLIC_URL:-http://localhost:8000}
+      - DB_PATH=/data/db.sqlite
+    volumes:
+      - shl-data:/data
+    restart: unless-stopped
+    networks:
+      - fhir-net
+    profiles:
+      - shl
+
 networks:
   fhir-net:
     driver: bridge
 
 volumes:
   wearables-pg-data:
+  shl-data:

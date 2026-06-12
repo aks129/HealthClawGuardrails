@@ -21,6 +21,10 @@
  */
 
 import fetch from "node-fetch";
+import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
+import { encryptJWE } from "./ktc/jwe";
+import { buildShlink, buildOwnerLink, buildViewerLink } from "./ktc/shlink";
+import { utf8 } from "./ktc/encoding";
 
 export type ToolTier = "read" | "write";
 
@@ -551,6 +555,23 @@ export class FHIRTools {
           required: ["action_id"],
         },
       },
+      {
+        name: "shl_generate",
+        description:
+          "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
+        tier: "write",
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            label: { type: "string", description: "Short label shown in SHL viewers (<=80 chars), e.g. 'Records for Winters Healthcare'. No PHI beyond what the patient approves." },
+            expires_in_days: { type: "number", description: "Link lifetime in days (default 7, max 90)" },
+            profile: { type: "string", enum: ["intake", "deidentified"], description: "intake = identified record for clinic check-in (default); deidentified = strips name/contact/institutional IDs" },
+            patient_id: { type: "string", description: "Optional patient id filter for multi-patient tenants" },
+          },
+          required: [],
+        },
+      },
     ];
   }
 
@@ -564,8 +585,8 @@ export class FHIRTools {
       return { error: `Unknown tool: ${toolName}` };
     }
 
-    // Enforce step-up for commit_write and action_commit
-    if (tool.tier === "write" && (toolName === "fhir_commit_write" || toolName === "action_commit")) {
+    // Enforce step-up for commit_write, action_commit, and shl_generate (releases full record)
+    if (tool.tier === "write" && (toolName === "fhir_commit_write" || toolName === "action_commit" || toolName === "shl_generate")) {
       const stepUpToken = headers?.["x-step-up-token"];
       if (!stepUpToken) {
         return {
@@ -740,6 +761,9 @@ export class FHIRTools {
 
       case "action_status":
         return this.getActionStatus(input.action_id as string, fwdHeaders);
+
+      case "shl_generate":
+        return this.generateShl(input, fwdHeaders);
 
       default:
         return { error: `Unimplemented tool: ${toolName}` };
@@ -1352,5 +1376,128 @@ export class FHIRTools {
       return { error: `action_status failed with status ${resp.status}`, detail };
     }
     return (await resp.json()) as Record<string, unknown>;
+  }
+
+  // --- SMART Health Links (SHL) ---
+
+  private async generateShl(
+    input: Record<string, unknown>,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const profile = (input.profile as string | undefined) || "intake";
+    const patientId = input.patient_id as string | undefined;
+    const rawDays = typeof input.expires_in_days === "number" ? input.expires_in_days : 7;
+    const days = Math.min(Math.max(1, Math.round(rawDays)), 90);
+    const label = typeof input.label === "string" ? input.label.slice(0, 80) : undefined;
+
+    // Step 1: Fetch the guardrailed share-bundle from Flask
+    const bundleResp = await fetch(`${root}/r6/fhir/$share-bundle`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(profile !== "intake" ? { profile } : {}),
+        ...(patientId ? { patient_id: patientId } : {}),
+      }),
+    });
+
+    if (!bundleResp.ok) {
+      let detail: unknown = null;
+      try { detail = await bundleResp.json(); } catch {
+        try { detail = await bundleResp.text(); } catch { detail = null; }
+      }
+      const result: Record<string, unknown> = {
+        error: `share-bundle fetch failed with status ${bundleResp.status}`,
+        detail,
+      };
+      if (bundleResp.status === 401) result.requires_step_up = true;
+      return result;
+    }
+
+    const bundle = (await bundleResp.json()) as Record<string, unknown>;
+    const resourceCount = (bundle.entry as unknown[] | undefined)?.length ?? 0;
+
+    // Step 2: Simulation mode — SHL_SERVER_URL not configured
+    const SHL_BASE = process.env.SHL_SERVER_URL;
+    if (!SHL_BASE) {
+      return {
+        simulated: true,
+        shlink: "shlink:/SIMULATED",
+        note: `SHL_SERVER_URL not configured — returned stub. Bundle contained ${resourceCount} resources.`,
+        resource_count: resourceCount,
+      };
+    }
+
+    // Step 3: Generate master secret, derive auth + key
+    const M = generateMasterSecret();
+    const auth = await deriveAuth(M);
+    const key = await deriveKey(M);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const exp = nowSeconds + days * 86400;
+
+    // Step 4: Create the SHL link on the server
+    const createLinkResp = await fetch(`${SHL_BASE}/api/links`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${auth}`,
+      },
+      body: JSON.stringify({ flag: "U", exp }),
+    });
+
+    if (!createLinkResp.ok) {
+      let detail: unknown = null;
+      try { detail = await createLinkResp.json(); } catch {
+        try { detail = await createLinkResp.text(); } catch { detail = null; }
+      }
+      return { error: `SHL /api/links failed with status ${createLinkResp.status}`, detail };
+    }
+
+    const linkData = (await createLinkResp.json()) as { id: string; url: string };
+
+    // Step 5: Encrypt the bundle and upload ciphertext
+    const jwe = await encryptJWE(
+      utf8(JSON.stringify(bundle)),
+      key,
+      { cty: "application/fhir+json", deflate: true }
+    );
+
+    const uploadResp = await fetch(`${SHL_BASE}/api/manage/files`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/jose",
+        "Authorization": `Bearer ${auth}`,
+      },
+      body: jwe,
+    });
+
+    if (!uploadResp.ok) {
+      let detail: unknown = null;
+      try { detail = await uploadResp.json(); } catch {
+        try { detail = await uploadResp.text(); } catch { detail = null; }
+      }
+      return { error: `SHL /api/manage/files failed with status ${uploadResp.status}`, detail };
+    }
+
+    // Step 6: Build the shlink URI
+    const shlink = buildShlink({
+      url: linkData.url,
+      key,
+      exp,
+      flag: "U",
+      ...(label ? { label } : {}),
+      v: 1,
+    });
+
+    // Step 7: Return result — NEVER log or persist M, key, or auth
+    const expiresAt = new Date(exp * 1000).toISOString();
+    return {
+      shlink,
+      viewer_link: buildViewerLink(SHL_BASE, shlink),
+      manage_link: buildOwnerLink(SHL_BASE, M),
+      expires_at: expiresAt,
+      resource_count: resourceCount,
+      _mcp_summary: `SMART Health Link created (expires ${expiresAt}). Give the manage link ONLY to the patient.`,
+    };
   }
 }
