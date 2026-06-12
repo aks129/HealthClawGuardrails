@@ -274,3 +274,81 @@ def test_share_bundle_invalid_resource_types_not_list(client, auth_headers):
         json={'resource_types': 'Patient'},  # string, not list
     )
     assert resp.status_code == 400
+
+
+def test_intake_profile_strips_ssn_note_text_keeps_name_and_mrn(client, auth_headers, app):
+    """Intake profile must strip SSN-class identifiers, note, and text but keep
+    name/demographics and non-SSN identifiers (e.g. MRN)."""
+    patient_with_ssn = {
+        'resourceType': 'Patient',
+        'id': 'ssn-strip-pt-001',
+        'name': [{'family': 'Smith', 'given': ['Alice']}],
+        'birthDate': '1990-03-15',
+        'identifier': [
+            {'system': 'http://example.org/mrn', 'value': 'MRN-12345'},
+            {'system': 'http://hl7.org/fhir/sid/us-ssn', 'value': '123-45-6789'},
+        ],
+        'note': [{'text': 'Patient is anxious about procedures.'}],
+        'text': {'status': 'generated', 'div': '<div>Alice Smith</div>'},
+    }
+    _seed_resource(app, 'Patient', patient_with_ssn)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'patient_id': 'ssn-strip-pt-001', 'resource_types': ['Patient']},
+        # profile defaults to 'intake'
+    )
+    assert resp.status_code == 200
+    bundle = json.loads(resp.data)
+    assert len(bundle['entry']) == 1
+
+    patient = bundle['entry'][0]['resource']
+
+    # Name must be preserved (intake = identified)
+    assert 'name' in patient
+    assert patient['name'][0]['family'] == 'Smith'
+
+    # birthDate must be preserved
+    assert patient.get('birthDate') == '1990-03-15'
+
+    # SSN identifier must be stripped
+    identifiers = patient.get('identifier', [])
+    systems = [i.get('system') for i in identifiers]
+    assert 'http://hl7.org/fhir/sid/us-ssn' not in systems
+
+    # Non-SSN (MRN) identifier must be kept
+    assert 'http://example.org/mrn' in systems
+
+    # note and text must be stripped
+    assert 'note' not in patient
+    assert 'text' not in patient
+
+    # meta.tag must be stamped
+    tags = patient.get('meta', {}).get('tag', [])
+    assert any(t.get('code') == 'intake-identified' for t in tags)
+
+
+def test_coverage_beneficiary_survives_patient_filter(client, auth_headers, app):
+    """Coverage resources that reference the patient via beneficiary.reference
+    must survive the patient_id filter (not just subject/patient references)."""
+    coverage = {
+        'resourceType': 'Coverage',
+        'id': 'cov-beneficiary-001',
+        'status': 'active',
+        'beneficiary': {'reference': f'Patient/{PATIENT_ID}'},
+        'payor': [{'display': 'ACME Insurance'}],
+    }
+    _seed_resource(app, 'Patient', PATIENT_RESOURCE)
+    _seed_resource(app, 'Coverage', coverage)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'patient_id': PATIENT_ID, 'resource_types': ['Patient', 'Coverage']},
+    )
+    assert resp.status_code == 200
+    bundle = json.loads(resp.data)
+
+    ids = [e['resource'].get('id') for e in bundle['entry']]
+    assert 'cov-beneficiary-001' in ids

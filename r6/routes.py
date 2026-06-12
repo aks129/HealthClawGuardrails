@@ -2254,19 +2254,45 @@ def mcp_app_wearables():
 
 # --- $share-bundle Export (SMART Health Link feed) ---
 
+def _intake_strip(res):
+    """Intake profile: identified for clinic check-in (name/DOB/address/telecom
+    preserved) but SSN-class identifiers and clinician free-text never ship."""
+    res.pop('note', None)
+    res.pop('text', None)
+    _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn', 'urn:oid:2.16.840.1.113883.4.1')
+    idents = res.get('identifier')
+    if isinstance(idents, list):
+        kept = [i for i in idents if not (isinstance(i, dict) and i.get('system') in _SSN_SYSTEMS)]
+        if kept:
+            res['identifier'] = kept
+        else:
+            res.pop('identifier', None)
+    return res
+
+
 @r6_blueprint.route('/$share-bundle', methods=['POST'])
 def share_bundle():
     """
     Export a patient-controlled FHIR collection Bundle for SMART Health Link
-    generation.  The bundle is IDENTIFIED data released under step-up
-    authorisation with patient-controlled redaction: institutional identifiers
-    and free-text notes are stripped, but name/DOB/clinical codes are
-    preserved so a receiving clinic can intake the record.
+    generation.
+
+    Profiles:
+        intake (default) — identified; name/DOB/address/insurance preserved;
+                           SSN-class identifiers (http://hl7.org/fhir/sid/us-ssn
+                           and urn:oid:2.16.840.1.113883.4.1), narrative text
+                           (text), and free-text notes (note) stripped; meta.tag
+                           stamped intake-identified.
+        deidentified    — apply_patient_controlled_redaction; strips name/
+                          telecom/address/notes, preserves birthDate and clinical
+                          codes, injects healthclaw canonical identifier; stamps
+                          meta.tag patient-controlled.  NOTE: this is
+                          patient-controlled redaction, not HIPAA Safe Harbor
+                          (birthDate is preserved, which Safe Harbor strips).
 
     Body (all optional JSON):
-        patient_id      — if given, restrict to resources whose subject/patient
-                          reference resolves to this patient id, plus the
-                          Patient resource itself.
+        patient_id      — if given, restrict to resources whose subject/patient/
+                          beneficiary reference resolves to this patient id, plus
+                          the Patient resource itself.
         resource_types  — list of FHIR resource types to include; defaults to
                           the SHL intake set.
 
@@ -2344,7 +2370,13 @@ def share_bundle():
                 data = json.loads(row.resource_json)
                 subject = data.get('subject', {}) or {}
                 patient_ref = data.get('patient', {}) or {}
-                ref = subject.get('reference') or patient_ref.get('reference') or ''
+                beneficiary_ref = data.get('beneficiary', {}) or {}
+                ref = (
+                    subject.get('reference')
+                    or patient_ref.get('reference')
+                    or beneficiary_ref.get('reference')
+                    or ''
+                )
                 if ref == f'Patient/{patient_id}':
                     filtered.append(row)
         all_rows = filtered
@@ -2364,9 +2396,9 @@ def share_bundle():
             )
             resource = apply_patient_controlled_redaction(fhir_json, redact_pid)
         else:
-            # intake profile: pass through unredacted; stamp meta.tag so
-            # receivers know this is an identified share.
-            resource = fhir_json
+            # intake profile: strip SSN-class identifiers and free-text, then
+            # stamp meta.tag so receivers know this is an identified share.
+            resource = _intake_strip(fhir_json)
             meta = resource.setdefault('meta', {})
             tags = meta.setdefault('tag', [])
             intake_tag = {
@@ -2377,6 +2409,12 @@ def share_bundle():
                 tags.append(intake_tag)
         entries.append({'resource': resource})
         type_set.add(row.resource_type)
+
+    # Detect multi-patient tenant when no patient_id filter was applied
+    patient_rows = [r for r in all_rows if r.resource_type == 'Patient']
+    multi_patient_note = ''
+    if not patient_id and len(patient_rows) > 1:
+        multi_patient_note = ' [multi-patient tenant, no patient filter]'
 
     bundle = {
         'resourceType': 'Bundle',
@@ -2393,7 +2431,7 @@ def share_bundle():
         tenant_id=tenant_id,
         detail=(
             f'share-bundle export (profile={profile}): {len(entries)} resources '
-            f'across {len(type_set)} type(s)'
+            f'across {len(type_set)} type(s){multi_patient_note}'
         ),
     )
 

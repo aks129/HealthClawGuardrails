@@ -21,7 +21,7 @@
  */
 
 import fetch from "node-fetch";
-import { deriveAuth, deriveKey } from "./ktc/hkdf";
+import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
 import { encryptJWE } from "./ktc/jwe";
 import { buildShlink, buildOwnerLink, buildViewerLink } from "./ktc/shlink";
 import { utf8 } from "./ktc/encoding";
@@ -1429,7 +1429,7 @@ export class FHIRTools {
     }
 
     // Step 3: Generate master secret, derive auth + key
-    const M = crypto.getRandomValues(new Uint8Array(32));
+    const M = generateMasterSecret();
     const auth = await deriveAuth(M);
     const key = await deriveKey(M);
     const nowSeconds = Math.floor(Date.now() / 1000);
