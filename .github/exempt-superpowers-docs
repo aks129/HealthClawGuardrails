@@ -1,0 +1,9 @@
+# Exemption: docs/superpowers/ spec + plan documents are intentionally public.
+#
+# These are reviewed architecture/design documents (no client names, no
+# credentials, no PHI) that CLAUDE.md references as the canonical design
+# record for the action layer. The over-sharing rule's intent — keeping
+# raw agent workspace content out of public repos — still applies to
+# .claude/ and .superpowers/ paths, which remain unexempted.
+#
+# Added 2026-06-12 for PR #19 (action core).
