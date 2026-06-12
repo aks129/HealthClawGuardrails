@@ -59,6 +59,7 @@ const EXPECTED_TOOL_NAMES = [
   "fhir_stats",
   "fhir_subscription_topics",
   "fhir_validate",
+  "shl_generate",
   "wearables_sync_status",
 ];
 
@@ -90,8 +91,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 19 tools", () => {
-    expect(schemas).toHaveLength(19);
+  it("getMCPToolSchemas() returns exactly 20 tools", () => {
+    expect(schemas).toHaveLength(20);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -110,7 +111,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 19 tool names match the expected set", () => {
+  it("all 20 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -707,6 +708,118 @@ describe("Tool Execution Tests", () => {
     expect(url).not.toContain("/commit");
     expect(result).toEqual(statusBody);
   });
+
+  // -- shl_generate --
+
+  it("shl_generate without step-up token returns requires_step_up (no fetch made)", async () => {
+    const result = await tools.executeTool(
+      "shl_generate",
+      { label: "Test Clinic" },
+      {} // no step-up token
+    );
+
+    expect(result).toHaveProperty("error", "Step-up authorization required");
+    expect(result).toHaveProperty("requires_step_up", true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("shl_generate simulation mode: SHL_SERVER_URL unset → simulated: true, no second fetch", async () => {
+    const prevShl = process.env.SHL_SERVER_URL;
+    delete process.env.SHL_SERVER_URL;
+
+    const bundle = {
+      resourceType: "Bundle",
+      type: "collection",
+      entry: [{ resource: { resourceType: "Patient" } }, { resource: { resourceType: "Observation" } }],
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
+
+    try {
+      const result = await tools.executeTool(
+        "shl_generate",
+        { label: "Clinic Visit", profile: "intake" },
+        { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+      );
+
+      // Only the share-bundle fetch should have been made (not SHL server)
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toContain("$share-bundle");
+
+      expect(result).toHaveProperty("simulated", true);
+      expect(result).toHaveProperty("shlink", "shlink:/SIMULATED");
+      expect(result).toHaveProperty("resource_count", 2);
+      expect((result.note as string)).toContain("2 resources");
+    } finally {
+      if (prevShl !== undefined) process.env.SHL_SERVER_URL = prevShl;
+    }
+  });
+
+  it("shl_generate real mode: creates shlink with correct structure, manage_link, and JWE upload", async () => {
+    const prevShl = process.env.SHL_SERVER_URL;
+    process.env.SHL_SERVER_URL = "http://shl.test";
+
+    const bundle = {
+      resourceType: "Bundle",
+      type: "collection",
+      entry: [{ resource: { resourceType: "Patient" } }],
+    };
+    const linkData = { id: "abc", url: "http://shl.test/shl/abc" };
+    const fileData = { fileId: "f1" };
+
+    mockFetch
+      .mockResolvedValueOnce(fakeResponse(bundle))          // share-bundle
+      .mockResolvedValueOnce(fakeResponse(linkData))        // POST /api/links
+      .mockResolvedValueOnce(fakeResponse(fileData));       // POST /api/manage/files
+
+    try {
+      const result = await tools.executeTool(
+        "shl_generate",
+        { label: "Records for Winters Healthcare", expires_in_days: 14 },
+        { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+
+      // Verify /api/links call had Bearer auth
+      const [linksUrl, linksOpts] = mockFetch.mock.calls[1];
+      expect(linksUrl).toContain("/api/links");
+      expect((linksOpts.headers as Record<string, string>)["Authorization"]).toMatch(/^Bearer /);
+
+      // Verify /api/manage/files POST body is a 5-segment JWE
+      const [filesUrl, filesOpts] = mockFetch.mock.calls[2];
+      expect(filesUrl).toContain("/api/manage/files");
+      const jweBody = filesOpts.body as string;
+      expect(jweBody.split(".").length).toBe(5);
+      expect((filesOpts.headers as Record<string, string>)["Content-Type"]).toBe("application/jose");
+
+      // Verify returned shlink parses with correct url and flag
+      expect(result).not.toHaveProperty("error");
+      const shlink = result.shlink as string;
+      expect(typeof shlink).toBe("string");
+      expect(shlink).toMatch(/^shlink:\//);
+
+      // Parse the shlink and verify fields
+      const { parseShlink } = await import("./ktc/shlink");
+      const parsed = parseShlink(shlink);
+      expect(parsed.url).toBe("http://shl.test/shl/abc");
+      expect(parsed.flag).toBe("U");
+      expect(typeof parsed.key).toBe("string");
+      expect(parsed.key.length).toBeGreaterThan(0);
+
+      // manage_link starts with base URL + /m#
+      const manageLink = result.manage_link as string;
+      expect(manageLink).toMatch(/^http:\/\/shl\.test\/m#/);
+
+      // viewer_link contains the shlink
+      expect(result.viewer_link as string).toContain(shlink);
+
+      expect(result.resource_count).toBe(1);
+    } finally {
+      if (prevShl !== undefined) process.env.SHL_SERVER_URL = prevShl;
+      else delete process.env.SHL_SERVER_URL;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -775,14 +888,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 19 tool schemas", async () => {
+    it("tools/list returns all 20 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(19);
+      expect(res.body.result.tools).toHaveLength(20);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -957,13 +1070,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 19 tool schemas", async () => {
+    it("tools/list returns all 20 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(19);
+      expect(res.body.result.tools).toHaveLength(20);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
