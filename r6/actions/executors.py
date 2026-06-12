@@ -13,6 +13,7 @@ import base64
 import logging
 import os
 import secrets
+import urllib.parse
 from dataclasses import dataclass
 
 import requests
@@ -28,15 +29,17 @@ class ExecutionResult:
     simulated: bool
     external_ref: str | None = None
     error: str | None = None
+    outcome_unknown: bool = False  # True when the provider MAY have acted (timeout/garbled response after send) — caller must map to status 'unknown', never 'failed', to prevent a re-proposed duplicate call.
 
 
 def _webhook_url(provider, action_id):
     base = os.environ.get('PUBLIC_BASE_URL', 'https://app.healthclaw.io')
     secret = os.environ.get('ACTIONS_WEBHOOK_SECRET', '')
-    url = '%s/r6/actions/callback/%s?action_id=%s' % (base, provider, action_id)
+    params = {'action_id': action_id or ''}
     if secret:
-        url += '&secret=%s' % secret
-    return url
+        params['secret'] = secret
+    return '%s/r6/actions/callback/%s?%s' % (
+        base, provider, urllib.parse.urlencode(params))
 
 
 def _execute_call(payload, action_id):
@@ -76,9 +79,14 @@ def _execute_sms(payload, action_id):
     sid = os.environ.get('TWILIO_ACCOUNT_SID')
     token = os.environ.get('TWILIO_AUTH_TOKEN')
     from_num = os.environ.get('TWILIO_FROM_NUMBER')
-    if not (sid and token and from_num):
+    configured = [v for v in (sid, token, from_num) if v]
+    if not configured:
         return ExecutionResult(ok=True, simulated=True,
                                external_ref='sim-' + secrets.token_hex(6))
+    if len(configured) != 3:
+        logger.error('Twilio partially configured — refusing to simulate')
+        return ExecutionResult(ok=False, simulated=False,
+                               error='SMS provider misconfigured')
     auth = base64.b64encode(('%s:%s' % (sid, token)).encode()).decode()
     resp = requests.post(
         'https://api.twilio.com/2010-04-01/Accounts/%s/Messages.json' % sid,
@@ -109,7 +117,15 @@ def execute_action(kind, payload, action_id=None):
                                error='No executor for kind: %s' % kind)
     try:
         return executor(payload, action_id)
+    except requests.Timeout as exc:
+        logger.error('Executor timeout: %s', type(exc).__name__)
+        return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
+                               error='Provider timed out — outcome unknown')
+    except requests.exceptions.JSONDecodeError as exc:
+        logger.error('Executor bad response: %s', type(exc).__name__)
+        return ExecutionResult(ok=False, simulated=False, outcome_unknown=True,
+                               error='Provider response unreadable — outcome unknown')
     except requests.RequestException as exc:
-        logger.error('Executor network failure: %s', exc)
+        logger.error('Executor network failure: %s', type(exc).__name__)
         return ExecutionResult(ok=False, simulated=False,
                                error='Provider unreachable')

@@ -59,10 +59,33 @@ def test_phone_call_provider_error(monkeypatch):
         )
     assert result.ok is False
     assert result.simulated is False
-    assert 'upstream error' not in (result.error or '') or len(result.error) < 200
+    assert 'upstream error' not in (result.error or '')
+    assert len(result.error) < 200
 
 
 def test_missing_phone_fails_fast():
     result = execute_action(kind='phone-call', payload={'body': 'script'})
     assert result.ok is False
     assert 'phone' in result.error
+
+
+def test_phone_call_timeout_is_outcome_unknown(monkeypatch):
+    import requests as req
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    with patch('r6.actions.executors.requests.post', side_effect=req.Timeout('slow')):
+        result = execute_action(
+            kind='phone-call',
+            payload={'phone': '617-555-0100', 'body': 'script'},
+        )
+    assert result.ok is False
+    assert result.outcome_unknown is True
+
+
+def test_partial_twilio_config_fails_not_simulates(monkeypatch):
+    monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'sid')
+    monkeypatch.setenv('TWILIO_AUTH_TOKEN', 'tok')
+    monkeypatch.delenv('TWILIO_FROM_NUMBER', raising=False)
+    result = execute_action(kind='sms', payload={'phone': '+1', 'body': 'hi'})
+    assert result.ok is False
+    assert result.simulated is False
+    assert 'misconfigured' in result.error
