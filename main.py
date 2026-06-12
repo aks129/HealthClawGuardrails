@@ -139,6 +139,11 @@ from r6.fasten.routes import fasten_blueprint
 app.register_blueprint(fasten_blueprint)
 logger.info("Fasten Connect Blueprint registered at /fasten")
 
+# Register Actions Blueprint
+from r6.actions.routes import actions_blueprint
+app.register_blueprint(actions_blueprint)
+logger.info("Actions Blueprint registered at /r6/actions")
+
 # Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
 from r6.wearables.routes import wearables_blueprint
 app.register_blueprint(wearables_blueprint)
