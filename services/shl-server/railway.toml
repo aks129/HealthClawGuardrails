@@ -1,0 +1,14 @@
+# Railway config for the SHL storage server (deploy from THIS directory:
+#   cd services/shl-server && railway up --service shl-server
+# so the repo-root railway.toml — which forces the Flask Dockerfile — is not
+# part of the upload).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The KTC server has no /health route; the landing page serves 200 at /.
+healthcheckPath = "/"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
