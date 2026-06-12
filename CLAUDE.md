@@ -103,7 +103,19 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 | MCP server (Node.js) | Railway `mcp-server` | `https://mcp-server-production-5112.up.railway.app/mcp` |
 | Telegram bot | Railway `openclaw-bot` | (long-poller) |
 
-Vercel serves `api/index.py` (serverless WSGI) — SQLite writes don't persist, use Railway for anything stateful. Both auto-deploy on push to `main`.
+Vercel serves `api/index.py` (serverless WSGI) — SQLite writes don't persist, use Railway for anything stateful. Vercel and the Railway `HealthClawGuardrails` (Flask) service auto-deploy on push to `main`.
+
+**`mcp-server` does NOT auto-deploy** (discovered 2026-06-12: it had served May 11 code for a month). After merging MCP-server changes, deploy manually — and note `railway up` uploads the *linked directory tree* (where `railway link` ran), so deploying a sub-service from inside the repo picks up the root `railway.toml` (Flask Dockerfile) and builds the wrong app. Use a staging dir:
+
+```bash
+mkdir /tmp/mcp-deploy && cd services/agent-orchestrator \
+  && cp -R Dockerfile package.json package-lock.json tsconfig.json src /tmp/mcp-deploy/ \
+  && cd /tmp/mcp-deploy \
+  && railway link --project <project-id> --service mcp-server --environment production \
+  && railway up --service mcp-server --detach
+```
+
+Same pattern for `shl-server` (Dockerfile + railway.toml only). Setting a variable with `railway variables --set` redeploys the *old image* — it does not rebuild from new source.
 
 ## Critical Rules & Gotchas
 
