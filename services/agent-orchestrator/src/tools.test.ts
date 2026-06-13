@@ -202,6 +202,37 @@ describe("Tool Execution Tests", () => {
 
   // -- fhir.search --
 
+  // -- fhir_get_token tenant binding (regression: tokens were always minted
+  //    for desktop-demo, ignoring X-Tenant-Id → "Token tenant mismatch" on
+  //    writes for any other tenant, e.g. the personas' ev-personal) --
+
+  it("fhir_get_token binds the token to the X-Tenant-Id header when no arg given", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ token: "tok-abc" }));
+
+    const result = await tools.executeTool(
+      "fhir_get_token",
+      {},
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/internal/step-up-token");
+    expect(JSON.parse(opts.body).tenant_id).toBe("ev-personal");
+    expect((result as Record<string, unknown>).tenant_id).toBe("ev-personal");
+  });
+
+  it("fhir_get_token honors an explicit tenant_id argument over the header", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ token: "tok-xyz" }));
+
+    await tools.executeTool(
+      "fhir_get_token",
+      { tenant_id: "explicit-tenant" },
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).tenant_id).toBe("explicit-tenant");
+  });
+
   it("fhir.search builds correct query params and adds _mcp_summary", async () => {
     const bundle = {
       resourceType: "Bundle",

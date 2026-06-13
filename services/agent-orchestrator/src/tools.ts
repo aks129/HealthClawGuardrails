@@ -718,34 +718,39 @@ export class FHIRTools {
         );
 
       case "fhir_get_token": {
-        const tenantId = (input.tenant_id as string) || "desktop-demo";
+        // Token MUST be bound to the same tenant the write will run as.
+        // Fall back to the request's X-Tenant-Id (resolved above as
+        // header → TENANT_ID env → desktop-demo) — NOT a hardcoded default,
+        // or a token minted for desktop-demo gets rejected when the actual
+        // call runs as another tenant ("Token tenant mismatch").
+        const tokenTenant = (input.tenant_id as string) || tenantId;
         const resp = await fetch(`${this.baseUrl}/internal/step-up-token`, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...fwdHeaders },
-          body: JSON.stringify({ tenant_id: tenantId }),
+          body: JSON.stringify({ tenant_id: tokenTenant }),
         });
         const data = (await resp.json()) as Record<string, unknown>;
         if (!resp.ok) return { error: "Failed to issue token", detail: data };
         return {
           token: data.token,
-          tenant_id: tenantId,
+          tenant_id: tokenTenant,
           expires_in_seconds: 300,
-          _mcp_summary: "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, or curatr_apply_fix.",
+          _mcp_summary: "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, action_commit, shl_generate, or curatr_apply_fix.",
         };
       }
 
       case "fhir_seed": {
-        const tenantId = (input.tenant_id as string) || "desktop-demo";
+        const seedTenant = (input.tenant_id as string) || tenantId;
         const resp = await fetch(`${this.baseUrl}/internal/seed`, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...fwdHeaders },
-          body: JSON.stringify({ tenant_id: tenantId }),
+          body: JSON.stringify({ tenant_id: seedTenant }),
         });
         const data = (await resp.json()) as Record<string, unknown>;
         if (!resp.ok) return { error: "Seed failed", detail: data };
         return {
           ...data,
-          _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${tenantId}'. The step_up_token is ready for write operations.`,
+          _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${seedTenant}'. The step_up_token is ready for write operations.`,
         };
       }
 
