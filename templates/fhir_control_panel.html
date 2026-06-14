@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}FHIR Control Panel — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/command-center.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fhir-control-panel.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="cc-container fcp" id="fcp-root">
+
+    <!-- Header -->
+    <section class="cc-hero fcp-hero">
+        <div class="cc-hero-title">
+            <i class="fas fa-sliders cc-hero-icon"></i>
+            <div>
+                <h1>FHIR Control Panel</h1>
+                <p class="cc-hero-sub" id="fcp-subtitle">Resource inventory · explorer · profile adherence</p>
+            </div>
+        </div>
+        <div class="cc-hero-stats fcp-hero-right">
+            <span class="fcp-badge"><i class="fas fa-circle-check"></i> FHIR R4 · US Core v9</span>
+            <a class="fcp-cap-link" id="fcp-metadata-link" href="/r6/fhir/metadata" target="_blank" rel="noopener">
+                <i class="fas fa-file-lines"></i> CapabilityStatement
+            </a>
+        </div>
+        <div class="cc-tenant-selector">
+            <label for="fcp-tenant-input">Tenant:</label>
+            <input id="fcp-tenant-input" type="text" placeholder="desktop-demo" />
+            <button type="button" id="fcp-refresh" class="btn btn-sm btn-outline-light">
+                <i class="fas fa-rotate"></i> Refresh
+            </button>
+            <span class="fcp-last-refresh">Last refresh <span id="fcp-last-refresh">—</span></span>
+        </div>
+    </section>
+
+    <!-- Inventory -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-database"></i> Resource Inventory</h2>
+        <div class="fcp-inventory-banner" id="fcp-inventory-banner">
+            <div class="cc-loading">Loading…</div>
+        </div>
+        <div class="cc-system-grid fcp-inventory-grid" id="fcp-inventory-grid"></div>
+    </section>
+
+    <!-- Profile adherence -->
+    <section class="cc-section">
+        <h2 class="cc-section-title"><i class="fas fa-clipboard-check"></i> Profile Adherence</h2>
+        <div class="fcp-adherence" id="fcp-adherence">
+            <div class="cc-loading">Loading…</div>
+        </div>
+    </section>
+
+    <!-- Resource explorer -->
+    <section class="cc-section">
+        <h2 class="cc-section-title">
+            <i class="fas fa-table-list"></i> Resource Explorer
+            <span class="fcp-explorer-type" id="fcp-explorer-type"></span>
+        </h2>
+        <p class="fcp-redaction-note">
+            <i class="fas fa-user-shield"></i> Reads are PHI-redacted. Click a row to open the compiled-truth detail.
+        </p>
+        <div class="fcp-explorer" id="fcp-explorer">
+            <div class="cc-empty">Select a resource type above to explore its resources.</div>
+        </div>
+    </section>
+
+</div>
+
+<script src="{{ url_for('static', filename='js/fhir-control-panel.js') }}"></script>
+{% endblock %}

@@ -113,6 +113,18 @@ def r6_dashboard():
     return render_template('r6_dashboard.html')
 
 
+@app.route('/fhir-control-panel')
+def fhir_control_panel():
+    """
+    FHIR Control Panel — live Dev Days demo surface.
+
+    Public page shell (no auth). All data calls are made client-side and
+    carry X-Tenant-Id, hitting the tenant-scoped read-only $inventory,
+    $profile-adherence, and search endpoints under /r6/fhir.
+    """
+    return render_template('fhir_control_panel.html')
+
+
 # Valid tenant_id pattern: alphanumeric, hyphens, underscores, 1-64 chars
 import re as _re
 _TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')

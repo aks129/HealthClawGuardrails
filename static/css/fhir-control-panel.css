@@ -1,0 +1,225 @@
+/* FHIR Control Panel — layers on top of command-center.css (reuses :root vars) */
+
+.fcp-hero {
+    grid-template-rows: auto auto;
+}
+
+.fcp-hero-right {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.55rem;
+}
+
+.fcp-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--cc-ok);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    white-space: nowrap;
+}
+
+.fcp-cap-link {
+    font-size: 0.8rem;
+    color: var(--cc-accent);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.fcp-cap-link:hover { color: #7dd3fc; text-decoration: underline; }
+
+.fcp-last-refresh {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: var(--cc-text-muted);
+}
+
+/* ------- Inventory ------- */
+.fcp-inventory-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    color: var(--cc-text-dim);
+    font-size: 0.9rem;
+}
+.fcp-banner-num {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--cc-accent);
+}
+.fcp-banner-updated { font-size: 0.8rem; color: var(--cc-text-muted); }
+
+.fcp-inventory-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+.fcp-tile {
+    background: var(--cc-card);
+    border: 1px solid var(--cc-border);
+    border-radius: 10px;
+    padding: 1rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+    color: var(--cc-text);
+}
+.fcp-tile:hover {
+    background: var(--cc-card-hover);
+    border-color: var(--cc-accent-dim);
+    transform: translateY(-1px);
+}
+.fcp-tile.selected {
+    border-color: var(--cc-accent);
+    background: linear-gradient(180deg, rgba(56, 189, 248, 0.12) 0%, var(--cc-card) 70%);
+}
+.fcp-tile-count {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--cc-accent);
+    line-height: 1;
+}
+.fcp-tile-name {
+    font-size: 0.82rem;
+    color: var(--cc-text-dim);
+    word-break: break-word;
+}
+
+/* ------- Profile adherence ------- */
+.fcp-adherence-layout {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1.25rem;
+    align-items: start;
+}
+@media (max-width: 800px) {
+    .fcp-adherence-layout { grid-template-columns: 1fr; }
+}
+
+.fcp-gauge {
+    background: var(--cc-card);
+    border: 1px solid var(--cc-border);
+    border-radius: 14px;
+    padding: 1.5rem 1.75rem;
+    text-align: center;
+    min-width: 170px;
+}
+.fcp-gauge-num { font-size: 2.8rem; font-weight: 800; line-height: 1; }
+.fcp-gauge-lbl {
+    margin-top: 0.4rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cc-text-muted);
+}
+.fcp-gauge.good { border-color: rgba(16, 185, 129, 0.5); }
+.fcp-gauge.good .fcp-gauge-num { color: var(--cc-ok); }
+.fcp-gauge.warn { border-color: rgba(245, 158, 11, 0.5); }
+.fcp-gauge.warn .fcp-gauge-num { color: var(--cc-pending); }
+.fcp-gauge.bad { border-color: rgba(239, 68, 68, 0.5); }
+.fcp-gauge.bad .fcp-gauge-num { color: var(--cc-blocked); }
+
+.fcp-adherence-table-wrap { overflow-x: auto; }
+
+/* ------- Tables ------- */
+.fcp-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--cc-card);
+    border: 1px solid var(--cc-border);
+    border-radius: 12px;
+    overflow: hidden;
+    font-size: 0.85rem;
+}
+.fcp-table th {
+    text-align: left;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cc-text-muted);
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--cc-border);
+}
+.fcp-table td {
+    padding: 0.65rem 0.9rem;
+    border-bottom: 1px solid var(--cc-border);
+    color: var(--cc-text);
+    vertical-align: top;
+}
+.fcp-table tbody tr:last-child td { border-bottom: none; }
+
+.fcp-num { white-space: nowrap; }
+.fcp-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+.fcp-none { color: var(--cc-text-muted); }
+.fcp-issues { color: var(--cc-text-dim); font-size: 0.8rem; }
+
+.fcp-type-link, .fcp-open {
+    background: none;
+    border: none;
+    color: var(--cc-accent);
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    text-decoration: none;
+}
+.fcp-type-link:hover { text-decoration: underline; }
+
+.fcp-adh-pill {
+    display: inline-block;
+    padding: 0.12rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 0.78rem;
+}
+.fcp-adh-pill.good { background: rgba(16, 185, 129, 0.18); color: var(--cc-ok); }
+.fcp-adh-pill.warn { background: rgba(245, 158, 11, 0.18); color: var(--cc-pending); }
+.fcp-adh-pill.bad { background: rgba(239, 68, 68, 0.18); color: var(--cc-blocked); }
+
+/* ------- Explorer ------- */
+.fcp-explorer-type {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--cc-text-dim);
+}
+.fcp-redaction-note {
+    font-size: 0.8rem;
+    color: var(--cc-text-muted);
+    margin: -0.4rem 0 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.fcp-explorer-meta {
+    font-size: 0.8rem;
+    color: var(--cc-text-muted);
+    margin-bottom: 0.6rem;
+}
+.fcp-res-table tbody tr.fcp-res-row { cursor: pointer; transition: background 0.12s; }
+.fcp-res-table tbody tr.fcp-res-row:hover { background: var(--cc-card-hover); }
+.fcp-open:hover { color: #7dd3fc; }
+
+/* ------- Errors ------- */
+.fcp-error {
+    padding: 0.9rem 1.1rem;
+    border-radius: 10px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
