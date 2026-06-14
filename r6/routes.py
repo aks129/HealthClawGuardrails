@@ -2442,6 +2442,203 @@ def share_bundle():
     )
 
 
+# --- FHIR Control Panel Aggregate Operations (read-only) ---
+
+# Cap resources sampled per type in $profile-adherence to bound validation cost.
+_PROFILE_ADHERENCE_SAMPLE_CAP = 50
+
+
+@r6_blueprint.route('/$inventory', methods=['GET'])
+def fhir_inventory():
+    """
+    $inventory — tenant-scoped resource census.
+
+    Returns counts of non-deleted resources grouped by resource_type for the
+    calling tenant, plus an overall total and the tenant's most-recent
+    last_updated timestamp. Powers the FHIR control panel UI.
+
+    Read-only: tenant isolation + audit apply, no step-up required.
+    """
+    tenant_id = request.headers.get('X-Tenant-Id')
+
+    # Efficient grouped count: one query, GROUP BY resource_type.
+    rows = (
+        db.session.query(
+            R6Resource.resource_type,
+            db.func.count(R6Resource.id),
+        )
+        .filter(
+            R6Resource.tenant_id == tenant_id,
+            R6Resource.is_deleted == False,  # noqa: E712
+        )
+        .group_by(R6Resource.resource_type)
+        .all()
+    )
+
+    # Only types with count > 0 (GROUP BY already excludes zero), sorted desc.
+    by_type = sorted(
+        ((rt, count) for rt, count in rows if count > 0),
+        key=lambda x: (-x[1], x[0]),
+    )
+    total = sum(count for _, count in by_type)
+
+    last_updated_dt = (
+        db.session.query(db.func.max(R6Resource.last_updated))
+        .filter(
+            R6Resource.tenant_id == tenant_id,
+            R6Resource.is_deleted == False,  # noqa: E712
+        )
+        .scalar()
+    )
+
+    parameters = [
+        {'name': 'tenant', 'valueString': tenant_id},
+        {'name': 'total', 'valueInteger': total},
+    ]
+    if last_updated_dt is not None:
+        parameters.append({
+            'name': 'lastUpdated',
+            'valueDateTime': last_updated_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+        })
+    parameters.append({
+        'name': 'byType',
+        'part': [
+            {'name': rt, 'valueInteger': count} for rt, count in by_type
+        ],
+    })
+
+    record_audit_event(
+        'read', 'Parameters', 'inventory',
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail=f'$inventory: types={len(by_type)}, total={total}',
+    )
+
+    return jsonify({
+        'resourceType': 'Parameters',
+        'parameter': parameters,
+    })
+
+
+@r6_blueprint.route('/$profile-adherence', methods=['GET'])
+def fhir_profile_adherence():
+    """
+    $profile-adherence — tenant-scoped conformance summary.
+
+    For each resource type present, sample up to _PROFILE_ADHERENCE_SAMPLE_CAP
+    resources and run each through the structural validator (US Core required
+    fields). Aggregates per-type adherence and the most common failing
+    diagnostics, plus an overall adherence ratio across all sampled resources.
+
+    Uses the validator's network-free structural path (_validate_structural)
+    so the operation is fast and deterministic for the demo — it never calls
+    the external HL7 validator even when one is configured.
+
+    Read-only: tenant isolation + audit apply, no step-up required.
+    """
+    tenant_id = request.headers.get('X-Tenant-Id')
+
+    # Distinct types present for this tenant, with totals.
+    type_rows = (
+        db.session.query(
+            R6Resource.resource_type,
+            db.func.count(R6Resource.id),
+        )
+        .filter(
+            R6Resource.tenant_id == tenant_id,
+            R6Resource.is_deleted == False,  # noqa: E712
+        )
+        .group_by(R6Resource.resource_type)
+        .all()
+    )
+
+    by_type_parts = []
+    total_sampled = 0
+    total_conformant = 0
+
+    # Sort by total desc for a stable, useful ordering in the UI.
+    for resource_type, total in sorted(type_rows, key=lambda x: (-x[1], x[0])):
+        if total <= 0:
+            continue
+        sampled_rows = (
+            R6Resource.query.filter_by(
+                resource_type=resource_type,
+                is_deleted=False,
+                tenant_id=tenant_id,
+            )
+            .order_by(R6Resource.last_updated.desc())
+            .limit(_PROFILE_ADHERENCE_SAMPLE_CAP)
+            .all()
+        )
+
+        sampled = len(sampled_rows)
+        conformant = 0
+        issue_counts = {}
+        for row in sampled_rows:
+            try:
+                resource = json.loads(row.resource_json)
+            except (ValueError, TypeError):
+                # Unparseable stored JSON counts as non-conformant.
+                issue_counts['Stored resource is not valid JSON'] = (
+                    issue_counts.get('Stored resource is not valid JSON', 0) + 1
+                )
+                continue
+            resource.setdefault('resourceType', resource_type)
+            # Network-free structural validation only.
+            result = validator._validate_structural(resource)
+            if result.get('valid'):
+                conformant += 1
+            else:
+                for issue in result.get('operation_outcome', {}).get('issue', []):
+                    if issue.get('severity') not in ('error', 'fatal'):
+                        continue
+                    diag = issue.get('diagnostics') or 'Unknown issue'
+                    issue_counts[diag] = issue_counts.get(diag, 0) + 1
+
+        total_sampled += sampled
+        total_conformant += conformant
+
+        adherence = round(conformant / sampled, 2) if sampled else 0.0
+        top_issues = sorted(
+            issue_counts.items(), key=lambda x: (-x[1], x[0])
+        )[:3]
+        top_issues_str = '; '.join(
+            f'{diag} ({count})' for diag, count in top_issues
+        )
+
+        part = [
+            {'name': 'total', 'valueInteger': total},
+            {'name': 'sampled', 'valueInteger': sampled},
+            {'name': 'conformant', 'valueInteger': conformant},
+            {'name': 'adherence', 'valueDecimal': adherence},
+        ]
+        if top_issues_str:
+            part.append({'name': 'topIssues', 'valueString': top_issues_str})
+
+        by_type_parts.append({'name': resource_type, 'part': part})
+
+    overall = round(total_conformant / total_sampled, 2) if total_sampled else 0.0
+
+    record_audit_event(
+        'read', 'Parameters', 'profile-adherence',
+        agent_id=request.headers.get('X-Agent-Id'),
+        tenant_id=tenant_id,
+        detail=(
+            f'$profile-adherence: types={len(by_type_parts)}, '
+            f'sampled={total_sampled}, conformant={total_conformant}'
+        ),
+    )
+
+    return jsonify({
+        'resourceType': 'Parameters',
+        'parameter': [
+            {'name': 'tenant', 'valueString': tenant_id},
+            {'name': 'overallAdherence', 'valueDecimal': overall},
+            {'name': 'byType', 'part': by_type_parts},
+        ],
+    })
+
+
 # --- Helper Functions ---
 
 def _operation_outcome(severity, code, diagnostics):
