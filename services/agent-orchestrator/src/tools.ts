@@ -386,6 +386,19 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- Sources: survey ALL connected health data sources at once ---
+      {
+        name: "sources_check",
+        description:
+          "Survey ALL connected health data sources (Fasten, HealthEx, Health Bank One, MEDENT, Flexpa, Epic/Health Skillz, wearables) at once — returns each source's connection status and the patient's record counts by type. Use when the patient asks what's connected or to check for data across services.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
       // --- Compiled Truth: current state + evidence timeline ---
       {
         name: "fhir_compiled_truth",
@@ -687,6 +700,9 @@ export class FHIRTools {
 
       case "fhir_subscription_topics":
         return this.listSubscriptionTopics(fwdHeaders);
+
+      case "sources_check":
+        return this.sourcesCheck(tenantId, fwdHeaders);
 
       case "fhir_compiled_truth":
         return this.compiledTruth(
@@ -1165,6 +1181,45 @@ export class FHIRTools {
     const hrs = Math.round(mins / 60);
     if (hrs < 24) return `${hrs} h ago`;
     return `${Math.round(hrs / 24)} d ago`;
+  }
+
+  // --- Sources: survey ALL connected health data sources at once ---
+
+  private async sourcesCheck(
+    tenantId: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const url = `${root}/command-center/api/sources-summary?tenant=${encodeURIComponent(tenantId)}`;
+    let resp;
+    try {
+      resp = await fetch(url, { headers });
+    } catch (e) {
+      return { error: "sources_check request failed", detail: String(e) };
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = (await resp.json()) as Record<string, unknown>;
+    } catch {
+      data = {};
+    }
+
+    if (!resp.ok) {
+      const result: Record<string, unknown> = {
+        error: `sources_check failed with status ${resp.status}`,
+        detail: data,
+      };
+      if (resp.status === 401) result.requires_step_up = true;
+      return result;
+    }
+
+    const connected = (data.connected_count as number) ?? 0;
+    const sourceCount = (data.source_count as number) ?? 7;
+    const totalRecords = (data.total_records as number) ?? 0;
+    data._mcp_summary = `${connected} of ${sourceCount} sources connected; ${totalRecords} total records.`;
+
+    return data;
   }
 
   private async compiledTruth(

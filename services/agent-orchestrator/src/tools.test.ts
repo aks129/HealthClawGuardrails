@@ -60,6 +60,7 @@ const EXPECTED_TOOL_NAMES = [
   "fhir_subscription_topics",
   "fhir_validate",
   "shl_generate",
+  "sources_check",
   "wearables_sync_status",
 ];
 
@@ -76,6 +77,7 @@ const READ_ONLY_TOOL_NAMES = [
   "fhir_permission_evaluate",
   "fhir_subscription_topics",
   "fhir_compiled_truth",
+  "sources_check",
   "wearables_sync_status",
 ];
 
@@ -91,8 +93,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 20 tools", () => {
-    expect(schemas).toHaveLength(20);
+  it("getMCPToolSchemas() returns exactly 21 tools", () => {
+    expect(schemas).toHaveLength(21);
   });
 
   it("every tool has required MCP fields: name, description, inputSchema, annotations", () => {
@@ -111,7 +113,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 20 tool names match the expected set", () => {
+  it("all 21 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -740,6 +742,69 @@ describe("Tool Execution Tests", () => {
     expect(result).toEqual(statusBody);
   });
 
+  // -- sources_check --
+
+  it("sources_check calls the sources-summary URL with the tenant and returns the parsed summary", async () => {
+    const summary = {
+      tenant: "ev-personal",
+      total_records: 177,
+      connected_count: 3,
+      source_count: 7,
+      sources: [
+        { id: "fasten", name: "Fasten", connected: true, detail: "", last_activity: null },
+        { id: "medent", name: "MEDENT", connected: true, detail: "", last_activity: null },
+      ],
+      records_by_type: [
+        { type: "Condition", count: 57 },
+        { type: "Observation", count: 120 },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(summary));
+
+    const result = await tools.executeTool(
+      "sources_check",
+      {},
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("/command-center/api/sources-summary");
+    expect(url).toContain("tenant=ev-personal");
+    expect(result).toHaveProperty("sources");
+    expect(result).toHaveProperty("_mcp_summary");
+    expect(result._mcp_summary as string).toContain("3 of 7 sources connected");
+  });
+
+  it("sources_check forwards X-Step-Up-Token when provided", async () => {
+    const summary = { tenant: "ev-personal", total_records: 0, connected_count: 0, source_count: 7, sources: [], records_by_type: [] };
+    mockFetch.mockResolvedValueOnce(fakeResponse(summary));
+
+    await tools.executeTool(
+      "sources_check",
+      {},
+      { "x-tenant-id": "ev-personal", "x-step-up-token": "tok-stepup-1" }
+    );
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.headers["X-Step-Up-Token"]).toBe("tok-stepup-1");
+    expect(opts.headers["X-Tenant-Id"]).toBe("ev-personal");
+  });
+
+  it("sources_check on 401 returns requires_step_up", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ error: "unauthorized" }, 401));
+
+    const result = await tools.executeTool(
+      "sources_check",
+      {},
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("401");
+    expect(result).toHaveProperty("requires_step_up", true);
+  });
+
   // -- shl_generate --
 
   it("shl_generate without step-up token returns requires_step_up (no fetch made)", async () => {
@@ -919,14 +984,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 20 tool schemas", async () => {
+    it("tools/list returns all 21 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(20);
+      expect(res.body.result.tools).toHaveLength(21);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -1101,13 +1166,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 20 tool schemas", async () => {
+    it("tools/list returns all 21 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(20);
+      expect(res.body.result.tools).toHaveLength(21);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
