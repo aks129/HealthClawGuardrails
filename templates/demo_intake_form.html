@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New Patient Intake Form — Riverside Family Medicine</title>
+<style>
+  :root { --ink:#1a2332; --muted:#5b6b82; --line:#c9d3e0; --accent:#1f6feb; --bg:#f4f6fb; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: var(--ink);
+         background: var(--bg); margin: 0; padding: 24px; line-height: 1.5; }
+  .sheet { max-width: 860px; margin: 0 auto; background: #fff; padding: 44px 52px;
+           border: 1px solid var(--line); box-shadow: 0 2px 14px rgba(20,40,80,.07); }
+  .letterhead { display:flex; justify-content:space-between; align-items:flex-start;
+                border-bottom: 3px double var(--ink); padding-bottom: 16px; margin-bottom: 6px; }
+  .practice { font-size: 23px; font-weight: bold; letter-spacing:.3px; }
+  .practice small { display:block; font-size: 12px; font-weight: normal; color: var(--muted);
+                    letter-spacing: 0; margin-top: 3px; }
+  .meta { text-align:right; font-size: 12px; color: var(--muted); }
+  h1 { font-size: 17px; text-align:center; letter-spacing: 1px; text-transform: uppercase;
+       margin: 18px 0 4px; }
+  .sub { text-align:center; font-size: 12px; color: var(--muted); margin-bottom: 22px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--accent);
+       border-bottom: 1px solid var(--line); padding-bottom: 4px; margin: 26px 0 12px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; }
+  .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  .field { display:flex; flex-direction: column; font-size: 13px; }
+  .field.full { grid-column: 1 / -1; }
+  label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing:.4px; }
+  .line { border-bottom: 1px solid var(--ink); min-height: 22px; padding: 2px 2px 0;
+          font-family: Arial, sans-serif; font-size: 14px; }
+  table { width:100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  th { text-align:left; font-size: 11px; text-transform: uppercase; letter-spacing:.4px;
+       color: var(--muted); border-bottom: 1.5px solid var(--ink); padding: 4px 6px; }
+  td { border-bottom: 1px solid var(--line); height: 30px; padding: 4px 6px;
+       font-family: Arial, sans-serif; }
+  .checks { display:flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; font-family: Arial, sans-serif; }
+  .checks span { white-space: nowrap; }
+  .box { display:inline-block; width: 12px; height: 12px; border: 1.4px solid var(--ink);
+         margin-right: 5px; vertical-align: -1px; }
+  .sigrow { display:flex; gap: 40px; margin-top: 10px; }
+  .sigrow .field { flex: 1; }
+  .note { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .consent { font-size: 12px; color: var(--ink); background: #f8fafc; border: 1px solid var(--line);
+             padding: 12px 14px; margin-top: 8px; }
+  @media print { body { background:#fff; padding:0; } .sheet { box-shadow:none; border:none; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="letterhead">
+    <div class="practice">Riverside Family Medicine
+      <small>Eleanor Hayes, MD · Marcus Bell, DO · Priya Nair, FNP-BC<br>
+      1820 Riverside Parkway, Suite 300 · Brookfield, MA 01506 · (508) 555‑0142</small>
+    </div>
+    <div class="meta">NPI 1093817465<br>Tax ID 04‑38••••<br>Fax (508) 555‑0143</div>
+  </div>
+
+  <h1>New Patient Intake Form</h1>
+  <div class="sub">Please complete all sections before your first appointment. Print clearly in ink.</div>
+
+  <h2>1 · Patient Demographics</h2>
+  <div class="grid">
+    <div class="field full"><label>Legal Name (Last, First, MI)</label><div class="line"></div></div>
+    <div class="field"><label>Date of Birth (MM/DD/YYYY)</label><div class="line"></div></div>
+    <div class="field"><label>Sex Assigned at Birth</label><div class="line"></div></div>
+    <div class="field"><label>Social Security No. (last 4)</label><div class="line"></div></div>
+    <div class="field"><label>Marital Status</label><div class="line"></div></div>
+    <div class="field full"><label>Mailing Address (Street, City, State, ZIP)</label><div class="line"></div></div>
+    <div class="field"><label>Home / Mobile Phone</label><div class="line"></div></div>
+    <div class="field"><label>Email Address</label><div class="line"></div></div>
+    <div class="field"><label>Preferred Language</label><div class="line"></div></div>
+    <div class="field"><label>Race / Ethnicity (optional)</label><div class="line"></div></div>
+  </div>
+
+  <h2>2 · Emergency Contact</h2>
+  <div class="grid three">
+    <div class="field"><label>Name</label><div class="line"></div></div>
+    <div class="field"><label>Relationship</label><div class="line"></div></div>
+    <div class="field"><label>Phone</label><div class="line"></div></div>
+  </div>
+
+  <h2>3 · Primary Insurance</h2>
+  <div class="grid">
+    <div class="field"><label>Insurance Carrier / Plan</label><div class="line"></div></div>
+    <div class="field"><label>Member / Subscriber ID</label><div class="line"></div></div>
+    <div class="field"><label>Group Number</label><div class="line"></div></div>
+    <div class="field"><label>Plan Type (HMO/PPO/etc.)</label><div class="line"></div></div>
+    <div class="field"><label>Subscriber Name (if not self)</label><div class="line"></div></div>
+    <div class="field"><label>Relationship to Subscriber</label><div class="line"></div></div>
+  </div>
+
+  <h2>4 · Secondary Insurance (if any)</h2>
+  <div class="grid">
+    <div class="field"><label>Carrier / Plan</label><div class="line"></div></div>
+    <div class="field"><label>Member ID</label><div class="line"></div></div>
+  </div>
+
+  <h2>5 · Preferred Pharmacy &amp; Referring Provider</h2>
+  <div class="grid">
+    <div class="field"><label>Pharmacy Name &amp; Location</label><div class="line"></div></div>
+    <div class="field"><label>Pharmacy Phone</label><div class="line"></div></div>
+    <div class="field"><label>Primary Care / Referring Physician</label><div class="line"></div></div>
+    <div class="field"><label>Reason for Today's Visit</label><div class="line"></div></div>
+  </div>
+
+  <h2>6 · Current Medications</h2>
+  <table>
+    <thead><tr><th style="width:42%">Medication</th><th style="width:22%">Dose</th>
+      <th style="width:22%">Frequency</th><th>Prescriber</th></tr></thead>
+    <tbody>
+      <tr><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td></tr>
+      <tr><td></td><td></td><td></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <h2>7 · Allergies &amp; Adverse Reactions</h2>
+  <table>
+    <thead><tr><th style="width:45%">Allergen (drug, food, environmental)</th>
+      <th>Reaction</th></tr></thead>
+    <tbody>
+      <tr><td></td><td></td></tr>
+      <tr><td></td><td></td></tr>
+      <tr><td></td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="note">☐ Check here if no known allergies</div>
+
+  <h2>8 · Past Medical History</h2>
+  <div class="checks">
+    <span><i class="box"></i>Hypertension</span><span><i class="box"></i>Diabetes (Type 1 / 2)</span>
+    <span><i class="box"></i>High cholesterol</span><span><i class="box"></i>Heart disease</span>
+    <span><i class="box"></i>Asthma / COPD</span><span><i class="box"></i>Thyroid disorder</span>
+    <span><i class="box"></i>Cancer</span><span><i class="box"></i>Depression / anxiety</span>
+    <span><i class="box"></i>Kidney disease</span><span><i class="box"></i>Stroke / TIA</span>
+    <span><i class="box"></i>Other: __________________</span>
+  </div>
+
+  <h2>9 · Surgical &amp; Family History</h2>
+  <div class="grid">
+    <div class="field"><label>Past Surgeries (with year)</label><div class="line" style="min-height:40px"></div></div>
+    <div class="field"><label>Family History (parents, siblings)</label><div class="line" style="min-height:40px"></div></div>
+  </div>
+
+  <h2>10 · Social History</h2>
+  <div class="grid three">
+    <div class="field"><label>Tobacco Use</label><div class="line"></div></div>
+    <div class="field"><label>Alcohol Use</label><div class="line"></div></div>
+    <div class="field"><label>Occupation</label><div class="line"></div></div>
+  </div>
+
+  <h2>11 · Consent &amp; Acknowledgement</h2>
+  <div class="consent">
+    I certify that the information provided above is accurate and complete to the best of my
+    knowledge. I authorize Riverside Family Medicine to use this information to provide care, to
+    bill my insurance, and to coordinate with my pharmacy and other providers. I acknowledge
+    receipt of the Notice of Privacy Practices (HIPAA).
+  </div>
+  <div class="sigrow">
+    <div class="field"><label>Patient / Guardian Signature</label><div class="line" style="min-height:30px"></div></div>
+    <div class="field" style="max-width:180px"><label>Date</label><div class="line" style="min-height:30px"></div></div>
+  </div>
+
+  <div class="note" style="margin-top:22px; text-align:center; border-top:1px solid var(--line); padding-top:10px;">
+    Riverside Family Medicine · Form RFM‑INT‑04 (rev. 2026) · For demonstration use — fictional practice, not a real clinic.
+  </div>
+
+</div>
+</body>
+</html>

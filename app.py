@@ -125,6 +125,16 @@ def fhir_control_panel():
     return render_template('fhir_control_panel.html')
 
 
+@app.route('/demo/intake-form')
+def demo_intake_form():
+    """
+    A realistic (fictional) new-patient intake form for the form-fill demo.
+    Blank form, no PHI — public. Pass this URL to the agent: it fetches the
+    form, reads the field labels, and fills them from the patient's record.
+    """
+    return render_template('demo_intake_form.html')
+
+
 # Valid tenant_id pattern: alphanumeric, hyphens, underscores, 1-64 chars
 import re as _re
 _TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
