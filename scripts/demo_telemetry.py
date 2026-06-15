@@ -107,6 +107,13 @@ def main():
             fresh = [r for r in fresh if r.get("id") and r["id"] not in seen]
             for r in reversed(fresh):  # oldest-first for readable chronology
                 seen.add(r["id"])
+                # Suppress the watcher's / control-panel's own meta-telemetry
+                # reads ($inventory, $profile-adherence) — they aren't patient
+                # operations and would clutter the stage feed with self-noise.
+                ent = (r.get("entity") or [{}])[0]
+                ref = (ent.get("what") or {}).get("reference") or ""
+                if ref in ("Parameters/inventory", "Parameters/profile-adherence"):
+                    continue
                 print(_event_line(r), flush=True)
         except Exception as exc:  # noqa: BLE001 — never let a blip kill the feed
             print(f"  (poll error: {type(exc).__name__})", flush=True)
