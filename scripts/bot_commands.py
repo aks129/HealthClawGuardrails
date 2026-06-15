@@ -290,12 +290,12 @@ def cmd_connect(args) -> int:
     print(f"     Verify once with CLEAR / ID.me — records stream from all QHINs.\n")
     print(f"  2. Health Bank One (verified records + insurance)")
     print(f"     Run: /hbo-connect\n")
-    print(f"  3. Flexpa (200+ payers/insurers, CMS-9115)")
-    print(f"     Run: /flexpa-connect\n")
-    print(f"  4. Epic / patient portals (Health Skillz)")
-    print(f"     Run: /epic-connect\n")
-    print(f"  5. MEDENT (small-practice EHR, SMART on FHIR)")
+    print(f"  3. MEDENT (small-practice EHR, SMART on FHIR)")
     print(f"     Run: /medent-connect\n")
+    print(f"  4. Epic / patient portals (Health Skillz, SMART on FHIR)")
+    print(f"     Run: /epic-connect\n")
+    print(f"  5. Flexpa (200+ payers/insurers, CMS-9115 — needs Flexpa account)")
+    print(f"     Run: /flexpa-connect\n")
     print("All sources feed into the same tenant — records are deduplicated.")
     return 0
 
@@ -809,16 +809,21 @@ def _shc_base() -> str:
 
 
 def cmd_flexpa_connect(args) -> int:
-    """Send the SmartHealthConnect Flexpa connection URL (200+ payers/insurers)."""
+    """Insurance/payer records via Flexpa. Requires a Flexpa account + publishable
+    key (commercial API). Honest status until credentials are provisioned —
+    never hand out a link to a host that isn't stood up."""
+    pub = os.environ.get("FLEXPA_PUBLISHABLE_KEY", "").strip()
     base = _shc_base()
-    if not base:
-        print(
-            "error: SHC_BASE_URL not set in ~/.healthclaw/env\n"
-            "  Set it to where SmartHealthConnect is running, e.g.:\n"
-            "  SHC_BASE_URL=https://smarthealthconnect.app",
-            file=sys.stderr,
-        )
-        return 1
+    if not pub or not base:
+        print("Flexpa (insurance/payer records — 200+ US insurers) is not connected yet.")
+        print()
+        print("Flexpa is a commercial payer-API. To enable it:")
+        print("  1. Create an account at https://www.flexpa.com and get a publishable key")
+        print("  2. Set FLEXPA_PUBLISHABLE_KEY and SHC_BASE_URL in ~/.healthclaw/env")
+        print("  3. Re-run /flexpa-connect")
+        print()
+        print("Today, your records come from Fasten TEFCA, MEDENT, and Health Bank One.")
+        return 0
     tenant = args.tenant or _tenant_default()
     url = f"{base}/connections?source=flexpa&tenant={tenant}"
     print("Open this link to connect your insurance/payer records via Flexpa:")
@@ -830,23 +835,19 @@ def cmd_flexpa_connect(args) -> int:
 
 
 def cmd_epic_connect(args) -> int:
-    """Send the SmartHealthConnect Health Skillz URL (Epic + major patient portals)."""
-    base = _shc_base()
-    if not base:
-        print(
-            "error: SHC_BASE_URL not set in ~/.healthclaw/env\n"
-            "  Set it to where SmartHealthConnect is running, e.g.:\n"
-            "  SHC_BASE_URL=https://smarthealthconnect.app",
-            file=sys.stderr,
-        )
-        return 1
-    tenant = args.tenant or _tenant_default()
-    url = f"{base}/connections?source=healthskillz&tenant={tenant}"
-    print("Open this link to connect your Epic / patient portal records via Health Skillz:")
-    print(url)
+    """Epic / patient-portal records via jmandel/health-skillz — a live, MIT
+    SMART-on-FHIR connector (health-skillz.joshuamandel.com). Override the base
+    with HEALTH_SKILLZ_URL if self-hosting."""
+    base = os.environ.get("HEALTH_SKILLZ_URL", "https://health-skillz.joshuamandel.com").rstrip("/")
+    print("Open this link to connect your Epic / patient-portal records (SMART on FHIR):")
+    print(base)
     print()
-    print("Health Skillz supports Epic MyChart and other major patient portals.")
-    print("After connecting, records auto-ingest into HealthClaw and you'll get a Telegram ping.")
+    print("Powered by Health Skillz (jmandel/health-skillz, MIT) — Epic MyChart and other")
+    print("SMART-on-FHIR portals. Authorize with your portal login; it pulls your record")
+    print("via the standard patient/*.read SMART flow.")
+    print()
+    print("To sync those records into HealthClaw, export from Health Skillz and ingest via")
+    print("/import (Bundle/$ingest-context). Full round-trip auto-sync is on the roadmap.")
     return 0
 
 
