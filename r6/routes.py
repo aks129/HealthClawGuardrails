@@ -269,6 +269,15 @@ def check_human_confirmation():
         return result
 
 
+def _oauth_base():
+    """Base URL for SMART OAuth endpoints, matching r6.oauth's discovery docs.
+
+    Built from the request host the same way oauth.py builds its
+    .well-known/smart-configuration endpoints — never hardcode the domain.
+    """
+    return request.host_url.rstrip('/') + '/r6/fhir/oauth'
+
+
 @r6_blueprint.route('/metadata', methods=['GET'])
 def r6_metadata():
     """
@@ -305,6 +314,24 @@ def r6_metadata():
         'rest': [
             {
                 'mode': 'server',
+                'security': {
+                    'cors': True,
+                    'service': [{
+                        'coding': [{
+                            'system': 'http://terminology.hl7.org/CodeSystem/restful-security-service',
+                            'code': 'SMART-on-FHIR',
+                            'display': 'SMART-on-FHIR'
+                        }]
+                    }],
+                    'extension': [{
+                        'url': 'http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris',
+                        'extension': [
+                            {'url': 'authorize', 'valueUri': _oauth_base() + '/authorize'},
+                            {'url': 'token', 'valueUri': _oauth_base() + '/token'},
+                            {'url': 'register', 'valueUri': _oauth_base() + '/register'},
+                        ]
+                    }]
+                },
                 'resource': [
                     _resource_capability(rt) for rt in R6Resource.SUPPORTED_TYPES
                 ],

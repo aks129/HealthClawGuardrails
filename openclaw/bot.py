@@ -284,8 +284,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f'⚠️ Could not bind chat (`{bind_detail}`). You can still use commands; notifications are off.'
     )
 
+    # One-time risk acknowledgment for the chat-app channel. Telegram is a
+    # consumer channel, not BAA-covered transport; this is patient-directed
+    # access to one's own records. See templates/privacy.html "Messaging
+    # Platforms" for the full posture.
+    # TODO(nophi): wire a real /nophi toggle that flips this chat into
+    # summary-only mode (persist per chat_id, gate read formatters on it).
+    # Disclosure line is shipped now; the toggle is not yet implemented.
+    risk_line = (
+        '⚠️ Heads up: chat apps aren’t encrypted medical channels. '
+        'You’re accessing your own records here; by continuing you accept '
+        'that for your own data. Reply /nophi to keep responses summary-only.'
+    )
+
     text = (
         '*HealthClaw Guardrails Bot*\n\n'
+        f'{risk_line}\n\n'
         f'{bind_line}\n\n'
         'Commands:\n'
         '/connect — pull your records (Fasten + TEFCA)\n'

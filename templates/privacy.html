@@ -44,6 +44,7 @@
           <li><a href="#phi-handling">PHI Handling &amp; Guardrails</a></li>
           <li><a href="#data-storage">Data Storage &amp; Retention</a></li>
           <li><a href="#third-party">Third-Party Services</a></li>
+          <li><a href="#messaging">Messaging Platforms</a></li>
           <li><a href="#cookies">Cookies &amp; Analytics</a></li>
           <li><a href="#your-rights">Your Rights</a></li>
           <li><a href="#children">Children's Privacy</a></li>
@@ -95,12 +96,21 @@
         <li><strong>Audit trail</strong> — all resource access is logged with tenant, agent identity, and timestamp; no PHI in log entries</li>
         <li><strong>Step-up authorization</strong> — write operations require HMAC-signed tokens in addition to tenant credentials</li>
         <li><strong>Human-in-the-loop</strong> — clinical writes are blocked until a human operator explicitly confirms</li>
-        <li><strong>Tenant isolation</strong> — every database query is scoped to the authenticated tenant; cross-tenant access is blocked at the query layer</li>
+        <li><strong>Tenant isolation</strong> — every database query is scoped to the requested tenant at the query layer, so cross-tenant access is blocked. For hosted deployments handling real records, tenant reads can additionally be authenticated with tenant-bound tokens; this is a capability the deployment enables through configuration, not a guarantee that every read on every deployment is authenticated.</li>
       </ul>
       <p>
         These controls are reference implementations. Organizations deploying this software for production use with
         real patients must conduct their own risk assessment, engage qualified legal counsel, and satisfy all
         applicable regulatory requirements (HIPAA, HITECH, state privacy laws, etc.).
+      </p>
+
+      <h3>Reference Implementation vs. Production</h3>
+      <p>
+        HealthClaw is a reference implementation of guardrail patterns for AI-agent access to health data. The
+        guardrails described above — PHI redaction, append-only audit, step-up authorization, and tenant isolation —
+        are active in the software. The public demo runs synthetic or patient-directed data and is <strong>not</strong> a
+        hardened multi-tenant PHI service. Production deployments are expected to add tenant-authenticated reads,
+        BAA-covered infrastructure, and the organization's own operational and regulatory controls on top of these patterns.
       </p>
 
       <h2 id="data-storage">4. Data Storage &amp; Retention</h2>
@@ -129,14 +139,40 @@
         Upstream FHIR server URLs are never exposed to end users (URL rewriting is enforced by the proxy layer).
       </p>
 
-      <h2 id="cookies">6. Cookies &amp; Analytics</h2>
+      <h2 id="messaging">6. Messaging Platforms (Telegram, Slack, Discord)</h2>
+      <p>
+        HealthClaw can deliver health information over consumer messaging platforms such as Telegram, Slack, and
+        Discord. These are consumer communication channels, not BAA-covered transport, and we do not treat them as
+        secure medical channels.
+      </p>
+      <p>
+        We operate these channels under a <strong>patient-directed access</strong> posture: the patient is retrieving
+        their own records to a channel they have chosen. Under HIPAA's individual right of access, an individual may
+        request delivery of their own health information over an unsecured channel after being warned of the risk.
+        In this flow HealthClaw acts as the patient's agent retrieving their own data — not as a covered entity making
+        a disclosure to a third party.
+      </p>
+      <p>To reduce exposure on these channels, HealthClaw applies several mitigations:</p>
+      <ul>
+        <li><strong>PHI redaction on reads</strong> — the same redaction applied to all read paths (initials, masked identifiers, stripped addresses, year-only birth dates).</li>
+        <li><strong>PHI-free notifications</strong> — push notifications carry only counts, status, and tenant identifiers, never names, identifiers, or clinical values.</li>
+        <li><strong>Optional summary-only mode</strong> — responses can be limited to summaries rather than full record content.</li>
+      </ul>
+      <p>
+        To be candid about the trade-off: messaging-app transport combined with HealthClaw's guardrails (redaction,
+        audit, step-up authorization, and data minimization) exceeds the security posture of typical consumer health
+        apps, which routinely move full records over similar channels without these controls. It is still not a
+        substitute for BAA-covered transport where a covered entity is making a disclosure.
+      </p>
+
+      <h2 id="cookies">7. Cookies &amp; Analytics</h2>
       <p>
         The public demo site uses only session cookies required for Flask operation. No advertising cookies,
         third-party trackers, or behavioral analytics are used. Server-side access logs are the only analytics
         collected and are not shared with any third party.
       </p>
 
-      <h2 id="your-rights">7. Your Rights</h2>
+      <h2 id="your-rights">8. Your Rights</h2>
       <p>
         If you have submitted data through the public demo and wish to request deletion, contact us at
         <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a>. We will respond within 30 days.
@@ -146,22 +182,23 @@
         your own database. We have no access to your data.
       </p>
 
-      <h2 id="children">8. Children's Privacy</h2>
+      <h2 id="children">9. Children's Privacy</h2>
       <p>
         This software and website are intended for healthcare developers and technologists. We do not knowingly
         collect personal information from children under 13. If you believe a child has submitted personal
         information through the demo, contact us at <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a>.
       </p>
 
-      <h2 id="security">9. Security</h2>
+      <h2 id="security">10. Security</h2>
       <p>
         We implement reasonable technical safeguards including HTTPS for all public endpoints, HMAC-signed
-        write tokens, append-only audit logs, and tenant-scoped queries. No system is perfectly secure.
+        write tokens, append-only audit logs, and tenant-scoped queries (with optional tenant-bound token
+        authentication on reads, enabled per deployment). No system is perfectly secure.
         Please report security vulnerabilities via GitHub Security Advisories or
         <a href="mailto:security@healthclaw.io">security@healthclaw.io</a>.
       </p>
 
-      <h2 id="changes">10. Changes to This Policy</h2>
+      <h2 id="changes">11. Changes to This Policy</h2>
       <p>
         We may update this policy as the software evolves. Material changes will be noted in the project
         <a href="https://github.com/aks129/HealthClawGuardrails/releases" target="_blank" rel="noopener noreferrer">release notes</a>
@@ -169,7 +206,7 @@
         constitutes acceptance of the revised policy.
       </p>
 
-      <h2 id="contact">11. Contact</h2>
+      <h2 id="contact">12. Contact</h2>
       <p>
         Privacy questions: <a href="mailto:privacy@healthclaw.io">privacy@healthclaw.io</a><br>
         Security disclosures: <a href="mailto:security@healthclaw.io">security@healthclaw.io</a><br>
