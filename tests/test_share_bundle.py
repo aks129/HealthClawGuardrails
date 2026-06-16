@@ -117,6 +117,40 @@ def test_share_bundle_returns_collection(client, auth_headers, app):
     assert len(bundle['entry']) == 2
 
 
+def test_share_bundle_works_for_non_public_tenant_with_token(client, app):
+    """The SHL feed must keep working for a real (non-public) tenant under the
+    read-auth gate, as long as a valid step-up token is supplied — this is the
+    path shl_generate drives (forward the patient's step-up token to
+    $share-bundle). Both the read-auth gate and the route's own step-up check
+    must accept it."""
+    from r6.stepup import generate_step_up_token
+    tenant = 'shl-private-clinic'  # NOT in PUBLIC_TENANTS
+    _seed_resource(app, 'Patient', PATIENT_RESOURCE, tenant_id=tenant)
+    _seed_resource(app, 'Condition', CONDITION_RESOURCE, tenant_id=tenant)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers={'X-Tenant-Id': tenant,
+                 'X-Step-Up-Token': generate_step_up_token(tenant)},
+        json={'patient_id': PATIENT_ID, 'resource_types': ['Patient', 'Condition']},
+    )
+    assert resp.status_code == 200
+    bundle = json.loads(resp.data)
+    assert {e['resource']['resourceType'] for e in bundle['entry']} == {'Patient', 'Condition'}
+
+
+def test_share_bundle_non_public_tenant_rejected_without_token(client, app):
+    """A non-public tenant with NO token is stopped by the read-auth gate (401)
+    before the route runs — the SHL feed never leaks identified data to an
+    unauthenticated caller."""
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers={'X-Tenant-Id': 'shl-private-clinic'},
+        json={},
+    )
+    assert resp.status_code == 401
+
+
 def test_share_bundle_patient_controlled_redaction_applied(client, auth_headers, app):
     """Deidentified profile: name/telecom/address removed, birthDate preserved."""
     _seed_resource(app, 'Patient', PATIENT_RESOURCE)
