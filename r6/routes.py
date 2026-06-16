@@ -12,6 +12,7 @@ Validation: structural checks for required fields. Falls back when external
 validator unavailable. No StructureDefinition or terminology binding validation.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -104,23 +105,51 @@ _PATIENT_REF_PATTERN = re.compile(r'^Patient/[A-Za-z0-9\-.]{1,64}$')
 
 # --- Tenant Enforcement ---
 
+_R6_PREFIX = '/r6/fhir'
+
+# Discovery/public endpoints exempt from tenant + read-auth enforcement.
+# EXACT full paths — never suffix-matched.
+_EXEMPT_EXACT_PATHS = frozenset({
+    f'{_R6_PREFIX}/metadata',   # CapabilityStatement
+    f'{_R6_PREFIX}/health',     # health check
+})
+
+# Genuinely-namespaced sub-trees exempt from tenant + read-auth enforcement.
+# These are prefix-matched because every path under them is non-clinical and
+# no FHIR resource read can introduce one of these segments: a resource read is
+# /{prefix}/{ResourceType}/{id}, where ResourceType is a single bare segment —
+# it can never be "internal", ".well-known", "oauth", "mcp-apps", or "demo"
+# *followed by another '/segment'*. (e.g. /r6/fhir/demo/agent-loop is the demo
+# endpoint; /r6/fhir/Demo is a — nonexistent — resource type but still a single
+# segment, so it would NOT match these prefixes.)
+_EXEMPT_PATH_PREFIXES = (
+    f'{_R6_PREFIX}/internal/',
+    f'{_R6_PREFIX}/.well-known/',
+    f'{_R6_PREFIX}/oauth/',
+    f'{_R6_PREFIX}/mcp-apps/',
+    f'{_R6_PREFIX}/demo/',
+)
+
+
+def _is_exempt_discovery_path(path):
+    """True if `path` is a public discovery/namespaced endpoint.
+
+    Exact-match the literal discovery routes (/metadata, /health) and
+    prefix-match the namespaced sub-trees. Crucially this does NOT use a
+    suffix test, so a FHIR read like /r6/fhir/Patient/metadata (resource id
+    "metadata") is NOT treated as discovery and stays fully gated.
+    """
+    if path in _EXEMPT_EXACT_PATHS:
+        return True
+    return any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
+
+
 @r6_blueprint.before_request
 def enforce_tenant_id():
     """Require X-Tenant-Id header on all endpoints except public discovery."""
-    # Public discovery endpoints (no tenant required)
-    if request.path.endswith('/metadata'):
-        return None
-    if request.path.endswith('/health'):
-        return None
-    if '/internal/' in request.path or '/demo/' in request.path:
-        return None
-    if '/.well-known/' in request.path:
-        return None
-    if '/oauth/' in request.path:
-        return None
-    # MCP App HTML renders without a tenant header; tenant arrives via
-    # query string or is supplied by the MCP client's outer session.
-    if '/mcp-apps/' in request.path:
+    # Public discovery endpoints (exact path / namespaced prefix — never a
+    # suffix test, which a resource id like Patient/metadata could exploit).
+    if _is_exempt_discovery_path(request.path):
         return None
     tenant_id = request.headers.get('X-Tenant-Id')
     # SHARP-on-MCP: requests bearing X-FHIR-Server-URL carry their own
@@ -1483,8 +1512,19 @@ def health_check():
 def issue_step_up_token():
     """
     Issue a step-up token for the dashboard demo.
-    In production, this would be gated behind an admin auth flow.
+
+    Token-mint oracle protection: if INTERNAL_TOKEN_MINT_SECRET is set, the
+    caller must present a matching X-Internal-Secret header (constant-time
+    compare) — otherwise 403. With read-auth enabled, an open mint endpoint
+    would be a trivial bypass (anyone could mint a tenant-bound read token).
+    If the env var is unset, behavior is unchanged (open) for dev/demo.
     """
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if mint_secret:
+        provided = request.headers.get('X-Internal-Secret', '')
+        if not hmac.compare_digest(provided, mint_secret):
+            return jsonify({'error': 'forbidden'}), 403
+
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
     try:

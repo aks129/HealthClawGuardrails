@@ -118,6 +118,55 @@ def test_internal_step_up_token_endpoint_still_reachable(client):
 
 # --- Phase 2: CapabilityStatement advertises SMART OAuth security ---
 
+# --- Exemption is exact-path / prefix, never a suffix (bypass closed) ---
+
+def test_resource_named_metadata_is_not_exempt(client):
+    """A FHIR read whose resource id is literally 'metadata' must NOT be
+    treated as the discovery /metadata endpoint — the old endswith() check let
+    /Patient/metadata bypass auth entirely."""
+    resp = client.get('/r6/fhir/Patient/metadata',
+                      headers={'X-Tenant-Id': PRIVATE_TENANT})
+    assert resp.status_code == 401
+
+
+def test_resource_named_health_is_not_exempt(client):
+    resp = client.get('/r6/fhir/Observation/health',
+                      headers={'X-Tenant-Id': PRIVATE_TENANT})
+    assert resp.status_code == 401
+
+
+def test_exact_metadata_and_health_still_public(client):
+    assert client.get('/r6/fhir/metadata').status_code == 200
+    assert client.get('/r6/fhir/health').status_code in (200, 503)
+
+
+# --- Token-mint oracle protection (dormant until env var set) ---
+
+def test_mint_open_when_secret_unset(client, monkeypatch):
+    monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+    resp = client.post('/r6/fhir/internal/step-up-token',
+                       json={'tenant_id': PRIVATE_TENANT})
+    assert resp.status_code == 200
+    assert resp.get_json()['token']
+
+
+def test_mint_requires_secret_when_set(client, monkeypatch):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 's3cr3t')
+    # no header -> 403
+    assert client.post('/r6/fhir/internal/step-up-token',
+                       json={'tenant_id': PRIVATE_TENANT}).status_code == 403
+    # wrong header -> 403
+    assert client.post('/r6/fhir/internal/step-up-token',
+                       json={'tenant_id': PRIVATE_TENANT},
+                       headers={'X-Internal-Secret': 'nope'}).status_code == 403
+    # correct header -> 200
+    ok = client.post('/r6/fhir/internal/step-up-token',
+                     json={'tenant_id': PRIVATE_TENANT},
+                     headers={'X-Internal-Secret': 's3cr3t'})
+    assert ok.status_code == 200
+    assert ok.get_json()['token']
+
+
 def test_capability_statement_declares_smart_security(client):
     resp = client.get('/r6/fhir/metadata')
     rest = resp.get_json()['rest'][0]
