@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Global request body cap — oversized payloads are rejected with 413 by
+# Werkzeug before any handler runs. 16 MB headroom: full US Core R4 history
+# Bundles ($ingest-context) and base64 PDF attachments in welcome/SHL flows
+# can exceed 5 MB, so we use the larger cap to avoid breaking legitimate
+# ingests while still stopping multi-hundred-MB body floods.
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
 # Skill index — read once at import, cached for the process lifetime.
 # ---------------------------------------------------------------------------
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -64,23 +73,39 @@ _SKILLS_CACHE: list[dict] = _load_skills()
 # ---------------------------------------------------------------------------
 # Security headers — applied to every response
 # ---------------------------------------------------------------------------
+# Content-Security-Policy. The dashboards (/r6-dashboard, /fhir-control-panel,
+# /command-center) ship inline <style> and <script> blocks and fetch the
+# tenant-scoped APIs same-origin, so 'unsafe-inline' is required for style/
+# script and connect-src stays 'self'. img-src allows data: URIs (inline
+# SVG/PNG badges). frame-ancestors 'none' mirrors X-Frame-Options: DENY.
+# No external CDNs are loaded by these pages, so default-src stays 'self'.
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "img-src 'self' data:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 @app.after_request
 def _security_headers(response):
-    # Default content security: locked-down but permissive enough for the
-    # current Bootstrap/FontAwesome CDN dependencies.
+    # setdefault throughout so we never clobber a header a handler already set.
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
-        "geolocation=(), microphone=(), camera=(), usb=()",
+        "geolocation=(), microphone=(), camera=()",
     )
-    # HSTS: only emit when behind HTTPS (avoid breaking localhost dev).
-    if request.is_secure or request.headers.get("X-Forwarded-Proto") == "https":
-        response.headers.setdefault(
-            "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains",
-        )
+    response.headers.setdefault("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
+    # HSTS is safe to emit always — browsers ignore it over plain HTTP, so it
+    # never affects localhost dev but is present the moment we're behind TLS.
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains",
+    )
     return response
 
 
