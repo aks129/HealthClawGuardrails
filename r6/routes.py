@@ -1554,6 +1554,98 @@ def bind_telegram_chat():
     }), 201
 
 
+def _internal_chat_auth(body):
+    """Shared validation for chat-consent endpoints: returns (tenant_id,
+    chat_id, error_response). Mirrors bind-telegram's step-up gate."""
+    tenant_id = (body.get('tenant_id') or '').strip()
+    chat_id_raw = body.get('chat_id')
+    token = (body.get('step_up_token')
+             or request.headers.get('X-Step-Up-Token', '')).strip()
+    if not tenant_id or chat_id_raw is None:
+        return None, None, (jsonify({'error': 'tenant_id and chat_id are required'}), 400)
+    if not _TENANT_ID_PATTERN.match(tenant_id):
+        return None, None, (jsonify({'error': 'invalid tenant_id format'}), 400)
+    try:
+        chat_id = int(chat_id_raw)
+    except (TypeError, ValueError):
+        return None, None, (jsonify({'error': 'chat_id must be an integer'}), 400)
+    if not token:
+        return None, None, (jsonify({'error': 'valid step-up token required'}), 401)
+    valid, err = validate_step_up_token(token, tenant_id)
+    if not valid:
+        return None, None, (jsonify({'error': err or 'invalid step-up token'}), 401)
+    return tenant_id, chat_id, None
+
+
+@r6_blueprint.route('/internal/telegram-consent', methods=['GET', 'POST'])
+def telegram_consent():
+    """Record or check a chat's acknowledgment of the patient-directed-access
+    notice. POST records consent; GET returns the chat's consent/privacy
+    status plus the current required version so the bot can decide whether to
+    (re-)prompt. Step-up gated like bind-telegram; called by OpenClaw."""
+    from r6.consent import CONSENT_VERSION, consent_notice
+    from r6.models import TelegramBinding
+
+    if request.method == 'GET':
+        tenant_id = (request.args.get('tenant_id') or '').strip()
+        chat_id_raw = request.args.get('chat_id')
+        token = (request.args.get('step_up_token')
+                 or request.headers.get('X-Step-Up-Token', '')).strip()
+        if not tenant_id or chat_id_raw is None:
+            return jsonify({'error': 'tenant_id and chat_id are required'}), 400
+        try:
+            chat_id = int(chat_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'chat_id must be an integer'}), 400
+        if not token or not validate_step_up_token(token, tenant_id)[0]:
+            return jsonify({'error': 'valid step-up token required'}), 401
+        status = TelegramBinding.consent_status(tenant_id, chat_id)
+        status['required_version'] = CONSENT_VERSION
+        status['needs_consent'] = not TelegramBinding.has_consented(
+            tenant_id, chat_id, required_version=CONSENT_VERSION)
+        # Serve the notice text so chat clients (which can't import r6) render a
+        # single source of truth. platform query param names the destination.
+        status['notice'] = consent_notice(request.args.get('platform', 'this chat'))
+        return jsonify(status), 200
+
+    body = request.get_json(silent=True) or {}
+    tenant_id, chat_id, err = _internal_chat_auth(body)
+    if err:
+        return err
+    username = (body.get('username') or '').strip() or None
+    version = (body.get('version') or CONSENT_VERSION).strip()
+    TelegramBinding.record_consent(tenant_id, chat_id, version, username=username)
+    db.session.commit()
+    record_audit_event(
+        'update', 'TelegramBinding', f'{tenant_id}:{chat_id}',
+        agent_id='openclaw', tenant_id=tenant_id,
+        detail=f'consent recorded version={version}',
+    )
+    return jsonify({'consented': True, 'version': version}), 200
+
+
+@r6_blueprint.route('/internal/telegram-phi-mode', methods=['POST'])
+def telegram_phi_mode():
+    """Set a chat's PHI mode: 'full' or 'summary' (summary suppresses
+    identified values). Step-up gated; called by OpenClaw's /privacy."""
+    from r6.models import TelegramBinding
+    body = request.get_json(silent=True) or {}
+    tenant_id, chat_id, err = _internal_chat_auth(body)
+    if err:
+        return err
+    mode = (body.get('mode') or '').strip()
+    if not TelegramBinding.set_phi_mode(tenant_id, chat_id, mode):
+        return jsonify({'error': "mode must be 'full' or 'summary', and the "
+                        'chat must be bound (send /start first)'}), 400
+    db.session.commit()
+    record_audit_event(
+        'update', 'TelegramBinding', f'{tenant_id}:{chat_id}',
+        agent_id='openclaw', tenant_id=tenant_id,
+        detail=f'phi_mode set to {mode}',
+    )
+    return jsonify({'phi_mode': mode}), 200
+
+
 @r6_blueprint.route('/internal/seed', methods=['POST'])
 def seed_tenant():
     """

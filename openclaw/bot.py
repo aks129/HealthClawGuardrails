@@ -197,8 +197,16 @@ def _fhir_get(path: str) -> dict:
     return resp.json()
 
 
+_token_cache: dict = {'token': '', 'exp': 0.0}
+
+
 def _get_step_up_token() -> str:
-    """Fetch a fresh step-up token from the seed/token endpoint."""
+    """Fetch (and cache) a tenant-bound step-up token. The mint endpoint
+    returns it under `token`; older callers expected `step_up_token`, so accept
+    either. Cached ~4 min (tokens are 5-min TTL) to avoid minting per read."""
+    import time
+    if _token_cache['token'] and _token_cache['exp'] > time.time():
+        return _token_cache['token']
     resp = requests.post(
         f'{FHIR_BASE_URL}/internal/step-up-token',
         json={'tenant_id': TENANT_ID},
@@ -206,7 +214,78 @@ def _get_step_up_token() -> str:
         timeout=10,
     )
     resp.raise_for_status()
-    return resp.json().get('step_up_token', '')
+    data = resp.json()
+    token = data.get('token') or data.get('step_up_token', '')
+    if token:
+        _token_cache.update(token=token, exp=time.time() + 240)
+    return token
+
+
+# ---------------------------------------------------------------------------
+# Consent (Phase 3) — patient-directed-access acknowledgment before PHI flows
+# ---------------------------------------------------------------------------
+
+def _consent_status(chat_id: int) -> dict:
+    """GET the chat's consent + PHI-mode status from Flask. The response
+    includes the server-rendered notice text (single source of truth).
+    Fail-open to needs_consent=True so a server hiccup never leaks PHI."""
+    try:
+        resp = requests.get(
+            f'{FHIR_BASE_URL}/internal/telegram-consent',
+            params={'tenant_id': TENANT_ID, 'chat_id': chat_id,
+                    'platform': 'Telegram', 'step_up_token': _get_step_up_token()},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.RequestException as exc:
+        logger.warning('consent status error chat=%s: %s', chat_id, exc.__class__.__name__)
+    return {'needs_consent': True, 'phi_mode': 'full', 'notice': None}
+
+
+def _record_consent(chat_id: int, username: str | None) -> bool:
+    try:
+        resp = requests.post(
+            f'{FHIR_BASE_URL}/internal/telegram-consent',
+            json={'tenant_id': TENANT_ID, 'chat_id': chat_id,
+                  'username': username, 'step_up_token': _get_step_up_token()},
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except requests.RequestException as exc:
+        logger.warning('record consent error chat=%s: %s', chat_id, exc.__class__.__name__)
+        return False
+
+
+def _set_phi_mode(chat_id: int, mode: str) -> bool:
+    try:
+        resp = requests.post(
+            f'{FHIR_BASE_URL}/internal/telegram-phi-mode',
+            json={'tenant_id': TENANT_ID, 'chat_id': chat_id, 'mode': mode,
+                  'step_up_token': _get_step_up_token()},
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except requests.RequestException as exc:
+        logger.warning('set phi_mode error chat=%s: %s', chat_id, exc.__class__.__name__)
+        return False
+
+
+async def _require_consent(update: Update, agent_id: str) -> dict | None:
+    """Gate a PHI command. Returns the consent status dict if the chat may
+    proceed, or None (after replying with the notice/hint) if it must consent
+    first."""
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        return None
+    status = _consent_status(chat_id)
+    if status.get('needs_consent'):
+        notice = status.get('notice') or (
+            'Please acknowledge the data-sharing notice before I share health '
+            'records here.')
+        await _reply(update, notice, agent_id, parse_mode='Markdown')
+        return None
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +367,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '*HealthClaw Guardrails Bot*\n\n'
         f'{bind_line}\n\n'
         'Commands:\n'
+        '/consent — acknowledge the data-sharing notice (required for PHI)\n'
+        '/privacy — switch summary-only ⇄ full mode\n'
         '/connect — pull your records (Fasten + TEFCA)\n'
         '/hbo\\_connect — authorize Health Bank One (OAuth)\n'
         '/hbo\\_pull — pull + ingest HBO verified records\n'
@@ -303,6 +384,52 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f'Tenant: `{TENANT_ID}`'
     )
     await _reply(update, text, agent_id, parse_mode='Markdown')
+
+    # Show the consent notice up front when the chat hasn't acknowledged the
+    # current version — PHI commands stay gated until they send /consent.
+    if chat_id is not None:
+        status = _consent_status(chat_id)
+        if status.get('needs_consent') and status.get('notice'):
+            await _reply(update, status['notice'], agent_id, parse_mode='Markdown')
+
+
+async def cmd_consent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record the chat's acknowledgment of the patient-directed-access notice."""
+    agent_id = await _log_incoming(update, 'consent')
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    username = (update.effective_user.username if update.effective_user else None) or None
+    if chat_id is None:
+        await _reply(update, 'Could not identify this chat.', agent_id)
+        return
+    if _record_consent(chat_id, username):
+        await _reply(
+            update,
+            '✅ Thanks — noted that you are directing your own health data here. '
+            'You can switch to summary-only anytime with /privacy, or disconnect '
+            'with /unbind. Try /summary or /conditions.',
+            agent_id)
+    else:
+        await _reply(update, '⚠️ Could not record consent right now — please try again.', agent_id)
+
+
+async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle PHI mode. `/privacy summary` or `/privacy full`; no arg toggles."""
+    agent_id = await _log_incoming(update, 'privacy')
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        await _reply(update, 'Could not identify this chat.', agent_id)
+        return
+    arg = (context.args[0].lower() if getattr(context, 'args', None) else '').strip()
+    if arg not in ('summary', 'full'):
+        current = _consent_status(chat_id).get('phi_mode', 'full')
+        arg = 'summary' if current == 'full' else 'full'
+    if _set_phi_mode(chat_id, arg):
+        desc = ('*summary-only* — I will report counts and summaries, not '
+                'identified values' if arg == 'summary'
+                else '*full* — identified values will be shown')
+        await _reply(update, f'🔐 Privacy mode set to {desc}.', agent_id, parse_mode='Markdown')
+    else:
+        await _reply(update, '⚠️ Could not change privacy mode. Send /start to bind first.', agent_id)
 
 
 async def cmd_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -410,6 +537,9 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_conditions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = await _log_incoming(update, 'conditions')
+    status = await _require_consent(update, agent_id)
+    if status is None:
+        return
     await _reply(update, 'Fetching conditions…', agent_id)
     try:
         result = _rpc('fhir_search', resource_type='Condition', params={})
@@ -417,6 +547,12 @@ async def cmd_conditions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         entries = bundle.get('entry', [])
         if not entries:
             await _reply(update, 'No conditions found.', agent_id)
+            return
+        if status.get('phi_mode') == 'summary':
+            await _reply(update,
+                         f'*Conditions*: {len(entries)} on record. '
+                         'Switch to /privacy full to list them.',
+                         agent_id, parse_mode='Markdown')
             return
         lines = [_fmt_condition(e) for e in entries[:20]]
         await _reply(update, '*Conditions*\n' + '\n'.join(lines), agent_id, parse_mode='Markdown')
@@ -427,6 +563,9 @@ async def cmd_conditions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def cmd_labs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = await _log_incoming(update, 'labs')
+    status = await _require_consent(update, agent_id)
+    if status is None:
+        return
     await _reply(update, 'Fetching lab results…', agent_id)
     try:
         result = _rpc(
@@ -438,6 +577,12 @@ async def cmd_labs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         entries = bundle.get('entry', [])
         if not entries:
             await _reply(update, 'No lab results found.', agent_id)
+            return
+        if status.get('phi_mode') == 'summary':
+            await _reply(update,
+                         f'*Lab Results*: {len(entries)} recent result(s) on record. '
+                         'Switch to /privacy full to see values.',
+                         agent_id, parse_mode='Markdown')
             return
         lines = [_fmt_observation(e) for e in entries[:20]]
         await _reply(update, '*Lab Results*\n' + '\n'.join(lines), agent_id, parse_mode='Markdown')
@@ -668,6 +813,8 @@ async def cmd_hbo_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def cmd_hbo_pull(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Pull + redact + ingest Health Bank One records into this tenant."""
     agent_id = await _log_incoming(update, 'hbo_pull')
+    if await _require_consent(update, agent_id) is None:
+        return
 
     await _reply(
         update,
@@ -735,6 +882,8 @@ def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler('start', cmd_start))
+    app.add_handler(CommandHandler('consent', cmd_consent))
+    app.add_handler(CommandHandler('privacy', cmd_privacy))
     app.add_handler(CommandHandler('connect', cmd_connect))
     app.add_handler(CallbackQueryHandler(_connect_callback, pattern='^connect:'))
     app.add_handler(CommandHandler('health', cmd_health))

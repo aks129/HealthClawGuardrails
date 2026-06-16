@@ -268,6 +268,13 @@ class TelegramBinding(db.Model):
     bound_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_seen = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Chat-platform consent (Phase 3). A chat must acknowledge the
+    # patient-directed-access notice before PHI flows over Telegram. phi_mode
+    # 'summary' suppresses identified values, returning counts/summaries only.
+    consent_at = db.Column(db.DateTime, nullable=True)
+    consent_version = db.Column(db.String(32), nullable=True)
+    phi_mode = db.Column(db.String(16), nullable=False, default='full')
+
     __table_args__ = (
         db.UniqueConstraint('tenant_id', 'chat_id', name='uq_tenant_chat'),
     )
@@ -291,3 +298,58 @@ class TelegramBinding(db.Model):
         return [
             r.chat_id for r in cls.query.filter_by(tenant_id=tenant_id).all()
         ]
+
+    # --- Phase 3: chat-platform consent ---
+
+    @classmethod
+    def record_consent(cls, tenant_id: str, chat_id: int, version: str,
+                       username: str | None = None) -> 'TelegramBinding':
+        """Record (or refresh) the chat's acknowledgment of the consent notice.
+
+        Binds the chat first if it isn't already — acknowledging consent is a
+        deliberate act that establishes the binding. Idempotent per version.
+        """
+        row = cls.bind(tenant_id=tenant_id, chat_id=chat_id, username=username)
+        row.consent_at = datetime.now(timezone.utc)
+        row.consent_version = version
+        return row
+
+    @classmethod
+    def has_consented(cls, tenant_id: str, chat_id: int,
+                      required_version: str | None = None) -> bool:
+        """True if the chat has a recorded consent. If required_version is
+        given, the recorded version must match exactly (a notice revision
+        re-prompts every chat)."""
+        row = cls.query.filter_by(tenant_id=tenant_id, chat_id=chat_id).first()
+        if row is None or row.consent_at is None:
+            return False
+        if required_version is not None and row.consent_version != required_version:
+            return False
+        return True
+
+    @classmethod
+    def set_phi_mode(cls, tenant_id: str, chat_id: int, mode: str) -> bool:
+        """Set the chat's PHI mode ('full' or 'summary'). Returns False if the
+        chat isn't bound or the mode is invalid."""
+        if mode not in ('full', 'summary'):
+            return False
+        row = cls.query.filter_by(tenant_id=tenant_id, chat_id=chat_id).first()
+        if row is None:
+            return False
+        row.phi_mode = mode
+        return True
+
+    @classmethod
+    def consent_status(cls, tenant_id: str, chat_id: int) -> dict:
+        """Snapshot of a chat's consent + privacy posture (for the bot to gate
+        on). Never raises; reports bound=False for unknown chats."""
+        row = cls.query.filter_by(tenant_id=tenant_id, chat_id=chat_id).first()
+        if row is None:
+            return {'bound': False, 'consented': False,
+                    'consent_version': None, 'phi_mode': 'full'}
+        return {
+            'bound': True,
+            'consented': row.consent_at is not None,
+            'consent_version': row.consent_version,
+            'phi_mode': row.phi_mode or 'full',
+        }
