@@ -47,7 +47,10 @@ def _execute_call(payload, action_id):
     if not phone:
         return ExecutionResult(ok=False, simulated=False,
                                error='phone number is required')
-    api_key = os.environ.get('BLAND_AI_API_KEY')
+    # BLAND_AI_API_KEY is the documented name; BLAND_API_KEY is accepted as an
+    # alias so a key stored under either spelling dials for real instead of
+    # silently falling into simulation mode.
+    api_key = os.environ.get('BLAND_AI_API_KEY') or os.environ.get('BLAND_API_KEY')
     if not api_key:
         return ExecutionResult(ok=True, simulated=True,
                                external_ref='sim-' + secrets.token_hex(6))

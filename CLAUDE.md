@@ -71,6 +71,8 @@ railway up                  # Railway (full-stack)
 vercel deploy --prod        # Vercel (marketing + API serverless)
 ```
 
+**`.env` is NOT auto-loaded** — no code calls `load_dotenv`. Env vars come from the shell (local) or the platform (Railway/Vercel). Running `python main.py` after only editing `.env` won't pick up the new values; export them or source the file yourself. (Consequence: a key present in `.env` but absent from the process env behaves as unset — e.g. a missing provider key silently drops the action layer into simulation mode.)
+
 ## Key Directories
 
 ```text
@@ -228,6 +230,8 @@ Post-ingest Telegram push: `r6.telegram_push.notify_tenant` is called directly v
 - `tenant_headers` — read-only tenant headers
 - Sample resources: `sample_patient`, `sample_observation`, `sample_bundle`, `sample_permission`, `sample_subscription_topic`, `sample_nutrition_intake`, `sample_device_alert`
 
+**Testing write paths against a live server:** `POST /r6/fhir/internal/step-up-token` with `{"tenant_id": "..."}` returns a `token` signed with that server's `STEP_UP_SECRET` — the only way to get a valid token for a deployed server (you can't mint one locally unless the local `STEP_UP_SECRET` matches the deployed one). Use it for action/FHIR commit smoke tests; pass as `X-Step-Up-Token`.
+
 ## CI (`.github/workflows/ci.yml`)
 
 Seven jobs: `python-tests`, `node-tests`, `playwright-tests`, `compose-smoke`, `compliance-gates`, `secret-scan`, `dependency-audit`.
@@ -251,7 +255,7 @@ Real-world actions (phone calls, SMS) behind the same guardrails as FHIR writes.
 - Executors log `type(exc).__name__` and HTTP status codes only — `str(exc)` can leak the secret-bearing webhook URL.
 - No retries on calls — by design.
 
-**Env vars:** `BLAND_AI_API_KEY` (calls), `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` (SMS — all three or hard-fail), `ACTIONS_WEBHOOK_SECRET` (callbacks 403 without it), `PUBLIC_BASE_URL` (webhook base, defaults to app.healthclaw.io). Absent provider keys → simulation mode (commit completes synchronously).
+**Env vars:** `BLAND_AI_API_KEY` (calls; `BLAND_API_KEY` accepted as an alias — either name dials for real), `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` (SMS — all three or hard-fail), `ACTIONS_WEBHOOK_SECRET` (callbacks 403 without it), `PUBLIC_BASE_URL` (webhook base, defaults to app.healthclaw.io). Absent provider keys → simulation mode (commit completes synchronously).
 
 **Design docs:** `docs/superpowers/specs/2026-06-12-unified-action-layer-design.md` (full integration spec — phases 2-6 cover skills, Flexpa, ainpi.dev lookup, SHL QR, careagents.cloud rewire) and `docs/superpowers/plans/2026-06-12-action-core.md` (Phase 1 plan, executed).
 

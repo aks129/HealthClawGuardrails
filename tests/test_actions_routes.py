@@ -100,6 +100,7 @@ def test_commit_requires_human_confirmation(client, tenant_headers, auth_headers
 def test_commit_executes_in_simulation(client, tenant_headers, auth_headers,
                                         app, monkeypatch):
     monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+    monkeypatch.delenv('BLAND_API_KEY', raising=False)
     action_id = _propose(client, tenant_headers)
     headers = dict(auth_headers)
     headers['X-Human-Confirmed'] = 'true'
@@ -134,6 +135,7 @@ def test_commit_expired_returns_410(client, tenant_headers, auth_headers, app):
 def test_commit_double_commit_conflict(client, tenant_headers, auth_headers,
                                         monkeypatch):
     monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+    monkeypatch.delenv('BLAND_API_KEY', raising=False)
     action_id = _propose(client, tenant_headers)
     headers = dict(auth_headers)
     headers['X-Human-Confirmed'] = 'true'

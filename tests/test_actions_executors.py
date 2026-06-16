@@ -6,6 +6,7 @@ from r6.actions.executors import execute_action, ExecutionResult
 
 def test_phone_call_simulated_without_key(monkeypatch):
     monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+    monkeypatch.delenv('BLAND_API_KEY', raising=False)
     result = execute_action(
         kind='phone-call',
         payload={'phone': '617-555-0100', 'body': 'script', 'to': 'CVS'},
@@ -45,6 +46,25 @@ def test_phone_call_real_contract(monkeypatch):
     assert kwargs['json']['phone_number'] == '617-555-0100'
     assert kwargs['json']['task'] == 'script'
     assert 'act-1' in kwargs['json']['webhook']
+
+
+def test_phone_call_dials_with_legacy_alias(monkeypatch):
+    """BLAND_API_KEY (alias) dials for real — not simulation."""
+    monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+    monkeypatch.setenv('BLAND_API_KEY', 'alias-key')
+    fake = MagicMock()
+    fake.status_code = 200
+    fake.json.return_value = {'call_id': 'bl-alias'}
+    with patch('r6.actions.executors.requests.post', return_value=fake) as post:
+        result = execute_action(
+            kind='phone-call',
+            payload={'phone': '617-555-0100', 'body': 'script'},
+            action_id='act-2',
+        )
+    assert result.simulated is False
+    assert result.external_ref == 'bl-alias'
+    _, kwargs = post.call_args
+    assert kwargs['headers']['Authorization'] == 'alias-key'
 
 
 def test_phone_call_provider_error(monkeypatch):
