@@ -198,15 +198,25 @@ def _fhir_get(path: str) -> dict:
 
 
 def _get_step_up_token() -> str:
-    """Fetch a fresh step-up token from the seed/token endpoint."""
+    """Fetch a fresh step-up token from the mint endpoint.
+
+    The endpoint returns the token under `token` (older callers expected
+    `step_up_token`). When INTERNAL_TOKEN_MINT_SECRET is set, minting for a
+    non-public tenant (this bot's TENANT_ID) requires X-Internal-Secret.
+    """
+    headers = {'X-Tenant-ID': TENANT_ID}
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if mint_secret:
+        headers['X-Internal-Secret'] = mint_secret
     resp = requests.post(
         f'{FHIR_BASE_URL}/internal/step-up-token',
         json={'tenant_id': TENANT_ID},
-        headers={'X-Tenant-ID': TENANT_ID},
+        headers=headers,
         timeout=10,
     )
     resp.raise_for_status()
-    return resp.json().get('step_up_token', '')
+    data = resp.json()
+    return data.get('token') or data.get('step_up_token', '')
 
 
 # ---------------------------------------------------------------------------

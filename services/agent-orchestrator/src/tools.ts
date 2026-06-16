@@ -816,7 +816,12 @@ export class FHIRTools {
         const tokenTenant = (input.tenant_id as string) || tenantId;
         const resp = await fetch(`${this.baseUrl}/internal/step-up-token`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...fwdHeaders },
+          headers: {
+            "Content-Type": "application/json",
+            // Non-public tenants require the mint secret when it's set.
+            "X-Internal-Secret": process.env.INTERNAL_TOKEN_MINT_SECRET || "",
+            ...fwdHeaders,
+          },
           body: JSON.stringify({ tenant_id: tokenTenant }),
         });
         const data = (await resp.json()) as Record<string, unknown>;

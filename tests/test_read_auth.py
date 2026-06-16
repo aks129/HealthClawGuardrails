@@ -163,6 +163,19 @@ def test_mint_secret_set_correct_header_200(client, monkeypatch):
     assert 'token' in resp.get_json()
 
 
+def test_mint_public_tenant_open_even_with_secret(client, monkeypatch):
+    """Public/synthetic tenants stay open with NO secret even when the mint
+    secret is set — so the browser demo dashboard + telemetry (which mint
+    desktop-demo tokens and can't hold a secret) keep working. A public-tenant
+    token only unlocks public data, which read-auth lets through anyway."""
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'top-secret')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo,test-tenant')
+    resp = client.post('/r6/fhir/internal/step-up-token',
+                       json={'tenant_id': 'desktop-demo'})
+    assert resp.status_code == 200
+    assert 'token' in resp.get_json()
+
+
 # --- Suffix-exemption bypass: a FHIR read of resource id "metadata"/"health"
 # must NOT be treated as a public discovery endpoint. ---
 

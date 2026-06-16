@@ -1623,20 +1623,26 @@ def issue_step_up_token():
     """
     Issue a step-up token for the dashboard demo.
 
-    Token-mint oracle protection: if INTERNAL_TOKEN_MINT_SECRET is set, the
-    caller must present a matching X-Internal-Secret header (constant-time
-    compare) — otherwise 403. With read-auth enabled, an open mint endpoint
-    would be a trivial bypass (anyone could mint a tenant-bound read token).
-    If the env var is unset, behavior is unchanged (open) for dev/demo.
+    Token-mint oracle protection: minting a token for a NON-public tenant is a
+    read-auth bypass (anyone could mint a tenant-bound read token), so when
+    INTERNAL_TOKEN_MINT_SECRET is set the caller must present a matching
+    X-Internal-Secret header (constant-time compare) — otherwise 403.
+
+    Public/synthetic tenants stay open even with the secret set: they bypass
+    read-auth anyway, and the demo dashboard + telemetry mint desktop-demo
+    tokens from the browser, where no secret can be held. If the env var is
+    unset, the endpoint is fully open (dev/demo, backward compatible).
     """
+    body = request.get_json(silent=True) or {}
+    tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
+
+    from r6.command_center.access import is_public
     mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
-    if mint_secret:
+    if mint_secret and not is_public(tenant_id):
         provided = request.headers.get('X-Internal-Secret', '')
         if not hmac.compare_digest(provided, mint_secret):
             return jsonify({'error': 'forbidden'}), 403
 
-    body = request.get_json(silent=True) or {}
-    tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
     try:
         token = generate_step_up_token(tenant_id)
         return jsonify({'token': token, 'tenant_id': tenant_id})
