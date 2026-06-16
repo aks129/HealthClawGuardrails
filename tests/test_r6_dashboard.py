@@ -230,9 +230,10 @@ class TestCrossTenantIsolationComprehensive:
         token = generate_step_up_token('tenant-c')
         self._create_patient(client, 'tenant-c', token)
 
-        # Try deidentify from different tenant
+        # An authenticated different tenant still cannot deidentify tenant-c's data
+        token_d = generate_step_up_token('tenant-d')
         resp = client.get('/r6/fhir/Patient/iso-pt-tenant-c/$deidentify',
-                          headers={'X-Tenant-Id': 'tenant-d'})
+                          headers={'X-Tenant-Id': 'tenant-d', 'X-Step-Up-Token': token_d})
         assert resp.status_code == 404
 
     def test_update_tenant_isolated(self, client):
@@ -720,12 +721,15 @@ class TestDemoAgentLoop:
 
     def test_demo_loop_generates_audit_events(self, client):
         """The demo loop generates audit events visible in the audit feed."""
+        from r6.stepup import generate_step_up_token
         client.post('/r6/fhir/demo/agent-loop',
                     content_type='application/json',
                     headers={'X-Tenant-Id': 'demo-audit'})
 
+        # Reading the audit feed for a non-public tenant requires auth now.
         audit_resp = client.get('/r6/fhir/AuditEvent?_count=20',
-                                headers={'X-Tenant-Id': 'demo-audit'})
+                                headers={'X-Tenant-Id': 'demo-audit',
+                                         'X-Step-Up-Token': generate_step_up_token('demo-audit')})
         assert audit_resp.status_code == 200
         assert audit_resp.get_json()['total'] >= 4
 

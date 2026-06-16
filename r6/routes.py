@@ -153,6 +153,42 @@ def enforce_tenant_id():
             }]
         }), 400
 
+    # --- Authenticate the tenant claim ---
+    # Presence of X-Tenant-Id is NOT proof of ownership. Public/synthetic
+    # tenants (PUBLIC_TENANTS) stay open for the demo; SHARP-on-MCP requests
+    # carry their own FHIR-level identity (a SMART token to the upstream).
+    # Everyone else must present a tenant-bound step-up token or a SMART
+    # Bearer whose tenant_id matches X-Tenant-Id. Writes already validate
+    # step-up inside their handlers; this closes the read-side gap.
+    from r6.command_center.access import is_public
+    if is_public(tenant_id) or is_sharp_context_active():
+        return None
+    step_up_token = request.headers.get('X-Step-Up-Token')
+    if step_up_token:
+        valid, _err = validate_step_up_token(step_up_token, tenant_id)
+        if valid:
+            return None
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        from r6.oauth import validate_bearer_token
+        ok, info = validate_bearer_token(auth_header[len('Bearer '):])
+        if ok and info.get('tenant_id') == tenant_id:
+            return None
+    return jsonify({
+        'resourceType': 'OperationOutcome',
+        'issue': [{
+            'severity': 'error',
+            'code': 'security',
+            'diagnostics': (
+                'X-Tenant-Id is not authenticated for this tenant. Provide a '
+                'tenant-bound step-up token (X-Step-Up-Token) or a SMART '
+                'Bearer token. Mint one via POST '
+                '/r6/fhir/internal/step-up-token or the SMART OAuth flow '
+                '(see security block in /r6/fhir/metadata).'
+            ),
+        }]
+    }), 401
+
 
 # --- Human-in-the-Loop Enforcement ---
 
@@ -200,6 +236,37 @@ def r6_metadata():
         'rest': [
             {
                 'mode': 'server',
+                # Advertise the SMART OAuth service so the metadata reflects the
+                # actual security posture. Tenant access is scoped to an
+                # authenticated tenant (step-up token or SMART Bearer); synthetic
+                # demo tenants are public.
+                'security': {
+                    'cors': True,
+                    'service': [{
+                        'coding': [{
+                            'system': 'http://terminology.hl7.org/CodeSystem/restful-security-service',
+                            'code': 'SMART-on-FHIR',
+                            'display': 'SMART-on-FHIR',
+                        }],
+                        'text': 'OAuth2 via SMART App Launch (see http://docs.smarthealthit.org)',
+                    }],
+                    'extension': [{
+                        'url': 'http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris',
+                        'extension': [
+                            {'url': 'authorize', 'valueUri': request.host_url.rstrip('/') + '/r6/fhir/oauth/authorize'},
+                            {'url': 'token', 'valueUri': request.host_url.rstrip('/') + '/r6/fhir/oauth/token'},
+                            {'url': 'register', 'valueUri': request.host_url.rstrip('/') + '/r6/fhir/oauth/register'},
+                            {'url': 'revoke', 'valueUri': request.host_url.rstrip('/') + '/r6/fhir/oauth/revoke'},
+                        ],
+                    }],
+                    'description': (
+                        'Access is scoped to the authenticated tenant. Synthetic '
+                        'demo tenants are publicly readable; all other tenants '
+                        'require a tenant-bound step-up token or a SMART Bearer '
+                        'token. Write operations additionally require step-up '
+                        'authorization and human confirmation.'
+                    ),
+                },
                 'resource': [
                     _resource_capability(rt) for rt in R6Resource.SUPPORTED_TYPES
                 ],

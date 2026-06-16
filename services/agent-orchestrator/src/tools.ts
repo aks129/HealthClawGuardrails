@@ -55,9 +55,55 @@ const MAX_RESULT_ENTRIES = 50;
 
 export class FHIRTools {
   private baseUrl: string;
+  // Per-tenant read-token cache. The Flask read-auth gate requires a
+  // tenant-bound step-up token for any non-public tenant, even on reads. We
+  // mint one on demand and cache it (tokens are 5-min TTL; we re-mint at 4).
+  private readTokenCache = new Map<string, { token: string; expMs: number }>();
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+
+  /**
+   * Ensure a read request carries tenant authentication. If the caller already
+   * supplied a step-up token or a bearer (or this is a SHARP request with its
+   * own FHIR identity), do nothing. Otherwise mint a short-lived, tenant-bound
+   * step-up token via the internal endpoint and attach it. Best-effort: if
+   * minting fails the read proceeds and Flask returns its own 401.
+   */
+  private async attachReadToken(
+    tenantId: string,
+    fwdHeaders: Record<string, string>
+  ): Promise<void> {
+    if (
+      fwdHeaders["X-Step-Up-Token"] ||
+      fwdHeaders["Authorization"] ||
+      fwdHeaders["X-FHIR-Server-URL"]
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const cached = this.readTokenCache.get(tenantId);
+    if (cached && cached.expMs > now) {
+      fwdHeaders["X-Step-Up-Token"] = cached.token;
+      return;
+    }
+    try {
+      const resp = await fetch(`${this.baseUrl}/internal/step-up-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Tenant-Id": tenantId },
+        body: JSON.stringify({ tenant_id: tenantId }),
+      });
+      if (!resp.ok) return;
+      const data = (await resp.json()) as Record<string, unknown>;
+      const token = data.token;
+      if (typeof token !== "string") return;
+      this.readTokenCache.set(tenantId, { token, expMs: now + 240_000 });
+      fwdHeaders["X-Step-Up-Token"] = token;
+    } catch {
+      // Network error minting the token — let the read hit Flask and surface
+      // its own auth error rather than masking it here.
+    }
   }
 
   /**
@@ -631,6 +677,13 @@ export class FHIRTools {
     if (headers?.["x-fhir-server-url"]) fwdHeaders["X-FHIR-Server-URL"] = headers["x-fhir-server-url"];
     if (headers?.["x-fhir-access-token"]) fwdHeaders["X-FHIR-Access-Token"] = headers["x-fhir-access-token"];
     if (headers?.["x-patient-id"]) fwdHeaders["X-Patient-ID"] = headers["x-patient-id"];
+
+    // Reads against a non-public tenant now require a tenant-bound token. Mint
+    // one transparently when the caller didn't supply auth, so read tools keep
+    // working without the agent having to call fhir_get_token first.
+    if (tool.tier === "read") {
+      await this.attachReadToken(tenantId, fwdHeaders);
+    }
 
     switch (toolName) {
       case "context_get":

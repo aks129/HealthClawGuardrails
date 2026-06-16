@@ -73,8 +73,11 @@ class TestTenantEnforcement:
 
     def test_valid_tenant_id_formats(self, client):
         """Valid tenant IDs with hyphens and underscores should work."""
+        from r6.stepup import generate_step_up_token
+        tenant = 'my-tenant_123'
         resp = client.get('/r6/fhir/Patient/nonexistent',
-                         headers={'X-Tenant-Id': 'my-tenant_123'})
+                         headers={'X-Tenant-Id': tenant,
+                                  'X-Step-Up-Token': generate_step_up_token(tenant)})
         assert resp.status_code == 404  # Accepted but resource not found
 
 
@@ -195,7 +198,8 @@ class TestR6CRUD:
                          headers=tenant_headers)
         assert resp.status_code == 400
 
-    def test_tenant_isolation_prevents_cross_tenant_read(self, client, sample_patient, auth_headers):
+    def test_tenant_isolation_prevents_cross_tenant_read(self, client, sample_patient,
+                                                         auth_headers, other_tenant_headers):
         """Resources created by one tenant should not be visible to another."""
         # Create with test tenant
         client.post('/r6/fhir/Patient',
@@ -203,9 +207,9 @@ class TestR6CRUD:
                     content_type='application/json',
                     headers=auth_headers)
 
-        # Read with a different tenant should fail
+        # An authenticated DIFFERENT tenant still cannot see the resource
         resp = client.get(f'/r6/fhir/Patient/{sample_patient["id"]}',
-                         headers={'X-Tenant-Id': 'other-tenant'})
+                         headers=other_tenant_headers)
         assert resp.status_code == 404
 
 
@@ -320,7 +324,8 @@ class TestR6ContextIngestion:
         assert data['context_id'] == context_id
         assert data['item_count'] == 2
 
-    def test_get_context_cross_tenant_blocked(self, client, sample_bundle, tenant_headers):
+    def test_get_context_cross_tenant_blocked(self, client, sample_bundle,
+                                              tenant_headers, other_tenant_headers):
         """Context envelopes should be tenant-isolated."""
         ingest_resp = client.post('/r6/fhir/Bundle/$ingest-context',
                                   data=json.dumps(sample_bundle),
@@ -329,7 +334,7 @@ class TestR6ContextIngestion:
         context_id = ingest_resp.get_json()['context_id']
 
         resp = client.get(f'/r6/fhir/context/{context_id}',
-                         headers={'X-Tenant-Id': 'other-tenant'})
+                         headers=other_tenant_headers)
         assert resp.status_code == 404
 
     def test_ingest_empty_bundle_fails(self, client, tenant_headers):
@@ -396,7 +401,7 @@ class TestR6AuditEvents:
         assert data['resourceType'] == 'Bundle'
 
     def test_audit_events_tenant_isolated(self, client, sample_patient,
-                                            auth_headers, tenant_headers):
+                                            auth_headers, other_tenant_headers):
         """Audit events from one tenant should not be visible to another."""
         client.post('/r6/fhir/Patient',
                     data=json.dumps(sample_patient),
@@ -404,7 +409,7 @@ class TestR6AuditEvents:
                     headers=auth_headers)
 
         resp = client.get('/r6/fhir/AuditEvent',
-                         headers={'X-Tenant-Id': 'other-tenant'})
+                         headers=other_tenant_headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['total'] == 0
@@ -807,14 +812,15 @@ class TestAuditExport:
         assert data['resourceType'] == 'Bundle'
         assert data['type'] == 'collection'
 
-    def test_export_tenant_isolated(self, client, sample_patient, auth_headers):
+    def test_export_tenant_isolated(self, client, sample_patient, auth_headers,
+                                    other_tenant_headers):
         client.post('/r6/fhir/Patient',
                     data=json.dumps(sample_patient),
                     content_type='application/json',
                     headers=auth_headers)
 
         resp = client.get('/r6/fhir/AuditEvent/$export?_format=fhir-bundle',
-                         headers={'X-Tenant-Id': 'other-tenant'})
+                         headers=other_tenant_headers)
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['total'] == 0
@@ -1412,14 +1418,15 @@ class TestPhase2SubscriptionTopicList:
         data = resp.get_json()
         assert data['total'] >= 1
 
-    def test_list_tenant_isolated(self, client, sample_subscription_topic, auth_headers):
+    def test_list_tenant_isolated(self, client, sample_subscription_topic, auth_headers,
+                                  other_tenant_headers):
         client.post('/r6/fhir/SubscriptionTopic',
                     data=json.dumps(sample_subscription_topic),
                     content_type='application/json',
                     headers=auth_headers)
 
         resp = client.get('/r6/fhir/SubscriptionTopic/$list',
-                         headers={'X-Tenant-Id': 'other-tenant'})
+                         headers=other_tenant_headers)
         assert resp.status_code == 200
         assert resp.get_json()['total'] == 0
 

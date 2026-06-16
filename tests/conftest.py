@@ -70,6 +70,22 @@ def tenant_headers(tenant_id):
 
 
 @pytest.fixture
+def other_tenant_headers():
+    """Authenticated read headers for a DIFFERENT, non-public tenant.
+
+    Used by cross-tenant isolation tests: the read-auth gate now requires a
+    tenant-bound token for any non-public tenant, so a bare
+    X-Tenant-Id no longer reaches the handler. Carrying a *valid* token for
+    'other-tenant' makes the isolation assertion stronger — it proves an
+    authenticated foreign tenant still cannot see the test tenant's data.
+    """
+    from r6.stepup import generate_step_up_token
+    other = 'other-tenant'
+    return {'X-Tenant-Id': other,
+            'X-Step-Up-Token': generate_step_up_token(other)}
+
+
+@pytest.fixture
 def sample_patient():
     """Sample FHIR R6 Patient resource."""
     return {

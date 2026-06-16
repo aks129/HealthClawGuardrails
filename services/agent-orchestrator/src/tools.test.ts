@@ -168,7 +168,17 @@ describe("Tool Execution Tests", () => {
   const BASE = "http://localhost:5000/r6/fhir";
   const tools = new FHIRTools(BASE);
 
+  beforeEach(() => {
+    // These tests exercise request-building in isolation. The read-auth token
+    // mint (attachReadToken) prepends an extra fetch on read tools; it has its
+    // own dedicated tests below. Stub it to a no-op here so a read makes
+    // exactly one fetch — the resource call the assertions target.
+    jest.spyOn(tools as unknown as { attachReadToken: () => Promise<void> },
+      "attachReadToken").mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
+    jest.restoreAllMocks();
     mockFetch.mockReset();
   });
 
@@ -233,6 +243,67 @@ describe("Tool Execution Tests", () => {
     );
 
     expect(JSON.parse(mockFetch.mock.calls[0][1].body).tenant_id).toBe("explicit-tenant");
+  });
+
+  // -- read-auth token minting (attachReadToken) --
+
+  describe("read-auth token minting", () => {
+    const authTools = new FHIRTools(BASE);
+
+    // route fetch by URL: token endpoint -> token, everything else -> body
+    function routeFetch(body: Record<string, unknown>) {
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).includes("/internal/step-up-token")
+            ? fakeResponse({ token: "minted-read-token" })
+            : fakeResponse(body)
+        )
+      );
+    }
+
+    it("mints and forwards a tenant-bound token on a read with no auth", async () => {
+      routeFetch({ resourceType: "Patient", id: "pt-1" });
+      await authTools.executeTool(
+        "fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" },
+        { "x-tenant-id": "private-clinic" }
+      );
+      const tokenCall = mockFetch.mock.calls.find(([u]: [string]) =>
+        String(u).includes("/internal/step-up-token"));
+      expect(tokenCall).toBeDefined();
+      expect(JSON.parse(tokenCall![1].body).tenant_id).toBe("private-clinic");
+      const readCall = mockFetch.mock.calls.find(([u]: [string]) =>
+        String(u).includes("/Patient/pt-1"));
+      expect(readCall![1].headers["X-Step-Up-Token"]).toBe("minted-read-token");
+    });
+
+    it("does NOT mint when the caller already supplied a step-up token", async () => {
+      routeFetch({ resourceType: "Patient", id: "pt-1" });
+      await authTools.executeTool(
+        "fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" },
+        { "x-tenant-id": "private-clinic", "x-step-up-token": "caller-token" }
+      );
+      const tokenCall = mockFetch.mock.calls.find(([u]: [string]) =>
+        String(u).includes("/internal/step-up-token"));
+      expect(tokenCall).toBeUndefined();
+      const readCall = mockFetch.mock.calls.find(([u]: [string]) =>
+        String(u).includes("/Patient/pt-1"));
+      expect(readCall![1].headers["X-Step-Up-Token"]).toBe("caller-token");
+    });
+
+    it("caches the minted token across reads for the same tenant", async () => {
+      const cacheTools = new FHIRTools(BASE);
+      routeFetch({ resourceType: "Patient", id: "pt-1" });
+      const hdrs = { "x-tenant-id": "cache-tenant" };
+      await cacheTools.executeTool("fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" }, hdrs);
+      await cacheTools.executeTool("fhir_read",
+        { resource_type: "Patient", resource_id: "pt-1" }, hdrs);
+      const tokenCalls = mockFetch.mock.calls.filter(([u]: [string]) =>
+        String(u).includes("/internal/step-up-token"));
+      expect(tokenCalls).toHaveLength(1); // minted once, reused
+    });
   });
 
   it("fhir.search builds correct query params and adds _mcp_summary", async () => {
@@ -1031,7 +1102,16 @@ describe("Express App Tests", () => {
 
       // Step 2: call a tool with the session
       const fhirPatient = { resourceType: "Patient", id: "pt-1" };
-      mockFetch.mockResolvedValueOnce(fakeResponse(fhirPatient));
+      // fhir_read is a read tool: it mints a tenant-bound token first, then
+      // reads. Route the token endpoint to a token and everything else to the
+      // patient body.
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).includes("/internal/step-up-token")
+            ? fakeResponse({ token: "read-token" })
+            : fakeResponse(fhirPatient)
+        )
+      );
 
       const res = await request(app)
         .post("/mcp")
@@ -1177,7 +1257,16 @@ describe("Express App Tests", () => {
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
       const fhirPatient = { resourceType: "Patient", id: "pt-1" };
-      mockFetch.mockResolvedValueOnce(fakeResponse(fhirPatient));
+      // fhir_read is a read tool: it mints a tenant-bound token first, then
+      // reads. Route the token endpoint to a token and everything else to the
+      // patient body.
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).includes("/internal/step-up-token")
+            ? fakeResponse({ token: "read-token" })
+            : fakeResponse(fhirPatient)
+        )
+      );
 
       const res = await request(app)
         .post("/mcp/rpc")

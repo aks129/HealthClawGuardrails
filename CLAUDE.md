@@ -127,6 +127,7 @@ Same pattern for `shl-server` (Dockerfile + railway.toml only). Setting a variab
 - Before any PHI/audit/access-control change: check `.claude/compliance/hipaa.md`.
 - Always emit AuditEvent for FHIR resource access.
 - Step-up authorization required for all write operations.
+- **Tenant reads are authenticated, not just tenant-scoped** (`enforce_tenant_id` in `r6/routes.py`). A bare `X-Tenant-Id` only works for tenants in `PUBLIC_TENANTS` (synthetic demo tenants) or SHARP-on-MCP requests (which carry their own SMART token to the upstream). Every other tenant must send a tenant-bound `X-Step-Up-Token` OR a SMART `Authorization: Bearer` whose `tenant_id` matches — else `401`. Mint a read token via `POST /r6/fhir/internal/step-up-token`. The `/metadata` CapabilityStatement advertises the SMART OAuth service in its `rest.security` block.
 
 ### Python version
 
@@ -161,7 +162,7 @@ Column names differ from what you might guess:
 
 **20 tools in three groups:**
 
-- **Read** (no step-up): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`
+- **Read** (no step-up *for public tenants only*): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`. Since the read-auth gate landed, reads against a **non-public** tenant also need a tenant-bound token — the MCP server must mint one (`fhir_get_token`) and forward it as `X-Step-Up-Token`/`_stepUpToken` on reads too, or those calls 401. The default `desktop-demo` tenant is public, so default-tenant reads are unaffected.
 - **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`
 - **Utility**: `fhir_compiled_truth`, `fhir_get_token`, `fhir_seed`
 
