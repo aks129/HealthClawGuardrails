@@ -6,7 +6,7 @@ the codebase to the bar we advocate.
 
 ## Reporting a vulnerability
 
-Email **security@vestelai.com** (operated by Vestel AI LLC). Please include a
+Email **security@healthclaw.io**. Please include a
 description, reproduction steps, and impact. We aim to acknowledge within 3
 business days and will coordinate disclosure. Please do not open public issues
 for security reports.

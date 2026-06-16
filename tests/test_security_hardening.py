@@ -137,8 +137,21 @@ def test_rate_limit_key_falls_back_to_ip(app):
 
 def test_rate_limit_key_honors_forwarded_for(app):
     from r6.rate_limit import rate_limit_key
+    # The rightmost X-Forwarded-For hop is the one appended by our trusted
+    # edge proxy — the real peer it saw. Leftmost entries are client-spoofable,
+    # so keying off the last hop removes that bucket-splitting surface.
     with app.test_request_context(
         '/r6/actions/callback/bland',
         headers={'X-Forwarded-For': '198.51.100.5, 10.0.0.1'},
     ):
-        assert rate_limit_key() == 'ip:198.51.100.5'
+        assert rate_limit_key() == 'ip:10.0.0.1'
+
+
+def test_rate_limit_key_forwarded_for_ignores_spoofed_left_hop(app):
+    """A client-injected leftmost XFF entry cannot change the bucket key."""
+    from r6.rate_limit import rate_limit_key
+    with app.test_request_context(
+        '/r6/actions/callback/bland',
+        headers={'X-Forwarded-For': 'spoofed-by-client, 203.0.113.9'},
+    ):
+        assert rate_limit_key() == 'ip:203.0.113.9'

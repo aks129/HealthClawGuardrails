@@ -161,3 +161,110 @@ def test_mint_secret_set_correct_header_200(client, monkeypatch):
                        headers={'X-Internal-Secret': 'top-secret'})
     assert resp.status_code == 200
     assert 'token' in resp.get_json()
+
+
+# --- Suffix-exemption bypass: a FHIR read of resource id "metadata"/"health"
+# must NOT be treated as a public discovery endpoint. ---
+
+def test_read_flag_on_resource_id_metadata_no_token_401(client, monkeypatch):
+    """GET /r6/fhir/Patient/metadata is a resource read, NOT discovery.
+
+    Pre-fix, path.endswith('/metadata') exempted this and leaked the Patient
+    without a token. It must now require auth like any other read.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.get('/r6/fhir/Patient/metadata',
+                      headers={'X-Tenant-Id': 'private-tenant'})
+    assert resp.status_code == 401
+    assert resp.get_json()['issue'][0]['code'] == 'security'
+
+
+def test_read_flag_on_resource_id_health_no_token_401(client, monkeypatch):
+    """GET /r6/fhir/Patient/health (resource id 'health') must require auth."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.get('/r6/fhir/Patient/health',
+                      headers={'X-Tenant-Id': 'private-tenant'})
+    assert resp.status_code == 401
+    assert resp.get_json()['issue'][0]['code'] == 'security'
+
+
+def test_read_flag_on_real_metadata_no_token_200(client, monkeypatch):
+    """The real CapabilityStatement stays exempt with the flag on."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.get('/r6/fhir/metadata')
+    assert resp.status_code == 200
+
+
+def test_read_flag_on_real_health_no_token_200(client, monkeypatch):
+    """The real health route stays exempt with the flag on."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.get('/r6/fhir/health')
+    assert resp.status_code == 200
+
+
+def test_tenant_hook_resource_id_metadata_still_requires_tenant(client):
+    """Flag OFF: /r6/fhir/Patient/metadata still needs X-Tenant-Id.
+
+    The same suffix bug also let the tenant hook exempt this path. With the
+    exact-match fix, a missing tenant header is now a 400, not a silent pass.
+    """
+    resp = client.get('/r6/fhir/Patient/metadata')
+    assert resp.status_code == 400
+    assert resp.get_json()['issue'][0]['code'] == 'security'
+
+
+# --- OAuth bearer access tokens authorize reads (the advertised mechanism) ---
+
+def _mint_oauth_token(tenant_id, scopes):
+    """Inject an OAuth access token directly into the in-memory store."""
+    import secrets
+    import time
+    from r6 import oauth
+    tok = secrets.token_urlsafe(16)
+    oauth._access_tokens[tok] = {
+        'client_id': 'test-client',
+        'scopes': scopes,
+        'tenant_id': tenant_id,
+        'exp': time.time() + 3600,
+    }
+    return tok
+
+
+def test_read_flag_on_oauth_bearer_read_scope_200(client, monkeypatch):
+    """A valid OAuth bearer with a read scope for the tenant → 200."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    tok = _mint_oauth_token('private-tenant', ['patient/*.read'])
+    resp = client.get(READ_PATH, headers={
+        'X-Tenant-Id': 'private-tenant',
+        'Authorization': f'Bearer {tok}',
+    })
+    assert resp.status_code == 200
+
+
+def test_read_flag_on_oauth_bearer_wrong_tenant_401(client, monkeypatch):
+    """OAuth bearer bound to another tenant must not authorize the read."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    tok = _mint_oauth_token('other-tenant', ['patient/*.read'])
+    resp = client.get(READ_PATH, headers={
+        'X-Tenant-Id': 'private-tenant',
+        'Authorization': f'Bearer {tok}',
+    })
+    assert resp.status_code == 401
+
+
+def test_read_flag_on_oauth_bearer_no_read_scope_401(client, monkeypatch):
+    """OAuth bearer without a read scope must not authorize the read."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    tok = _mint_oauth_token('private-tenant', ['fhir.write'])
+    resp = client.get(READ_PATH, headers={
+        'X-Tenant-Id': 'private-tenant',
+        'Authorization': f'Bearer {tok}',
+    })
+    assert resp.status_code == 401

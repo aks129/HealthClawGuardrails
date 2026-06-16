@@ -21,13 +21,21 @@ _rate_limits = {}
 
 def _client_ip():
     """
-    Best-effort client IP for rate-limit keying. Honors the first hop in
-    X-Forwarded-For (set by the Railway/Vercel edge) and falls back to the
-    socket peer. Used only as a rate-limit bucket key — never for auth.
+    Best-effort client IP for rate-limit keying. Used only as a rate-limit
+    bucket key — never for auth.
+
+    Behind a single trusted proxy (Railway/Vercel edge), the LAST entry in
+    X-Forwarded-For is the IP appended by that trusted proxy — i.e. the real
+    peer it saw. The leftmost entries are attacker-controllable: a client can
+    inject "X-Forwarded-For: spoofed" and split the bucket arbitrarily. Taking
+    the rightmost hop removes that spoofing surface for our 1-proxy topology.
+    (If proxy depth changes, count back that many hops instead.)
     """
     fwd = request.headers.get('X-Forwarded-For', '')
     if fwd:
-        return fwd.split(',')[0].strip()
+        hops = [h.strip() for h in fwd.split(',') if h.strip()]
+        if hops:
+            return hops[-1]
     return request.remote_addr or 'unknown'
 
 

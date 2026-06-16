@@ -88,7 +88,12 @@ export class FHIRTools {
     const tenant = fwdHeaders["X-Tenant-Id"] || "desktop-demo";
     const now = Date.now();
 
-    const cached = READ_TOKEN_CACHE.get(tenant);
+    // Key by serverRoot + tenant: a step-up token is minted by (and only valid
+    // against) a specific Flask backend, so a token cached for one backend must
+    // never be reused for a request routed to a different backend.
+    const cacheKey = `${this.serverRoot()}::${tenant}`;
+
+    const cached = READ_TOKEN_CACHE.get(cacheKey);
     if (cached && cached.expiresAtMs - READ_TOKEN_SKEW_MS > now) {
       fwdHeaders["X-Step-Up-Token"] = cached.token;
       return;
@@ -114,7 +119,7 @@ export class FHIRTools {
         console.error(`ensureReadToken: mint returned no token for tenant ${tenant}; proceeding without read token`);
         return;
       }
-      READ_TOKEN_CACHE.set(tenant, { token, expiresAtMs: now + READ_TOKEN_TTL_MS });
+      READ_TOKEN_CACHE.set(cacheKey, { token, expiresAtMs: now + READ_TOKEN_TTL_MS });
       fwdHeaders["X-Step-Up-Token"] = token;
     } catch (e) {
       console.error(`ensureReadToken: mint request error (${(e as Error).name}) for tenant ${tenant}; proceeding without read token`);

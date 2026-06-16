@@ -78,12 +78,23 @@ _SKILLS_CACHE: list[dict] = _load_skills()
 # tenant-scoped APIs same-origin, so 'unsafe-inline' is required for style/
 # script and connect-src stays 'self'. img-src allows data: URIs (inline
 # SVG/PNG badges). frame-ancestors 'none' mirrors X-Frame-Options: DENY.
-# No external CDNs are loaded by these pages, so default-src stays 'self'.
+#
+# templates/base.html and templates/index.html load assets from external CDNs:
+#   - Bootstrap CSS+JS  → cdn.jsdelivr.net
+#   - FontAwesome CSS+fonts → cdnjs.cloudflare.com
+#   - Google Fonts CSS  → fonts.googleapis.com (font files on fonts.gstatic.com)
+# The previous "no external CDNs" policy silently broke styling/fonts on every
+# deploy (flag-independent), so those hosts are explicitly allowed below.
+#
+# DEBT: script-src 'unsafe-inline' is a stopgap until inline <script> blocks are
+# moved behind per-response nonces; tighten to 'self' + nonce when that lands.
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "img-src 'self' data:; "
-    "style-src 'self' 'unsafe-inline'; "
-    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net "
+    "https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
     "connect-src 'self'; "
     "frame-ancestors 'none'"
 )
@@ -97,7 +108,7 @@ def _security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
-        "geolocation=(), microphone=(), camera=()",
+        "geolocation=(), microphone=(), camera=(), usb=()",
     )
     response.headers.setdefault("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
     # HSTS is safe to emit always — browsers ignore it over plain HTTP, so it
