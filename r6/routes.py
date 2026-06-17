@@ -235,6 +235,41 @@ def enforce_tenant_id():
         }), 400
 
 
+def authenticate_tenant_read(tenant_id):
+    """Validate read credentials for `tenant_id`.
+
+    Shared by the GET before_request hook and POST read-shaped operations
+    (e.g. Questionnaire/$populate). Returns None when access is allowed,
+    or an (OperationOutcome, status) tuple to abort with.
+
+    Mirrors the gate semantics: public tenants and the disabled flag pass;
+    otherwise a tenant-bound step-up token OR a SMART bearer is required.
+    """
+    if not _read_auth_enabled():
+        return None
+    if not _read_auth_required(tenant_id):
+        return None
+
+    bearer = ''
+    auth = (request.headers.get('Authorization') or '').strip()
+    if auth.lower().startswith('bearer '):
+        bearer = auth[7:].strip()
+    step_up = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
+
+    valid = False
+    if step_up:
+        valid, _err = validate_step_up_token(step_up, tenant_id)
+    if not valid and bearer:
+        valid = _validate_oauth_read(bearer, tenant_id)
+
+    if not valid:
+        return _operation_outcome(
+            'error', 'security',
+            f"Read access to tenant '{tenant_id}' requires authentication",
+        ), 401
+    return None
+
+
 @r6_blueprint.before_request
 def authenticate_read():
     """Authenticate the tenant claim on FHIR reads (flag-gated).
@@ -280,31 +315,9 @@ def authenticate_read():
     #   1. HMAC step-up token, via X-Step-Up-Token or Authorization: Bearer.
     #   2. A SMART-on-FHIR OAuth access token (the mechanism the
     #      CapabilityStatement advertises), via Authorization: Bearer.
-    # Try step-up first; if that fails and a bearer is present, fall back to
-    # the OAuth validator. 401 only when BOTH fail.
-    bearer = ''
-    auth = (request.headers.get('Authorization') or '').strip()
-    if auth.lower().startswith('bearer '):
-        bearer = auth[7:].strip()
-
-    step_up = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
-
-    valid = False
-    if step_up:
-        # validate_step_up_token returns (bool, str) — destructure both;
-        # never coerce the tuple to a boolean.
-        valid, _err = validate_step_up_token(step_up, tenant_id)
-
-    if not valid and bearer:
-        valid = _validate_oauth_read(bearer, tenant_id)
-
-    if not valid:
-        # Do NOT leak whether the tenant exists or why the token failed.
-        return _operation_outcome(
-            'error', 'security',
-            f"Read access to tenant '{tenant_id}' requires authentication",
-        ), 401
-    return None
+    # Delegated to the reusable helper so POST read-shaped operations can
+    # apply the exact same gate.
+    return authenticate_tenant_read(tenant_id)
 
 
 # Scopes that grant FHIR read access. patient/*.read is the SMART-on-FHIR v2

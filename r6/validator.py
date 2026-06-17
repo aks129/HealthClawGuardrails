@@ -38,6 +38,8 @@ R6_RESOURCE_TYPES = [
     'Practitioner', 'PractitionerRole', 'RelatedPerson',
     'Coverage', 'ServiceRequest', 'Specimen',
     'FamilyMemberHistory',
+    # Phase 5 — SDC Structured Data Capture
+    'Questionnaire', 'QuestionnaireResponse',
 ]
 
 # TTL for validator availability cache (seconds)
