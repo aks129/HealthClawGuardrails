@@ -118,6 +118,7 @@ def _observation_answer(item_codes, observations):
                 break
     if not matches:
         return None
+    # Recency by effectiveDateTime only; other effective[x] types sort as oldest (v1).
     matches.sort(key=lambda o: o.get("effectiveDateTime", ""), reverse=True)
     best = matches[0]
     if "valueQuantity" in best:
@@ -139,12 +140,12 @@ def _initial_expression(item):
 def _coerce(value, item_type):
     if isinstance(value, dict):
         return value
-    if item_type in ("integer",):
+    if item_type == "integer":
         try:
             return int(value)
         except (TypeError, ValueError):
             return value
-    if item_type in ("decimal",):
+    if item_type == "decimal":
         try:
             return float(value)
         except (TypeError, ValueError):
