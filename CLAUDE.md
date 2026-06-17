@@ -77,8 +77,9 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 
 ```text
 /r6/                    FHIR modules: routes, models, validator, oauth, stepup, audit,
-                        redaction, health_compliance, context_builder, rate_limit,
-                        fhir_proxy, agent_client, seed, telegram_push
+                        redaction, health_compliance, context_builder, health_context,
+                        rate_limit, fhir_proxy, agent_client, curatr, schema_sync,
+                        seed, telegram_push
 /r6/actions/            Real-world action layer — propose/commit/status/callbacks for
                         phone calls (Bland.ai) + SMS (Twilio), simulation mode without keys
 /r6/fasten/             Fasten Connect integration (routes, models, ingester, verify)
@@ -90,7 +91,7 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 /openclaw/              Telegram bot (bot.py + Dockerfile)
 /hermes/                Nous Research Hermes agent config + persona
 /skills/                Skill definitions (agentskills.io standard, auto-indexed at /skills)
-/tests/                 Python tests (597 passing)
+/tests/                 Python tests (~669 across 30 files)
 /e2e/                   Playwright tests
 ```
 
