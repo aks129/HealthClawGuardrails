@@ -258,11 +258,14 @@ def authenticate_tenant_read(tenant_id):
 
     valid = False
     if step_up:
+        # validate_step_up_token returns (bool, str) — destructure both;
+        # never coerce the tuple to a boolean.
         valid, _err = validate_step_up_token(step_up, tenant_id)
     if not valid and bearer:
         valid = _validate_oauth_read(bearer, tenant_id)
 
     if not valid:
+        # Do NOT leak whether the tenant exists or why the token failed.
         return _operation_outcome(
             'error', 'security',
             f"Read access to tenant '{tenant_id}' requires authentication",
