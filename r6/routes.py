@@ -2892,3 +2892,14 @@ def _operation_outcome(severity, code, diagnostics):
             }
         ]
     })
+
+
+# --- SDC ($populate / $extract) ---
+from r6.sdc.routes import register_sdc_routes  # noqa: E402
+
+register_sdc_routes(r6_blueprint, {
+    "operation_outcome": _operation_outcome,
+    "authenticate_tenant_read": authenticate_tenant_read,
+    "validate_step_up_token": validate_step_up_token,
+    "validator": validator,
+})
