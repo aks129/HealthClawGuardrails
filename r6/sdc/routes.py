@@ -1,7 +1,7 @@
 """SDC $populate / $extract Flask handlers.
 
 Attached to the existing r6_blueprint so the tenant-enforcement before_request
-hook applies. Owns all store I/O, audit, step-up, and redaction; the transform
+hook applies. Owns all store I/O, audit, and step-up; the transform
 logic lives in the pure engines (populate.py, extract.py).
 """
 

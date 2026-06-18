@@ -738,6 +738,12 @@ export class FHIRTools {
       await this.ensureReadToken(fwdHeaders);
     }
 
+    // questionnaire_extract dry-run is read-shaped (Flask gates it with read-auth
+    // but no step-up); mint a read token so non-public tenants can preview.
+    if (toolName === "questionnaire_extract" && input.dry_run === true) {
+      await this.ensureReadToken(fwdHeaders);
+    }
+
     switch (toolName) {
       case "context_get":
         return this.getContext(input.context_id as string, fwdHeaders);
