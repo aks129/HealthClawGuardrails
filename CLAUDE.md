@@ -161,10 +161,10 @@ Column names differ from what you might guess:
 
 ## MCP Server
 
-**20 tools in three groups:**
+**23 tools in three groups:**
 
-- **Read** (no step-up *for public tenants only*): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`. Since the read-auth gate landed, reads against a **non-public** tenant also need a tenant-bound token — the MCP server must mint one (`fhir_get_token`) and forward it as `X-Step-Up-Token`/`_stepUpToken` on reads too, or those calls 401. The default `desktop-demo` tenant is public, so default-tenant reads are unaffected.
-- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`
+- **Read** (no step-up *for public tenants only*): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `questionnaire_populate`, `curatr_evaluate`, `action_status`. Since the read-auth gate landed, reads against a **non-public** tenant also need a tenant-bound token — the MCP server must mint one (`fhir_get_token`) and forward it as `X-Step-Up-Token`/`_stepUpToken` on reads too, or those calls 401. The default `desktop-demo` tenant is public, so default-tenant reads are unaffected.
+- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`, `questionnaire_extract` (step-up enforced by Flask's `$extract` route on the commit path; `dry_run=true` previews without committing)
 - **Utility**: `fhir_compiled_truth`, `fhir_get_token`, `fhir_seed`
 
 Tool names use underscores (`fhir_search`, not `fhir.search`).
