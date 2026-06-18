@@ -273,3 +273,18 @@ Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `fa0020d`) as the SHL 
 - **Zero-knowledge property:** storage server sees only ciphertext + `sha256(auth)`; PHI never leaves the MCP server unencrypted.
 - **Railway deploy caveat:** The repo-root `railway.toml` targets the Flask Dockerfile — always `cd services/shl-server && railway up --service shl-server`; deploying from repo root picks up the wrong Dockerfile. A service that inherited root `watchPatterns` may also skip Dockerfile-only deploys until the per-service `railway.toml` takes effect after the first successful build.
 - **Personas MUST use `skills/share-health-qr`** — never direct-encode PHI into QR images (incident 2026-06-12). The QR must encode only the `shlink:/` URI from `shl_generate`.
+
+## SDC Forms ($populate / $extract)
+
+HL7 Structured Data Capture form round-trip. Engines are pure (no Flask/DB) in `r6/sdc/`; the Flask handlers (`r6/sdc/routes.py`, registered on `r6_blueprint` via `register_sdc_routes`) own auth/audit/store I/O.
+
+- **`POST /r6/fhir/Questionnaire[/<id>]/$populate`** — Questionnaire + subject + content → pre-filled QuestionnaireResponse. Mechanisms: expression-based (`initialExpression` FHIRPath via `fhirpathpy`) and observation-based (`item.code` LOINC matched against the subject's Observations). Read-shaped: tenant-read-authenticated + AuditEvent.
+- **`POST /r6/fhir/QuestionnaireResponse/$extract`** — completed QR → transaction Bundle. Mechanisms: observation-based (`observationExtract`) and definition-based (`definitionExtract` + item `definition` element paths). `?dryRun=true` returns the Bundle without committing (read-auth only); otherwise requires `X-Step-Up-Token`, runs `$validate` per resource, commits, audits.
+- **MCP tools:** `questionnaire_populate` (read) and `questionnaire_extract` (write).
+- **Demo:** seeded `healthclaw-intake` Questionnaire (`r6/seed.py`).
+
+**Deliberate compliance postures (decided 2026-06-18):**
+- **H2 (redaction):** `$populate` returns UNREDACTED PHI by design — the form must hold real data, and the read-auth gate is the compensating control. An optional `?redaction=<profile>` param (de-identified output) is a tracked **follow-up**, not yet implemented.
+- **H4 (human-in-the-loop):** `$extract` commit is exempt from the per-resource `X-Human-Confirmed` gate, treated as an ingest-class operation like `Bundle/$ingest-context`. Step-up + `$validate` gate the write.
+
+**v1 scope limits:** definition-based extract reliably maps only `name.*` and `birthDate` element paths (see `_set_path` in `r6/sdc/extract.py`); StructureMap/CQL/template mechanisms are out of scope.

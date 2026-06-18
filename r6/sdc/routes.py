@@ -116,6 +116,11 @@ def register_sdc_routes(blueprint, deps):
         bundle = extract_resources(qr, questionnaire)
 
         if not dry_run:
+            # H4 posture (deliberate): $extract commits clinical resources as a
+            # structured bundle import, like Bundle/$ingest-context — both are
+            # exempt from the per-resource X-Human-Confirmed gate that direct
+            # writes (e.g. POST /Observation) require. Step-up + $validate gate
+            # the write here; the form-fill review IS the human-in-the-loop step.
             for entry in bundle["entry"]:
                 result = validator.validate_resource(entry["resource"])
                 if not result["valid"]:

@@ -157,3 +157,4 @@ Added to `services/agent-orchestrator/src`:
 2. CQL expression support in populate.
 3. Template-based extraction (`templateExtract` / `templateExtractBundle`).
 4. A `skills/` form-filling skill teaching personas to drive the new MCP tools.
+5. `$populate` optional `?redaction=<profile>` param (de-identified QuestionnaireResponse via apply_patient_controlled_redaction) — deferred from v1 (decided 2026-06-18: ship populate with unredacted output behind the read-auth gate).
