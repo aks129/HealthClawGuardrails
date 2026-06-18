@@ -60,6 +60,27 @@ def test_extract_requires_step_up(client, tenant_headers):
     assert resp.status_code == 401
 
 
+def test_extract_dry_run_requires_read_auth(client, monkeypatch):
+    """Flag on + non-public tenant + no token: dryRun $extract is rejected.
+
+    Regression for the read-auth bypass: a dryRun extract reflected stored
+    QuestionnaireResponse/Questionnaire contents (PHI-bearing) without the
+    read-auth gate a normal GET requires. $extract must enforce the same floor.
+    """
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_TENANTS", "")
+    qr = {"resourceType": "QuestionnaireResponse", "status": "completed"}
+    resp = client.post(
+        "/r6/fhir/QuestionnaireResponse/$extract?dryRun=true",
+        headers={"X-Tenant-Id": "private-tenant"},  # no token
+        json={"resourceType": "Parameters",
+              "parameter": [{"name": "questionnaire-response",
+                             "resource": qr}]},
+    )
+    assert resp.status_code == 401
+    assert resp.get_json()["issue"][0]["code"] == "security"
+
+
 def test_extract_dry_run_returns_bundle(client, auth_headers):
     qr = {"resourceType": "QuestionnaireResponse", "status": "completed",
           "subject": {"reference": "Patient/p1"},

@@ -77,6 +77,9 @@ def register_sdc_routes(blueprint, deps):
                      methods=["POST"])
     def sdc_extract(qr_id=None):
         tenant_id = request.headers.get("X-Tenant-Id")
+        auth_err = authenticate_tenant_read(tenant_id)
+        if auth_err is not None:
+            return auth_err[0], auth_err[1]
         dry_run = request.args.get("dryRun", "false").lower() == "true"
 
         params = request.get_json(silent=True) or {}
@@ -117,7 +120,16 @@ def register_sdc_routes(blueprint, deps):
                 result = validator.validate_resource(entry["resource"])
                 if not result["valid"]:
                     return jsonify(result["operation_outcome"]), 422
-            _commit_bundle(bundle, tenant_id)
+            try:
+                _commit_bundle(bundle, tenant_id)
+            except Exception as exc:
+                from r6.models import db
+                db.session.rollback()
+                logger.error("SDC extract commit failed: %s",
+                             type(exc).__name__)
+                return operation_outcome(
+                    "error", "exception",
+                    "Failed to commit extracted resources"), 500
 
         record_audit_event("create" if not dry_run else "read",
                             "QuestionnaireResponse", qr.get("id"),
@@ -216,8 +228,6 @@ def _commit_bundle(bundle, tenant_id):
             resource_json=json.dumps(resource),
             tenant_id=tenant_id,
         )
-        resource["id"] = row.id
-        row.resource_json = json.dumps(resource)
         db.session.add(row)
     db.session.commit()
 
