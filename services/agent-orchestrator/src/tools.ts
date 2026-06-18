@@ -306,6 +306,38 @@ export class FHIRTools {
         },
       },
       {
+        name: "questionnaire_populate",
+        description:
+          "SDC $populate — pre-fill a Questionnaire for a subject. Returns a QuestionnaireResponse. Read tier; mints a tenant token for non-public tenants.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            questionnaire_id: { type: "string", description: "Stored Questionnaire id" },
+            questionnaire: { type: "object", description: "Inline Questionnaire (overrides questionnaire_id)" },
+            subject_reference: { type: "string", description: "Subject reference, e.g. 'Patient/p1'" },
+          },
+          required: ["subject_reference"],
+        },
+      },
+      {
+        name: "questionnaire_extract",
+        description:
+          "SDC $extract — extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up unless dry_run=true.",
+        tier: "write",
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            questionnaire_response: { type: "object", description: "Completed QuestionnaireResponse" },
+            questionnaire: { type: "object", description: "The referenced Questionnaire (optional if resolvable by reference)" },
+            dry_run: { type: "boolean", description: "Preview the Bundle without committing", default: false },
+          },
+          required: ["questionnaire_response"],
+        },
+      },
+      {
         name: "fhir_propose_write",
         description:
           "Propose a write — validates the resource and returns a preview. Does NOT commit. Safe to call without step-up authorization.",
@@ -706,6 +738,12 @@ export class FHIRTools {
       await this.ensureReadToken(fwdHeaders);
     }
 
+    // questionnaire_extract dry-run is read-shaped (Flask gates it with read-auth
+    // but no step-up); mint a read token so non-public tenants can preview.
+    if (toolName === "questionnaire_extract" && input.dry_run === true) {
+      await this.ensureReadToken(fwdHeaders);
+    }
+
     switch (toolName) {
       case "context_get":
         return this.getContext(input.context_id as string, fwdHeaders);
@@ -733,6 +771,22 @@ export class FHIRTools {
 
       case "fhir_validate":
         return this.validateResource(input.resource as Record<string, unknown>, fwdHeaders);
+
+      case "questionnaire_populate":
+        return this.populateQuestionnaire(
+          input.questionnaire_id as string | undefined,
+          input.questionnaire as Record<string, unknown> | undefined,
+          input.subject_reference as string,
+          fwdHeaders
+        );
+
+      case "questionnaire_extract":
+        return this.extractQuestionnaire(
+          input.questionnaire_response as Record<string, unknown>,
+          input.questionnaire as Record<string, unknown> | undefined,
+          (input.dry_run as boolean) ?? false,
+          fwdHeaders
+        );
 
       case "fhir_propose_write":
         return this.proposeWrite(
@@ -1140,6 +1194,56 @@ export class FHIRTools {
     );
     if (!resp.ok) {
       return { error: `Permission $evaluate failed with status ${resp.status}` };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  // --- SDC: Questionnaire $populate / $extract ---
+
+  private async populateQuestionnaire(
+    questionnaireId: string | undefined,
+    questionnaire: Record<string, unknown> | undefined,
+    subjectReference: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const parameter: Array<Record<string, unknown>> = [
+      { name: "subject", valueReference: { reference: subjectReference } },
+    ];
+    if (questionnaire) parameter.push({ name: "questionnaire", resource: questionnaire });
+
+    const path = questionnaireId
+      ? `/Questionnaire/${encodeURIComponent(questionnaireId)}/$populate`
+      : `/Questionnaire/$populate`;
+    const resp = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ resourceType: "Parameters", parameter }),
+    });
+    if (!resp.ok) {
+      return { error: `$populate failed with status ${resp.status}` };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  private async extractQuestionnaire(
+    questionnaireResponse: Record<string, unknown>,
+    questionnaire: Record<string, unknown> | undefined,
+    dryRun: boolean,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const parameter: Array<Record<string, unknown>> = [
+      { name: "questionnaire-response", resource: questionnaireResponse },
+    ];
+    if (questionnaire) parameter.push({ name: "questionnaire", resource: questionnaire });
+
+    const url = `${this.baseUrl}/QuestionnaireResponse/$extract?dryRun=${dryRun}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ resourceType: "Parameters", parameter }),
+    });
+    if (!resp.ok) {
+      return { error: `$extract failed with status ${resp.status}` };
     }
     return (await resp.json()) as Record<string, unknown>;
   }

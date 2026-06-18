@@ -75,6 +75,59 @@ def _built_in_resources() -> list[dict]:
             "subject": {"reference": "Patient/__PATIENT_ID__"},
             "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "860975", "display": "Metformin 500 MG Oral Tablet"}]},
         },
+        {
+            "resourceType": "Questionnaire",
+            "id": "healthclaw-intake",
+            "url": "https://healthclaw.io/Questionnaire/healthclaw-intake",
+            "version": "1.0.0",
+            "status": "active",
+            "title": "HealthClaw Demo Intake",
+            "extension": [{
+                "url": "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
+                       "sdc-questionnaire-definitionExtract",
+                "valueCode": "Patient",
+            }],
+            "item": [
+                {
+                    "linkId": "given-name",
+                    "type": "string",
+                    "text": "First name",
+                    "definition": "http://hl7.org/fhir/StructureDefinition/"
+                                  "Patient#Patient.name.given",
+                    "extension": [{
+                        "url": "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
+                               "sdc-questionnaire-initialExpression",
+                        "valueExpression": {
+                            "language": "text/fhirpath",
+                            "expression": "%patient.name.given.first()"},
+                    }],
+                },
+                {
+                    "linkId": "family-name",
+                    "type": "string",
+                    "text": "Last name",
+                    "definition": "http://hl7.org/fhir/StructureDefinition/"
+                                  "Patient#Patient.name.family",
+                    "extension": [{
+                        "url": "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
+                               "sdc-questionnaire-initialExpression",
+                        "valueExpression": {
+                            "language": "text/fhirpath",
+                            "expression": "%patient.name.family"},
+                    }],
+                },
+                {
+                    "linkId": "body-weight",
+                    "type": "quantity",
+                    "text": "Body weight",
+                    "code": [{"system": "http://loinc.org", "code": "29463-7"}],
+                    "extension": [{
+                        "url": "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
+                               "sdc-questionnaire-observationExtract",
+                        "valueBoolean": True}],
+                },
+            ],
+        },
     ]
 
 

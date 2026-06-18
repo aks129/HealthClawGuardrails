@@ -61,6 +61,8 @@ class R6Resource(db.Model):
         'Practitioner', 'PractitionerRole', 'RelatedPerson',
         'Coverage', 'ServiceRequest', 'Specimen',
         'FamilyMemberHistory',
+        # Phase 5 — SDC Structured Data Capture
+        'Questionnaire', 'QuestionnaireResponse',
     ]
 
     def __init__(self, resource_type, resource_json, resource_id=None, tenant_id=None):

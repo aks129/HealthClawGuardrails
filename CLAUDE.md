@@ -77,8 +77,9 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 
 ```text
 /r6/                    FHIR modules: routes, models, validator, oauth, stepup, audit,
-                        redaction, health_compliance, context_builder, rate_limit,
-                        fhir_proxy, agent_client, seed, telegram_push
+                        redaction, health_compliance, context_builder, health_context,
+                        rate_limit, fhir_proxy, agent_client, curatr, schema_sync,
+                        seed, telegram_push
 /r6/actions/            Real-world action layer — propose/commit/status/callbacks for
                         phone calls (Bland.ai) + SMS (Twilio), simulation mode without keys
 /r6/fasten/             Fasten Connect integration (routes, models, ingester, verify)
@@ -90,7 +91,7 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 /openclaw/              Telegram bot (bot.py + Dockerfile)
 /hermes/                Nous Research Hermes agent config + persona
 /skills/                Skill definitions (agentskills.io standard, auto-indexed at /skills)
-/tests/                 Python tests (597 passing)
+/tests/                 Python tests (~669 across 30 files)
 /e2e/                   Playwright tests
 ```
 
@@ -160,10 +161,10 @@ Column names differ from what you might guess:
 
 ## MCP Server
 
-**20 tools in three groups:**
+**23 tools in three groups:**
 
-- **Read** (no step-up *for public tenants only*): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `curatr_evaluate`, `action_status`. Since the read-auth gate landed, reads against a **non-public** tenant also need a tenant-bound token — the MCP server must mint one (`fhir_get_token`) and forward it as `X-Step-Up-Token`/`_stepUpToken` on reads too, or those calls 401. The default `desktop-demo` tenant is public, so default-tenant reads are unaffected.
-- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`
+- **Read** (no step-up *for public tenants only*): `context_get`, `fhir_read`, `fhir_search`, `fhir_validate`, `fhir_stats`, `fhir_lastn`, `fhir_permission_evaluate`, `fhir_subscription_topics`, `questionnaire_populate`, `curatr_evaluate`, `action_status`. Since the read-auth gate landed, reads against a **non-public** tenant also need a tenant-bound token — the MCP server must mint one (`fhir_get_token`) and forward it as `X-Step-Up-Token`/`_stepUpToken` on reads too, or those calls 401. The default `desktop-demo` tenant is public, so default-tenant reads are unaffected.
+- **Write** (require step-up): `fhir_propose_write`, `fhir_commit_write`, `curatr_apply_fix`, `action_propose`, `action_commit`, `shl_generate`, `questionnaire_extract` (step-up enforced by Flask's `$extract` route on the commit path; `dry_run=true` previews without committing)
 - **Utility**: `fhir_compiled_truth`, `fhir_get_token`, `fhir_seed`
 
 Tool names use underscores (`fhir_search`, not `fhir.search`).
@@ -272,3 +273,18 @@ Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `fa0020d`) as the SHL 
 - **Zero-knowledge property:** storage server sees only ciphertext + `sha256(auth)`; PHI never leaves the MCP server unencrypted.
 - **Railway deploy caveat:** The repo-root `railway.toml` targets the Flask Dockerfile — always `cd services/shl-server && railway up --service shl-server`; deploying from repo root picks up the wrong Dockerfile. A service that inherited root `watchPatterns` may also skip Dockerfile-only deploys until the per-service `railway.toml` takes effect after the first successful build.
 - **Personas MUST use `skills/share-health-qr`** — never direct-encode PHI into QR images (incident 2026-06-12). The QR must encode only the `shlink:/` URI from `shl_generate`.
+
+## SDC Forms ($populate / $extract)
+
+HL7 Structured Data Capture form round-trip. Engines are pure (no Flask/DB) in `r6/sdc/`; the Flask handlers (`r6/sdc/routes.py`, registered on `r6_blueprint` via `register_sdc_routes`) own auth/audit/store I/O.
+
+- **`POST /r6/fhir/Questionnaire[/<id>]/$populate`** — Questionnaire + subject + content → pre-filled QuestionnaireResponse. Mechanisms: expression-based (`initialExpression` FHIRPath via `fhirpathpy`) and observation-based (`item.code` LOINC matched against the subject's Observations). Read-shaped: tenant-read-authenticated + AuditEvent.
+- **`POST /r6/fhir/QuestionnaireResponse/$extract`** — completed QR → transaction Bundle. Mechanisms: observation-based (`observationExtract`) and definition-based (`definitionExtract` + item `definition` element paths). `?dryRun=true` returns the Bundle without committing (read-auth only); otherwise requires `X-Step-Up-Token`, runs `$validate` per resource, commits, audits.
+- **MCP tools:** `questionnaire_populate` (read) and `questionnaire_extract` (write).
+- **Demo:** seeded `healthclaw-intake` Questionnaire (`r6/seed.py`).
+
+**Deliberate compliance postures (decided 2026-06-18):**
+- **H2 (redaction):** `$populate` returns UNREDACTED PHI by design — the form must hold real data, and the read-auth gate is the compensating control. An optional `?redaction=<profile>` param (de-identified output) is a tracked **follow-up**, not yet implemented.
+- **H4 (human-in-the-loop):** `$extract` commit is exempt from the per-resource `X-Human-Confirmed` gate, treated as an ingest-class operation like `Bundle/$ingest-context`. Step-up + `$validate` gate the write.
+
+**v1 scope limits:** definition-based extract reliably maps only `name.*` and `birthDate` element paths (see `_set_path` in `r6/sdc/extract.py`); StructureMap/CQL/template mechanisms are out of scope.
