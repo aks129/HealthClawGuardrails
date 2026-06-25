@@ -91,7 +91,7 @@ vercel deploy --prod        # Vercel (marketing + API serverless)
 /openclaw/              Telegram bot (bot.py + Dockerfile)
 /hermes/                Nous Research Hermes agent config + persona
 /skills/                Skill definitions (agentskills.io standard, auto-indexed at /skills)
-/tests/                 Python tests (~669 across 30 files)
+/tests/                 Python tests (~700 across 37 files, incl. SDC test_sdc_*.py)
 /e2e/                   Playwright tests
 ```
 
