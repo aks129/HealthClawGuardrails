@@ -144,6 +144,11 @@ from r6.actions.routes import actions_blueprint
 app.register_blueprint(actions_blueprint)
 logger.info("Actions Blueprint registered at /r6/actions")
 
+# Register SMBP Blueprint
+from r6.smbp.routes import smbp_blueprint
+app.register_blueprint(smbp_blueprint)
+logger.info("SMBP Blueprint registered at /r6/smbp")
+
 # Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
 from r6.wearables.routes import wearables_blueprint
 app.register_blueprint(wearables_blueprint)
