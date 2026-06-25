@@ -26,6 +26,8 @@ def voice_reading_script(lang="en"):
         msg("teach_sit", lang),
         msg("teach_arm", lang),
         msg("teach_rest", lang),
+        # Pass literal {placeholders} through .format() so the read-back line keeps
+        # them for the Bland voice agent to fill with the heard values at call time.
         msg("reading_readback", lang, systolic="{systolic}",
             diastolic="{diastolic}", pulse="{pulse}"),
     ]
