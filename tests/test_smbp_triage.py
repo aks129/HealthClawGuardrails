@@ -36,7 +36,7 @@ def test_emergency_high_with_symptom():
     assert r["action"] == "call_911"
 
 
-def test_emergency_diastolic_alone_triggers_high_band():
+def test_severe_diastolic_alone_is_urgent_not_emergency():
     # >= 180/120 with no symptoms is urgent (recheck), not emergency
     assert classify(150, 122)["band"] == "urgent"
 

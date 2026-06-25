@@ -15,6 +15,10 @@ HOME_DIASTOLIC = 85
 SEVERE_SYSTOLIC = 180
 SEVERE_DIASTOLIC = 120
 
+# Stage-2 thresholds (followup band: timely visit, not the ED).
+STAGE2_SYSTOLIC = 160
+STAGE2_DIASTOLIC = 100
+
 # The 6-item symptom screen (asked in the patient's language elsewhere).
 SYMPTOMS = (
     "chest_pain",
@@ -41,7 +45,7 @@ def classify(systolic, diastolic, symptoms=None):
     if severe:
         return _result("urgent", "recheck_5min_then_careteam", False,
                        "Hypertensive urgency")
-    if systolic >= 160 or diastolic >= 100:
+    if systolic >= STAGE2_SYSTOLIC or diastolic >= STAGE2_DIASTOLIC:
         return _result("followup", "symptom_screen_then_visit", False,
                        "Needs timely follow-up, not the ED")
     if systolic >= HOME_SYSTOLIC or diastolic >= HOME_DIASTOLIC:
