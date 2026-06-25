@@ -42,11 +42,15 @@ def enroll():
     patient_ref = body.get("patient_ref")
     if not patient_ref:
         return jsonify(_oo("error", "invalid", "patient_ref required")), 400
+    try:
+        days = int(body.get("days", 14))
+    except (ValueError, TypeError):
+        return jsonify(_oo("error", "invalid", "days must be an integer")), 400
     session = SMBPSession(
         tenant_id=tenant_id,
         patient_ref=patient_ref,
         language=body.get("language", "en"),
-        days=int(body.get("days", 14)),
+        days=days,
         consent_captured=bool(body.get("consent_captured", False)),
     )
     db.session.add(session)
@@ -99,6 +103,10 @@ def report(session_id):
     tenant_id = _tenant()
     if not tenant_id:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
+    from r6.routes import authenticate_tenant_read
+    auth_err = authenticate_tenant_read(tenant_id)
+    if auth_err is not None:
+        return auth_err[0], auth_err[1]
     session = SMBPSession.query.filter_by(id=session_id, tenant_id=tenant_id).first()
     if session is None:
         return jsonify(_oo("error", "not-found", "session not found")), 404
@@ -134,7 +142,8 @@ def _persist_document_reference(tenant_id, session, size):
                              "display": "SMBP report"}]},
         "subject": {"reference": session.patient_ref},
         "content": [{"attachment": {"contentType": "application/pdf",
-                                    "title": "SMBP report"}}],
+                                    "title": "SMBP report",
+                                    "size": size}}],
     }
     row = R6Resource(resource_type="DocumentReference",
                      resource_json=json.dumps(doc), tenant_id=tenant_id)

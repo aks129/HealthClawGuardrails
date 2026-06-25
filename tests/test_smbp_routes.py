@@ -58,6 +58,23 @@ def _seed_session_and_readings(client, app, tenant_id, auth_headers):
     return session_id
 
 
+def test_report_requires_read_auth_for_nonpublic_tenant(client, app, monkeypatch):
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_TENANTS", "")
+    # enroll a session under a non-public tenant WITH a token, then read WITHOUT one
+    from r6.stepup import generate_step_up_token
+    tok = generate_step_up_token("private-smbp")
+    enroll = client.post("/r6/smbp/enroll",
+                         headers={"X-Tenant-Id": "private-smbp", "X-Step-Up-Token": tok},
+                         json={"patient_ref": "Patient/p1", "language": "en"})
+    session_id = enroll.get_json()["id"]
+    # report with only the tenant header (no token) must be rejected
+    resp = client.get(f"/r6/smbp/report/{session_id}",
+                      headers={"X-Tenant-Id": "private-smbp"})
+    assert resp.status_code == 401
+    assert resp.get_json()["issue"][0]["code"] == "security"
+
+
 def test_report_html_and_pdf(client, app, tenant_id, auth_headers, tenant_headers):
     session_id = _seed_session_and_readings(client, app, tenant_id, auth_headers)
     html = client.get(f"/r6/smbp/report/{session_id}", headers=tenant_headers)
