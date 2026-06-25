@@ -484,6 +484,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pyyaml" },
     { name = "redis" },
+    { name = "reportlab" },
     { name = "requests" },
 ]
 
@@ -513,6 +514,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.3" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "redis", specifier = ">=4.6.0" },
+    { name = "reportlab", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.33.0" },
 ]
 provides-extras = ["test"]
