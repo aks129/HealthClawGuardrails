@@ -45,7 +45,12 @@ def _components(obs):
 
 
 def slot_of(effective):
-    """AM/PM from an ISO effectiveDateTime (hour < 12 => AM)."""
+    """AM/PM from an ISO effectiveDateTime (hour < 12 => AM).
+
+    Reads the literal hour field of the timestamp; any timezone offset is
+    intentionally ignored — the patient's wall-clock hour defines the slot
+    (a "morning reading" is morning where the patient is, not in UTC).
+    """
     try:
         hour = int(effective[11:13])
     except (ValueError, IndexError):
