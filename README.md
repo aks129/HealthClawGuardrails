@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/hero.svg" alt="HealthClaw Guardrails — the security layer between AI agents and clinical data" width="100%">
+<img src=".github/assets/healthclaw-logo.png" alt="HealthClaw — AI-Powered Healthcare Intelligence" width="440">
 
 # HealthClaw Guardrails
 
