@@ -26,7 +26,7 @@ def test_reading_logs_observation_and_classifies(client, auth_headers, tenant_id
                              "diastolic": 104, "effective": "2026-06-02T20:00:00Z"})
     assert resp.status_code == 201
     body = resp.get_json()
-    assert body["triage"]["band"] == "followup"
+    assert body["triage"]["band"] == "stage2"
     with app.app_context():
         n = R6Resource.query.filter_by(resource_type="Observation",
                                        tenant_id=tenant_id).count()
@@ -79,7 +79,7 @@ def test_report_html_and_pdf(client, app, tenant_id, auth_headers, tenant_header
     session_id = _seed_session_and_readings(client, app, tenant_id, auth_headers)
     html = client.get(f"/r6/smbp/report/{session_id}", headers=tenant_headers)
     assert html.status_code == 200
-    assert b"135/85" in html.data
+    assert b"130/80" in html.data
     pdf = client.get(f"/r6/smbp/report/{session_id}?format=pdf", headers=tenant_headers)
     assert pdf.status_code == 200
     assert pdf.data[:4] == b"%PDF"

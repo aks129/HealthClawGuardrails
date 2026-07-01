@@ -50,19 +50,21 @@ CATALOG = {
 SYMPTOM_PROMPTS = {
     "en": {
         "chest_pain": "Do you have chest pain?",
-        "trouble_breathing": "Do you have trouble breathing?",
-        "vision_change": "Any change in your vision?",
+        "shortness_of_breath": "Do you have trouble breathing?",
         "one_sided_weakness": "Any weakness or numbness on one side?",
         "trouble_speaking": "Any trouble speaking?",
+        "vision_change": "Any change in your vision?",
         "severe_headache": "Do you have a very bad headache?",
+        "confusion": "Do you feel confused or hard to think clearly?",
     },
     "es": {
         "chest_pain": "¿Tiene dolor en el pecho?",
-        "trouble_breathing": "¿Tiene dificultad para respirar?",
-        "vision_change": "¿Algún cambio en su vista?",
+        "shortness_of_breath": "¿Tiene dificultad para respirar?",
         "one_sided_weakness": "¿Debilidad o entumecimiento en un lado?",
         "trouble_speaking": "¿Dificultad para hablar?",
+        "vision_change": "¿Algún cambio en su vista?",
         "severe_headache": "¿Tiene un dolor de cabeza muy fuerte?",
+        "confusion": "¿Se siente confundido o le cuesta pensar con claridad?",
     },
 }
 

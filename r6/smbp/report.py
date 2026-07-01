@@ -1,7 +1,7 @@
 """Clinician-facing SMBP report — pure compute + HTML/PDF rendering.
 
 build_report() computes the per-reading table, AM/PM + overall averages against
-the 135/85 home threshold, and adherence. render_html()/render_pdf() format it.
+the 130/80 home threshold, and adherence. render_html()/render_pdf() format it.
 No DB, no Flask. The route layer persists the rendered report as a
 DocumentReference.
 """
@@ -28,7 +28,7 @@ def build_report(patient_ref, patient_label, days, observations):
             "systolic": s,
             "diastolic": d,
             "band": band,
-            "flag": band != "normal",
+            "flag": band != "at_goal",
         })
     avg = averages(observations)
     adh = adherence(days, observations)
@@ -82,7 +82,7 @@ def render_html(report):
 </style></head><body>
 <h1>Home Blood Pressure (SMBP) Report — {label}</h1>
 <div class="sub">{report['days']}-day home monitoring · {report['valid_days']} valid days ·
- home threshold {thr} (not office 140/90)</div>
+ home threshold {thr} (2025 AHA/ACC)</div>
 <div class="cards">
  <div class="card"><div class="n">{overall}</div><div class="l">Overall avg vs {thr}</div></div>
  <div class="card"><div class="n">{am}</div><div class="l">AM avg</div></div>

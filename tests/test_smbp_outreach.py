@@ -20,4 +20,4 @@ def test_voice_script_includes_readback_and_symptom_screen():
     joined = " ".join(script["steps"]).lower()
     assert "read" in joined  # read-back step present
     assert script["keypad_fallback"] is True
-    assert len(script["symptom_screen"]) == 6
+    assert len(script["symptom_screen"]) == 7  # 2025 red-flag screen

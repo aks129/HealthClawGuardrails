@@ -46,9 +46,9 @@ logic stays Flask-free and unit-testable; the route layer owns auth, audit, step
 ```text
 r6/smbp/
   __init__.py
-  triage.py      [pure] §2.2 triage bands + 6-symptom screen + emergency cutout — single source of truth
+  triage.py      [pure] §2.2 triage bands + 7-symptom screen + emergency cutout — single source of truth
   monitoring.py  [pure] 14-day SMBP session model: AM/PM schedule, valid-day + adherence math
-  report.py      compute AM/PM + overall average vs 135/85 + flags; render HTML + reportlab PDF
+  report.py      compute AM/PM + overall average vs 130/80 + flags; render HTML + reportlab PDF
   content.py     [pure] bilingual (EN/ES, ≤6th-grade) message catalog
   routes.py      Flask blueprint: enroll, log-reading, report endpoint, DocumentReference; auth/audit/store I/O
 ```
@@ -62,15 +62,19 @@ Registered on the app in `main.py` alongside the other blueprints.
 A pure module encoding §2.2 **exactly**. Clinicians will check this; it must be the one
 implementation the skill, the voice script, and the report flags all call, so they cannot drift.
 
+Aligned to the **2025 AHA/ACC** guideline (Gigi Magan spec, updated June 2026). Two
+**independent axes** — the BP number and red-flag symptoms — evaluated separately.
+
 - `classify(systolic, diastolic, symptoms=None) -> TriageResult` returning band, agent-action, rationale.
-- Bands: `<135/85` (log/encourage), `135–159 / 85–99` (log + flag, no patient alarm),
-  `160–179 / 100–119` no symptoms (symptom screen → if negative, arrange visit within the week),
-  `≥180/120` no symptoms (re-check in 5 min → if still high, same-day care-team contact),
-  `≥180/120` + any symptom (911/ED + notify care team).
-- **Emergency cutout** is encoded here and is non-overridable: systolic ≥180 OR diastolic ≥120 OR any
-  symptom (chest pain, trouble breathing, vision change, one-sided weakness/numbness, trouble speaking,
-  severe headache) → emergency pathway.
-- Home diagnostic threshold is **135/85** (not office 140/90) everywhere a threshold is referenced.
+- BP-axis bands (no symptoms): `at_goal <130/80` (log/encourage), `stage1 130–139/80–89`
+  (log + flag, no patient alarm), `stage2 140–179/90–119` (symptom screen → if negative, arrange
+  visit within the week), `crisis ≥180/120` (re-check in 5 min → if still high, same-day care-team contact).
+- **Symptom axis (independent):** ANY red-flag symptom → emergency / 911, **regardless of the reading**.
+  Red-flag screen (7): chest pain, shortness of breath, one-sided weakness/numbness, trouble speaking,
+  vision change, severe headache, confusion. These are stroke/heart-attack signs; the agent must never
+  reassure a symptomatic patient because the number looks normal.
+- Home diagnostic threshold is **130/80** (the 2025 line; 135/85 was the older threshold tied to the
+  retired 140/90 office cutoff) everywhere a threshold is referenced.
 
 ### 2. `monitoring.py` — SMBP session + adherence
 
@@ -84,7 +88,7 @@ implementation the skill, the voice script, and the report flags all call, so th
 ### 3. `report.py` — clinician SMBP report (the "wow" / last frame)
 
 - Computes the per-reading table (timestamp, AM/PM, systolic/diastolic, band flag), AM/PM averages,
-  overall average **displayed against 135/85**, adherence %, and a flag summary.
+  overall average **displayed against 130/80**, adherence %, and a flag summary.
 - Renders a **one-page HTML** report (served at a route for clean screen capture / browser viewing)
   and a **reportlab PDF** export (the artifact the clinic keeps).
 - The generated report is stored as a FHIR `DocumentReference` for the tenant.
@@ -120,21 +124,21 @@ implementation the skill, the voice script, and the report flags all call, so th
 
 - **Administrative-only:** the agent never diagnoses, never interprets readings clinically, never adjusts
   or recommends medications. Framing is "your care plan says…" / "worth discussing with your PCP."
-- **Emergency cutout:** `≥180/120` or any screened symptom → stop coordination, direct to 911/provider,
-  notify care team. Encoded in `triage.py`, non-overridable.
+- **Symptom axis (independent):** ANY red-flag symptom → 911, **regardless of the BP reading** —
+  a symptom is a stroke/heart-attack sign; the agent never reassures a symptomatic patient because
+  the number looks normal. Encoded in `triage.py`, non-overridable.
 - **Every outbound action human-confirmed** via the existing action layer loop.
 - **All PHI synthetic/composite** — no detail traceable to a real patient.
 
-### Clinical interpretation decision (pending sign-off)
+### Clinical interpretation decision (RESOLVED 2026-06-27)
 
-The source spec is internally inconsistent on the emergency cutout: the §2.2 band
-table escalates a symptom to the emergency pathway only at a severe reading
-(≥180/120), while the prose says "≥180/120 **OR any symptom**." We implement the
-**band table**: a symptom escalates to emergency only when the reading is also
-≥180/120 (a symptom at a non-severe reading is logged/handled administratively,
-not auto-911). This is the safer-to-explain reading and is encoded once in
-`r6/smbp/triage.py`. **This needs a one-line clinical sign-off** (Dr. Gigi / the
-Winters clinical reviewer) and the source spec prose should be reconciled to match.
+Earlier the source spec was internally inconsistent on the emergency cutout (the §2.2 table read
+symptom-escalates-only-at-≥180/120, the prose read "OR any symptom"). Gigi's **updated, 2025 AHA/ACC-
+aligned spec resolves it authoritatively**: the BP number and red-flag symptoms are **two independent
+axes**, and **any red-flag symptom is an emergency regardless of the reading**. That is what
+`r6/smbp/triage.py` now implements (symptoms evaluated first, independently). The home threshold also
+moved to **130/80** and Stage 2 to **140/90** per the same 2025 update, and the red-flag screen is **7**
+symptoms (adds *confusion*).
 
 ## Seed + tests
 
@@ -143,7 +147,7 @@ Winters clinical reviewer) and the source spec prose should be reconciled to mat
   Marisol trending to a 138/88 overall average (hypertension confirmed → lisinopril 10mg), Mr. Ray with a
   164/98 escalation reading for the Demo 2 centerpiece.
 - **Unit tests (pure):** `triage.classify` across all five bands + every symptom; `monitoring.adherence`
-  and `averages` (incl. <12-valid-days handling); `report` computation (averages vs 135/85, flag counts).
+  and `averages` (incl. <12-valid-days handling); `report` computation (averages vs 130/80, flag counts).
 - **Route tests:** enroll, log-reading (step-up required; Observation written; triage returned),
   report endpoint (HTML + PDF; DocumentReference persisted; tenant-read auth; audit emitted).
 - **Guardrail tests:** emergency-cutout reading classified to the emergency pathway; reading write without

@@ -15,11 +15,16 @@ def test_readback_formats_values():
     assert "142" in out and "88" in out and "76" in out
 
 
-def test_symptom_prompts_cover_all_six():
+def test_symptom_prompts_cover_all_seven_red_flags():
     assert set(SYMPTOM_PROMPTS["en"].keys()) == {
-        "chest_pain", "trouble_breathing", "vision_change",
-        "one_sided_weakness", "trouble_speaking", "severe_headache"}
+        "chest_pain", "shortness_of_breath", "one_sided_weakness",
+        "trouble_speaking", "vision_change", "severe_headache", "confusion"}
     assert set(SYMPTOM_PROMPTS["es"].keys()) == set(SYMPTOM_PROMPTS["en"].keys())
+
+
+def test_symptom_prompts_match_triage_symptoms():
+    from r6.smbp.triage import SYMPTOMS
+    assert set(SYMPTOM_PROMPTS["en"].keys()) == set(SYMPTOMS)
 
 
 def test_unknown_key_raises():
