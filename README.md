@@ -1,16 +1,52 @@
+<div align="center">
+
+<img src=".github/assets/healthclaw-logo.png" alt="HealthClaw — AI-Powered Healthcare Intelligence" width="440">
+
 # HealthClaw Guardrails
 
-An **open reference implementation** of the security and compliance layer between AI agents and clinical data — the FHIR × MCP guardrails nobody else has standardized. Built in the open as a community project, MIT-licensed. Use it, fork it, send a PR — see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+### The open-source security layer between AI agents and clinical data.
 
-**v1.5.0** | 700+ Python + 74 Node tests | 23 MCP tools | FHIR R4 US Core v9 + R6 v6.0.0-ballot3 | HL7 SDC forms ($populate/$extract) | Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT | Open Wearables | Real-world actions (calls/SMS) | SMART Health Links | Claude Code plugin
+*FHIR standardized how health data is structured. MCP standardized how AI connects to tools.*
+***Nobody standardized the guardrails in between. This project does.***
 
-> FHIR standardized how health data is structured. MCP standardized how AI connects to tools.
-> Nobody standardized the guardrails in between. This is a shared, open reference for that layer —
-> not a product, not a pitch. If the pattern is useful, take it; if it's wrong, tell us or fix it.
+<br/>
 
-**This is a community effort.** It's most useful if implementers, clinicians, and standards folks
-poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome.
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+<!-- Project -->
+[![Release](https://img.shields.io/badge/release-v1.5.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
+[![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
+[![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
+
+<!-- Community metrics -->
+[![Stars](https://img.shields.io/github/stars/aks129/HealthClawGuardrails?style=flat-square&logo=github&color=eab308)](https://github.com/aks129/HealthClawGuardrails/stargazers)
+[![Forks](https://img.shields.io/github/forks/aks129/HealthClawGuardrails?style=flat-square&logo=github&color=8b5cf6)](https://github.com/aks129/HealthClawGuardrails/network/members)
+[![Issues](https://img.shields.io/github/issues/aks129/HealthClawGuardrails?style=flat-square&logo=github&color=ef4444)](https://github.com/aks129/HealthClawGuardrails/issues)
+[![Contributors](https://img.shields.io/github/contributors/aks129/HealthClawGuardrails?style=flat-square&color=14b8a6)](https://github.com/aks129/HealthClawGuardrails/graphs/contributors)
+[![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
+
+<!-- Stack & scope -->
+[![Tests](https://img.shields.io/badge/tests-700%2B%20Python%20%2B%2074%20Node-22c55e?style=flat-square)](#testing)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-23-6366f1?style=flat-square&logo=anthropic)](#mcp-tools)
+[![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
+[![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
+
+<br/>
+
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)**
+
+</div>
+
+---
+
+> **What it is:** an open reference implementation of the FHIR × MCP guardrail layer — PHI redaction,
+> immutable audit, step-up auth, and tenant isolation — that sits between *any* AI agent and *any* FHIR
+> server. Built in the open as a community project, MIT-licensed. Not a product, not a pitch: if the
+> pattern is useful, take it; if it's wrong, tell us or fix it.
+
+**This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
+
+**At a glance:** v1.5.0 · 700+ Python + 74 Node tests · 23 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin
 
 ## What's new in v1.5.0 — Security Hardening + SDC Forms
 
