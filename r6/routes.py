@@ -1634,30 +1634,41 @@ def health_check():
 
 # --- Internal Endpoints (dashboard support) ---
 
+def _internal_mint_authorized(tenant_id):
+    """Fail-closed authorization for internal mint/seed of `tenant_id`.
+
+    Minting a step-up token (or seeding) for a NON-public tenant is a read-auth
+    bypass — anyone could mint a tenant-bound read+write token. Rules:
+
+    - Public/synthetic tenants are always allowed. They bypass read-auth anyway,
+      and the browser demo dashboard + telemetry mint desktop-demo tokens where
+      no secret can be held.
+    - Non-public tenants require a matching `X-Internal-Secret` (constant-time).
+    - Fail-closed: if `INTERNAL_TOKEN_MINT_SECRET` is unset, non-public mints are
+      REFUSED in production and allowed only in dev (backward compatible locally).
+    """
+    from r6.command_center.access import is_public
+    if is_public(tenant_id):
+        return True
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if mint_secret:
+        provided = request.headers.get('X-Internal-Secret', '')
+        return hmac.compare_digest(provided, mint_secret)
+    # Secret unset → open only outside production.
+    return os.environ.get('FLASK_ENV') != 'production'
+
+
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
 def issue_step_up_token():
     """
-    Issue a step-up token for the dashboard demo.
-
-    Token-mint oracle protection: minting a token for a NON-public tenant is a
-    read-auth bypass (anyone could mint a tenant-bound read token), so when
-    INTERNAL_TOKEN_MINT_SECRET is set the caller must present a matching
-    X-Internal-Secret header (constant-time compare) — otherwise 403.
-
-    Public/synthetic tenants stay open even with the secret set: they bypass
-    read-auth anyway, and the demo dashboard + telemetry mint desktop-demo
-    tokens from the browser, where no secret can be held. If the env var is
-    unset, the endpoint is fully open (dev/demo, backward compatible).
+    Issue a step-up token for the dashboard demo. Gated by
+    `_internal_mint_authorized` (fail-closed for non-public tenants).
     """
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
 
-    from r6.command_center.access import is_public
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
-    if mint_secret and not is_public(tenant_id):
-        provided = request.headers.get('X-Internal-Secret', '')
-        if not hmac.compare_digest(provided, mint_secret):
-            return jsonify({'error': 'forbidden'}), 403
+    if not _internal_mint_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
 
     try:
         token = generate_step_up_token(tenant_id)
@@ -1741,6 +1752,11 @@ def seed_tenant():
 
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'desktop-demo')
+
+    # C1: seed also mints a write token — gate it exactly like the mint endpoint
+    # (fail-closed for non-public tenants) so it can't be a token oracle.
+    if not _internal_mint_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
 
     # If caller supplied a full bundle, extract resources from it
     custom_bundle = body.get('bundle')

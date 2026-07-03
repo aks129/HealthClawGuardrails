@@ -176,6 +176,58 @@ def test_mint_public_tenant_open_even_with_secret(client, monkeypatch):
     assert 'token' in resp.get_json()
 
 
+def test_mint_unset_secret_prod_closed(client, monkeypatch):
+    """Fail-closed: with the secret unset, a NON-public tenant mint is refused
+    in production (the C2 oracle). Dev stays open (backward compatible)."""
+    monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+    monkeypatch.setenv('FLASK_ENV', 'production')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.post('/r6/fhir/internal/step-up-token',
+                       json={'tenant_id': 'private-tenant'})
+    assert resp.status_code == 403
+
+
+# --- /internal/seed: the C1 unauthenticated write-token oracle ---
+
+def test_seed_secret_set_missing_header_403(client, monkeypatch):
+    """C1: /internal/seed must NOT mint a token (or seed) for a non-public
+    tenant without the internal secret when the secret is configured."""
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'top-secret')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.post('/r6/fhir/internal/seed',
+                       json={'tenant_id': 'victim-tenant'})
+    assert resp.status_code == 403
+    assert 'step_up_token' not in resp.get_json()
+
+
+def test_seed_secret_set_correct_header_ok(client, monkeypatch):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'top-secret')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.post('/r6/fhir/internal/seed',
+                       json={'tenant_id': 'ops-tenant'},
+                       headers={'X-Internal-Secret': 'top-secret'})
+    assert resp.status_code == 201
+    assert resp.get_json().get('step_up_token')
+
+
+def test_seed_public_tenant_open(client, monkeypatch):
+    """Public/synthetic demo tenants stay seedable (browser demo needs it)."""
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'top-secret')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.post('/r6/fhir/internal/seed',
+                       json={'tenant_id': 'desktop-demo'})
+    assert resp.status_code == 201
+
+
+def test_seed_unset_secret_prod_closed(client, monkeypatch):
+    monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+    monkeypatch.setenv('FLASK_ENV', 'production')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.post('/r6/fhir/internal/seed',
+                       json={'tenant_id': 'victim-tenant'})
+    assert resp.status_code == 403
+
+
 # --- Suffix-exemption bypass: a FHIR read of resource id "metadata"/"health"
 # must NOT be treated as a public discovery endpoint. ---
 
