@@ -159,6 +159,21 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_request',
                           'error_description': 'Only S256 code_challenge_method supported'}), 400
 
+        # H3: this endpoint AUTO-APPROVES with no consent screen and binds the
+        # token's tenant from the request header. When read-auth is on, that
+        # would let anyone mint a read bearer for any tenant, bypassing the gate.
+        # Restrict auto-approve to public/demo tenants; a protected tenant needs
+        # real per-user consent (out of scope for this reference OAuth server).
+        requested_tenant = request.headers.get('X-Tenant-Id', 'default')
+        from r6.command_center.access import is_public
+        from r6.routes import _read_auth_enabled
+        if _read_auth_enabled() and not is_public(requested_tenant):
+            return jsonify({
+                'error': 'access_denied',
+                'error_description': 'Auto-approve authorization is limited to '
+                'public/demo tenants; protected tenants require per-user consent.',
+            }), 403
+
         # Generate authorization code
         code = secrets.token_urlsafe(32)
         _auth_codes[code] = {
@@ -167,7 +182,7 @@ def register_oauth_routes(blueprint):
             'code_challenge': code_challenge,
             'code_challenge_method': code_challenge_method,
             'scopes': scope.split(),
-            'tenant_id': request.headers.get('X-Tenant-Id', 'default'),
+            'tenant_id': requested_tenant,
             'exp': time.time() + 600,  # 10 minutes
         }
 

@@ -228,4 +228,7 @@ def log_request(response):
 from app import *  # noqa: F401,F403,E402
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Never default the Werkzeug debugger (RCE console) on — opt in via FLASK_DEBUG=1
+    # for local debugging only. Production serves via gunicorn (main:app), not this.
+    app.run(host="0.0.0.0", port=5000,
+            debug=os.environ.get("FLASK_DEBUG") == "1")
