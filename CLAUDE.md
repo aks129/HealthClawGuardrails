@@ -274,6 +274,27 @@ Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `fa0020d`) as the SHL 
 - **Railway deploy caveat:** The repo-root `railway.toml` targets the Flask Dockerfile — always `cd services/shl-server && railway up --service shl-server`; deploying from repo root picks up the wrong Dockerfile. A service that inherited root `watchPatterns` may also skip Dockerfile-only deploys until the per-service `railway.toml` takes effect after the first successful build.
 - **Personas MUST use `skills/share-health-qr`** — never direct-encode PHI into QR images (incident 2026-06-12). The QR must encode only the `shlink:/` URI from `shl_generate`.
 
+## Quality Measures (NQF 0018 / CMS165)
+
+`r6/quality/` — a **Python measure calculator** (NOT a CQL execution engine) for
+Controlling High Blood Pressure. Pure engine + report builders; Flask handler
+registered on `r6_blueprint` via `register_quality_routes`.
+
+- **`POST|GET /r6/fhir/Measure/nqf0018-controlling-high-bp/$evaluate-measure`** — computes the
+  measure over the tenant's stored Patient/Condition/Observation and returns a FHIR
+  `MeasureReport` (individual with `subject`/`?subject=`, or population summary with the
+  performance rate). Params `periodStart`/`periodEnd` (Parameters body or query). Read-shaped:
+  tenant-read-authenticated + AuditEvent. `GET /Measure/<id>` returns the `Measure` resource.
+- `r6/quality/measures.py` — `evaluate_nqf0018()` / `evaluate_population()`: initial pop 18–85,
+  denominator = active essential-hypertension dx, **numerator = most recent BP in period < 140/90**.
+- **Threshold gotcha (clinicians check this):** the measure CONTROL target is **140/90** (office),
+  deliberately distinct from the **130/80** home *diagnostic* threshold in `r6/smbp/triage.py`.
+  A patient can be hypertensive (>130/80) yet controlled for the measure (<140/90).
+- **Honesty:** this is a calculator, not a certified eCQM. Denominator exclusions are **partial**
+  (pregnancy/ESRD only; the full CMS165 exclusion set is a documented v1 gap). The `Measure`
+  resource and `description` say so — never represent it as the certified/complete eCQM.
+- Demo cohort: `scripts/seed_quality_demo.py` seeds a synthetic hypertensive panel (~70% control).
+
 ## SDC Forms ($populate / $extract)
 
 HL7 Structured Data Capture form round-trip. Engines are pure (no Flask/DB) in `r6/sdc/`; the Flask handlers (`r6/sdc/routes.py`, registered on `r6_blueprint` via `register_sdc_routes`) own auth/audit/store I/O.
