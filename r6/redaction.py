@@ -85,6 +85,31 @@ def _redact_fields(resource):
             if 'value' in telecom and isinstance(telecom['value'], str):
                 telecom['value'] = '[Redacted]'
 
+    # Redact Patient.contact[] — emergency-contact name / phone / address is
+    # PHI and must not pass through on reads (contact.name is a single
+    # HumanName, telecom a list, address a single Address).
+    if 'contact' in resource and isinstance(resource['contact'], list):
+        for c in resource['contact']:
+            if not isinstance(c, dict):
+                continue
+            cn = c.get('name')
+            if isinstance(cn, dict):
+                if isinstance(cn.get('family'), str) and cn['family']:
+                    cn['family'] = cn['family'][0] + '.'
+                if isinstance(cn.get('given'), list):
+                    cn['given'] = [
+                        g[0] + '.' if isinstance(g, str) and len(g) > 0 else g
+                        for g in cn['given']
+                    ]
+                cn.pop('text', None)
+            for tc in (c.get('telecom') or []):
+                if isinstance(tc, dict) and isinstance(tc.get('value'), str):
+                    tc['value'] = '[Redacted]'
+            ca = c.get('address')
+            if isinstance(ca, dict):
+                ca.pop('line', None)
+                ca.pop('text', None)
+
     # Remove notes/comments
     for field in ['note', 'comment']:
         if field in resource:
