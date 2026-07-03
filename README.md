@@ -87,6 +87,8 @@ The v1.4.0 release wires **five distinct health data pipelines** into HealthClaw
 | **Health Skillz (Epic)** | Epic MyChart + major patient portals | SmartHealthConnect bridge | `/epic-connect` |
 | **MEDENT** | Small-practice EHR (SMART on FHIR direct) | Direct SMART on FHIR pull | `/medent-connect`, `/medent-pull` |
 
+> **Where the code lives:** Fasten (webhook + NDJSON ingest), HealthEx / Health Bank One (MCP-client OAuth pull), and MEDENT (SMART-on-FHIR pull) have working connector code **in this repo**. **Flexpa** and **Health Skillz (Epic)** run their payer/portal OAuth pull in the separate **SmartHealthConnect** service; this repo provides the guardrailed **`/shc/ingest`** receiver that those pulls post into — not the payer OAuth client itself. Ingested claims/coverage data is stored, validated, and audited; **cost/denial/coverage-gap analytics are not implemented** (payer data is retained, not analyzed).
+
 **New infrastructure:**
 
 - **`/shc/ingest` endpoint** — SmartHealthConnect bridge receives FHIR bundles from Flexpa and Health Skillz pulls, applies the full guardrail stack, fires Telegram notification
