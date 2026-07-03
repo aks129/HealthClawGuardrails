@@ -215,6 +215,13 @@ def action_status(action_id):
     if not tenant_id:
         return _error(400, 'X-Tenant-Id header is required')
 
+    # Read-auth: for non-public tenants (when the flag is on) require a
+    # tenant-bound token/bearer, same posture as FHIR + SMBP reads.
+    from r6.routes import authenticate_tenant_read
+    auth_err = authenticate_tenant_read(tenant_id)
+    if auth_err is not None:
+        return auth_err
+
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
     if action is None:
@@ -235,7 +242,15 @@ def action_status(action_id):
                 detail='proposal expired',
             )
 
-    return jsonify(action.to_dict()), 200
+    # Only a caller holding a valid tenant-bound step-up token gets the full
+    # record (phone number + message body). Everyone else gets the PHI-safe
+    # summary (id/kind/recipient-label/status).
+    step_up = request.headers.get('X-Step-Up-Token')
+    privileged = False
+    if step_up:
+        valid, _err = validate_step_up_token(step_up, tenant_id)
+        privileged = valid
+    return jsonify(action.to_dict() if privileged else action.summary()), 200
 
 
 @actions_blueprint.route('/callback/<provider>', methods=['POST'])

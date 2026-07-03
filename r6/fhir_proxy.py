@@ -25,8 +25,10 @@ Medplum mode (MEDPLUM_BASE_URL set, FHIR_UPSTREAM_URL not set):
   an in-process dict cache when Redis is unavailable.
 """
 
+import ipaddress
 import logging
 import os
+import socket
 import time
 from urllib.parse import urlparse
 
@@ -129,7 +131,10 @@ class FHIRUpstreamProxy:
         self._client = httpx.Client(
             base_url=self.upstream_url,
             timeout=_UPSTREAM_TIMEOUT,
-            follow_redirects=True,
+            # SSRF: do NOT follow redirects. validate_upstream_url() only vets the
+            # initial URL; following a 3xx would let a validated public host
+            # redirect the server to cloud metadata / internal IPs.
+            follow_redirects=False,
             headers={
                 'Accept': 'application/fhir+json, application/json',
                 'User-Agent': 'HealthClaw-Guardrails/1.0.0',
@@ -395,6 +400,90 @@ SHARP_ACCESS_TOKEN_HEADER = 'X-FHIR-Access-Token'
 SHARP_PATIENT_ID_HEADER = 'X-Patient-ID'
 
 
+def _is_blocked_ip(ip_str: str) -> bool:
+    """True if `ip_str` is an internal/reserved address an upstream must not use."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # not a parseable IP → block (fail closed)
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def validate_upstream_url(url: str) -> bool:
+    """SSRF guard for a client-supplied upstream FHIR base URL.
+
+    Requires https; blocks private / loopback / link-local / reserved hosts
+    (including cloud metadata 169.254.169.254); honours an optional
+    FHIR_UPSTREAM_ALLOWED_HOSTS allowlist. Hostnames are resolved and EVERY
+    resolved IP is checked. Returns False on any doubt.
+
+    Residual: the connection is not pinned to the validated IP, so a low-TTL
+    DNS-rebind between validation and connect is still theoretically possible —
+    use FHIR_UPSTREAM_ALLOWED_HOSTS in production to eliminate it. Redirect-based
+    SSRF is closed separately (the upstream client uses follow_redirects=False).
+    """
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:  # noqa: BLE001 — malformed URL → reject
+        return False
+    if parsed.scheme != 'https' or not parsed.hostname:
+        return False
+    host = parsed.hostname
+
+    allow = os.environ.get('FHIR_UPSTREAM_ALLOWED_HOSTS', '').strip()
+    if allow:
+        allowed = {h.strip().lower() for h in allow.split(',') if h.strip()}
+        if host.lower() not in allowed:
+            return False
+
+    # Literal IP → check directly (no DNS).
+    try:
+        ipaddress.ip_address(host)
+        return not _is_blocked_ip(host)
+    except ValueError:
+        pass  # it's a hostname
+
+    # Hostname → resolve and reject if ANY resolved address is internal.
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443,
+                                   proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, socket.error, UnicodeError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        if _is_blocked_ip(info[4][0]):
+            return False
+    return True
+
+
+def _sharp_url_from_request():
+    """Return (raw_url, is_valid) for the SHARP upstream header, cached on g.
+
+    Caching avoids re-resolving DNS multiple times per request (is_sharp_context_active
+    and get_proxy_for_request both consult it).
+    """
+    try:
+        from flask import g, request, has_request_context
+    except ImportError:  # pragma: no cover
+        return '', False
+    if not has_request_context():
+        return '', False
+    cached = getattr(g, '_sharp_url_check', None)
+    if cached is not None:
+        return cached
+    raw = (request.headers.get(SHARP_SERVER_URL_HEADER) or '').strip()
+    result = (raw, bool(raw) and validate_upstream_url(raw))
+    try:
+        g._sharp_url_check = result
+    except Exception:  # pragma: no cover — g not available
+        pass
+    return result
+
+
 def make_sharp_proxy(server_url: str,
                      access_token: str | None,
                      local_base_url: str = '') -> FHIRUpstreamProxy:
@@ -431,7 +520,13 @@ def get_proxy_for_request() -> FHIRUpstreamProxy | None:
     if cached is not None:
         return cached
 
-    server_url = (request.headers.get(SHARP_SERVER_URL_HEADER) or '').strip()
+    server_url, valid = _sharp_url_from_request()
+    if server_url and not valid:
+        # SSRF guard: a client-supplied upstream that fails validation
+        # (non-https, private/loopback/link-local/reserved, or off-allowlist)
+        # is ignored — no per-request proxy is built.
+        logger.warning('Rejected SHARP upstream URL (failed SSRF validation)')
+        return get_proxy()
     if server_url:
         access_token = (request.headers.get(SHARP_ACCESS_TOKEN_HEADER) or '').strip() or None
         local_base = os.environ.get('FHIR_LOCAL_BASE_URL', '').strip()
@@ -443,14 +538,11 @@ def get_proxy_for_request() -> FHIRUpstreamProxy | None:
 
 
 def is_sharp_context_active() -> bool:
-    """True when the current request carries SHARP context headers."""
-    try:
-        from flask import request, has_request_context
-    except ImportError:  # pragma: no cover
-        return False
-    if not has_request_context():
-        return False
-    return bool((request.headers.get(SHARP_SERVER_URL_HEADER) or '').strip())
+    """True when the request carries a SHARP upstream header that PASSES the
+    SSRF guard. An invalid/malicious upstream must not activate SHARP context
+    (which would otherwise skip read-auth and synthesize a tenant)."""
+    _raw, valid = _sharp_url_from_request()
+    return valid
 
 
 def close_request_proxy(_exc=None):

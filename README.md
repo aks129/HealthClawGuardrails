@@ -87,6 +87,8 @@ The v1.4.0 release wires **five distinct health data pipelines** into HealthClaw
 | **Health Skillz (Epic)** | Epic MyChart + major patient portals | SmartHealthConnect bridge | `/epic-connect` |
 | **MEDENT** | Small-practice EHR (SMART on FHIR direct) | Direct SMART on FHIR pull | `/medent-connect`, `/medent-pull` |
 
+> **Where the code lives:** Fasten (webhook + NDJSON ingest), HealthEx / Health Bank One (MCP-client OAuth pull), and MEDENT (SMART-on-FHIR pull) have working connector code **in this repo**. **Flexpa** and **Health Skillz (Epic)** run their payer/portal OAuth pull in the separate **SmartHealthConnect** service; this repo provides the guardrailed **`/shc/ingest`** receiver that those pulls post into — not the payer OAuth client itself. Ingested claims/coverage data is stored, validated, and audited; **cost/denial/coverage-gap analytics are not implemented** (payer data is retained, not analyzed).
+
 **New infrastructure:**
 
 - **`/shc/ingest` endpoint** — SmartHealthConnect bridge receives FHIR bundles from Flexpa and Health Skillz pulls, applies the full guardrail stack, fires Telegram notification
@@ -607,10 +609,12 @@ in-process cache when Redis is unavailable).
 - Local mode: JSON blob storage with table-scan search (no indexed fields)
 - Structural validation only (no StructureDefinition conformance or terminology binding)
 - SubscriptionTopic stored but notifications not dispatched
-- Human-in-the-loop is a header flag, not cryptographic confirmation
-- OAuth endpoints implemented but not enforced on routes (demonstration only)
+- Human-in-the-loop is a header flag (`X-Human-Confirmed`), not cryptographic confirmation — a compensating control for the demo, not proof a human acted
+- OAuth endpoints are for discovery/SMART advertisement; route enforcement is via step-up + read-auth tokens, and the auto-approve authorize flow is limited to public/demo tenants (no per-user consent screen)
 - No historical versioning (version_id increments but old versions not retrievable)
 - Upstream proxy: no response caching, no cross-version translation
+- **Security is config-dependent — production requires** `READ_AUTH_ENABLED=true` (authenticate non-public reads), `INTERNAL_TOKEN_MINT_SECRET` (gate token mint/seed for non-public tenants; fail-closed in prod when unset), `PUBLIC_TENANTS` limited to synthetic demo tenants, a real `SESSION_SECRET`/`STEP_UP_SECRET`, and https-only upstreams
+- Step-up tokens are valid for multiple writes within their 5-min TTL (not single-use); irreversible actions rely on state-machine idempotency (guarded `WHERE status='proposed'` claim) rather than nonce consumption
 
 ## Contributing — this is a community effort
 

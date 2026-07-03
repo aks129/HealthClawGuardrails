@@ -82,6 +82,29 @@ def _propose(client, tenant_headers):
     return resp.get_json()['id']
 
 
+def test_status_hides_payload_without_step_up(client, tenant_headers):
+    """H4: a tenant-header-only status read must NOT leak the callee phone
+    number or the free-text message body — only the PHI-safe summary."""
+    action_id = _propose(client, tenant_headers)
+    resp = client.get(f'/r6/actions/{action_id}', headers=tenant_headers)
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert 'payload' not in d
+    blob = json.dumps(d)
+    assert '617-555-0100' not in blob   # phone
+    assert 'metformin' not in blob      # message body
+    assert d['status'] == 'proposed'
+    assert d['id'] == action_id
+    assert d['to'] == 'CVS Pharmacy'    # recipient label is fine
+
+
+def test_status_shows_payload_with_step_up(client, tenant_headers, auth_headers):
+    action_id = _propose(client, tenant_headers)
+    resp = client.get(f'/r6/actions/{action_id}', headers=auth_headers)
+    assert resp.status_code == 200
+    assert 'payload' in resp.get_json()
+
+
 def test_commit_requires_step_up(client, tenant_headers):
     action_id = _propose(client, tenant_headers)
     resp = client.post('/r6/actions/%s/commit' % action_id,

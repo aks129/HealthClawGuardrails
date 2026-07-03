@@ -314,3 +314,50 @@ class TestEndToEndExport:
         # demo tenants; tests protect against accidentally flipping the default.
         assert "Alex" in out.read_text()
         assert sum(snapshot["_meta"]["redaction_stats"].values()) == 0
+
+
+def test_redact_patient_contact_emergency_pii():
+    """H5: Patient.contact[] (emergency contact name/phone/address) must be
+    redacted on the read path, not passed through."""
+    from r6.redaction import apply_redaction
+    patient = {
+        "resourceType": "Patient",
+        "name": [{"family": "Rivera", "given": ["Maria"]}],
+        "contact": [{
+            "relationship": [{"text": "spouse"}],
+            "name": {"family": "Rivera", "given": ["Carlos"]},
+            "telecom": [{"system": "phone", "value": "617-555-0142"}],
+            "address": {"line": ["9 Private Ln"], "city": "Boston"},
+        }],
+    }
+    out = apply_redaction(patient)
+    import json as _j
+    blob = _j.dumps(out)
+    assert "617-555-0142" not in blob        # emergency phone gone
+    assert "9 Private Ln" not in blob        # emergency address line gone
+    c = out["contact"][0]
+    assert c["name"]["family"] == "R."       # emergency name truncated
+    assert c["name"]["given"] == ["C."]
+    assert c["address"].get("city") == "Boston"  # coarse demographics ok
+
+
+def test_patient_controlled_strips_contact():
+    """H5 (sharing path): apply_patient_controlled_redaction feeds SHL/$share-bundle
+    de-identified output — emergency-contact PII must not leak into shared links."""
+    from r6.redaction import apply_patient_controlled_redaction
+    patient = {
+        "resourceType": "Patient",
+        "name": [{"family": "Rivera", "given": ["Maria"]}],
+        "contact": [{
+            "name": {"family": "Rivera", "given": ["Carlos"]},
+            "telecom": [{"system": "phone", "value": "617-555-0142"}],
+            "address": {"line": ["9 Private Ln"], "city": "Boston"},
+        }],
+    }
+    out = apply_patient_controlled_redaction(patient, "hc-patient-1")
+    import json as _j
+    blob = _j.dumps(out)
+    assert "617-555-0142" not in blob
+    assert "9 Private Ln" not in blob
+    assert "Carlos" not in blob
+    assert "contact" not in out

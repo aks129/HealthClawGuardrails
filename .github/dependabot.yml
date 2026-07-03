@@ -9,22 +9,30 @@ updates:
       - dependencies
       - github-actions
 
-  # If this repo has Node dependencies, uncomment the block below + remove the comment marker
-  # - package-ecosystem: npm
-  #   directory: "/"
-  #   schedule:
-  #     interval: weekly
-  #   open-pull-requests-limit: 5
-  #   labels:
-  #     - dependencies
-  #   groups:
-  #     minor-and-patch:
-  #       update-types:
-  #         - minor
-  #         - patch
+  # Node MCP server
+  - package-ecosystem: npm
+    directory: "/services/agent-orchestrator"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
 
-  # If this repo has Python dependencies, uncomment + adapt path:
-  # - package-ecosystem: pip
-  #   directory: "/"
-  #   schedule:
-  #     interval: weekly
+  # Python (Flask app + scripts) — resolved via uv.lock
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
