@@ -321,6 +321,14 @@ FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py
 
 Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.
 
+**Put the guardrails in front of your FHIR server** — recipe for running the
+redaction + audit + step-up + human-in-the-loop stack in front of **Medplum**
+(the same pattern works for Aidbox, Google Cloud Healthcare, or any FHIR R4
+server): [docs/recipes/healthclaw-in-front-of-medplum.md](docs/recipes/healthclaw-in-front-of-medplum.md).
+A repeatable integration test (`tests/test_medplum_in_front.py`) proves a
+Medplum-returned Patient comes back redacted + audited and writes are step-up
+gated before reaching Medplum.
+
 ## Curatr — Patient-Owned Data Quality
 
 Curatr is a patient-facing data quality skill that evaluates FHIR health records for
