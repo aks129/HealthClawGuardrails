@@ -2,7 +2,8 @@
 believable BP-control rate for the demo. Composite (fictional) patients only.
 
 The panel is designed to land near a realistic safety-net NQF 0018 number:
-9 in the denominator (1 pregnancy exclusion), 7 controlled -> ~78%.
+11 hypertensive patients, 1 pregnancy-excluded -> 10 in the scored denominator,
+7 controlled (<140/90) -> 70% BP control.
 
 Usage (against a running server; winters-demo is a public demo tenant):
     python scripts/seed_quality_demo.py --base-url https://app.healthclaw.io \

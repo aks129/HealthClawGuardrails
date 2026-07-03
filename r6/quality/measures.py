@@ -15,6 +15,13 @@ Measure definition (core logic):
   - Numerator: most recent BP during the period is CONTROLLED, i.e.
     systolic < 140 AND diastolic < 90.
 
+Other documented v1 simplifications vs. the certified eCQM (do not overclaim):
+  - Initial population requires an active hypertension dx only; the eCQM also
+    requires a qualifying visit during the period and the dx to start before/
+    within the first 6 months — NOT enforced here.
+  - Among multiple same-date readings the eCQM uses the lowest systolic and
+    lowest diastolic; this picks the last-iterated same-date reading.
+
 Threshold note (clinicians check this): the measure CONTROL target is 140/90.
 That is deliberately different from the 130/80 home *diagnostic* threshold used
 by r6/smbp/triage.py — a patient can be hypertensive (>130/80) yet controlled
@@ -132,21 +139,27 @@ def evaluate_nqf0018(patient, conditions, bp_observations,
                      control_diastolic=CONTROL_DIASTOLIC):
     """Evaluate NQF 0018 for a single patient. Returns a result dict.
 
-    period_start / period_end are ISO dates ('YYYY-MM-DD'). Age is taken at the
-    start of the measurement period.
+    period_start / period_end are ISO dates ('YYYY-MM-DD'). Per CMS165v14, age
+    is taken at the END of the measurement period ("18-85 by the end of the
+    measurement period").
     """
     # Accept full ISO dates or a bare year ('2026' -> Jan 1 / Dec 31).
     ps, pe = str(period_start), str(period_end)
     period_start = ps if len(ps) >= 10 else f"{ps[:4]}-01-01"
     period_end = pe if len(pe) >= 10 else f"{pe[:4]}-12-31"
 
-    age = _age_at(patient.get("birthDate", ""), period_start)
+    age = _age_at(patient.get("birthDate", ""), period_end)
     in_ip = age is not None and 18 <= age <= 85
 
     has_htn = _has_hypertension(conditions)
     excluded = _has_exclusion(conditions)
 
-    in_denominator = bool(in_ip and has_htn and not excluded)
+    # Gross denominator = initial population AND hypertension (pre-exclusion);
+    # this is the population count reported by HL7 convention. The scored
+    # denominator subtracts exclusions.
+    in_denominator_gross = bool(in_ip and has_htn)
+    denominator_exclusion = bool(in_denominator_gross and excluded)
+    in_denominator = in_denominator_gross and not excluded
 
     recent = _most_recent_bp_in_period(bp_observations, period_start, period_end)
     in_numerator = bool(
@@ -158,7 +171,8 @@ def evaluate_nqf0018(patient, conditions, bp_observations,
         "age": age,
         "in_initial_population": in_ip,
         "has_hypertension": has_htn,
-        "denominator_exclusion": bool(in_ip and has_htn and excluded),
+        "in_denominator_gross": in_denominator_gross,
+        "denominator_exclusion": denominator_exclusion,
         "in_denominator": in_denominator,
         "most_recent_bp": ({"systolic": recent[0], "diastolic": recent[1]}
                            if recent else None),
@@ -171,22 +185,29 @@ def evaluate_nqf0018(patient, conditions, bp_observations,
 def evaluate_population(patients_bundle, period_start, period_end):
     """Evaluate a cohort. `patients_bundle` is a list of dicts:
     {patient, conditions, observations}. Returns population counts + rate."""
-    denom = numer = excl = 0
+    initial_pop = denom_gross = denom_net = numer = excl = 0
     per_patient = []
     for entry in patients_bundle:
         r = evaluate_nqf0018(entry["patient"], entry.get("conditions", []),
                              entry.get("observations", []),
                              period_start, period_end)
         per_patient.append(r)
+        if r["in_initial_population"]:
+            initial_pop += 1
+        if r["in_denominator_gross"]:
+            denom_gross += 1
         if r["denominator_exclusion"]:
             excl += 1
         if r["in_denominator"]:
-            denom += 1
+            denom_net += 1
             if r["in_numerator"]:
                 numer += 1
-    rate = round(numer / denom, 4) if denom else None
+    rate = round(numer / denom_net, 4) if denom_net else None
     return {
-        "denominator": denom,
+        "initial_population": initial_pop,
+        # `denominator` follows HL7 convention: pre-exclusion population count.
+        # The score subtracts exclusions: numerator / (denominator - exclusions).
+        "denominator": denom_gross,
         "numerator": numer,
         "exclusions": excl,
         "performance_rate": rate,

@@ -99,3 +99,13 @@ def test_evaluate_requires_read_auth_nonpublic(client, app, monkeypatch):
         "?subject=Patient/p1",
         headers={"X-Tenant-Id": "private-q"})
     assert resp.status_code == 401
+
+
+def test_evaluate_post_requires_read_auth_nonpublic(client, app, monkeypatch):
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    monkeypatch.setenv("PUBLIC_TENANTS", "")
+    resp = client.post(
+        "/r6/fhir/Measure/nqf0018-controlling-high-bp/$evaluate-measure",
+        headers={"X-Tenant-Id": "private-q"},
+        json={"resourceType": "Parameters", "parameter": []})
+    assert resp.status_code == 401

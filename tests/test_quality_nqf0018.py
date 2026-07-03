@@ -79,6 +79,23 @@ def test_age_under_18_excluded():
     assert r["in_initial_population"] is False
 
 
+def test_age_measured_at_period_end_turning_18_midyear_included():
+    # CMS165v14: age at END of period. Born 2008-09-01 -> 17 at period start,
+    # 18 by 2026-12-31 -> IN the initial population.
+    r = evaluate_nqf0018(_patient("2008-09-01"), [_htn_condition()],
+                         [_bp(120, 78, "2026-11-01")], *PERIOD)
+    assert r["age"] == 18
+    assert r["in_initial_population"] is True
+
+
+def test_age_measured_at_period_end_turning_86_midyear_excluded():
+    # Born 1940-09-01 -> 85 at period start but 86 by year-end -> EXCLUDED.
+    r = evaluate_nqf0018(_patient("1940-09-01"), [_htn_condition()],
+                         [_bp(120, 78, "2026-11-01")], *PERIOD)
+    assert r["age"] == 86
+    assert r["in_initial_population"] is False
+
+
 def test_no_hypertension_diagnosis_not_in_denominator():
     r = evaluate_nqf0018(_patient("1970-06-01"), [],
                          [_bp(120, 78, "2026-09-01")], *PERIOD)

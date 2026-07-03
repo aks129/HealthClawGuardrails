@@ -18,7 +18,8 @@ def test_cohort_yields_believable_rate():
         obs = [{**g["observation"], "subject": {"reference": f"Patient/{g['label']}"}}]
         bundle.append({"patient": patient, "conditions": conds, "observations": obs})
     pop = evaluate_population(bundle, "2026-01-01", "2026-12-31")
-    assert pop["denominator"] == 10
-    assert pop["numerator"] == 7
-    assert pop["exclusions"] == 1
+    assert pop["denominator"] == 11   # gross (pre-exclusion) per HL7 convention
+    assert pop["exclusions"] == 1     # 1 pregnancy exclusion
+    assert pop["numerator"] == 7      # 7 controlled
+    # scored rate = numerator / (denominator - exclusions) = 7/10
     assert pop["performance_rate"] == 0.7

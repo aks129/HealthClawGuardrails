@@ -60,8 +60,9 @@ def build_individual_report(subject_ref, result, period_start, period_end):
             "population": [
                 _population("initial-population",
                             _bool_count(result.get("in_initial_population"))),
+                # HL7 convention: denominator is the pre-exclusion population.
                 _population("denominator",
-                            _bool_count(result.get("in_denominator"))),
+                            _bool_count(result.get("in_denominator_gross"))),
                 _population("denominator-exclusion",
                             _bool_count(result.get("denominator_exclusion"))),
                 _population("numerator",
@@ -82,6 +83,7 @@ def build_summary_report(pop_result, period_start, period_end):
         "period": {"start": period_start, "end": period_end},
         "group": [{
             "population": [
+                _population("initial-population", pop_result.get("initial_population", 0)),
                 _population("denominator", pop_result.get("denominator", 0)),
                 _population("denominator-exclusion", pop_result.get("exclusions", 0)),
                 _population("numerator", pop_result.get("numerator", 0)),

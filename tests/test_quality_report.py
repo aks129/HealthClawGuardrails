@@ -26,8 +26,9 @@ def test_measure_resource_shape():
 
 def test_individual_report_controlled():
     result = {
-        "in_initial_population": True, "in_denominator": True,
-        "denominator_exclusion": False, "in_numerator": True,
+        "in_initial_population": True, "in_denominator_gross": True,
+        "in_denominator": True, "denominator_exclusion": False,
+        "in_numerator": True,
         "control_threshold": {"systolic": 140, "diastolic": 90},
     }
     rep = build_individual_report("Patient/p1", result, "2026-01-01", "2026-12-31")
@@ -43,8 +44,9 @@ def test_individual_report_controlled():
 
 def test_individual_report_uncontrolled():
     result = {
-        "in_initial_population": True, "in_denominator": True,
-        "denominator_exclusion": False, "in_numerator": False,
+        "in_initial_population": True, "in_denominator_gross": True,
+        "in_denominator": True, "denominator_exclusion": False,
+        "in_numerator": False,
         "control_threshold": {"systolic": 140, "diastolic": 90},
     }
     rep = build_individual_report("Patient/p1", result, "2026-01-01", "2026-12-31")
