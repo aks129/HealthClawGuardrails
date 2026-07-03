@@ -162,6 +162,8 @@ claude plugin install smarthealthconnect@healthclaw-marketplace
 
 Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 
+**Not on Claude/MCP?** The same 23 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
+
 ## Quick Start
 
 ```bash
