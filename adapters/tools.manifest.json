@@ -1,6 +1,6 @@
 {
   "source": "healthclaw-mcp",
-  "tool_count": 23,
+  "tool_count": 24,
   "tools": [
     {
       "name": "context_get",
@@ -687,6 +687,33 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": true
+      }
+    },
+    {
+      "name": "fhir_interpret_labs",
+      "description": "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observation": {
+            "type": "object",
+            "description": "A single FHIR Observation to interpret"
+          },
+          "bundle": {
+            "type": "object",
+            "description": "A FHIR Bundle of Observations to interpret"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Patient reference (e.g. 'Patient/pt-1') — interpret the tenant's stored Observations for this subject"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
       }
     }
   ]

@@ -403,6 +403,22 @@ export class FHIRTools {
         },
       },
       {
+        name: "fhir_interpret_labs",
+        description:
+          "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            observation: { type: "object", description: "A single FHIR Observation to interpret" },
+            bundle: { type: "object", description: "A FHIR Bundle of Observations to interpret" },
+            subject: { type: "string", description: "Patient reference (e.g. 'Patient/pt-1') — interpret the tenant's stored Observations for this subject" },
+          },
+          required: [],
+        },
+      },
+      {
         name: "fhir_lastn",
         description:
           "Get the last N observations per code. Standard FHIR $lastn (since R4). Returns most recent observations by storage order.",
@@ -807,6 +823,14 @@ export class FHIRTools {
         return this.observationStats(
           input.code as string | undefined,
           input.patient as string | undefined,
+          fwdHeaders
+        );
+
+      case "fhir_interpret_labs":
+        return this.interpretLabs(
+          input.observation as Record<string, unknown> | undefined,
+          input.bundle as Record<string, unknown> | undefined,
+          input.subject as string | undefined,
           fwdHeaders
         );
 
@@ -1450,6 +1474,30 @@ export class FHIRTools {
       },
     };
     return result;
+  }
+
+  private async interpretLabs(
+    observation: Record<string, unknown> | undefined,
+    bundle: Record<string, unknown> | undefined,
+    subject: string | undefined,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams();
+    if (subject) params.set("subject", subject);
+    const query = params.toString();
+
+    const resp = await fetch(
+      `${this.baseUrl}/Observation/$interpret${query ? `?${query}` : ""}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(bundle || observation || {}),
+      }
+    );
+    if (!resp.ok) {
+      return { error: `$interpret failed with status ${resp.status}` };
+    }
+    return (await resp.json()) as Record<string, unknown>;
   }
 
   // --- Curatr: patient-facing data quality tools ---

@@ -50,6 +50,7 @@ const EXPECTED_TOOL_NAMES = [
   "fhir_commit_write",
   "fhir_compiled_truth",
   "fhir_get_token",
+  "fhir_interpret_labs",
   "fhir_lastn",
   "fhir_permission_evaluate",
   "fhir_propose_write",
@@ -75,6 +76,7 @@ const READ_ONLY_TOOL_NAMES = [
   "fhir_search",
   "fhir_validate",
   "fhir_stats",
+  "fhir_interpret_labs",
   "fhir_lastn",
   "fhir_permission_evaluate",
   "fhir_subscription_topics",
@@ -96,8 +98,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 23 tools", () => {
-    expect(schemas).toHaveLength(23);
+  it("getMCPToolSchemas() returns exactly 24 tools", () => {
+    expect(schemas).toHaveLength(24);
   });
 
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
@@ -126,7 +128,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 23 tool names match the expected set", () => {
+  it("all 24 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -567,6 +569,40 @@ describe("Tool Execution Tests", () => {
     expect(result).toHaveProperty("_mcp_summary");
     const summary = (result as Record<string, unknown>)._mcp_summary as Record<string, unknown>;
     expect(summary.max_requested).toBe(3);
+  });
+
+  // -- fhir_interpret_labs --
+
+  it("fhir_interpret_labs posts to /Observation/$interpret and returns Parameters", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    const result = await tools.executeTool(
+      "fhir_interpret_labs",
+      { observation: { resourceType: "Observation" } },
+      { "x-tenant-id": "t1" }
+    );
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain(`${BASE}/Observation/$interpret`);
+    expect(opts.method).toBe("POST");
+    expect((result as Record<string, unknown>).resourceType).toBe("Parameters");
+  });
+
+  it("fhir_interpret_labs appends ?subject= when a subject reference is given", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    await tools.executeTool(
+      "fhir_interpret_labs",
+      { subject: "Patient/pt-1" },
+      { "x-tenant-id": "t1" }
+    );
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("subject=Patient%2Fpt-1");
   });
 
   // -- fhir.permission_evaluate --
@@ -1092,14 +1128,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 23 tool schemas", async () => {
+    it("tools/list returns all 24 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(23);
+      expect(res.body.result.tools).toHaveLength(24);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -1274,13 +1310,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 23 tool schemas", async () => {
+    it("tools/list returns all 24 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(23);
+      expect(res.body.result.tools).toHaveLength(24);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
