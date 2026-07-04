@@ -99,8 +99,12 @@ def enforce_human_in_loop():
     if request.method not in ('POST', 'PUT'):
         return None
 
-    # Exempt validation, operations, and internal demo endpoints
-    if '$validate' in request.path or '$import-stub' in request.path:
+    # Exempt validation, operations, and internal demo endpoints.
+    # $interpret is read-shaped (lab reference-range interpreter) — it never
+    # writes the posted Observation/Bundle to the store, so the clinical-write
+    # human-confirmation gate does not apply.
+    if ('$validate' in request.path or '$import-stub' in request.path
+            or '$interpret' in request.path):
         return None
     if '$ingest-context' in request.path:
         return None

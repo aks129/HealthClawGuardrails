@@ -2927,3 +2927,11 @@ register_quality_routes(r6_blueprint, {
     "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
+
+# --- Lab reference-range interpreter ($interpret) ---
+from r6.labs.routes import register_labs_routes  # noqa: E402
+
+register_labs_routes(r6_blueprint, {
+    "operation_outcome": _operation_outcome,
+    "authenticate_tenant_read": authenticate_tenant_read,
+})
