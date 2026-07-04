@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a capability or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Who benefits — a consumer, a clinician, an agent developer, an operator?
+        This project's bar: genuinely useful, accurate, credible, standards-based.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Sketch the API/operation/tool shape if you have one. FHIR/LOINC/UCUM standards preferred over bespoke formats.
+  - type: checkboxes
+    id: guardrails
+    attributes:
+      label: Guardrail impact
+      options:
+        - label: This touches PHI handling, audit, auth, or tenant isolation (maintainers will review against `.claude/compliance/hipaa.md`)

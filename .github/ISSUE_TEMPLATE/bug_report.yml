@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Never include real PHI** (names, MRNs, phone
+        numbers, real clinical values) in an issue — reproduce with synthetic
+        data (the seeded `desktop-demo` tenant works well).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: "POST /r6/fhir/Observation/$interpret returned ... but I expected ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Exact commands/requests with synthetic data.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface?
+      options:
+        - Flask FHIR facade (/r6/fhir/*)
+        - MCP server (Node)
+        - Adapters (OpenAI/Gemini bridge)
+        - Action layer (/r6/actions)
+        - SMBP / demos
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "v1.5.0 or a git SHA"
