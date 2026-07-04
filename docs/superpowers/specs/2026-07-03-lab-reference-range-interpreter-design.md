@@ -8,10 +8,31 @@
 
 Give agents a guardrailed way to interpret FHIR lab `Observation`s against
 reference ranges — flagging each result low / normal / high / critical and
-producing a clinician- and patient-readable summary. Clinical usefulness for the
-Dr. Gigi Magan physician-group demos, and a table-stakes capability for a lab-
-aware health agent. **Decision support, not diagnosis** — the honesty posture
+producing a clinician- and **consumer**-readable summary. Clinical usefulness for
+the Dr. Gigi Magan physician-group demos, and a table-stakes capability for a
+lab-aware health agent. **Decision support, not diagnosis** — the honesty posture
 matches the NQF 0018 quality module (calculator, not a certified device).
+
+## Guiding principles
+
+These shape every decision below:
+
+1. **Consumer, not patient.** HealthClaw is consumer-controlled health data. The
+   human-facing summary is written *for the consumer* (plain language,
+   empowering, oriented to their next step) — even though the FHIR resource is
+   still named `Patient`. The consumer is the primary audience, the clinician the
+   secondary one.
+2. **Goal = outcomes improvement.** The interpreter exists to help improve health
+   outcomes, not merely to label numbers. Output points the consumer toward a
+   concrete, non-diagnostic next step ("this is above the typical range — worth
+   discussing with your clinician"), never a dead-end flag.
+3. **Value-add and accurate.** Every flag must be *correct* and *useful*. A wrong
+   or misleading range is worse than no interpretation — so accuracy gates
+   inclusion. When we cannot interpret accurately (unknown analyte, unit
+   mismatch), we say *indeterminate*, never guess.
+4. **Credible and standards-based.** Codes and ranges come from recognized
+   standards and citable sources — never invented. Every `LOINC_RANGES` entry
+   carries a `source`; a test asserts none is missing (see Standards & sources).
 
 ## Non-goals (v1)
 
@@ -28,7 +49,7 @@ New module `r6/labs/`, mirroring `r6/quality/` (pure engine + report builders +
 Flask routes, each independently testable). No changes to existing modules
 except route registration in `r6/routes.py`.
 
-```
+```text
 r6/labs/
   __init__.py
   interpret.py   # pure engine: LOINC_RANGES table + interpret_observation()
@@ -59,12 +80,14 @@ Each entry:
     "male":   {"low": ..., "high": ...},
     "female": {"low": ..., "high": ...},
   },
+  "source": "…citable adult reference…",   # REQUIRED — principle 4
 }
 ```
 
-Sex-specific analytes in v1: Hgb, creatinine, HDL. Ranges sourced from widely
-used adult clinical-chemistry references; each entry carries a `source` note in
-the module for traceability.
+Sex-specific analytes in v1: Hgb, creatinine, HDL. **`source` is required on every
+entry** (principle 4) — a test asserts none is missing, so no range can ship
+without a credible, citable provenance. Panic thresholds follow recognized
+critical-value conventions, also cited.
 
 **`interpret_observation(obs, patient=None) -> dict`**
 
@@ -117,6 +140,14 @@ Panic values are **advisory** — the engine flags, it never acts.
   `{normal, low, high, critical, indeterminate}` + a `flagged` list of
   `{analyte, value, unit, flag}`. Clinical data → returned only to the
   authenticated reader; **never** placed in audit detail.
+- **`build_consumer_summary(results) -> dict`** — the consumer-facing view
+  (principle 1 + 2). Plain-language, empowering, outcomes-oriented: each flagged
+  analyte maps to a short line + a **non-diagnostic next step** ("Your potassium
+  is above the typical range — worth discussing with your clinician soon"),
+  critical values escalate the wording ("this is well outside the typical range —
+  contact your clinician promptly"). Normal results are affirmed, not silent, so
+  the consumer sees the whole picture. No treatment advice, no diagnosis. Same
+  PHI posture — reader-only, never audited.
 
 ### 3. `routes.py` — `register_labs_routes(blueprint, deps)`
 
@@ -144,7 +175,8 @@ Output — a `Parameters` (consistent with `$populate`):
   "resourceType": "Parameters",
   "parameter": [
     {"name": "return", "resource": { "Bundle of annotated Observations" }},
-    {"name": "summary", "valueString": "<json summary>"},
+    {"name": "summary", "valueString": "<clinician json summary>"},
+    {"name": "consumerSummary", "valueString": "<plain-language, outcomes-oriented>"},
     {"name": "disclaimer", "valueString":
       "Advisory decision support, not a diagnosis. Reference ranges are adult
        population defaults and vary by lab, age, sex, and clinical context.
@@ -162,13 +194,14 @@ OpenAI/Gemini. Node jest test asserts the tool relays and returns the Parameters
 
 ## Data flow
 
-```
+```text
 Agent (any framework)
   → MCP fhir_interpret_labs
     → Flask POST /Observation/$interpret   (tenant-auth, AuditEvent[PHI-free])
       → r6.labs.interpret.interpret_observation()  (resource range → table → flag)
       → r6.labs.report.annotate_observation() + build_interpretation_summary()
-    ← Parameters{ annotated Bundle, summary, disclaimer }
+        + build_consumer_summary()
+    ← Parameters{ annotated Bundle, summary, consumerSummary, disclaimer }
 ```
 
 ## Error handling
@@ -178,12 +211,32 @@ Agent (any framework)
 - Empty input / no Observations for subject → 200 with empty Bundle + zero summary.
 - Non-Observation resource in input → skipped, counted in an `ignored` tally.
 
+## Standards & sources (principle 4)
+
+Credible and standards-based, top to bottom:
+
+- **Codes:** LOINC for analytes, UCUM for units, HL7 v3 `ObservationInterpretation`
+  for flags, FHIR R4 / US Core `Observation` shape for input and output.
+- **Reference ranges:** every `LOINC_RANGES` entry carries a `source` citing a
+  recognized adult clinical-chemistry reference; the resource's own
+  `referenceRange` (the performing lab) always takes precedence over ours.
+- **Panic thresholds:** drawn from established critical-value conventions, cited
+  per entry.
+- **Provenance is testable:** a unit test asserts every entry has a non-empty
+  `source`, so no un-sourced range can ship. The module keeps a short references
+  list mapping each source key to its citation.
+- **Accuracy over coverage:** if a credible range for an analyte can't be
+  sourced, it stays out of v1 and the analyte reads *indeterminate* — we never
+  ship a guessed range (principle 3).
+
 ## Honesty posture (explicit, matches quality module)
 
 - The `$interpret` response and the MCP tool description both state: decision
   support, not a certified diagnostic device.
 - Ranges are population adult defaults; the performing lab's range always wins.
 - Panic flags are advisory ("verify and act per your protocol") — no auto-action.
+- The consumer summary offers non-diagnostic next steps only ("discuss with your
+  clinician"), never treatment advice.
 - `CLAUDE.md` gets a "Lab Interpreter" section stating the same, plus the v1
   scope limits (no unit conversion, no pediatric/pregnancy ranges, no trends).
 
@@ -193,9 +246,14 @@ Agent (any framework)
   sex-specific (male vs female Hgb); resource-range-wins over table; unit mismatch
   → indeterminate; unknown LOINC → indeterminate; missing value; component-only
   (BP) skipped.
+- **Provenance** (`test_labs_interpret.py`): **every `LOINC_RANGES` entry has a
+  non-empty `source`** (principle 4) — no un-sourced range can ship.
 - **Report** (`test_labs_report.py`): interpretation `CodeableConcept` shape +
   system/code; table-sourced `referenceRange` stamped, resource range untouched;
   summary counts; summary never surfaces in audit-safe shape.
+- **Consumer summary** (`test_labs_report.py`): plain-language line per flagged
+  analyte with a non-diagnostic next step; critical wording escalates; normals
+  affirmed; contains no diagnosis/treatment terms.
 - **Routes** (`test_labs_routes.py`): single Observation, Bundle, `?subject=`
   pull; read-auth 401 for non-public header-only; AuditEvent emitted with
   PHI-free detail; disclaimer present; empty-input 200.
