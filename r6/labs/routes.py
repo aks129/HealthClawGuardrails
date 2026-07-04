@@ -32,13 +32,17 @@ def register_labs_routes(blueprint, deps):
         return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _observations_from_request(tenant_id):
-        """Return (observations, ignored_count)."""
+        """Return (observations, ignored_count). Tolerates malformed input."""
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
         subject = request.args.get("subject")
         if body.get("resourceType") == "Parameters":
             for p in body.get("parameter", []):
-                if p.get("name") == "subject":
-                    subject = p.get("valueReference", {}).get("reference") or subject
+                if isinstance(p, dict) and p.get("name") == "subject":
+                    ref = p.get("valueReference")
+                    if isinstance(ref, dict):
+                        subject = ref.get("reference") or subject
         observations, ignored = [], 0
         if subject:
             rows = R6Resource.query.filter_by(
@@ -49,8 +53,8 @@ def register_labs_routes(blueprint, deps):
                     observations.append(obs)
         elif body.get("resourceType") == "Bundle":
             for e in body.get("entry", []):
-                res = e.get("resource", {})
-                if res.get("resourceType") == "Observation":
+                res = e.get("resource", {}) if isinstance(e, dict) else {}
+                if isinstance(res, dict) and res.get("resourceType") == "Observation":
                     observations.append(res)
                 else:
                     ignored += 1

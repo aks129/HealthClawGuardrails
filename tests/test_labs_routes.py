@@ -49,3 +49,26 @@ def test_interpret_empty_input_is_ok(client, tenant_headers):
                     headers=tenant_headers, json={"resourceType": "Bundle", "entry": []})
     assert r.status_code == 200
     assert json.loads(_resp_param(r.get_json(), "summary")["valueString"])["total"] == 0
+
+
+def test_interpret_json_array_body_is_graceful(client, tenant_headers):
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json=[1, 2, 3])
+    assert r.status_code == 200
+    assert json.loads(_resp_param(r.get_json(), "summary")["valueString"])["total"] == 0
+
+
+def test_interpret_bundle_with_non_dict_entry_is_graceful(client, tenant_headers):
+    bundle = {"resourceType": "Bundle",
+              "entry": ["oops", {"resource": _obs("2823-3", 4.2, "mmol/L")}]}
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers, json=bundle)
+    assert r.status_code == 200
+    s = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert s["total"] == 1 and s["ignored"] == 1
+
+
+def test_interpret_parameters_subject_string_is_graceful(client, tenant_headers):
+    params = {"resourceType": "Parameters",
+              "parameter": [{"name": "subject", "valueReference": "Patient/x"}]}
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers, json=params)
+    assert r.status_code == 200
