@@ -38,9 +38,14 @@ class TestR6Metadata:
 
     def test_metadata_version_is_current(self, client):
         """CapabilityStatement.software.version must match pyproject.toml."""
+        import tomllib
+        from pathlib import Path
+        expected = tomllib.loads(
+            (Path(__file__).resolve().parent.parent / 'pyproject.toml').read_text()
+        )['project']['version']
         resp = client.get('/r6/fhir/metadata')
         data = resp.get_json()
-        assert data['software']['version'] == '1.3.0'
+        assert data['software']['version'] == expected
 
 
 class TestTenantEnforcement:
@@ -1522,9 +1527,15 @@ class TestPhase2CapabilityStatement:
         assert 'lastn' in op_names
 
     def test_metadata_version_is_phase2(self, client):
+        # Phase-2 features shipped in >=1.3.0; the exact version tracks pyproject.
+        import tomllib
+        from pathlib import Path
+        expected = tomllib.loads(
+            (Path(__file__).resolve().parent.parent / 'pyproject.toml').read_text()
+        )['project']['version']
         resp = client.get('/r6/fhir/metadata')
         data = resp.get_json()
-        assert data['software']['version'] == '1.3.0'
+        assert data['software']['version'] == expected
 
 
 class TestPhase2DisclaimersOnNewResources:

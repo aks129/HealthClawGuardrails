@@ -47,6 +47,17 @@ def test_base_nav_badge_matches_released_version():
         "(RELEASING.md step 2)")
 
 
+def test_health_context_version_matches_release():
+    # index.html's nav badge renders v{{ health_context.version }}, sourced
+    # from .health-context.yaml — the value that actually shows on
+    # healthclaw.io. It sat at 1.3.0 for three releases before this guard.
+    m = re.search(r"^version:\s*([\d.]+)", (ROOT / ".health-context.yaml").read_text(),
+                  re.MULTILINE)
+    assert m and m.group(1) == _version(), (
+        f".health-context.yaml version {m.group(1) if m else '(missing)'} != "
+        f"pyproject {_version()} — this drives the live site's nav badge")
+
+
 def test_readme_release_badge_matches_version():
     readme = (ROOT / "README.md").read_text()
     assert f"release-v{_version()}-" in readme, (
