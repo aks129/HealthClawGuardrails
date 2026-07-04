@@ -295,6 +295,30 @@ registered on `r6_blueprint` via `register_quality_routes`.
   resource and `description` say so — never represent it as the certified/complete eCQM.
 - Demo cohort: `scripts/seed_quality_demo.py` seeds a synthetic hypertensive panel (~70% control).
 
+## Lab Interpreter (Observation/$interpret)
+
+`r6/labs/` — a **decision-support** interpreter (NOT a diagnostic device) that
+flags lab `Observation` values against reference ranges. Pure engine
+(`interpret.py`) + report builders (`report.py`); Flask handler registered via
+`register_labs_routes`.
+
+- **`POST /r6/fhir/Observation/$interpret`** — body is one Observation, a Bundle,
+  or `?subject=Patient/<id>` (pulls the tenant's stored Observations). Read-shaped:
+  tenant-read-authenticated + AuditEvent (PHI-free detail). Returns a `Parameters`
+  with the annotated Observations (HL7 v3 `ObservationInterpretation`), a clinician
+  `summary`, a plain-language `consumerSummary`, and a `disclaimer`.
+- **Resource range wins:** `Observation.referenceRange` (the performing lab)
+  always takes precedence over the built-in `LOINC_RANGES` table. Unknown LOINC,
+  a missing unit, or a unit mismatch → *indeterminate*, never a false "normal".
+- **Standards:** LOINC / UCUM / HL7 v3 ObservationInterpretation / FHIR R4. Every
+  `LOINC_RANGES` entry carries a cited `source` (enforced by test).
+- **Honesty / scope:** adult population defaults (clinician-reviewable before a
+  live demo); panic flags are advisory (never auto-act); v1 has no unit
+  conversion, no pediatric/pregnancy ranges, no trend analysis.
+- **Exempt from the human-in-the-loop write gate** (`enforce_human_in_loop`) like
+  `$validate` — it never persists the posted resource.
+- **MCP tool:** `fhir_interpret_labs` (read group) forwards to the operation.
+
 ## SDC Forms ($populate / $extract)
 
 HL7 Structured Data Capture form round-trip. Engines are pure (no Flask/DB) in `r6/sdc/`; the Flask handlers (`r6/sdc/routes.py`, registered on `r6_blueprint` via `register_sdc_routes`) own auth/audit/store I/O.
