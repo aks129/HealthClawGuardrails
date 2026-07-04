@@ -164,6 +164,11 @@ from r6.shc.routes import shc_blueprint
 app.register_blueprint(shc_blueprint)
 logger.info("SmartHealthConnect bridge registered at /shc")
 
+# Register inbound email relay (Resend receiving webhook -> maintainer)
+from r6.email_inbound import email_blueprint
+app.register_blueprint(email_blueprint)
+logger.info("Inbound email relay registered at /email/inbound")
+
 # Register Command Center Blueprint — "My Health in Good Hands" dashboard.
 # Skipped on Vercel (healthclaw.io is the public marketing/demo surface;
 # the command center lives on Railway behind auth).
