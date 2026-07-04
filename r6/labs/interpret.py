@@ -93,12 +93,19 @@ def _apply_sex(entry, patient):
     return low, high
 
 
-def _resource_range(obs):
+def _resource_range(obs, value_unit):
+    """The performing lab's range — trusted only when its unit is consistent
+    with the value's unit (a range quoted in a different unit would invert the
+    interpretation, so we skip it and fall back to the table)."""
     for rr in obs.get("referenceRange", []):
-        low = rr.get("low", {}).get("value")
-        high = rr.get("high", {}).get("value")
-        if low is not None or high is not None:
-            return low, high
+        low_q, high_q = rr.get("low", {}), rr.get("high", {})
+        low, high = low_q.get("value"), high_q.get("value")
+        if low is None and high is None:
+            continue
+        units = [q.get("unit") for q in (low_q, high_q) if q.get("unit")]
+        if any(value_unit and u != value_unit for u in units):
+            continue  # unit-inconsistent lab range — don't trust it
+        return low, high
     return None
 
 
@@ -128,19 +135,22 @@ def interpret_observation(obs, patient=None):
     vq = obs.get("valueQuantity") or {}
     value, unit = vq.get("value"), vq.get("unit")
 
-    if value is None:
+    # value must be a real number (bool is an int subclass — exclude it).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return _indeterminate(analyte, loinc, value, unit, "no numeric value")
     if loinc is None or entry is None:
         return _indeterminate(analyte, loinc, value, unit, "unknown analyte")
 
     crit_low, crit_high = entry.get("crit_low"), entry.get("crit_high")
 
-    resource_rng = _resource_range(obs)
+    resource_rng = _resource_range(obs, unit)
     if resource_rng is not None:
         low, high = resource_rng
         source, note = "resource", "used the performing lab's reference range"
     else:
-        if unit and unit != entry["unit"]:
+        # Table fallback requires a confirmed matching unit — an absent or
+        # mismatched unit is indeterminate, never a guessed normal.
+        if unit != entry["unit"]:
             return _indeterminate(analyte, loinc, value, unit,
                                   f"unit {unit!r} != expected {entry['unit']!r}")
         low, high = _apply_sex(entry, patient)
