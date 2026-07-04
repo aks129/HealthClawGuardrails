@@ -726,6 +726,43 @@ export class FHIRTools {
           required: [],
         },
       },
+      // --- ChatGPT-connector-compatible tools (thin wrappers over fhir_search/fhir_read) ---
+      {
+        name: "search",
+        title: "Search Health Records",
+        description:
+          "ChatGPT-connector-compatible search over the tenant's FHIR records. Query is a FHIR search string (e.g. 'Observation?code=4548-4' or 'Patient?name=smith'); bare resource type works too. Returns compact results: id, title, url. Reads are PHI-redacted and audit-logged server-side.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "FHIR search string: 'ResourceType?params' or just 'ResourceType'",
+            },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        name: "fetch",
+        title: "Fetch Health Record",
+        description:
+          "ChatGPT-connector-compatible fetch of one FHIR resource by id ('ResourceType/id', as returned by search). Returns the full document (PHI-redacted server-side) with metadata.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description: "Resource reference: 'ResourceType/id'",
+            },
+          },
+          required: ["id"],
+        },
+      },
     ];
   }
 
@@ -969,6 +1006,12 @@ export class FHIRTools {
 
       case "shl_generate":
         return this.generateShl(input, fwdHeaders);
+
+      case "search":
+        return this.connectorSearch(input.query as string, fwdHeaders);
+
+      case "fetch":
+        return this.connectorFetch(input.id as string, fwdHeaders);
 
       default:
         return { error: `Unimplemented tool: ${toolName}` };
@@ -1816,6 +1859,129 @@ export class FHIRTools {
       expires_at: expiresAt,
       resource_count: resourceCount,
       _mcp_summary: `SMART Health Link created (expires ${expiresAt}). Give the manage link ONLY to the patient.`,
+    };
+  }
+
+  // --- ChatGPT-connector-compatible search / fetch ---
+
+  /**
+   * Short human-readable summary for a resource, used as the `title` field
+   * in connector search/fetch responses. Patient uses name.text (or
+   * given+family); everything else prefers code.text, then
+   * code.coding[0].display, then falls back to the resource id.
+   */
+  private summarizeResource(resourceType: string, resource: Record<string, unknown>): string {
+    let display: string | undefined;
+
+    if (resourceType === "Patient") {
+      const name = ((resource.name as Array<Record<string, unknown>>) || [])[0];
+      if (name) {
+        const text = name.text as string | undefined;
+        const given = (name.given as string[] | undefined) || [];
+        const family = name.family as string | undefined;
+        display = text || [...given, family].filter(Boolean).join(" ") || undefined;
+      }
+    } else {
+      const code = resource.code as Record<string, unknown> | undefined;
+      const codings = (code?.coding as Array<Record<string, unknown>> | undefined) || [];
+      display = (code?.text as string | undefined) || (codings[0]?.display as string | undefined);
+    }
+
+    if (!display) display = (resource.id as string | undefined) || "unknown";
+    return `${resourceType}: ${display}`;
+  }
+
+  /**
+   * ChatGPT-connector `search` tool. Thin wrapper over the same Flask search
+   * endpoint fhir_search uses — guardrails (PHI redaction, audit) are
+   * inherited server-side. Query is a FHIR search string, e.g.
+   * 'Observation?code=4548-4' or a bare 'Patient'.
+   */
+  private async connectorSearch(
+    query: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    if (!query || typeof query !== "string") {
+      return { error: "query is required" };
+    }
+
+    const qIdx = query.indexOf("?");
+    const resourceType = qIdx === -1 ? query : query.slice(0, qIdx);
+    const rawParams = qIdx === -1 ? "" : query.slice(qIdx + 1);
+    if (!resourceType) {
+      return { error: "query must start with a FHIR resource type" };
+    }
+
+    const params = new URLSearchParams(rawParams);
+    const requestedCount = parseInt(params.get("_count") || "20", 10);
+    const clampedCount = Math.min(
+      Number.isFinite(requestedCount) && requestedCount > 0 ? requestedCount : 20,
+      MAX_RESULT_ENTRIES
+    );
+    params.set("_count", clampedCount.toString());
+
+    const resp = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(resourceType)}?${params.toString()}`,
+      { headers }
+    );
+    if (!resp.ok) {
+      return { error: `search failed with status ${resp.status}` };
+    }
+
+    const bundle = (await resp.json()) as Record<string, unknown>;
+    const entries = (bundle.entry as Array<Record<string, unknown>> | undefined) || [];
+    const results = entries.map((entry) => {
+      const resource = (entry.resource as Record<string, unknown>) || {};
+      return {
+        id: `${resourceType}/${resource.id}`,
+        title: this.summarizeResource(resourceType, resource),
+        url: `${this.baseUrl}/${resourceType}/${resource.id}`,
+      };
+    });
+
+    return { results };
+  }
+
+  /**
+   * ChatGPT-connector `fetch` tool. Thin wrapper over the same Flask read
+   * endpoint fhir_read uses — guardrails (PHI redaction, audit) are
+   * inherited server-side. `id` must be 'ResourceType/id', as returned by
+   * connectorSearch.
+   */
+  private async connectorFetch(
+    id: string,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    if (!id || typeof id !== "string") {
+      return { error: "id is required" };
+    }
+    const slashIdx = id.indexOf("/");
+    const resourceType = slashIdx === -1 ? "" : id.slice(0, slashIdx);
+    const resourceId = slashIdx === -1 ? "" : id.slice(slashIdx + 1);
+    if (!resourceType || !resourceId) {
+      return { error: "id must be in 'ResourceType/id' format" };
+    }
+
+    const resp = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
+      { headers }
+    );
+    if (!resp.ok) {
+      return { error: `fetch failed with status ${resp.status}` };
+    }
+
+    const resource = (await resp.json()) as Record<string, unknown>;
+    const meta = (resource.meta as Record<string, unknown> | undefined) || {};
+
+    return {
+      id,
+      title: this.summarizeResource(resourceType, resource),
+      text: JSON.stringify(resource),
+      url: `${this.baseUrl}/${resourceType}/${resourceId}`,
+      metadata: {
+        resourceType,
+        lastUpdated: meta.lastUpdated as string | undefined,
+      },
     };
   }
 }

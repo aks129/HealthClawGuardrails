@@ -47,6 +47,7 @@ const EXPECTED_TOOL_NAMES = [
   "context_get",
   "curatr_apply_fix",
   "curatr_evaluate",
+  "fetch",
   "fhir_commit_write",
   "fhir_compiled_truth",
   "fhir_get_token",
@@ -62,6 +63,7 @@ const EXPECTED_TOOL_NAMES = [
   "fhir_validate",
   "questionnaire_extract",
   "questionnaire_populate",
+  "search",
   "shl_generate",
   "sources_check",
   "wearables_sync_status",
@@ -72,6 +74,7 @@ const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
 const READ_ONLY_TOOL_NAMES = [
   "action_status",
   "context_get",
+  "fetch",
   "fhir_read",
   "fhir_search",
   "fhir_validate",
@@ -82,6 +85,7 @@ const READ_ONLY_TOOL_NAMES = [
   "fhir_subscription_topics",
   "fhir_compiled_truth",
   "questionnaire_populate",
+  "search",
   "sources_check",
   "wearables_sync_status",
 ];
@@ -98,8 +102,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 24 tools", () => {
-    expect(schemas).toHaveLength(24);
+  it("getMCPToolSchemas() returns exactly 26 tools", () => {
+    expect(schemas).toHaveLength(26);
   });
 
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
@@ -135,7 +139,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 24 tool names match the expected set", () => {
+  it("all 26 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -1067,6 +1071,146 @@ describe("Tool Execution Tests", () => {
       else delete process.env.SHL_SERVER_URL;
     }
   });
+
+  // -- search / fetch (ChatGPT connector compatibility) --
+
+  it("search returns compact results shape from a mocked Bundle", async () => {
+    const bundle = {
+      resourceType: "Bundle",
+      type: "searchset",
+      total: 1,
+      entry: [
+        {
+          resource: {
+            resourceType: "Observation",
+            id: "obs-1",
+            code: { coding: [{ display: "Glucose" }] },
+          },
+        },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
+
+    const result = await tools.executeTool("search", { query: "Observation?code=4548-4" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain(`${BASE}/Observation?`);
+    expect(url).toContain("code=4548-4");
+    expect(url).toContain("_count=20");
+
+    expect(result).toEqual({
+      results: [
+        {
+          id: "Observation/obs-1",
+          title: "Observation: Glucose",
+          url: `${BASE}/Observation/obs-1`,
+        },
+      ],
+    });
+  });
+
+  it("search with a bare resource type (no '?') works", async () => {
+    const bundle = { resourceType: "Bundle", type: "searchset", total: 0, entry: [] };
+    mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
+
+    const result = await tools.executeTool("search", { query: "Patient" });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/Patient?_count=20`);
+    expect(result).toEqual({ results: [] });
+  });
+
+  it("search summarizes a Patient result using the name text", async () => {
+    const bundle = {
+      resourceType: "Bundle",
+      type: "searchset",
+      total: 1,
+      entry: [
+        { resource: { resourceType: "Patient", id: "pt-1", name: [{ text: "Jane Doe" }] } },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
+
+    const result = await tools.executeTool("search", { query: "Patient?name=jane" });
+
+    expect(result).toEqual({
+      results: [
+        { id: "Patient/pt-1", title: "Patient: Jane Doe", url: `${BASE}/Patient/pt-1` },
+      ],
+    });
+  });
+
+  it("search clamps a caller-provided _count above MAX_RESULT_ENTRIES (50)", async () => {
+    const bundle = { resourceType: "Bundle", type: "searchset", total: 0, entry: [] };
+    mockFetch.mockResolvedValueOnce(fakeResponse(bundle));
+
+    await tools.executeTool("search", { query: "Patient?_count=999" });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain("_count=50");
+  });
+
+  it("search returns an error object when the upstream search fails", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({}, 500));
+
+    const result = await tools.executeTool("search", { query: "Patient" });
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("500");
+  });
+
+  it("fetch returns document shape for a valid ResourceType/id", async () => {
+    const patient = {
+      resourceType: "Patient",
+      id: "pt-1",
+      name: [{ text: "Jane Doe" }],
+      meta: { lastUpdated: "2026-01-01T00:00:00Z" },
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(patient));
+
+    const result = await tools.executeTool("fetch", { id: "Patient/pt-1" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/Patient/pt-1`);
+
+    expect(result).toEqual({
+      id: "Patient/pt-1",
+      title: "Patient: Jane Doe",
+      text: JSON.stringify(patient),
+      url: `${BASE}/Patient/pt-1`,
+      metadata: { resourceType: "Patient", lastUpdated: "2026-01-01T00:00:00Z" },
+    });
+  });
+
+  it("fetch falls back to code.coding[0].display, then resource id, for the title", async () => {
+    const obs = { resourceType: "Observation", id: "obs-2", code: { coding: [{ display: "Hemoglobin A1c" }] } };
+    mockFetch.mockResolvedValueOnce(fakeResponse(obs));
+
+    const result = await tools.executeTool("fetch", { id: "Observation/obs-2" });
+    expect((result as Record<string, unknown>).title).toBe("Observation: Hemoglobin A1c");
+
+    mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Condition", id: "cond-1" }));
+    const result2 = await tools.executeTool("fetch", { id: "Condition/cond-1" });
+    expect((result2 as Record<string, unknown>).title).toBe("Condition: cond-1");
+  });
+
+  it("fetch with malformed id (no 'ResourceType/id' format) returns an error and makes no request", async () => {
+    const result = await tools.executeTool("fetch", { id: "not-a-valid-id" });
+
+    expect(result).toHaveProperty("error");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("fetch propagates a 404 from the upstream read as an error object", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({}, 404));
+
+    const result = await tools.executeTool("fetch", { id: "Patient/nonexistent" });
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("404");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1135,14 +1279,14 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 24 tool schemas", async () => {
+    it("tools/list returns all 26 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(24);
+      expect(res.body.result.tools).toHaveLength(26);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -1317,13 +1461,13 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 24 tool schemas", async () => {
+    it("tools/list returns all 26 tool schemas", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(24);
+      expect(res.body.result.tools).toHaveLength(26);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {

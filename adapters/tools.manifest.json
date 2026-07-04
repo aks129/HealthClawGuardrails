@@ -1,6 +1,6 @@
 {
   "source": "healthclaw-mcp",
-  "tool_count": 24,
+  "tool_count": 26,
   "tools": [
     {
       "name": "context_get",
@@ -739,6 +739,50 @@
         "openWorldHint": false
       },
       "title": "Interpret Lab Results"
+    },
+    {
+      "name": "search",
+      "description": "ChatGPT-connector-compatible search over the tenant's FHIR records. Query is a FHIR search string (e.g. 'Observation?code=4548-4' or 'Patient?name=smith'); bare resource type works too. Returns compact results: id, title, url. Reads are PHI-redacted and audit-logged server-side.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "FHIR search string: 'ResourceType?params' or just 'ResourceType'"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "title": "Search Health Records"
+    },
+    {
+      "name": "fetch",
+      "description": "ChatGPT-connector-compatible fetch of one FHIR resource by id ('ResourceType/id', as returned by search). Returns the full document (PHI-redacted server-side) with metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Resource reference: 'ResourceType/id'"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "title": "Fetch Health Record"
     }
   ]
 }

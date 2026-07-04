@@ -25,15 +25,15 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2076%20Node-22c55e?style=flat-square)](#testing)
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-24-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-24)
+[![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2086%20Node-22c55e?style=flat-square)](#testing)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-26-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-26)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
 
 <br/>
 
-**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-24)** · **[Recipes](docs/recipes/)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)**
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-26)** · **[Recipes](docs/recipes/)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)**
 
 </div>
 
@@ -46,7 +46,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.6.0 · 840+ Python + 76 Node tests · 24 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.6.0 · 840+ Python + 86 Node tests · 26 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Release highlights
 
@@ -103,7 +103,7 @@ claude plugin install smarthealthconnect@healthclaw-marketplace
 
 Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 
-**Not on Claude/MCP?** The same 24 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
+**Not on Claude/MCP?** The same 26 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
 
 ## Quick Start
 
@@ -133,7 +133,7 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (24)
+## MCP Tools (26)
 
 Tool names use underscores (not dots) for Claude Desktop / MCP client compatibility.
 
@@ -153,6 +153,8 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `questionnaire_populate` | SDC `$populate` — pre-fill a Questionnaire for a subject |
 | `curatr_evaluate` | Evaluate a FHIR resource for data quality issues |
 | `action_status` | Poll a real-world action (call/SMS) |
+| `search` | ChatGPT-connector-compatible search — thin wrapper over `fhir_search`, returns compact `{id, title, url}` results |
+| `fetch` | ChatGPT-connector-compatible fetch by `ResourceType/id` — thin wrapper over `fhir_read`, returns `{id, title, text, url, metadata}` |
 
 **Write tools** (require step-up token):
 
