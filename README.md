@@ -25,15 +25,15 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-700%2B%20Python%20%2B%2074%20Node-22c55e?style=flat-square)](#testing)
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-23-6366f1?style=flat-square&logo=anthropic)](#mcp-tools)
+[![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2076%20Node-22c55e?style=flat-square)](#testing)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-24-6366f1?style=flat-square&logo=anthropic)](#mcp-tools)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
 
 <br/>
 
-**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)**
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools)** · **[Recipes](docs/recipes/)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)**
 
 </div>
 
@@ -46,78 +46,24 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.5.0 · 700+ Python + 74 Node tests · 23 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin
+**At a glance:** v1.5.0 · 840+ Python + 76 Node tests · 24 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
-## What's new in v1.5.0 — Security Hardening + SDC Forms
+## Release highlights
 
-Two threads landed since v1.4.0: a **read-authentication hardening pass** on the guardrail core, and
-**HL7 Structured Data Capture (SDC)** support so the project can populate and extract healthcare forms
-the standard, interoperable way.
+Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/releases)**.
 
-**SDC form round-trip** — implements the two halves of [HL7 SDC](https://build.fhir.org/ig/HL7/sdc/):
+| Version | Highlights |
+| --- | --- |
+| **v1.5.0** | Read-auth hardening (tenant reads authenticated, not just scoped) · HL7 SDC forms — `$populate` / `$extract` |
+| v1.4.0 | Six health-data connectors (Fasten TEFCA, HealthEx, Health Bank One, Flexpa, Epic, MEDENT) behind one guardrail stack |
+| v1.3.0 | Wearables → FHIR Observations (8 providers, LOINC/UCUM mapping, device Provenance) |
+| v1.2.0 | Compiled Truth — current state + append-only Provenance trail per resource |
 
-| Operation | What it does | Mechanisms (v1) |
-| --- | --- | --- |
-| `POST /r6/fhir/Questionnaire[/<id>]/$populate` | Questionnaire + subject → pre-filled `QuestionnaireResponse` | expression-based (`initialExpression` FHIRPath) + observation-based (`item.code` LOINC) |
-| `POST /r6/fhir/QuestionnaireResponse/$extract` | completed `QuestionnaireResponse` → transaction `Bundle` | observation-based (`observationExtract`) + definition-based (`definitionExtract`) |
-
-- Pure, Flask-free transform engines in `r6/sdc/` (`expressions.py`, `populate.py`, `extract.py`); the route layer owns auth, audit, step-up, and store I/O.
-- `$populate` is read-shaped (tenant-read-authenticated + AuditEvent); `$extract` reuses the existing write path — step-up + per-resource `$validate` on commit, with `?dryRun=true` to preview the Bundle without committing.
-- Two new MCP tools — `questionnaire_populate` (read) and `questionnaire_extract` (write) — so an agent can fill and extract forms end-to-end.
-- A seeded `healthclaw-intake` demo Questionnaire shows the full populate → complete → extract loop.
-
-**Security hardening** — `X-Tenant-Id` reads are now **authenticated, not just tenant-scoped**: non-public tenants must present a tenant-bound step-up token or a matching SMART bearer (a bare header gets `401`). Plus a public-tenant-aware token-mint guard, the SMART OAuth service advertised in `/metadata`, and dependency CVE bumps (PyJWT, npm advisories).
-
-**Deliberate compliance postures** (documented in [CLAUDE.md](CLAUDE.md) and the [design spec](docs/superpowers/specs/2026-06-17-sdc-populate-extract-design.md)):
-- `$populate` returns **unredacted** PHI by design — a form must hold real data, and the read-auth gate is the compensating control. An optional `?redaction=` opt-in is a tracked follow-up.
-- `$extract` commit is treated as an ingest-class operation (like `Bundle/$ingest-context`): step-up + `$validate` gate the write; it is exempt from the per-resource `X-Human-Confirmed` gate.
-
-## What's new in v1.4.0 — Multi-Connector Health Data Pipeline
-
-One Telegram bot. All your health records. Every major source, automatically.
-
-The v1.4.0 release wires **five distinct health data pipelines** into HealthClaw — each with its own auth model, transport, and data format — and exposes them as unified Telegram slash commands so you never leave the chat.
-
-| Source | Coverage | Transport | Telegram command |
-| --- | --- | --- | --- |
-| **Fasten TEFCA** | Nationwide — all QHINs (hospitals, EHRs, labs) via CLEAR/ID.me | Webhook push | `/connect` |
-| **HealthEx** | Lab + clinical aggregator | MCP Streamable HTTP pull | `/export` |
-| **Health Bank One** | Identity-verified records + insurance context | MCP Streamable HTTP pull | `/hbo-connect`, `/hbo-pull` |
-| **Flexpa** | 200+ payers/insurers (CMS-9115 mandate) | SmartHealthConnect bridge | `/flexpa-connect` |
-| **Health Skillz (Epic)** | Epic MyChart + major patient portals | SmartHealthConnect bridge | `/epic-connect` |
-| **MEDENT** | Small-practice EHR (SMART on FHIR direct) | Direct SMART on FHIR pull | `/medent-connect`, `/medent-pull` |
-
-> **Where the code lives:** Fasten (webhook + NDJSON ingest), HealthEx / Health Bank One (MCP-client OAuth pull), and MEDENT (SMART-on-FHIR pull) have working connector code **in this repo**. **Flexpa** and **Health Skillz (Epic)** run their payer/portal OAuth pull in the separate **SmartHealthConnect** service; this repo provides the guardrailed **`/shc/ingest`** receiver that those pulls post into — not the payer OAuth client itself. Ingested claims/coverage data is stored, validated, and audited; **cost/denial/coverage-gap analytics are not implemented** (payer data is retained, not analyzed).
-
-**New infrastructure:**
-
-- **`/shc/ingest` endpoint** — SmartHealthConnect bridge receives FHIR bundles from Flexpa and Health Skillz pulls, applies the full guardrail stack, fires Telegram notification
-- **`/shc/medent/callback` broker** — MEDENT's OAuth validator requires a public HTTPS redirect URI; Railway acts as the callback broker so the Mac mini agent can still drive the flow
-- **`scripts/medent_oauth.py`** — SMART on FHIR Patient Standalone Launch (Dynamic Client Registration + PKCE + token caching + auto-refresh)
-- **`scripts/export_medent_fhir.py`** — Pulls US Core R4 resources from any MEDENT practice, redacts PHI in-process
-- **Telegram**: all 6 new commands deployed to all 7 OpenClaw personas (Sally, Mary, Dom, Kristy, Joe, Ronny, Shervin)
-
-## What's new in v1.3.0 — Wearables
-
-Heart rate, HRV, SpO2, steps, sleep, BP, glucose, body weight — from **Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman** — flow into HealthClaw as FHIR Observations with correct LOINC codes and device Provenance. Compiled Truth timelines now include wearable-sourced data; SmartHealthConnect's `healthy-habits` + `diet-exercise` skills read them through the same `fhir_search` they already use.
-
-- **Open Wearables sidecar** ([the-momentum/open-wearables](https://github.com/the-momentum/open-wearables), MIT) runs under a new `wearables` docker-compose profile. It owns per-provider OAuth; we own the FHIR mapping.
-- **`r6/wearables/mapper.py`** translates 13 metrics to LOINC + UCUM FHIR Observations. Unknown fields fall through with `code.text` — no data loss.
-- **Daemon poller** syncs every `WEARABLES_POLL_INTERVAL` (default 900s), posts through `/Bundle/$ingest-context` with step-up + `X-Agent-Id: wearable-sync`.
-- **`wearables_sync_status`** MCP tool (16 tools total) returns connection status + `_meta.ui.resourceUri` pointing at the new Connection Manager MCP App.
-- **MCP App** at `/r6/fhir/mcp-apps/wearables/` — cards per provider: connect / re-auth / sync / view.
-
-Quick start: `OPEN_WEARABLES_URL=http://open-wearables:8000 docker-compose --profile wearables up -d`.
-
-## What's new in v1.2.0 — Compiled Truth
-
-Every other health tool shows you data. HealthClaw shows you the **trail**.
-
-- **`GET /<type>/<id>/$compiled-truth`** — returns current redacted resource + curation state + quality score + full Provenance timeline (newest first).
-- **`fhir_compiled_truth`** MCP tool — agents call this before making resource-specific claims; responses carry `_meta.ui.resourceUri` pointing to an embeddable review surface.
-- **MCP App** at `/r6/fhir/mcp-apps/compiled-truth/<type>/<id>` — focused HTML page: current data, evidence timeline, approve / re-evaluate actions. Zero install.
-- **Activated schema** — `curation_state` (raw → in_review → curated) and `quality_score` (0.0–1.0) now persisted on every resource.
-- **`.health-context.yaml`** — single declaration of jurisdiction, audience, regulations, defaults. Read by the guardrail stack; mirrored in SmartHealthConnect.
+**Since v1.5.0 on `main`:** NQF 0018 quality measure (`Measure/$evaluate-measure`) · lab reference-range
+interpreter (`Observation/$interpret`, decision support with consumer summaries) · the
+**[any-agent-framework adapter kit](docs/recipes/any-agent-framework.md)** (same 24 guardrailed tools on
+OpenAI / Gemini / LangChain) · the **[HealthClaw-in-front-of-Medplum recipe](docs/recipes/healthclaw-in-front-of-medplum.md)** ·
+ruff lint gate · all Dependabot advisories remediated.
 
 ## What It Does
 
@@ -162,7 +108,7 @@ claude plugin install smarthealthconnect@healthclaw-marketplace
 
 Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 
-**Not on Claude/MCP?** The same 23 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
+**Not on Claude/MCP?** The same 24 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
 
 ## Quick Start
 
@@ -192,7 +138,7 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (23)
+## MCP Tools (24)
 
 Tool names use underscores (not dots) for Claude Desktop / MCP client compatibility.
 
@@ -206,6 +152,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `fhir_validate` | Structural validation |
 | `fhir_stats` | Observation statistics (count/min/max/mean) |
 | `fhir_lastn` | Most recent N observations per code |
+| `fhir_interpret_labs` | Lab reference-range interpretation (`$interpret`) — decision support, not diagnosis |
 | `fhir_permission_evaluate` | R6 Permission access control evaluation |
 | `fhir_subscription_topics` | List available SubscriptionTopics |
 | `questionnaire_populate` | SDC `$populate` — pre-fill a Questionnaire for a subject |
@@ -268,7 +215,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (700+ across 30+ files; includes the SDC test_sdc_*.py suite)
+# Python tests (840+ across 40+ files; includes SDC, quality, and labs suites)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
