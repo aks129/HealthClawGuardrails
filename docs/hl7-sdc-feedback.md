@@ -6,6 +6,11 @@
 **Specification / Work Group:** `FHIR-sdc` (Structured Data Capture)
 **Reported by:** eugene.vestel@gmail.com (your HL7 account)
 
+**Required — "at least one of Related Artifact(s) or Related Page(s)":**
+- **Related Page(s):** `https://hl7.org/fhir/uv/sdc/extraction.html` (SDC Data Extraction page)
+- **Related Artifact(s)** (optional, stronger): autocomplete → `QuestionnaireResponse/$extract`,
+  or URL `https://hl7.org/fhir/uv/sdc/OperationDefinition-QuestionnaireResponse-extract.html`
+
 ---
 
 ## Summary (paste into the Summary field)
