@@ -28,6 +28,7 @@
 [![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2086%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-26-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-26)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
+[![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
 
