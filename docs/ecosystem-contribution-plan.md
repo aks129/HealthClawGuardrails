@@ -5,6 +5,31 @@ already read, by contributing things *only we can credibly contribute* — real
 fixes, real implementer feedback, real production-usage reports. No drive-by
 listings without substance behind them.
 
+## LIVE STATUS (2026-07-05)
+
+| Touchpoint | Type | State |
+| --- | --- | --- |
+| MCP Registry `io.github.aks129/healthclaw-guardrails` | listing | ✅ published + verified |
+| Gemini CLI extension (`gemini-extension.json`) | self-serve | ✅ live in repo, one-command install |
+| medplum/medplum #9746 (bot subscription AuditEvents) | PR | 🕓 open, CI clean, no maintainer reply |
+| medplum/medplum #9616 (MCP search/fetch) | comment+offer | 🕓 open, deferred to @aanishs |
+| jmandel/kill-the-clipboard #3 (packageable lib) | PR | 🕓 open, no reply |
+| jmandel/shlep #1 (early-adopter integration report) | issue | 🕓 open (we are issue #1), no reply |
+| fastenhealth/fasten-onprem #207 (export mapping) | comment | 🕓 open, no reply |
+| the-momentum/open-wearables #1264 (.env drift) | PR | 🕓 open, CodeRabbit "no actionable comments" |
+| kakoni/awesome-healthcare #156 | listing PR | 🕓 open |
+| rdmgator12/awesome-healthcare-mcp-servers #5 | listing PR | 🕓 open |
+
+**9 external touchpoints across 6 orgs in ~24h. PACING RULE NOW BINDS:** do NOT
+open new external contributions into cold trackers until some of these get a
+maintainer response — first responsiveness converts a PR into a relationship;
+saturation reads as spam. Next external moves (Tuva BP-measure, wso2 design-input
+issue, Medplum #8812 PHI-in-logs) are PREPPED-when-ready, fired on a response
+signal or after a few days of quiet, one per day max.
+
+**Aggregators** (Glama/PulseMCP/Smithery) have not yet crawled the registry entry
+— re-check; manual submit only if still absent after ~a week.
+
 **House rules for every external contribution:**
 
 - Substance first. If we wouldn't want the PR without the visibility, don't send it.
