@@ -101,6 +101,13 @@ HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-d
   [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
 ```
 
+Or hit the **one-URL self-test** on any running deployment — no token needed, it
+self-tenants internally and returns 200 at Grade A (503 otherwise):
+
+```bash
+curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
+```
+
 The same harness runs against the Flask test client as a **CI gate** (`tests/test_guardrail_conformance.py`),
 so a guardrail regression fails the build. `--json` emits a machine-readable
 report. Library API: `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
