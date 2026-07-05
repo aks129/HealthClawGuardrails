@@ -81,6 +81,30 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
                          Human-in-the-loop
 ```
 
+## Prove it: guardrail conformance
+
+The guardrails are **verifiable, not marketing.** A runnable harness probes any
+deployment with synthetic data and emits a scorecard across all six properties —
+run it against your own instance (or ours):
+
+```bash
+python scripts/guardrail_conformance.py \
+  --base-url https://app.healthclaw.io --tenant desktop-demo \
+  --step-up-token "$(mint a token via POST /r6/fhir/internal/step-up-token)"
+```
+
+```text
+HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-demo]
+  Grade: A   (6/6 properties)
+  [PASS] PHI Redaction            [PASS] Human-in-the-Loop
+  [PASS] Immutable Audit Trail    [PASS] Tenant Isolation
+  [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
+```
+
+The same harness runs against the Flask test client as a **CI gate** (`tests/test_guardrail_conformance.py`),
+so a guardrail regression fails the build. `--json` emits a machine-readable
+report. Library API: `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
+
 ## Install as a Claude Plugin
 
 HealthClaw ships as a Claude Code plugin marketplace. Two plugins are available:

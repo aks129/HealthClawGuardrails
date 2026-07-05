@@ -124,6 +124,14 @@ Same pattern for `shl-server` (Dockerfile + railway.toml only). Setting a variab
 
 ### Security
 
+- **Guardrail conformance harness** (`r6/conformance/`) probes all six guardrail
+  properties (PHI redaction, audit, step-up, human-in-the-loop, tenant isolation,
+  disclaimers) and grades a deployment A–F. `tests/test_guardrail_conformance.py`
+  runs it against the test client as a **CI gate** — if you change a guardrail,
+  keep it Grade A or the build fails. HITL (428) + disclaimers apply to CLINICAL
+  resource types only (`CLINICAL_RESOURCE_TYPES` — Observation/Condition/…), NOT
+  demographic Patient; probes use an Observation for those two. Live scorecard:
+  `python scripts/guardrail_conformance.py --base-url <url> --tenant <t> --step-up-token <tok>`.
 - `validate_step_up_token` returns `(bool, str)` — **destructure both values**; never coerce the tuple to a boolean (non-empty tuple is truthy → silent auth bypass).
 - Before any PHI/audit/access-control change: check `.claude/compliance/hipaa.md`.
 - Always emit AuditEvent for FHIR resource access.
