@@ -146,7 +146,12 @@ class ProbeContext:
     second_tenant: str = "conformance-tenant-b"
 
     def read_headers(self) -> dict:
-        return {"X-Tenant-Id": self.tenant}
+        # Include the step-up token so reads succeed on non-public tenants too
+        # (a tenant-bound token authorizes reads under READ_AUTH_ENABLED).
+        h = {"X-Tenant-Id": self.tenant}
+        if self.step_up_token:
+            h["X-Step-Up-Token"] = self.step_up_token
+        return h
 
     def write_headers(self) -> dict:
         return {"X-Tenant-Id": self.tenant, "X-Step-Up-Token": self.step_up_token,

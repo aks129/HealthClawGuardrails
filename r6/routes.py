@@ -112,8 +112,9 @@ _R6_PREFIX = '/r6/fhir'
 # Discovery/public endpoints exempt from tenant + read-auth enforcement.
 # EXACT full paths — never suffix-matched.
 _EXEMPT_EXACT_PATHS = frozenset({
-    f'{_R6_PREFIX}/metadata',   # CapabilityStatement
-    f'{_R6_PREFIX}/health',     # health check
+    f'{_R6_PREFIX}/metadata',       # CapabilityStatement
+    f'{_R6_PREFIX}/health',         # health check
+    f'{_R6_PREFIX}/$conformance',   # guardrail self-test (self-tenanted internally)
 })
 
 # Genuinely-namespaced sub-trees exempt from tenant + read-auth enforcement.
@@ -2933,3 +2934,8 @@ register_labs_routes(r6_blueprint, {
     "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
+
+# --- Guardrail conformance self-test ($conformance) ---
+from r6.conformance.routes import register_conformance_routes  # noqa: E402
+
+register_conformance_routes(r6_blueprint, {})
