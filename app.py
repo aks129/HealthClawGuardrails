@@ -11,6 +11,7 @@ Web UI routes:
 """
 
 import base64
+import hashlib
 import logging
 import os
 import re
@@ -221,6 +222,61 @@ def terms():
 def skills_index():
     """Browseable index of every OpenClaw skill in this repo."""
     return render_template('skills.html', skills=_SKILLS_CACHE)
+
+
+# ---------------------------------------------------------------------------
+# Agent Skills Discovery (RFC 8615 well-known URI) — Cloudflare spec v0.2.0.
+# Lets Hermes, Claude Code, Cursor, and any spec-compliant client discover and
+# install our skills directly from healthclaw.io. Skills are SKILL.md-only
+# (type "skill-md"); digests are SHA-256 of the artifact, computed at import.
+# The /.well-known/skills/ alias serves v0.1 clients.
+# ---------------------------------------------------------------------------
+_SKILLS_DISCOVERY_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
+_SKILL_NAME_RE = re.compile(r"^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$")
+
+
+def _wellknown_skill_entries() -> list[dict]:
+    skills_dir = Path(__file__).parent / "skills"
+    entries = []
+    for s in _SKILLS_CACHE:
+        slug = s["slug"]
+        if not _SKILL_NAME_RE.match(slug):
+            continue
+        path = skills_dir / slug / "SKILL.md"
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        entries.append({
+            "name": slug,
+            "type": "skill-md",
+            "description": s["description"],
+            "url": f"/.well-known/agent-skills/{slug}/SKILL.md",
+            "digest": f"sha256:{digest}",
+        })
+    return entries
+
+
+_WELLKNOWN_SKILLS_CACHE: list[dict] = _wellknown_skill_entries()
+
+
+@app.route('/.well-known/agent-skills/index.json')
+@app.route('/.well-known/skills/index.json')
+def wellknown_skills_discovery():
+    return jsonify({"$schema": _SKILLS_DISCOVERY_SCHEMA,
+                    "skills": _WELLKNOWN_SKILLS_CACHE})
+
+
+@app.route('/.well-known/agent-skills/<slug>/SKILL.md')
+@app.route('/.well-known/skills/<slug>/SKILL.md')
+def wellknown_skill_md(slug):
+    if not _SKILL_NAME_RE.match(slug):
+        return jsonify({"error": "invalid skill name"}), 400
+    path = Path(__file__).parent / "skills" / slug / "SKILL.md"
+    if not path.is_file():
+        return jsonify({"error": "unknown skill"}), 404
+    return app.response_class(path.read_bytes(),
+                              mimetype="text/markdown; charset=utf-8")
 
 
 # ---------------------------------------------------------------------------
