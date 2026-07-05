@@ -19,8 +19,9 @@ listings without substance behind them.
 | the-momentum/open-wearables #1264 (.env drift) | PR | 🕓 open, CodeRabbit "no actionable comments" |
 | kakoni/awesome-healthcare #156 | listing PR | 🕓 open |
 | rdmgator12/awesome-healthcare-mcp-servers #5 | listing PR | 🕓 open |
+| **HL7 Jira FHIR-57806** (SDC definition-based extraction feedback) | standards-body issue | ✅ submitted |
 
-**9 external touchpoints across 6 orgs in ~24h. PACING RULE NOW BINDS:** do NOT
+**10 external touchpoints across 7 orgs in ~24h. PACING RULE NOW BINDS:** do NOT
 open new external contributions into cold trackers until some of these get a
 maintainer response — first responsiveness converts a PR into a relationship;
 saturation reads as spam. Next external moves (Tuva BP-measure, wso2 design-input
