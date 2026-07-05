@@ -263,12 +263,13 @@ Real-world actions (phone calls, SMS) behind the same guardrails as FHIR writes.
 
 ## SMART Health Links
 
-Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `fa0020d`) as the SHL storage server rather than building bespoke — it implements SHL STU 1 and is zero-knowledge (the server stores only ciphertext + `sha256(auth)`; it can never read PHI).
+Adopted **jmandel/kill-the-clipboard-skill** (MIT, pinned `6ff88e9`) as the SHL storage server rather than building bespoke — it implements SHL STU 1 and is zero-knowledge (the server stores only ciphertext + `sha256(auth)`; it can never read PHI).
 
 - **Storage server** — Docker Compose service `shl-server` (profile `shl`); exposes port 8000; SQLite at `/data/db.sqlite` (named volume `shl-data`); `SHL_PUBLIC_URL` env sets `BASE_URL`.
 - **MCP client-side crypto** — vendored into `src/ktc/`; keep diffable against upstream. AES-256-GCM encryption happens in the MCP server before anything is uploaded to the storage server.
 - **Flask `$share-bundle`** operation — profiles: `intake` (default, US Core R4 clinical; name/DOB/address preserved, SSN-class identifiers and free-text stripped) and `deidentified` (apply_patient_controlled_redaction — preserves birthDate, differs from HIPAA Safe Harbor). Feeds the SHL server.
-- **`shl_generate` MCP tool** — step-up gated (Write group); clinical export + Coverage + Observations (incl. wearable-sourced) → patient-controlled redaction → encrypted SHL with TTL; returns shlink/viewer/manage links. QR-image rendering and link revocation via the manage page on the SHL server are PLANNED.
+- **`shl_generate` MCP tool** — step-up gated (Write group); clinical export + Coverage + Observations (incl. wearable-sourced) → patient-controlled redaction → encrypted SHL with TTL; returns shlink/viewer/manage links. Passes `deflate:true` explicitly, so payloads still compress after upstream's compression-default flip to opt-in.
+- **QR + revocation now exist UPSTREAM** (as of the `6ff88e9` bump; `app/src/components/QrCard.tsx`, `app/src/lib/qr.ts`, and `manage-shl.ts` verbs `pause|resume|re-arm`/revoke). These are **adoption** tasks (wire our manage-page/QR flow to the upstream implementation), not features to build from scratch. Also upstream: an unauthenticated `/health` liveness probe (wired into the `shl-server` container/compose healthcheck) and first-class never-expiring links.
 - **`SHL_SERVER_URL` env** on the MCP server — absent → simulation mode (link generated locally, not persisted).
 - **Zero-knowledge property:** storage server sees only ciphertext + `sha256(auth)`; PHI never leaves the MCP server unencrypted.
 - **Railway deploy caveat:** The repo-root `railway.toml` targets the Flask Dockerfile — always `cd services/shl-server && railway up --service shl-server`; deploying from repo root picks up the wrong Dockerfile. A service that inherited root `watchPatterns` may also skip Dockerfile-only deploys until the per-service `railway.toml` takes effect after the first successful build.
