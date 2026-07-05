@@ -29,6 +29,7 @@
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-27-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-27)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
+[![Glama score](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails/badges/score.svg)](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
 
@@ -64,6 +65,11 @@ them in plain language."* One-command installs:
 `gemini extensions install https://github.com/aks129/HealthClawGuardrails` ·
 `claude plugin marketplace add aks129/HealthClawGuardrails` ·
 skills on [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails)
+
+**Listed in:** [Official MCP Registry](https://registry.modelcontextprotocol.io) (`io.github.aks129/healthclaw-guardrails`) ·
+[Glama](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails) ([hosted connector](https://glama.ai/mcp/connectors/io.github.aks129/healthclaw-guardrails)) ·
+[ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails) (14 skills) ·
+Gemini CLI Extensions · agent-skills discovery at [`/.well-known/agent-skills/`](https://healthclaw.io/.well-known/agent-skills/index.json)
 
 ## Release highlights
 
