@@ -91,3 +91,23 @@ def test_year_month_birthdate_still_yields_age():
     res = {r["rule_id"]: r for r in evaluate_care_gaps(
         _patient(birth="1966-05"), as_of="2026-07-01")}
     assert res["colorectal-screening"]["applicable"] is True
+
+
+def test_rules_carry_ecqm_crosswalk_where_one_exists():
+    # Portability bridge to certified-measure stacks (e.g. CQL Studio ELM-to-SQL):
+    # rules map to the related CMS eCQM where a clean mapping exists, None where
+    # it doesn't. "Related" — not a claim of eCQM-equivalent logic.
+    xwalk = {r["id"]: r.get("related_ecqm") for r in CARE_GAP_RULES}
+    assert xwalk["colorectal-screening"] == "CMS130"
+    assert xwalk["cervical-screening"] == "CMS124"
+    assert xwalk["mammography"] == "CMS125"
+    assert xwalk["flu-immunization"] == "CMS147"
+    assert xwalk["bp-screening"] == "CMS22"
+    assert xwalk["lipid-screening"] is None  # no current screening eCQM — honest None
+
+
+def test_results_include_ecqm_crosswalk():
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(), as_of="2026-07-01")}
+    assert res["mammography"]["related_ecqm"] == "CMS125"
+    assert res["lipid-screening"]["related_ecqm"] is None

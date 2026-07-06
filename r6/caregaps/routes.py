@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 _DISCLAIMER = ("Preventive-care decision support based on published guidelines "
               "(USPSTF/ACIP/ADA). Not a diagnosis or a directive; population-level "
               "adult defaults that individual risk factors can change. Confirm "
-              "with your clinician.")
+              "with your clinician. This is a lightweight consumer-facing check, "
+              "not the Da Vinci DEQM $care-gaps operation and not a certified "
+              "eCQM; per-rule related_ecqm ids are provided for reconciling with "
+              "certified measure engines.")
 
 
 def register_caregaps_routes(blueprint, deps):

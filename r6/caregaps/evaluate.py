@@ -29,6 +29,9 @@ REFERENCES = {
 #   cadence_months: expected interval; satisfied if a matching resource falls within
 #   satisfied_by: {resource, systemless codes matched on code value}
 #   source: key into REFERENCES
+#   related_ecqm: the RELATED CMS eCQM id, for reconciling with certified-measure
+#     stacks (e.g. CQL/ELM-to-SQL engines). "Related" — NOT a claim this rule
+#     implements the eCQM's logic. None where no clean mapping exists.
 CARE_GAP_RULES = [
     {
         "id": "bp-screening", "title": "Blood pressure check",
@@ -37,6 +40,7 @@ CARE_GAP_RULES = [
         "satisfied_by": {"resource": "Observation",
                          "codes": {"8480-6", "85354-9", "55284-4"}},
         "source": "uspstf",
+        "related_ecqm": "CMS22",
     },
     {
         "id": "lipid-screening", "title": "Cholesterol (lipid) screening",
@@ -45,6 +49,7 @@ CARE_GAP_RULES = [
         "satisfied_by": {"resource": "Observation",
                          "codes": {"2093-3", "13457-7", "2571-8", "18262-6"}},
         "source": "uspstf",
+        "related_ecqm": None,
     },
     {
         "id": "diabetes-a1c", "title": "Diabetes A1c monitoring",
@@ -53,6 +58,7 @@ CARE_GAP_RULES = [
         "cadence_months": 6,
         "satisfied_by": {"resource": "Observation", "codes": {"4548-4", "17856-6"}},
         "source": "ada",
+        "related_ecqm": "CMS122",
     },
     {
         "id": "colorectal-screening", "title": "Colorectal cancer screening",
@@ -61,6 +67,7 @@ CARE_GAP_RULES = [
         "satisfied_by": {"resource": "Procedure",
                          "codes": {"45378", "45380", "45385", "44388", "45330"}},
         "source": "uspstf",
+        "related_ecqm": "CMS130",
     },
     {
         "id": "cervical-screening", "title": "Cervical cancer screening (Pap)",
@@ -68,6 +75,7 @@ CARE_GAP_RULES = [
         "cadence_months": 36,
         "satisfied_by": {"resource": "Procedure", "codes": {"88175", "88164", "88142"}},
         "source": "uspstf",
+        "related_ecqm": "CMS124",
     },
     {
         "id": "mammography", "title": "Breast cancer screening (mammogram)",
@@ -76,6 +84,7 @@ CARE_GAP_RULES = [
         "satisfied_by": {"resource": "Procedure",
                          "codes": {"77067", "77066", "77065"}},
         "source": "uspstf",
+        "related_ecqm": "CMS125",
     },
     {
         "id": "flu-immunization", "title": "Influenza (flu) vaccine",
@@ -84,6 +93,7 @@ CARE_GAP_RULES = [
         "satisfied_by": {"resource": "Immunization",
                          "codes": {"88", "140", "141", "150", "158", "161", "171"}},
         "source": "acip",
+        "related_ecqm": "CMS147",
     },
 ]
 
@@ -191,6 +201,7 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
         cadence = _cadence_desc(rule["cadence_months"])
         base = {"rule_id": rule["id"], "title": rule["title"],
                 "cadence": cadence, "source": rule["source"],
+                "related_ecqm": rule["related_ecqm"],
                 "last_done": None, "note": ""}
 
         # Sex gate

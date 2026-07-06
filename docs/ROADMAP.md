@@ -16,8 +16,14 @@ welcome on all of it: several items are labeled
   as authoritative in live demos
 - Care-gaps interpreter (`Patient/$care-gaps`): preventive-care reminders from a
   patient's own record — sourced USPSTF/ACIP/ADA rules, conservative
-  `indeterminate` handling. Follow-ups: risk-adjusted cadence, condition-driven
-  rules beyond diabetes A1c
+  `indeterminate` handling, per-rule `related_ecqm` crosswalk (CMS130/124/125/
+  147/22/122). Follow-ups: risk-adjusted cadence, condition-driven rules beyond
+  diabetes A1c, optional Da Vinci DEQM-shaped gaps-in-care output (ours is a
+  deliberately lightweight consumer variant, **not** the DEQM `$care-gaps`
+  operation — the disclaimer says so). The crosswalk is the reconciliation
+  bridge to certified CQL measure engines (e.g. cqframework's CQL Studio
+  ELM-to-SQL): they compute the certified numbers, HealthClaw delivers the
+  guardrailed consumer answer
 
 **Demos & workflows**
 - SMBP phase 2: BP-cuff photo OCR intake; wire the reminder scheduler to a

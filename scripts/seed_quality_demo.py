@@ -12,6 +12,7 @@ Usage (against a running server; winters-demo is a public demo tenant):
 
 import argparse
 import json
+from datetime import date, timedelta
 
 TENANT = "winters-demo"
 
@@ -52,7 +53,10 @@ def build_quality_cohort():
         observation = {
             "resourceType": "Observation", "status": "final",
             "code": {"coding": [{"system": "http://loinc.org", "code": "85354-9"}]},
-            "effectiveDateTime": "2026-09-15",
+            # ~6 weeks ago: recent enough to count for any current measurement
+            # period, and never in the future (a future "last done" date reads
+            # wrong in demos and makes care-gaps output look broken).
+            "effectiveDateTime": (date.today() - timedelta(days=45)).isoformat(),
             "component": [
                 {"code": {"coding": [{"system": "http://loinc.org", "code": "8480-6"}]},
                  "valueQuantity": {"value": sys_v, "unit": "mm[Hg]"}},
