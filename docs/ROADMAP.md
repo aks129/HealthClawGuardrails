@@ -14,6 +14,10 @@ welcome on all of it: several items are labeled
 - Quality measures: complete the CMS165 denominator exclusion set ([#55](https://github.com/aks129/HealthClawGuardrails/issues/55)); current-year default period ([#52](https://github.com/aks129/HealthClawGuardrails/issues/52))
 - Clinical review of the `LOINC_RANGES` reference table before it is presented
   as authoritative in live demos
+- Care-gaps interpreter (`Patient/$care-gaps`): preventive-care reminders from a
+  patient's own record — sourced USPSTF/ACIP/ADA rules, conservative
+  `indeterminate` handling. Follow-ups: risk-adjusted cadence, condition-driven
+  rules beyond diabetes A1c
 
 **Demos & workflows**
 - SMBP phase 2: BP-cuff photo OCR intake; wire the reminder scheduler to a
@@ -39,6 +43,11 @@ welcome on all of it: several items are labeled
   coded records + OAuth scope authorization — see
   [the design doc](design/oauth-scope-mapping-hbo.md)) and the
   Medplum-in-front recipe
+- **CMS-0057-F prior-auth (2027 mandate):** position the existing SDC
+  `$populate`/`$extract` engine as the guardrailed documentation layer for
+  Da Vinci DTR — redaction on egress, audit, human-in-the-loop, verifiable
+  `$conformance`. Scope, gaps (CQL bridge), and phasing in
+  [the design doc](design/cms-0057-prior-auth-dtr.md)
 
 ## Honesty ledger (deliberate scope limits)
 
