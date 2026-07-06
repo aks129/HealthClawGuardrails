@@ -639,9 +639,15 @@ with different vantage points pressure-test it. We especially want:
 - **Standards people** (HL7 / SDC / SMART) — tell us where we've diverged from the spec, especially on `$populate`/`$extract`.
 - **Anyone** — open an issue, file a "you got this wrong," or send a PR.
 
-Start here: **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[CHANGELOG.md](CHANGELOG.md)** · **[Security policy](SECURITY.md)**
+Start here: **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[Roadmap](docs/ROADMAP.md)** · **[Dev Guide](docs/development.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[CHANGELOG.md](CHANGELOG.md)** · **[Security policy](SECURITY.md)**
 
 Good first contributions are labeled in the issue tracker. No CLA, no gatekeeping — just the MIT license below.
+
+### Community
+
+- **[GitHub Discussions](https://github.com/aks129/HealthClawGuardrails/discussions)** — questions, ideas, show-and-tell.
+- **[good first issues](https://github.com/aks129/HealthClawGuardrails/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** — scoped, ~15-minute-to-start contributions.
+- Building on OpenClaw or Hermes? The skills are on [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails); the MCP server is in the [Hermes catalog](https://github.com/NousResearch/hermes-agent/pull/59221).
 
 ## License
 
