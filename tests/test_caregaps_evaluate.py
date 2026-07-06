@@ -76,3 +76,18 @@ def test_colorectal_satisfied_by_recent_procedure():
     res = {r["rule_id"]: r for r in evaluate_care_gaps(
         _patient(birth="1968-05-01"), procedures=[proc], as_of="2026-07-01")}
     assert res["colorectal-screening"]["status"] == "up_to_date"
+
+
+def test_year_only_birthdate_still_yields_age():
+    # FHIR partial dates are legal — and HealthClaw's own redaction truncates
+    # birthDate to the year. A ~60yo must not come back all-indeterminate.
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(birth="1966"), as_of="2026-07-01")}
+    assert res["bp-screening"]["applicable"] is True
+    assert res["mammography"]["applicable"] is True
+
+
+def test_year_month_birthdate_still_yields_age():
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(birth="1966-05"), as_of="2026-07-01")}
+    assert res["colorectal-screening"]["applicable"] is True

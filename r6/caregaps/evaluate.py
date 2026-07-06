@@ -99,8 +99,22 @@ def _parse_date(s):
         return None
 
 
+def _parse_birth_date(s):
+    """birthDate may be a FHIR partial date (YYYY or YYYY-MM) — our own
+    redaction truncates it to the year. Pad to the first day; screening age
+    bands are wide enough that the ±1y edge error is acceptable for advisory
+    output (and the consumer note already says to confirm with a clinician)."""
+    if not isinstance(s, str):
+        return None
+    if len(s) == 4 and s.isdigit():
+        s = f"{s}-01-01"
+    elif len(s) == 7:
+        s = f"{s}-01"
+    return _parse_date(s)
+
+
 def _age_years(birth, as_of):
-    b, a = _parse_date(birth), _parse_date(as_of)
+    b, a = _parse_birth_date(birth), _parse_date(as_of)
     if not b or not a:
         return None
     return a.year - b.year - ((a.month, a.day) < (b.month, b.day))
