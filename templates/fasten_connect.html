@@ -287,8 +287,13 @@
     var data = event.data || {};
     var type = data.type || data.event || data.action || '';
 
-    // Accept messages from any fastenhealth.com subdomain (embed, app, etc.)
-    if (!event.origin.includes('fastenhealth.com')) return;
+    // Accept messages only from fastenhealth.com or its subdomains — parse the
+    // origin's host and check the domain properly (includes() would also match
+    // a spoofed origin like https://fastenhealth.com.evil.com).
+    var originHost;
+    try { originHost = new URL(event.origin).hostname; } catch (e) { return; }
+    if (originHost !== 'fastenhealth.com' &&
+        !originHost.endsWith('.fastenhealth.com')) return;
 
     // Fasten Stitch widget completion (standard + TEFCA mode variants)
     if (type === 'widget.complete' || type === 'complete' ||

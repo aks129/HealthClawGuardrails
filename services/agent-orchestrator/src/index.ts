@@ -342,7 +342,7 @@ app.post("/mcp", async (req, res) => {
     }
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "Unknown error";
-    console.error(`Streamable HTTP error for ${method}:`, detail);
+    console.error("Streamable HTTP error for method:", method, "-", detail);
     return res.json({
       jsonrpc: "2.0",
       id,
@@ -486,7 +486,7 @@ app.post("/mcp/rpc", async (req, res) => {
     }
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "Unknown error";
-    console.error(`RPC error for method ${method}:`, detail);
+    console.error("RPC error for method:", method, "-", detail);
     return res.json({
       jsonrpc: "2.0",
       id,

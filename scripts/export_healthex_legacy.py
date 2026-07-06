@@ -1059,7 +1059,8 @@ def main():
             "--tenant-id", args.tenant_id,
             "--step-up-secret", args.step_up_secret,
         ]
-        logger.info("Running import: %s", " ".join(cmd))
+        _shown = ["***" if a == args.step_up_secret else a for a in cmd]
+        logger.info("Running import: %s", " ".join(_shown))
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 

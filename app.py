@@ -272,8 +272,11 @@ def wellknown_skills_discovery():
 def wellknown_skill_md(slug):
     if not _SKILL_NAME_RE.match(slug):
         return jsonify({"error": "invalid skill name"}), 400
-    path = Path(__file__).parent / "skills" / slug / "SKILL.md"
-    if not path.is_file():
+    skills_root = (Path(__file__).parent / "skills").resolve()
+    path = (skills_root / slug / "SKILL.md").resolve()
+    # Defense in depth on top of the name regex: the resolved artifact must be
+    # a SKILL.md that stays inside the skills directory (no traversal escape).
+    if path.parent.parent != skills_root or path.name != "SKILL.md" or not path.is_file():
         return jsonify({"error": "unknown skill"}), 404
     return app.response_class(path.read_bytes(),
                               mimetype="text/markdown; charset=utf-8")

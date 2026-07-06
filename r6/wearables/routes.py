@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, Response, current_app, jsonify, redirect, request
+from markupsafe import escape
 
 from models import db
 from r6.audit import record_audit_event
@@ -212,10 +213,10 @@ def oauth_callback():
         'padding:32px;max-width:480px;text-align:center}'
         '.ok{color:#34d399;font-size:42px;margin-bottom:12px}'
         'a{color:#22d3ee}</style></head><body><div class="card">'
-        f'<div class="ok">✓</div><h2>{provider.title()} connected</h2>'
+        f'<div class="ok">✓</div><h2>{escape(provider.title())} connected</h2>'
         '<p>Wearable data will start flowing through HealthClaw Guardrails '
         'on the next sync pass.</p>'
-        f'<p><a href="/r6/fhir/mcp-apps/wearables/?tenant_id={tenant_id}">'
+        f'<p><a href="/r6/fhir/mcp-apps/wearables/?tenant_id={escape(tenant_id)}">'
         'View connections</a></p>'
         '</div></body></html>'
     )

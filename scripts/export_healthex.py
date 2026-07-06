@@ -454,7 +454,8 @@ def run_import(bundle_path: str, import_tenant: str, step_up_secret: str, base_u
         "--step-up-secret", step_up_secret,
         "--base-url", base_url,
     ]
-    print(f"\nRunning import: {' '.join(cmd)}")
+    shown = ["***" if a == step_up_secret else a for a in cmd]
+    print(f"\nRunning import: {' '.join(shown)}")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         sys.exit(f"Import failed with exit code {result.returncode}")
