@@ -259,6 +259,14 @@ def _wellknown_skill_entries() -> list[dict]:
 
 _WELLKNOWN_SKILLS_CACHE: list[dict] = _wellknown_skill_entries()
 
+# Allowlist: slug -> resolved SKILL.md path. Building this from the discovered
+# entries (not from request input) means the skill-artifact route can look up
+# a validated path by key instead of joining a request string into a path.
+_WELLKNOWN_SKILL_PATHS: dict[str, Path] = {
+    e["name"]: (Path(__file__).parent / "skills" / e["name"] / "SKILL.md").resolve()
+    for e in _WELLKNOWN_SKILLS_CACHE
+}
+
 
 @app.route('/.well-known/agent-skills/index.json')
 @app.route('/.well-known/skills/index.json')
@@ -270,15 +278,13 @@ def wellknown_skills_discovery():
 @app.route('/.well-known/agent-skills/<slug>/SKILL.md')
 @app.route('/.well-known/skills/<slug>/SKILL.md')
 def wellknown_skill_md(slug):
-    if not _SKILL_NAME_RE.match(slug):
-        return jsonify({"error": "invalid skill name"}), 400
-    skills_root = (Path(__file__).parent / "skills").resolve()
-    path = (skills_root / slug / "SKILL.md").resolve()
-    # Defense in depth on top of the name regex: the resolved artifact must be
-    # a SKILL.md that stays inside the skills directory (no traversal escape).
-    if path.parent.parent != skills_root or path.name != "SKILL.md" or not path.is_file():
+    # Only ever serve a slug that is already in our known-skills allowlist —
+    # the request value is used purely as a dictionary key, never joined into a
+    # path, so no attacker-controlled string reaches the filesystem.
+    known = _WELLKNOWN_SKILL_PATHS.get(slug)
+    if known is None:
         return jsonify({"error": "unknown skill"}), 404
-    return app.response_class(path.read_bytes(),
+    return app.response_class(known.read_bytes(),
                               mimetype="text/markdown; charset=utf-8")
 
 

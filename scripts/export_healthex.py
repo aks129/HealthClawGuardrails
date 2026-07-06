@@ -103,6 +103,21 @@ _STRIP_IDENTIFIER_SYSTEMS = {
 }
 
 
+
+def _redact_secret_arg(cmd, flag="--step-up-secret"):
+    """Return a copy of an argv list with the value FOLLOWING `flag` masked, so
+    the secret value never appears in logs. Masks by position, not by value."""
+    out, mask_next = [], False
+    for a in cmd:
+        if mask_next:
+            out.append("***")
+            mask_next = False
+        else:
+            out.append(a)
+            mask_next = a == flag
+    return out
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         description="Export personal health data from HealthClaw FHIR store"
@@ -454,8 +469,7 @@ def run_import(bundle_path: str, import_tenant: str, step_up_secret: str, base_u
         "--step-up-secret", step_up_secret,
         "--base-url", base_url,
     ]
-    shown = ["***" if a == step_up_secret else a for a in cmd]
-    print(f"\nRunning import: {' '.join(shown)}")
+    print(f"\nRunning import: {' '.join(_redact_secret_arg(cmd))}")
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         sys.exit(f"Import failed with exit code {result.returncode}")

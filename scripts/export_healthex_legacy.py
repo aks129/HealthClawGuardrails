@@ -150,6 +150,19 @@ class HealthExClient:
         return self.get_all("HealthEx_get_procedures", years)
 
 
+
+def _redact_secret_arg(cmd, flag="--step-up-secret"):
+    """Mask the value following `flag` so secrets never reach logs (by position)."""
+    out, mask_next = [], False
+    for a in cmd:
+        if mask_next:
+            out.append("***")
+            mask_next = False
+        else:
+            out.append(a)
+            mask_next = a == flag
+    return out
+
 def _parse_next_before(text: str) -> str | None:
     """Extract the beforeDate from a HealthEx pagination hint."""
     m = re.search(r"beforeDate:\s*[\"']?(\d{4}-\d{2}-\d{2})[\"']?", text)
@@ -1059,8 +1072,7 @@ def main():
             "--tenant-id", args.tenant_id,
             "--step-up-secret", args.step_up_secret,
         ]
-        _shown = ["***" if a == args.step_up_secret else a for a in cmd]
-        logger.info("Running import: %s", " ".join(_shown))
+        logger.info("Running import: %s", " ".join(_redact_secret_arg(cmd)))
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
