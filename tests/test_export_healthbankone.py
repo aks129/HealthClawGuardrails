@@ -37,9 +37,8 @@ class TestResolveToken:
             "access_token": "cached-tok",
             "expires_at": future,
         }))
-        # TOKEN_CACHE is a module-level Path computed at import time, so patch it directly
-        import export_healthbankone_mcp as m
-        monkeypatch.setattr(m, "TOKEN_CACHE", cache)
+        # cache path is resolved from the env at call time
+        monkeypatch.setenv("HBO_TOKEN_CACHE", str(cache))
         assert _resolve_token() == "cached-tok"
 
     def test_cache_file_expired_returns_none_without_refresh(self, monkeypatch, tmp_path):
@@ -97,14 +96,7 @@ class TestTryRefresh:
         }
 
         with patch("httpx.post", return_value=mock_resp):
-            # Patch TOKEN_CACHE inside the module
-            import export_healthbankone_mcp as m
-            orig = m.TOKEN_CACHE
-            m.TOKEN_CACHE = cache_path
-            try:
-                result = _try_refresh({"refresh_token": "old-ref"})
-            finally:
-                m.TOKEN_CACHE = orig
+            result = _try_refresh({"refresh_token": "old-ref"})
 
         assert result == "new-tok"
 

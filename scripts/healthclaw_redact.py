@@ -61,6 +61,7 @@ class RedactionStats:
     birthdates_coarsened: int = 0
     free_text_dropped: int = 0
     generic_keys_redacted: int = 0
+    embedded_tags_masked: int = 0
 
     def merge(self, other: "RedactionStats") -> None:
         self.names_truncated += other.names_truncated
@@ -70,6 +71,7 @@ class RedactionStats:
         self.birthdates_coarsened += other.birthdates_coarsened
         self.free_text_dropped += other.free_text_dropped
         self.generic_keys_redacted += other.generic_keys_redacted
+        self.embedded_tags_masked += other.embedded_tags_masked
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -227,7 +229,41 @@ def _walk(obj: Any, stats: RedactionStats, salt: str, parent_key: str = "") -> A
     if isinstance(obj, list):
         return [_walk(item, stats, salt, parent_key=parent_key) for item in obj]
 
+    if isinstance(obj, str):
+        return _scrub_embedded_tags(obj, stats)
+
     return obj
+
+
+# Some sources (e.g. Health Bank One MCP tools) return XML-ish strings rather
+# than JSON structures. The structural walk can't see inside those, so PHI-
+# bearing tag CONTENTS must be scrubbed at the string leaf or they reach disk
+# verbatim (found live 2026-07-06: <full_name> in an export file).
+_EMBEDDED_MASK_TAGS = (
+    "full_name", "patient_name", "email", "mobile_phone", "home_phone",
+    "phone", "telecom", "address", "street", "street_address", "city",
+    "zip", "zip_code", "postal_code", "ssn", "mrn",
+)
+_EMBEDDED_TAG_RE = re.compile(
+    r"<(" + "|".join(_EMBEDDED_MASK_TAGS) + r")>([^<]+)</\1>", re.IGNORECASE)
+_EMBEDDED_DOB_RE = re.compile(
+    r"<(date_of_birth|dob|birth_date)>\s*(\d{4})[^<]*</\1>", re.IGNORECASE)
+
+
+def _scrub_embedded_tags(value: str, stats: RedactionStats) -> str:
+    if "<" not in value:
+        return value
+
+    def _mask(m: "re.Match[str]") -> str:
+        stats.embedded_tags_masked += 1
+        return f"<{m.group(1)}>[REDACTED]</{m.group(1)}>"
+
+    def _coarsen(m: "re.Match[str]") -> str:
+        stats.embedded_tags_masked += 1
+        return f"<{m.group(1)}>{m.group(2)}</{m.group(1)}>"
+
+    value = _EMBEDDED_TAG_RE.sub(_mask, value)
+    return _EMBEDDED_DOB_RE.sub(_coarsen, value)
 
 
 def _looks_like_fhir_field(key: str, value: Any, parent: dict) -> bool:

@@ -44,8 +44,11 @@ from healthclaw_redact import redact, redact_via_proxy, RedactionStats  # noqa: 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-TOKEN_CACHE = Path(os.environ.get(
-    "HBO_TOKEN_CACHE", str(Path.home() / ".healthclaw" / "hbo_tokens.json")))
+def _token_cache() -> Path:
+    """Resolved at call time (not import) so HBO_TOKEN_CACHE is honored by
+    tests and callers that set it after import."""
+    return Path(os.environ.get(
+        "HBO_TOKEN_CACHE", str(Path.home() / ".healthclaw" / "hbo_tokens.json")))
 
 # Tool-name fragments that suggest a write/destructive operation. In discovery
 # mode we skip these unless --include-writes is passed; a pull should never
@@ -58,9 +61,10 @@ def _resolve_token() -> str | None:
     token = os.environ.get("HBO_ACCESS_TOKEN", "").strip()
     if token:
         return token
-    if TOKEN_CACHE.exists():
+    cache = _token_cache()
+    if cache.exists():
         try:
-            cached = json.loads(TOKEN_CACHE.read_text())
+            cached = json.loads(cache.read_text())
         except json.JSONDecodeError:
             return None
         expires_at = cached.get("expires_at", 0)
@@ -116,9 +120,10 @@ def _try_refresh(cached: dict) -> str | None:
         "expires_at": datetime.now(timezone.utc).timestamp()
         + int(body.get("expires_in", 3600)) - 60,
     })
-    TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_CACHE.write_text(json.dumps(cached))
-    TOKEN_CACHE.chmod(0o600)
+    cache = _token_cache()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(cached))
+    cache.chmod(0o600)
     return body["access_token"]
 
 

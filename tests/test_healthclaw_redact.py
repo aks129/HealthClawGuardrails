@@ -360,3 +360,27 @@ def test_patient_controlled_strips_contact():
     assert "9 Private Ln" not in blob
     assert "Carlos" not in blob
     assert "contact" not in out
+
+
+def test_embedded_xml_tags_in_string_values_are_scrubbed():
+    # HBO's MCP tools return XML-ish strings, not JSON structures — the walker
+    # must scrub PHI-bearing tag contents inside string leaves, or the export
+    # writes raw name/contact info to disk (found live 2026-07-06).
+    payload = {"result": ("<patient_basic_info>\n  <full_name>JANE Q TESTPERSON</full_name>"
+                          "\n  <date_of_birth>1981-05-04</date_of_birth>"
+                          "\n  <email>jane@example.com</email>"
+                          "\n  <mobile_phone>(555) 123-4567</mobile_phone>"
+                          "\n  <address>1 Main St</address>\n  <city>Springfield</city>"
+                          "\n  <zip>12345</zip>\n  <gender>Female</gender>"
+                          "\n</patient_basic_info>")}
+    redacted, stats = redact(payload)
+    s = redacted["result"]
+    assert "TESTPERSON" not in s
+    assert "jane@example.com" not in s
+    assert "123-4567" not in s
+    assert "1 Main St" not in s
+    assert "12345" not in s
+    assert "1981-05-04" not in s
+    assert "<date_of_birth>1981</date_of_birth>" in s  # coarsened, not dropped
+    assert "Female" in s  # non-PHI demographics survive
+    assert stats.embedded_tags_masked >= 5
