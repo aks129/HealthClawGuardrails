@@ -26,7 +26,7 @@
 
 <!-- Stack & scope -->
 [![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2088%20Node-22c55e?style=flat-square)](#testing)
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-27-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-27)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-28-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-28)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
 [![Glama score](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails/badges/score.svg)](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails)
@@ -35,7 +35,7 @@
 
 <br/>
 
-**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-27)** · **[Recipes](docs/recipes/)** · **[Roadmap](docs/ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-28)** · **[Recipes](docs/recipes/)** · **[Roadmap](docs/ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
 
 </div>
 
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.6.0 · 840+ Python + 88 Node tests · 27 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.6.0 · 840+ Python + 90 Node tests · 28 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -157,7 +157,7 @@ claude plugin install smarthealthconnect@healthclaw-marketplace
 
 Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 
-**Not on Claude/MCP?** The same 27 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
+**Not on Claude/MCP?** The same 28 guardrailed tools run on OpenAI, Gemini, LangChain, or plain HTTP via the framework-neutral bridge in [`adapters/`](adapters/) — see [Recipe: run HealthClaw tools on any agent framework](docs/recipes/any-agent-framework.md). Guardrails stay server-side, so no framework can bypass them.
 
 ## Quick Start
 
@@ -190,7 +190,7 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (27)
+## MCP Tools (28)
 
 Tool names use underscores (not dots) for Claude Desktop / MCP client compatibility.
 
@@ -205,6 +205,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `fhir_stats` | Observation statistics (count/min/max/mean) |
 | `fhir_lastn` | Most recent N observations per code |
 | `fhir_interpret_labs` | Lab reference-range interpretation (`$interpret`) — decision support, not diagnosis |
+| `care_gaps` | Preventive-care gaps (`$care-gaps`) — screenings/immunizations that may be due, from the patient's own records |
 | `guardrail_conformance` | Run the guardrail conformance self-test — graded A–F scorecard across all six properties |
 | `fhir_permission_evaluate` | R6 Permission access control evaluation |
 | `fhir_subscription_topics` | List available SubscriptionTopics |

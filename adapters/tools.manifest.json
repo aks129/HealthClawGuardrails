@@ -1,6 +1,6 @@
 {
   "source": "healthclaw-mcp",
-  "tool_count": 27,
+  "tool_count": 28,
   "tools": [
     {
       "name": "context_get",
@@ -783,6 +783,26 @@
         "openWorldHint": false
       },
       "title": "Fetch Health Record"
+    },
+    {
+      "name": "care_gaps",
+      "description": "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Patient reference (e.g. 'Patient/pt-1')"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "title": "Preventive Care Gaps"
     },
     {
       "name": "guardrail_conformance",

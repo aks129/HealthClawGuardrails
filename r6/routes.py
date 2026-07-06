@@ -2935,6 +2935,14 @@ register_labs_routes(r6_blueprint, {
     "authenticate_tenant_read": authenticate_tenant_read,
 })
 
+# --- Preventive-care gaps ($care-gaps) ---
+from r6.caregaps.routes import register_caregaps_routes  # noqa: E402
+
+register_caregaps_routes(r6_blueprint, {
+    "operation_outcome": _operation_outcome,
+    "authenticate_tenant_read": authenticate_tenant_read,
+})
+
 # --- Guardrail conformance self-test ($conformance) ---
 from r6.conformance.routes import register_conformance_routes  # noqa: E402
 

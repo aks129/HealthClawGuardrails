@@ -432,6 +432,21 @@ export class FHIRTools {
         },
       },
       {
+        name: "care_gaps",
+        title: "Preventive Care Gaps",
+        description:
+          "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive.",
+        tier: "read",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+        inputSchema: {
+          type: "object",
+          properties: {
+            subject: { type: "string", description: "Patient reference (e.g. 'Patient/pt-1')" },
+          },
+          required: [],
+        },
+      },
+      {
         name: "guardrail_conformance",
         title: "Guardrail Conformance Scorecard",
         description:
@@ -915,6 +930,9 @@ export class FHIRTools {
           input.subject as string | undefined,
           fwdHeaders
         );
+
+      case "care_gaps":
+        return this.careGaps(input.subject as string | undefined, fwdHeaders);
 
       case "guardrail_conformance":
         return this.guardrailConformance(input.fresh === true, fwdHeaders);
@@ -1587,6 +1605,24 @@ export class FHIRTools {
     );
     if (!resp.ok) {
       return { error: `$interpret failed with status ${resp.status}` };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  private async careGaps(
+    subject: string | undefined,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams();
+    if (subject) params.set("subject", subject);
+    const query = params.toString();
+
+    const resp = await fetch(
+      `${this.baseUrl}/Patient/$care-gaps${query ? `?${query}` : ""}`,
+      { method: "POST", headers, body: JSON.stringify({}) }
+    );
+    if (!resp.ok) {
+      return { error: `$care-gaps failed with status ${resp.status}` };
     }
     return (await resp.json()) as Record<string, unknown>;
   }

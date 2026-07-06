@@ -44,6 +44,7 @@ const EXPECTED_TOOL_NAMES = [
   "action_commit",
   "action_propose",
   "action_status",
+  "care_gaps",
   "context_get",
   "curatr_apply_fix",
   "curatr_evaluate",
@@ -74,6 +75,7 @@ const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
 
 const READ_ONLY_TOOL_NAMES = [
   "action_status",
+  "care_gaps",
   "context_get",
   "fetch",
   "fhir_read",
@@ -104,8 +106,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 27 tools", () => {
-    expect(schemas).toHaveLength(27);
+  it("getMCPToolSchemas() returns exactly 28 tools", () => {
+    expect(schemas).toHaveLength(28);
   });
 
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
@@ -141,7 +143,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 27 tool names match the expected set", () => {
+  it("all 28 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -644,6 +646,37 @@ describe("Tool Execution Tests", () => {
 
     const [url] = mockFetch.mock.calls[0];
     expect(url).toContain("subject=Patient%2Fpt-1");
+  });
+
+  // -- care_gaps --
+
+  it("care_gaps posts to /Patient/$care-gaps and returns Parameters", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    const result = await tools.executeTool(
+      "care_gaps",
+      { subject: "Patient/pt-1" },
+      { "x-tenant-id": "t1" }
+    );
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain(`${BASE}/Patient/$care-gaps`);
+    expect(url).toContain("subject=Patient%2Fpt-1");
+    expect(opts.method).toBe("POST");
+    expect((result as Record<string, unknown>).resourceType).toBe("Parameters");
+  });
+
+  it("care_gaps omits the query string when no subject is given", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    await tools.executeTool("care_gaps", {}, { "x-tenant-id": "t1" });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/Patient/$care-gaps`);
   });
 
   // -- fhir.permission_evaluate --
@@ -1316,7 +1349,7 @@ describe("Express App Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(27);
+      expect(res.body.result.tools).toHaveLength(28);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -1497,7 +1530,7 @@ describe("Express App Tests", () => {
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(27);
+      expect(res.body.result.tools).toHaveLength(28);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
