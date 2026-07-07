@@ -97,6 +97,13 @@ _CONTENT_SECURITY_POLICY = (
     "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
     "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
     "connect-src 'self'; "
+    # frame-src: the /connect/<tenant> page embeds the Fasten Stitch widget
+    # (embed.connect.fastenhealth.com); TEFCA identity verification may
+    # navigate that frame to CLEAR or ID.me. Without this, default-src 'self'
+    # blocks the iframe outright. Controls what WE embed — frame-ancestors
+    # 'none' still forbids anyone embedding US.
+    "frame-src 'self' https://*.fastenhealth.com https://*.id.me "
+    "https://*.clearme.com; "
     "frame-ancestors 'none'"
 )
 

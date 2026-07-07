@@ -155,3 +155,19 @@ def test_rate_limit_key_forwarded_for_ignores_spoofed_left_hop(app):
         headers={'X-Forwarded-For': 'spoofed-by-client, 203.0.113.9'},
     ):
         assert rate_limit_key() == 'ip:203.0.113.9'
+
+
+def test_csp_allows_fasten_widget_iframe(client):
+    # The /connect/<tenant> page embeds the Fasten Stitch widget. Without an
+    # explicit frame-src, default-src 'self' blocks the iframe and the page
+    # shows "content blocked" (found live 2026-07-08). Identity verification
+    # may navigate the frame to CLEAR/ID.me, so those hosts are allowed too.
+    resp = client.get('/connect/csp-check-tenant')
+    csp = resp.headers.get('Content-Security-Policy', '')
+    assert 'frame-src' in csp
+    assert 'https://*.fastenhealth.com' in csp
+    assert 'https://*.id.me' in csp
+    assert 'https://*.clearme.com' in csp
+    # embedding US stays forbidden — frame-src (what we embed) must not
+    # loosen frame-ancestors (who embeds us)
+    assert "frame-ancestors 'none'" in csp
