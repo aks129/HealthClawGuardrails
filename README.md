@@ -66,6 +66,9 @@ them in plain language."* One-command installs:
 `claude plugin marketplace add aks129/HealthClawGuardrails` ·
 skills on [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails)
 
+**Non-developer?** Step-by-step guides for Claude (web/desktop/phone), Perplexity,
+ChatGPT, and Telegram — plus a 10-minute demo script — in [docs/quickstarts/](docs/quickstarts/README.md).
+
 **Listed in:** [Official MCP Registry](https://registry.modelcontextprotocol.io) (`io.github.aks129/healthclaw-guardrails`) ·
 [Glama](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails) ([hosted connector](https://glama.ai/mcp/connectors/io.github.aks129/healthclaw-guardrails)) ·
 [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails) (14 skills) ·
