@@ -54,11 +54,16 @@ If you use Claude Desktop and prefer a config file, add to
 
 Restart Claude Desktop; the tools appear under the tools icon.
 
-## Pointing at your own tenant (real data — optional)
+## Pointing at your own records (optional)
 
-Claude Desktop users can pass a tenant and token per-conversation by asking
-Claude to include `_tenantId` and `_stepUpToken` in tool calls (see the main
-README's MCP section). Do not do this while screen-recording.
+Connect your providers at `https://app.healthclaw.io/connect/<your-tenant-id>`
+(identity-verified via CLEAR/ID.me). When the connection completes, the page
+shows a one-time **"Connect your AI assistant"** card — click "Copy setup
+message" and paste it into your Claude chat (works on web, desktop, and
+mobile). From then on Claude passes your tenant and read-only token on every
+HealthClaw call. The token cannot write and expires in 30 days.
+See [Connecting your own health data](README.md#connecting-your-own-health-data-fasten-connect).
+Do not do this while screen-recording.
 
 ## Troubleshooting
 
