@@ -335,12 +335,29 @@
     if (originHost !== 'fastenhealth.com' &&
         !originHost.endsWith('.fastenhealth.com')) return;
 
+    // Debug: surface every widget message shape in the console so a renamed
+    // completion event is diagnosable from the browser, not the server.
+    try { console.log('[fasten-widget]', type || '(untyped)', JSON.stringify(data).slice(0, 500)); } catch (e) {}
+
+    // Robust completion detection: Fasten event names have drifted across
+    // widget versions, so ALSO treat any fasten-origin message that carries
+    // an org_connection_id (at any common nesting) as completion.
+    var oid = data.org_connection_id ||
+              (data.data && data.data.org_connection_id) ||
+              (data.payload && data.payload.org_connection_id) ||
+              (data.detail && data.detail.org_connection_id) || null;
+    var payload = oid && data.org_connection_id ? data
+                : (data.data && data.data.org_connection_id) ? data.data
+                : (data.payload && data.payload.org_connection_id) ? data.payload
+                : (data.detail && data.detail.org_connection_id) ? data.detail
+                : data;
+
     // Fasten Stitch widget completion (standard + TEFCA mode variants)
     if (type === 'widget.complete' || type === 'complete' ||
         type === 'tefca.complete' || type === 'connection.complete' ||
-        type === 'authorization.complete') {
+        type === 'authorization.complete' || oid) {
       backdrop.classList.remove('open');
-      await _registerConnection(data);
+      await _registerConnection(payload);
     } else if (type === 'widget.error' || type === 'error') {
       backdrop.classList.remove('open');
       showStatus('Widget error: ' + (data.message || 'unknown'), 'error');
