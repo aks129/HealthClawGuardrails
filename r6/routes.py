@@ -259,8 +259,10 @@ def authenticate_tenant_read(tenant_id):
     valid = False
     if step_up:
         # validate_step_up_token returns (bool, str) — destructure both;
-        # never coerce the tuple to a boolean.
-        valid, _err = validate_step_up_token(step_up, tenant_id)
+        # never coerce the tuple to a boolean. require_scope=None: reads
+        # accept both full tokens and read-scoped patient connect tokens.
+        valid, _err = validate_step_up_token(step_up, tenant_id,
+                                             require_scope=None)
     if not valid and bearer:
         valid = _validate_oauth_read(bearer, tenant_id)
 

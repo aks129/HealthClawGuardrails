@@ -278,9 +278,49 @@
           : 'Connection registration failed (HTTP ' + resp.status + ').',
         resp.ok ? 'success' : 'error'
       );
+      if (resp.ok) {
+        var body = null;
+        try { body = await resp.json(); } catch (e) {}
+        if (body && body.agent_access) _showAgentAccess(body.agent_access);
+      }
     } catch (err) {
       showStatus('Network error: ' + err.message, 'error');
     }
+  }
+
+  function _showAgentAccess(access) {
+    // One-time handoff of the read-scoped connect token. Shown once, never
+    // stored client-side beyond this page render, never sent anywhere else.
+    var el = document.createElement('div');
+    el.className = 'stitch-card';
+    el.style.marginTop = '18px';
+    el.innerHTML =
+      '<h3 style="margin:0 0 10px">Connect your AI assistant</h3>' +
+      '<p style="margin:0 0 10px">Copy these two values into your assistant ' +
+      '(Claude, Perplexity, or any MCP agent) so it can read <strong>your</strong> ' +
+      'records. The token is read-only — it can never change anything — ' +
+      'and expires in 30 days. Treat it like a password and save it now: ' +
+      'it is shown only once.</p>' +
+      '<p style="margin:0 0 6px"><strong>Tenant:</strong> <code></code></p>' +
+      '<p style="margin:0 0 10px"><strong>Read token:</strong> ' +
+      '<code style="word-break:break-all"></code></p>' +
+      '<p style="margin:0 0 10px">Then tell your assistant:</p>' +
+      '<pre style="white-space:pre-wrap;background:#f6f8fa;border-radius:8px;padding:10px;font-size:13px"></pre>' +
+      '<button type="button" style="padding:8px 14px;border-radius:8px;cursor:pointer">Copy setup message</button>';
+    var codes = el.querySelectorAll('code');
+    codes[0].textContent = access.tenant_id;
+    codes[1].textContent = access.read_token;
+    var setupMsg = 'For every HealthClaw tool call in our conversations, ' +
+      'include _tenantId: "' + access.tenant_id + '" and _stepUpToken: "' +
+      access.read_token + '". This is my personal read-only health record ' +
+      'access; never include these values in anything you write publicly.';
+    el.querySelector('pre').textContent = setupMsg;
+    el.querySelector('button').addEventListener('click', function () {
+      navigator.clipboard.writeText(setupMsg).then(function () {
+        showStatus('Setup message copied — paste it into your assistant.', 'success');
+      });
+    });
+    statusEl.parentNode.insertBefore(el, statusEl.nextSibling);
   }
 
   window.addEventListener('message', async function (event) {

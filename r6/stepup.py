@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Default TTL for step-up tokens (5 minutes)
 DEFAULT_TOKEN_TTL_SECONDS = 300
 
+# TTL for patient connect tokens (read-scoped, issued once at the moment of an
+# identity-verified data connection — see r6/fasten/routes.py). Renewal =
+# reconnect. Read-scoped tokens can never authorize writes (H4 stays intact).
+READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
+
 # ---------------------------------------------------------------------------
 # Replay guard (opt-in).
 #
@@ -78,7 +83,8 @@ def _get_secret():
 
 
 def generate_step_up_token(tenant_id, agent_id=None,
-                           ttl_seconds=DEFAULT_TOKEN_TTL_SECONDS):
+                           ttl_seconds=DEFAULT_TOKEN_TTL_SECONDS,
+                           scope=None):
     """
     Generate a signed step-up authorization token.
 
@@ -86,6 +92,9 @@ def generate_step_up_token(tenant_id, agent_id=None,
         tenant_id: Tenant the token is scoped to
         agent_id: Optional agent identifier
         ttl_seconds: Token lifetime in seconds
+        scope: Optional capability scope. 'read' produces a token the read
+            gate accepts but every write path rejects. None (default) omits
+            the claim — the historical full-capability token shape.
 
     Returns:
         Signed token string: {base64_payload}.{hmac_signature}
@@ -103,6 +112,8 @@ def generate_step_up_token(tenant_id, agent_id=None,
         'sub': agent_id or 'system',
         'nonce': secrets.token_hex(16)
     }
+    if scope:
+        payload['scope'] = scope
     payload_b64 = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(',', ':')).encode()
     ).decode()
@@ -112,7 +123,8 @@ def generate_step_up_token(tenant_id, agent_id=None,
     return f'{payload_b64}.{sig}'
 
 
-def validate_step_up_token(token, tenant_id, consume_nonce=False):
+def validate_step_up_token(token, tenant_id, consume_nonce=False,
+                           require_scope='write'):
     """
     Validate a step-up authorization token.
 
@@ -120,6 +132,7 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False):
     - HMAC signature matches
     - Token is not expired
     - Tenant ID matches
+    - Scope satisfies `require_scope`
     - (when consume_nonce=True) the token's nonce has not been used before
 
     Args:
@@ -130,6 +143,11 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False):
             validation of the same token is rejected as a replay. Defaults to
             False, preserving the historical multi-use behavior (no replay
             tracking) so existing callers are unaffected.
+        require_scope: Capability the caller is authorizing. The default
+            'write' REJECTS read-scoped tokens, so every existing write call
+            site stays strict without modification (fail-safe). Read paths
+            pass require_scope=None to accept any valid tenant-bound token.
+            Legacy tokens without a scope claim satisfy 'write' (back-compat).
 
     Returns:
         tuple: (is_valid: bool, error_message: str or None)
@@ -168,6 +186,10 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False):
     # Check tenant binding
     if payload.get('tid') != tenant_id:
         return False, 'Token tenant mismatch'
+
+    # Scope gate: a read-scoped token can never authorize a write path.
+    if require_scope == 'write' and payload.get('scope') == 'read':
+        return False, 'Read-scoped token cannot authorize this operation'
 
     # Optional replay guard — only when the caller opts in.
     if consume_nonce:

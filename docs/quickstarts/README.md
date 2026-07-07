@@ -72,20 +72,28 @@ stack. Everything runs against the synthetic demo tenant.
 9. **Share a record safely** (SMART Health Links)
    > Generate a secure share link for this patient's record.
 
-## Connecting real health data
+## Connecting your own health data (Fasten Connect)
 
-The demo tenant is synthetic. To work with real records, connect a data
-source — each flows through the same guardrail stack:
+The demo tenant is synthetic. To put YOUR records behind the guardrails:
 
-- **Fasten Connect** (thousands of US providers + TEFCA networks):
-  visit `https://app.healthclaw.io/fasten`, connect your provider through the
-  widget, and records ingest into your own isolated tenant.
-- **Health Bank One / HealthEx / MEDENT**: OAuth-based pulls with in-process
-  PHI redaction — see `scripts/` in the repo.
-- **Apple Health / Fitbit wearables**: `r6/wearables/` sync.
+1. Open `https://app.healthclaw.io/connect/<your-tenant-id>` — pick a long,
+   unguessable tenant id (e.g. `jane-k8f3q9w2`); it names your private,
+   isolated data space.
+2. Click connect. The Fasten Stitch widget walks you through **identity
+   verification (CLEAR or ID.me)** and connecting your providers — TEFCA
+   network access means one verification covers participating systems.
+3. When the connection completes, the page shows a one-time
+   **"Connect your AI assistant"** card: your tenant id + a **read-only
+   token** (30-day expiry). Click "Copy setup message" and paste it into
+   your assistant. That's it — your agent now reads your records, and only
+   reads: the token is cryptographically scoped so it can never write.
+4. Records stream in over the next 5–45 minutes.
 
-Real tenants are non-public: reads require a tenant-bound token
-(`POST /r6/fhir/internal/step-up-token` — see the README security section).
+Treat the token like a password. Lost it or expired? Reconnect for a new one.
+
+Other sources, same guardrails: **Health Bank One / HealthEx / MEDENT**
+(OAuth pulls with in-process PHI redaction — see `scripts/`), and
+**Apple Health / Fitbit** wearables sync.
 
 **If you are recording videos: stay on the synthetic demo tenant.** Never
 film real PHI, including your own.

@@ -25,6 +25,7 @@ from r6.audit import record_audit_event
 from r6.fasten.models import FastenConnection, FastenJob
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
+from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -295,10 +296,70 @@ def register_connection():
         detail=f'platform={conn.platform_type}',
     )
 
-    return jsonify({
+    body = {
         'status': 'registered',
         'org_connection_id': org_connection_id,
-    }), 201
+    }
+    access = _maybe_issue_agent_access(tenant_id)
+    if access:
+        body['agent_access'] = access
+    return jsonify(body), 201
+
+
+def _maybe_issue_agent_access(tenant_id):
+    """Issue a READ-scoped patient connect token — only at first connection.
+
+    The moment a patient completes the identity-verified Stitch flow is the
+    one point we can hand their agent a read credential without a portal
+    account. Guarded so it can never become a read-auth bypass:
+
+    - READ scope only: every write path rejects it (H4 intact).
+    - Fresh tenants only: a tenant that already holds resources or a prior
+      connection gets nothing (pre-claim protection — you cannot register a
+      junk connection against someone else's populated tenant and walk away
+      with their data).
+    - Never for public tenants (their reads are already open).
+    - The token itself is returned to the caller once and never logged.
+    """
+    from r6.command_center.access import is_public
+    from r6.models import R6Resource
+
+    if is_public(tenant_id):
+        return None
+    prior_connections = FastenConnection.query.filter_by(
+        tenant_id=tenant_id).count()
+    if prior_connections > 1:  # the one just registered
+        return None
+    if R6Resource.query.filter_by(tenant_id=tenant_id).first() is not None:
+        return None
+    try:
+        token = generate_step_up_token(
+            tenant_id, agent_id='patient-connect',
+            ttl_seconds=READ_TOKEN_TTL_SECONDS, scope='read')
+    except ValueError:
+        return None  # STEP_UP_SECRET unset — nothing to issue
+    expires_at = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
+    record_audit_event(
+        event_type='agent_read_token_issued',
+        agent_id='fasten-connect',
+        tenant_id=tenant_id,
+        outcome='success',
+        detail='read-scoped patient connect token (30d) issued at registration',
+    )
+    return {
+        'tenant_id': tenant_id,
+        'read_token': token,
+        'expires_at': datetime.fromtimestamp(
+            expires_at, tz=timezone.utc).isoformat(timespec='seconds'),
+        'scope': 'read',
+        'instructions': (
+            'Give these two values to your AI assistant: for every HealthClaw '
+            'tool call include _tenantId and _stepUpToken (or send them as the '
+            'X-Tenant-Id / X-Step-Up-Token headers). Treat the token like a '
+            'password. It can read this record only — it can never change '
+            'anything — and it expires in 30 days; reconnect to renew.'
+        ),
+    }
 
 
 @fasten_blueprint.route('/connections/<org_connection_id>', methods=['GET'])
