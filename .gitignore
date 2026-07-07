@@ -38,5 +38,5 @@ gha-creds-*.json
 
 # --- Local-only: personal strategy docs + AI-session artifacts (kept on disk, not published) ---
 private/
-CLAUDE.md
+/CLAUDE.md
 .claude/
