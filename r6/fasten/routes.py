@@ -57,19 +57,26 @@ def webhook():
     # Log only the event type — never the full payload (may contain PHI)
     logger.info('Fasten webhook received: type=%s', event_type)
 
+    # Fasten's live envelope nests the event fields under `data`:
+    # {api_mode, type, date, id, data: {org_connection_id, external_id, ...}}
+    # (verified from a live delivery 2026-07-07). Handlers receive the inner
+    # object; a flat payload (fields at top level) passes through unchanged.
+    event = payload.get('data') if isinstance(payload.get('data'), dict) \
+        else payload
+
     if event_type == 'patient.ehi_export_success':
-        _handle_export_success(payload)
+        _handle_export_success(event)
 
     elif event_type == 'patient.ehi_export_failed':
-        _handle_export_failed(payload)
+        _handle_export_failed(event)
 
     elif event_type == 'patient.authorization_revoked':
-        _handle_revoked(payload)
+        _handle_revoked(event)
 
     elif event_type == 'patient.connection_success':
         # Optional event (disabled by default in Fasten).
         # If enabled, can auto-register connections server-side.
-        _handle_connection_success(payload)
+        _handle_connection_success(event)
 
     # webhook.test, patient.request_health_system, patient.request_support: accept silently
     return jsonify({'received': True}), 200
