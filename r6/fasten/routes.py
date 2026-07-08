@@ -112,17 +112,30 @@ def _handle_export_success(payload: dict) -> None:
         )
         return
 
-    # Idempotency: if we already processed this task, skip
-    if FastenJob.query.filter_by(task_id=task_id).first():
-        logger.info('Fasten: job %s already exists — skipping (idempotent)', task_id)
-        return
-
-    job = FastenJob(
-        task_id=task_id,
-        org_connection_id=org_connection_id,
-        tenant_id=conn.tenant_id,
-    )
-    db.session.add(job)
+    # Idempotency with recovery: skip only a COMPLETED job. A job stranded in
+    # a non-terminal state (a redeploy/crash killed the daemon thread) or a
+    # failed one is reset and re-run — otherwise the records are stuck forever.
+    existing = FastenJob.query.filter_by(task_id=task_id).first()
+    if existing:
+        if existing.status == 'complete':
+            logger.info('Fasten: job %s complete — skipping (idempotent)', task_id)
+            return
+        logger.info('Fasten: job %s in state %s — reprocessing',
+                    task_id, existing.status)
+        job = existing
+        job.ingested_resources = 0
+        job.skipped_resources = 0
+        job.failed_resources = 0
+        job.failure_reason = None
+    else:
+        job = FastenJob(
+            task_id=task_id,
+            org_connection_id=org_connection_id,
+            tenant_id=conn.tenant_id,
+        )
+        db.session.add(job)
+    job.status = 'pending'
+    job.download_links_json = json.dumps(download_links)
     conn.last_export_at = datetime.now(timezone.utc)
     db.session.commit()
 
@@ -134,15 +147,49 @@ def _handle_export_success(payload: dict) -> None:
         detail=f'job={task_id} links={len(download_links)}',
     )
 
-    # Launch background download thread — webhook must return 200 quickly
+    _launch_ingest(job.id, download_links, conn.tenant_id, task_id)
+
+
+def _launch_ingest(job_id, download_links, tenant_id, task_id):
+    """Start the background ingest thread (webhook must return 200 quickly)."""
     app = current_app._get_current_object()
     t = threading.Thread(
         target=stream_ingest,
-        args=(app, job.id, download_links, conn.tenant_id),
+        args=(app, job_id, download_links, tenant_id),
         daemon=True,
         name=f'fasten-ingest-{task_id[:8]}',
     )
     t.start()
+
+
+@fasten_blueprint.route('/jobs/<task_id>/retry', methods=['POST'])
+def retry_job(task_id):
+    """Re-run a stranded ingest job from its persisted download links.
+
+    Recovery hatch for jobs stuck by a redeploy/crash mid-ingest, or failed
+    ones. Tenant-scoped; refuses completed jobs (409) and jobs without stored
+    links (409, cannot recover without the signed URLs).
+    """
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    if not tenant_id:
+        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    job = FastenJob.query.filter_by(task_id=task_id, tenant_id=tenant_id).first()
+    if not job:
+        return jsonify({'error': 'not found'}), 404
+    if job.status == 'complete':
+        return jsonify({'error': 'job already complete'}), 409
+    if not job.download_links_json:
+        return jsonify({'error': 'no stored download links — re-trigger the '
+                                 'export instead'}), 409
+    links = json.loads(job.download_links_json)
+    job.status = 'pending'
+    job.ingested_resources = 0
+    job.skipped_resources = 0
+    job.failed_resources = 0
+    job.failure_reason = None
+    db.session.commit()
+    _launch_ingest(job.id, links, tenant_id, task_id)
+    return jsonify({'status': 'retrying', 'task_id': task_id}), 202
 
 
 def _handle_export_failed(payload: dict) -> None:

@@ -58,5 +58,8 @@ class FastenJob(db.Model):
     failed_resources = db.Column(db.Integer, default=0)
     # Failure details (category only — never log raw Fasten failure_reason as it may contain PII)
     failure_reason = db.Column(db.String(256), nullable=True)
+    # Signed download URLs (JSON array) — persisted so a job stranded by a
+    # redeploy/crash mid-ingest can be re-run without the original webhook.
+    download_links_json = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = db.Column(db.DateTime, nullable=True)
