@@ -22,6 +22,7 @@ from flask import Blueprint, jsonify, request
 from models import db
 from r6.actions.executors import execute_action
 from r6.actions.models import ProposedAction, VALID_KINDS
+from r6.actions.rx_transfer import build_transfer_request
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.stepup import validate_step_up_token
@@ -46,6 +47,74 @@ def _tenant_or_none():
     if not tenant_id or not _TENANT_PATTERN.match(tenant_id):
         return None
     return tenant_id
+
+
+@actions_blueprint.route('/rx-transfer/propose', methods=['POST'])
+def propose_rx_transfer():
+    """Build a prescription-transfer request call from the tenant's active
+    MedicationRequests and stage it as a proposed phone-call action.
+
+    Body: {to_pharmacy: {name, phone}, from_pharmacy?: {name, phone},
+           medication_names?: [str]}  (names filter; default = all active)
+
+    Commit is the EXISTING /actions/<id>/commit — step-up + X-Human-Confirmed
+    stay mandatory; this endpoint only drafts. Schedule II medications are
+    refused with an explanation (never transferable; see rx_transfer.py).
+    """
+    tenant_id = _tenant_or_none()
+    if not tenant_id:
+        return _error(400, 'X-Tenant-Id header is required')
+
+    body = request.get_json(silent=True) or {}
+    to_pharmacy = body.get('to_pharmacy') or {}
+    if not (isinstance(to_pharmacy, dict) and to_pharmacy.get('name')
+            and to_pharmacy.get('phone')):
+        return _error(400, 'to_pharmacy {name, phone} is required')
+    from_pharmacy = body.get('from_pharmacy') \
+        if isinstance(body.get('from_pharmacy'), dict) else None
+    name_filter = body.get('medication_names')
+
+    from r6.models import R6Resource
+    rows = R6Resource.query.filter_by(
+        resource_type='MedicationRequest', tenant_id=tenant_id).all()
+    meds = [r.to_fhir_json() for r in rows]
+    if isinstance(name_filter, list) and name_filter:
+        wanted = {n.lower() for n in name_filter if isinstance(n, str)}
+        meds = [m for m in meds
+                if (m.get('medicationCodeableConcept') or {}).get('text', '')
+                .lower() in wanted]
+
+    result = build_transfer_request(meds, to_pharmacy,
+                                    from_pharmacy=from_pharmacy)
+    if result['action_payload'] is None:
+        return jsonify({
+            'error': 'no transferable medications',
+            'refused': result['refused'],
+            'detail': ('Nothing to transfer: no active medication orders '
+                       'matched, or all matches are Schedule II (which can '
+                       'never be transferred — a new prescription is '
+                       'required).'),
+        }), 422
+
+    action = ProposedAction(tenant_id=tenant_id, kind='phone-call',
+                            payload=result['action_payload'])
+    db.session.add(action)
+    db.session.commit()
+
+    record_audit_event(
+        'create', resource_type='ProposedAction', resource_id=action.id,
+        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+        detail=json.dumps(action.summary()),
+    )
+
+    return jsonify({
+        'action': action.summary(),
+        'allowed': result['allowed'],
+        'refused': result['refused'],
+        'next_step': ('Review the draft with the patient, then commit via '
+                      'POST /r6/actions/%s/commit with X-Step-Up-Token and '
+                      'X-Human-Confirmed: true.' % action.id),
+    }), 201
 
 
 @actions_blueprint.route('/propose', methods=['POST'])

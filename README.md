@@ -26,7 +26,7 @@
 
 <!-- Stack & scope -->
 [![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2088%20Node-22c55e?style=flat-square)](#testing)
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-28-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-28)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
 [![Glama score](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails/badges/score.svg)](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails)
@@ -35,7 +35,7 @@
 
 <br/>
 
-**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-28)** · **[Recipes](docs/recipes/)** · **[Roadmap](docs/ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-29)** · **[Recipes](docs/recipes/)** · **[Roadmap](docs/ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
 
 </div>
 
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.6.0 · 840+ Python + 90 Node tests · 28 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.6.0 · 840+ Python + 90 Node tests · 29 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -193,7 +193,7 @@ docker-compose up -d --build
 # - redis (port 6379)
 ```
 
-## MCP Tools (28)
+## MCP Tools (29)
 
 Tool names use underscores (not dots) for Claude Desktop / MCP client compatibility.
 
@@ -227,6 +227,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `questionnaire_extract` | SDC `$extract` — extract resources from a completed QuestionnaireResponse |
 | `curatr_apply_fix` | Apply patient-approved fixes with Provenance tracking |
 | `action_propose` / `action_commit` | Propose / commit a real-world phone call or SMS |
+| `rx_transfer_request` | Draft a pharmacy-transfer request call from active meds (Schedule II refused); commit via `action_commit` |
 | `shl_generate` | Generate an encrypted SMART Health Link (QR) |
 
 **Utility tools:**

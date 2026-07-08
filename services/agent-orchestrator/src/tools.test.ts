@@ -65,6 +65,7 @@ const EXPECTED_TOOL_NAMES = [
   "guardrail_conformance",
   "questionnaire_extract",
   "questionnaire_populate",
+  "rx_transfer_request",
   "search",
   "shl_generate",
   "sources_check",
@@ -106,8 +107,8 @@ describe("Tool Schema Tests", () => {
     schemas = tools.getMCPToolSchemas();
   });
 
-  it("getMCPToolSchemas() returns exactly 28 tools", () => {
-    expect(schemas).toHaveLength(28);
+  it("getMCPToolSchemas() returns exactly 29 tools", () => {
+    expect(schemas).toHaveLength(29);
   });
 
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
@@ -143,7 +144,7 @@ describe("Tool Schema Tests", () => {
     }
   });
 
-  it("all 28 tool names match the expected set", () => {
+  it("all 29 tool names match the expected set", () => {
     const actualNames = schemas.map((t) => t.name).sort();
     expect(actualNames).toEqual(EXPECTED_TOOL_NAMES);
   });
@@ -584,6 +585,43 @@ describe("Tool Execution Tests", () => {
     expect(result).toHaveProperty("_mcp_summary");
     const summary = (result as Record<string, unknown>)._mcp_summary as Record<string, unknown>;
     expect(summary.max_requested).toBe(3);
+  });
+
+  // -- rx_transfer_request --
+
+  it("rx_transfer_request posts pharmacy + med filter to the rx-transfer propose endpoint", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ action: { id: "a1", kind: "phone-call", status: "proposed" },
+        allowed: [{ name: "Metformin 500 mg" }], refused: [] })
+    );
+
+    const result = await tools.executeTool("rx_transfer_request", {
+      to_pharmacy_name: "Walgreens Main St",
+      to_pharmacy_phone: "+15551230000",
+      from_pharmacy_name: "CVS Oak Ave",
+      medication_names: ["Metformin 500 mg"],
+    }, { "x-tenant-id": "t1" });
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/r6/actions/rx-transfer/propose");
+    const sent = JSON.parse((opts as { body: string }).body);
+    expect(sent.to_pharmacy.name).toBe("Walgreens Main St");
+    expect(sent.to_pharmacy.phone).toBe("+15551230000");
+    expect(sent.medication_names).toEqual(["Metformin 500 mg"]);
+    expect((result as Record<string, unknown>).action).toBeDefined();
+  });
+
+  it("rx_transfer_request surfaces the 422 no-transferable-meds refusal", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ error: "no transferable medications",
+        refused: [{ name: "Oxycodone 5 mg", reason: "Schedule II" }] }, 422)
+    );
+
+    const result = await tools.executeTool("rx_transfer_request", {
+      to_pharmacy_name: "Walgreens", to_pharmacy_phone: "+15551230000",
+    }, {}) as Record<string, unknown>;
+
+    expect(String(result.error)).toContain("422");
   });
 
   // -- fhir_interpret_labs --
@@ -1349,7 +1387,7 @@ describe("Express App Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(28);
+      expect(res.body.result.tools).toHaveLength(29);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
@@ -1530,7 +1568,7 @@ describe("Express App Tests", () => {
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(28);
+      expect(res.body.result.tools).toHaveLength(29);
     });
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {

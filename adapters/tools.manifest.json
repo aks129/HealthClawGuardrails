@@ -1,6 +1,6 @@
 {
   "source": "healthclaw-mcp",
-  "tool_count": 28,
+  "tool_count": 29,
   "tools": [
     {
       "name": "context_get",
@@ -633,6 +633,11 @@
       "title": "Propose Real-World Action"
     },
     {
+      "name": "rx_transfer_request",
+      "tier": "write",
+      "description": "Draft a prescription-transfer request call to the receiving pharmacy from the patient's active medications (Schedule II refused); commit via action_commit after patient approval."
+    },
+    {
       "name": "action_commit",
       "description": "Execute a previously proposed action AFTER the patient has explicitly approved the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). Only call this after the patient says yes.",
       "inputSchema": {
@@ -786,7 +791,7 @@
     },
     {
       "name": "care_gaps",
-      "description": "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive.",
+      "description": "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines \u2014 not a diagnosis or directive.",
       "inputSchema": {
         "type": "object",
         "properties": {

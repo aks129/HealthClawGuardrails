@@ -712,6 +712,29 @@ export class FHIRTools {
         },
       },
       {
+        name: "rx_transfer_request",
+        title: "Request Prescription Transfer",
+        description:
+          "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; execute with action_commit after explicit approval.",
+        tier: "write",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        inputSchema: {
+          type: "object",
+          properties: {
+            to_pharmacy_name: { type: "string", description: "Receiving pharmacy name" },
+            to_pharmacy_phone: { type: "string", description: "Receiving pharmacy phone number" },
+            from_pharmacy_name: { type: "string", description: "Current pharmacy name (optional)" },
+            from_pharmacy_phone: { type: "string", description: "Current pharmacy phone (optional)" },
+            medication_names: {
+              type: "array",
+              items: { type: "string" },
+              description: "Limit to these medication names (default: all active orders)",
+            },
+          },
+          required: ["to_pharmacy_name", "to_pharmacy_phone"],
+        },
+      },
+      {
         name: "action_commit",
         title: "Commit Real-World Action",
         description:
@@ -1030,6 +1053,8 @@ export class FHIRTools {
         };
       }
 
+      case "rx_transfer_request":
+        return this.proposeRxTransfer(input, fwdHeaders);
       case "action_propose":
         return this.proposeAction(
           input.kind as string,
@@ -1761,6 +1786,37 @@ export class FHIRTools {
         try { detail = await resp.text(); } catch { detail = null; }
       }
       return { error: `action_propose failed with status ${resp.status}`, detail };
+    }
+    return (await resp.json()) as Record<string, unknown>;
+  }
+
+  private async proposeRxTransfer(
+    input: Record<string, unknown>,
+    headers: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const root = this.serverRoot();
+    const body: Record<string, unknown> = {
+      to_pharmacy: { name: input.to_pharmacy_name, phone: input.to_pharmacy_phone },
+    };
+    if (input.from_pharmacy_name || input.from_pharmacy_phone) {
+      body.from_pharmacy = { name: input.from_pharmacy_name, phone: input.from_pharmacy_phone };
+    }
+    if (Array.isArray(input.medication_names) && input.medication_names.length) {
+      body.medication_names = input.medication_names;
+    }
+    const resp = await fetch(`${root}/r6/actions/rx-transfer/propose`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await resp.json();
+      } catch {
+        try { detail = await resp.text(); } catch { detail = null; }
+      }
+      return { error: `rx_transfer_request failed with status ${resp.status}`, detail };
     }
     return (await resp.json()) as Record<string, unknown>;
   }
