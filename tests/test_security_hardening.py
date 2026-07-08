@@ -171,3 +171,25 @@ def test_csp_allows_fasten_widget_iframe(client):
     # embedding US stays forbidden — frame-src (what we embed) must not
     # loosen frame-ancestors (who embeds us)
     assert "frame-ancestors 'none'" in csp
+
+
+def test_vercel_serverless_copy_refuses_stateful_writes(client, monkeypatch):
+    # api/index.py (ephemeral serverless SQLite) must refuse mutating
+    # requests to stateful paths — a write accepted there is silently lost.
+    # The hook can't be re-registered mid-suite, so exercise the guard
+    # function directly in a request context.
+    from api.index import _refuse_serverless_writes
+    from main import app as flask_app
+
+    monkeypatch.setenv('VERCEL', '1')
+    with flask_app.test_request_context('/r6/fhir/Patient', method='POST'):
+        resp = _refuse_serverless_writes()
+        assert resp is not None
+        body, status = resp
+        assert status == 405
+        assert 'app.healthclaw.io' in body.get_data(as_text=True)
+    with flask_app.test_request_context('/r6/fhir/metadata', method='GET'):
+        assert _refuse_serverless_writes() is None
+    monkeypatch.delenv('VERCEL')
+    with flask_app.test_request_context('/r6/fhir/Patient', method='POST'):
+        assert _refuse_serverless_writes() is None  # non-Vercel: no-op

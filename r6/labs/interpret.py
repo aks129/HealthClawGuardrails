@@ -110,11 +110,13 @@ def _resource_range(obs, value_unit):
 
 
 def _flag(value, low, high, crit_low, crit_high):
-    if crit_low is not None and value < crit_low:
+    # Panic thresholds are INCLUSIVE — a value exactly at the panic line is
+    # critical (a K of 6.5 with crit_high 6.5 must be HH, not H).
+    if crit_low is not None and value <= crit_low:
         return "LL"
     if low is not None and value < low:
         return "L"
-    if crit_high is not None and value > crit_high:
+    if crit_high is not None and value >= crit_high:
         return "HH"
     if high is not None and value > high:
         return "H"
@@ -160,6 +162,23 @@ def interpret_observation(obs, patient=None):
             else "; sex unknown — used non-specific range")
 
     flag = _flag(value, low, high, crit_low, crit_high)
+
+    # One-sided resource range: the lab asserted only one bound. If the value
+    # is "normal" only because the other bound is missing, and it crosses the
+    # TABLE's bound on that side, we cannot honestly call it normal — and we
+    # won't invent an H/L from a range the lab didn't assert. Indeterminate.
+    if flag == "N" and source == "resource" and (low is None) != (high is None) \
+            and unit == entry["unit"]:
+        t_low, t_high = _apply_sex(entry, patient)
+        crosses_missing_side = (
+            (high is None and t_high is not None and value > t_high)
+            or (low is None and t_low is not None and value < t_low))
+        if crosses_missing_side:
+            return _indeterminate(
+                analyte, loinc, value, unit,
+                "value is outside the population range on the side the "
+                "performing lab's one-sided reference range does not cover")
+
     return {"analyte": analyte, "loinc": loinc, "value": value, "unit": unit,
             "range_source": source, "low": low, "high": high,
             "flag": flag, "critical": flag in ("LL", "HH"), "note": note}

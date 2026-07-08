@@ -80,7 +80,12 @@ class TestReadPathAcceptsReadScope:
         assert resp.status_code == 401
 
 
-class TestFastenRegistrationIssuesAgentAccess:
+class TestWebhookGatedAgentAccess:
+    """Token issuance is gated on the HMAC-verified connection_success webhook.
+
+    Pre-claim protection: a fabricated org_connection_id never gets webhook
+    verification, so registering it yields no token — ever."""
+
     def _register(self, client, tenant, org_id):
         return client.post(
             "/fasten/connections",
@@ -88,53 +93,66 @@ class TestFastenRegistrationIssuesAgentAccess:
             data=json.dumps({"org_connection_id": org_id,
                              "platform_type": "epic"}))
 
-    def test_new_connection_on_fresh_tenant_returns_agent_access(self, client):
-        resp = self._register(client, "fresh-fasten-tenant", "org-conn-abc-1")
-        assert resp.status_code == 201
-        body = resp.get_json()
-        access = body.get("agent_access")
-        assert access, body
-        assert access["tenant_id"] == "fresh-fasten-tenant"
-        assert access["read_token"]
-        assert access["expires_at"]
-        # the issued token reads but does not write
-        valid, err = validate_step_up_token(
-            access["read_token"], "fresh-fasten-tenant", require_scope=None)
-        assert valid is True, err
-        valid, _ = validate_step_up_token(
-            access["read_token"], "fresh-fasten-tenant")
-        assert valid is False
+    def _webhook_verify(self, client, tenant, org_id):
+        from unittest.mock import patch
+        payload = {"type": "patient.connection_success",
+                   "data": {"org_connection_id": org_id,
+                            "external_id": tenant}}
+        with patch("r6.fasten.routes.verify_webhook", return_value=True):
+            return client.post("/fasten/webhook", data=json.dumps(payload),
+                               content_type="application/json")
 
-    def test_duplicate_registration_does_not_reissue(self, client):
-        first = self._register(client, "dup-fasten-tenant", "org-conn-dup-1")
-        assert first.status_code == 201
-        again = self._register(client, "dup-fasten-tenant", "org-conn-dup-1")
-        assert again.status_code == 200
-        assert "agent_access" not in (again.get_json() or {})
+    def _access(self, client, tenant, org_id):
+        return client.get(f"/fasten/connections/{org_id}/agent-access",
+                          headers={"X-Tenant-Id": tenant})
 
-    def test_tenant_with_existing_data_gets_no_token(self, client,
-                                                     sample_patient):
-        # Pre-claim protection: registering a connection against a tenant
-        # that already holds data must NOT hand out a read token.
-        tenant = "occupied-fasten-tenant"
-        write_tok = generate_step_up_token(tenant)
-        seeded = client.post(
-            "/r6/fhir/Patient",
-            headers={"X-Tenant-Id": tenant, "X-Step-Up-Token": write_tok,
-                     "X-Human-Confirmed": "true",
-                     "Content-Type": "application/fhir+json"},
-            data=json.dumps(sample_patient))
-        assert seeded.status_code == 201
-
-        resp = self._register(client, tenant, "org-conn-occupied-1")
+    def test_registration_alone_yields_no_token(self, client):
+        resp = self._register(client, "preclaim-tenant", "oc-preclaim-1")
         assert resp.status_code == 201
         assert "agent_access" not in (resp.get_json() or {})
+        # unverified connection: poll says pending, forever
+        poll = self._access(client, "preclaim-tenant", "oc-preclaim-1")
+        assert poll.status_code == 202
+        assert poll.get_json().get("pending") is True
 
-    def test_second_connection_same_tenant_does_not_reissue(self, client):
-        tenant = "two-conn-tenant"
-        first = self._register(client, tenant, "org-conn-two-1")
-        assert first.status_code == 201
-        assert first.get_json().get("agent_access")
-        second = self._register(client, tenant, "org-conn-two-2")
-        assert second.status_code == 201
-        assert "agent_access" not in (second.get_json() or {})
+    def test_webhook_verification_unlocks_one_time_mint(self, client):
+        t, oc = "verified-tenant", "oc-verified-1"
+        assert self._register(client, t, oc).status_code == 201
+        assert self._webhook_verify(client, t, oc).status_code == 200
+        first = self._access(client, t, oc)
+        assert first.status_code == 200, first.get_data(as_text=True)
+        body = first.get_json()
+        assert body["tenant_id"] == t and body["scope"] == "read"
+        valid, err = validate_step_up_token(body["read_token"], t,
+                                            require_scope=None)
+        assert valid is True, err
+        # read token still rejected on writes
+        valid, _ = validate_step_up_token(body["read_token"], t)
+        assert valid is False
+        # mint-once
+        again = self._access(client, t, oc)
+        assert again.status_code == 410
+
+    def test_wrong_tenant_cannot_poll(self, client):
+        t, oc = "owner-tenant", "oc-owner-1"
+        self._register(client, t, oc)
+        self._webhook_verify(client, t, oc)
+        resp = self._access(client, "attacker-tenant", oc)
+        assert resp.status_code == 404
+
+    def test_second_connection_same_tenant_gets_no_token(self, client):
+        t = "second-conn-tenant"
+        self._register(client, t, "oc-2nd-a")
+        self._webhook_verify(client, t, "oc-2nd-a")
+        assert self._access(client, t, "oc-2nd-a").status_code == 200
+        self._register(client, t, "oc-2nd-b")
+        self._webhook_verify(client, t, "oc-2nd-b")
+        assert self._access(client, t, "oc-2nd-b").status_code == 409
+
+    def test_webhook_created_connection_is_verified_and_mintable(self, client):
+        # connection_success arriving before the page registers: webhook
+        # creates the row already verified; the page poll can mint.
+        t, oc = "webhook-first-tenant", "oc-whfirst-1"
+        assert self._webhook_verify(client, t, oc).status_code == 200
+        resp = self._access(client, t, oc)
+        assert resp.status_code == 200

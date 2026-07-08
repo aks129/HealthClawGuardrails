@@ -130,13 +130,46 @@ def test_egfr_low_and_critical_low():
 
 
 def test_boundary_values_land_on_less_severe_side():
+    # Normal-range bounds are inclusive-normal (at the bound = N)...
     assert interpret_observation(_obs("2823-3", 3.5))["flag"] == "N"
     assert interpret_observation(_obs("2823-3", 5.1))["flag"] == "N"
-    assert interpret_observation(_obs("2823-3", 2.5))["flag"] == "L"   # not LL
-    assert interpret_observation(_obs("2823-3", 6.5))["flag"] == "H"   # not HH
+    # ...but PANIC thresholds are inclusive-critical: institutional critical
+    # value lists are "K <= 2.5", so the exact threshold must alert
+    # (convention changed 2026-07-08 per audit — safer side for decision support).
+    assert interpret_observation(_obs("2823-3", 2.5))["flag"] == "LL"
+    assert interpret_observation(_obs("2823-3", 6.5))["flag"] == "HH"
 
 
 def test_resource_range_with_only_low_bound():
     ref = [{"low": {"value": 3.0}}]
     r = interpret_observation(_obs("2823-3", 2.0, ref=ref))
     assert r["range_source"] == "resource" and r["flag"] == "LL"  # crit_low 2.5 from table
+
+
+def test_exact_panic_threshold_is_critical():
+    # A potassium of exactly 6.5 (the panic threshold) must flag HH, not H
+    # (audit finding 2026-07-08: strict > let the boundary value through).
+    r = interpret_observation(_obs("2823-3", 6.5))
+    assert r["flag"] == "HH" and r["critical"] is True
+    r = interpret_observation(_obs("2823-3", 2.5))
+    assert r["flag"] == "LL" and r["critical"] is True
+
+
+def test_one_sided_resource_range_never_yields_false_normal():
+    # Lab supplied only a LOW bound (3.5). Value 6.0 exceeds the table's high
+    # (5.1) but not the lab's (absent) high — calling that "N" is a false
+    # normal. It must be indeterminate, never N.
+    ref = [{"low": {"value": 3.5, "unit": "mmol/L"}}]
+    r = interpret_observation(_obs("2823-3", 6.0, ref=ref))
+    assert r["flag"] != "N"
+    assert "indeterminate" in (r["note"] or "")
+
+
+def test_one_sided_resource_range_defined_side_still_works():
+    # The defined side of a one-sided range still flags normally.
+    ref = [{"low": {"value": 3.5, "unit": "mmol/L"}}]
+    r = interpret_observation(_obs("2823-3", 3.0, ref=ref))
+    assert r["flag"] == "L"
+    # and a value inside BOTH the lab's low and the table's high is normal
+    r = interpret_observation(_obs("2823-3", 4.2, ref=ref))
+    assert r["flag"] == "N"

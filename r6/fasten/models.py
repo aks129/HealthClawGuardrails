@@ -31,6 +31,11 @@ class FastenConnection(db.Model):
     consent_expires_at = db.Column(db.DateTime, nullable=True)
     connected_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_export_at = db.Column(db.DateTime, nullable=True)
+    # Set ONLY by the HMAC-verified patient.connection_success webhook — the
+    # proof this org_connection_id is real, not fabricated by the registrant.
+    webhook_verified_at = db.Column(db.DateTime, nullable=True)
+    # Mint-once marker for the patient connect (agent read) token.
+    agent_token_issued_at = db.Column(db.DateTime, nullable=True)
 
 
 class FastenJob(db.Model):

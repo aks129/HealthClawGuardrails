@@ -25,17 +25,19 @@ def verify_webhook(headers: dict, raw_body: bytes) -> bool:
     """
     Verify a Standard-Webhooks HMAC signature.
 
-    Returns True if the signature is valid (or if FASTEN_WEBHOOK_SECRET is
-    not configured — allows dev/test without a real secret).
-    Returns False if the signature is present but invalid or the timestamp
-    is outside the replay window.
+    Returns True only for a valid signature. FAIL-CLOSED when
+    FASTEN_WEBHOOK_SECRET is unset: unsigned events are rejected unless
+    FASTEN_ALLOW_UNSIGNED_WEBHOOKS=true is set explicitly (local dev only).
+    The webhook now gates agent-token verification (connection_success), so
+    fail-open would let forged events verify fabricated connections.
     """
     secret = os.environ.get('FASTEN_WEBHOOK_SECRET', '').strip()
     if not secret:
-        logger.warning(
-            'FASTEN_WEBHOOK_SECRET not set — skipping webhook verification (dev mode)'
-        )
-        return True
+        if os.environ.get('FASTEN_ALLOW_UNSIGNED_WEBHOOKS', '').lower() == 'true':
+            logger.warning('FASTEN_ALLOW_UNSIGNED_WEBHOOKS=true — accepting unsigned webhook (dev only)')
+            return True
+        logger.warning('FASTEN_WEBHOOK_SECRET not set — rejecting webhook (fail-closed)')
+        return False
 
     msg_id = headers.get('webhook-id') or headers.get('Webhook-Id', '')
     msg_timestamp = headers.get('webhook-timestamp') or headers.get('Webhook-Timestamp', '')

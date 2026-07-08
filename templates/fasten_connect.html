@@ -278,14 +278,30 @@
           : 'Connection registration failed (HTTP ' + resp.status + ').',
         resp.ok ? 'success' : 'error'
       );
-      if (resp.ok) {
-        var body = null;
-        try { body = await resp.json(); } catch (e) {}
-        if (body && body.agent_access) _showAgentAccess(body.agent_access);
+      if (resp.ok && data.org_connection_id) {
+        // Token is minted only after Fasten's SIGNED webhook verifies the
+        // connection (usually seconds). Poll briefly.
+        _pollAgentAccess(data.org_connection_id, 30);
       }
     } catch (err) {
       showStatus('Network error: ' + err.message, 'error');
     }
+  }
+
+  async function _pollAgentAccess(orgConnectionId, attemptsLeft) {
+    if (attemptsLeft <= 0) {
+      showStatus('Connection made — your assistant key is still being verified. ' +
+                 'Email support@healthclaw.io and we will send it to you.', '');
+      return;
+    }
+    try {
+      var r = await fetch('/fasten/connections/' + encodeURIComponent(orgConnectionId) + '/agent-access', {
+        headers: { 'X-Tenant-Id': {{ tenant_id | tojson }} }
+      });
+      if (r.status === 200) { _showAgentAccess(await r.json()); return; }
+      if (r.status !== 202) return;  // 409/410/404: nothing to show
+    } catch (e) {}
+    setTimeout(function () { _pollAgentAccess(orgConnectionId, attemptsLeft - 1); }, 3000);
   }
 
   function _showAgentAccess(access) {

@@ -195,12 +195,20 @@ def _handle_connection_success(payload: dict) -> None:
         )
         return
 
-    if FastenConnection.query.filter_by(org_connection_id=org_connection_id).first():
+    existing = FastenConnection.query.filter_by(
+        org_connection_id=org_connection_id).first()
+    if existing:
+        # The signature check already passed upstream — this is the proof the
+        # org_connection_id is real. Stamp it for the agent-access mint gate.
+        if existing.webhook_verified_at is None:
+            existing.webhook_verified_at = datetime.now(timezone.utc)
+            db.session.commit()
         return
 
     conn = FastenConnection(
         org_connection_id=org_connection_id,
         tenant_id=tenant_id,
+        webhook_verified_at=datetime.now(timezone.utc),
         endpoint_id=payload.get('endpoint_id'),
         brand_id=payload.get('brand_id'),
         portal_id=payload.get('portal_id'),
@@ -303,70 +311,14 @@ def register_connection():
         detail=f'platform={conn.platform_type}',
     )
 
-    body = {
+    return jsonify({
         'status': 'registered',
         'org_connection_id': org_connection_id,
-    }
-    access = _maybe_issue_agent_access(tenant_id)
-    if access:
-        body['agent_access'] = access
-    return jsonify(body), 201
+        # token is minted by GET .../agent-access AFTER the signed
+        # connection_success webhook verifies this org_connection_id
+        'agent_access_pending': True,
+    }), 201
 
-
-def _maybe_issue_agent_access(tenant_id):
-    """Issue a READ-scoped patient connect token — only at first connection.
-
-    The moment a patient completes the identity-verified Stitch flow is the
-    one point we can hand their agent a read credential without a portal
-    account. Guarded so it can never become a read-auth bypass:
-
-    - READ scope only: every write path rejects it (H4 intact).
-    - Fresh tenants only: a tenant that already holds resources or a prior
-      connection gets nothing (pre-claim protection — you cannot register a
-      junk connection against someone else's populated tenant and walk away
-      with their data).
-    - Never for public tenants (their reads are already open).
-    - The token itself is returned to the caller once and never logged.
-    """
-    from r6.command_center.access import is_public
-    from r6.models import R6Resource
-
-    if is_public(tenant_id):
-        return None
-    prior_connections = FastenConnection.query.filter_by(
-        tenant_id=tenant_id).count()
-    if prior_connections > 1:  # the one just registered
-        return None
-    if R6Resource.query.filter_by(tenant_id=tenant_id).first() is not None:
-        return None
-    try:
-        token = generate_step_up_token(
-            tenant_id, agent_id='patient-connect',
-            ttl_seconds=READ_TOKEN_TTL_SECONDS, scope='read')
-    except ValueError:
-        return None  # STEP_UP_SECRET unset — nothing to issue
-    expires_at = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
-    record_audit_event(
-        event_type='agent_read_token_issued',
-        agent_id='fasten-connect',
-        tenant_id=tenant_id,
-        outcome='success',
-        detail='read-scoped patient connect token (30d) issued at registration',
-    )
-    return {
-        'tenant_id': tenant_id,
-        'read_token': token,
-        'expires_at': datetime.fromtimestamp(
-            expires_at, tz=timezone.utc).isoformat(timespec='seconds'),
-        'scope': 'read',
-        'instructions': (
-            'Give these two values to your AI assistant: for every HealthClaw '
-            'tool call include _tenantId and _stepUpToken (or send them as the '
-            'X-Tenant-Id / X-Step-Up-Token headers). Treat the token like a '
-            'password. It can read this record only — it can never change '
-            'anything — and it expires in 30 days; reconnect to renew.'
-        ),
-    }
 
 
 @fasten_blueprint.route('/connections/<org_connection_id>', methods=['GET'])
@@ -642,4 +594,75 @@ def run_demo():
         'org_connection_id': org_connection_id,
         'task_id': task_id,
         'steps': steps,
+    }), 200
+
+@fasten_blueprint.route('/connections/<org_connection_id>/agent-access',
+                        methods=['GET'])
+def agent_access(org_connection_id):
+    """One-time mint of the patient connect (agent read) token.
+
+    Issued only when ALL of:
+    - the connection exists and belongs to the calling tenant,
+    - the HMAC-verified patient.connection_success webhook has confirmed the
+      org_connection_id (pre-claim protection: fabricated ids never verify),
+    - this is the tenant's FIRST connection (no older connection rows),
+    - the token has not been issued before (mint-once),
+    - the tenant is not public (public reads are already open).
+
+    Not yet verified -> 202 {pending}: the page polls briefly; the webhook
+    usually lands within seconds of widget completion.
+    """
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    if not tenant_id:
+        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+
+    conn = FastenConnection.query.filter_by(
+        org_connection_id=org_connection_id, tenant_id=tenant_id).first()
+    if conn is None:
+        return jsonify({'error': 'not found'}), 404
+
+    from r6.command_center.access import is_public
+    if is_public(tenant_id):
+        return jsonify({'error': 'public tenant — no token needed'}), 409
+    if conn.agent_token_issued_at is not None:
+        return jsonify({'error': 'already issued'}), 410
+    if conn.webhook_verified_at is None:
+        return jsonify({'pending': True}), 202
+    older = FastenConnection.query.filter(
+        FastenConnection.tenant_id == tenant_id,
+        FastenConnection.connected_at < conn.connected_at,
+    ).count()
+    if older:
+        return jsonify({'error': 'not first connection for tenant'}), 409
+
+    try:
+        token = generate_step_up_token(
+            tenant_id, agent_id='patient-connect',
+            ttl_seconds=READ_TOKEN_TTL_SECONDS, scope='read')
+    except ValueError:
+        return jsonify({'error': 'server not configured to mint'}), 503
+
+    conn.agent_token_issued_at = datetime.now(timezone.utc)
+    db.session.commit()
+    record_audit_event(
+        event_type='agent_read_token_issued',
+        agent_id='fasten-connect',
+        tenant_id=tenant_id,
+        outcome='success',
+        detail='read-scoped patient connect token (30d) issued after webhook verification',
+    )
+    expires = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
+    return jsonify({
+        'tenant_id': tenant_id,
+        'read_token': token,
+        'expires_at': datetime.fromtimestamp(
+            expires, tz=timezone.utc).isoformat(timespec='seconds'),
+        'scope': 'read',
+        'instructions': (
+            'Give these two values to your AI assistant: for every HealthClaw '
+            'tool call include _tenantId and _stepUpToken (or send them as the '
+            'X-Tenant-Id / X-Step-Up-Token headers). Treat the token like a '
+            'password. It can read this record only — it can never change '
+            'anything — and it expires in 30 days.'
+        ),
     }), 200
