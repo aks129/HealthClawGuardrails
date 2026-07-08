@@ -4,7 +4,7 @@
 
 # HealthClaw Guardrails
 
-### The Fair Source security layer between AI agents and clinical data.
+### The open-source security layer between AI agents and clinical data.
 
 *FHIR standardized how health data is structured. MCP standardized how AI connects to tools.*
 ***Nobody standardized the guardrails in between. This project does.***
@@ -13,7 +13,7 @@
 
 <!-- Project -->
 [![Release](https://img.shields.io/badge/release-v1.7.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
-[![License](https://img.shields.io/badge/license-FSL--1.1--MIT-2dd4bf?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
 [![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
 
@@ -647,7 +647,7 @@ with different vantage points pressure-test it. We especially want:
 
 Start here: **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[Roadmap](docs/ROADMAP.md)** · **[Dev Guide](docs/development.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[CHANGELOG.md](CHANGELOG.md)** · **[Security policy](SECURITY.md)**
 
-Good first contributions are labeled in the issue tracker. Contributions are DCO-signed under the project license ([FSL-1.1-MIT](LICENSE) — free for everything except building a competing product; every release becomes MIT after two years; see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
+Good first contributions are labeled in the issue tracker. Contributions are DCO-signed (`git commit -s`) under the [MIT license](LICENSE) — see [LICENSING.md](LICENSING.md) for the project's licensing posture going forward.
 
 ### Community
 

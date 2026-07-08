@@ -10,7 +10,7 @@ description: >
   gaps, or export data to a personal FHIR store.
 version: 1.0.0
 author: HealthClaw contributors
-license: FSL-1.1-MIT
+license: MIT
 tools:
   required:
     - HealthEx:get_health_summary

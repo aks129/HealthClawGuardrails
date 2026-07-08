@@ -19,7 +19,7 @@ extraction semantics wrong" issue is as valuable as a PR.
 ## Ground rules
 
 - Be kind and assume good faith. See the [Code of Conduct](CODE_OF_CONDUCT.md).
-- **No CLA — DCO instead.** Sign off your commits (`git commit -s`, Developer Certificate of Origin). Contributions are accepted under the project's [FSL-1.1-MIT license](LICENSE) (free for everything except competing products; each release becomes MIT after two years — see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
+- **No CLA — DCO instead.** Sign off your commits (`git commit -s`, Developer Certificate of Origin). Contributions are accepted under the project's [MIT license](LICENSE); see [LICENSING.md](LICENSING.md) for the licensing posture going forward.
 - **Never commit secrets or real PHI.** This repo uses synthetic demo data only. PHI must never appear in code, tests, fixtures, logs, or commit history.
 
 ## Project shape (orient yourself fast)

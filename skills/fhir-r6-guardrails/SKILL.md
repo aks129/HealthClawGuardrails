@@ -12,7 +12,7 @@ description: >
 
 # HealthClaw Guardrails
 
-A [healthclaw.io](https://healthclaw.io) Fair Source project. Reference implementation
+A [healthclaw.io](https://healthclaw.io) open source project. Reference implementation
 of security and compliance patterns for AI agent access to FHIR data via MCP.
 
 Supports **FHIR R4 US Core v9** (stable) and **FHIR R6 v6.0.0-ballot3** (experimental).

@@ -13,7 +13,7 @@ description: >
   question. Use this before any other HealthClaw skill when the user hasn't yet
   built their stack.
 version: 1.0.0
-license: FSL-1.1-MIT
+license: MIT
 references:
   openclaw_docs: https://docs.openclaw.ai
   openclaw_home: https://openclaw.ai

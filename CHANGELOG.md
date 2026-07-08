@@ -8,13 +8,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [Unreleased]
 
 ### Changed
-- **License: MIT → FSL-1.1-MIT (Fair Source).** Effective from the next release: free for
-  everything — internal use at any organization (including commercial ones), education, research,
-  building products ON TOP of HealthClaw — except offering HealthClaw itself (or a substitute) as
-  a competing commercial product. Each release automatically becomes MIT two years after
-  publication. Versions **v1.7.0 and earlier remain MIT** (`LICENSE-MIT-v1.7-and-earlier`).
-  Enterprise capabilities beyond the core are offered commercially (open core) — see
-  `COMMERCIAL-LICENSE.md`. Contributions now use DCO sign-off instead of no-CLA.
+- **Licensing posture documented (staying MIT).** After evaluating Fair Source (FSL-1.1-MIT)
+  and open-core models, the project remains MIT while adoption grows. `LICENSING.md` records the
+  posture: future releases may adopt FSL-1.1-MIT and/or open core based on adoption, any
+  MIT-released version stays MIT forever, and the guardrail core stays freely available.
+  Contributions now use DCO sign-off (`git commit -s`) to keep future licensing options clean.
 
 ## [1.7.0] — 2026-07-08 — Own-Data Onboarding + Care Gaps + Rx Transfer
 

@@ -10,7 +10,7 @@ description: >
   One", "pull from HBO", "verify identity through Health Bank One".
 version: 0.2.0
 author: HealthClaw contributors
-license: FSL-1.1-MIT
+license: MIT
 status: live — all 14 tools confirmed 2026-06-10 (Bootstrap Developer Program)
 references:
   hbo_home: https://www.healthbankone.com
