@@ -62,8 +62,17 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
         try:
             for url in download_links:
                 logger.info('Fasten: streaming download for job %s', job.task_id)
+                # Fasten's download endpoint requires Basic auth (it 302s to
+                # a signed URL; httpx drops the auth header on cross-host
+                # redirects, so the signed hop stays clean).
+                _auth = None
+                _pub = os.environ.get('FASTEN_PUBLIC_KEY', '').strip()
+                _priv = os.environ.get('FASTEN_PRIVATE_KEY', '').strip()
+                if _pub and _priv and 'fastenhealth.com' in url:
+                    _auth = (_pub, _priv)
                 with httpx.stream(
-                    'GET', url, timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True
+                    'GET', url, timeout=_DOWNLOAD_TIMEOUT,
+                    follow_redirects=True, auth=_auth
                 ) as resp:
                     resp.raise_for_status()
 

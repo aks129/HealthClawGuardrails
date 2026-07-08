@@ -87,7 +87,17 @@ def _handle_export_success(payload: dict) -> None:
     """Handle patient.ehi_export_success — kick off streaming download."""
     task_id = payload.get('task_id', '')
     org_connection_id = payload.get('org_connection_id', '')
-    download_links = payload.get('download_links', [])
+    # Live payloads carry download_links as [{content_type, export_type, url}]
+    # (2026-07-08 delivery); older/flat shapes as plain URL strings. Normalize
+    # to URL strings — the ingester streams from URLs.
+    raw_links = payload.get('download_links') or []
+    if not raw_links and payload.get('download_link'):
+        raw_links = [payload['download_link']]
+    download_links = [
+        (d.get('url') if isinstance(d, dict) else d)
+        for d in raw_links
+        if (d.get('url') if isinstance(d, dict) else d)
+    ]
 
     if not task_id or not org_connection_id or not download_links:
         logger.warning('Fasten export_success: missing required fields')

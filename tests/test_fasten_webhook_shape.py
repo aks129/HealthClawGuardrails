@@ -77,3 +77,27 @@ def test_flat_payloads_still_work(client):
         resp = _post_webhook(client, payload)
     assert resp.status_code == 200
     assert FastenJob.query.filter_by(task_id="task-flat-1").first() is not None
+
+
+def test_download_links_as_objects_are_normalized_to_urls(client):
+    # Real payloads carry download_links as [{content_type, export_type, url}]
+    # (live delivery 2026-07-08) — the ingest thread must receive URL strings.
+    client.post("/fasten/connections",
+                headers={"X-Tenant-Id": "dl-shape-tenant",
+                         "Content-Type": "application/json"},
+                data=json.dumps({"org_connection_id": "oc-dl-1"}))
+    payload = _envelope("patient.ehi_export_success", {
+        "org_connection_id": "oc-dl-1",
+        "task_id": "task-dl-1",
+        "download_links": [
+            {"content_type": "application/fhir+ndjson",
+             "export_type": "jsonl",
+             "url": "https://example.com/export.jsonl"}],
+    })
+    with patch("r6.fasten.routes.threading.Thread") as t:
+        resp = _post_webhook(client, payload)
+    assert resp.status_code == 200
+    assert FastenJob.query.filter_by(task_id="task-dl-1").first() is not None
+    # thread args: (app, job_id, download_links, tenant_id)
+    links = t.call_args.kwargs.get("args", t.call_args[1].get("args"))[2]
+    assert links == ["https://example.com/export.jsonl"]
