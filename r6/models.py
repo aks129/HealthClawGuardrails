@@ -172,7 +172,10 @@ class AuditEventRecord(db.Model):
     id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     event_type = db.Column(db.String(32), nullable=False)  # read, create, update, delete, validate
     resource_type = db.Column(db.String(64), nullable=True)
-    resource_id = db.Column(db.String(64), nullable=True)
+    # Holds the same FHIR resource ids as R6Resource.id — Epic ids exceed 64,
+    # and an audit-insert truncation here rolls back the whole transaction,
+    # discarding the resource write too (found live 2026-07-08).
+    resource_id = db.Column(db.String(255), nullable=True)
     context_id = db.Column(db.String(64), nullable=True, index=True)
     tenant_id = db.Column(db.String(64), nullable=True, index=True)
     agent_id = db.Column(db.String(128), nullable=True)

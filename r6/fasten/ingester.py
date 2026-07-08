@@ -142,10 +142,18 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 job.task_id, ingested, skipped, failed,
             )
 
-            # Optional: run Curatr quality scan on clinical resources
+            # Optional: run Curatr quality scan on clinical resources. Best
+            # effort ONLY — the ingest is already committed 'complete' above,
+            # so a scan failure must never flip the job to 'failed'.
             curatr_issues = 0
             if os.environ.get('FASTEN_CURATR_SCAN', '').lower() == 'true':
-                curatr_issues = _run_curatr_scan(curatr_eligible_ids, tenant_id, job.task_id) or 0
+                try:
+                    curatr_issues = _run_curatr_scan(
+                        curatr_eligible_ids, tenant_id, job.task_id) or 0
+                except Exception as scan_exc:  # pragma: no cover - defensive
+                    logger.warning('Fasten Curatr scan failed (ingest already '
+                                   'complete): %s', type(scan_exc).__name__)
+                    db.session.rollback()
 
             # Push a Telegram notification to every chat bound to this tenant.
             # Summary-level only; no PHI. Failures are swallowed — notify is a
@@ -247,9 +255,9 @@ def _run_curatr_scan(
     if not eligible:
         return 0
 
-    from r6.curatr import CuratrEvaluator  # local import to keep module lightweight
+    from r6.curatr import CuratrEngine  # local import to keep module lightweight
 
-    evaluator = CuratrEvaluator()
+    evaluator = CuratrEngine()
     issues_found = 0
 
     for resource_type, resource_id in eligible[:100]:  # cap at 100 per import
@@ -258,8 +266,8 @@ def _run_curatr_scan(
             if not res_obj or res_obj.tenant_id != tenant_id:
                 continue
             resource = json.loads(res_obj.resource_json)
-            result = evaluator.evaluate(resource_type, resource, resource_id)
-            count = len(result.get('issues', []))
+            result = evaluator.evaluate(resource)
+            count = len(result.issues)
             if count:
                 issues_found += count
                 record_audit_event(

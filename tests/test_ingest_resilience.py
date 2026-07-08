@@ -60,3 +60,24 @@ def test_ingest_error_rolls_back_session_so_next_resource_succeeds(client, tenan
     db.session.add(good2)
     db.session.commit()
     assert db.session.get(R6Resource, "ir-good-2") is not None
+
+
+def test_audit_resource_id_column_fits_real_ehr_ids():
+    # The audit table stores the same resource ids; if it's narrower than
+    # R6Resource.id, an audit-insert truncation rolls back the resource write
+    # in the shared transaction (found live 2026-07-08 — only 2/56
+    # observations survived). Must be at least as wide.
+    from r6.models import AuditEventRecord, R6Resource
+    assert (AuditEventRecord.__table__.c.resource_id.type.length
+            >= R6Resource.__table__.c.id.type.length)
+
+
+def test_curatr_engine_api_matches_ingester_usage():
+    # The Fasten post-ingest scan imports CuratrEngine and calls
+    # evaluate(resource) -> result.issues. Pin that contract so the import/
+    # signature can't silently drift again (it did: stale 'CuratrEvaluator').
+    from r6.curatr import CuratrEngine
+    engine = CuratrEngine()
+    result = engine.evaluate({"resourceType": "Condition", "id": "c1"})
+    assert hasattr(result, "issues")
+    assert isinstance(result.issues, list)
