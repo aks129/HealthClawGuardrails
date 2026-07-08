@@ -193,3 +193,17 @@ def test_vercel_serverless_copy_refuses_stateful_writes(client, monkeypatch):
     monkeypatch.delenv('VERCEL')
     with flask_app.test_request_context('/r6/fhir/Patient', method='POST'):
         assert _refuse_serverless_writes() is None  # non-Vercel: no-op
+
+
+def test_all_model_tables_registered_in_metadata():
+    # schema_sync reconciles db.metadata — a model module not imported at
+    # boot means its new columns silently never reach long-lived Postgres
+    # (live incident 2026-07-08: fasten_connections.webhook_verified_at).
+    from models import db  # noqa: F401
+    import main  # noqa: F401  (executes the boot-time imports)
+    tables = set(db.metadata.tables)
+    for expected in ("fasten_connections", "fasten_jobs",
+                     "proposed_actions" if "proposed_actions" in tables else "proposed_action",
+                     "wearable_connections" if "wearable_connections" in tables else "wearable_connection"):
+        assert any(expected.rstrip('s') in t for t in tables), (expected, tables)
+    assert "fasten_connections" in tables

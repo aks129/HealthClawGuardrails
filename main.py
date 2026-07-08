@@ -91,6 +91,14 @@ with app.app_context():
     from r6.models import R6Resource
     import r6.actions.models  # noqa: F401 — registers ProposedAction table
     import r6.smbp.models  # noqa: F401 — registers SMBPSession table
+    # Import EVERY model module BEFORE create_all/reconcile_schema. Anything
+    # missing here is invisible to schema_sync, so new columns on its tables
+    # are never ALTERed onto long-lived Postgres (found live 2026-07-08:
+    # fasten_connections.webhook_verified_at was missing in prod and every
+    # Fasten webhook 500'd).
+    import r6.fasten.models  # noqa: F401 — FastenConnection/FastenJob
+    import r6.wearables.models  # noqa: F401 — WearableConnection
+    import r6.command_center.models  # noqa: F401 — ConversationMessage/AgentTask
     from sqlalchemy.exc import OperationalError, IntegrityError, ProgrammingError
     try:
         db.create_all()
