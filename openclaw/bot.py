@@ -805,8 +805,45 @@ def main() -> None:
     app.add_handler(CommandHandler('hbo_pull', cmd_hbo_pull))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
+    _preflight_singleton_check()
+
     logger.info('openclaw bot starting (tenant=%s)', TENANT_ID)
     app.run_polling(drop_pending_updates=True)
+
+
+def _preflight_singleton_check() -> None:
+    """Refuse to start a duplicate poller.
+
+    Telegram allows only ONE getUpdates consumer per token; a second poller
+    makes both thrash with 'Conflict: terminated by other getUpdates request'
+    and silently drops/duplicates messages. run_polling retries Conflict
+    internally, so a duplicate limps along invisibly for weeks. Here we probe
+    getUpdates ONCE before starting: on Conflict we exit loudly rather than
+    join the fight. A brief retry tolerates the normal overlap when a
+    platform (e.g. Railway) restarts the service and the old process is still
+    shutting down.
+    """
+    import time
+    api = f'https://api.telegram.org/bot{BOT_TOKEN}/getUpdates'
+    for attempt in range(3):
+        try:
+            resp = requests.get(api, params={'offset': -1, 'timeout': 0},
+                                timeout=10)
+        except requests.RequestException as exc:
+            logger.warning('singleton preflight: network error (%s) — proceeding',
+                           type(exc).__name__)
+            return
+        if resp.status_code == 409:
+            if attempt < 2:
+                time.sleep(3)  # tolerate brief restart overlap
+                continue
+            logger.error(
+                'ANOTHER INSTANCE IS ALREADY POLLING @this bot '
+                '(Telegram 409 Conflict). Refusing to start a duplicate — '
+                'stop the other poller (SSH box / container / systemd) first. '
+                'Exiting.')
+            raise SystemExit(1)
+        return  # 200 (or any non-409): we are the sole poller
 
 
 if __name__ == '__main__':
