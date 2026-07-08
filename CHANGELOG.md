@@ -5,6 +5,17 @@ All notable changes to HealthClaw Guardrails are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **License: MIT → FSL-1.1-MIT (Fair Source).** Effective from the next release: free for
+  everything — internal use at any organization (including commercial ones), education, research,
+  building products ON TOP of HealthClaw — except offering HealthClaw itself (or a substitute) as
+  a competing commercial product. Each release automatically becomes MIT two years after
+  publication. Versions **v1.7.0 and earlier remain MIT** (`LICENSE-MIT-v1.7-and-earlier`).
+  Enterprise capabilities beyond the core are offered commercially (open core) — see
+  `COMMERCIAL-LICENSE.md`. Contributions now use DCO sign-off instead of no-CLA.
+
 ## [1.7.0] — 2026-07-08 — Own-Data Onboarding + Care Gaps + Rx Transfer
 
 ### Added
