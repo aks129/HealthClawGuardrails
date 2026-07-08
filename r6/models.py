@@ -19,7 +19,11 @@ class R6Resource(db.Model):
     """
     __tablename__ = 'r6_resources'
 
-    id = db.Column(db.String(64), primary_key=True)
+    # Real EHR resource ids (Epic in particular) routinely exceed the FHIR
+    # 64-char id limit — 65/250 in a live Epic export, max 109. 255 gives
+    # headroom while preserving the full id so intra-bundle references
+    # (subject.reference "Patient/<id>") still resolve.
+    id = db.Column(db.String(255), primary_key=True)
     resource_type = db.Column(db.String(64), nullable=False, index=True)
     version_id = db.Column(db.Integer, nullable=False, default=1)
     last_updated = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

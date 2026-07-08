@@ -97,7 +97,18 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                             failed += 1
                         except Exception as exc:
                             failed += 1
-                            logger.warning('Fasten ingest error: %s', exc)
+                            # CRITICAL: roll back the failed flush so the
+                            # session isn't poisoned. Without this, one bad
+                            # resource makes every subsequent resource fail
+                            # with "transaction has been rolled back", wedging
+                            # the whole job (found live 2026-07-08: a single
+                            # over-length id poisoned all 250).
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                pass
+                            logger.warning('Fasten ingest error: %s',
+                                           type(exc).__name__)
 
                         total = ingested + skipped + failed
                         if total % _PROGRESS_BATCH == 0:

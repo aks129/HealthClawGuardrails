@@ -71,10 +71,34 @@ def reconcile_schema(engine: Engine, metadata) -> list[str]:
             # create_all() should have already handled this
             continue
 
-        db_cols = {c["name"] for c in inspector.get_columns(table.name)}
+        db_columns = {c["name"]: c for c in inspector.get_columns(table.name)}
+        db_cols = set(db_columns)
 
         for col in table.columns:
             if col.name in db_cols:
+                # Column exists — widen it if the model's String is now longer
+                # than the live varchar. Real EHR ids exceed the old
+                # varchar(64) (Epic ids up to ~109); widening varchar length
+                # in Postgres is safe and online (no table rewrite). Never
+                # narrows. (found live 2026-07-08 — a too-narrow id column
+                # truncation-errored mid-ingest and poisoned the batch.)
+                model_len = getattr(col.type, "length", None)
+                live_type = db_columns[col.name].get("type")
+                live_len = getattr(live_type, "length", None)
+                if (isinstance(model_len, int) and isinstance(live_len, int)
+                        and model_len > live_len):
+                    stmt = (
+                        f"ALTER TABLE {table.name} "
+                        f"ALTER COLUMN {col.name} TYPE VARCHAR({model_len})"
+                    )
+                    logger.info("schema_sync (widen): %s", stmt)
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(stmt))
+                        added.append(stmt)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("schema_sync widen failed for "
+                                       "%s.%s: %s", table.name, col.name, e)
                 continue
             col_type = col.type.compile(engine.dialect)
             default_sql = _format_server_default(col)
