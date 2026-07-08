@@ -11,11 +11,11 @@ open it in Telegram, and send:
 ```text
 /start        bind the chat (demo tenant by default)
 /health       stack health check
-/summary      high-level record review
 /conditions   condition list
 /labs         recent lab results
-/curatr       data-quality scan
+/curatr       data-quality scan (`/curatr fix` proposes fixes)
 /approve      approve a pending fix — the human-in-the-loop step
+/connect      pull your records (Fasten + TEFCA)
 /dashboard    signed 24-hour command-center link
 ```
 

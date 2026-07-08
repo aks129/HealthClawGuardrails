@@ -98,6 +98,16 @@ CARE_GAP_RULES = [
 ]
 
 _DIABETES_PREFIXES = ("E10", "E11", "E13", "250")  # ICD-10 / ICD-9 diabetes
+# SNOMED diabetes concepts — real-world pulls (Fasten/Epic) code in SNOMED,
+# not ICD; matched exactly, never by prefix (SNOMED ids aren't hierarchical
+# strings). DM, T2DM, T1DM + common subtype descendants seen in US Core data.
+_DIABETES_SNOMED = {
+    "73211009",   # Diabetes mellitus
+    "44054006",   # Type 2 diabetes mellitus
+    "46635009",   # Type 1 diabetes mellitus
+    "190330002",  # Type 1 diabetes mellitus with ketoacidosis (legacy)
+    "422034002",  # Diabetic retinopathy assoc. with type 2 (marker of dx)
+}
 
 
 def _parse_date(s):
@@ -154,6 +164,8 @@ def _resource_date(resource):
 def _has_diabetes(conditions):
     for c in conditions or []:
         for code in _codes_of(c):
+            if code in _DIABETES_SNOMED:
+                return True
             if any(code.startswith(p) for p in _DIABETES_PREFIXES):
                 return True
     return False
@@ -165,7 +177,9 @@ def _most_recent(resources, wanted_codes, as_of_date, cadence_months):
     for r in resources or []:
         if _codes_of(r) & wanted_codes:
             d = _resource_date(r)
-            if d and (best is None or d > best):
+            # future-dated records never satisfy a gap — bad source data
+            # must not produce a false "up to date"
+            if d and d <= as_of_date and (best is None or d > best):
                 best = d
     if best is None:
         return None

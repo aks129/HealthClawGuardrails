@@ -111,3 +111,27 @@ def test_results_include_ecqm_crosswalk():
         _patient(), as_of="2026-07-01")}
     assert res["mammography"]["related_ecqm"] == "CMS125"
     assert res["lipid-screening"]["related_ecqm"] is None
+
+
+def test_snomed_coded_diabetes_triggers_a1c_rule():
+    # Real-world records (Fasten/Epic pulls) code diabetes in SNOMED, not ICD.
+    # Detection matched only ICD prefixes, so SNOMED-coded diabetics had their
+    # A1c monitoring gap suppressed as "not applicable" (found in audit 2026-07-08).
+    for code in ("73211009", "44054006", "46635009"):  # DM, T2DM, T1DM
+        cond = {"resourceType": "Condition",
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "code": {"coding": [{"system": "http://snomed.info/sct",
+                                     "code": code}]}}
+        res = {r["rule_id"]: r for r in evaluate_care_gaps(
+            _patient(), conditions=[cond], as_of="2026-07-01")}
+        assert res["diabetes-a1c"]["applicable"] is True, code
+        assert res["diabetes-a1c"]["status"] == "due"
+
+
+def test_future_dated_record_does_not_satisfy_a_gap():
+    # A record dated after as_of must not count — bad source data could
+    # otherwise produce a false "up to date" (audit finding 2026-07-08).
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(), observations=[_obs("8480-6", "2026-09-15")],
+        as_of="2026-07-01")}
+    assert res["bp-screening"]["status"] == "due"

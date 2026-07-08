@@ -89,7 +89,9 @@ The demo tenant is synthetic. To put YOUR records behind the guardrails:
    reads: the token is cryptographically scoped so it can never write.
 4. Records stream in over the next 5–45 minutes.
 
-Treat the token like a password. Lost it or expired? Reconnect for a new one.
+Treat the token like a password. Lost or expired tokens: email
+support@healthclaw.io for a re-issue (tokens are minted only once per
+connection, so a lost token is a support request, not a reconnect).
 
 Other sources, same guardrails: **Health Bank One / HealthEx / MEDENT**
 (OAuth pulls with in-process PHI redaction — see `scripts/`), and
