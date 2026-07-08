@@ -14,16 +14,15 @@ welcome on all of it: several items are labeled
 - Quality measures: complete the CMS165 denominator exclusion set ([#55](https://github.com/aks129/HealthClawGuardrails/issues/55)); current-year default period ([#52](https://github.com/aks129/HealthClawGuardrails/issues/52))
 - Clinical review of the `LOINC_RANGES` reference table before it is presented
   as authoritative in live demos
-- Care-gaps interpreter (`Patient/$care-gaps`): preventive-care reminders from a
-  patient's own record — sourced USPSTF/ACIP/ADA rules, conservative
-  `indeterminate` handling, per-rule `related_ecqm` crosswalk (CMS130/124/125/
-  147/22/122). Follow-ups: risk-adjusted cadence, condition-driven rules beyond
-  diabetes A1c, optional Da Vinci DEQM-shaped gaps-in-care output (ours is a
-  deliberately lightweight consumer variant, **not** the DEQM `$care-gaps`
-  operation — the disclaimer says so). The crosswalk is the reconciliation
-  bridge to certified CQL measure engines (e.g. cqframework's CQL Studio
-  ELM-to-SQL): they compute the certified numbers, HealthClaw delivers the
-  guardrailed consumer answer
+- Care-gaps interpreter ✅ shipped v1.7.0 (`Patient/$care-gaps` + `care_gaps`
+  tool, eCQM crosswalk). Follow-ups: risk-adjusted cadence, condition-driven
+  rules beyond diabetes A1c, optional Da Vinci DEQM-shaped output
+- Prescription transfers ✅ phase 1 shipped v1.7.0 (`rx_transfer_request` —
+  guardrailed call to the receiving pharmacy, Schedule II refused).
+  Phase 2: Walgreens Prescription Refill & Transfer API (prefilled handoff);
+  phase 3: CVS Health100 ecosystem when it opens
+- Own-data onboarding ✅ shipped v1.7.0 (identity-verified Fasten connect →
+  webhook-gated 30-day read-scoped agent token → per-agent quickstarts)
 
 **Demos & workflows**
 - SMBP phase 2: BP-cuff photo OCR intake; wire the reminder scheduler to a

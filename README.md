@@ -12,7 +12,7 @@
 <br/>
 
 <!-- Project -->
-[![Release](https://img.shields.io/badge/release-v1.6.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
+[![Release](https://img.shields.io/badge/release-v1.7.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
 [![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
 [![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.6.0 · 840+ Python + 90 Node tests · 29 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.7.0 · 950+ Python + 92 Node tests · 29 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -80,6 +80,7 @@ Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/r
 
 | Version | Highlights |
 | --- | --- |
+| **v1.7.0** | Preventive care-gaps engine (`Patient/$care-gaps`, USPSTF/ACIP/ADA + eCQM crosswalk) · patient connect flow: identity-verified Fasten onboarding mints a webhook-gated, read-scoped 30-day agent token · prescription transfer requests (`rx_transfer_request`, Schedule II refused) — 29 MCP tools · [per-agent quickstarts](docs/quickstarts/) (Claude/Perplexity/ChatGPT/Telegram) · HBO export→FHIR converter + embedded-XML PHI scrubber · hardening: fail-closed webhook verify, scoped tokens, serverless write guard, live-path contract tests · clinical fixes: SNOMED diabetes detection, inclusive panic thresholds, one-sided-range honesty |
 | **v1.6.0** | Lab reference-range interpreter (`Observation/$interpret`) · NQF 0018 quality measure (`Measure/$evaluate-measure`) · [any-agent-framework adapters](docs/recipes/any-agent-framework.md) (OpenAI/Gemini) · [Medplum-in-front recipe](docs/recipes/healthclaw-in-front-of-medplum.md) · SMBP triage on 2025 AHA/ACC · ruff lint gate · all dependency advisories remediated |
 | v1.5.0 | Read-auth hardening (tenant reads authenticated, not just scoped) · HL7 SDC forms — `$populate` / `$extract` |
 | v1.4.0 | Six health-data connectors (Fasten TEFCA, HealthEx, Health Bank One, Flexpa, Epic, MEDENT) behind one guardrail stack |

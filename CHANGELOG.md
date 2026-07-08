@@ -5,6 +5,67 @@ All notable changes to HealthClaw Guardrails are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-07-08 — Own-Data Onboarding + Care Gaps + Rx Transfer
+
+### Added
+- **Preventive care-gaps engine** — `POST /r6/fhir/Patient/$care-gaps` + `care_gaps` MCP tool:
+  seven USPSTF/ACIP/ADA-sourced rules (BP, lipids, diabetes A1c, colorectal/cervical/breast
+  screening, flu) with per-rule `related_ecqm` crosswalk (CMS130/124/125/147/22/122), honest
+  `indeterminate` for unknown age/sex, FHIR partial-birthDate support, SNOMED + ICD diabetes
+  detection, future-dated records rejected. Deliberately a lightweight consumer variant — NOT the
+  Da Vinci DEQM `$care-gaps` operation (the disclaimer says so).
+- **Patient connect flow (own data, no portal account):** the identity-verified Fasten Stitch
+  onboarding (`/connect/<tenant>`, CLEAR/ID.me via TEFCA) now ends with a one-time
+  "Connect your AI assistant" card — a **read-scoped, 30-day patient connect token** minted only
+  after Fasten's HMAC-signed `connection_success` webhook verifies the `org_connection_id`
+  (`GET /fasten/connections/<id>/agent-access`; first-connection-only, mint-once, tenant-bound).
+  Token scope claim: read-scoped tokens are rejected by every write path (H4 intact).
+- **EHI export trigger** (`r6/fasten/api.py`): Fasten does not export records automatically —
+  the server now requests `POST /v1/bridge/fhir/ehi-export` (idempotent) the moment a connection
+  verifies. Requires `FASTEN_PRIVATE_KEY`.
+- **Prescription transfer requests** — `rx_transfer_request` MCP tool (**29 tools**) +
+  `POST /r6/actions/rx-transfer/propose`: assembles active medications and stages one
+  human-confirmed phone call to the receiving pharmacy (how US transfers actually work).
+  Schedule II is refused with an explanation (never transferable).
+- **Per-agent quickstarts** (`docs/quickstarts/`): Claude (web/desktop/mobile), Perplexity,
+  ChatGPT Developer Mode, Telegram (OpenClaw), generic MCP — plus a 10-minute demo script and
+  the own-data onboarding walkthrough.
+- **Health Bank One converter** (`scripts/convert_hbo_export.py`): HBO's columns/rows tables →
+  FHIR R4, Patient redacted-by-construction; in-process redactor now scrubs PHI-bearing
+  embedded XML tags in string payloads (`embedded_tags_masked`).
+- **CMS-0057-F / Da Vinci DTR design doc** (`docs/design/cms-0057-prior-auth-dtr.md`).
+- **Contract tests for live integration paths:** Fasten Standard-Webhooks signatures
+  (valid/tampered/expired/fail-closed), `/shc/ingest` auth+shape, MEDENT/HBO OAuth broker
+  round-trips, EHI export trigger, OpenClaw bot fixes.
+
+### Changed
+- **Fasten webhook envelope:** events nest fields under `data` — handlers now unwrap it
+  (previously every live event was silently dropped with a 200).
+- **Webhook verification is fail-closed:** unsigned events rejected unless
+  `FASTEN_ALLOW_UNSIGNED_WEBHOOKS=true` (dev only).
+- **Vercel serverless copy refuses stateful writes** (405 → app.healthclaw.io) — its SQLite is
+  ephemeral, so accepted writes were silently lost.
+- **Lab interpreter honesty:** panic thresholds are inclusive (K of exactly 6.5 → `HH`), and a
+  one-sided lab reference range can no longer yield a false "normal" when the value crosses the
+  population bound on the uncovered side (→ indeterminate).
+- CSP now allows the Fasten Stitch widget + CLEAR/ID.me identity frames (`frame-src`);
+  `frame-ancestors 'none'` unchanged.
+- OpenClaw bot: server-mint bind fallback (no shared secret needed for public tenants);
+  `/curatr` targets a real resource per the current tool schema.
+
+## [1.6.0] — 2026-07-02 — Clinical Intelligence
+
+_Retroactive entry (release shipped without a changelog update)._
+
+### Added
+- Lab reference-range interpreter (`Observation/$interpret`, `fhir_interpret_labs`) — LOINC/UCUM,
+  resource-range-wins, indeterminate-over-false-normal.
+- NQF 0018 / CMS165 quality-measure calculator (`Measure/$evaluate-measure`) — honestly scoped
+  as a calculator, not a certified eCQM.
+- Guardrail conformance harness (`GET /r6/fhir/$conformance`) grading deployments A–F; CI gate.
+- Any-agent-framework adapters (OpenAI/Gemini), Medplum-in-front recipe, SMBP triage aligned to
+  the 2025 AHA/ACC guideline, ruff lint gate, dependency advisories remediated.
+
 ## [1.5.0] — 2026-06-18 — Security Hardening + SDC Forms
 
 ### Added

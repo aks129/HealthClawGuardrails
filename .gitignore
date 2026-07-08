@@ -40,3 +40,6 @@ gha-creds-*.json
 private/
 /CLAUDE.md
 .claude/
+
+# Playwright MCP session artifacts
+.playwright-mcp/
