@@ -26,7 +26,7 @@ from r6.models import R6Resource
 
 logger = logging.getLogger(__name__)
 
-_PROGRESS_BATCH = 50  # commit progress every N resources
+_PROGRESS_BATCH = 10  # commit progress every N resources (observability)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
 
 # Clinical types eligible for automatic Curatr scan after ingestion
@@ -105,6 +105,9 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                             job.skipped_resources = skipped
                             job.failed_resources = failed
                             db.session.commit()
+                            logger.info(
+                                'Fasten job %s progress: ingested=%d skipped=%d '
+                                'failed=%d', job.task_id, ingested, skipped, failed)
 
             job.status = 'complete'
             job.ingested_resources = ingested
