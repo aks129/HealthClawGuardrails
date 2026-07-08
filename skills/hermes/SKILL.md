@@ -10,7 +10,7 @@ description: >
   wants an alternative to OpenClaw that learns over time.
 version: 1.0.0
 author: HealthClaw contributors
-license: MIT
+license: FSL-1.1-MIT
 references:
   hermes_repo: https://github.com/nousresearch/hermes-agent
   agentskills: https://agentskills.io
