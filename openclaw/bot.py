@@ -256,10 +256,24 @@ def _bind_chat_to_tenant(chat_id: int, username: str | None) -> tuple[bool, str]
     webhook can push back. Idempotent; returns (ok, detail) — detail is
     safe to surface in chat ("bound", "already bound", or an error class).
     """
-    if not STEP_UP_SECRET:
-        return False, 'STEP_UP_SECRET not configured'
     try:
-        step_up = _get_step_up_token()
+        if STEP_UP_SECRET:
+            step_up = _get_step_up_token()
+        else:
+            # No shared secret (e.g. running the quickstart recipe against a
+            # remote stack): mint via the server. Works for public tenants
+            # (desktop-demo); non-public tenants correctly get a 403 there.
+            mint = requests.post(
+                f'{FHIR_BASE_URL}/internal/step-up-token',
+                json={'tenant_id': TENANT_ID},
+                headers={'X-Tenant-Id': TENANT_ID},
+                timeout=5,
+            )
+            if mint.status_code != 200:
+                return False, f'server mint http {mint.status_code}'
+            step_up = mint.json().get('token', '')
+            if not step_up:
+                return False, 'server mint returned no token'
         resp = requests.post(
             f'{FHIR_BASE_URL}/internal/bind-telegram',
             json={
@@ -480,14 +494,33 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _reply(update, 'Running Curatr evaluation…', agent_id)
     chat_id = update.effective_chat.id
     try:
-        result = _rpc('curatr_evaluate')
+        # curatr_evaluate targets one resource (resource_type + resource_id);
+        # default to the tenant's most recent Observation.
+        search = _rpc('fhir_search', resource_type='Observation',
+                      params={'_count': 1})
+        entries = (search.get('entry') or search.get('resources') or
+                   (search.get('bundle') or {}).get('entry') or [])
+        if not entries:
+            await _reply(update, 'No Observations to evaluate yet — '
+                                 'connect records first (/connect).', agent_id)
+            return
+        first = entries[0].get('resource', entries[0])
+        result = _rpc('curatr_evaluate',
+                      resource_type=first.get('resourceType', 'Observation'),
+                      resource_id=first.get('id'))
         _chat_state.setdefault(chat_id, {})['last_curatr'] = result
 
-        score = result.get('overall_score', result.get('score', '?'))
+        score = result.get('quality_score',
+                           result.get('overall_score', result.get('score', '?')))
+        quality = result.get('overall_quality', '')
         issues = result.get('issues', [])
         proposals = result.get('fix_proposals', result.get('proposals', []))
 
-        lines = [f'*Curatr Evaluation* (score: {score})']
+        lines = [f'*Curatr Evaluation* — quality: {quality or "?"} '
+                 f'(score: {score})']
+        summary = result.get('summary')
+        if summary:
+            lines.append(summary)
         if issues:
             lines.append('\n*Issues:*')
             for iss in issues[:5]:
