@@ -26,6 +26,7 @@ from r6.fasten.models import FastenConnection, FastenJob
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
 from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
+from r6.fasten.api import trigger_ehi_export
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +204,8 @@ def _handle_connection_success(payload: dict) -> None:
         if existing.webhook_verified_at is None:
             existing.webhook_verified_at = datetime.now(timezone.utc)
             db.session.commit()
+        # Fasten does NOT export automatically — request it (idempotent).
+        trigger_ehi_export(org_connection_id)
         return
 
     conn = FastenConnection(
@@ -218,6 +221,9 @@ def _handle_connection_success(payload: dict) -> None:
     )
     db.session.add(conn)
     db.session.commit()
+
+    # Fasten does NOT export automatically — request it (idempotent).
+    trigger_ehi_export(org_connection_id)
 
 
 # ---------------------------------------------------------------------------
