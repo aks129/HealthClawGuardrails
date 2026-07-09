@@ -361,11 +361,21 @@ def _fhir_base() -> str:
 
 
 def _fhir_get(resource_type: str, params: dict, tenant: str) -> dict:
-    """Generic FHIR search, returns parsed Bundle or raises."""
+    """Generic FHIR search, returns parsed Bundle or raises.
+
+    Reads of non-public tenants are authenticated (the read-auth gate): a bare
+    X-Tenant-Id 401s. Mint and send a tenant-bound step-up token — the read
+    gate accepts any valid one — so the clinical commands (conditions, labs,
+    vitals, meds, summary, ...) actually return data.
+    """
     r = requests.get(
         f"{_fhir_base()}/{resource_type}",
         params=params,
-        headers={"X-Tenant-Id": tenant, "Accept": "application/fhir+json"},
+        headers={
+            "X-Tenant-Id": tenant,
+            "X-Step-Up-Token": mint_step_up_token(tenant, "bot"),
+            "Accept": "application/fhir+json",
+        },
         timeout=20,
     )
     r.raise_for_status()
