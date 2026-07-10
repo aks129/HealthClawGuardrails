@@ -63,6 +63,16 @@ services:
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-120}
     depends_on:
       - fhir-mcp-guardrails
+    # node:20-slim ships no curl, so the probe uses node's global fetch.
+    # tools/list on the /mcp/rpc bridge is the strongest liveness signal:
+    # it exercises the Express stack, JSON-RPC dispatch, and the tool
+    # registry (asserts a non-empty tools array), not just process-up.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/mcp/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}).then(r=>r.json()).then(b=>process.exit(b.result&&Array.isArray(b.result.tools)&&b.result.tools.length>0?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     networks:
       - fhir-net
 
