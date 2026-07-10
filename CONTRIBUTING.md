@@ -19,6 +19,11 @@ extraction semantics wrong" issue is as valuable as a PR.
 ## Ground rules
 
 - Be kind and assume good faith. See the [Code of Conduct](CODE_OF_CONDUCT.md).
+- **Every PR gets an automated standards review** within minutes (against
+  [.github/REVIEW_STANDARDS.md](.github/REVIEW_STANDARDS.md)) and merges
+  automatically once CI is green, the review passes, and a maintainer
+  approves. You'll always get specific, actionable feedback — never a silent
+  rejection.
 - **No CLA — DCO instead.** Sign off your commits (`git commit -s`, Developer Certificate of Origin). Contributions are accepted under the project's [MIT license](LICENSE); see [LICENSING.md](LICENSING.md) for the licensing posture going forward.
 - **Never commit secrets or real PHI.** This repo uses synthetic demo data only. PHI must never appear in code, tests, fixtures, logs, or commit history.
 
