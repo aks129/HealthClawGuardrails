@@ -116,6 +116,221 @@ def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
 # Timeout for upstream requests (seconds)
 _UPSTREAM_TIMEOUT = float(os.environ.get('FHIR_UPSTREAM_TIMEOUT', '15'))
 
+# ---------------------------------------------------------------------------
+# Upstream error sanitization
+#
+# A failed upstream call must surface as a (sanitized) OperationOutcome with
+# the real status — never as an empty bundle or a fake not-found. Raw upstream
+# error bodies are NOT passed through: diagnostics can embed PHI, stack traces,
+# or internal URLs that _rewrite_urls() would not catch.
+# ---------------------------------------------------------------------------
+
+# Statuses that describe the CALLER's request; these pass through unchanged.
+# Upstream 401/403 are deliberately absent: the caller never authenticates to
+# the upstream directly, so those mean the PROXY's credentials or upstream
+# policy failed — surfaced as 502 so the caller doesn't re-auth in a loop.
+_PASSTHROUGH_STATUSES = frozenset({400, 404, 405, 406, 409, 410, 412, 422, 429})
+
+# FHIR issue-type codes allowed through from upstream OperationOutcomes.
+_SAFE_ISSUE_CODES = frozenset({
+    'invalid', 'structure', 'required', 'value', 'invariant',
+    'security', 'login', 'unknown', 'expired', 'forbidden', 'suppressed',
+    'processing', 'not-supported', 'duplicate', 'multiple-matches',
+    'not-found', 'deleted', 'too-long', 'code-invalid', 'extension',
+    'too-costly', 'business-rule', 'conflict', 'transient', 'lock-error',
+    'no-store', 'exception', 'timeout', 'incomplete', 'throttled',
+    'informational',
+})
+_SAFE_SEVERITIES = frozenset({'fatal', 'error', 'warning', 'information'})
+_MAX_SANITIZED_ISSUES = 5
+# Refuse to parse oversized upstream error bodies (memory-exhaustion guard).
+_MAX_ERROR_BODY_BYTES = 1_000_000
+
+# Upstream free text (issue[].details.text / diagnostics) is NEVER forwarded:
+# it can carry patient names, identifiers, or internal hostnames that no URL
+# regex can reliably strip. We keep only the issue `code` (a bounded FHIR
+# value-set token) and synthesize the human-readable message ourselves from
+# this map. Specific, parameter-level correction ("unknown param X, did you
+# mean Y") is produced on the LOCAL search path, where we parse the query and
+# can name the parameter without echoing upstream text.
+_ISSUE_CODE_MESSAGE = {
+    'invalid': 'The upstream FHIR server rejected the request as invalid.',
+    'structure': 'The upstream FHIR server rejected the request structure.',
+    'required': 'The upstream FHIR server reported a missing required element.',
+    'value': 'The upstream FHIR server rejected a submitted value.',
+    'not-supported': 'The upstream FHIR server does not support this request.',
+    'security': 'Upstream authentication or authorization failed.',
+    'forbidden': 'The upstream FHIR server forbade this request.',
+    'not-found': 'The upstream FHIR server reported the resource was not found.',
+    'conflict': 'The request conflicted with the current state upstream.',
+    'duplicate': 'The upstream FHIR server reported a duplicate.',
+    'too-costly': 'The upstream FHIR server refused the request as too costly.',
+    'throttled': 'The upstream FHIR server is rate-limiting requests.',
+    'processing': 'The upstream FHIR server could not process the request.',
+    'transient': 'The upstream FHIR server had a transient error.',
+    'timeout': 'The upstream FHIR server timed out.',
+    'exception': 'The upstream FHIR server encountered an internal error.',
+}
+
+
+def _message_for_code(code: str) -> str:
+    return _ISSUE_CODE_MESSAGE.get(code, 'The upstream FHIR server returned an error.')
+
+
+def _issue_code_for_status(status: int) -> str:
+    """Map an HTTP status to a FHIR issue-type code."""
+    mapping = {
+        400: 'invalid', 401: 'security', 403: 'security',
+        404: 'not-found', 405: 'not-supported', 409: 'conflict',
+        410: 'deleted', 412: 'conflict', 422: 'processing',
+        429: 'throttled',
+    }
+    if status in mapping:
+        return mapping[status]
+    return 'transient' if status >= 500 else 'processing'
+
+
+def _sanitize_issue_list(raw_issues, fallback_code: str) -> list:
+    """Allowlist-sanitize an OperationOutcome issue array.
+
+    Keeps only ``severity`` and ``code`` from upstream (both bounded FHIR
+    value-set tokens) and synthesizes ``details.text`` from the code — the
+    upstream's own free text is never forwarded. Tolerates malformed shapes
+    (null, dict, string, non-dict entries, unhashable fields) by dropping or
+    defaulting them; a hostile or broken upstream must not crash the error
+    path or leak text through it.
+    """
+    issues = []
+    if not isinstance(raw_issues, list):
+        return issues
+    for issue in raw_issues[:_MAX_SANITIZED_ISSUES]:
+        if not isinstance(issue, dict):
+            continue
+        severity = issue.get('severity')
+        code = issue.get('code')
+        # Membership tests must be type-guarded: a list/dict severity or code
+        # is unhashable and would raise inside `in`.
+        safe_severity = severity if isinstance(severity, str) and severity in _SAFE_SEVERITIES else 'error'
+        safe_code = code if isinstance(code, str) and code in _SAFE_ISSUE_CODES else fallback_code
+        issues.append({
+            'severity': safe_severity,
+            'code': safe_code,
+            'details': {'text': _message_for_code(safe_code)},
+        })
+    return issues
+
+
+def sanitize_operation_outcome_resource(oo) -> dict:
+    """Sanitize an OperationOutcome embedded in a SUCCESS response — e.g. a
+    search.mode="outcome" warning entry in a searchset. apply_redaction()
+    targets clinical resources and does not inspect issue[].diagnostics, so
+    outcome entries go through the same allowlist as upstream errors."""
+    raw = oo.get('issue') if isinstance(oo, dict) else None
+    issues = _sanitize_issue_list(raw, 'processing')
+    if not issues:
+        issues = [{'severity': 'information', 'code': 'informational',
+                   'details': {'text': 'The upstream FHIR server returned a warning.'}}]
+    return {'resourceType': 'OperationOutcome', 'issue': issues}
+
+
+def sanitize_upstream_error(resp, caller_auth: bool = False) -> tuple[dict, int]:
+    """Convert a non-2xx upstream response into (OperationOutcome, status).
+
+    Allowlist policy: only issue ``severity`` and ``code`` (bounded FHIR
+    value-set tokens) survive; ``details.text`` is synthesized from the code.
+    Upstream free text, diagnostics, expressions, extensions, and any
+    non-OperationOutcome body are dropped entirely — upstream error text can
+    carry patient names or internal hostnames that scrubbing can't reliably
+    remove.
+
+    Status mapping: caller-attributable 4xx pass through. 401/403 depend on
+    who owns the upstream credential: with ``caller_auth=True`` (SHARP mode —
+    the caller's own SMART token is forwarded) they pass through so the
+    caller can re-authenticate; otherwise they map to 502 because the
+    PROXY's credentials failed and a passthrough 401 would send the caller
+    into a futile re-auth loop. 5xx maps to 502 with a fixed message —
+    upstream server-error text is never forwarded.
+    """
+    upstream_status = resp.status_code
+    if upstream_status in _PASSTHROUGH_STATUSES:
+        status = upstream_status
+    elif caller_auth and upstream_status in (401, 403):
+        status = upstream_status
+    else:
+        status = 502
+
+    if upstream_status in (401, 403) and not caller_auth:
+        # The upstream's auth diagnostics describe the proxy's credentials,
+        # which the caller can neither see nor fix — replace them wholesale.
+        return {
+            'resourceType': 'OperationOutcome',
+            'issue': [{
+                'severity': 'error',
+                'code': 'security',
+                'details': {'text': ('Upstream authentication/authorization '
+                                     f'failed (HTTP {upstream_status} from upstream)')},
+            }],
+        }, status
+
+    issues = []
+    if upstream_status < 500:
+        # 5xx bodies are never parsed: server-error pages/traces have no
+        # corrective value for the caller and the highest leak risk.
+        raw = getattr(resp, 'content', None)
+        try:
+            oversized = raw is not None and len(raw) > _MAX_ERROR_BODY_BYTES
+        except TypeError:  # content has no length — treat as unbounded, don't parse
+            oversized = True
+        body = None
+        if not oversized:
+            try:
+                body = resp.json()
+            except Exception:  # noqa: BLE001 — non-JSON upstream error body
+                body = None
+        if isinstance(body, dict) and body.get('resourceType') == 'OperationOutcome':
+            issues = _sanitize_issue_list(body.get('issue'),
+                                          _issue_code_for_status(upstream_status))
+
+    if not issues:
+        fallback_code = _issue_code_for_status(upstream_status)
+        issues = [{
+            'severity': 'error',
+            'code': fallback_code,
+            'details': {'text': _message_for_code(fallback_code)},
+        }]
+
+    return {'resourceType': 'OperationOutcome', 'issue': issues}, status
+
+
+def malformed_upstream_response_outcome() -> tuple[dict, int]:
+    """(OperationOutcome, 502) for a 2xx upstream response whose body is
+    absent, unparseable, or not a JSON object — a malformed success must not
+    escape as an unhandled 500 downstream (routes assume a dict resource)."""
+    return {
+        'resourceType': 'OperationOutcome',
+        'issue': [{
+            'severity': 'error',
+            'code': 'processing',
+            'details': {'text': 'Upstream FHIR server returned a malformed response body'},
+        }],
+    }, 502
+
+
+def upstream_unreachable_outcome(exc: Exception) -> tuple[dict, int]:
+    """(OperationOutcome, 502) for a network-level upstream failure.
+
+    Only the exception TYPE is disclosed — str(exc) can embed URLs or
+    secret-bearing connection strings.
+    """
+    return {
+        'resourceType': 'OperationOutcome',
+        'issue': [{
+            'severity': 'error',
+            'code': 'transient',
+            'details': {'text': f'Upstream FHIR server unreachable ({type(exc).__name__})'},
+        }],
+    }, 502
+
 
 class FHIRUpstreamProxy:
     """
@@ -125,9 +340,14 @@ class FHIRUpstreamProxy:
     URL rewriting ensures no upstream URLs leak to the client.
     """
 
-    def __init__(self, upstream_url: str, local_base_url: str = ''):
+    def __init__(self, upstream_url: str, local_base_url: str = '',
+                 caller_auth: bool = False):
         self.upstream_url = upstream_url.rstrip('/')
         self.local_base_url = local_base_url.rstrip('/')
+        # True when the CALLER's own credential is forwarded upstream (SHARP
+        # mode) — upstream 401/403 then belong to the caller and pass
+        # through, instead of mapping to 502 (proxy-credential failure).
+        self.caller_auth = caller_auth
         self._client = httpx.Client(
             base_url=self.upstream_url,
             timeout=_UPSTREAM_TIMEOUT,
@@ -167,35 +387,73 @@ class FHIRUpstreamProxy:
                 'error': str(e),
             }
 
-    def read(self, resource_type: str, resource_id: str) -> dict | None:
-        """Read a single resource from the upstream server."""
+    def _success_body(self, resp):
+        """Parse a 2xx upstream body and require it to be a JSON object.
+
+        Returns (rewritten_dict, None) on success, or (None, malformed
+        outcome tuple) when the body is unparseable or not an object —
+        downstream route code assumes a dict resource/Bundle, so an array
+        or scalar 200 would otherwise crash after the guardrail boundary.
+        """
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001 — unparseable body
+            return None, malformed_upstream_response_outcome()
+        if not isinstance(data, dict):
+            return None, malformed_upstream_response_outcome()
+        return self._rewrite_urls(data), None
+
+    def read(self, resource_type: str, resource_id: str) -> tuple[dict | None, int]:
+        """Read a single resource from the upstream server.
+
+        Returns (resource, 200) on success, (None, 404) when the upstream
+        says the resource does not exist, and (sanitized OperationOutcome,
+        status) for every other failure — an upstream 401/500 must not
+        masquerade as "not found" (#74).
+        """
         path = f'/{resource_type}/{resource_id}'
         try:
             resp = self._client.get(path)
-            if resp.status_code == 200:
-                data = resp.json()
-                return self._rewrite_urls(data)
-            if resp.status_code == 404:
-                return None
-            logger.warning(f'Upstream read {path} returned {resp.status_code}')
-            return None
-        except Exception as e:
-            logger.error(f'Upstream read {path} failed: {e}')
-            return None
+        except Exception as e:  # noqa: BLE001 — network-level failure
+            # Log the resource type only — the path embeds the resource id,
+            # which for person resources is PHI-adjacent.
+            logger.error(f'Upstream read {resource_type} failed: {type(e).__name__}')
+            return upstream_unreachable_outcome(e)
+        if resp.status_code == 200:
+            data, malformed = self._success_body(resp)
+            if malformed is not None:
+                logger.warning(f'Upstream read {resource_type} returned a malformed 200 body')
+                return malformed
+            return data, 200
+        if resp.status_code == 404:
+            return None, 404
+        logger.warning(f'Upstream read {resource_type} returned {resp.status_code}')
+        return sanitize_upstream_error(resp, caller_auth=self.caller_auth)
 
-    def search(self, resource_type: str, params: dict) -> dict:
-        """Search resources on the upstream server. Returns a Bundle."""
+    def search(self, resource_type: str, params: dict) -> tuple[dict, int]:
+        """Search resources on the upstream server.
+
+        Returns (Bundle, 200) on success and (sanitized OperationOutcome,
+        status) on failure — a rejected search must not be reported as an
+        empty result set (#74).
+        """
         path = f'/{resource_type}'
         try:
             resp = self._client.get(path, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                return self._rewrite_urls(data)
-            logger.warning(f'Upstream search {path} returned {resp.status_code}')
-            return self._empty_bundle()
-        except Exception as e:
-            logger.error(f'Upstream search {path} failed: {e}')
-            return self._empty_bundle()
+        except Exception as e:  # noqa: BLE001 — network-level failure
+            logger.error(f'Upstream search {resource_type} failed: {type(e).__name__}')
+            return upstream_unreachable_outcome(e)
+        if resp.status_code == 200:
+            data, malformed = self._success_body(resp)
+            if malformed is not None or data.get('resourceType') != 'Bundle':
+                # A search MUST return a Bundle; a bare resource (or other
+                # shape) would make the route synthesize a misleading empty
+                # searchset. Treat anything else as a malformed response.
+                logger.warning(f'Upstream search {resource_type} returned a non-Bundle 200 body')
+                return malformed if malformed is not None else malformed_upstream_response_outcome()
+            return data, 200
+        logger.warning(f'Upstream search {resource_type} returned {resp.status_code}')
+        return sanitize_upstream_error(resp, caller_auth=self.caller_auth)
 
     def create(self, resource_type: str, resource: dict) -> tuple[dict | None, int]:
         """Create a resource on the upstream server. Returns (resource, status_code)."""
@@ -207,13 +465,15 @@ class FHIRUpstreamProxy:
                 headers={'Content-Type': 'application/fhir+json'},
             )
             if resp.status_code in (200, 201):
-                data = resp.json()
-                return self._rewrite_urls(data), resp.status_code
-            logger.warning(f'Upstream create {path} returned {resp.status_code}: {resp.text[:200]}')
-            return resp.json() if resp.headers.get('content-type', '').startswith('application/') else None, resp.status_code
+                data, malformed = self._success_body(resp)
+                if malformed is not None:
+                    return malformed
+                return data, resp.status_code
+            logger.warning(f'Upstream create {resource_type} returned {resp.status_code}')
+            return sanitize_upstream_error(resp, caller_auth=self.caller_auth)
         except Exception as e:
-            logger.error(f'Upstream create {path} failed: {e}')
-            return None, 502
+            logger.error(f'Upstream create {resource_type} failed: {type(e).__name__}')
+            return upstream_unreachable_outcome(e)
 
     def update(self, resource_type: str, resource_id: str, resource: dict,
                if_match: str | None = None) -> tuple[dict | None, int]:
@@ -225,13 +485,15 @@ class FHIRUpstreamProxy:
         try:
             resp = self._client.put(path, json=resource, headers=headers)
             if resp.status_code in (200, 201):
-                data = resp.json()
-                return self._rewrite_urls(data), resp.status_code
-            logger.warning(f'Upstream update {path} returned {resp.status_code}')
-            return resp.json() if resp.headers.get('content-type', '').startswith('application/') else None, resp.status_code
+                data, malformed = self._success_body(resp)
+                if malformed is not None:
+                    return malformed
+                return data, resp.status_code
+            logger.warning(f'Upstream update {resource_type} returned {resp.status_code}')
+            return sanitize_upstream_error(resp, caller_auth=self.caller_auth)
         except Exception as e:
-            logger.error(f'Upstream update {path} failed: {e}')
-            return None, 502
+            logger.error(f'Upstream update {resource_type} failed: {type(e).__name__}')
+            return upstream_unreachable_outcome(e)
 
     def operation(self, path: str, method: str = 'GET',
                   params: dict | None = None,
@@ -487,8 +749,15 @@ def _sharp_url_from_request():
 def make_sharp_proxy(server_url: str,
                      access_token: str | None,
                      local_base_url: str = '') -> FHIRUpstreamProxy:
-    """Create a per-request FHIR proxy from SHARP context headers."""
-    proxy = FHIRUpstreamProxy(server_url, local_base_url)
+    """Create a per-request FHIR proxy from SHARP context headers.
+
+    caller_auth is set only when a SMART token is actually forwarded: then
+    upstream 401/403 belong to the caller and pass through for re-auth. With
+    no token forwarded, a 401/403 is not the caller's to fix, so it maps to
+    502 like any other proxy-side failure.
+    """
+    proxy = FHIRUpstreamProxy(server_url, local_base_url,
+                              caller_auth=bool(access_token))
     if access_token:
         token = access_token.strip()
         if token.lower().startswith('bearer '):

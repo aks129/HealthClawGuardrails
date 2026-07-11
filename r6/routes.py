@@ -44,6 +44,7 @@ from r6.fhir_proxy import (
     is_proxy_enabled,
     is_sharp_context_active,
     close_request_proxy,
+    sanitize_operation_outcome_resource,
     SHARP_SERVER_URL_HEADER,
 )
 from r6.curatr import (
@@ -537,7 +538,13 @@ def create_resource(resource_type):
             response = jsonify(result)
             response.status_code = status_code
             return response
-        # Upstream rejected the create
+        # Upstream rejected the create — audit the failure and surface the
+        # sanitized OperationOutcome with its real status.
+        record_audit_event('create', resource_type, None,
+                           agent_id=request.headers.get('X-Agent-Id'),
+                           tenant_id=tenant_id,
+                           outcome='failure',
+                           detail=f'create (upstream): rejected HTTP {status_code}')
         if result:
             return jsonify(result), status_code
         return _operation_outcome('error', 'exception',
@@ -586,10 +593,29 @@ def read_resource(resource_type, resource_id):
     # --- Upstream proxy mode: fetch from real FHIR server ---
     proxy = get_proxy_for_request()
     if proxy:
-        fhir_json = proxy.read(resource_type, resource_id)
-        if not fhir_json:
+        fhir_json, upstream_status = proxy.read(resource_type, resource_id)
+        if upstream_status == 404:
+            # Not-found is still an access attempt — audit it (every FHIR
+            # resource access emits an AuditEvent, failures included).
+            record_audit_event('read', resource_type, resource_id,
+                               agent_id=request.headers.get('X-Agent-Id'),
+                               context_id=request.headers.get('X-Context-Id'),
+                               tenant_id=tenant_id,
+                               outcome='failure',
+                               detail='read (upstream): HTTP 404 not found')
             return _operation_outcome('error', 'not-found',
                                       f'{resource_type}/{resource_id} not found'), 404
+        if upstream_status != 200:
+            # Surface the (sanitized) upstream failure with its real status —
+            # a 401/500 must not masquerade as not-found — and audit the
+            # failed access so denied/failed reads are visible in the trail.
+            record_audit_event('read', resource_type, resource_id,
+                               agent_id=request.headers.get('X-Agent-Id'),
+                               context_id=request.headers.get('X-Context-Id'),
+                               tenant_id=tenant_id,
+                               outcome='failure',
+                               detail=f'read (upstream): HTTP {upstream_status}')
+            return jsonify(fhir_json), upstream_status
 
         record_audit_event('read', resource_type, resource_id,
                            agent_id=request.headers.get('X-Agent-Id'),
@@ -703,6 +729,13 @@ def update_resource(resource_type, resource_id):
             result = add_disclaimer(result, resource_type)
             result['_source'] = 'upstream'
             return jsonify(result)
+        # Upstream rejected the update — audit the failure and surface the
+        # sanitized OperationOutcome with its real status.
+        record_audit_event('update', resource_type, resource_id,
+                           agent_id=request.headers.get('X-Agent-Id'),
+                           tenant_id=tenant_id,
+                           outcome='failure',
+                           detail=f'update (upstream): rejected HTTP {status_code}')
         if result:
             return jsonify(result), status_code
         return _operation_outcome('error', 'exception',
@@ -763,19 +796,60 @@ def search_resources(resource_type):
         params = dict(request.args)
         # Remove context-id (local concept, not upstream)
         params.pop('context-id', None)
-        bundle = proxy.search(resource_type, params)
+        bundle, upstream_status = proxy.search(resource_type, params)
+        if upstream_status != 200:
+            # Surface the (sanitized) upstream rejection with its real status —
+            # a failed search must not be reported as an empty result set —
+            # and audit it as a failure, not a zero-result success.
+            record_audit_event('read', resource_type, None,
+                               agent_id=request.headers.get('X-Agent-Id'),
+                               tenant_id=tenant_id,
+                               outcome='failure',
+                               detail=f'search (upstream): rejected HTTP {upstream_status}')
+            return jsonify(bundle), upstream_status
 
-        # Apply guardrails to each entry from upstream
+        # Apply guardrails to each entry from upstream. Tolerate a malformed
+        # bundle (null/non-list entry, non-dict entries or resources) rather
+        # than 500 — the upstream is not fully trusted.
         entries = []
-        for entry in bundle.get('entry', []):
-            resource_data = entry.get('resource', {})
-            redacted = apply_redaction(resource_data)
-            redacted = add_disclaimer(redacted, resource_type)
+        bundle_entries = bundle.get('entry')
+        if not isinstance(bundle_entries, list):
+            bundle_entries = []
+        for entry in bundle_entries:
+            if not isinstance(entry, dict):
+                continue
+            resource_data = entry.get('resource')
+            if not isinstance(resource_data, dict):
+                continue
+            if resource_data.get('resourceType') == 'OperationOutcome':
+                # Warning entries (search.mode="outcome") carry free-text
+                # issue fields apply_redaction() does not inspect — run them
+                # through the same allowlist as upstream errors.
+                redacted = sanitize_operation_outcome_resource(resource_data)
+            else:
+                redacted = apply_redaction(resource_data)
+                redacted = add_disclaimer(redacted, resource_type)
             redacted['_source'] = 'upstream'
-            entries.append({
+            new_entry = {
                 'fullUrl': entry.get('fullUrl', ''),
                 'resource': redacted,
-            })
+            }
+            # Preserve entry.search so mode="outcome" warnings survive — but
+            # allowlist it to scalar mode/score: `search` can carry
+            # extensions, and even under mode/score keys a hostile upstream
+            # could nest an object holding PHI or internal URLs.
+            search_info = entry.get('search')
+            if isinstance(search_info, dict):
+                allowed = {}
+                mode = search_info.get('mode')
+                if mode in ('match', 'include', 'outcome'):
+                    allowed['mode'] = mode
+                score = search_info.get('score')
+                if isinstance(score, (int, float)) and not isinstance(score, bool):
+                    allowed['score'] = score
+                if allowed:
+                    new_entry['search'] = allowed
+            entries.append(new_entry)
 
         result = {
             'resourceType': 'Bundle',
