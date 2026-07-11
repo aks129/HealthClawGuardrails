@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "jest --forceExit",
+    "test": "jest",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

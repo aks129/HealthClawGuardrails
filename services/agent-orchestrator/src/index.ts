@@ -376,7 +376,7 @@ app.delete("/mcp", (req, res) => {
 });
 
 // --- Session cleanup: expire sessions after 30 minutes of inactivity ---
-setInterval(() => {
+const sessionCleanupInterval = setInterval(() => {
   // In production, sessions would have last-activity timestamps
   // For now, cap total sessions to prevent memory exhaustion
   const MAX_SESSIONS = 1000;
@@ -389,6 +389,7 @@ setInterval(() => {
     }
   }
 }, 60_000);
+sessionCleanupInterval.unref?.();
 
 // --- SSE Transport (legacy MCP, still supported) ---
 
@@ -538,4 +539,11 @@ if (require.main === module) {
   });
 }
 
-export { app };
+function closeMCPServerForTests(): void {
+  clearInterval(sessionCleanupInterval);
+  rateLimitMap.clear();
+  streamableSessions.clear();
+  activeSessions.clear();
+}
+
+export { app, closeMCPServerForTests };

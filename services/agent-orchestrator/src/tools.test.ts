@@ -8,6 +8,7 @@
  */
 
 import { FHIRTools, MCPToolSchema } from "./tools";
+import http from "http";
 
 // Mock node-fetch before importing anything that uses it.
 // jest.mock is hoisted, so the factory must not reference outer variables.
@@ -16,15 +17,10 @@ import fetch from "node-fetch";
 const mockFetch = fetch as unknown as jest.Mock;
 
 import request from "supertest";
-import { app } from "./index";
+import { app, closeMCPServerForTests } from "./index";
 
-// The index module starts a setInterval for session cleanup. Use fake timers
-// so Jest can exit cleanly without --forceExit.
-beforeAll(() => {
-  jest.useFakeTimers();
-});
 afterAll(() => {
-  jest.useRealTimers();
+  closeMCPServerForTests();
 });
 
 // ---------------------------------------------------------------------------
@@ -1524,29 +1520,52 @@ describe("Express App Tests", () => {
   // -- SSE transport --
 
   describe("GET /sse", () => {
-    it("starts SSE connection with text/event-stream content type", (done) => {
-      request(app)
-        .get("/sse")
-        .buffer(false)
-        .parse((res: any, callback: any) => {
-          expect(res.headers["content-type"]).toContain("text/event-stream");
-          let data = "";
-          res.on("data", (chunk: Buffer) => {
-            data += chunk.toString();
-            if (data.length > 0) {
-              res.destroy();
+    it("starts SSE connection with text/event-stream content type", async () => {
+      await new Promise<void>((resolve, reject) => {
+        const server = http.createServer(app);
+        let req: http.ClientRequest | undefined;
+        let finished = false;
+
+        const finish = (error?: Error) => {
+          if (finished) return;
+          finished = true;
+          req?.destroy();
+          server.close((closeError) => {
+            if (error) {
+              reject(error);
+            } else if (closeError) {
+              reject(closeError);
+            } else {
+              resolve();
             }
           });
-          res.on("end", () => callback(null, data));
-          res.on("error", () => callback(null, data));
-          setTimeout(() => {
-            res.destroy();
-            callback(null, data);
-          }, 500);
-        })
-        .end(() => {
-          done();
+        };
+
+        server.listen(0, () => {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            finish(new Error("Expected test server to listen on a TCP port"));
+            return;
+          }
+
+          req = http.get(
+            { hostname: "127.0.0.1", port: address.port, path: "/sse" },
+            (res) => {
+              try {
+                expect(res.statusCode).toBe(200);
+                expect(res.headers["content-type"]).toContain("text/event-stream");
+                res.destroy();
+                finish();
+              } catch (error) {
+                res.destroy();
+                finish(error as Error);
+              }
+            }
+          );
+          req.on("error", (error) => finish(error));
         });
+        server.on("error", (error) => finish(error));
+      });
     });
   });
 
