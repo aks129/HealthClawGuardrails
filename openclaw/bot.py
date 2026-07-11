@@ -242,7 +242,25 @@ def _fmt_observation(entry: dict) -> str:
            .get('display', res.get('code', {}).get('text', '?'))
     )
     qty = res.get('valueQuantity', {})
-    value = f"{qty.get('value', '?')} {qty.get('unit', '')}".strip()
+    if qty:
+        value = f"{qty.get('value', '?')} {qty.get('unit', '')}".strip()
+    elif res.get('component'):
+        # Panel observations (e.g. blood pressure) carry values in components
+        parts = []
+        for comp in res['component'][:4]:
+            cq = comp.get('valueQuantity', {})
+            if cq.get('value') is None:
+                continue
+            label = (comp.get('code', {}).get('coding', [{}])[0]
+                     .get('display', '') or '').split(' ')[0].lower()
+            parts.append(f"{label + ' ' if label else ''}{cq['value']}")
+        value = ('/'.join(p.split()[-1] for p in parts)
+                 + ' ' + (res['component'][0].get('valueQuantity', {}).get('unit', '') or '')
+                 ).strip() if parts else '(see full record)'
+    elif res.get('valueString'):
+        value = str(res['valueString'])[:40]
+    else:
+        value = '(no numeric value)'
     return f'• {code}: {value}'
 
 
