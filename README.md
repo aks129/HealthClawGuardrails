@@ -80,6 +80,7 @@ Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/r
 
 | Version | Highlights |
 | --- | --- |
+| **v1.8.0** | **Real-actions foundation** — an agent can *propose* a real-world action (call, SMS, form) but `commit` only *submits* it (HTTP 202); execution happens through a separate approval that requires a single-use step-up credential and an expiry-guarded atomic claim, so the agent's own toolchain can never approve its own action (the spoofable `X-Human-Confirmed` header is gone) · **`ActionExecutor` plugin registry** — add a real-world capability behind the full guardrail rail in ~50 lines, no core changes ([extend it](ROADMAP.md#extending-the-action-rail)) · mandatory red-flag emergency screen; fail-loud rails (no silent simulation) · **durable execution** — attempt ledger, provider reconciliation, external-tick reaper, append-only action-event log · **reliability floor** — config preflight (`GET /r6/ops/preflight`), Postgres CI lane, MCP fetch timeouts, poller 409-storm detection, source-aware resource identity `(tenant, type, id)`, Fasten hardening + zombie-job reaper · public [ROADMAP](ROADMAP.md) + contributor on-ramp · fixes: upstream FHIR error fidelity, quality measures default to current year |
 | **v1.7.0** | Preventive care-gaps engine (`Patient/$care-gaps`, USPSTF/ACIP/ADA + eCQM crosswalk) · patient connect flow: identity-verified Fasten onboarding mints a webhook-gated, read-scoped 30-day agent token · prescription transfer requests (`rx_transfer_request`, Schedule II refused) — 29 MCP tools · [per-agent quickstarts](docs/quickstarts/) (Claude/Perplexity/ChatGPT/Telegram) · HBO export→FHIR converter + embedded-XML PHI scrubber · hardening: fail-closed webhook verify, scoped tokens, serverless write guard, live-path contract tests · clinical fixes: SNOMED diabetes detection, inclusive panic thresholds, one-sided-range honesty |
 | **v1.6.0** | Lab reference-range interpreter (`Observation/$interpret`) · NQF 0018 quality measure (`Measure/$evaluate-measure`) · [any-agent-framework adapters](docs/recipes/any-agent-framework.md) (OpenAI/Gemini) · [Medplum-in-front recipe](docs/recipes/healthclaw-in-front-of-medplum.md) · SMBP triage on 2025 AHA/ACC · ruff lint gate · all dependency advisories remediated |
 | v1.5.0 | Read-auth hardening (tenant reads authenticated, not just scoped) · HL7 SDC forms — `$populate` / `$extract` |
@@ -94,7 +95,7 @@ This is a **vendor-neutral guardrail proxy** that sits between any AI agent and 
 - **PHI redaction** — Names truncated to initials, identifiers masked, addresses stripped, birth dates truncated to year
 - **Immutable audit trail** — Every read/write logged with tenant, agent, timestamp
 - **Step-up authorization** — HMAC-SHA256 tokens required for writes
-- **Human-in-the-loop** — Clinical writes blocked until a human confirms (HTTP 428)
+- **Human-in-the-loop** — Clinical writes blocked until a human confirms (HTTP 428); real-world actions (calls, SMS, forms) go further: `commit` only *submits*, and execution requires a **provably out-of-band** single-use approval the agent's own toolchain cannot satisfy
 - **Tenant isolation** — Every query scoped to tenant, cross-tenant access blocked
 - **Medical disclaimers** — Injected on all clinical resource reads
 - **Compiled Truth** — Current state + append-only evidence trail for every resource
@@ -276,7 +277,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (840+ across 40+ files; includes SDC, quality, and labs suites)
+# Python tests (1,170+ across 80+ files; includes action-rail, SDC, quality, labs, ops suites)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
