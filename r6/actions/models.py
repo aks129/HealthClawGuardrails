@@ -50,7 +50,12 @@ class ProposedAction(db.Model):
     tenant_id = db.Column(db.String(64), nullable=False, index=True)
     kind = db.Column(db.String(32), nullable=False)
     payload_json = db.Column(db.Text, nullable=False)
-    status = db.Column(db.String(16), nullable=False, default='proposed')
+    # 32, not 16: 'awaiting_confirmation' is 21 chars. SQLite ignores varchar
+    # width so tests can't catch truncation at write time — Postgres raises
+    # StringDataRightTruncation. Width is asserted against the state map in
+    # tests/actions/test_state_transitions.py; schema_sync auto-widens the
+    # live column at boot when the model length exceeds it.
+    status = db.Column(db.String(32), nullable=False, default='proposed')
     external_ref = db.Column(db.String(128), nullable=True)
     outcome_summary = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow)

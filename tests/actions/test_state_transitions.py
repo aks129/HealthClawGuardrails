@@ -61,3 +61,16 @@ def test_new_states_present():
     assert 'executing' in _TRANSITIONS['awaiting_confirmation']
     assert 'expired' in _TRANSITIONS['awaiting_confirmation']
     assert 'needs_review' in _TRANSITIONS['executing']
+
+
+def test_status_column_fits_every_legal_state():
+    # SQLite ignores VARCHAR length, so an under-width column passes every
+    # test here and then raises StringDataRightTruncation on Postgres the
+    # first time the state is written (same class of bug as
+    # tests/test_ingest_resilience.py::test_resource_id_column_fits_real_ehr_ids).
+    # Computed from the state map, not hardcoded, so a future state rename
+    # can never silently reintroduce it.
+    from r6.actions.models import _TRANSITIONS
+    all_states = _TRANSITIONS.keys() | set().union(*_TRANSITIONS.values())
+    longest = max(len(s) for s in all_states)
+    assert ProposedAction.__table__.c.status.type.length >= longest
