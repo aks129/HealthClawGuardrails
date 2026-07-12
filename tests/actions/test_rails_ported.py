@@ -153,6 +153,59 @@ def test_phone_execute_success(monkeypatch):
     assert calls[0][1] == 'https://api.bland.ai/v1/calls'
 
 
+def test_phone_execute_success_full_request_contract(monkeypatch):
+    """Ported from the old executors.py test_phone_call_real_contract: pins
+    the exact headers/JSON body Bland.ai receives, and that the webhook URL
+    embeds the action_id (+ secret, when configured) in its querystring —
+    that's how the callback later re-identifies which action to resolve."""
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    monkeypatch.setenv('PUBLIC_BASE_URL', 'https://app.healthclaw.io')
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    calls = []
+
+    def fake_request(method, url, **kw):
+        calls.append((method, url, kw))
+        return _Resp200Phone()
+    monkeypatch.setattr('requests.request', fake_request)
+
+    ex = get_executor('phone-call')
+    action = _FakeAction({'phone': '617-555-0100', 'body': 'script'},
+                         action_id='act-1')
+    result = ex.execute(action)
+
+    assert result.status == 'executing'
+    assert result.provider_ref == 'CALL123'
+    method, url, kw = calls[0]
+    assert method == 'POST'
+    assert url == 'https://api.bland.ai/v1/calls'
+    assert kw['headers']['Authorization'] == 'test-key'
+    assert kw['json']['phone_number'] == '617-555-0100'
+    assert kw['json']['task'] == 'script'
+    webhook = kw['json']['webhook']
+    assert webhook.startswith('https://app.healthclaw.io/r6/actions/callback/bland?')
+    assert 'action_id=act-1' in webhook
+    assert 'secret=hook-secret' in webhook
+
+
+def test_phone_execute_dials_with_legacy_alias(monkeypatch):
+    """BLAND_API_KEY (alias) dials for real, not just BLAND_AI_API_KEY —
+    ported from the old executors.py test_phone_call_dials_with_legacy_alias."""
+    monkeypatch.delenv('BLAND_AI_API_KEY', raising=False)
+    monkeypatch.setenv('BLAND_API_KEY', 'alias-key')
+    calls = []
+
+    def fake_request(method, url, **kw):
+        calls.append((method, url, kw))
+        return _Resp200Phone()
+    monkeypatch.setattr('requests.request', fake_request)
+
+    ex = get_executor('phone-call')
+    result = ex.execute(_FakeAction({'phone': '617-555-0100', 'body': 'script'}))
+    assert result.status == 'executing'
+    assert result.provider_ref == 'CALL123'
+    assert calls[0][2]['headers']['Authorization'] == 'alias-key'
+
+
 def test_sms_execute_success(monkeypatch):
     monkeypatch.setenv('TWILIO_ACCOUNT_SID', 'ACxxx')
     monkeypatch.setenv('TWILIO_AUTH_TOKEN', 'tok')
