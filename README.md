@@ -627,7 +627,7 @@ in-process cache when Redis is unavailable).
 - Local mode: JSON blob storage with table-scan search (no indexed fields)
 - Structural validation only (no StructureDefinition conformance or terminology binding)
 - SubscriptionTopic stored but notifications not dispatched
-- Human-in-the-loop is a header flag (`X-Human-Confirmed`), not cryptographic confirmation — a compensating control for the demo, not proof a human acted
+- Clinical FHIR writes gate human-in-the-loop with a header flag (`X-Human-Confirmed`), not cryptographic confirmation — a compensating control for the demo, not proof a human acted. Real-world actions (phone/SMS/etc.) no longer use that header: `commit` only submits the action for out-of-band approval (202 `awaiting_confirmation`), and the patient's Approve tap consumes a single-use `ActionConfirmation` credential server-side before anything executes.
 - OAuth endpoints are for discovery/SMART advertisement; route enforcement is via step-up + read-auth tokens, and the auto-approve authorize flow is limited to public/demo tenants (no per-user consent screen)
 - No historical versioning (version_id increments but old versions not retrievable)
 - Upstream proxy: no response caching, no cross-version translation
