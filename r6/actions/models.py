@@ -20,15 +20,20 @@ PROPOSAL_TTL_MINUTES = 30
 
 VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call')
 
-# Legal status transitions
+# Legal status transitions. awaiting_confirmation is the out-of-band gate:
+# commit submits (proposed->awaiting_confirmation), the human's approval claims
+# (awaiting_confirmation->executing). expiry from awaiting_confirmation is the
+# COMMON path (proposals linger hours awaiting a human). needs_review = executed
+# but outcome unconfirmable (carries evidence). unknown = post-possible-send.
 _TRANSITIONS = {
-    'proposed': {'confirmed', 'executing', 'expired'},  # proposed->executing: atomic single-UPDATE claim path in commit route
-    'confirmed': {'executing', 'failed'},
-    'executing': {'completed', 'failed', 'unknown'},
+    'proposed': {'awaiting_confirmation', 'expired'},
+    'awaiting_confirmation': {'executing', 'expired'},
+    'executing': {'completed', 'failed', 'needs_review', 'unknown'},
     'completed': set(),
     'failed': set(),
+    'needs_review': set(),
     'expired': set(),
-    'unknown': {'completed', 'failed'},  # late webhook may still resolve it
+    'unknown': {'completed', 'failed', 'needs_review'},
 }
 
 
@@ -65,13 +70,6 @@ class ProposedAction(db.Model):
 
     def is_expired(self):
         return _utcnow() >= self.expires_at
-
-    def transition(self, new_status):
-        allowed = _TRANSITIONS.get(self.status, set())
-        if new_status not in allowed:
-            raise ValueError(
-                'Illegal transition %s -> %s' % (self.status, new_status))
-        self.status = new_status
 
     @property
     def payload(self):
