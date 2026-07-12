@@ -5,9 +5,12 @@ Test fixtures for the R6 FHIR Showcase.
 import os
 import pytest
 
-# Set test environment before importing app — prevents file-based DB creation
+# Set test environment before importing app — prevents file-based DB creation.
+# setdefault (not assignment) so a CI job can pre-set SQLALCHEMY_DATABASE_URI
+# (e.g. to Postgres, for the postgres-tests lane) before pytest starts;
+# sqlite:///:memory: remains the default for local/unconfigured runs.
 os.environ['TESTING'] = '1'
-os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///:memory:')
 os.environ['STEP_UP_SECRET'] = 'test-secret-for-hmac-validation'
 # Command-center tests assume desktop-demo is publicly readable (mirrors
 # the healthclaw.io demo host). In production on Railway this env var is
@@ -23,7 +26,11 @@ def app():
     """Create a test Flask application."""
     from main import app as flask_app
     flask_app.config['TESTING'] = True
-    flask_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    # Respect the module-level env var (sqlite by default, Postgres when the
+    # postgres-tests CI lane pre-sets SQLALCHEMY_DATABASE_URI) rather than
+    # forcing sqlite here — main.py already read it into app.config at
+    # import time, so this just keeps them in sync.
+    flask_app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['SQLALCHEMY_DATABASE_URI']
 
     from models import db
     with flask_app.app_context():
@@ -32,6 +39,13 @@ def app():
         from r6.rate_limit import _rate_limits
         _rate_limits.clear()
         yield flask_app
+        # Release the scoped session's connection/transaction before DDL.
+        # On SQLite (StaticPool, single shared connection) drop_all() reuses
+        # the same connection as db.session so this was never load-bearing —
+        # but on Postgres, drop_all() opens a separate pooled connection,
+        # and a still-open session transaction (e.g. from an uncommitted
+        # SELECT during the test) blocks its DROP TABLE indefinitely.
+        db.session.remove()
         db.drop_all()
 
 
