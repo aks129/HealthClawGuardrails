@@ -1,12 +1,18 @@
 """The action extension point (public, versioned). A rail implements
 ActionExecutor and calls register_executor() from its module in
-r6/actions/rails/ (imported at boot). VALID kinds are derived from this
-registry — rails never edit a shared tuple, so parallel rails can't collide.
+r6/actions/rails/ (imported at boot). VALID kinds WILL BE derived from this
+registry once rails register at boot (Task 8); until then models.VALID_KINDS
+remains the gate. Rails never edit a shared tuple, so parallel rails can't
+collide.
 
 This is the contributor surface the docs advertise: implement the three
 methods (~50 lines), register, and your capability inherits the entire
 guardrail rail — propose validation, the out-of-band human gate, audit,
 observability — for free.
+
+Interim note: executors.py still has the OLD ExecutionResult (ok/simulated
+shape); this module's ExecutionResult (status-based) replaces it in Task 8 —
+don't mix the two up in the meantime.
 """
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable

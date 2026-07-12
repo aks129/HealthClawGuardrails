@@ -24,6 +24,11 @@ def test_register_and_lookup():
     assert isinstance(get_executor('toy'), _Toy)
 
 
+def test_unregistered_kind_returns_none():
+    _clear()
+    assert get_executor('never-registered') is None
+
+
 def test_duplicate_kind_rejected():
     _clear()
     register_executor(_Toy())

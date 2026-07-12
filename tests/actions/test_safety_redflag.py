@@ -21,6 +21,14 @@ def test_expanded_lexicon():
         assert screen_text(phrase) is not None, phrase
 
 
+def test_lay_terms_flagged():
+    # Lay emergency phrasing a caregiver would actually type — verified live
+    # as false negatives before the lexicon covered them.
+    for phrase in ['heart attack', 'having a stroke', 'he is not breathing',
+                   "isn't breathing", 'call 911']:
+        assert screen_text(phrase) is not None, phrase
+
+
 def test_case_insensitive():
     assert screen_text('CHEST PAIN!!') is not None
 

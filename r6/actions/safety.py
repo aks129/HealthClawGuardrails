@@ -1,7 +1,9 @@
-"""Mandatory, non-bypassable emergency screen. Runs at PROPOSE on every
-free-text reason/body. A hit refuses the action and returns 911/urgent-care
-escalation, audited like a Schedule-II refusal. Reuses the SMBP triage
-red-flag doctrine (symptoms trump everything) — see r6/smbp/triage.py.
+"""Mandatory, non-bypassable emergency screen for PROPOSE on every free-text
+reason/body: a hit refuses the action and returns 911/urgent-care escalation,
+audited like a Schedule-II refusal. Wired into the propose routes in Task 10
+(Approve-is-the-commit flow); until then this module is the shared lexicon +
+contract. Reuses the SMBP triage red-flag doctrine (symptoms trump
+everything) — see r6/smbp/triage.py.
 
 triage.SYMPTOMS is a structured question-set vocabulary (snake_case codes
 like "chest_pain", answered yes/no in the BP flow), not free-text phrases —
@@ -25,8 +27,15 @@ from r6.smbp.triage import SYMPTOMS
 _EXTRA = [
     'kill myself', 'suicid', 'end my life', 'want to die',
     'anaphylax', 'throat closing', "can't breathe", 'cannot breathe',
-    'trouble breathing', 'face drooping', 'slurred speech',
+    'trouble breathing', 'not breathing', "isn't breathing",
+    'face drooping', 'slurred speech',
     'vaginal bleeding', 'pregnant and bleeding', 'overdose',
+    # Lay terms for the events themselves, not just symptoms — a caregiver
+    # types "he's having a heart attack", not "chest pain". Bare 'stroke'
+    # substring-matches 'keystroke'/'stroke of luck' and '911' matches
+    # addresses like '911 Main St'; accepted false positives — this screen
+    # must err toward refusing an action, never toward missing an emergency.
+    'heart attack', 'stroke', '911',
 ]
 
 _LEXICON = [s.replace('_', ' ').lower() for s in SYMPTOMS] + [s.lower() for s in _EXTRA]
