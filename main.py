@@ -171,6 +171,14 @@ app.register_blueprint(actions_blueprint)
 logger.info("Actions Blueprint registered at /r6/actions (rails: %s)",
             ', '.join(_action_kinds()))
 
+# Register Ops Blueprint — config preflight + external-tick reaper
+# (spec W0 §1 + Durable execution). No new models; reads env + the existing
+# action tables only. Registered after the actions rails so preflight's
+# per-rail required_env checks see the populated registry.
+from r6.ops.routes import ops_blueprint
+app.register_blueprint(ops_blueprint)
+logger.info("Ops Blueprint registered at /r6/ops")
+
 # Register SMBP Blueprint
 from r6.smbp.routes import smbp_blueprint
 app.register_blueprint(smbp_blueprint)
