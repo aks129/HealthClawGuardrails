@@ -12,7 +12,7 @@
 <br/>
 
 <!-- Project -->
-[![Release](https://img.shields.io/badge/release-v1.7.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
+[![Release](https://img.shields.io/badge/release-v1.8.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
 [![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
 [![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
@@ -25,7 +25,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-840%2B%20Python%20%2B%2088%20Node-22c55e?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1170%2B%20Python%20%2B%20112%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
@@ -35,7 +35,7 @@
 
 <br/>
 
-**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-29)** · **[Recipes](docs/recipes/)** · **[Roadmap](docs/ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
+**[Quick Start](#quick-start)** · **[MCP Tools](#mcp-tools-29)** · **[Recipes](docs/recipes/)** · **[Roadmap](ROADMAP.md)** · **[Claude Plugin](#install-as-a-claude-plugin)** · **[Architecture](#what-it-does)** · **[healthclaw.io](https://healthclaw.io)** · **[Contributing](CONTRIBUTING.md)** · **[Dev Guide](docs/development.md)**
 
 </div>
 
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.7.0 · 950+ Python + 92 Node tests · 29 MCP tools · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.8.0 · 1,170+ Python + 112 Node tests · 29 MCP tools · real-world action rail (provably out-of-band gate) · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -646,7 +646,7 @@ with different vantage points pressure-test it. We especially want:
 - **Standards people** (HL7 / SDC / SMART) — tell us where we've diverged from the spec, especially on `$populate`/`$extract`.
 - **Anyone** — open an issue, file a "you got this wrong," or send a PR.
 
-Start here: **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[Roadmap](docs/ROADMAP.md)** · **[Dev Guide](docs/development.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[CHANGELOG.md](CHANGELOG.md)** · **[Security policy](SECURITY.md)**
+Start here: **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[Roadmap](ROADMAP.md)** · **[Dev Guide](docs/development.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[CHANGELOG.md](CHANGELOG.md)** · **[Security policy](SECURITY.md)**
 
 Good first contributions are labeled in the issue tracker. Contributions are DCO-signed (`git commit -s`) under the [MIT license](LICENSE) — see [LICENSING.md](LICENSING.md) for the project's licensing posture going forward.
 
