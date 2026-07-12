@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.coverage
+.coverage.*
+coverage.json
+htmlcov/
 instance/
 *.db
 node_modules/

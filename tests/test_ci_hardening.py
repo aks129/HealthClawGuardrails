@@ -42,3 +42,28 @@ def test_dependabot_updates_both_node_projects():
     }
 
     assert npm_directories == {"/services/agent-orchestrator", "/e2e"}
+
+
+def test_python_quality_gates_include_measured_coverage_and_gradual_typing():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    pyproject = (ROOT / "pyproject.toml").read_text()
+
+    assert "--cov-fail-under=80" in workflow
+    assert "uv run mypy" in workflow
+    assert "pytest-cov" in pyproject
+    assert "mypy" in pyproject
+    assert "[tool.mypy]" in pyproject
+
+
+def test_local_compose_security_defaults_are_documented_and_loopback_bound():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    example_env = (ROOT / ".env.example").read_text()
+
+    assert compose["services"]["fhir-mcp-guardrails"]["ports"][0].startswith(
+        "127.0.0.1:"
+    )
+    assert compose["services"]["agent-orchestrator"]["ports"][0].startswith(
+        "127.0.0.1:"
+    )
+    assert "MCP_AUTH_TOKEN=" in example_env
+    assert "READ_AUTH_ENABLED=" in example_env

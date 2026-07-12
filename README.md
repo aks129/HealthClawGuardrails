@@ -482,6 +482,10 @@ Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 | `FHIR_UPSTREAM_URL` | No | — | Upstream FHIR server (enables proxy mode) |
 | `SQLALCHEMY_DATABASE_URI` | Production | `sqlite:///mcp_server.db` | Database connection |
 | `SESSION_SECRET` | No | (dev key) | Flask session secret |
+| `READ_AUTH_ENABLED` | Production | `false` | Require tenant-bound credentials on protected reads |
+| `PUBLIC_TENANTS` | Production | — | Explicit comma-separated synthetic/demo tenant allowlist |
+| `REDIS_URL` | Production | — | Shared nonce, OAuth, rate-limit, and worker state |
+| `MCP_AUTH_TOKEN` | HTTP MCP | — | Bearer credential required by MCP HTTP transports |
 | `FHIR_UPSTREAM_TIMEOUT` | No | 15 | Upstream request timeout (seconds) |
 | `FHIR_LOCAL_BASE_URL` | No | — | Local URL for response URL rewriting |
 
