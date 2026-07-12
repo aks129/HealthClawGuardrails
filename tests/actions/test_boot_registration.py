@@ -28,6 +28,8 @@ def test_action_events_table_registered_by_importing_main_alone():
         "from models import db\n"
         "assert 'action_events' in db.metadata.tables, "
         "'ActionEvent not registered at boot — add the import to main.py'\n"
+        "assert 'action_confirmations' in db.metadata.tables, "
+        "'ActionConfirmation not registered at boot — add the import to main.py'\n"
     )
     proc = subprocess.run([sys.executable, '-c', code], cwd=_REPO_ROOT,
                           env=env, capture_output=True, text=True, timeout=60)
