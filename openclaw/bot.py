@@ -363,7 +363,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show a menu of available health data connection options."""
-    agent_id = await _log_incoming(update, 'connect')
+    await _log_incoming(update, 'connect')
 
     keyboard = [
         [InlineKeyboardButton(

@@ -1,7 +1,7 @@
 """Generic contract suite — parametrized over EVERY registered executor. A rail
 merges only when it passes this. New rails add zero lines here."""
 import pytest
-from r6.actions.registry import all_kinds, get_executor, ExecutionResult
+from r6.actions.registry import all_kinds, get_executor
 
 
 def _kinds():

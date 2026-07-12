@@ -4,7 +4,6 @@ GET /r6/fhir/$conformance probes the running deployment in-process and returns
 the scorecard — a one-URL "prove the guardrails hold" for partners and demos.
 """
 
-import json
 
 
 def test_conformance_endpoint_grades_the_live_app(client):
