@@ -12,11 +12,15 @@ import time
 import uuid
 from flask import Flask, request as flask_request, g
 from models import db
+from r6.runtime_config import validate_runtime_environment
+
+
+APP_ENV = validate_runtime_environment()
 
 # Configure logging — structured JSON in production, human-readable in dev
-log_level = os.environ.get('LOG_LEVEL', 'DEBUG' if os.environ.get('FLASK_ENV') == 'development' else 'INFO')
+log_level = os.environ.get('LOG_LEVEL', 'DEBUG' if APP_ENV == 'development' else 'INFO')
 
-if os.environ.get('FLASK_ENV') == 'production' or os.environ.get('LOG_FORMAT') == 'json':
+if APP_ENV == 'production' or os.environ.get('LOG_FORMAT') == 'json':
     class JSONFormatter(logging.Formatter):
         def format(self, record):
             log_entry = {
@@ -45,6 +49,13 @@ app = Flask(__name__,
             template_folder=os.path.join(_root_dir, 'templates'),
             static_folder=os.path.join(_root_dir, 'static'))
 app.secret_key = os.environ.get("SESSION_SECRET") or "a-development-secret-key"
+app.config["APP_ENV"] = APP_ENV
+if APP_ENV == "production":
+    app.config.update(
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
 
 # Configure database — require explicit URI in production (unless VERCEL)
 db_uri = os.environ.get("SQLALCHEMY_DATABASE_URI")
@@ -52,7 +63,7 @@ if not db_uri:
     if os.environ.get('VERCEL'):
         # Vercel serverless: use ephemeral SQLite in /tmp
         db_uri = "sqlite:////tmp/mcp_server.db"
-    elif os.environ.get('FLASK_ENV') == 'production':
+    elif APP_ENV == 'production':
         raise RuntimeError(
             'SQLALCHEMY_DATABASE_URI environment variable is required in production. '
             'SQLite is not suitable for production use.'
@@ -71,18 +82,6 @@ if 'postgresql' in db_uri or 'postgres' in db_uri:
         "pool_recycle": 3600,
         "pool_pre_ping": True,
     }
-
-# Require STEP_UP_SECRET in production (auto-generate on Vercel for demo)
-if os.environ.get('FLASK_ENV') == 'production' and not os.environ.get('STEP_UP_SECRET'):
-    if os.environ.get('VERCEL'):
-        import secrets
-        os.environ['STEP_UP_SECRET'] = secrets.token_hex(32)
-        logger.info("STEP_UP_SECRET auto-generated for Vercel demo deployment")
-    else:
-        raise RuntimeError(
-            'STEP_UP_SECRET environment variable is required in production. '
-            'Generate a secure random secret: python -c "import secrets; print(secrets.token_hex(32))"'
-        )
 
 # Initialize database
 db.init_app(app)

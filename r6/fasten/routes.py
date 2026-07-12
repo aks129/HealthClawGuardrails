@@ -25,6 +25,7 @@ from r6.audit import record_audit_event
 from r6.fasten.models import FastenConnection, FastenJob
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
+from r6.read_auth import authorize_tenant_read
 from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
 from r6.fasten.api import trigger_ehi_export
 
@@ -287,12 +288,25 @@ def _handle_connection_success(payload: dict) -> None:
 # Connection registry
 # ---------------------------------------------------------------------------
 
+def _tenant_for_read():
+    """Resolve a tenant claim only after the shared read-auth gate."""
+    candidate = request.headers.get('X-Tenant-Id', '').strip()
+    if not candidate:
+        return None, (jsonify({'error': 'X-Tenant-Id header required'}), 400)
+    tenant_id = authorize_tenant_read(candidate)
+    if tenant_id is None:
+        return None, (jsonify({
+            'error': 'authentication required for this tenant',
+        }), 401)
+    return tenant_id, None
+
+
 @fasten_blueprint.route('/connections', methods=['GET'])
 def list_connections():
     """List EHR connections for the requesting tenant (max 50, newest first)."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
 
     conns = (
         FastenConnection.query
@@ -387,7 +401,9 @@ def register_connection():
 @fasten_blueprint.route('/connections/<org_connection_id>', methods=['GET'])
 def get_connection(org_connection_id: str):
     """Get connection status. Requires X-Tenant-Id for tenant isolation."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
     conn = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id,
         tenant_id=tenant_id,
@@ -415,9 +431,9 @@ def get_connection(org_connection_id: str):
 @fasten_blueprint.route('/jobs', methods=['GET'])
 def list_jobs():
     """List EHI ingestion jobs for the requesting tenant (max 50, newest first)."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
 
     jobs = (
         FastenJob.query
@@ -433,7 +449,9 @@ def list_jobs():
 @fasten_blueprint.route('/jobs/<task_id>', methods=['GET'])
 def get_job(task_id: str):
     """Get status of a specific EHI ingestion job."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
     job = FastenJob.query.filter_by(
         task_id=task_id, tenant_id=tenant_id
     ).first()
@@ -675,9 +693,9 @@ def agent_access(org_connection_id):
     Not yet verified -> 202 {pending}: the page polls briefly; the webhook
     usually lands within seconds of widget completion.
     """
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
 
     conn = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id, tenant_id=tenant_id).first()

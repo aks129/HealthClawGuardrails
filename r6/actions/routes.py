@@ -37,6 +37,7 @@ from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
+from r6.read_auth import authorize_tenant_read
 from r6.stepup import validate_step_up_token
 from r6.telegram_push import notify_tenant
 
@@ -212,6 +213,9 @@ def propose_rx_transfer():
     tenant_id = _tenant_or_none()
     if not tenant_id:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = authorize_tenant_read(tenant_id)
+    if tenant_id is None:
+        return _error(401, 'authentication required for this tenant')
 
     body = request.get_json(silent=True) or {}
     to_pharmacy = body.get('to_pharmacy') or {}

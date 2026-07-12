@@ -22,6 +22,7 @@ from markupsafe import escape
 
 from models import db
 from r6.audit import record_audit_event
+from r6.read_auth import authorize_tenant_read
 from r6.stepup import validate_step_up_token
 from r6.wearables.client import WearablesClient
 from r6.wearables.models import SUPPORTED_PROVIDERS, WearableConnection
@@ -227,11 +228,16 @@ def oauth_callback():
 
 @wearables_blueprint.route('/sync-status', methods=['GET'])
 def sync_status():
-    tenant_id = request.args.get('tenant_id') or request.headers.get(
+    candidate = request.args.get('tenant_id') or request.headers.get(
         'X-Tenant-Id',
     )
-    if not tenant_id:
+    if not candidate:
         return jsonify({'error': 'tenant_id required'}), 400
+    tenant_id = authorize_tenant_read(candidate)
+    if tenant_id is None:
+        return jsonify({
+            'error': 'authentication required for this tenant',
+        }), 401
     conns = WearableConnection.query.filter_by(tenant_id=tenant_id).all()
     wc = WearablesClient()
     return jsonify({

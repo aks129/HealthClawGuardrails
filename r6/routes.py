@@ -32,7 +32,14 @@ from r6.audit import record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.stepup import validate_step_up_token, generate_step_up_token
-from r6.oauth import register_oauth_routes, validate_bearer_token
+from r6.oauth import register_oauth_routes
+from r6.read_auth import (
+    authorize_tenant_read,
+    public_tenants as _public_read_tenants,
+    read_auth_enabled as _read_auth_enabled,
+    read_auth_required as _read_auth_required,
+)
+from r6.runtime_config import resolve_app_env
 from r6.rate_limit import rate_limit_middleware
 from r6.health_compliance import (
     add_disclaimer, enforce_human_in_loop, deidentify_resource,
@@ -148,46 +155,6 @@ def _is_exempt_discovery_path(path):
     return any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
 
 
-# --- Read Authentication (flag-gated) ---
-
-
-def _read_auth_enabled():
-    """True only when READ_AUTH_ENABLED is explicitly turned on.
-
-    Defaults OFF — deploying this code changes nothing until the flag is
-    flipped. Re-read every call so the flag can be toggled without restart.
-    """
-    return os.environ.get('READ_AUTH_ENABLED', '').strip().lower() in (
-        '1', 'true', 'yes',
-    )
-
-
-def _public_read_tenants():
-    """Tenants readable without authentication (synthetic demo data).
-
-    Parsed from PUBLIC_TENANTS (comma-separated). Empty/unset → no public
-    tenants. Re-read every call so changes take effect without restart.
-    """
-    raw = os.environ.get('PUBLIC_TENANTS', '').strip()
-    if not raw:
-        return frozenset()
-    return frozenset(t.strip() for t in raw.split(',') if t.strip())
-
-
-def _read_auth_required(tenant_id):
-    """Whether a read for `tenant_id` must present a tenant-bound token.
-
-    False when the flag is off (no-op default) or the tenant is public.
-    True otherwise — caller must then validate a step-up token bound to
-    this tenant.
-    """
-    if not _read_auth_enabled():
-        return False
-    if tenant_id in _public_read_tenants():
-        return False
-    return True
-
-
 # --- Tenant Enforcement ---
 
 @r6_blueprint.before_request
@@ -246,34 +213,13 @@ def authenticate_tenant_read(tenant_id):
     Mirrors the gate semantics: public tenants and the disabled flag pass;
     otherwise a tenant-bound step-up token OR a SMART bearer is required.
     """
-    if not _read_auth_enabled():
+    if authorize_tenant_read(tenant_id) is not None:
         return None
-    if not _read_auth_required(tenant_id):
-        return None
-
-    bearer = ''
-    auth = (request.headers.get('Authorization') or '').strip()
-    if auth.lower().startswith('bearer '):
-        bearer = auth[7:].strip()
-    step_up = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
-
-    valid = False
-    if step_up:
-        # validate_step_up_token returns (bool, str) — destructure both;
-        # never coerce the tuple to a boolean. require_scope=None: reads
-        # accept both full tokens and read-scoped patient connect tokens.
-        valid, _err = validate_step_up_token(step_up, tenant_id,
-                                             require_scope=None)
-    if not valid and bearer:
-        valid = _validate_oauth_read(bearer, tenant_id)
-
-    if not valid:
-        # Do NOT leak whether the tenant exists or why the token failed.
-        return _operation_outcome(
-            'error', 'security',
-            f"Read access to tenant '{tenant_id}' requires authentication",
-        ), 401
-    return None
+    # Do NOT leak whether the tenant exists or why the token failed.
+    return _operation_outcome(
+        'error', 'security',
+        f"Read access to tenant '{tenant_id}' requires authentication",
+    ), 401
 
 
 @r6_blueprint.before_request
@@ -324,32 +270,6 @@ def authenticate_read():
     # Delegated to the reusable helper so POST read-shaped operations can
     # apply the exact same gate.
     return authenticate_tenant_read(tenant_id)
-
-
-# Scopes that grant FHIR read access. patient/*.read is the SMART-on-FHIR v2
-# read scope; fhir.read is this server's coarse read scope. Either authorizes
-# a redacted read.
-_OAUTH_READ_SCOPES = frozenset({
-    'patient/*.read', 'smart/patient/*.read', 'fhir.read', 'user/*.read',
-    'system/*.read',
-})
-
-
-def _validate_oauth_read(bearer, tenant_id):
-    """Validate an OAuth bearer access token for a read of `tenant_id`.
-
-    Returns True only when the token is valid (not expired/revoked), its
-    associated tenant matches X-Tenant-Id (no cross-tenant reuse), and it
-    carries a read scope. This is what makes the CapabilityStatement's
-    SMART-on-FHIR advertisement actually authorize reads.
-    """
-    ok, info = validate_bearer_token(bearer)
-    if not ok or not isinstance(info, dict):
-        return False
-    if info.get('tenant_id') != tenant_id:
-        return False
-    token_scopes = set(info.get('scopes') or [])
-    return bool(token_scopes & _OAUTH_READ_SCOPES)
 
 
 # --- Human-in-the-Loop Enforcement ---
@@ -1730,7 +1650,7 @@ def _internal_mint_authorized(tenant_id):
         provided = request.headers.get('X-Internal-Secret', '')
         return hmac.compare_digest(provided, mint_secret)
     # Secret unset → open only outside production.
-    return os.environ.get('FLASK_ENV') != 'production'
+    return resolve_app_env() != 'production'
 
 
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
