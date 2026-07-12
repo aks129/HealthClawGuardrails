@@ -124,7 +124,7 @@ class TestSharpTenantDerivation:
         expected_digest = hashlib.sha256(sharp_url.encode('utf-8')).hexdigest()[:16]
         expected_tenant = f'sharp-{expected_digest}'
 
-        with patch('r6.fhir_proxy.FHIRUpstreamProxy.read', return_value=None) as mock_read:
+        with patch('r6.fhir_proxy.FHIRUpstreamProxy.read', return_value=(None, 404)) as mock_read:
             resp = client.get(
                 '/r6/fhir/Patient/upstream-only-id',
                 headers={
@@ -156,7 +156,7 @@ class TestSharpProxyRouting:
         }
         with patch(
             'r6.fhir_proxy.FHIRUpstreamProxy.read',
-            return_value=upstream_resource,
+            return_value=(upstream_resource, 200),
         ) as mock_read:
             resp = client.get(
                 '/r6/fhir/Patient/patient-from-upstream',

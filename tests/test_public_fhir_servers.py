@@ -73,7 +73,7 @@ class TestHAPIFHIRProxy:
     @skip_hapi
     def test_patient_search(self):
         """Search for patients returns a valid Bundle."""
-        result = self.proxy.search('Patient', {'_count': '3'})
+        result, _ = self.proxy.search('Patient', {'_count': '3'})
         assert result['resourceType'] == 'Bundle'
         assert result['type'] == 'searchset'
         assert 'total' in result or 'entry' in result
@@ -81,7 +81,7 @@ class TestHAPIFHIRProxy:
     @skip_hapi
     def test_patient_search_with_params(self):
         """Search with specific parameters is forwarded correctly."""
-        result = self.proxy.search('Patient', {'_count': '2', '_summary': 'true'})
+        result, _ = self.proxy.search('Patient', {'_count': '2', '_summary': 'true'})
         assert result['resourceType'] == 'Bundle'
         # Summary mode returns fewer fields per resource
         if result.get('entry'):
@@ -91,14 +91,14 @@ class TestHAPIFHIRProxy:
     @skip_hapi
     def test_observation_search(self):
         """Search for observations returns valid results."""
-        result = self.proxy.search('Observation', {'_count': '3'})
+        result, _ = self.proxy.search('Observation', {'_count': '3'})
         assert result['resourceType'] == 'Bundle'
         assert result['type'] == 'searchset'
 
     @skip_hapi
     def test_url_rewriting_on_real_response(self):
         """Upstream URLs in real HAPI responses are rewritten to local proxy."""
-        result = self.proxy.search('Patient', {'_count': '1'})
+        result, _ = self.proxy.search('Patient', {'_count': '1'})
         serialized = json.dumps(result)
         # No upstream URLs should leak
         assert 'hapi.fhir.org/baseR4' not in serialized
@@ -110,13 +110,14 @@ class TestHAPIFHIRProxy:
     @skip_hapi
     def test_read_nonexistent_patient(self):
         """Reading a nonexistent patient returns None."""
-        result = self.proxy.read('Patient', 'definitely-does-not-exist-xyz-99999')
+        result, status = self.proxy.read('Patient', 'definitely-does-not-exist-xyz-99999')
         assert result is None
+        assert status == 404
 
     @skip_hapi
     def test_condition_search(self):
         """Search for conditions works against HAPI."""
-        result = self.proxy.search('Condition', {'_count': '2'})
+        result, _ = self.proxy.search('Condition', {'_count': '2'})
         assert result['resourceType'] == 'Bundle'
 
     @skip_hapi
@@ -156,39 +157,40 @@ class TestSMARTHealthITProxy:
     @skip_smart
     def test_patient_search(self):
         """Search for patients returns a valid Bundle."""
-        result = self.proxy.search('Patient', {'_count': '3'})
+        result, _ = self.proxy.search('Patient', {'_count': '3'})
         assert result['resourceType'] == 'Bundle'
         assert result['type'] == 'searchset'
 
     @skip_smart
     def test_patient_search_by_name(self):
         """Search by name parameter forwards correctly."""
-        result = self.proxy.search('Patient', {'name': 'Smith', '_count': '3'})
+        result, _ = self.proxy.search('Patient', {'name': 'Smith', '_count': '3'})
         assert result['resourceType'] == 'Bundle'
 
     @skip_smart
     def test_observation_search(self):
         """Search for observations on SMART Health IT."""
-        result = self.proxy.search('Observation', {'_count': '3'})
+        result, _ = self.proxy.search('Observation', {'_count': '3'})
         assert result['resourceType'] == 'Bundle'
 
     @skip_smart
     def test_url_rewriting_on_real_response(self):
         """SMART Health IT URLs are rewritten to local proxy."""
-        result = self.proxy.search('Patient', {'_count': '1'})
+        result, _ = self.proxy.search('Patient', {'_count': '1'})
         serialized = json.dumps(result)
         assert 'r4.smarthealthit.org' not in serialized
 
     @skip_smart
     def test_read_nonexistent_returns_none(self):
         """Reading a nonexistent resource returns None."""
-        result = self.proxy.read('Patient', 'nonexistent-id-xyz-99999')
+        result, status = self.proxy.read('Patient', 'nonexistent-id-xyz-99999')
         assert result is None
+        assert status == 404
 
     @skip_smart
     def test_encounter_search(self):
         """Search for encounters on SMART Health IT."""
-        result = self.proxy.search('Encounter', {'_count': '2'})
+        result, _ = self.proxy.search('Encounter', {'_count': '2'})
         assert result['resourceType'] == 'Bundle'
 
     @skip_smart
@@ -220,8 +222,8 @@ class TestCrossServerComparison:
                         reason='Both FHIR servers must be reachable')
     def test_both_servers_return_valid_bundles(self):
         """Both servers return structurally valid search Bundles."""
-        hapi_result = self.hapi.search('Patient', {'_count': '2'})
-        smart_result = self.smart.search('Patient', {'_count': '2'})
+        hapi_result, _ = self.hapi.search('Patient', {'_count': '2'})
+        smart_result, _ = self.smart.search('Patient', {'_count': '2'})
 
         for result in [hapi_result, smart_result]:
             assert result['resourceType'] == 'Bundle'
@@ -242,8 +244,8 @@ class TestCrossServerComparison:
                         reason='Both FHIR servers must be reachable')
     def test_url_rewriting_prevents_upstream_leakage(self):
         """Neither server's URLs leak through the proxy."""
-        hapi_result = self.hapi.search('Patient', {'_count': '1'})
-        smart_result = self.smart.search('Patient', {'_count': '1'})
+        hapi_result, _ = self.hapi.search('Patient', {'_count': '1'})
+        smart_result, _ = self.smart.search('Patient', {'_count': '1'})
 
         hapi_json = json.dumps(hapi_result)
         smart_json = json.dumps(smart_result)

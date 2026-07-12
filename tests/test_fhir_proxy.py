@@ -14,6 +14,8 @@ from unittest.mock import patch, MagicMock
 from r6.fhir_proxy import (
     FHIRUpstreamProxy, MedplumProxy, get_proxy, reset_proxy, is_proxy_enabled,
     _fetch_medplum_token, _medplum_cache,
+    sanitize_upstream_error, upstream_unreachable_outcome,
+    _SAFE_SEVERITIES,
 )
 
 
@@ -84,28 +86,104 @@ class TestFHIRUpstreamProxy:
         }
         self.proxy._client.get = MagicMock(return_value=mock_resp)
 
-        result = self.proxy.read('Patient', '123')
+        result, status = self.proxy.read('Patient', '123')
+        assert status == 200
         assert result is not None
         assert result['resourceType'] == 'Patient'
         assert result['id'] == '123'
 
     @patch.object(FHIRUpstreamProxy, '_client', create=True)
     def test_read_not_found(self, mock_client):
-        """Read returns None for 404."""
+        """Read returns (None, 404) only for a true upstream 404."""
         mock_resp = MagicMock()
         mock_resp.status_code = 404
         self.proxy._client.get = MagicMock(return_value=mock_resp)
 
-        result = self.proxy.read('Patient', 'nonexistent')
+        result, status = self.proxy.read('Patient', 'nonexistent')
         assert result is None
+        assert status == 404
 
     @patch.object(FHIRUpstreamProxy, '_client', create=True)
     def test_read_network_error(self, mock_client):
-        """Read returns None on network error."""
+        """Network failure surfaces as (OperationOutcome, 502) — not a fake 404.
+
+        Regression for #74: this used to return None, which the route turned
+        into "Patient/123 not found".
+        """
         self.proxy._client.get = MagicMock(side_effect=Exception('Connection refused'))
 
-        result = self.proxy.read('Patient', '123')
-        assert result is None
+        result, status = self.proxy.read('Patient', '123')
+        assert status == 502
+        assert result['resourceType'] == 'OperationOutcome'
+        assert result['issue'][0]['code'] == 'transient'
+
+    @patch.object(FHIRUpstreamProxy, '_client', create=True)
+    def test_read_auth_failure_is_not_a_404(self, mock_client):
+        """Upstream 401 surfaces as a security outcome, never as not-found.
+
+        Regression for #74: an expired proxy token used to be reported to the
+        caller as "this resource does not exist".
+        """
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.json.return_value = {
+            'resourceType': 'OperationOutcome',
+            'issue': [{'severity': 'error', 'code': 'login',
+                       'details': {'text': 'Invalid access token'}}],
+        }
+        self.proxy._client.get = MagicMock(return_value=mock_resp)
+
+        result, status = self.proxy.read('Patient', '123')
+        assert status == 502  # proxy-credential failure, not the caller's 401
+        assert result['resourceType'] == 'OperationOutcome'
+        assert result['issue'][0]['code'] == 'security'
+        # The upstream's auth diagnostics describe OUR credentials — dropped
+        assert 'Invalid access token' not in json.dumps(result)
+
+    @patch.object(FHIRUpstreamProxy, '_client', create=True)
+    def test_malformed_200_body_surfaces_as_502(self, mock_client):
+        """A 2xx response whose body fails to parse must not escape as an
+        unhandled exception — it becomes a processing outcome."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError('not json')
+        self.proxy._client.get = MagicMock(return_value=mock_resp)
+
+        result, status = self.proxy.read('Patient', '1')
+        assert status == 502
+        assert result['issue'][0]['code'] == 'processing'
+        result, status = self.proxy.search('Patient', {})
+        assert status == 502
+        assert result['issue'][0]['code'] == 'processing'
+
+    @patch.object(FHIRUpstreamProxy, '_client', create=True)
+    def test_wrong_shape_200_body_surfaces_as_502(self, mock_client):
+        """A parseable-but-non-object 200 (array/scalar) must not reach the
+        route, which assumes a dict resource/Bundle — it maps to 502."""
+        for shape in ([], 'a string', 42, None):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = shape
+            self.proxy._client.get = MagicMock(return_value=mock_resp)
+            result, status = self.proxy.read('Patient', '1')
+            assert status == 502, f'read shape {shape!r}'
+            assert result['issue'][0]['code'] == 'processing'
+            result, status = self.proxy.search('Patient', {})
+            assert status == 502, f'search shape {shape!r}'
+
+    @patch.object(FHIRUpstreamProxy, '_client', create=True)
+    def test_search_non_bundle_dict_surfaces_as_502(self, mock_client):
+        """A dict 200 that isn't a Bundle (e.g. a bare Patient) must not reach
+        the route, which would synthesize a misleading empty searchset."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {'resourceType': 'Patient', 'id': 'p1'}
+        self.proxy._client.get = MagicMock(return_value=mock_resp)
+
+        result, status = self.proxy.search('Patient', {})
+        assert status == 502
+        assert result['resourceType'] == 'OperationOutcome'
+        assert result['issue'][0]['code'] == 'processing'
 
     @patch.object(FHIRUpstreamProxy, '_client', create=True)
     def test_search_success(self, mock_client):
@@ -120,18 +198,49 @@ class TestFHIRUpstreamProxy:
         }
         self.proxy._client.get = MagicMock(return_value=mock_resp)
 
-        result = self.proxy.search('Patient', {'name': 'Smith'})
+        result, status = self.proxy.search('Patient', {'name': 'Smith'})
+        assert status == 200
         assert result['total'] == 1
         assert len(result['entry']) == 1
 
     @patch.object(FHIRUpstreamProxy, '_client', create=True)
-    def test_search_error_returns_empty_bundle(self, mock_client):
-        """Search error returns an empty bundle, not an exception."""
+    def test_search_network_error_returns_outcome(self, mock_client):
+        """Network failure surfaces as (OperationOutcome, 502) — never as an
+        empty result set (#74: a failed search used to come back as total=0)."""
         self.proxy._client.get = MagicMock(side_effect=Exception('Timeout'))
 
-        result = self.proxy.search('Patient', {})
-        assert result['total'] == 0
-        assert result['entry'] == []
+        result, status = self.proxy.search('Patient', {})
+        assert status == 502
+        assert result['resourceType'] == 'OperationOutcome'
+        assert result['issue'][0]['code'] == 'transient'
+
+    @patch.object(FHIRUpstreamProxy, '_client', create=True)
+    def test_search_upstream_rejection_passes_through_status(self, mock_client):
+        """An upstream 400 OperationOutcome surfaces as a sanitized 400 with
+        the real status and machine-readable code — but the upstream's own
+        free text (which could carry PHI) is NOT forwarded (#74)."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {
+            'resourceType': 'OperationOutcome',
+            'issue': [{'severity': 'error', 'code': 'invalid',
+                       'details': {'text': 'Patient Rosa Hernandez already exists'},
+                       'diagnostics': 'stack trace with https://internal:5432/db'}],
+        }
+        self.proxy._client.get = MagicMock(return_value=mock_resp)
+
+        result, status = self.proxy.search('Observation', {'datetime': 'x'})
+        assert status == 400
+        assert result['resourceType'] == 'OperationOutcome'
+        assert result['issue'][0]['code'] == 'invalid'  # code (safe enum) survives
+        # Synthesized message, NOT the upstream text
+        assert result['issue'][0]['details']['text'] == \
+            'The upstream FHIR server rejected the request as invalid.'
+        # Nothing from the upstream body transits: not the name, not the trace
+        blob = json.dumps(result)
+        assert 'Rosa Hernandez' not in blob
+        assert 'internal:5432' not in blob
+        assert 'diagnostics' not in result['issue'][0]
 
     @patch.object(FHIRUpstreamProxy, '_client', create=True)
     def test_healthy_connected(self, mock_client):
@@ -188,6 +297,159 @@ class TestFHIRUpstreamProxy:
 
 
 # --- Module-level singleton tests ---
+
+class TestUpstreamErrorSanitization:
+    """Unit tests for the allowlist OperationOutcome sanitizer (#74).
+
+    Only the FHIR value-set tokens severity/code survive from upstream; the
+    human-readable text is synthesized from the code. Upstream free text is
+    never forwarded (it can carry patient names or internal hostnames).
+    """
+
+    @staticmethod
+    def _resp(status, body=None, json_error=False):
+        resp = MagicMock()
+        resp.status_code = status
+        # A real, small bytes .content so the size guard measures a length
+        # (a bare MagicMock has no len() and would read as unbounded).
+        resp.content = json.dumps(body).encode() if body is not None else b'{}'
+        if json_error:
+            resp.json.side_effect = ValueError('not json')
+        else:
+            resp.json.return_value = body
+        return resp
+
+    def test_unknown_severity_and_code_are_mapped(self):
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'catastrophic', 'code': 'made-up-code',
+                         'details': {'text': 'bad thing'}}]}
+        result, status = sanitize_upstream_error(self._resp(400, oo))
+        assert status == 400
+        assert result['issue'][0]['severity'] == 'error'
+        assert result['issue'][0]['code'] == 'invalid'  # mapped from HTTP 400
+
+    def test_only_severity_code_and_synthesized_text_survive(self):
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'error', 'code': 'invalid',
+                         'details': {'text': 'Rosa Hernandez at db.internal', 'coding': [{'code': 'x'}]},
+                         'diagnostics': 'trace', 'expression': ['Patient.name'],
+                         'extension': [{'url': 'x'}]}]}
+        result, _ = sanitize_upstream_error(self._resp(400, oo))
+        issue = result['issue'][0]
+        assert set(issue.keys()) == {'severity', 'code', 'details'}
+        assert set(issue['details'].keys()) == {'text'}
+        # text is synthesized from the code, not copied from upstream
+        assert issue['details']['text'] == 'The upstream FHIR server rejected the request as invalid.'
+        assert 'Rosa Hernandez' not in json.dumps(result)
+        assert 'db.internal' not in json.dumps(result)
+
+    def test_upstream_free_text_never_forwarded_for_any_form(self):
+        # None of these upstream free-text payloads may reach the caller —
+        # names, hosts, IPs, encoded URLs are all replaced by synthesized text.
+        for leak in ('patient Rosa Hernandez was seen', 'host clinic.internal',
+                     '10.0.0.7', 'db.internal/path', 'https%3A%2F%2Fx.internal'):
+            oo = {'resourceType': 'OperationOutcome',
+                  'issue': [{'severity': 'error', 'code': 'invalid',
+                             'details': {'text': f'error: {leak}'}}]}
+            result, _ = sanitize_upstream_error(self._resp(400, oo))
+            assert leak not in json.dumps(result), f'leaked: {leak!r}'
+
+    def test_issue_count_is_bounded(self):
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'error', 'code': 'invalid'}] * 20}
+        result, _ = sanitize_upstream_error(self._resp(400, oo))
+        assert len(result['issue']) == 5
+
+    def test_non_json_body_is_synthesized(self):
+        result, status = sanitize_upstream_error(self._resp(500, json_error=True))
+        assert status == 502
+        assert result['issue'][0]['code'] == 'transient'
+        assert result['issue'][0]['details']['text'] == 'The upstream FHIR server had a transient error.'
+
+    def test_non_operationoutcome_json_is_synthesized(self):
+        result, status = sanitize_upstream_error(
+            self._resp(429, {'error': 'rate limited', 'internal': 'stuff'}))
+        assert status == 429
+        assert result['issue'][0]['code'] == 'throttled'
+        assert 'stuff' not in json.dumps(result)
+
+    def test_401_maps_to_502_and_drops_upstream_text(self):
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'error', 'code': 'login',
+                         'details': {'text': 'client_id cid-12345 token expired'}}]}
+        result, status = sanitize_upstream_error(self._resp(401, oo))
+        assert status == 502
+        assert result['issue'][0]['code'] == 'security'
+        assert 'cid-12345' not in json.dumps(result)
+
+    def test_caller_attributable_statuses_pass_through(self):
+        for upstream, expected in ((400, 400), (404, 404), (422, 422),
+                                   (429, 429), (500, 502), (503, 502)):
+            _, status = sanitize_upstream_error(self._resp(upstream, json_error=True))
+            assert status == expected, f'HTTP {upstream} should map to {expected}'
+
+    def test_unreachable_outcome_discloses_type_only(self):
+        exc = ConnectionError('https://user:pass@internal:5432 refused')
+        result, status = upstream_unreachable_outcome(exc)
+        assert status == 502
+        assert result['issue'][0]['code'] == 'transient'
+        assert 'ConnectionError' in result['issue'][0]['details']['text']
+        assert 'internal:5432' not in json.dumps(result)
+
+    def test_malformed_issue_shapes_do_not_crash(self):
+        # Whole-array malformations AND per-field malformations (unhashable
+        # severity/code would raise inside a membership test).
+        bad_arrays = (None, 'a string', {'severity': 'error'}, 42,
+                      [None, 'x', 42, {'severity': 'error', 'code': 'invalid'}])
+        bad_fields = (
+            [{'severity': [], 'code': {}}],
+            [{'severity': {'x': 1}, 'code': ['a']}],
+            [{'severity': 5, 'code': 5, 'details': {'text': ['not', 'a', 'string']}}],
+        )
+        for bad_issue in (*bad_arrays, *bad_fields):
+            oo = {'resourceType': 'OperationOutcome', 'issue': bad_issue}
+            result, status = sanitize_upstream_error(self._resp(400, oo))
+            assert status == 400
+            assert result['resourceType'] == 'OperationOutcome'
+            assert len(result['issue']) >= 1
+            # non-string severity/code fall back to safe defaults
+            for issue in result['issue']:
+                assert issue['severity'] in _SAFE_SEVERITIES
+                assert isinstance(issue['code'], str)
+
+    def test_oversized_error_body_is_not_parsed(self):
+        resp = self._resp(400, {'resourceType': 'OperationOutcome',
+                                'issue': [{'severity': 'error', 'code': 'invalid',
+                                           'details': {'text': 'should not appear'}}]})
+        resp.content = b'x' * 2_000_000
+        result, status = sanitize_upstream_error(resp)
+        assert status == 400
+        assert 'should not appear' not in json.dumps(result)
+        resp.json.assert_not_called()
+
+    def test_5xx_body_text_is_never_forwarded(self):
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'error', 'code': 'exception',
+                         'details': {'text': 'NullPointerException at PatientDao.java:88'}}]}
+        resp = self._resp(500, oo)
+        result, status = sanitize_upstream_error(resp)
+        assert status == 502
+        assert 'PatientDao' not in json.dumps(result)
+        assert result['issue'][0]['details']['text'] == 'The upstream FHIR server had a transient error.'
+        resp.json.assert_not_called()  # 5xx bodies are never parsed at all
+
+    def test_caller_auth_401_passes_through_for_sharp(self):
+        """SHARP mode forwards the CALLER's SMART token — an upstream 401
+        belongs to the caller, who must see the status to re-authenticate.
+        The code passes through; the upstream text still does not."""
+        oo = {'resourceType': 'OperationOutcome',
+              'issue': [{'severity': 'error', 'code': 'expired',
+                         'details': {'text': 'Token expired for user jsmith@clinic.internal'}}]}
+        result, status = sanitize_upstream_error(self._resp(401, oo), caller_auth=True)
+        assert status == 401  # caller can see the 401 and re-auth
+        assert result['issue'][0]['code'] == 'expired'
+        assert 'jsmith@clinic.internal' not in json.dumps(result)  # text still not forwarded
+
 
 class TestProxySingleton:
     """Tests for the module-level proxy singleton."""
@@ -257,7 +519,7 @@ class TestProxyRouteIntegration:
 
         with patch('r6.routes.get_proxy_for_request') as mock_get:
             mock_proxy = MagicMock()
-            mock_proxy.read.return_value = upstream_patient
+            mock_proxy.read.return_value = (upstream_patient, 200)
             mock_get.return_value = mock_proxy
 
             resp = self.client.get('/r6/fhir/Patient/upstream-pt-1',
@@ -279,7 +541,7 @@ class TestProxyRouteIntegration:
 
         with patch('r6.routes.get_proxy_for_request') as mock_get:
             mock_proxy = MagicMock()
-            mock_proxy.read.return_value = None
+            mock_proxy.read.return_value = (None, 404)
             mock_get.return_value = mock_proxy
 
             resp = self.client.get('/r6/fhir/Patient/nonexistent',
@@ -311,7 +573,7 @@ class TestProxyRouteIntegration:
 
         with patch('r6.routes.get_proxy_for_request') as mock_get:
             mock_proxy = MagicMock()
-            mock_proxy.search.return_value = upstream_bundle
+            mock_proxy.search.return_value = (upstream_bundle, 200)
             mock_get.return_value = mock_proxy
 
             resp = self.client.get('/r6/fhir/Patient?name=Smith',
