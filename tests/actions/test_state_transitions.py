@@ -7,7 +7,8 @@ from r6.actions.state import transition_action, IllegalTransition
 
 # Actor vocabulary written by callers of transition_action (see the comment
 # on ActionEvent.actor). Used to assert the column fits every value.
-_ACTORS = ('commit-route', 'confirm', 'webhook', 'reaper', 'propose')
+_ACTORS = ('commit-route', 'confirm', 'webhook', 'reaper', 'propose',
+           'status-route', 'callback:bland', 'callback:twilio')
 
 
 def _all_states():
@@ -86,6 +87,35 @@ def test_status_via_fields_rejected(app):
                               actor='commit-route', status='completed')
         assert db.session.get(ProposedAction, aid).status == 'proposed'
         assert ActionEvent.query.filter_by(action_id=aid).count() == 0
+
+
+def test_extra_criteria_blocks_transition(app):
+    # extra_criteria predicates join the guarded UPDATE's WHERE, making the
+    # claim stricter (e.g. the expiry check on commit/confirm claims). A
+    # failing predicate must mean no move and no event — same contract as a
+    # status mismatch.
+    from datetime import timedelta
+    from r6.actions.models import _utcnow
+    with app.app_context():
+        aid = _make('proposed')
+        row = db.session.get(ProposedAction, aid)
+        row.expires_at = _utcnow() - timedelta(minutes=1)  # already expired
+        db.session.commit()
+        ok = transition_action(aid, from_states=('proposed',),
+                               to_state='awaiting_confirmation',
+                               actor='commit-route',
+                               extra_criteria=[ProposedAction.expires_at
+                                               > _utcnow()])
+        assert ok is False
+        assert db.session.get(ProposedAction, aid).status == 'proposed'
+        assert ActionEvent.query.filter_by(action_id=aid).count() == 0
+        # And a passing predicate does not interfere.
+        ok = transition_action(aid, from_states=('proposed',),
+                               to_state='expired', actor='reaper',
+                               extra_criteria=[ProposedAction.expires_at
+                                               <= _utcnow()])
+        assert ok is True
+        assert db.session.get(ProposedAction, aid).status == 'expired'
 
 
 def test_empty_from_states_rejected(app):

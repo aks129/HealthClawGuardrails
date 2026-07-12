@@ -55,6 +55,25 @@ def test_bland_callback_completes_action(client, tenant_headers, app, monkeypatc
         assert 'ready after 3pm' in row.outcome_summary
 
 
+def test_callback_resolution_writes_action_event(client, tenant_headers, app,
+                                                 monkeypatch):
+    """Webhook resolutions go through transition_action (state.py's 'only
+    sanctioned way'), so they land in the ActionEvent ledger the W1
+    observability views read."""
+    monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
+    action_id = _executing_action(client, tenant_headers, app)
+    resp = client.post(
+        '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
+        json={'call_id': 'bl-123', 'status': 'completed', 'summary': 'done'})
+    assert resp.status_code == 200
+    with app.app_context():
+        from r6.actions.events import ActionEvent
+        events = ActionEvent.query.filter_by(action_id=action_id,
+                                             to_status='completed').all()
+        assert len(events) == 1
+        assert events[0].actor == 'callback:bland'
+
+
 def test_bland_callback_failed_call(client, tenant_headers, app, monkeypatch):
     monkeypatch.setenv('ACTIONS_WEBHOOK_SECRET', 'hook-secret')
     action_id = _executing_action(client, tenant_headers, app)

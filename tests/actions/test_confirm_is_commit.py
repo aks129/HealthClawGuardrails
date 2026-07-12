@@ -155,6 +155,49 @@ def test_confirm_expired_awaiting_confirmation_410(client, tenant_headers,
         assert db.session.get(ProposedAction, action_id).status == 'expired'
 
 
+def test_expired_row_cannot_win_commit_claim(client, tenant_headers,
+                                             auth_headers, app, monkeypatch):
+    """TOCTOU closure: expiry that lands between the route's snapshot check
+    and the claim must still lose — the claim's WHERE re-checks expires_at.
+    Blinding is_expired() simulates the row expiring after the snapshot."""
+    action_id = _propose(client, tenant_headers)
+    with app.app_context():
+        row = db.session.get(ProposedAction, action_id)
+        row.expires_at = _past()
+        db.session.commit()
+    monkeypatch.setattr(ProposedAction, 'is_expired', lambda self: False)
+    resp = client.post('/r6/actions/%s/commit' % action_id,
+                       headers=auth_headers)
+    assert resp.status_code == 410
+    with app.app_context():
+        assert db.session.get(ProposedAction, action_id).status == 'expired'
+
+
+def test_expired_row_cannot_win_confirm_claim(client, tenant_headers,
+                                              auth_headers, app,
+                                              action_registry, fake_providers,
+                                              monkeypatch):
+    """Same TOCTOU closure on the execution claim: an approval window that
+    lapses between the snapshot check and the claim must never dial."""
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    action_id = _propose(client, tenant_headers)
+    _commit(client, auth_headers, action_id)
+    with app.app_context():
+        row = db.session.get(ProposedAction, action_id)
+        row.expires_at = _past()
+        db.session.commit()
+    monkeypatch.setattr(ProposedAction, 'is_expired', lambda self: False)
+    resp = _confirm(client, auth_headers, action_id)
+    assert resp.status_code == 410
+    assert fake_providers == []   # never executed
+    with app.app_context():
+        from r6.actions.confirmations import ActionConfirmation
+        assert db.session.get(ProposedAction, action_id).status == 'expired'
+        # No consent record for an execution that never happened.
+        assert ActionConfirmation.query.filter_by(
+            action_id=action_id).count() == 0
+
+
 def test_confirm_tenant_isolation(client, tenant_headers, auth_headers,
                                   other_tenant_headers, action_registry,
                                   fake_providers):
@@ -187,7 +230,10 @@ def test_confirmation_row_is_the_consent_record(client, tenant_headers,
 def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
                                                   auth_headers, app,
                                                   action_registry,
-                                                  fake_providers):
+                                                  fake_providers, monkeypatch):
+    """A 400 on pure input validation happens BEFORE nonce consumption: it
+    neither claims the action nor burns the single-use token."""
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
     resp = _confirm(client, auth_headers, action_id,
@@ -198,6 +244,12 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
         # Not claimed: the action is still approvable.
         assert db.session.get(ProposedAction,
                               action_id).status == 'awaiting_confirmation'
+    # The credential was NOT consumed by the 400 — the SAME token now
+    # confirms successfully.
+    retry = _confirm(client, auth_headers, action_id,
+                     body={'approved_via': 'dashboard'})
+    assert retry.status_code == 200
+    assert len(fake_providers) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +261,8 @@ def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
                                          monkeypatch):
     """Spec v3: /confirm consumes the step-up token's nonce. One token
     authorizes at most ONE real-world execution — a captured token can't be
-    replayed against a second pending action."""
-    from r6.stepup import clear_nonce_cache
-    clear_nonce_cache()
+    replayed against a second pending action. (Nonce cache is cleared by the
+    autouse fixture in tests/actions/conftest.py.)"""
     monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
 
     first_action = _propose(client, tenant_headers)
@@ -238,8 +289,6 @@ def test_commit_does_not_consume_token_only_confirm_does(
         fake_providers, monkeypatch):
     """A token used for commit and then confirm is legitimate: commit
     validates multi-use (submit is not an execution), confirm consumes."""
-    from r6.stepup import clear_nonce_cache
-    clear_nonce_cache()
     monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
 
     # propose -> commit (token X) -> confirm (token X): succeeds end-to-end.
@@ -388,6 +437,7 @@ def test_propose_executor_validation_422(client, tenant_headers,
     assert resp.status_code == 422
     data = resp.get_json()
     assert data['error_code'] == errors.PAYLOAD_INVALID
+    assert data['error']                            # human-readable message
     assert errors.PAYLOAD_INVALID in data['errors']
 
 

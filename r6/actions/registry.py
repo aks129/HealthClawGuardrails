@@ -27,6 +27,9 @@ class ExecutionResult:
     status: str
     provider_ref: str | None = None
     outcome: dict = field(default_factory=dict)
+    # error SHOULD be a taxonomy code from r6.actions.errors (errors.ALL);
+    # the confirm route coerces anything else to PROVIDER_ERROR before it
+    # reaches the API response.
     error: str | None = None
     outcome_unknown: bool = False  # provider MAY have acted -> caller maps to 'unknown'
 
