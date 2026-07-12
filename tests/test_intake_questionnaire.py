@@ -12,7 +12,7 @@ Covers:
     conditions won't actually fill until Task 2 wires list-resource matching.
 """
 
-from r6.sdc.intake import INTAKE_QUESTIONNAIRE, intake_questionnaire
+from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
 
 
