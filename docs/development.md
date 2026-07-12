@@ -32,6 +32,26 @@ them). A key present only in `.env` behaves as unset.
 Local dev works on Python 3.13, but **CI runs 3.11** — avoid 3.12+-only syntax
 (e.g. backslash escapes inside f-string expressions).
 
+### Flask lifecycle commands
+
+Importing `main` and calling `create_app()` configure routes and extensions but
+do not mutate the database or start background threads. Run lifecycle work
+explicitly when provisioning or recovering a deployment:
+
+```bash
+uv run flask --app main init-db
+uv run flask --app main seed-demo --tenant-id desktop-demo
+uv run flask --app main recover-zombies
+```
+
+`initialize_database(app)`, `seed_demo_tenant(app)`,
+`recover_zombie_jobs(app)`, and `start_wearables_poller(app)` are also available
+for process supervisors and deployment scripts. Existing deployments that
+temporarily require the pre-factory behavior may set
+`HEALTHCLAW_LEGACY_BOOT=1`; this opt-in runs all legacy boot tasks while the app
+is constructed. Prefer the explicit commands because each WSGI worker imports
+`main` independently.
+
 ## Architecture map
 
 ```text

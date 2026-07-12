@@ -1,16 +1,11 @@
-"""Guard: the SMBP table must actually be CREATED at app import time.
+"""Guard: explicit database initialization must create the SMBP table.
 
-Production runs `gunicorn main:app` — it imports `main` (NOT the `__main__`
-block). main.py's startup `db.create_all()` only creates tables whose models
-are imported *before* it runs. The SMBP blueprint is registered later in main.py
-and imports SMBPSession, so the table ends up in the SQLAlchemy *metadata* by the
-end of import — but if it wasn't imported before `create_all()`, the table is
-never physically created, and POST /r6/smbp/enroll 500s in prod (while
-Observation writes still work, since R6Resource's table predates SMBP).
+The application factory registers all model metadata but deliberately does no
+DDL. The operator-controlled ``initialize_database`` lifecycle hook must still
+import SMBPSession before create_all, or POST /r6/smbp/enroll will 500.
 
 So this checks the ENGINE's real table list (what create_all actually built),
-not the metadata, using a temp-file SQLite in a clean subprocess that mirrors
-the gunicorn import path.
+not the metadata, using a temp-file SQLite in a clean subprocess.
 """
 
 import os
@@ -19,20 +14,21 @@ import sys
 import tempfile
 
 
-def test_smbp_table_physically_created_on_plain_import():
+def test_smbp_table_physically_created_by_explicit_database_init():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
     tmp.close()
     code = (
         "import main;"
+        "main.initialize_database(main.app);"
         "from r6.models import db;"
         "from sqlalchemy import inspect;"
         "ctx = main.app.app_context(); ctx.push();"
         "names = inspect(db.engine).get_table_names();"
         "ctx.pop();"
         "assert 'smbp_sessions' in names,"
-        "  'smbp_sessions not created by startup create_all() — add"
-        " import r6.smbp.models to the main.py create_all block: ' + repr(names);"
+        "  'smbp_sessions not created by initialize_database() — add"
+        " import r6.smbp.models to register_model_metadata(): ' + repr(names);"
         "print('OK')"
     )
     try:
@@ -45,7 +41,7 @@ def test_smbp_table_physically_created_on_plain_import():
     finally:
         os.unlink(tmp.name)
     assert result.returncode == 0, (
-        "main import failed or smbp_sessions not physically created:\n"
+        "database init failed or smbp_sessions not physically created:\n"
         + result.stdout + result.stderr
     )
     assert "OK" in result.stdout
