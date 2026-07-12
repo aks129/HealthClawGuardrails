@@ -69,12 +69,19 @@ interface CachedReadToken {
 const READ_TOKEN_CACHE = new Map<string, CachedReadToken>();
 const READ_TOKEN_TTL_MS = 5 * 60 * 1000; // assume 5-min server TTL
 const READ_TOKEN_SKEW_MS = 30 * 1000; // re-mint 30s before expiry
+const PRIVILEGED_TOOL_NAMES = new Set(["fhir_get_token", "fhir_seed"]);
+
+export interface FHIRToolsOptions {
+  allowPrivileged?: boolean;
+}
 
 export class FHIRTools {
   private baseUrl: string;
+  private allowPrivileged: boolean;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: FHIRToolsOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.allowPrivileged = options.allowPrivileged === true;
   }
 
   /**
@@ -88,6 +95,7 @@ export class FHIRTools {
    * proceed (the read may 401 if the flag is on, but we never crash).
    */
   async ensureReadToken(fwdHeaders: Record<string, string>): Promise<void> {
+    if (!this.allowPrivileged) return;
     if (process.env.READ_TOKEN_AUTOMINT !== "true") return;
     if (fwdHeaders["X-Step-Up-Token"]) return;
 
@@ -137,13 +145,15 @@ export class FHIRTools {
    * Includes annotations required by OpenAI and Anthropic marketplaces.
    */
   getMCPToolSchemas(): MCPToolSchema[] {
-    return this.getToolSchemas().map((t) => ({
-      name: t.name,
-      title: t.title,
-      description: t.description,
-      inputSchema: t.inputSchema,
-      annotations: t.annotations,
-    }));
+    return this.getToolSchemas()
+      .filter((tool) => this.allowPrivileged || !PRIVILEGED_TOOL_NAMES.has(tool.name))
+      .map((t) => ({
+        name: t.name,
+        title: t.title,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        annotations: t.annotations,
+      }));
   }
 
   getToolSchemas(): ToolDefinition[] {
@@ -849,6 +859,10 @@ export class FHIRTools {
     input: Record<string, unknown>,
     headers?: Record<string, string>
   ): Promise<Record<string, unknown>> {
+    if (!this.allowPrivileged && PRIVILEGED_TOOL_NAMES.has(toolName)) {
+      return { error: `Tool ${toolName} is not available on this transport` };
+    }
+
     const tool = this.getToolSchemas().find((t) => t.name === toolName);
     if (!tool) {
       return { error: `Unknown tool: ${toolName}` };

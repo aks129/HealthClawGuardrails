@@ -21,7 +21,19 @@ const mockFetch = fetch as unknown as jest.Mock;
 import * as fetchTimeoutModule from "./fetch-timeout";
 
 import request from "supertest";
-import { app, closeMCPServerForTests } from "./index";
+import * as indexModule from "./index";
+
+const { app, closeMCPServerForTests } = indexModule;
+
+type FHIRToolsConstructor = new (
+  baseUrl: string,
+  options?: { allowPrivileged?: boolean }
+) => FHIRTools;
+
+const createPrivilegedTools = (baseUrl: string): FHIRTools =>
+  new (FHIRTools as unknown as FHIRToolsConstructor)(baseUrl, {
+    allowPrivileged: true,
+  });
 
 afterAll(() => {
   closeMCPServerForTests();
@@ -73,6 +85,10 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 const EXPECTED_TOOL_NAME_SET = new Set(EXPECTED_TOOL_NAMES);
+const EXPECTED_NETWORK_TOOL_NAMES = EXPECTED_TOOL_NAMES.filter(
+  (name) => name !== "fhir_get_token" && name !== "fhir_seed"
+);
+const EXPECTED_NETWORK_TOOL_NAME_SET = new Set(EXPECTED_NETWORK_TOOL_NAMES);
 
 const READ_ONLY_TOOL_NAMES = [
   "action_status",
@@ -100,7 +116,7 @@ const READ_ONLY_TOOL_NAMES = [
 // ---------------------------------------------------------------------------
 
 describe("Tool Schema Tests", () => {
-  const tools = new FHIRTools("http://localhost:5000/r6/fhir");
+  const tools = createPrivilegedTools("http://localhost:5000/r6/fhir");
   let schemas: MCPToolSchema[];
 
   beforeAll(() => {
@@ -109,6 +125,15 @@ describe("Tool Schema Tests", () => {
 
   it("getMCPToolSchemas() returns exactly 29 tools", () => {
     expect(schemas).toHaveLength(29);
+  });
+
+  it("defaults to a registry without token-mint and seed tools", () => {
+    const restrictedTools = new FHIRTools("http://localhost:5000/r6/fhir");
+    const names = restrictedTools.getMCPToolSchemas().map((tool) => tool.name);
+
+    expect(names).toHaveLength(27);
+    expect(names).not.toContain("fhir_get_token");
+    expect(names).not.toContain("fhir_seed");
   });
 
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
@@ -197,7 +222,7 @@ describe("Tool Schema Tests", () => {
 
 describe("Tool Execution Tests", () => {
   const BASE = "http://localhost:5000/r6/fhir";
-  const tools = new FHIRTools(BASE);
+  const tools = createPrivilegedTools(BASE);
 
   afterEach(() => {
     mockFetch.mockReset();
@@ -1399,7 +1424,7 @@ describe("Tool Execution Tests", () => {
 
 describe("Backend Timeout Guardrails", () => {
   const BASE = "http://localhost:5000/r6/fhir";
-  const tools = new FHIRTools(BASE);
+  const tools = createPrivilegedTools(BASE);
   let helperSpy: jest.SpyInstance;
 
   beforeEach(() => {
@@ -1554,16 +1579,17 @@ describe("Backend Timeout Guardrails", () => {
 describe("Express App Tests", () => {
   afterEach(() => {
     mockFetch.mockReset();
+    jest.restoreAllMocks();
   });
 
   // -- Health endpoint --
 
   describe("GET /health", () => {
-    it("returns healthy status with version 1.0.0", async () => {
+    it("returns healthy status with the package version", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("healthy");
-      expect(res.body.version).toBe("1.0.0");
+      expect(res.body.version).toBe("1.8.0");
       expect(res.body.service).toBe("healthclaw-guardrails");
       expect(res.body.transports).toEqual(
         expect.arrayContaining(["streamable-http", "sse", "http-bridge"])
@@ -1603,7 +1629,7 @@ describe("Express App Tests", () => {
       expect(res.body.id).toBe(1);
       expect(res.body.result).toBeDefined();
       expect(res.body.result.serverInfo.name).toBe("healthclaw-guardrails");
-      expect(res.body.result.serverInfo.version).toBe("1.0.0");
+      expect(res.body.result.serverInfo.version).toBe("1.8.0");
       expect(res.body.result.protocolVersion).toBe("2024-11-05");
       expect(res.body.result.capabilities).toHaveProperty("tools");
 
@@ -1613,20 +1639,44 @@ describe("Express App Tests", () => {
       expect(sessionId.length).toBeGreaterThan(0);
     });
 
-    it("tools/list returns all 26 tool schemas", async () => {
+    it("tools/list omits network-ineligible token-mint and seed tools", async () => {
       const res = await request(app)
         .post("/mcp")
         .send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 
       expect(res.status).toBe(200);
       expect(res.body.result).toBeDefined();
-      expect(res.body.result.tools).toHaveLength(29);
+      expect(res.body.result.tools).toHaveLength(27);
 
       const names = new Set<string>(
         res.body.result.tools.map((t: { name: string }) => t.name)
       );
-      expect(names).toEqual(EXPECTED_TOOL_NAME_SET);
+      expect(names).toEqual(EXPECTED_NETWORK_TOOL_NAME_SET);
     });
+
+    it.each(["fhir_get_token", "fhir_seed"])(
+      "does not execute %s over Streamable HTTP",
+      async (toolName) => {
+        const initRes = await request(app)
+          .post("/mcp")
+          .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+
+        const res = await request(app)
+          .post("/mcp")
+          .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
+          .send({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: toolName, arguments: { tenant_id: "private-tenant" } },
+          });
+
+        expect(res.status).toBe(200);
+        const result = JSON.parse(res.body.result.content[0].text);
+        expect(result.error).toContain("not available");
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    );
 
     it("tools/call without session returns 400", async () => {
       const res = await request(app)
@@ -1818,14 +1868,32 @@ describe("Express App Tests", () => {
   // -- Legacy HTTP Bridge /mcp/rpc --
 
   describe("POST /mcp/rpc", () => {
-    it("tools/list returns all 26 tool schemas", async () => {
+    it("tools/list omits network-ineligible token-mint and seed tools", async () => {
       const res = await request(app)
         .post("/mcp/rpc")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
 
       expect(res.status).toBe(200);
-      expect(res.body.result.tools).toHaveLength(29);
+      expect(res.body.result.tools).toHaveLength(27);
     });
+
+    it.each(["fhir_get_token", "fhir_seed"])(
+      "does not execute %s over the HTTP bridge",
+      async (toolName) => {
+        const res = await request(app)
+          .post("/mcp/rpc")
+          .send({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: toolName, arguments: { tenant_id: "private-tenant" } },
+          });
+
+        expect(res.status).toBe(200);
+        expect(res.body.result.error).toContain("not available");
+        expect(mockFetch).not.toHaveBeenCalled();
+      }
+    );
 
     it("tools/call executes the tool and returns result directly (not wrapped)", async () => {
       const fhirPatient = { resourceType: "Patient", id: "pt-1" };
@@ -1863,6 +1931,192 @@ describe("Express App Tests", () => {
 
       expect(res.body.error.code).toBe(-32601);
       expect(res.body.error.message).toContain("Method not found");
+    });
+  });
+
+  describe("in-memory lifecycle cleanup", () => {
+    const SESSION_TTL_MS = 30 * 60 * 1000;
+    const runtime = indexModule as unknown as {
+      cleanupExpiredRuntimeStateForTests: (now: number) => void;
+      getRuntimeStateForTests: () => {
+        streamableSessions: number;
+        rateLimitBuckets: number;
+      };
+    };
+
+    it("evicts a Streamable HTTP session after its inactivity TTL", async () => {
+      const now = Date.now();
+      const initRes = await request(app)
+        .post("/mcp")
+        .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+
+      runtime.cleanupExpiredRuntimeStateForTests(now + SESSION_TTL_MS + 10_000);
+
+      const callRes = await request(app)
+        .post("/mcp")
+        .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
+        .send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "fhir_read",
+            arguments: { resource_type: "Patient", resource_id: "pt-1" },
+          },
+        });
+
+      expect(callRes.status).toBe(400);
+      expect(callRes.body.error.message).toContain("session");
+    });
+
+    it("refreshes lastActivity when an existing session is used", async () => {
+      const createdAt = 10_000;
+      const clock = jest.spyOn(Date, "now").mockReturnValue(createdAt);
+      const initRes = await request(app)
+        .post("/mcp")
+        .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      const sessionId = initRes.headers["mcp-session-id"];
+      const arguments_ = { resource_type: "Patient", resource_id: "pt-1" };
+      mockFetch.mockResolvedValue(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
+
+      clock.mockReturnValue(createdAt + SESSION_TTL_MS - 1_000);
+      await request(app)
+        .post("/mcp")
+        .set("Mcp-Session-Id", sessionId)
+        .send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "fhir_read", arguments: arguments_ },
+        })
+        .expect(200);
+
+      const afterOriginalExpiry = createdAt + SESSION_TTL_MS + 1;
+      clock.mockReturnValue(afterOriginalExpiry);
+      runtime.cleanupExpiredRuntimeStateForTests(afterOriginalExpiry);
+      await request(app)
+        .post("/mcp")
+        .set("Mcp-Session-Id", sessionId)
+        .send({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "fhir_read", arguments: arguments_ },
+        })
+        .expect(200);
+
+      const afterRefreshedExpiry = afterOriginalExpiry + SESSION_TTL_MS + 1;
+      clock.mockReturnValue(afterRefreshedExpiry);
+      runtime.cleanupExpiredRuntimeStateForTests(afterRefreshedExpiry);
+      const expiredRes = await request(app)
+        .post("/mcp")
+        .set("Mcp-Session-Id", sessionId)
+        .send({
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "fhir_read", arguments: arguments_ },
+        });
+
+      expect(expiredRes.status).toBe(400);
+      clock.mockRestore();
+    });
+
+    it("removes expired rate-limit buckets", async () => {
+      await request(app).get("/health").expect(200);
+      expect(runtime.getRuntimeStateForTests().rateLimitBuckets).toBeGreaterThan(0);
+
+      runtime.cleanupExpiredRuntimeStateForTests(Date.now() + 60_001);
+
+      expect(runtime.getRuntimeStateForTests().rateLimitBuckets).toBe(0);
+    });
+  });
+
+  describe("MCP transport authentication", () => {
+    const originalToken = process.env.MCP_AUTH_TOKEN;
+
+    afterEach(() => {
+      if (originalToken === undefined) delete process.env.MCP_AUTH_TOKEN;
+      else process.env.MCP_AUTH_TOKEN = originalToken;
+    });
+
+    it.each([
+      ["post", "/mcp"],
+      ["post", "/mcp/rpc"],
+      ["get", "/sse"],
+      ["post", "/messages?sessionId=missing"],
+    ] as const)("requires the configured Bearer token for %s %s", async (method, path) => {
+      process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
+
+      const unauthenticated = await request(app)[method](path).send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+      });
+      expect(unauthenticated.status).toBe(401);
+      expect(unauthenticated.headers["www-authenticate"]).toBe("Bearer");
+
+      const wrongToken = await request(app)[method](path)
+        .set("Authorization", "Bearer wrong-secret")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+      expect(wrongToken.status).toBe(401);
+    });
+
+    it("accepts the configured Bearer token and leaves health public", async () => {
+      process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
+
+      await request(app).get("/health").expect(200);
+      const res = await request(app)
+        .post("/mcp")
+        .set("Authorization", "Bearer mcp-test-secret")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.result.tools).toHaveLength(27);
+    });
+
+    it("does not forward the MCP transport credential to the FHIR backend", async () => {
+      process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
+      const initRes = await request(app)
+        .post("/mcp")
+        .set("Authorization", "Bearer mcp-test-secret")
+        .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      mockFetch.mockResolvedValueOnce(
+        fakeResponse({ resourceType: "Patient", id: "pt-1" })
+      );
+
+      await request(app)
+        .post("/mcp")
+        .set("Authorization", "Bearer mcp-test-secret")
+        .set("Mcp-Session-Id", initRes.headers["mcp-session-id"])
+        .send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "fhir_read",
+            arguments: { resource_type: "Patient", resource_id: "pt-1" },
+          },
+        })
+        .expect(200);
+
+      expect(mockFetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    });
+
+    it("rejects production startup without MCP_AUTH_TOKEN", () => {
+      const assertMCPAuthConfigured = (
+        indexModule as unknown as {
+          assertMCPAuthConfigured: (env: NodeJS.ProcessEnv) => void;
+        }
+      ).assertMCPAuthConfigured;
+
+      expect(() => assertMCPAuthConfigured({ NODE_ENV: "production" })).toThrow(
+        "MCP_AUTH_TOKEN"
+      );
+      expect(() => assertMCPAuthConfigured({ NODE_ENV: "development" })).not.toThrow();
+      expect(() =>
+        assertMCPAuthConfigured({ NODE_ENV: "production", MCP_AUTH_TOKEN: "configured" })
+      ).not.toThrow();
     });
   });
 });

@@ -2,8 +2,8 @@ FROM node:20-slim
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --production=false
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY tsconfig.json ./
 COPY src/ ./src/
