@@ -27,9 +27,12 @@ STEP_UP_SECRET       HMAC secret for step-up tokens.
 import json
 import logging
 import os
+import time
+from collections import deque
 
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -101,6 +104,14 @@ HBO_REDIRECT_URI = os.environ.get(
 HBO_SCOPES = os.environ.get('HBO_SCOPES', 'openid offline_access').strip()
 HBO_MCP_URL = os.environ.get(
     'HBO_MCP_URL', 'https://mcp.app.healthbankone.com/mcp').strip()
+
+# Optional ops-alert destination for mid-run poller-conflict storms (see
+# "Mid-run singleton hardening" below). The bot has no dedicated admin/ops
+# channel otherwise — r6.telegram_push.notify_tenant is patient-facing and
+# needs the Flask app's DB, which this standalone poller process doesn't
+# have. If unset, storm detection still logs CRITICAL and exits; it just
+# can't push a chat alert.
+TELEGRAM_ADMIN_CHAT_ID = os.environ.get('TELEGRAM_ADMIN_CHAT_ID', '').strip()
 
 
 def _persist_turn(update: Update, agent_id: str, role: str, text: str,
@@ -822,6 +833,7 @@ def main() -> None:
     app.add_handler(CommandHandler('hbo_connect', cmd_hbo_connect))
     app.add_handler(CommandHandler('hbo_pull', cmd_hbo_pull))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    app.add_error_handler(_on_error)
 
     _preflight_singleton_check()
 
@@ -862,6 +874,109 @@ def _preflight_singleton_check() -> None:
                 'Exiting.')
             raise SystemExit(1)
         return  # 200 (or any non-409): we are the sole poller
+
+
+# ---------------------------------------------------------------------------
+# Mid-run singleton hardening — 409-Conflict storm detection
+# ---------------------------------------------------------------------------
+# _preflight_singleton_check() above only guards startup. If a second poller
+# starts LATER — a stale Railway container that didn't finish shutting down,
+# a forgotten copy left running on the Mac mini or an SSH box — this process
+# keeps polling and Telegram thrashes BOTH pollers with repeated
+# 'Conflict: terminated by other getUpdates request' errors. run_polling
+# retries Conflict internally, so nothing stops on its own: messages are
+# silently dropped or duplicated for as long as nobody notices.
+#
+# Telegram also emits an occasional single Conflict during normal
+# reconnects (network blip, Telegram-side restart), so a lone 409 is not
+# itself a signal — only a STORM (several in quick succession) reliably
+# means a second consumer is holding this token.
+CONFLICT_STORM_THRESHOLD = 3          # this many Conflict errors...
+CONFLICT_STORM_WINDOW_SECONDS = 60.0  # ...within this many seconds = a storm
+
+# Sliding window of Conflict-error timestamps (epoch seconds).
+_conflict_timestamps: deque[float] = deque()
+
+
+def _record_conflict_and_check_storm(now: float | None = None) -> bool:
+    """Record one Conflict-error timestamp; report whether it completes a storm.
+
+    Prunes timestamps older than CONFLICT_STORM_WINDOW_SECONDS, appends
+    `now`, and returns True once CONFLICT_STORM_THRESHOLD or more
+    timestamps remain inside the window. On a storm verdict the window is
+    cleared — the caller is about to exit the process, so there is nothing
+    left to accumulate toward, and a fresh sequence of errors is required
+    before the next verdict (relevant mainly to tests, which call this
+    function directly without actually exiting).
+    """
+    if now is None:
+        now = time.time()
+    cutoff = now - CONFLICT_STORM_WINDOW_SECONDS
+    while _conflict_timestamps and _conflict_timestamps[0] < cutoff:
+        _conflict_timestamps.popleft()
+    _conflict_timestamps.append(now)
+    if len(_conflict_timestamps) >= CONFLICT_STORM_THRESHOLD:
+        _conflict_timestamps.clear()
+        return True
+    return False
+
+
+def _send_admin_alert(message: str) -> None:
+    """Best-effort ops alert for a Conflict storm.
+
+    sendMessage is independent of getUpdates, so this can still reach
+    Telegram even while this process's polling is being rejected with 409s.
+    If TELEGRAM_ADMIN_CHAT_ID isn't configured there is no alerting channel
+    to use — this is a documented no-op and the CRITICAL log line already
+    emitted by the caller is the only signal.
+    """
+    if not TELEGRAM_ADMIN_CHAT_ID:
+        logger.warning(
+            'no TELEGRAM_ADMIN_CHAT_ID configured — skipping admin chat alert '
+            '(the CRITICAL log line above is the only signal for this storm)')
+        return
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
+            json={'chat_id': TELEGRAM_ADMIN_CHAT_ID, 'text': message},
+            timeout=5,
+        )
+    except requests.RequestException as exc:
+        logger.warning('admin alert send failed: %s', exc)
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global python-telegram-bot error handler.
+
+    Passes through every error, but watches Conflict (409) errors for a
+    storm (see _record_conflict_and_check_storm). A single Conflict is
+    normal Telegram churn — logged and ignored. A storm means another
+    poller is very likely holding this bot's token: log CRITICAL, send a
+    best-effort admin alert, and exit loudly (SystemExit) so the supervisor
+    (launchd, Railway's restart policy, systemd, ...) surfaces the failure
+    instead of this process quietly thrashing forever.
+    """
+    error = context.error
+    if isinstance(error, Conflict):
+        logger.warning('Telegram Conflict (409) on getUpdates: %s', error)
+        if _record_conflict_and_check_storm():
+            logger.critical(
+                'CONFLICT STORM: %d+ Telegram 409 Conflict errors within '
+                '%.0fs. Another poller is almost certainly holding this bot '
+                'token (stale Railway container, forgotten Mac-mini/SSH '
+                'copy, etc.) — stop it before restarting this one. Exiting '
+                'rather than keep thrashing both pollers.',
+                CONFLICT_STORM_THRESHOLD, CONFLICT_STORM_WINDOW_SECONDS,
+            )
+            _send_admin_alert(
+                '🚨 openclaw poller CONFLICT STORM — exiting.\n'
+                f'tenant={TENANT_ID}\n'
+                'Another process is polling this bot token. Stop it, then '
+                'restart this poller.'
+            )
+            raise SystemExit(1)
+        return
+    logger.error('Unhandled error while processing update: %s', error, exc_info=error)
 
 
 if __name__ == '__main__':
