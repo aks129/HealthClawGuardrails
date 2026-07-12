@@ -14,12 +14,21 @@ def transition_action(action_id, from_states, to_state, actor, detail=None, **fi
     only if the row currently matches (atomic WHERE). Returns True if it moved
     (and writes one ActionEvent in the same commit), False if the WHERE matched
     nothing (concurrent claim / already advanced). Raises IllegalTransition if
-    to_state isn't reachable from every from_state."""
+    to_state isn't reachable from every from_state, if from_states is empty,
+    or if 'status' is passed via fields.
+
+    Commits the session in all cases (including the False path); do not call
+    with unrelated pending changes staged. Caller updates belong in **fields,
+    which apply atomically with the transition."""
+    if 'status' in fields:
+        raise IllegalTransition('status cannot be passed via fields')
+    if not from_states:
+        raise IllegalTransition('from_states must be non-empty')
     for fs in from_states:
         if to_state not in _TRANSITIONS.get(fs, set()):
             raise IllegalTransition('%s -> %s not permitted' % (fs, to_state))
-    updates = {'status': to_state}
-    updates.update(fields)
+    updates = dict(fields)
+    updates['status'] = to_state
     moved = ProposedAction.query.filter(
         ProposedAction.id == action_id,
         ProposedAction.status.in_(tuple(from_states)),

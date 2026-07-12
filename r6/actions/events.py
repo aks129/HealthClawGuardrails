@@ -2,11 +2,9 @@
 dead-letter lists, and per-tenant caps are all VIEWS over this table. Written
 in the SAME transaction as every state transition (see r6/actions/state.py)."""
 import uuid
-from datetime import datetime, timezone
-from models import db
 
-def _utcnow():
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from models import db
+from r6.actions.models import _utcnow
 
 class ActionEvent(db.Model):
     __tablename__ = 'action_events'

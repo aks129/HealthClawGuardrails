@@ -2,8 +2,11 @@
 ProposedAction — lifecycle record for real-world actions (calls, SMS).
 
 Mirrors the FHIR propose -> commit write pattern: an action is proposed
-(draft shown to the patient), confirmed (step-up + human confirmation),
-executed (Bland.ai / Twilio), and resolved by webhook callback.
+(draft shown to the patient), submitted for approval (commit ->
+awaiting_confirmation), claimed and executed by the human's out-of-band
+approval (awaiting_confirmation -> executing, Bland.ai / Twilio), and
+resolved (completed/failed/needs_review/unknown) by executor result or
+webhook callback.
 
 PHI note: payload_json holds the verbatim script (needed to execute) and
 is tenant-scoped like R6Resource. summary() is the ONLY representation

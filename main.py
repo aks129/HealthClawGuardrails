@@ -90,6 +90,7 @@ db.init_app(app)
 with app.app_context():
     from r6.models import R6Resource
     import r6.actions.models  # noqa: F401 — registers ProposedAction table
+    import r6.actions.events  # noqa: F401 — registers ActionEvent table for create_all/schema_sync
     import r6.smbp.models  # noqa: F401 — registers SMBPSession table
     # Import EVERY model module BEFORE create_all/reconcile_schema. Anything
     # missing here is invisible to schema_sync, so new columns on its tables
