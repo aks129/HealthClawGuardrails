@@ -32,6 +32,12 @@ _PANEL = [
 ]
 
 
+def _demo_observation_date(today=None):
+    today = today or date.today()
+    start_of_year = date(today.year, 1, 1)
+    return max(today - timedelta(days=45), start_of_year).isoformat()
+
+
 def build_quality_cohort():
     """Pure: return the cohort as (patient, condition, [pregnancy?], observation)
     groups plus the expected NQF 0018 numbers."""
@@ -56,7 +62,7 @@ def build_quality_cohort():
             # ~6 weeks ago: recent enough to count for any current measurement
             # period, and never in the future (a future "last done" date reads
             # wrong in demos and makes care-gaps output look broken).
-            "effectiveDateTime": (date.today() - timedelta(days=45)).isoformat(),
+            "effectiveDateTime": _demo_observation_date(),
             "component": [
                 {"code": {"coding": [{"system": "http://loinc.org", "code": "8480-6"}]},
                  "valueQuantity": {"value": sys_v, "unit": "mm[Hg]"}},
