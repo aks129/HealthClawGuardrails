@@ -12,6 +12,7 @@ PUBLIC_SURFACES = (
     "static/js/r6-dashboard.js",
     "skills/phi-redaction/SKILL.md",
     "skills/healthex-export/SKILL.md",
+    "r6/routes.py",
 )
 
 
@@ -20,6 +21,7 @@ def test_public_surfaces_call_output_a_preview_not_safe_harbor():
         "HIPAA Safe Harbor de-identification",
         "Safe Harbor De-identified",
         "De-identify Patient (Safe Harbor)",
+        "hipaa-safe-harbor",
     )
 
     for relative_path in PUBLIC_SURFACES:

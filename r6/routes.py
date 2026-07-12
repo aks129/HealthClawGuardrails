@@ -1460,7 +1460,7 @@ def evaluate_permission():
 
 @r6_blueprint.route('/<resource_type>/<resource_id>/$deidentify', methods=['GET'])
 def deidentify_endpoint(resource_type, resource_id):
-    """Return a HIPAA Safe Harbor de-identified copy of a resource."""
+    """Return a conservative de-identification preview of a resource."""
     if not R6Resource.is_supported_type(resource_type):
         return _operation_outcome('error', 'not-supported',
                                   f'Resource type {resource_type} is not supported'), 400
@@ -1481,7 +1481,7 @@ def deidentify_endpoint(resource_type, resource_id):
                        detail='de-identification export')
 
     fhir_json = resource.to_fhir_json()
-    mode = request.args.get('mode', 'hipaa-safe-harbor')
+    mode = request.args.get('mode', 'deidentified-preview')
 
     if mode == 'patient-controlled':
         patient_id = request.args.get('patient_id', resource_id)
@@ -1560,7 +1560,10 @@ def privacy_policy():
         },
         'data_protection': {
             'redaction': 'PHI redaction applied on all read paths (identifiers, addresses, telecom)',
-            'de_identification': 'HIPAA Safe Harbor de-identification available via $deidentify operation',
+            'de_identification': (
+                'Conservative de-identification preview available via '
+                '$deidentify; expert review is required before disclosure'
+            ),
             'encryption': 'TLS required for all production deployments',
             'audit_trail': 'Immutable, append-only AuditEvent records for all operations',
             'tenant_isolation': 'Mandatory tenant-scoped data isolation on all queries',
