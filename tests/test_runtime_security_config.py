@@ -19,6 +19,7 @@ _GOOD_PRODUCTION_ENV = {
     "PUBLIC_TENANTS": "",
     "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
     "DISABLE_COMMAND_CENTER": "1",
+    "REDIS_URL": "redis://localhost:6379/0",
 }
 
 
@@ -80,6 +81,12 @@ def test_production_requires_public_tenants_to_be_explicit():
     result = _startup(removed=("PUBLIC_TENANTS",))
     assert result.returncode != 0
     assert "PUBLIC_TENANTS" in (result.stdout + result.stderr)
+
+
+def test_production_requires_shared_redis_state():
+    result = _startup(removed=("REDIS_URL",))
+    assert result.returncode != 0
+    assert "REDIS_URL" in (result.stdout + result.stderr)
 
 
 def test_explicit_empty_public_tenant_allowlist_is_valid():

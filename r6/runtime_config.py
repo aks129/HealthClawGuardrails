@@ -95,4 +95,10 @@ def validate_runtime_environment(
             "(use an empty value for no public tenants)"
         )
 
+    if not env.get("REDIS_URL", "").strip():
+        raise RuntimeError(
+            "REDIS_URL is required in production for shared nonce, OAuth, "
+            "rate-limit, and worker state"
+        )
+
     return app_env
