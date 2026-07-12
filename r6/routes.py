@@ -612,25 +612,7 @@ def update_resource(resource_type, resource_id):
         return _operation_outcome('error', 'invalid',
                                   f'Resource id in body ({body["id"]}) does not match URL ({resource_id})'), 400
 
-    # Enforce tenant isolation
-    resource = R6Resource.query.filter_by(
-        id=resource_id, resource_type=resource_type,
-        is_deleted=False, tenant_id=tenant_id
-    ).first()
-
-    if not resource:
-        return _operation_outcome('error', 'not-found',
-                                  f'{resource_type}/{resource_id} not found'), 404
-
-    # ETag/If-Match concurrency control
     if_match = request.headers.get('If-Match')
-    if if_match:
-        # Normalize: strip W/ prefix and quotes for comparison
-        expected = if_match.strip().lstrip('W/').strip('"')
-        actual = str(resource.version_id)
-        if expected != actual:
-            return _operation_outcome('error', 'conflict',
-                                      'Resource has been modified (ETag mismatch)'), 409
 
     # Run $validate pre-commit
     validation_result = validator.validate_resource(body)
@@ -662,6 +644,25 @@ def update_resource(resource_type, resource_id):
                                   'Upstream FHIR server rejected the update'), status_code
 
     # --- Local mode ---
+    # Local tenant isolation and optimistic concurrency are evaluated only
+    # after proxy selection: an upstream-only resource has no shadow DB row.
+    resource = R6Resource.query.filter_by(
+        id=resource_id, resource_type=resource_type,
+        is_deleted=False, tenant_id=tenant_id
+    ).first()
+
+    if not resource:
+        return _operation_outcome('error', 'not-found',
+                                  f'{resource_type}/{resource_id} not found'), 404
+
+    if if_match:
+        # Normalize: strip W/ prefix and quotes for comparison.
+        expected = if_match.strip().lstrip('W/').strip('"')
+        actual = str(resource.version_id)
+        if expected != actual:
+            return _operation_outcome('error', 'conflict',
+                                      'Resource has been modified (ETag mismatch)'), 409
+
     resource_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
     resource.update_resource(resource_json)
 
