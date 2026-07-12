@@ -307,7 +307,12 @@ def confirm_action(action_id):
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _error(401, 'Action confirm requires X-Step-Up-Token header')
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    # consume_nonce: the confirm token is a SINGLE-USE execution credential
+    # (spec v3). Commit validates the same token multi-use (submitting is not
+    # an execution); only the human's Approve spends the nonce, so a captured
+    # token can never authorize a second real-world execution.
+    valid, err = validate_step_up_token(step_up_token, tenant_id,
+                                        consume_nonce=True)
     if not valid:
         return _error(401, 'Step-up token rejected: %s' % err)
 

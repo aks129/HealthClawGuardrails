@@ -58,7 +58,6 @@ def test_commit_returns_202_and_executes_nothing(client, tenant_headers,
     assert resp.status_code == 202
     data = resp.get_json()
     assert data['status'] == 'awaiting_confirmation'
-    assert 'confirm' not in data.get('next_step', '').lower() or True
     # THE guarantee: submit never touches the provider.
     assert fake_providers == []
     with app.app_context():
@@ -110,9 +109,15 @@ def test_confirm_executes_exactly_once(client, tenant_headers, auth_headers,
         assert row.claimed_at is not None
         assert row.provider_request_at is not None
 
-    # Second Approve (other device / replay): claim already spent -> 409,
-    # and crucially the provider was NOT called again.
-    second = _confirm(client, auth_headers, action_id)
+    # Second Approve from another device carries its own FRESH step-up token
+    # (the first token's nonce is consumed by the first confirm — see the
+    # replay tests below): the claim is already spent -> 409, and crucially
+    # the provider was NOT called again.
+    from r6.stepup import generate_step_up_token
+    fresh = dict(auth_headers)
+    fresh['X-Step-Up-Token'] = generate_step_up_token(
+        tenant_headers['X-Tenant-Id'])
+    second = _confirm(client, fresh, action_id)
     assert second.status_code == 409
     assert len(fake_providers) == 1
 
@@ -193,6 +198,65 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
         # Not claimed: the action is still approvable.
         assert db.session.get(ProposedAction,
                               action_id).status == 'awaiting_confirmation'
+
+
+# ---------------------------------------------------------------------------
+# step-up nonce consumption at confirm (single-use execution credential)
+# ---------------------------------------------------------------------------
+
+def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
+                                         app, action_registry, fake_providers,
+                                         monkeypatch):
+    """Spec v3: /confirm consumes the step-up token's nonce. One token
+    authorizes at most ONE real-world execution — a captured token can't be
+    replayed against a second pending action."""
+    from r6.stepup import clear_nonce_cache
+    clear_nonce_cache()
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+
+    first_action = _propose(client, tenant_headers)
+    second_action = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, first_action).status_code == 202
+    assert _commit(client, auth_headers, second_action).status_code == 202
+
+    first = _confirm(client, auth_headers, first_action)
+    assert first.status_code == 200
+    assert len(fake_providers) == 1
+
+    # Same token against the OTHER awaiting_confirmation action: replay.
+    second = _confirm(client, auth_headers, second_action)
+    assert second.status_code == 401
+    assert 'already used (replay)' in second.get_json()['error']
+    assert len(fake_providers) == 1   # nothing executed
+    with app.app_context():
+        row = db.session.get(ProposedAction, second_action)
+        assert row.status == 'awaiting_confirmation'  # still approvable
+
+
+def test_commit_does_not_consume_token_only_confirm_does(
+        client, tenant_headers, auth_headers, action_registry,
+        fake_providers, monkeypatch):
+    """A token used for commit and then confirm is legitimate: commit
+    validates multi-use (submit is not an execution), confirm consumes."""
+    from r6.stepup import clear_nonce_cache
+    clear_nonce_cache()
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+
+    # propose -> commit (token X) -> confirm (token X): succeeds end-to-end.
+    action_id = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, action_id).status_code == 202
+    resp = _confirm(client, auth_headers, action_id)
+    assert resp.status_code == 200
+    assert len(fake_providers) == 1
+
+    # A NEW action: commit with token X still works (multi-use validation),
+    # but confirm with the now-spent token X is a replay -> 401.
+    new_action = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, new_action).status_code == 202
+    replay = _confirm(client, auth_headers, new_action)
+    assert replay.status_code == 401
+    assert 'already used (replay)' in replay.get_json()['error']
+    assert len(fake_providers) == 1
 
 
 # ---------------------------------------------------------------------------
