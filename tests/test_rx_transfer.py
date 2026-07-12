@@ -90,10 +90,10 @@ class TestProposeRoute:
         assert body["action"]["kind"] == "phone-call"
         assert body["action"]["status"] == "proposed"
         assert any("Metformin" in m["name"] for m in body["allowed"])
-        # commit still requires step-up + human confirmation (untouched path)
+        # commit (submit-for-confirmation) still requires a step-up token
         commit = client.post(f"/r6/actions/{body['action']['id']}/commit",
                              headers=tenant_headers)
-        assert commit.status_code in (401, 428)
+        assert commit.status_code == 401
 
     def test_missing_pharmacy_400(self, client, tenant_headers):
         assert self._propose(client, tenant_headers, {}).status_code == 400

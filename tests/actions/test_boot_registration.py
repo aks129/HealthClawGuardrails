@@ -30,6 +30,12 @@ def test_action_events_table_registered_by_importing_main_alone():
         "'ActionEvent not registered at boot — add the import to main.py'\n"
         "assert 'action_confirmations' in db.metadata.tables, "
         "'ActionConfirmation not registered at boot — add the import to main.py'\n"
+        "from r6.actions.registry import all_kinds\n"
+        "kinds = set(all_kinds())\n"
+        "missing = {'phone-call', 'sms', 'insurance-call'} - kinds\n"
+        "assert not missing, "
+        "'Rail executors not registered at boot: %s — main.py must call "
+        "r6.actions.rails.register_all()' % sorted(missing)\n"
     )
     proc = subprocess.run([sys.executable, '-c', code], cwd=_REPO_ROOT,
                           env=env, capture_output=True, text=True, timeout=60)

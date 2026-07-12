@@ -90,8 +90,22 @@ class PhoneCallExecutor:
         return ExecutionResult(status='executing', outcome=data)
 
 
+class InsuranceCallExecutor(PhoneCallExecutor):
+    """Same Bland.ai transport as phone-call; the kind differs so insurance
+    scripts stay a distinct, separately auditable action kind (script source
+    lives with the proposer, not the rail)."""
+    kind = 'insurance-call'
+
+
 def register():
-    register_executor(PhoneCallExecutor())
+    # Per-executor duplicate swallow: a partially populated registry (e.g. a
+    # test registered one kind manually) must not stop the other kind from
+    # registering.
+    for executor in (PhoneCallExecutor(), InsuranceCallExecutor()):
+        try:
+            register_executor(executor)
+        except ValueError:
+            pass
 
 
 register()

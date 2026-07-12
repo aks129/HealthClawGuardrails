@@ -1,10 +1,16 @@
 """
-Action lifecycle API — propose / commit / status / provider callbacks.
+Action lifecycle API — propose / commit / confirm / status / provider callbacks.
 
-Contract mirrors FHIR writes:
-  propose  -> tenant header only, returns draft for human review
-  commit   -> X-Step-Up-Token (validated, tuple destructured) AND
-              X-Human-Confirmed: true, else 401 / 428
+Approve-is-the-commit (Task 10):
+  propose  -> tenant header only; red-flag screened + rail-validated;
+              returns draft for human review
+  commit   -> X-Step-Up-Token (validated, tuple destructured); SUBMITS the
+              action for out-of-band approval (202, awaiting_confirmation).
+              Nothing executes here — the spoofable X-Human-Confirmed gate
+              is gone.
+  confirm  -> the human's out-of-band Approve (dashboard/Telegram). The ONLY
+              place an action executes: guarded claim -> consent record ->
+              provider call.
   callback -> shared-secret verification
 
 Audit detail and Telegram pushes use ProposedAction.summary() ONLY (no PHI).
@@ -15,14 +21,20 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+import uuid
 
 from flask import Blueprint, jsonify, request
 
 from models import db
-from r6.actions.executors import execute_action
-from r6.actions.models import ProposedAction, VALID_KINDS
+from r6.actions import errors
+from r6.actions.confirmations import (APPROVED_VIA_VALUES,
+                                      consume_confirmation,
+                                      issue_confirmation)
+from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
+from r6.actions.registry import get_executor
 from r6.actions.rx_transfer import build_transfer_request
+from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
+from r6.actions.state import transition_action
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.stepup import validate_step_up_token
@@ -49,6 +61,36 @@ def _tenant_or_none():
     return tenant_id
 
 
+def _emergency_refusal_or_none(tenant_id, text):
+    """Mandatory red-flag screen on free-text at PROPOSE. A hit refuses the
+    action with 911/urgent-care escalation, audited like a Schedule-II
+    refusal (matched lexicon phrase only — never the free text itself)."""
+    hit = screen_text(text)
+    if hit is None:
+        return None
+    record_audit_event(
+        'create', resource_type='ProposedAction',
+        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+        outcome='failure', detail='emergency_indicated: %s' % hit['matched'],
+    )
+    return jsonify({'error_code': errors.EMERGENCY_INDICATED,
+                    'error': EMERGENCY_MESSAGE}), 422
+
+
+def _rail_validation_or_none(kind, payload):
+    """Executor validation when a rail is registered for this kind. Kinds
+    with no rail (e.g. form-fill) skip this — VALID_KINDS remains the
+    propose gate; they fail loud at confirm instead."""
+    ex = get_executor(kind)
+    if ex is None:
+        return None
+    errs = ex.validate(payload)
+    if errs:
+        return jsonify({'error_code': errors.PAYLOAD_INVALID,
+                        'errors': errs}), 422
+    return None
+
+
 @actions_blueprint.route('/rx-transfer/propose', methods=['POST'])
 def propose_rx_transfer():
     """Build a prescription-transfer request call from the tenant's active
@@ -57,9 +99,10 @@ def propose_rx_transfer():
     Body: {to_pharmacy: {name, phone}, from_pharmacy?: {name, phone},
            medication_names?: [str]}  (names filter; default = all active)
 
-    Commit is the EXISTING /actions/<id>/commit — step-up + X-Human-Confirmed
-    stay mandatory; this endpoint only drafts. Schedule II medications are
-    refused with an explanation (never transferable; see rx_transfer.py).
+    Commit is the EXISTING /actions/<id>/commit — step-up stays mandatory and
+    commit only SUBMITS for out-of-band approval; this endpoint only drafts.
+    Schedule II medications are refused with an explanation (never
+    transferable; see rx_transfer.py).
     """
     tenant_id = _tenant_or_none()
     if not tenant_id:
@@ -96,6 +139,14 @@ def propose_rx_transfer():
                        'required).'),
         }), 422
 
+    refusal = _emergency_refusal_or_none(tenant_id,
+                                         result['action_payload'].get('body'))
+    if refusal is not None:
+        return refusal
+    invalid = _rail_validation_or_none('phone-call', result['action_payload'])
+    if invalid is not None:
+        return invalid
+
     action = ProposedAction(tenant_id=tenant_id, kind='phone-call',
                             payload=result['action_payload'])
     db.session.add(action)
@@ -111,9 +162,10 @@ def propose_rx_transfer():
         'action': action.summary(),
         'allowed': result['allowed'],
         'refused': result['refused'],
-        'next_step': ('Review the draft with the patient, then commit via '
-                      'POST /r6/actions/%s/commit with X-Step-Up-Token and '
-                      'X-Human-Confirmed: true.' % action.id),
+        'next_step': ('Review the draft with the patient, then submit via '
+                      'POST /r6/actions/%s/commit with X-Step-Up-Token. The '
+                      'patient then approves out of band (dashboard/Telegram) '
+                      'to execute.' % action.id),
     }), 201
 
 
@@ -140,6 +192,13 @@ def propose_action():
     if len(json.dumps(payload)) > 65536:
         return _error(400, 'payload too large (64KB max)')
 
+    refusal = _emergency_refusal_or_none(tenant_id, payload['body'])
+    if refusal is not None:
+        return refusal
+    invalid = _rail_validation_or_none(kind, payload)
+    if invalid is not None:
+        return invalid
+
     action = ProposedAction(tenant_id=tenant_id, kind=kind, payload=payload)
     db.session.add(action)
     db.session.commit()
@@ -154,11 +213,16 @@ def propose_action():
 
 @actions_blueprint.route('/<action_id>/commit', methods=['POST'])
 def commit_action(action_id):
+    """SUBMIT-FOR-CONFIRMATION. Nothing executes here: commit moves the
+    proposal to awaiting_confirmation and pushes an approval request to the
+    patient's out-of-band channels. The old X-Human-Confirmed header gate is
+    gone — any caller could spoof a header; nobody can spoof the patient
+    tapping Approve in their own dashboard/Telegram."""
     tenant_id = _tenant_or_none()
     if not tenant_id:
         return _error(400, 'X-Tenant-Id header is required')
 
-    # Gate 1: step-up token (ALWAYS destructure the tuple)
+    # Gate: step-up token (ALWAYS destructure the tuple)
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _error(401, 'Action commit requires X-Step-Up-Token header')
@@ -166,30 +230,18 @@ def commit_action(action_id):
     if not valid:
         return _error(401, 'Step-up token rejected: %s' % err)
 
-    # Gate 2: human confirmation (same contract as clinical writes)
-    confirmed = request.headers.get('X-Human-Confirmed', '').lower()
-    if confirmed != 'true':
-        return jsonify({
-            'error': 'Real-world actions require human confirmation. '
-                     'Set X-Human-Confirmed: true after the patient approves '
-                     'the draft.',
-            'requires_confirmation': True,
-        }), 428
-
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
     if action is None:
         return _error(404, 'Unknown action')
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    if action.status == 'proposed' and action.expires_at <= now:
+    if action.status == 'proposed' and action.is_expired():
         # Guarded expiry: only flips rows still 'proposed' — never clobbers a
-        # concurrently claimed/executing action (double-call vector otherwise).
-        expired = ProposedAction.query.filter_by(
-            id=action_id, tenant_id=tenant_id, status='proposed'
-        ).update({'status': 'expired'}, synchronize_session=False)
-        db.session.commit()
+        # concurrently advanced action.
+        expired = transition_action(
+            action_id, from_states=('proposed',), to_state='expired',
+            actor='commit-route', detail='proposal expired')
+        db.session.refresh(action)
         if expired:
             record_audit_event(
                 'update', resource_type='ProposedAction', resource_id=action_id,
@@ -197,28 +249,16 @@ def commit_action(action_id):
                 detail='proposal expired',
             )
             return _error(410, 'Proposal expired — propose the action again')
-        db.session.refresh(action)
         return _error(409, 'Action is %s, not proposed' % action.status)
 
-    # ATOMIC claim straight to 'executing': single guarded UPDATE whose WHERE
-    # re-checks both status and expiry, closing the TOCTOU between the check
-    # above and the claim. Two concurrent commits cannot both pass (a
-    # double-placed phone call is worse than a failed one).
-    claimed = ProposedAction.query.filter(
-        ProposedAction.id == action_id,
-        ProposedAction.tenant_id == tenant_id,
-        ProposedAction.status == 'proposed',
-        ProposedAction.expires_at > now,
-    ).update({'status': 'executing'}, synchronize_session=False)
-    db.session.commit()
-    if not claimed:
-        db.session.refresh(action)
-        if action.status == 'proposed':
-            # only possible reason: expired between check and claim
+    moved = transition_action(
+        action_id, from_states=('proposed',),
+        to_state='awaiting_confirmation', actor='commit-route')
+    db.session.refresh(action)
+    if not moved:
+        if action.status == 'expired':
             return _error(410, 'Proposal expired — propose the action again')
         return _error(409, 'Action is %s, not proposed' % action.status)
-
-    db.session.refresh(action)
 
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
@@ -226,38 +266,149 @@ def commit_action(action_id):
         detail=json.dumps(action.summary()),
     )
 
-    result = execute_action(action.kind, action.payload, action_id=action.id)
+    # Telegram push: summary-level ONLY (kind + recipient label)
+    label = action.summary().get('to') or 'recipient'
+    notify_tenant(tenant_id,
+                  '🔔 Approval needed: %s to %s. Review and approve in your '
+                  'HealthClaw dashboard.' % (action.kind, label))
 
-    if not result.ok:
-        # Post-send ambiguity (timeout/garbled response/5xx) -> 'unknown',
-        # never 'failed': failed invites re-propose -> duplicate call.
-        new_status = 'unknown' if result.outcome_unknown else 'failed'
-        updated = ProposedAction.query.filter_by(
-            id=action_id, status='executing'
-        ).update({'status': new_status, 'outcome_summary': result.error},
-                 synchronize_session=False)
-        db.session.commit()
+    return jsonify({
+        'id': action.id,
+        'status': 'awaiting_confirmation',
+        'next_step': ('Terminal for this turn: the patient must approve out '
+                      'of band (dashboard/Telegram). Poll GET /r6/actions/%s '
+                      'or end your turn. Do not retry commit.' % action.id),
+    }), 202
+
+
+@actions_blueprint.route('/<action_id>/confirm', methods=['POST'])
+def confirm_action(action_id):
+    """The human's out-of-band Approve — the ONLY place an action executes.
+    Called by the dashboard/Telegram approve handler with the patient's own
+    tenant-bound step-up token. Body optional: {'approved_via': 'dashboard'
+    | 'telegram'} (default 'dashboard').
+
+    Ordering rationale (do not reorder):
+      1. THE CLAIM FIRST. The guarded transition awaiting_confirmation ->
+         executing is the mutex — a single guarded UPDATE, so exactly one
+         concurrent Approve wins. It must precede issuing the confirmation:
+         transition_action() COMMITS the session on both branches, so a
+         pre-issued ActionConfirmation row would be committed even when the
+         claim loses — a consent record for an execution that never happened.
+      2. AFTER a winning claim, issue + immediately consume the
+         ActionConfirmation. The claim is the LOCK; the confirmation row
+         (issued and consumed with the same timestamps) is the CONSENT
+         RECORD — the durable who/when/via audit artifact of the approval.
+    """
+    tenant_id = _tenant_or_none()
+    if not tenant_id:
+        return _error(400, 'X-Tenant-Id header is required')
+
+    step_up_token = request.headers.get('X-Step-Up-Token')
+    if not step_up_token:
+        return _error(401, 'Action confirm requires X-Step-Up-Token header')
+    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _error(401, 'Step-up token rejected: %s' % err)
+
+    body = request.get_json(silent=True) or {}
+    approved_via = body.get('approved_via', 'dashboard')
+    if approved_via not in APPROVED_VIA_VALUES:
+        return _error(400, 'approved_via must be one of: %s'
+                      % ', '.join(APPROVED_VIA_VALUES))
+
+    # (a) Load, tenant-scoped.
+    action = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    if action is None:
+        return _error(404, 'Unknown action')
+
+    # (b) Guarded expiry: a stale approval window lapses instead of dialing.
+    if action.status == 'awaiting_confirmation' and action.is_expired():
+        lapsed = transition_action(
+            action_id, from_states=('awaiting_confirmation',),
+            to_state='expired', actor='confirm',
+            detail='approval window lapsed')
         db.session.refresh(action)
-        if not updated:
-            # A provider webhook resolved the action while we were waiting —
-            # its verdict wins; report the authoritative state.
-            return jsonify(action.to_dict()), 200
-        record_audit_event(
-            'update', resource_type='ProposedAction', resource_id=action.id,
-            agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-            outcome='failure', detail=result.error,
-        )
-        return jsonify({'id': action.id, 'status': new_status,
-                        'error': result.error}), 502
+        if lapsed:
+            record_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action_id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                detail='approval window lapsed',
+            )
+            return _error(410, 'Approval window lapsed — propose the action '
+                               'again')
+        # Lost to a concurrent claim — the claim below settles it.
 
-    if result.simulated:
-        # No webhook will ever arrive — resolve synchronously (guarded).
-        ProposedAction.query.filter_by(
-            id=action_id, status='executing'
-        ).update({'status': 'completed',
-                  'external_ref': result.external_ref,
-                  'outcome_summary': 'Simulated (no provider keys configured)'},
-                 synchronize_session=False)
+    # (c) THE CLAIM: single-winner mutex (see docstring for why this comes
+    # before the confirmation record).
+    moved = transition_action(
+        action_id, from_states=('awaiting_confirmation',),
+        to_state='executing', actor='confirm',
+        attempt_id=str(uuid.uuid4()), claimed_at=_utcnow())
+    if not moved:
+        db.session.refresh(action)
+        if action.status == 'expired':
+            return _error(410, 'Approval window lapsed — propose the action '
+                               'again')
+        return _error(409, 'Action is %s, not awaiting_confirmation'
+                      % action.status)
+    db.session.refresh(action)
+
+    # (d) Consent record: issued + immediately consumed in one transaction.
+    # The claim above is the lock; this row is the audit artifact of
+    # who/when/via. Same timestamps by design.
+    issue_confirmation(action_id, approved_via, ttl_minutes=15)
+    db.session.flush()
+    consume_confirmation(action_id)
+    db.session.commit()
+
+    record_audit_event(
+        'update', resource_type='ProposedAction', resource_id=action.id,
+        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+        detail='approved via %s; %s' % (approved_via,
+                                        json.dumps(action.summary())),
+    )
+
+    label = action.summary().get('to') or 'recipient'
+
+    # (f-precheck) A kind with no registered rail fails loud — never a fake
+    # success (form-fill is proposable but not yet executable).
+    ex = get_executor(action.kind)
+    if ex is None:
+        summary = 'No executor for kind: %s' % action.kind
+        failed = transition_action(
+            action_id, from_states=('executing',), to_state='failed',
+            actor='confirm', outcome_summary=summary)
+        db.session.refresh(action)
+        if failed:
+            record_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action.id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                outcome='failure', detail=summary,
+            )
+            notify_tenant(tenant_id, '⚠️ %s to %s: failed'
+                          % (action.kind, label))
+        return jsonify({'id': action.id, 'status': action.status,
+                        'error_code': errors.PROVIDER_NOT_CONFIGURED}), 502
+
+    # (e) Stamp provider_request_at immediately before the provider call so a
+    # crash is distinguishable: claimed-but-never-called (safe to fail) vs
+    # called-but-unresolved (needs review). Guarded update + commit.
+    ProposedAction.query.filter_by(id=action_id, status='executing').update(
+        {'provider_request_at': _utcnow()}, synchronize_session=False)
+    db.session.commit()
+
+    # (f) Execute.
+    result = ex.execute(action)
+
+    # (g) Map the executor's verdict onto the state machine.
+    if result.status == 'executing':
+        # Provider accepted; a webhook will resolve. Store the ref WITHOUT
+        # touching status — a fast webhook may already have resolved the
+        # action; never clobber its verdict.
+        ProposedAction.query.filter_by(id=action_id).update(
+            {'external_ref': result.provider_ref}, synchronize_session=False)
         db.session.commit()
         db.session.refresh(action)
         record_audit_event(
@@ -265,17 +416,80 @@ def commit_action(action_id):
             agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
             detail=json.dumps(action.summary()),
         )
-    else:
-        # Store the provider ref WITHOUT touching status — a fast webhook may
-        # already have resolved the action; never clobber its verdict.
-        ProposedAction.query.filter_by(id=action_id).update(
-            {'external_ref': result.external_ref}, synchronize_session=False)
-        db.session.commit()
-        db.session.refresh(action)
+        notify_tenant(tenant_id, '📤 %s to %s: %s'
+                      % (action.kind, label, action.status))
+        if action.status != 'executing':
+            # Fast webhook won while we were storing the ref — report the
+            # authoritative state.
+            return jsonify(action.to_dict()), 200
+        return jsonify({'id': action.id, 'status': 'executing',
+                        'note': 'provider accepted; webhook will resolve'}), 200
 
-    response = action.to_dict()
-    response['simulated'] = result.simulated
-    return jsonify(response), 200
+    if result.status == 'completed':
+        fields = {'outcome_summary': (json.dumps(result.outcome)
+                                      if result.outcome else 'completed')}
+        if result.provider_ref:
+            fields['external_ref'] = result.provider_ref
+        resolved = transition_action(
+            action_id, from_states=('executing',), to_state='completed',
+            actor='confirm', **fields)
+        db.session.refresh(action)
+        if not resolved:
+            # Webhook won — its verdict is authoritative.
+            return jsonify(action.to_dict()), 200
+        record_audit_event(
+            'update', resource_type='ProposedAction', resource_id=action.id,
+            agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+            detail=json.dumps(action.summary()),
+        )
+        notify_tenant(tenant_id, '✅ %s to %s: completed' % (action.kind, label))
+        return jsonify(action.to_dict()), 200
+
+    if result.status == 'needs_review':
+        resolved = transition_action(
+            action_id, from_states=('executing',), to_state='needs_review',
+            actor='confirm',
+            outcome_summary=(json.dumps(result.outcome)
+                             if result.outcome else 'needs review'))
+        db.session.refresh(action)
+        if not resolved:
+            return jsonify(action.to_dict()), 200
+        record_audit_event(
+            'update', resource_type='ProposedAction', resource_id=action.id,
+            agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+            detail=json.dumps(action.summary()),
+        )
+        notify_tenant(tenant_id, '⚠️ %s to %s: needs review'
+                      % (action.kind, label))
+        return jsonify({'id': action.id, 'status': 'needs_review',
+                        'outcome_summary': action.outcome_summary}), 200
+
+    # result.status == 'failed' (ExecutionResult admits no other statuses).
+    # Post-send ambiguity (timeout/garbled response/5xx) -> 'unknown', never
+    # 'failed': failed invites re-propose -> duplicate call.
+    new_status = 'unknown' if result.outcome_unknown else 'failed'
+    resolved = transition_action(
+        action_id, from_states=('executing',), to_state=new_status,
+        actor='confirm', outcome_summary=result.error)
+    db.session.refresh(action)
+    if not resolved:
+        # Webhook resolved the action while we were waiting — its verdict
+        # wins; report the authoritative state.
+        return jsonify(action.to_dict()), 200
+    record_audit_event(
+        'update', resource_type='ProposedAction', resource_id=action.id,
+        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+        outcome='failure', detail=result.error,
+    )
+    notify_tenant(tenant_id, '⚠️ %s to %s: %s'
+                  % (action.kind, label, new_status))
+    response = {'id': action.id, 'status': new_status,
+                'error_code': result.error or errors.PROVIDER_ERROR}
+    if result.outcome_unknown:
+        response['note'] = ('Provider outcome unknown — the provider may '
+                            'have acted; do not re-propose without '
+                            'reconciliation.')
+    return jsonify(response), 502
 
 
 @actions_blueprint.route('/<action_id>', methods=['GET'])

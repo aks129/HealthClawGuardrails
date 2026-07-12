@@ -15,10 +15,11 @@ calls each rail's register() function directly (not via import), swallowing
 the duplicate-kind ValueError. Tests should do `_clear(); register_all()`
 to reach a known-good registry state rather than relying on import order.
 
-Scope note: 'insurance-call' is NOT ported here. It keeps using the OLD
-r6/actions/executors.py module (same Bland.ai transport, different script
-source) until Task 10 decides how/whether it maps onto a rail in this
-package.
+Scope note: 'insurance-call' registers here too (Task 10) — a tiny subclass
+of PhoneCallExecutor in phone.py that only overrides kind (same Bland.ai
+transport; the insurance script source lives with the proposer). 'form-fill'
+stays unregistered on purpose: proposable, but Approve fails loud at the
+confirm route instead of pretending to execute.
 """
 
 import logging
