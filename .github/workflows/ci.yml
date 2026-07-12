@@ -39,6 +39,63 @@ jobs:
       - name: Run Python tests
         run: uv run python -m pytest tests/ -v --tb=short
 
+  # ─────────────────────────────────────────────
+  # Postgres CI lane — the full suite above runs on sqlite:///:memory:
+  # (tests/conftest.py), which does not enforce VARCHAR length or PK
+  # subtleties the way Postgres (prod) does. This repo has shipped 3
+  # Postgres-only truncation bugs that sqlite-based CI could never catch:
+  # oversized Epic resource ids, a narrower AuditEventRecord.resource_id
+  # column poisoning the shared transaction, and an under-width status
+  # column (see tests/test_ingest_resilience.py and
+  # tests/actions/test_state_transitions.py docstrings). Run just the
+  # DB-shape-sensitive subset against real Postgres to close that gap
+  # without doubling total CI time.
+  # ─────────────────────────────────────────────
+  postgres-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install uv
+          uv sync --extra test
+
+      - name: Run DB-shape-sensitive tests against Postgres
+        env:
+          SQLALCHEMY_DATABASE_URI: postgresql://postgres:postgres@localhost:5432/test
+        run: |
+          uv run python -m pytest \
+            tests/actions/ \
+            tests/test_ingest_resilience.py \
+            tests/test_actions_models.py \
+            tests/test_fasten_export_trigger.py \
+            tests/test_fasten_webhook_shape.py \
+            tests/test_fasten_verify_signature.py \
+            tests/test_fasten_job_recovery.py \
+            -v --tb=short
+
   node-tests:
     runs-on: ubuntu-latest
     defaults:

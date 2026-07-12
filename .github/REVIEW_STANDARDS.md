@@ -36,7 +36,11 @@ review bot reads THIS file, so keep it current.)
 10. **Postgres/SQLite parity trap:** the test suite runs on SQLite, prod is
     Postgres. Schema-affecting changes (column widths, constraints) need a
     model-level assertion test (see `tests/test_ingest_resilience.py`), and
-    new columns rely on `schema_sync` (additive + widen only).
+    new columns rely on `schema_sync` (additive + widen only). The
+    `postgres-tests` CI job runs the DB-shape-sensitive subset
+    (`tests/actions/`, ingest/fasten/models tests) against a real
+    postgres:16 service container — schema-affecting tests belong in that
+    subset, not just under SQLite.
 11. **External payload shapes are pinned by tests** using real captured
     payloads (see `tests/test_fasten_webhook_shape.py`). Handlers for
     webhooks/callbacks must tolerate envelope nesting and fail without
