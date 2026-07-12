@@ -268,42 +268,16 @@ jobs:
         run: pip install uv
 
       - name: Python dependency audit (pip-audit)
-        run: |
-          uv add --dev pip-audit 2>/dev/null || pip install pip-audit
-          uv run pip-audit --ignore-vuln GHSA-wfm5-v35h-vwf4 || \
-            uv run pip-audit --desc 2>&1 | tee pip-audit.txt
-          # Fail on high/critical; print report on moderate
-          uv run pip-audit --format=json 2>/dev/null | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          vulns = data.get('dependencies', [])
-          high = [v for dep in vulns for v in dep.get('vulns', [])
-                  if v.get('fix_versions')]
-          if high:
-              print(f'FAIL: {len(high)} fixable vulnerabilities found')
-              sys.exit(1)
-          print(f'OK: no fixable high/critical CVEs in Python dependencies')
-          " || true  # advisory only until baseline is established
+        # pip-audit does not publish reliable severity metadata for every
+        # advisory. Fail on every known vulnerability rather than silently
+        # misclassifying one; exceptions require a reviewed, expiring policy.
+        run: uvx --from pip-audit==2.9.0 pip-audit --strict
 
       - name: Node.js dependency audit
         working-directory: services/agent-orchestrator
         run: |
           npm ci
-          npm audit --audit-level=high 2>&1 | tee npm-audit.txt || \
-            echo "::warning::npm audit found issues — review npm-audit.txt"
-          # High/critical fail the build; moderate are advisory
-          npm audit --audit-level=critical --json 2>/dev/null | python3 -c "
-          import sys, json
-          try:
-              data = json.load(sys.stdin)
-              critical = data.get('metadata', {}).get('vulnerabilities', {}).get('critical', 0)
-              if critical:
-                  print(f'FAIL: {critical} critical CVEs in Node dependencies')
-                  sys.exit(1)
-              print('OK: no critical CVEs in Node.js dependencies')
-          except Exception:
-              print('OK: audit check passed (no JSON output means clean)')
-          " || true
+          npm audit --audit-level=high
 
   # ─────────────────────────────────────────────
   # Compliance Gate 3: Guardrail enforcement checks
