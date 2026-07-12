@@ -174,12 +174,14 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 msg_lines.append('Try `/summary`, `/conditions`, `/curatr`, or `/dashboard`.')
                 notify_tenant(tenant_id, '\n'.join(msg_lines))
             except Exception as notify_exc:  # pragma: no cover - defensive
-                logger.warning('Fasten notify push failed: %s', notify_exc)
+                logger.warning('Fasten notify push failed: %s',
+                               type(notify_exc).__name__)
 
         except Exception as exc:
             job.status = 'failed'
-            # Truncate — never persist full error strings that may contain PHI
-            job.failure_reason = str(exc)[:200]
+            # Persist only a bounded category. Exception strings from HTTP and
+            # database clients commonly embed URLs, tokens, or bound FHIR JSON.
+            job.failure_reason = type(exc).__name__[:200]
             job.completed_at = datetime.now(timezone.utc)
             db.session.commit()
             record_audit_event(
@@ -189,7 +191,8 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 outcome='failure',
                 detail=f'job={job.task_id}',
             )
-            logger.error('Fasten job %d failed: %s', job_id, exc)
+            logger.error('Fasten job %d failed: %s', job_id,
+                         type(exc).__name__)
             try:
                 from r6.telegram_push import notify_tenant
                 notify_tenant(
@@ -293,7 +296,8 @@ def _run_curatr_scan(
                     detail=f'issues={count}',
                 )
         except Exception as exc:
-            logger.warning('Curatr scan error for %s/%s: %s', resource_type, resource_id, exc)
+            logger.warning('Curatr scan error for resource type %s: %s',
+                           resource_type, type(exc).__name__)
 
     logger.info(
         'Fasten job %s Curatr scan complete: %d issues across %d resources',
