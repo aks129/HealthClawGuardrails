@@ -27,7 +27,8 @@ def test_long_id_resource_stores_and_round_trips(client, tenant_id):
                      resource_id=long_id, tenant_id=tenant_id)
     db.session.add(res)
     db.session.commit()
-    got = db.session.get(R6Resource, long_id)
+    got = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation", id=long_id).first()
     assert got is not None and got.id == long_id
 
 
@@ -43,7 +44,8 @@ def test_ingest_error_rolls_back_session_so_next_resource_succeeds(client, tenan
     db.session.add(good1)
     db.session.commit()
 
-    # Force a failure (duplicate PK) then the ingester's recovery: rollback.
+    # Force a failure (duplicate composite PK — same tenant, type, AND id)
+    # then the ingester's recovery: rollback.
     dup = R6Resource(resource_type="Observation",
                      resource_json="{}", resource_id="ir-good-1",
                      tenant_id=tenant_id)
@@ -59,7 +61,9 @@ def test_ingest_error_rolls_back_session_so_next_resource_succeeds(client, tenan
                        tenant_id=tenant_id)
     db.session.add(good2)
     db.session.commit()
-    assert db.session.get(R6Resource, "ir-good-2") is not None
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation",
+        id="ir-good-2").first() is not None
 
 
 def test_audit_resource_id_column_fits_real_ehr_ids():

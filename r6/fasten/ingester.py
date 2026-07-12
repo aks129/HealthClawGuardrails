@@ -217,9 +217,19 @@ def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
     resource_id = resource.get('id') or str(uuid.uuid4())
     resource_json = json.dumps(resource, separators=(',', ':'))
 
-    existing = db.session.get(R6Resource, resource_id)
-    if existing and existing.tenant_id == tenant_id and not existing.is_deleted:
+    # Identity is (tenant_id, resource_type, id) — composite PK. The same
+    # FHIR id held by ANOTHER tenant (or another type in this tenant) is a
+    # different row entirely, so the old cross-tenant PK collision (which
+    # silently dropped the resource from the import) cannot occur.
+    existing = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type=resource_type, id=resource_id
+    ).first()
+    if existing:
+        # Re-ingest of a row we already hold — including one that was
+        # soft-deleted: a fresh import of the same (tenant, type, id)
+        # revives it rather than colliding with the tombstone.
         existing.update_resource(resource_json)
+        existing.is_deleted = False
     else:
         new_res = R6Resource(
             resource_type=resource_type,
@@ -262,8 +272,11 @@ def _run_curatr_scan(
 
     for resource_type, resource_id in eligible[:100]:  # cap at 100 per import
         try:
-            res_obj = db.session.get(R6Resource, resource_id)
-            if not res_obj or res_obj.tenant_id != tenant_id:
+            res_obj = R6Resource.query.filter_by(
+                tenant_id=tenant_id, resource_type=resource_type,
+                id=resource_id,
+            ).first()
+            if not res_obj:
                 continue
             resource = json.loads(res_obj.resource_json)
             result = evaluator.evaluate(resource)

@@ -6,9 +6,10 @@ import os
 import pytest
 
 # Set test environment before importing app — prevents file-based DB creation.
-# setdefault (not assignment) so a CI job can pre-set SQLALCHEMY_DATABASE_URI
-# (e.g. to Postgres, for the postgres-tests lane) before pytest starts;
-# sqlite:///:memory: remains the default for local/unconfigured runs.
+# setdefault (not assignment) so a pre-set SQLALCHEMY_DATABASE_URI wins: the
+# postgres-tests CI lane points here, and the resource-identity migration
+# rehearsal (docs/runbooks/resource-identity-migration.md) points the suite at
+# a migrated Postgres copy. sqlite:///:memory: is the local/unconfigured default.
 os.environ['TESTING'] = '1'
 os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///:memory:')
 os.environ['STEP_UP_SECRET'] = 'test-secret-for-hmac-validation'
@@ -26,10 +27,8 @@ def app():
     """Create a test Flask application."""
     from main import app as flask_app
     flask_app.config['TESTING'] = True
-    # Respect the module-level env var (sqlite by default, Postgres when the
-    # postgres-tests CI lane pre-sets SQLALCHEMY_DATABASE_URI) rather than
-    # forcing sqlite here — main.py already read it into app.config at
-    # import time, so this just keeps them in sync.
+    # Respect the module-level env var (sqlite by default, Postgres when a CI
+    # lane or migration rehearsal pre-sets SQLALCHEMY_DATABASE_URI).
     flask_app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['SQLALCHEMY_DATABASE_URI']
 
     from models import db
