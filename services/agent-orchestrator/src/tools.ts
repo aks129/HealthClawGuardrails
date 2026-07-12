@@ -753,7 +753,7 @@ export class FHIRTools {
         name: "action_status",
         title: "Action Status",
         description:
-          "Check the status and outcome of an action (proposed/awaiting_confirmation/executing/completed/failed/expired). Use after action_commit to see whether the patient has approved yet, and to report the final result back to them.",
+          "Check the status and outcome of an action (proposed/awaiting_confirmation/executing/completed/failed/needs_review/unknown/expired). needs_review means it ran but the outcome could not be confirmed - show the patient the evidence. unknown means the provider MAY have acted - never re-propose the same action. Use after action_commit to see whether the patient has approved yet, and to report the final result back to them.",
         tier: "read",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {

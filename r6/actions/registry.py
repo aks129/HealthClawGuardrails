@@ -10,8 +10,6 @@ methods (~50 lines), register, and your capability inherits the entire
 guardrail rail — propose validation, the out-of-band human gate, audit,
 observability — for free.
 
-Interim note: executors.py still has the OLD ExecutionResult (ok/simulated
-shape); this module's ExecutionResult (status-based) replaces it in Task 8 —
 don't mix the two up in the meantime.
 """
 from dataclasses import dataclass, field

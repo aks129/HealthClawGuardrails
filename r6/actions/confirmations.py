@@ -1,7 +1,9 @@
 """Out-of-band human approval record. issue_confirmation() is written by the
-authenticated Telegram/dashboard approve handler; consume_confirmation() is
-called INSIDE the claim transaction so approval and execution are atomic and
-single-use (an approval from Tuesday can't authorize a Thursday commit)."""
+authenticated Telegram/dashboard approve handler; The confirm route claims FIRST
+(the guarded transition is the mutex), then issues + consumes the confirmation
+in the next transaction: the claim is the lock, this row is the durable consent
+record of who/when/via. TTL means an approval from Tuesday can't authorize a
+Thursday commit."""
 import uuid
 from datetime import timedelta
 

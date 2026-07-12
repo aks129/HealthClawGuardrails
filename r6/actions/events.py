@@ -16,6 +16,6 @@ class ActionEvent(db.Model):
     # map in tests/actions/test_state_transitions.py.
     from_status = db.Column(db.String(128), nullable=True)
     to_status = db.Column(db.String(32), nullable=False)
-    actor = db.Column(db.String(32), nullable=False)  # commit-route|confirm|webhook|reaper|propose
+    actor = db.Column(db.String(32), nullable=False)  # commit-route|confirm|status-route|callback:<provider> (reaper: future)
     detail = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow, index=True)
