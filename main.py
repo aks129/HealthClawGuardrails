@@ -126,6 +126,19 @@ with app.app_context():
     except Exception as e:  # noqa: BLE001
         logger.warning("schema_sync failed (non-fatal): %s", e)
 
+    # Recover Fasten jobs stranded in non-terminal states by a restart
+    # mid-ingest (zombie jobs): re-trigger a FRESH EHI export so new signed
+    # URLs arrive via webhook (the persisted ones expire). Wrapped so a
+    # reaper failure NEVER blocks boot.
+    try:
+        from r6.fasten.reaper import reap_zombie_jobs
+        _reaped = reap_zombie_jobs()
+        if _reaped:
+            logger.info("Fasten boot reaper: re-triggered %d zombie job(s)",
+                        _reaped)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Fasten boot reaper failed (non-fatal, boot continues): %s", e)
+
     # Auto-seed demo tenant on first boot (Railway / Docker deployments)
     if os.environ.get('SEED_DEMO_TENANT'):
         _demo_tenant = os.environ.get('DEMO_TENANT_ID', 'desktop-demo')

@@ -18,7 +18,13 @@ class FastenConnection(db.Model):
     """
     __tablename__ = 'fasten_connections'
 
-    org_connection_id = db.Column(db.String(64), primary_key=True)
+    # 255, not 64: Fasten mints this id — we don't control its length, and
+    # SQLite masks a too-narrow varchar until Postgres truncation-errors
+    # (bitten 3x; see tests/test_fasten_models_widths.py). Widening a
+    # varchar PK on Postgres is a plain online type widen; schema_sync
+    # ALTERs it on existing deployments.
+    org_connection_id = db.Column(db.String(255), primary_key=True)
+    # tenant_id is internally generated — 64 is intentional.
     tenant_id = db.Column(db.String(64), nullable=False, index=True)
     # EHR portal identifiers (absent in TEFCA mode)
     endpoint_id = db.Column(db.String(128), nullable=True)
@@ -47,8 +53,11 @@ class FastenJob(db.Model):
     __tablename__ = 'fasten_jobs'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    task_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
-    org_connection_id = db.Column(db.String(64), nullable=False, index=True)
+    # task_id/org_connection_id are minted by Fasten (external ids) — 255,
+    # not 64, for the same SQLite-masks-varchar reason as FastenConnection.
+    task_id = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    org_connection_id = db.Column(db.String(255), nullable=False, index=True)
+    # tenant_id is internally generated — 64 is intentional.
     tenant_id = db.Column(db.String(64), nullable=False, index=True)
     # Job lifecycle status
     status = db.Column(db.String(32), default='pending')
