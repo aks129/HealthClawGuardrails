@@ -921,12 +921,22 @@ describe("Tool Execution Tests", () => {
   });
 
   // -- action_commit with step-up --
+  //
+  // Approve-is-the-commit (PR #1 Task 10/11): commit only SUBMITS the action
+  // for the patient's out-of-band approval. The Node MCP server must never
+  // mint the spoofable X-Human-Confirmed header itself, and must surface the
+  // Flask 202 {status: 'awaiting_confirmation'} response as terminal-for-turn
+  // guidance the model can't mistake for an error or a retry invitation.
 
-  it("action_commit with step-up token sends X-Step-Up-Token and X-Human-Confirmed: true", async () => {
-    const committed = { id: "act-001", status: "executing" };
-    mockFetch.mockResolvedValueOnce(fakeResponse(committed));
+  it("action_commit sends X-Step-Up-Token but NEVER X-Human-Confirmed", async () => {
+    const submitted = {
+      id: "act-001",
+      status: "awaiting_confirmation",
+      next_step: "Terminal for this turn: the patient must approve out of band.",
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(submitted, 202));
 
-    const result = await tools.executeTool(
+    await tools.executeTool(
       "action_commit",
       { action_id: "act-001" },
       { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
@@ -937,11 +947,74 @@ describe("Tool Execution Tests", () => {
     expect(url).toContain("/r6/actions/act-001/commit");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-Step-Up-Token"]).toBe("valid-token-abc");
-    expect(opts.headers["X-Human-Confirmed"]).toBe("true");
-    expect(result).toEqual(committed);
+    expect(opts.headers).not.toHaveProperty("X-Human-Confirmed");
+    expect(JSON.stringify(opts.body || "")).not.toContain("X-Human-Confirmed");
   });
 
-  it("action_commit on 410 returns error + detail containing 'expired'", async () => {
+  it("action_commit on 202 awaiting_confirmation returns terminal-for-turn guidance, not a retry invitation", async () => {
+    const submitted = {
+      id: "act-001",
+      status: "awaiting_confirmation",
+      next_step: "Terminal for this turn: the patient must approve out of band (dashboard/Telegram). Poll GET /r6/actions/act-001 or end your turn. Do not retry commit.",
+    };
+    mockFetch.mockResolvedValueOnce(fakeResponse(submitted, 202));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(result.id).toBe("act-001");
+    expect(result.status).toBe("awaiting_confirmation");
+    expect(result).toHaveProperty("_mcp_summary");
+    const summary = result._mcp_summary as string;
+    expect(summary).toMatch(/awaiting_confirmation/);
+    expect(summary).toMatch(/end your turn|do not call action_commit again/i);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("action_commit on 401 (replayed/rejected step-up token) surfaces the error without a retry invitation", async () => {
+    const body = { error: "Step-up token rejected: Token already used (replay)" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(body, 401));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      { "x-step-up-token": "replayed-token", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("401");
+    expect(result).toHaveProperty("requires_step_up", true);
+    const detail = result.detail as Record<string, unknown>;
+    expect((detail.error as string).toLowerCase()).toContain("replay");
+    const summary = (result._mcp_summary as string) || "";
+    expect(summary.toLowerCase()).toContain("replay");
+    expect(summary.toLowerCase()).not.toMatch(/retry|try again|resend|call action_commit again/);
+  });
+
+  it("action_commit on 409 (action not in 'proposed' state) surfaces the server's message with no retry hint", async () => {
+    const body = { error: "Action is executing, not proposed" };
+    mockFetch.mockResolvedValueOnce(fakeResponse(body, 409));
+
+    const result = await tools.executeTool(
+      "action_commit",
+      { action_id: "act-001" },
+      { "x-step-up-token": "valid-token-abc", "x-tenant-id": "tenant-xyz" }
+    );
+
+    expect(result).toHaveProperty("error");
+    expect((result.error as string)).toContain("409");
+    const detail = result.detail as Record<string, unknown>;
+    expect(detail.error).toBe("Action is executing, not proposed");
+    const summary = (result._mcp_summary as string) || "";
+    expect(summary).toContain("Action is executing, not proposed");
+    expect(summary.toLowerCase()).not.toMatch(/retry|try again|resend|call action_commit again/);
+    expect(result).not.toHaveProperty("requires_step_up");
+  });
+
+  it("action_commit on 410 returns error + detail containing 'expired', with no retry hint", async () => {
     const body = { error: "Proposal expired — propose the action again" };
     mockFetch.mockResolvedValueOnce(fakeResponse(body, 410));
 
@@ -957,6 +1030,8 @@ describe("Tool Execution Tests", () => {
     const detail = result.detail as Record<string, unknown>;
     expect((detail.error as string).toLowerCase()).toContain("expired");
     expect(result).not.toHaveProperty("requires_step_up");
+    const summary = (result._mcp_summary as string) || "";
+    expect(summary.toLowerCase()).not.toMatch(/retry commit|call action_commit again/);
   });
 
   it("action_commit on 401 includes requires_step_up: true", async () => {
