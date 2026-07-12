@@ -122,12 +122,21 @@ class TestOnErrorHandler:
         assert any('CONFLICT STORM' in rec.message for rec in caplog.records)
         mock_alert.assert_called_once()
 
-    def test_three_conflicts_spread_over_more_than_60s_do_not_exit(self):
-        timestamps = [1000.0, 1070.0, 1140.0]
-        with patch.object(bot.time, 'time', side_effect=timestamps):
-            for _ in timestamps:
-                _run(bot._on_error(
-                    None, _ctx_with_error(Conflict('terminated by other getUpdates request'))))
+    def test_three_conflicts_spread_over_more_than_60s_do_not_exit(self, monkeypatch):
+        # Fake clock at the module seam: bot.py does `import time` and calls
+        # `time.time()`, so replace the `time` attribute in bot's namespace
+        # only. Never patch the global time module with a finite
+        # side_effect list — asyncio/logging internals also call
+        # time.time() (a variable number of times per interpreter version),
+        # and an exhausted mock generator raises StopIteration, which
+        # inside a coroutine becomes RuntimeError (PEP 479). A mutable
+        # clock the test advances is call-count independent.
+        clock = [1000.0]
+        monkeypatch.setattr(bot, 'time', SimpleNamespace(time=lambda: clock[0]))
+        for now in (1000.0, 1070.0, 1140.0):
+            clock[0] = now
+            _run(bot._on_error(
+                None, _ctx_with_error(Conflict('terminated by other getUpdates request'))))
         # No SystemExit was raised (loop completed) and the window holds
         # only the most recent timestamp.
         assert len(bot._conflict_timestamps) == 1
