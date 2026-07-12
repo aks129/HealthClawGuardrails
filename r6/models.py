@@ -19,17 +19,30 @@ class R6Resource(db.Model):
     """
     __tablename__ = 'r6_resources'
 
+    # Resource identity is (tenant_id, resource_type, id) — COMPOSITE.
+    # FHIR ids are only unique per resource type per source server, and this
+    # store holds many tenants: with the old global single-column PK, tenant
+    # B importing an id tenant A already held (Synthea 'example', Epic
+    # numeric ids) hit a PK collision and the resource was silently dropped
+    # from the import. Patient/X and Observation/X collided within one
+    # tenant, too. Column order here fixes the PK order in the DDL —
+    # (tenant_id, resource_type, id) — matching
+    # scripts/migrate_resource_identity.py for live Postgres databases.
+    #
+    # W2 (planned, NOT this migration): a `source` column + ingest
+    # Provenance will record which upstream server each row came from, so
+    # the same logical resource pulled via two connections can be told apart.
+    tenant_id = db.Column(db.String(64), primary_key=True, index=True)
+    resource_type = db.Column(db.String(64), primary_key=True, index=True)
     # Real EHR resource ids (Epic in particular) routinely exceed the FHIR
     # 64-char id limit — 65/250 in a live Epic export, max 109. 255 gives
     # headroom while preserving the full id so intra-bundle references
     # (subject.reference "Patient/<id>") still resolve.
     id = db.Column(db.String(255), primary_key=True)
-    resource_type = db.Column(db.String(64), nullable=False, index=True)
     version_id = db.Column(db.Integer, nullable=False, default=1)
     last_updated = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     resource_json = db.Column(db.Text, nullable=False)
     sha256 = db.Column(db.String(64), nullable=False)
-    tenant_id = db.Column(db.String(64), nullable=True, index=True)
     is_deleted = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
