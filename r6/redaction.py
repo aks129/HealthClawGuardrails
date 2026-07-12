@@ -23,18 +23,12 @@ def apply_redaction(resource):
     Returns a deep copy with PHI fields redacted.
     """
     redacted = json.loads(json.dumps(resource))  # Deep copy
-    _redact_fields(redacted)
-
-    # Also redact any contained resources
-    if 'contained' in redacted and isinstance(redacted['contained'], list):
-        for contained in redacted['contained']:
-            if isinstance(contained, dict):
-                _redact_fields(contained)
+    _redact_recursive(redacted)
 
     return redacted
 
 
-def _redact_fields(resource):
+def _redact_fields(resource, narrative=True):
     """Redact PHI fields from a single resource dict (in-place)."""
     # Redact names: truncate family and given to first initial only
     if 'name' in resource and isinstance(resource['name'], list):
@@ -58,26 +52,35 @@ def _redact_fields(resource):
     resource.pop('photo', None)
 
     # Remove text narratives
-    if 'text' in resource:
+    if 'text' in resource and narrative:
         resource['text'] = {
             'status': 'empty',
             'div': '<div xmlns="http://www.w3.org/1999/xhtml">[Redacted]</div>'
         }
+    elif 'text' in resource:
+        resource.pop('text', None)
 
     # Redact identifiers (keep last 4 characters)
-    if 'identifier' in resource and isinstance(resource['identifier'], list):
-        for ident in resource['identifier']:
-            if 'value' in ident and isinstance(ident['value'], str):
-                val = ident['value']
-                if len(val) > 4:
-                    ident['value'] = '***' + val[-4:]
+    if 'identifier' in resource:
+        identifiers = resource['identifier']
+        if isinstance(identifiers, dict):
+            identifiers = [identifiers]
+        if isinstance(identifiers, list):
+            for ident in identifiers:
+                if (isinstance(ident, dict)
+                        and isinstance(ident.get('value'), str)):
+                    val = ident['value']
+                    ident['value'] = '***' + val[-4:] if len(val) > 4 else '***'
 
     # Remove full addresses
     if 'address' in resource and isinstance(resource['address'], list):
         for addr in resource['address']:
             addr.pop('line', None)
             addr.pop('text', None)
-            # Keep city, state, country for demographics
+            addr.pop('city', None)
+            addr.pop('district', None)
+            addr.pop('postalCode', None)
+            # State/country remain useful coarse demographics.
 
     # Redact telecom (phone numbers, emails)
     if 'telecom' in resource and isinstance(resource['telecom'], list):
@@ -109,6 +112,9 @@ def _redact_fields(resource):
             if isinstance(ca, dict):
                 ca.pop('line', None)
                 ca.pop('text', None)
+                ca.pop('city', None)
+                ca.pop('district', None)
+                ca.pop('postalCode', None)
 
     # Remove notes/comments
     for field in ['note', 'comment']:
@@ -119,6 +125,48 @@ def _redact_fields(resource):
                 resource[field] = '[Redacted]'
 
 
+_FREE_TEXT_KEYS = {
+    'display', 'description', 'valueString', 'valueMarkdown', 'valueUrl',
+    'valueUri', 'valueCanonical', 'valueBase64Binary',
+}
+_DATE_KEYS = {
+    'birthDate', 'deceasedDateTime', 'valueDate', 'valueDateTime',
+}
+
+
+def _redact_recursive(obj):
+    """Recursively minimize common PHI-bearing FHIR datatypes in-place."""
+    if isinstance(obj, list):
+        for item in obj:
+            _redact_recursive(item)
+        return
+    if not isinstance(obj, dict):
+        return
+
+    _redact_fields(obj, narrative=bool(obj.get('resourceType')))
+
+    # Attachment content and signed URLs can directly contain or reveal PHI.
+    if ('contentType' in obj and any(k in obj for k in ('data', 'url', 'title'))):
+        obj.pop('data', None)
+        obj.pop('url', None)
+        obj.pop('title', None)
+
+    # Organization/Practitioner names are often represented as a scalar.
+    if isinstance(obj.get('name'), str):
+        value = obj['name']
+        obj['name'] = value[0] + '.' if value else value
+
+    for key in list(obj):
+        value = obj.get(key)
+        if key in _FREE_TEXT_KEYS:
+            obj.pop(key, None)
+            continue
+        if key in _DATE_KEYS and isinstance(value, str):
+            obj[key] = value[:4]
+            continue
+        _redact_recursive(value)
+
+
 def apply_patient_controlled_redaction(resource, patient_id):
     """
     Patient-controlled deidentification mode.
@@ -126,7 +174,7 @@ def apply_patient_controlled_redaction(resource, patient_id):
     The patient owns this store — they want their own data, minus
     institutional identifiers that could re-identify them to third parties.
 
-    Rules (differ from standard HIPAA Safe Harbor apply_redaction):
+    Rules (differ from the stricter de-identification preview):
     - name[], telecom[], address[], photo[] — removed entirely
     - birthDate — PRESERVED (patient wants their own DOB)
     - Institutional identifiers (MRN, facility patient IDs) — removed

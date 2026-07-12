@@ -303,7 +303,7 @@ cd e2e && npm run test:ui        # interactive UI mode
 | `/r6/fhir/{type}/$validate` | POST | Validate resource |
 | `/r6/fhir/Questionnaire[/{id}]/$populate` | POST | SDC — pre-fill a QuestionnaireResponse from a subject |
 | `/r6/fhir/QuestionnaireResponse/$extract` | POST | SDC — extract a transaction Bundle (`?dryRun=true` to preview) |
-| `/r6/fhir/{type}/{id}/$deidentify` | GET | HIPAA Safe Harbor de-identification |
+| `/r6/fhir/{type}/{id}/$deidentify` | GET | Conservative de-identification preview (expert review required) |
 | `/r6/fhir/Observation/$stats` | GET | Observation statistics |
 | `/r6/fhir/Observation/$lastn` | GET | Most recent observations |
 | `/r6/fhir/Permission/$evaluate` | POST | R6 access control evaluation |
@@ -498,7 +498,7 @@ r6/
   audit.py                      Immutable AuditEvent recording
   stepup.py                     HMAC-SHA256 step-up token management
   oauth.py                      OAuth 2.1 + PKCE + SMART-on-FHIR discovery
-  health_compliance.py          Disclaimers, HITL, HIPAA Safe Harbor, audit export
+  health_compliance.py          Disclaimers, HITL, de-identification preview, audit export
   context_builder.py            Bundle ingestion + context envelopes
   rate_limit.py                 Per-tenant rate limiting
   fhir_proxy.py                 Upstream FHIR server proxy with URL rewriting
@@ -582,7 +582,7 @@ patient's canonical tenant ID.
 ### 5. Deidentify for sharing
 
 ```bash
-# HIPAA Safe Harbor
+# De-identification preview (not a legal Safe Harbor determination)
 curl -H "X-Tenant-ID: my-patient" \
   http://localhost:5000/r6/fhir/Patient/pt-1/\$deidentify
 
