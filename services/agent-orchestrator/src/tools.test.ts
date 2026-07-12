@@ -16,6 +16,10 @@ jest.mock("node-fetch", () => jest.fn());
 import fetch from "node-fetch";
 const mockFetch = fetch as unknown as jest.Mock;
 
+// Import as a namespace so jest.spyOn can intercept tools.ts's calls to the
+// helper (CommonJS property access happens at call time).
+import * as fetchTimeoutModule from "./fetch-timeout";
+
 import request from "supertest";
 import { app, closeMCPServerForTests } from "./index";
 
@@ -1382,6 +1386,164 @@ describe("Tool Execution Tests", () => {
 
     expect(result).toHaveProperty("error");
     expect((result.error as string)).toContain("404");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2b. Backend Timeout Guardrails (W0 item 5)
+// ---------------------------------------------------------------------------
+// Every backend fetch goes through fetchWithTimeout (15s default budget,
+// 60s for the synchronous conformance probe suite, 30s for seed + curatr's
+// external-terminology round trips). A timeout must surface to the model as
+// a STRUCTURED result -- never as a raw AbortError or an unhandled rejection.
+
+describe("Backend Timeout Guardrails", () => {
+  const BASE = "http://localhost:5000/r6/fhir";
+  const tools = new FHIRTools(BASE);
+  let helperSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // Spy calls through to the real helper (which uses the mocked node-fetch).
+    helperSpy = jest.spyOn(fetchTimeoutModule, "fetchWithTimeout");
+  });
+
+  afterEach(() => {
+    helperSpy.mockRestore();
+    mockFetch.mockReset();
+  });
+
+  /** node-fetch's abort rejection, as AbortSignal.timeout() produces it. */
+  function abortError(): Error {
+    const e = new Error("The user aborted a request.");
+    e.name = "AbortError";
+    return e;
+  }
+
+  it("fhir_read: hanging backend returns the structured timeout result (no unhandled rejection)", async () => {
+    mockFetch.mockRejectedValueOnce(abortError());
+
+    const result = await tools.executeTool("fhir_read", {
+      resource_type: "Patient",
+      resource_id: "pt-1",
+    });
+
+    expect(result.error).toBe("backend_timeout");
+    expect(result.retryable).toBe(true);
+    expect(result.timeout_ms).toBe(15_000);
+    expect(result.message).toContain("timed out after 15s");
+    expect(result.message).toContain("cold-starting");
+    expect(result.message).toContain("try once more in ~30 seconds");
+  });
+
+  it("timeout result never leaks raw AbortError text or a stack trace to the model", async () => {
+    mockFetch.mockRejectedValueOnce(abortError());
+
+    const result = await tools.executeTool("fhir_read", {
+      resource_type: "Patient",
+      resource_id: "pt-1",
+    });
+
+    const rendered = JSON.stringify(result);
+    expect(rendered).not.toContain("AbortError");
+    expect(rendered).not.toContain("aborted");
+    expect(rendered).not.toContain("at ");
+  });
+
+  it("fhir_search: timeout also converts (central catch covers every tool)", async () => {
+    mockFetch.mockRejectedValueOnce(abortError());
+
+    const result = await tools.executeTool("fhir_search", { resource_type: "Observation" });
+
+    expect(result.error).toBe("backend_timeout");
+    expect(result.retryable).toBe(true);
+  });
+
+  it("non-timeout fetch failures still propagate (not misreported as timeouts)", async () => {
+    const netErr = new Error("connect ECONNREFUSED 127.0.0.1:5000");
+    netErr.name = "FetchError";
+    mockFetch.mockRejectedValueOnce(netErr);
+
+    await expect(
+      tools.executeTool("fhir_read", { resource_type: "Patient", resource_id: "pt-1" })
+    ).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("every backend fetch carries an AbortSignal (timeout actually wired)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
+
+    await tools.executeTool("fhir_read", { resource_type: "Patient", resource_id: "pt-1" });
+
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("fhir_read uses the default 15s budget (no per-call override)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Patient", id: "pt-1" }));
+
+    await tools.executeTool("fhir_read", { resource_type: "Patient", resource_id: "pt-1" });
+
+    expect(helperSpy).toHaveBeenCalledTimes(1);
+    expect(helperSpy.mock.calls[0][2]).toBeUndefined(); // defaults to DEFAULT_TIMEOUT_MS
+  });
+
+  it("guardrail_conformance uses the 60s budget (synchronous probe suite)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ grade: "A" }));
+
+    await tools.executeTool("guardrail_conformance", {});
+
+    expect(helperSpy).toHaveBeenCalledWith(
+      expect.stringContaining("$conformance"),
+      expect.anything(),
+      60_000
+    );
+  });
+
+  it("fhir_seed uses a 30s budget (bulk insert + per-resource audit commits)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ created: [] }));
+
+    await tools.executeTool("fhir_seed", {});
+
+    expect(helperSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/internal/seed"),
+      expect.anything(),
+      30_000
+    );
+  });
+
+  it("curatr_evaluate uses a 30s budget (stacked external terminology calls)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ issue_count: 0, overall_quality: "good" }));
+
+    await tools.executeTool("curatr_evaluate", {
+      resource_type: "Condition",
+      resource_id: "c-1",
+    });
+
+    expect(helperSpy).toHaveBeenCalledWith(
+      expect.stringContaining("$curatr-evaluate"),
+      expect.anything(),
+      30_000
+    );
+  });
+
+  it("curatr_apply_fix uses a 30s budget (re-evaluates via external terminology after fix)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ issues_fixed: 1 }));
+
+    await tools.executeTool(
+      "curatr_apply_fix",
+      {
+        resource_type: "Condition",
+        resource_id: "c-1",
+        fixes: [{ field_path: "Condition.code.coding[0].system", new_value: "x" }],
+        patient_intent: "fix my record",
+      },
+      { "x-step-up-token": "tok-1" }
+    );
+
+    expect(helperSpy).toHaveBeenCalledWith(
+      expect.stringContaining("$curatr-apply-fix"),
+      expect.anything(),
+      30_000
+    );
   });
 });
 

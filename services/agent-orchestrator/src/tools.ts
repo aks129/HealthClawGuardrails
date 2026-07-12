@@ -20,7 +20,11 @@
  * All tools include MCP annotations (readOnlyHint, destructiveHint, openWorldHint).
  */
 
-import fetch from "node-fetch";
+import {
+  fetchWithTimeout,
+  BackendTimeoutError,
+  backendTimeoutResult,
+} from "./fetch-timeout";
 import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
 import { encryptJWE } from "./ktc/jwe";
 import { buildShlink, buildOwnerLink, buildViewerLink } from "./ktc/shlink";
@@ -102,7 +106,7 @@ export class FHIRTools {
     }
 
     try {
-      const resp = await fetch(`${this.serverRoot()}/r6/fhir/internal/step-up-token`, {
+      const resp = await fetchWithTimeout(`${this.serverRoot()}/r6/fhir/internal/step-up-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -827,6 +831,24 @@ export class FHIRTools {
     input: Record<string, unknown>,
     headers?: Record<string, string>
   ): Promise<Record<string, unknown>> {
+    // Central timeout conversion: every backend fetch below goes through
+    // fetchWithTimeout, which throws BackendTimeoutError past its budget.
+    // Convert it HERE (one catch path for all ~30 tools) into a structured
+    // tool result so the model sees calm, actionable text instead of a raw
+    // AbortError stack or a JSON-RPC "Internal error".
+    try {
+      return await this.executeToolInner(toolName, input, headers);
+    } catch (e) {
+      if (e instanceof BackendTimeoutError) return backendTimeoutResult(e);
+      throw e;
+    }
+  }
+
+  private async executeToolInner(
+    toolName: string,
+    input: Record<string, unknown>,
+    headers?: Record<string, string>
+  ): Promise<Record<string, unknown>> {
     const tool = this.getToolSchemas().find((t) => t.name === toolName);
     if (!tool) {
       return { error: `Unknown tool: ${toolName}` };
@@ -1018,7 +1040,7 @@ export class FHIRTools {
         // or a token minted for desktop-demo gets rejected when the actual
         // call runs as another tenant ("Token tenant mismatch").
         const tokenTenant = (input.tenant_id as string) || tenantId;
-        const resp = await fetch(`${this.baseUrl}/internal/step-up-token`, {
+        const resp = await fetchWithTimeout(`${this.baseUrl}/internal/step-up-token`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1040,11 +1062,18 @@ export class FHIRTools {
 
       case "fhir_seed": {
         const seedTenant = (input.tenant_id as string) || tenantId;
-        const resp = await fetch(`${this.baseUrl}/internal/seed`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...fwdHeaders },
-          body: JSON.stringify({ tenant_id: seedTenant }),
-        });
+        // 30s budget: seeding inserts the whole demo bundle with a
+        // per-resource audit-event commit each (r6/seed.py), which can
+        // legitimately exceed 15s on a cold backend + cold database.
+        const resp = await fetchWithTimeout(
+          `${this.baseUrl}/internal/seed`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...fwdHeaders },
+            body: JSON.stringify({ tenant_id: seedTenant }),
+          },
+          30_000
+        );
         const data = (await resp.json()) as Record<string, unknown>;
         if (!resp.ok) return { error: "Seed failed", detail: data };
         return {
@@ -1086,7 +1115,7 @@ export class FHIRTools {
     contextId: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/context/${encodeURIComponent(contextId)}`,
       { headers }
     );
@@ -1109,7 +1138,7 @@ export class FHIRTools {
     resourceId: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
       { headers }
     );
@@ -1139,7 +1168,7 @@ export class FHIRTools {
     if (searchParams._sort) params.set("_sort", searchParams._sort);
     params.set("_count", searchParams._count.toString());
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}?${params.toString()}`,
       { headers }
     );
@@ -1173,7 +1202,7 @@ export class FHIRTools {
     if (!resourceType) {
       return { error: "Resource must have a resourceType" };
     }
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/$validate`,
       {
         method: "POST",
@@ -1246,7 +1275,7 @@ export class FHIRTools {
 
     let resp;
     if (operation === "create") {
-      resp = await fetch(`${this.baseUrl}/${encodeURIComponent(resourceType)}`, {
+      resp = await fetchWithTimeout(`${this.baseUrl}/${encodeURIComponent(resourceType)}`, {
         method: "POST",
         headers,
         body: JSON.stringify(resource),
@@ -1256,7 +1285,7 @@ export class FHIRTools {
       if (!resourceId) {
         return { error: "Resource ID required for update" };
       }
-      resp = await fetch(
+      resp = await fetchWithTimeout(
         `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
         {
           method: "PUT",
@@ -1282,7 +1311,7 @@ export class FHIRTools {
     if (code) params.set("code", code);
     if (patient) params.set("patient", patient);
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/Observation/$stats?${params.toString()}`,
       { headers }
     );
@@ -1325,7 +1354,7 @@ export class FHIRTools {
     if (patient) params.set("patient", patient);
     params.set("max", max.toString());
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/Observation/$lastn?${params.toString()}`,
       { headers }
     );
@@ -1350,7 +1379,7 @@ export class FHIRTools {
     resource: string | undefined,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/Permission/$evaluate`,
       {
         method: "POST",
@@ -1380,7 +1409,7 @@ export class FHIRTools {
     const path = questionnaireId
       ? `/Questionnaire/${encodeURIComponent(questionnaireId)}/$populate`
       : `/Questionnaire/$populate`;
-    const resp = await fetch(`${this.baseUrl}${path}`, {
+    const resp = await fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: "POST",
       headers,
       body: JSON.stringify({ resourceType: "Parameters", parameter }),
@@ -1403,7 +1432,7 @@ export class FHIRTools {
     if (questionnaire) parameter.push({ name: "questionnaire", resource: questionnaire });
 
     const url = `${this.baseUrl}/QuestionnaireResponse/$extract?dryRun=${dryRun}`;
-    const resp = await fetch(url, {
+    const resp = await fetchWithTimeout(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ resourceType: "Parameters", parameter }),
@@ -1417,7 +1446,7 @@ export class FHIRTools {
   private async listSubscriptionTopics(
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/SubscriptionTopic/$list`,
       { headers }
     );
@@ -1464,7 +1493,7 @@ export class FHIRTools {
     const url = `${root}/wearables/sync-status?tenant_id=${encodeURIComponent(tenantId)}`;
     let status: Record<string, unknown>;
     try {
-      const resp = await fetch(url, { headers });
+      const resp = await fetchWithTimeout(url, { headers });
       status = (await resp.json()) as Record<string, unknown>;
       if (!resp.ok) {
         return {
@@ -1473,6 +1502,7 @@ export class FHIRTools {
         };
       }
     } catch (e) {
+      if (e instanceof BackendTimeoutError) throw e; // converted centrally in executeTool
       return {
         error: "wearables status request failed",
         detail: String(e),
@@ -1542,8 +1572,9 @@ export class FHIRTools {
     const url = `${root}/command-center/api/sources-summary?tenant=${encodeURIComponent(tenantId)}`;
     let resp;
     try {
-      resp = await fetch(url, { headers });
+      resp = await fetchWithTimeout(url, { headers });
     } catch (e) {
+      if (e instanceof BackendTimeoutError) throw e; // converted centrally in executeTool
       return { error: "sources_check request failed", detail: String(e) };
     }
 
@@ -1576,7 +1607,7 @@ export class FHIRTools {
     resourceId: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$compiled-truth`,
       { headers }
     );
@@ -1628,7 +1659,7 @@ export class FHIRTools {
     if (subject) params.set("subject", subject);
     const query = params.toString();
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/Observation/$interpret${query ? `?${query}` : ""}`,
       {
         method: "POST",
@@ -1650,7 +1681,7 @@ export class FHIRTools {
     if (subject) params.set("subject", subject);
     const query = params.toString();
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/Patient/$care-gaps${query ? `?${query}` : ""}`,
       { method: "POST", headers, body: JSON.stringify({}) }
     );
@@ -1667,7 +1698,10 @@ export class FHIRTools {
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
     const url = `${this.baseUrl}/$conformance${fresh ? "?fresh=1" : ""}`;
-    const resp = await fetch(url, { headers });
+    // 60s budget: the conformance endpoint runs the entire guardrail probe
+    // suite synchronously (6 probes, each doing several backend round trips,
+    // with 25s-per-request internal budgets) before responding.
+    const resp = await fetchWithTimeout(url, { headers }, 60_000);
     // 503 = graded below A — still return the scorecard body, it explains why.
     const body = (await resp.json()) as Record<string, unknown>;
     if (!resp.ok && !("grade" in body)) {
@@ -1681,9 +1715,13 @@ export class FHIRTools {
     resourceId: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const resp = await fetch(
+    // 30s budget: Flask validates each coding against public terminology
+    // services (tx.fhir.org, NLM, RXNAV) at 5s apiece (r6/curatr.py) — a
+    // resource with several codings can legitimately stack past 15s.
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-evaluate`,
-      { headers }
+      { headers },
+      30_000
     );
     if (!resp.ok) {
       return { error: `Curatr evaluate failed with status ${resp.status}` };
@@ -1743,13 +1781,18 @@ export class FHIRTools {
       };
     }
 
-    const resp = await fetch(
+    // 30s budget: after applying, Flask re-evaluates the fixed resource via
+    // the same external terminology services as $curatr-evaluate
+    // (r6/routes.py calls _curatr_engine.evaluate(fresh)), so the stacked
+    // 5s-per-service calls can legitimately exceed 15s.
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-apply-fix`,
       {
         method: "POST",
         headers: { ...headers, "X-Human-Confirmed": "true" },
         body: JSON.stringify({ fixes, patient_intent: patientIntent }),
-      }
+      },
+      30_000
     );
     if (!resp.ok) {
       return { error: `Curatr apply-fix failed with status ${resp.status}` };
@@ -1781,7 +1824,7 @@ export class FHIRTools {
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
     const root = this.serverRoot();
-    const resp = await fetch(`${root}/r6/actions/propose`, {
+    const resp = await fetchWithTimeout(`${root}/r6/actions/propose`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ kind, payload }),
@@ -1812,7 +1855,7 @@ export class FHIRTools {
     if (Array.isArray(input.medication_names) && input.medication_names.length) {
       body.medication_names = input.medication_names;
     }
-    const resp = await fetch(`${root}/r6/actions/rx-transfer/propose`, {
+    const resp = await fetchWithTimeout(`${root}/r6/actions/rx-transfer/propose`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1840,7 +1883,7 @@ export class FHIRTools {
     // returns 202 {status: 'awaiting_confirmation'}; nothing executes on
     // this call, so there is nothing for the agent to retry into existing.
     const root = this.serverRoot();
-    const resp = await fetch(`${root}/r6/actions/${encodeURIComponent(actionId)}/commit`, {
+    const resp = await fetchWithTimeout(`${root}/r6/actions/${encodeURIComponent(actionId)}/commit`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
     });
@@ -1886,7 +1929,7 @@ export class FHIRTools {
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
     const root = this.serverRoot();
-    const resp = await fetch(`${root}/r6/actions/${encodeURIComponent(actionId)}`, {
+    const resp = await fetchWithTimeout(`${root}/r6/actions/${encodeURIComponent(actionId)}`, {
       headers,
     });
     if (!resp.ok) {
@@ -1915,7 +1958,7 @@ export class FHIRTools {
     const label = typeof input.label === "string" ? input.label.slice(0, 80) : undefined;
 
     // Step 1: Fetch the guardrailed share-bundle from Flask
-    const bundleResp = await fetch(`${root}/r6/fhir/$share-bundle`, {
+    const bundleResp = await fetchWithTimeout(`${root}/r6/fhir/$share-bundle`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1959,7 +2002,7 @@ export class FHIRTools {
     const exp = nowSeconds + days * 86400;
 
     // Step 4: Create the SHL link on the server
-    const createLinkResp = await fetch(`${SHL_BASE}/api/links`, {
+    const createLinkResp = await fetchWithTimeout(`${SHL_BASE}/api/links`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1985,7 +2028,7 @@ export class FHIRTools {
       { cty: "application/fhir+json", deflate: true }
     );
 
-    const uploadResp = await fetch(`${SHL_BASE}/api/manage/files`, {
+    const uploadResp = await fetchWithTimeout(`${SHL_BASE}/api/manage/files`, {
       method: "POST",
       headers: {
         "Content-Type": "application/jose",
@@ -2082,7 +2125,7 @@ export class FHIRTools {
     );
     params.set("_count", clampedCount.toString());
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}?${params.toString()}`,
       { headers }
     );
@@ -2124,7 +2167,7 @@ export class FHIRTools {
       return { error: "id must be in 'ResourceType/id' format" };
     }
 
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
       { headers }
     );
