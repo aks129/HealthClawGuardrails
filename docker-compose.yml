@@ -56,6 +56,8 @@ services:
     ports:
       - "3001:3001"
     environment:
+      - NODE_ENV=production
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
       - MCP_PORT=3001
       - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
       - TENANT_ID=${TENANT_ID:-desktop-demo}
@@ -64,11 +66,9 @@ services:
     depends_on:
       - fhir-mcp-guardrails
     # node:20-slim ships no curl, so the probe uses node's global fetch.
-    # tools/list on the /mcp/rpc bridge is the strongest liveness signal:
-    # it exercises the Express stack, JSON-RPC dispatch, and the tool
-    # registry (asserts a non-empty tools array), not just process-up.
+    # /health stays public even when MCP transports require bearer auth.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/mcp/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}).then(r=>r.json()).then(b=>process.exit(b.result&&Array.isArray(b.result.tools)&&b.result.tools.length>0?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 15s

@@ -10,6 +10,8 @@ COPY src/ ./src/
 
 RUN npx tsc
 
+ENV NODE_ENV=production
+
 EXPOSE 3001
 
 CMD ["node", "dist/index.js"]

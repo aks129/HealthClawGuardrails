@@ -46,13 +46,14 @@ app.use((req, _res, next) => {
 });
 
 function isMCPTransportPath(path: string): boolean {
+  const normalizedPath = path.toLowerCase();
   return (
-    path === "/mcp" ||
-    path.startsWith("/mcp/") ||
-    path === "/sse" ||
-    path.startsWith("/sse/") ||
-    path === "/messages" ||
-    path.startsWith("/messages/")
+    normalizedPath === "/mcp" ||
+    normalizedPath.startsWith("/mcp/") ||
+    normalizedPath === "/sse" ||
+    normalizedPath.startsWith("/sse/") ||
+    normalizedPath === "/messages" ||
+    normalizedPath.startsWith("/messages/")
   );
 }
 

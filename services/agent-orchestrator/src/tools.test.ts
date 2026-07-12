@@ -52,6 +52,46 @@ function fakeResponse(body: Record<string, unknown>, status = 200) {
   };
 }
 
+async function getStreamingStatus(
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<number | undefined> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(app);
+    let clientRequest: http.ClientRequest | undefined;
+    let finished = false;
+
+    const finish = (status?: number, error?: Error) => {
+      if (finished) return;
+      finished = true;
+      clientRequest?.destroy();
+      server.close(() => {
+        if (error) reject(error);
+        else resolve(status);
+      });
+    };
+
+    server.listen(0, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        finish(undefined, new Error("Expected test server to listen on a TCP port"));
+        return;
+      }
+
+      clientRequest = http.get(
+        { hostname: "127.0.0.1", port: address.port, path, headers },
+        (response) => {
+          const status = response.statusCode;
+          response.destroy();
+          finish(status);
+        }
+      );
+      clientRequest.on("error", (error) => finish(undefined, error));
+    });
+    server.on("error", (error) => finish(undefined, error));
+  });
+}
+
 const EXPECTED_TOOL_NAMES = [
   "action_commit",
   "action_propose",
@@ -2043,6 +2083,8 @@ describe("Express App Tests", () => {
     it.each([
       ["post", "/mcp"],
       ["post", "/mcp/rpc"],
+      ["get", "/mcp"],
+      ["delete", "/mcp"],
       ["get", "/sse"],
       ["post", "/messages?sessionId=missing"],
     ] as const)("requires the configured Bearer token for %s %s", async (method, path) => {
@@ -2060,6 +2102,29 @@ describe("Express App Tests", () => {
         .set("Authorization", "Bearer wrong-secret")
         .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
       expect(wrongToken.status).toBe(401);
+    });
+
+    it.each([
+      ["post", "/MCP"],
+      ["post", "/MCP/RPC"],
+      ["post", "/MESSAGES?sessionId=missing"],
+    ] as const)("cannot bypass authentication with uppercase %s %s", async (method, path) => {
+      process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
+
+      const res = await request(app)[method](path).send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+      });
+
+      expect(res.status).toBe(401);
+      expect(res.headers["www-authenticate"]).toBe("Bearer");
+    });
+
+    it("cannot bypass SSE authentication with uppercase GET /SSE", async () => {
+      process.env.MCP_AUTH_TOKEN = "mcp-test-secret";
+
+      await expect(getStreamingStatus("/SSE")).resolves.toBe(401);
     });
 
     it("accepts the configured Bearer token and leaves health public", async () => {
