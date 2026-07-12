@@ -90,6 +90,8 @@ db.init_app(app)
 with app.app_context():
     from r6.models import R6Resource
     import r6.actions.models  # noqa: F401 — registers ProposedAction table
+    import r6.actions.events  # noqa: F401 — registers ActionEvent table for create_all/schema_sync
+    import r6.actions.confirmations  # noqa: F401 — registers ActionConfirmation table for create_all/schema_sync
     import r6.smbp.models  # noqa: F401 — registers SMBPSession table
     # Import EVERY model module BEFORE create_all/reconcile_schema. Anything
     # missing here is invisible to schema_sync, so new columns on its tables
@@ -145,10 +147,16 @@ from r6.fasten.routes import fasten_blueprint
 app.register_blueprint(fasten_blueprint)
 logger.info("Fasten Connect Blueprint registered at /fasten")
 
-# Register Actions Blueprint
+# Register Actions Blueprint + rail executors. register_all() is idempotent
+# and guarantees the registry is populated even if the rail modules were
+# already in sys.modules (see r6/actions/rails/__init__.py).
 from r6.actions.routes import actions_blueprint
+from r6.actions.registry import all_kinds as _action_kinds
+import r6.actions.rails
+r6.actions.rails.register_all()
 app.register_blueprint(actions_blueprint)
-logger.info("Actions Blueprint registered at /r6/actions")
+logger.info("Actions Blueprint registered at /r6/actions (rails: %s)",
+            ', '.join(_action_kinds()))
 
 # Register SMBP Blueprint
 from r6.smbp.routes import smbp_blueprint

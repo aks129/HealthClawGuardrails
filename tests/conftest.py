@@ -242,3 +242,42 @@ def sample_device_alert():
         'device': {'reference': 'Device/pump-1'},
         'subject': {'reference': 'Patient/test-patient-1'},
     }
+
+
+# --- Action rail fixtures (r6/actions/rails/*) ---
+
+@pytest.fixture
+def action_registry():
+    """Fresh registry with the real rails registered (idempotent)."""
+    from r6.actions.registry import _clear
+    from r6.actions.rails import register_all
+    _clear()
+    register_all()
+    yield
+    _clear()
+    register_all()
+
+
+@pytest.fixture
+def fake_providers(monkeypatch):
+    """Intercept provider HTTP so contract tests never hit the network.
+    Returns the recorded call list for assertions.
+
+    r6/actions/rails/__init__.py's _safe_request() calls requests.request()
+    (not requests.post/requests.get) so both GET and POST go through one
+    code path — patch requests.request, dispatching on the method arg.
+    """
+    calls = []
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {'call_id': 'fake-123', 'sid': 'fake-123', 'status': 'completed'}
+
+    def fake_request(method, url, **kw):
+        calls.append({'method': method, 'url': url, 'kw': kw})
+        return _Resp()
+
+    monkeypatch.setattr('requests.request', fake_request)
+    return calls

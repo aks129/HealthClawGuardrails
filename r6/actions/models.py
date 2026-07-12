@@ -2,8 +2,11 @@
 ProposedAction — lifecycle record for real-world actions (calls, SMS).
 
 Mirrors the FHIR propose -> commit write pattern: an action is proposed
-(draft shown to the patient), confirmed (step-up + human confirmation),
-executed (Bland.ai / Twilio), and resolved by webhook callback.
+(draft shown to the patient), submitted for approval (commit ->
+awaiting_confirmation), claimed and executed by the human's out-of-band
+approval (awaiting_confirmation -> executing, Bland.ai / Twilio), and
+resolved (completed/failed/needs_review/unknown) by executor result or
+webhook callback.
 
 PHI note: payload_json holds the verbatim script (needed to execute) and
 is tenant-scoped like R6Resource. summary() is the ONLY representation
@@ -20,15 +23,20 @@ PROPOSAL_TTL_MINUTES = 30
 
 VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call')
 
-# Legal status transitions
+# Legal status transitions. awaiting_confirmation is the out-of-band gate:
+# commit submits (proposed->awaiting_confirmation), the human's approval claims
+# (awaiting_confirmation->executing). expiry from awaiting_confirmation is the
+# COMMON path (proposals linger hours awaiting a human). needs_review = executed
+# but outcome unconfirmable (carries evidence). unknown = post-possible-send.
 _TRANSITIONS = {
-    'proposed': {'confirmed', 'executing', 'expired'},  # proposed->executing: atomic single-UPDATE claim path in commit route
-    'confirmed': {'executing', 'failed'},
-    'executing': {'completed', 'failed', 'unknown'},
+    'proposed': {'awaiting_confirmation', 'expired'},
+    'awaiting_confirmation': {'executing', 'expired'},
+    'executing': {'completed', 'failed', 'needs_review', 'unknown'},
     'completed': set(),
     'failed': set(),
+    'needs_review': set(),
     'expired': set(),
-    'unknown': {'completed', 'failed'},  # late webhook may still resolve it
+    'unknown': {'completed', 'failed', 'needs_review'},
 }
 
 
@@ -45,12 +53,25 @@ class ProposedAction(db.Model):
     tenant_id = db.Column(db.String(64), nullable=False, index=True)
     kind = db.Column(db.String(32), nullable=False)
     payload_json = db.Column(db.Text, nullable=False)
-    status = db.Column(db.String(16), nullable=False, default='proposed')
+    # 32, not 16: 'awaiting_confirmation' is 21 chars. SQLite ignores varchar
+    # width so tests can't catch truncation at write time — Postgres raises
+    # StringDataRightTruncation. Width is asserted against the state map in
+    # tests/actions/test_state_transitions.py; schema_sync auto-widens the
+    # live column at boot when the model length exceeds it.
+    status = db.Column(db.String(32), nullable=False, default='proposed')
     external_ref = db.Column(db.String(128), nullable=True)
     outcome_summary = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
+
+    # Attempt ledger (crash-recovery; see r6/actions/state.py + the ops reaper).
+    # attempt_id = idempotency key set at claim; provider_request_at is stamped
+    # immediately before the provider POST so a crash is distinguishable:
+    # claimed-but-never-called (safe to fail) vs called-but-unresolved (review).
+    attempt_id = db.Column(db.String(64), nullable=True)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    provider_request_at = db.Column(db.DateTime, nullable=True)
 
     def __init__(self, tenant_id, kind, payload, **kwargs):
         if kind not in VALID_KINDS:
@@ -65,13 +86,6 @@ class ProposedAction(db.Model):
 
     def is_expired(self):
         return _utcnow() >= self.expires_at
-
-    def transition(self, new_status):
-        allowed = _TRANSITIONS.get(self.status, set())
-        if new_status not in allowed:
-            raise ValueError(
-                'Illegal transition %s -> %s' % (self.status, new_status))
-        self.status = new_status
 
     @property
     def payload(self):

@@ -691,7 +691,7 @@ export class FHIRTools {
         name: "action_propose",
         title: "Propose Real-World Action",
         description:
-          "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before commit. Does not execute anything.",
+          "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before submitting via action_commit. Does not execute anything.",
         tier: "write",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
@@ -715,7 +715,7 @@ export class FHIRTools {
         name: "rx_transfer_request",
         title: "Request Prescription Transfer",
         description:
-          "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; execute with action_commit after explicit approval.",
+          "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; submit with action_commit for the patient's own out-of-band confirmation after they explicitly agree — action_commit does not execute the call itself.",
         tier: "write",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
@@ -736,9 +736,9 @@ export class FHIRTools {
       },
       {
         name: "action_commit",
-        title: "Commit Real-World Action",
+        title: "Submit Real-World Action for Confirmation",
         description:
-          "Execute a previously proposed action AFTER the patient has explicitly approved the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). Only call this after the patient says yes.",
+          "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
         tier: "write",
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
         inputSchema: {
@@ -753,7 +753,7 @@ export class FHIRTools {
         name: "action_status",
         title: "Action Status",
         description:
-          "Check the status and outcome of an action (proposed/executing/completed/failed). Use after commit to report the result back to the patient.",
+          "Check the status and outcome of an action (proposed/awaiting_confirmation/executing/completed/failed/needs_review/unknown/expired). needs_review means it ran but the outcome could not be confirmed - show the patient the evidence. unknown means the provider MAY have acted - never re-propose the same action. Use after action_commit to see whether the patient has approved yet, and to report the final result back to them.",
         tier: "read",
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
@@ -1833,25 +1833,52 @@ export class FHIRTools {
     actionId: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
+    // Approve-is-the-commit: this request only SUBMITS the proposal for the
+    // patient's out-of-band approval (dashboard/Telegram). The MCP server
+    // must never self-attest human confirmation — no X-Human-Confirmed
+    // header is minted here, and none is accepted as a tool argument. Flask
+    // returns 202 {status: 'awaiting_confirmation'}; nothing executes on
+    // this call, so there is nothing for the agent to retry into existing.
     const root = this.serverRoot();
     const resp = await fetch(`${root}/r6/actions/${encodeURIComponent(actionId)}/commit`, {
       method: "POST",
-      headers: { ...headers, "Content-Type": "application/json", "X-Human-Confirmed": "true" },
+      headers: { ...headers, "Content-Type": "application/json" },
     });
-    if (!resp.ok) {
-      let detail: unknown = null;
-      try {
-        detail = await resp.json();
-      } catch {
-        try { detail = await resp.text(); } catch { detail = null; }
-      }
-      const result: Record<string, unknown> = { error: `action_commit failed with status ${resp.status}`, detail };
-      if (resp.status === 401) {
-        result.requires_step_up = true;
-      }
+
+    if (resp.ok) {
+      const result = (await resp.json()) as Record<string, unknown>;
+      const status = (result.status as string) || "awaiting_confirmation";
+      const nextStep =
+        (result.next_step as string) ||
+        "The patient must approve out of band (dashboard/Telegram); the action executes only on their approval.";
+      result._mcp_summary =
+        `Submitted for the patient's approval. Status: ${status}. This is terminal for your turn — ` +
+        `${nextStep} You may poll action_status or end your turn. Do not call action_commit again.`;
       return result;
     }
-    return (await resp.json()) as Record<string, unknown>;
+
+    let detail: unknown = null;
+    try {
+      detail = await resp.json();
+    } catch {
+      try { detail = await resp.text(); } catch { detail = null; }
+    }
+    const serverMessage =
+      detail && typeof detail === "object" && "error" in (detail as Record<string, unknown>)
+        ? String((detail as Record<string, unknown>).error)
+        : undefined;
+
+    const result: Record<string, unknown> = { error: `action_commit failed with status ${resp.status}`, detail };
+    if (resp.status === 401) {
+      result.requires_step_up = true;
+      result._mcp_summary = serverMessage || "Step-up authorization rejected.";
+    } else if (resp.status === 409 || resp.status === 410) {
+      // Terminal for this action_id: the server's own message explains why
+      // (already awaiting_confirmation, expired, etc). No retry hint —
+      // retrying action_commit with the same action_id will not help.
+      result._mcp_summary = serverMessage || `Action commit rejected with status ${resp.status}.`;
+    }
+    return result;
   }
 
   private async getActionStatus(
