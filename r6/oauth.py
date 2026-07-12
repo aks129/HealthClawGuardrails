@@ -14,6 +14,7 @@ OAuth provider (Auth0, Keycloak) via OAUTH_ISSUER configuration.
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -45,6 +46,117 @@ _registered_clients = {}  # client_id -> {client_secret, redirect_uris, scopes, 
 _auth_codes = {}  # code -> {client_id, code_challenge, scopes, tenant_id, exp}
 _access_tokens = {}  # token -> {client_id, scopes, tenant_id, exp}
 _revoked_tokens = set()  # revoked token hashes
+_redis_client = None
+
+_OAUTH_STORES = {
+    'client': _registered_clients,
+    'auth-code': _auth_codes,
+    'access-token': _access_tokens,
+}
+
+
+def _get_redis_client():
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    redis_url = os.environ.get('REDIS_URL', '').strip()
+    if not redis_url:
+        return None
+    import redis
+    _redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _oauth_key(kind, key):
+    digest = hashlib.sha256(key.encode('utf-8')).hexdigest()
+    return f'healthclaw:oauth:{kind}:{digest}'
+
+
+def _oauth_store_set(kind, key, value, ttl=None):
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.set(
+                _oauth_key(kind, key),
+                json.dumps(value, separators=(',', ':')),
+                ex=ttl,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - Redis errors vary
+            logger.error('OAuth Redis write failed: %s', type(exc).__name__)
+            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+                raise RuntimeError('OAuth state store unavailable') from None
+    _OAUTH_STORES[kind][key] = value
+
+
+def _decode_oauth_value(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8')
+    return json.loads(raw)
+
+
+def _oauth_store_get(kind, key):
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            return _decode_oauth_value(client.get(_oauth_key(kind, key)))
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis read failed: %s', type(exc).__name__)
+            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+                return None
+    return _OAUTH_STORES[kind].get(key)
+
+
+def _oauth_store_pop(kind, key):
+    """Atomically consume a one-time value when backed by Redis."""
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            return _decode_oauth_value(client.getdel(_oauth_key(kind, key)))
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis consume failed: %s', type(exc).__name__)
+            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+                return None
+    return _OAUTH_STORES[kind].pop(key, None)
+
+
+def _oauth_store_delete(kind, key):
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.delete(_oauth_key(kind, key))
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis delete failed: %s', type(exc).__name__)
+    _OAUTH_STORES[kind].pop(key, None)
+
+
+def _oauth_revoke(token, ttl):
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.set(_oauth_key('revoked', token_hash), '1', ex=max(1, ttl))
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis revoke failed: %s', type(exc).__name__)
+            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+                raise RuntimeError('OAuth state store unavailable') from None
+    _revoked_tokens.add(token_hash)
+
+
+def _oauth_is_revoked(token_hash):
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            return bool(client.exists(_oauth_key('revoked', token_hash)))
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis revocation read failed: %s',
+                         type(exc).__name__)
+            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+                return True
+    return token_hash in _revoked_tokens
 
 
 def register_oauth_routes(blueprint):
@@ -108,13 +220,13 @@ def register_oauth_routes(blueprint):
         client_name = body.get('client_name', 'Unknown Client')
         scope = body.get('scope', 'fhir.read context.read')
 
-        _registered_clients[client_id] = {
+        _oauth_store_set('client', client_id, {
             'client_secret': client_secret,
             'redirect_uris': redirect_uris,
             'client_name': client_name,
             'scope': scope,
             'created_at': time.time(),
-        }
+        }, ttl=30 * 24 * 3600)
 
         return jsonify({
             'client_id': client_id,
@@ -142,7 +254,7 @@ def register_oauth_routes(blueprint):
                           'error_description': 'client_id and redirect_uri required'}), 400
 
         # Validate client exists and redirect_uri is registered
-        registered_client = _registered_clients.get(client_id)
+        registered_client = _oauth_store_get('client', client_id)
         if not registered_client:
             return jsonify({'error': 'invalid_client',
                           'error_description': 'Client not registered'}), 401
@@ -175,7 +287,7 @@ def register_oauth_routes(blueprint):
 
         # Generate authorization code
         code = secrets.token_urlsafe(32)
-        _auth_codes[code] = {
+        _oauth_store_set('auth-code', code, {
             'client_id': client_id,
             'redirect_uri': redirect_uri,
             'code_challenge': code_challenge,
@@ -183,7 +295,7 @@ def register_oauth_routes(blueprint):
             'scopes': scope.split(),
             'tenant_id': requested_tenant,
             'exp': time.time() + 600,  # 10 minutes
-        }
+        }, ttl=600)
 
         # In production, this would render a consent screen.
         # For the MCP server, we auto-approve and redirect.
@@ -214,7 +326,7 @@ def register_oauth_routes(blueprint):
                           'error_description': 'code and code_verifier required'}), 400
 
         # Validate authorization code
-        auth_code = _auth_codes.pop(code, None)
+        auth_code = _oauth_store_pop('auth-code', code)
         if not auth_code:
             return jsonify({'error': 'invalid_grant',
                           'error_description': 'Authorization code expired or invalid'}), 400
@@ -244,12 +356,12 @@ def register_oauth_routes(blueprint):
 
         # Issue access token
         access_token = secrets.token_urlsafe(48)
-        _access_tokens[access_token] = {
+        _oauth_store_set('access-token', access_token, {
             'client_id': auth_code['client_id'],
             'scopes': auth_code['scopes'],
             'tenant_id': auth_code['tenant_id'],
             'exp': time.time() + TOKEN_TTL_SECONDS,
-        }
+        }, ttl=TOKEN_TTL_SECONDS)
 
         return jsonify({
             'access_token': access_token,
@@ -266,8 +378,10 @@ def register_oauth_routes(blueprint):
         body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
         token_value = body.get('token')
         if token_value:
-            _access_tokens.pop(token_value, None)
-            _revoked_tokens.add(hashlib.sha256(token_value.encode()).hexdigest())
+            token_info = _oauth_store_get('access-token', token_value) or {}
+            ttl = max(1, int(token_info.get('exp', time.time()) - time.time()))
+            _oauth_store_delete('access-token', token_value)
+            _oauth_revoke(token_value, ttl)
         return '', 200
 
 
@@ -283,15 +397,15 @@ def validate_bearer_token(token):
 
     # Check revocation
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    if token_hash in _revoked_tokens:
+    if _oauth_is_revoked(token_hash):
         return False, 'Token has been revoked'
 
-    token_info = _access_tokens.get(token)
+    token_info = _oauth_store_get('access-token', token)
     if not token_info:
         return False, 'Token not found or expired'
 
     if token_info['exp'] < time.time():
-        _access_tokens.pop(token, None)
+        _oauth_store_delete('access-token', token)
         return False, 'Token expired'
 
     return True, token_info
