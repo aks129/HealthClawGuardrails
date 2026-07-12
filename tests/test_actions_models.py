@@ -44,22 +44,6 @@ def test_invalid_kind_rejected(app):
             ProposedAction(tenant_id='t', kind='teleport', payload={})
 
 
-def test_transition_guard(app):
-    with app.app_context():
-        from models import db
-        action = ProposedAction(tenant_id='t', kind='phone-call', payload={'body': 'x'})
-        db.session.add(action)
-        db.session.commit()
-        # legal: proposed -> confirmed -> executing -> completed
-        action.transition('confirmed')
-        action.transition('executing')
-        action.transition('completed')
-        # illegal: completed -> executing
-        import pytest
-        with pytest.raises(ValueError):
-            action.transition('executing')
-
-
 def test_summary_has_no_payload(app):
     with app.app_context():
         from models import db

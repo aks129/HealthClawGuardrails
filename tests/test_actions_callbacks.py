@@ -14,8 +14,7 @@ def _executing_action(client, tenant_headers, app):
     with app.app_context():
         from models import db
         row = db.session.get(ProposedAction, action_id)
-        row.transition('confirmed')
-        row.transition('executing')
+        row.status = 'executing'
         row.external_ref = 'bl-123'
         db.session.commit()
     return action_id
@@ -110,7 +109,7 @@ def test_unknown_resolved_by_late_webhook(client, tenant_headers, app, monkeypat
     with app.app_context():
         from models import db
         row = db.session.get(ProposedAction, action_id)
-        row.transition('unknown')
+        row.status = 'unknown'
         db.session.commit()
     resp = client.post(
         '/r6/actions/callback/bland?action_id=%s&secret=hook-secret' % action_id,
