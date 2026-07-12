@@ -1,6 +1,6 @@
 {
   "name": "healthclaw-guardrails",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Guardrailed FHIR access for AI agents: PHI redaction, immutable audit, step-up auth, tenant isolation over a remote MCP server.",
   "mcpServers": {
     "healthclaw": {
