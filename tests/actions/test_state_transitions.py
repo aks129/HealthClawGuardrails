@@ -74,3 +74,14 @@ def test_status_column_fits_every_legal_state():
     all_states = _TRANSITIONS.keys() | set().union(*_TRANSITIONS.values())
     longest = max(len(s) for s in all_states)
     assert ProposedAction.__table__.c.status.type.length >= longest
+
+
+def test_from_status_column_fits_worst_case_join():
+    # transition_action() writes ','.join(from_states) into
+    # ActionEvent.from_status. Assert the column can hold the WORST-CASE
+    # join of every legal state, so a future multi-state guard or state
+    # rename can never truncate on Postgres (SQLite masks it, as above).
+    from r6.actions.models import _TRANSITIONS
+    all_states = _TRANSITIONS.keys() | set().union(*_TRANSITIONS.values())
+    worst_case = len(','.join(sorted(all_states)))
+    assert ActionEvent.__table__.c.from_status.type.length >= worst_case

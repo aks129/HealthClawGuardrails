@@ -12,7 +12,11 @@ class ActionEvent(db.Model):
     __tablename__ = 'action_events'
     id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     action_id = db.Column(db.String(64), nullable=False, index=True)
-    from_status = db.Column(db.String(32), nullable=True)
+    # 128, not 32: transition_action() writes ','.join(from_states) here, and
+    # the full-join worst case is already ~70 chars. SQLite masks varchar
+    # overflow; Postgres truncation-errors. Width asserted against the state
+    # map in tests/actions/test_state_transitions.py.
+    from_status = db.Column(db.String(128), nullable=True)
     to_status = db.Column(db.String(32), nullable=False)
     actor = db.Column(db.String(32), nullable=False)  # commit-route|confirm|webhook|reaper|propose
     detail = db.Column(db.Text, nullable=True)
