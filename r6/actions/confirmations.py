@@ -15,13 +15,15 @@ class ActionConfirmation(db.Model):
     __tablename__ = 'action_confirmations'
     id = db.Column(db.String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     action_id = db.Column(db.String(64), nullable=False, index=True)
-    approved_via = db.Column(db.String(32), nullable=False)  # telegram | dashboard
+    approved_via = db.Column(db.String(32), nullable=False)  # APPROVED_VIA_VALUES
     approved_at = db.Column(db.DateTime, default=_utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
     consumed_at = db.Column(db.DateTime, nullable=True)
 
 
 def issue_confirmation(action_id, approved_via, ttl_minutes):
+    if approved_via not in APPROVED_VIA_VALUES:
+        raise ValueError('Unsupported approval channel: %s' % approved_via)
     c = ActionConfirmation(action_id=action_id, approved_via=approved_via,
                            expires_at=_utcnow() + timedelta(minutes=ttl_minutes))
     db.session.add(c)

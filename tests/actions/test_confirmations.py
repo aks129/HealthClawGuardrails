@@ -8,8 +8,11 @@ itself (the caller owns the transaction), so tests here commit explicitly.
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from models import db
 from r6.actions.confirmations import (
+    APPROVED_VIA_VALUES,
     ActionConfirmation,
     issue_confirmation,
     consume_confirmation,
@@ -53,12 +56,21 @@ def test_two_confirmations_only_one_needed(app):
         assert consume_confirmation('a3') is False
 
 
+def test_unknown_approval_channel_rejected(app):
+    # Mirrors VALID_KINDS gating ProposedAction.__init__: approved_via is
+    # audit vocabulary, so an unrecognized channel is a programming error,
+    # not a row to store.
+    with app.app_context():
+        with pytest.raises(ValueError):
+            issue_confirmation('a9', approved_via='carrier-pigeon',
+                               ttl_minutes=15)
+
+
 def test_approved_via_column_fits_documented_vocabulary(app):
-    # Computed from the documented vocabulary, not hardcoded, per house
-    # rule: a future channel name can't silently truncate on Postgres
+    # Computed from the enforced vocabulary constant, not hardcoded, per
+    # house rule: a future channel name can't silently truncate on Postgres
     # (SQLite masks varchar overflow — see the analogous status-width
     # tests in tests/actions/test_state_transitions.py).
-    vocab = ('telegram', 'dashboard')
     with app.app_context():
-        longest = max(len(v) for v in vocab)
+        longest = max(len(v) for v in APPROVED_VIA_VALUES)
         assert ActionConfirmation.__table__.c.approved_via.type.length >= longest
