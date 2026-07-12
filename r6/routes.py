@@ -979,6 +979,27 @@ def ingest_context():
 
     tenant_id = request.headers.get('X-Tenant-Id')
 
+    # In hardened deployments, bundle ingestion is a write boundary—not a
+    # read-shaped convenience operation. Public/demo tenants remain usable in
+    # local compatibility mode, while production enables this gate at startup.
+    if _read_auth_enabled():
+        step_up_token = request.headers.get('X-Step-Up-Token', '').strip()
+        valid, _error = validate_step_up_token(
+            step_up_token, tenant_id, require_scope='write'
+        )
+        if not valid:
+            record_audit_event(
+                'create', 'Bundle', None,
+                agent_id=request.headers.get('X-Agent-Id'),
+                tenant_id=tenant_id,
+                outcome='failure',
+                detail='ingest-context authorization rejected',
+            )
+            return _operation_outcome(
+                'error', 'security',
+                'Bundle ingestion requires a tenant-bound write token',
+            ), 401
+
     try:
         result = context_builder.ingest_bundle(body, tenant_id=tenant_id)
         record_audit_event('create', 'Bundle', None,
@@ -989,9 +1010,9 @@ def ingest_context():
         return jsonify(result), 201
     except ValueError as e:
         return _operation_outcome('error', 'invalid', str(e)), 400
-    except Exception as e:
+    except Exception as exc:
         db.session.rollback()
-        logger.error(f'Failed to ingest bundle: {e}')
+        logger.error('Failed to ingest bundle: %s', type(exc).__name__)
         return _operation_outcome('error', 'exception',
                                   'Failed to ingest bundle'), 500
 
@@ -2204,9 +2225,9 @@ def curatr_apply_fix(resource_type, resource_id):
           "patient_intent": "Updating from retired ICD-9 to ICD-10-CM"
         }
 
-    Requires step-up authorization (X-Step-Up-Token) and human
-    confirmation (X-Human-Confirmed: true) — Condition is a clinical
-    resource type.
+    Production requires an operation-bound, single-use Curatr approval token.
+    ``X-Human-Confirmed`` remains a compatibility signal, but is not treated as
+    proof of approval by itself.
 
     Creates a linked Provenance resource with full change attribution.
     """
@@ -2224,7 +2245,14 @@ def curatr_apply_fix(resource_type, resource_id):
             'Write operations require X-Step-Up-Token header'
         ), 403
 
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    production_approval = resolve_app_env() == 'production'
+    operation = f'curatr-apply-fix:{resource_type}/{resource_id}'
+    valid, err = validate_step_up_token(
+        step_up_token,
+        tenant_id,
+        require_audience='curatr' if production_approval else None,
+        require_operation=operation if production_approval else None,
+    )
     if not valid:
         return _operation_outcome(
             'error', 'security',
@@ -2245,6 +2273,21 @@ def curatr_apply_fix(resource_type, resource_id):
             'error', 'invalid', 'fixes array is required and must not be empty'
         ), 400
 
+    if production_approval:
+        # Consume only after the request shape is valid so malformed attempts
+        # cannot burn a legitimate one-time approval credential.
+        valid, err = validate_step_up_token(
+            step_up_token,
+            tenant_id,
+            consume_nonce=True,
+            require_audience='curatr',
+            require_operation=operation,
+        )
+        if not valid:
+            return _operation_outcome(
+                'error', 'security', f'Step-up token rejected: {err}'
+            ), 403
+
     try:
         result = _curatr_apply_fix(
             resource_type=resource_type,
@@ -2255,8 +2298,10 @@ def curatr_apply_fix(resource_type, resource_id):
             agent_id=request.headers.get('X-Agent-Id', 'curatr'),
         )
     except RuntimeError as exc:
-        logger.error('curatr_apply_fix failed: %s', exc)
-        return _operation_outcome('error', 'exception', str(exc)), 500
+        logger.error('curatr_apply_fix failed: %s', type(exc).__name__)
+        return _operation_outcome(
+            'error', 'exception', 'Curatr fix could not be applied'
+        ), 500
 
     if 'error' in result:
         return _operation_outcome('error', 'not-found', result['error']), 404
@@ -2275,7 +2320,8 @@ def curatr_apply_fix(resource_type, resource_id):
             result['quality_score'] = compute_quality_score(fresh_result)
     except Exception as exc:
         logger.warning(
-            'curation state promotion failed (fix still committed): %s', exc,
+            'curation state promotion failed (fix still committed): %s',
+            type(exc).__name__,
         )
 
     return jsonify(result)
