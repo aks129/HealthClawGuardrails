@@ -10,7 +10,7 @@ webhook reprocess a non-complete job, and expose an explicit retry endpoint.
 import json
 from unittest.mock import patch
 
-from r6.fasten.models import FastenConnection, FastenJob
+from r6.fasten.models import FastenJob
 from models import db
 
 

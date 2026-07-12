@@ -1,5 +1,5 @@
 import pytest
-from r6.actions.registry import (ActionExecutor, ExecutionResult,
+from r6.actions.registry import (ExecutionResult,
                                   register_executor, get_executor, all_kinds, _clear)
 
 
