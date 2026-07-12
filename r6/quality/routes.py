@@ -5,6 +5,7 @@ Read-shaped: tenant-read-authenticated + AuditEvent. Computes the measure from
 the tenant's stored Patient / Condition / Observation resources.
 """
 
+import datetime as dt
 import logging
 
 from flask import request, jsonify
@@ -19,6 +20,11 @@ from r6.quality.report import (
 logger = logging.getLogger(__name__)
 
 MEASURE_ID = "nqf0018-controlling-high-bp"
+
+
+def _default_measurement_period(today=None):
+    today = today or dt.date.today()
+    return f"{today.year}-01-01", f"{today.year}-12-31"
 
 
 def register_quality_routes(blueprint, deps):
@@ -59,10 +65,13 @@ def register_quality_routes(blueprint, deps):
             return auth_err[0], auth_err[1]
 
         params = request.get_json(silent=True) or {}
+        default_start, default_end = _default_measurement_period()
         period_start = (_param(params, "periodStart")
-                        or request.args.get("periodStart", "2026-01-01"))
+                        or request.args.get("periodStart")
+                        or default_start)
         period_end = (_param(params, "periodEnd")
-                      or request.args.get("periodEnd", "2026-12-31"))
+                      or request.args.get("periodEnd")
+                      or default_end)
         subject = (_param(params, "subject")
                    or request.args.get("subject"))
 
