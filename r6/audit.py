@@ -14,6 +14,42 @@ from r6.health_context import get as _hc_get
 logger = logging.getLogger(__name__)
 
 
+def _new_audit_event(event_type, resource_type=None, resource_id=None,
+                     agent_id=None, context_id=None, outcome='success',
+                     detail=None, tenant_id=None):
+    return AuditEventRecord(
+        event_type=event_type,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        context_id=context_id,
+        tenant_id=tenant_id,
+        agent_id=(
+            agent_id
+            or _hc_get('audit_agent_default', 'healthclaw-guardrails')
+        ),
+        outcome=outcome,
+        detail=detail,
+    )
+
+
+def add_audit_event(event_type, resource_type=None, resource_id=None,
+                    agent_id=None, context_id=None, outcome='success',
+                    detail=None, tenant_id=None):
+    """Add and flush an AuditEvent inside the caller-owned transaction.
+
+    Write paths should use this function before their domain commit so the
+    state change and mandatory audit record succeed or roll back together.
+    Audit failures deliberately propagate to the unit-of-work owner.
+    """
+    audit = _new_audit_event(
+        event_type, resource_type, resource_id, agent_id, context_id,
+        outcome, detail, tenant_id,
+    )
+    db.session.add(audit)
+    db.session.flush()
+    return audit
+
+
 def record_audit_event(event_type, resource_type=None, resource_id=None,
                        agent_id=None, context_id=None, outcome='success',
                        detail=None, tenant_id=None):
@@ -35,18 +71,9 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
     """
     try:
         nested = db.session.begin_nested()
-        audit = AuditEventRecord(
-            event_type=event_type,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            context_id=context_id,
-            tenant_id=tenant_id,
-            agent_id=(
-                agent_id
-                or _hc_get('audit_agent_default', 'healthclaw-guardrails')
-            ),
-            outcome=outcome,
-            detail=detail
+        audit = _new_audit_event(
+            event_type, resource_type, resource_id, agent_id, context_id,
+            outcome, detail, tenant_id,
         )
         db.session.add(audit)
         nested.commit()
@@ -55,8 +82,8 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
             f'AuditEvent recorded: {event_type} on {resource_type}/{resource_id} '
             f'by {agent_id or "system"}'
         )
-    except Exception as e:
-        logger.error(f'Failed to record audit event: {e}')
+    except Exception as exc:
+        logger.error('Failed to record audit event: %s', type(exc).__name__)
         # Roll back only the nested savepoint, not the caller's transaction
         try:
             db.session.rollback()

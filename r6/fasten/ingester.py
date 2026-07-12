@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 import httpx
 
 from models import db
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
 from r6.models import R6Resource
 
 logger = logging.getLogger(__name__)
@@ -244,7 +244,7 @@ def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
 
     db.session.flush()
 
-    record_audit_event(
+    add_audit_event(
         event_type='create',
         resource_type=resource_type,
         resource_id=resource_id,
