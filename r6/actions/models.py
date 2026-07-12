@@ -65,6 +65,14 @@ class ProposedAction(db.Model):
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
 
+    # Attempt ledger (crash-recovery; see r6/actions/state.py + the ops reaper).
+    # attempt_id = idempotency key set at claim; provider_request_at is stamped
+    # immediately before the provider POST so a crash is distinguishable:
+    # claimed-but-never-called (safe to fail) vs called-but-unresolved (review).
+    attempt_id = db.Column(db.String(64), nullable=True)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    provider_request_at = db.Column(db.DateTime, nullable=True)
+
     def __init__(self, tenant_id, kind, payload, **kwargs):
         if kind not in VALID_KINDS:
             raise ValueError('Unsupported action kind: %s' % kind)
