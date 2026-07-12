@@ -7,6 +7,9 @@ local dev, CI, and the demo stack fully functional with zero credentials,
 matching the contract careagents.cloud used before this module existed.
 
 No retries by design: a double-placed phone call is worse than a failed one.
+
+DEPRECATED: replaced by r6/actions/rails/* + registry (Task 10 rewires
+routes); do not add new callers.
 """
 
 import base64
