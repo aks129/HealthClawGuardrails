@@ -37,6 +37,7 @@ from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
+from r6.read_auth import authorize_tenant_read
 from r6.stepup import validate_step_up_token
 from r6.telegram_push import notify_tenant
 
@@ -213,6 +214,9 @@ def propose_rx_transfer():
     tenant_id = _tenant_or_none()
     if not tenant_id:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = authorize_tenant_read(tenant_id)
+    if tenant_id is None:
+        return _error(401, 'authentication required for this tenant')
 
     body = request.get_json(silent=True) or {}
     to_pharmacy = body.get('to_pharmacy') or {}
@@ -244,6 +248,20 @@ def propose_rx_transfer():
                        'never be transferred — a new prescription is '
                        'required).'),
         }), 422
+
+    # This endpoint becomes a write only when a transferable draft exists.
+    # Read-scoped credentials may preview the no-action/refusal response above,
+    # but persisting a ProposedAction requires an explicit write-capable token.
+    step_up_token = (request.headers.get('X-Step-Up-Token') or '').strip()
+    if not step_up_token:
+        auth = (request.headers.get('Authorization') or '').strip()
+        if auth.lower().startswith('bearer '):
+            step_up_token = auth[7:].strip()
+    if not step_up_token:
+        return _error(401, 'write-scoped X-Step-Up-Token required')
+    valid, _token_error = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _error(401, 'write-scoped token rejected')
 
     refusal = _emergency_refusal_or_none(tenant_id,
                                          result['action_payload'].get('body'))

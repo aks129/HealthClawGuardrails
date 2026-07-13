@@ -1209,7 +1209,7 @@ const WALKTHROUGH_STEPS = [
   { title: 'Load Sample Patient', action: loadSamplePatient, panel: 'patient-panel' },
   { title: 'Ingest Bundle + Build Context', action: ingestDemoBundle, panel: 'context-panel' },
   { title: 'Execute Agent Tool (fhir.read)', action: async () => { selectTool('fhir.read'); await executeSelectedTool(); }, panel: 'tools-panel' },
-  { title: 'De-identify Patient (Safe Harbor)', action: runDeidentify, panel: 'deid-panel' },
+  { title: 'Preview Patient De-identification', action: runDeidentify, panel: 'deid-panel' },
   { title: 'Human-in-the-Loop Enforcement', action: demoHumanInLoop, panel: 'hitl-panel' },
   { title: 'Full OAuth 2.1 + PKCE Flow', action: demoOAuthFlow, panel: 'oauth-panel' },
   // Phase 2 steps

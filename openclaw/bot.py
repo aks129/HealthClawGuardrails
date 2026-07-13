@@ -20,6 +20,7 @@ Environment variables
 TELEGRAM_BOT_TOKEN   Required. BotFather token.
 TENANT_ID            Tenant to query. Default: desktop-demo.
 MCP_BASE_URL         MCP HTTP bridge base URL. Default: http://localhost:3001.
+MCP_AUTH_TOKEN       Bearer token for authenticated MCP HTTP requests.
 FHIR_BASE_URL        Flask FHIR base URL. Default: http://localhost:5000/r6/fhir.
 STEP_UP_SECRET       HMAC secret for step-up tokens.
 """
@@ -55,6 +56,7 @@ logger = logging.getLogger('openclaw')
 BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 TENANT_ID = os.environ.get('TENANT_ID', 'desktop-demo')
 MCP_BASE_URL = os.environ.get('MCP_BASE_URL', 'http://localhost:3001').rstrip('/')
+MCP_AUTH_TOKEN = os.environ.get('MCP_AUTH_TOKEN', '').strip()
 FHIR_BASE_URL = os.environ.get('FHIR_BASE_URL', 'http://localhost:5000/r6/fhir').rstrip('/')
 STEP_UP_SECRET = os.environ.get('STEP_UP_SECRET', '')
 
@@ -189,7 +191,10 @@ def _rpc(tool: str, **params) -> dict:
             'arguments': {'tenant_id': TENANT_ID, **params},
         },
     }
-    resp = requests.post(_RPC_URL, json=payload, timeout=20)
+    headers = {}
+    if MCP_AUTH_TOKEN:
+        headers['Authorization'] = f'Bearer {MCP_AUTH_TOKEN}'
+    resp = requests.post(_RPC_URL, json=payload, headers=headers, timeout=20)
     resp.raise_for_status()
     data = resp.json()
     if 'error' in data:

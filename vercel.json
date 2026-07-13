@@ -26,7 +26,11 @@
     }
   ],
   "env": {
-    "FLASK_ENV": "production",
+    "APP_ENV": "production",
+    "READ_AUTH_ENABLED": "true",
+    "PUBLIC_TENANTS": "desktop-demo",
+    "DISABLE_COMMAND_CENTER": "1",
+    "READ_ONLY_DEPLOYMENT": "1",
     "PYTHONUNBUFFERED": "1"
   }
 }

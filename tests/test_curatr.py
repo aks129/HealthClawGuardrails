@@ -382,6 +382,44 @@ class TestCuratrApplyFixEndpoint:
         )
         assert resp.status_code == 403
 
+    def test_production_requires_operation_bound_single_use_approval(
+        self, client, auth_headers, monkeypatch,
+    ):
+        from r6.stepup import generate_step_up_token
+
+        resource_id = self._create_icd9_condition(client, auth_headers)
+        url = f'/r6/fhir/Condition/{resource_id}/$curatr-apply-fix'
+        body = {"fixes": [{
+            "field_path": "Condition.code.coding[0].code",
+            "new_value": "E11.9",
+        }]}
+        monkeypatch.setenv('APP_ENV', 'production')
+
+        generic = client.post(
+            url,
+            json=body,
+            headers={**auth_headers, 'X-Human-Confirmed': 'true'},
+        )
+        assert generic.status_code == 403
+        assert 'audience' in generic.get_json()['issue'][0]['diagnostics']
+
+        approval = generate_step_up_token(
+            'test-tenant',
+            audience='curatr',
+            operation=f'curatr-apply-fix:Condition/{resource_id}',
+        )
+        approved_headers = {
+            **auth_headers,
+            'X-Step-Up-Token': approval,
+            'X-Human-Confirmed': 'true',
+        }
+        approved = client.post(url, json=body, headers=approved_headers)
+        assert approved.status_code == 200
+
+        replay = client.post(url, json=body, headers=approved_headers)
+        assert replay.status_code == 403
+        assert 'replay' in replay.get_json()['issue'][0]['diagnostics'].lower()
+
     def test_apply_fix_empty_fixes_returns_400(
         self, client, auth_headers
     ):

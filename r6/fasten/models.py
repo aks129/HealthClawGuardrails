@@ -40,6 +40,10 @@ class FastenConnection(db.Model):
     # Set ONLY by the HMAC-verified patient.connection_success webhook — the
     # proof this org_connection_id is real, not fabricated by the registrant.
     webhook_verified_at = db.Column(db.DateTime, nullable=True)
+    # Only the SHA-256 digest is persisted; the raw short-lived proof remains
+    # inside the browser's signed HttpOnly session cookie.
+    enrollment_proof_hash = db.Column(db.String(64), nullable=True)
+    enrollment_expires_at = db.Column(db.DateTime, nullable=True)
     # Mint-once marker for the patient connect (agent read) token.
     agent_token_issued_at = db.Column(db.DateTime, nullable=True)
 

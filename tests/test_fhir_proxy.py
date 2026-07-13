@@ -655,6 +655,39 @@ class TestProxyRouteIntegration:
             assert data['id'] == 'server-assigned-id'
             assert data.get('_source') == 'upstream'
 
+    def test_update_via_proxy_does_not_require_local_shadow_row(self, auth_headers):
+        """An upstream-only resource can be updated without a local DB copy."""
+        patient = {
+            'resourceType': 'Patient',
+            'id': 'upstream-only-id',
+            'name': [{'family': 'Updated'}],
+        }
+
+        with patch('r6.routes.get_proxy_for_request') as mock_get:
+            mock_proxy = MagicMock()
+            mock_proxy.update.return_value = (patient, 200)
+            mock_get.return_value = mock_proxy
+
+            resp = self.client.put(
+                '/r6/fhir/Patient/upstream-only-id',
+                json=patient,
+                headers={
+                    **auth_headers,
+                    'X-Human-Confirmed': 'true',
+                    'If-Match': 'W/"7"',
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.get_json()['_source'] == 'upstream'
+        mock_proxy.update.assert_called_once_with(
+            'Patient', 'upstream-only-id', {
+                'resourceType': 'Patient',
+                'id': 'upstream-only-id',
+                'name': [{'family': 'Updated'}],
+            }, 'W/"7"'
+        )
+
     def test_metadata_shows_proxy_description(self):
         """Metadata describes proxy mode when upstream is configured."""
         with patch('r6.routes.is_proxy_enabled', return_value=True):

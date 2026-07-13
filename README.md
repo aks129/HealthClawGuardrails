@@ -170,6 +170,10 @@ Each skill is auto-discoverable — Claude loads it when your prompt matches the
 # Install dependencies
 uv sync
 
+# Apply deterministic database migrations
+STEP_UP_SECRET=your-secret uv run flask --app main init-db
+STEP_UP_SECRET=your-secret uv run flask --app main seed-demo --tenant-id desktop-demo
+
 # Run (local mode with SQLite)
 STEP_UP_SECRET=your-secret python main.py
 
@@ -303,7 +307,7 @@ cd e2e && npm run test:ui        # interactive UI mode
 | `/r6/fhir/{type}/$validate` | POST | Validate resource |
 | `/r6/fhir/Questionnaire[/{id}]/$populate` | POST | SDC — pre-fill a QuestionnaireResponse from a subject |
 | `/r6/fhir/QuestionnaireResponse/$extract` | POST | SDC — extract a transaction Bundle (`?dryRun=true` to preview) |
-| `/r6/fhir/{type}/{id}/$deidentify` | GET | HIPAA Safe Harbor de-identification |
+| `/r6/fhir/{type}/{id}/$deidentify` | GET | Conservative de-identification preview (expert review required) |
 | `/r6/fhir/Observation/$stats` | GET | Observation statistics |
 | `/r6/fhir/Observation/$lastn` | GET | Most recent observations |
 | `/r6/fhir/Permission/$evaluate` | POST | R6 access control evaluation |
@@ -482,8 +486,18 @@ Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 | `FHIR_UPSTREAM_URL` | No | — | Upstream FHIR server (enables proxy mode) |
 | `SQLALCHEMY_DATABASE_URI` | Production | `sqlite:///mcp_server.db` | Database connection |
 | `SESSION_SECRET` | No | (dev key) | Flask session secret |
+| `READ_AUTH_ENABLED` | Production | `false` | Require tenant-bound credentials on protected reads |
+| `PUBLIC_TENANTS` | Production | — | Explicit comma-separated synthetic/demo tenant allowlist |
+| `REDIS_URL` | Production | — | Shared nonce, OAuth, rate-limit, and worker state |
+| `MCP_AUTH_TOKEN` | HTTP MCP | — | Bearer credential required by MCP HTTP transports |
 | `FHIR_UPSTREAM_TIMEOUT` | No | 15 | Upstream request timeout (seconds) |
 | `FHIR_LOCAL_BASE_URL` | No | — | Local URL for response URL rewriting |
+
+Database DDL is never run during WSGI import. Run `flask --app main init-db`
+before each release; it applies the locked Alembic revisions. Operators adopting
+Alembic on an existing v1.8.0 Postgres deployment must follow the
+[database migration runbook](docs/runbooks/database-migrations.md) to verify and
+stamp the compatibility baseline before upgrading.
 
 ## Project Structure
 
@@ -498,7 +512,7 @@ r6/
   audit.py                      Immutable AuditEvent recording
   stepup.py                     HMAC-SHA256 step-up token management
   oauth.py                      OAuth 2.1 + PKCE + SMART-on-FHIR discovery
-  health_compliance.py          Disclaimers, HITL, HIPAA Safe Harbor, audit export
+  health_compliance.py          Disclaimers, HITL, de-identification preview, audit export
   context_builder.py            Bundle ingestion + context envelopes
   rate_limit.py                 Per-tenant rate limiting
   fhir_proxy.py                 Upstream FHIR server proxy with URL rewriting
@@ -582,7 +596,7 @@ patient's canonical tenant ID.
 ### 5. Deidentify for sharing
 
 ```bash
-# HIPAA Safe Harbor
+# De-identification preview (not a legal Safe Harbor determination)
 curl -H "X-Tenant-ID: my-patient" \
   http://localhost:5000/r6/fhir/Patient/pt-1/\$deidentify
 

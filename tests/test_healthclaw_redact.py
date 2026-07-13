@@ -337,7 +337,7 @@ def test_redact_patient_contact_emergency_pii():
     c = out["contact"][0]
     assert c["name"]["family"] == "R."       # emergency name truncated
     assert c["name"]["given"] == ["C."]
-    assert c["address"].get("city") == "Boston"  # coarse demographics ok
+    assert "city" not in c["address"]             # geography minimized too
 
 
 def test_patient_controlled_strips_contact():
