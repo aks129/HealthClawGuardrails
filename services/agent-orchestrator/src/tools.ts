@@ -25,12 +25,44 @@ import {
   BackendTimeoutError,
   backendTimeoutResult,
 } from "./fetch-timeout";
+import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
 import { encryptJWE } from "./ktc/jwe";
 import { buildShlink, buildOwnerLink, buildViewerLink } from "./ktc/shlink";
 import { utf8 } from "./ktc/encoding";
 
 export type ToolTier = "read" | "write";
+
+export type ToolName =
+  | "context_get"
+  | "fhir_read"
+  | "fhir_search"
+  | "fhir_validate"
+  | "questionnaire_populate"
+  | "questionnaire_extract"
+  | "fhir_propose_write"
+  | "fhir_commit_write"
+  | "fhir_stats"
+  | "fhir_interpret_labs"
+  | "care_gaps"
+  | "guardrail_conformance"
+  | "fhir_lastn"
+  | "fhir_permission_evaluate"
+  | "fhir_subscription_topics"
+  | "wearables_sync_status"
+  | "sources_check"
+  | "fhir_compiled_truth"
+  | "curatr_evaluate"
+  | "curatr_apply_fix"
+  | "fhir_get_token"
+  | "fhir_seed"
+  | "action_propose"
+  | "rx_transfer_request"
+  | "action_commit"
+  | "action_status"
+  | "shl_generate"
+  | "search"
+  | "fetch";
 
 interface ToolAnnotations {
   readOnlyHint: boolean;
@@ -39,12 +71,30 @@ interface ToolAnnotations {
 }
 
 interface ToolDefinition {
-  name: string;
+  name: ToolName;
   title: string;
   description: string;
   tier: ToolTier;
   annotations: ToolAnnotations;
   inputSchema: Record<string, unknown>;
+}
+
+interface ToolHandlerContext {
+  input: Record<string, unknown>;
+  headers: Record<string, string>;
+  tenantId: string;
+}
+
+type ToolHandler = (
+  context: ToolHandlerContext
+) => Promise<Record<string, unknown>> | Record<string, unknown>;
+
+interface ToolRegistration extends ToolDefinition {
+  handler: ToolHandler;
+}
+
+interface RegisteredTool extends ToolRegistration {
+  validate: ValidateFunction;
 }
 
 // MCP SDK tool schema format (includes annotations)
@@ -78,10 +128,12 @@ export interface FHIRToolsOptions {
 export class FHIRTools {
   private baseUrl: string;
   private allowPrivileged: boolean;
+  private registry: ReadonlyMap<ToolName, RegisteredTool>;
 
   constructor(baseUrl: string, options: FHIRToolsOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.allowPrivileged = options.allowPrivileged === true;
+    this.registry = this.buildToolRegistry();
   }
 
   /**
@@ -157,6 +209,12 @@ export class FHIRTools {
   }
 
   getToolSchemas(): ToolDefinition[] {
+    return [...this.registry.values()].map(
+      ({ handler: _handler, validate: _validate, ...definition }) => definition
+    );
+  }
+
+  private getToolRegistrations(): ToolRegistration[] {
     return [
       {
         name: "context_get",
@@ -164,6 +222,8 @@ export class FHIRTools {
         description:
           "Retrieve a pre-built context envelope with patient-centric FHIR resources. Returns bounded, policy-stamped, time-limited context.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.getContext(input.context_id as string, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -178,6 +238,12 @@ export class FHIRTools {
         title: "Read FHIR Resource",
         description: "Read a specific FHIR resource by type and ID. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Returns redacted resource with PHI protection.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.readResource(
+            input.resource_type as string,
+            input.resource_id as string,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -234,6 +300,22 @@ export class FHIRTools {
         description:
           "Search for FHIR resources. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Supports patient, code, status, _lastUpdated, _count, _sort parameters. Returns paginated, redacted Bundle.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.searchResources(
+            input.resource_type as string,
+            {
+              patient: input.patient as string | undefined,
+              code: input.code as string | undefined,
+              status: input.status as string | undefined,
+              _lastUpdated: input._lastUpdated as string | undefined,
+              _count: Math.min(
+                (input._count as number) || 20,
+                MAX_RESULT_ENTRIES
+              ),
+              _sort: input._sort as string | undefined,
+            },
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -314,6 +396,11 @@ export class FHIRTools {
         description:
           "Validate a proposed FHIR R6 resource against structural rules. Returns OperationOutcome.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.validateResource(
+            input.resource as Record<string, unknown>,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -332,6 +419,13 @@ export class FHIRTools {
         description:
           "SDC $populate — pre-fill a Questionnaire for a subject. Returns a QuestionnaireResponse. Read tier; mints a tenant token for non-public tenants.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.populateQuestionnaire(
+            input.questionnaire_id as string | undefined,
+            input.questionnaire as Record<string, unknown> | undefined,
+            input.subject_reference as string,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -349,6 +443,13 @@ export class FHIRTools {
         description:
           "SDC $extract — extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up unless dry_run=true.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.extractQuestionnaire(
+            input.questionnaire_response as Record<string, unknown>,
+            input.questionnaire as Record<string, unknown> | undefined,
+            (input.dry_run as boolean) ?? false,
+            headers
+          ),
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -366,6 +467,12 @@ export class FHIRTools {
         description:
           "Propose a write — validates the resource and returns a preview. Does NOT commit. Safe to call without step-up authorization.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.proposeWrite(
+            input.resource as Record<string, unknown>,
+            input.operation as string,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -389,6 +496,12 @@ export class FHIRTools {
         description:
           "Commit a previously proposed write. Requires step-up authorization token. This is a destructive operation.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.commitWrite(
+            input.resource as Record<string, unknown>,
+            input.operation as string,
+            headers
+          ),
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -412,6 +525,12 @@ export class FHIRTools {
         description:
           "Compute statistics (count, min, max, mean) over numeric Observation values. Standard FHIR $stats (since R4). Only supports valueQuantity. Filter by patient and/or code.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.observationStats(
+            input.code as string | undefined,
+            input.patient as string | undefined,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -434,6 +553,13 @@ export class FHIRTools {
         description:
           "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.interpretLabs(
+            input.observation as Record<string, unknown> | undefined,
+            input.bundle as Record<string, unknown> | undefined,
+            input.subject as string | undefined,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -451,6 +577,8 @@ export class FHIRTools {
         description:
           "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.careGaps(input.subject as string | undefined, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -466,6 +594,8 @@ export class FHIRTools {
         description:
           "Run the guardrail conformance self-test on the connected HealthClaw deployment and return the graded scorecard (A-F across PHI redaction, immutable audit, step-up auth, human-in-the-loop, tenant isolation, medical disclaimers). Uses synthetic data only. Set fresh=true to force a new run instead of the cached result.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.guardrailConformance(input.fresh === true, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -484,6 +614,13 @@ export class FHIRTools {
         description:
           "Get the last N observations per code. Standard FHIR $lastn (since R4). Returns most recent observations by storage order.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.observationLastN(
+            input.code as string | undefined,
+            input.patient as string | undefined,
+            (input.max as number) || 1,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -511,6 +648,13 @@ export class FHIRTools {
         description:
           "Evaluate R6 Permission resources for access control decisions. Returns permit/deny based on stored Permission rules. Separates access control (Permission) from consent records (Consent).",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.evaluatePermission(
+            input.subject as string | undefined,
+            input.action as string,
+            input.resource as string | undefined,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -538,6 +682,7 @@ export class FHIRTools {
         description:
           "List available SubscriptionTopics for event-driven subscriptions. R6 moves topic-based subscriptions toward Normative. Agents discover what events they can subscribe to.",
         tier: "read",
+        handler: ({ headers }) => this.listSubscriptionTopics(headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -552,6 +697,11 @@ export class FHIRTools {
         description:
           "List wearable connections (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman) for a tenant, with last sync time, observation count, and status. Use this to tell a patient what's connected, when data last arrived, and surface a connection-management UI (via _meta.ui.resourceUri) so they can connect more providers. Data flows into HealthClaw as FHIR Observations with LOINC codes — agents read it via fhir_search like any other Observation.",
         tier: "read",
+        handler: ({ input, headers, tenantId }) =>
+          this.wearablesSyncStatus(
+            (input.tenant_id as string) || tenantId,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -571,6 +721,7 @@ export class FHIRTools {
         description:
           "Survey ALL connected health data sources (Fasten, HealthEx, Health Bank One, MEDENT, Flexpa, Epic/Health Skillz, wearables) at once — returns each source's connection status and the patient's record counts by type. Use when the patient asks what's connected or to check for data across services.",
         tier: "read",
+        handler: ({ headers, tenantId }) => this.sourcesCheck(tenantId, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -585,6 +736,12 @@ export class FHIRTools {
         description:
           "Return the current best understanding of a FHIR resource plus the append-only evidence trail (Provenance entries) of how it got there. Use this before presenting resource-specific facts to a patient — surfaces curation_state and quality_score so the agent can say not just WHAT the record says but WHY it says it. Redacted, audited. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.compiledTruth(
+            input.resource_type as string,
+            input.resource_id as string,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -608,6 +765,12 @@ export class FHIRTools {
         description:
           "Evaluate a FHIR resource for data quality issues. Checks coding elements against public terminology services (tx.fhir.org for SNOMED/LOINC, NLM for ICD-10-CM, RXNAV for RxNorm) and structural rules. Returns issues in plain language with patient-facing impact descriptions and resolution suggestions. Read-only — no step-up required.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.curatrEvaluate(
+            input.resource_type as string,
+            input.resource_id as string,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
@@ -630,6 +793,14 @@ export class FHIRTools {
         description:
           "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token) and human confirmation (X-Human-Confirmed: true) for clinical resources like Condition.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.curatrApplyFix(
+            input.resource_type as string,
+            input.resource_id as string,
+            input.fixes as Array<{ field_path: string; new_value: unknown }>,
+            input.patient_intent as string,
+            headers
+          ),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -670,6 +841,31 @@ export class FHIRTools {
         description:
           "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string — pass it as _stepUpToken in subsequent write tool calls.",
         tier: "read",
+        handler: async ({ input, headers, tenantId }) => {
+          const tokenTenant = (input.tenant_id as string) || tenantId;
+          const resp = await fetchWithTimeout(
+            `${this.baseUrl}/internal/step-up-token`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Secret":
+                  process.env.INTERNAL_TOKEN_MINT_SECRET || "",
+                ...headers,
+              },
+              body: JSON.stringify({ tenant_id: tokenTenant }),
+            }
+          );
+          const data = (await resp.json()) as Record<string, unknown>;
+          if (!resp.ok) return { error: "Failed to issue token", detail: data };
+          return {
+            token: data.token,
+            tenant_id: tokenTenant,
+            expires_in_seconds: 300,
+            _mcp_summary:
+              "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, action_commit, shl_generate, or curatr_apply_fix.",
+          };
+        },
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -688,6 +884,24 @@ export class FHIRTools {
         description:
           "Seed a tenant with a realistic Patient + Observations + Condition bundle for live testing. Use this at the start of a demo session to populate data. Returns created resource IDs and a ready-to-use step_up_token.",
         tier: "read",
+        handler: async ({ input, headers, tenantId }) => {
+          const seedTenant = (input.tenant_id as string) || tenantId;
+          const resp = await fetchWithTimeout(
+            `${this.baseUrl}/internal/seed`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...headers },
+              body: JSON.stringify({ tenant_id: seedTenant }),
+            },
+            30_000
+          );
+          const data = (await resp.json()) as Record<string, unknown>;
+          if (!resp.ok) return { error: "Seed failed", detail: data };
+          return {
+            ...data,
+            _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${seedTenant}'. The step_up_token is ready for write operations.`,
+          };
+        },
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -707,6 +921,12 @@ export class FHIRTools {
         description:
           "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before submitting via action_commit. Does not execute anything.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.proposeAction(
+            input.kind as string,
+            input.payload as Record<string, unknown>,
+            headers
+          ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
@@ -731,6 +951,7 @@ export class FHIRTools {
         description:
           "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; submit with action_commit for the patient's own out-of-band confirmation after they explicitly agree — action_commit does not execute the call itself.",
         tier: "write",
+        handler: ({ input, headers }) => this.proposeRxTransfer(input, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
@@ -754,6 +975,8 @@ export class FHIRTools {
         description:
           "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
         tier: "write",
+        handler: ({ input, headers }) =>
+          this.commitAction(input.action_id as string, headers),
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
         inputSchema: {
           type: "object",
@@ -769,6 +992,8 @@ export class FHIRTools {
         description:
           "Check the status and outcome of an action (proposed/awaiting_confirmation/executing/completed/failed/needs_review/unknown/expired). needs_review means it ran but the outcome could not be confirmed - show the patient the evidence. unknown means the provider MAY have acted - never re-propose the same action. Use after action_commit to see whether the patient has approved yet, and to report the final result back to them.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.getActionStatus(input.action_id as string, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -784,6 +1009,7 @@ export class FHIRTools {
         description:
           "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
         tier: "write",
+        handler: ({ input, headers }) => this.generateShl(input, headers),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
           type: "object",
@@ -803,6 +1029,8 @@ export class FHIRTools {
         description:
           "ChatGPT-connector-compatible search over the tenant's FHIR records. Query is a FHIR search string (e.g. 'Observation?code=4548-4' or 'Patient?name=smith'); bare resource type works too. Returns compact results: id, title, url. Reads are PHI-redacted and audit-logged server-side.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.connectorSearch(input.query as string, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -821,6 +1049,8 @@ export class FHIRTools {
         description:
           "ChatGPT-connector-compatible fetch of one FHIR resource by id ('ResourceType/id', as returned by search). Returns the full document (PHI-redacted server-side) with metadata.",
         tier: "read",
+        handler: ({ input, headers }) =>
+          this.connectorFetch(input.id as string, headers),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -834,6 +1064,30 @@ export class FHIRTools {
         },
       },
     ];
+  }
+
+  private buildToolRegistry(): ReadonlyMap<ToolName, RegisteredTool> {
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const registry = new Map<ToolName, RegisteredTool>();
+
+    for (const definition of this.getToolRegistrations()) {
+      if (registry.has(definition.name)) {
+        throw new Error(`Duplicate MCP tool registration: ${definition.name}`);
+      }
+      registry.set(definition.name, {
+        ...definition,
+        validate: ajv.compile(definition.inputSchema),
+      });
+    }
+    return registry;
+  }
+
+  private formatValidationErrors(errors: ErrorObject[] | null | undefined): string[] {
+    return (errors || []).map((error) => {
+      const missing = (error.params as { missingProperty?: string }).missingProperty;
+      const path = `${error.instancePath || "input"}${missing ? `/${missing}` : ""}`;
+      return `${path} ${error.message || "is invalid"}`;
+    });
   }
 
   async executeTool(
@@ -863,9 +1117,27 @@ export class FHIRTools {
       return { error: `Tool ${toolName} is not available on this transport` };
     }
 
-    const tool = this.getToolSchemas().find((t) => t.name === toolName);
+    const tool = this.registry.get(toolName as ToolName);
     if (!tool) {
       return { error: `Unknown tool: ${toolName}` };
+    }
+
+    // Preserve the stdio token tool's long-standing tenant fallback even
+    // though its public schema requires tenant_id. HTTP never exposes this
+    // privileged tool; local callers inherit the request/env demo tenant.
+    const tenantId =
+      headers?.["x-tenant-id"] || process.env.TENANT_ID || "desktop-demo";
+    const effectiveInput =
+      toolName === "fhir_get_token" && input && !input.tenant_id
+        ? { ...input, tenant_id: tenantId }
+        : input;
+
+    if (!tool.validate(effectiveInput)) {
+      return {
+        error: "Invalid tool input",
+        tool: toolName,
+        details: this.formatValidationErrors(tool.validate.errors),
+      };
     }
 
     // Enforce step-up for commit_write, action_commit, and shl_generate (releases full record)
@@ -883,11 +1155,6 @@ export class FHIRTools {
 
     // Build forwarded headers (tenant, auth, agent)
     // X-Tenant-Id is always set: incoming header → TENANT_ID env var → "desktop-demo"
-    const tenantId =
-      headers?.["x-tenant-id"] ||
-      process.env.TENANT_ID ||
-      "desktop-demo";
-
     const fwdHeaders: Record<string, string> = {
       "Content-Type": "application/fhir+json",
       "X-Tenant-Id": tenantId,
@@ -912,217 +1179,11 @@ export class FHIRTools {
 
     // questionnaire_extract dry-run is read-shaped (Flask gates it with read-auth
     // but no step-up); mint a read token so non-public tenants can preview.
-    if (toolName === "questionnaire_extract" && input.dry_run === true) {
+    if (toolName === "questionnaire_extract" && effectiveInput.dry_run === true) {
       await this.ensureReadToken(fwdHeaders);
     }
 
-    switch (toolName) {
-      case "context_get":
-        return this.getContext(input.context_id as string, fwdHeaders);
-
-      case "fhir_read":
-        return this.readResource(
-          input.resource_type as string,
-          input.resource_id as string,
-          fwdHeaders
-        );
-
-      case "fhir_search":
-        return this.searchResources(
-          input.resource_type as string,
-          {
-            patient: input.patient as string | undefined,
-            code: input.code as string | undefined,
-            status: input.status as string | undefined,
-            _lastUpdated: input._lastUpdated as string | undefined,
-            _count: Math.min((input._count as number) || 20, MAX_RESULT_ENTRIES),
-            _sort: input._sort as string | undefined,
-          },
-          fwdHeaders
-        );
-
-      case "fhir_validate":
-        return this.validateResource(input.resource as Record<string, unknown>, fwdHeaders);
-
-      case "questionnaire_populate":
-        return this.populateQuestionnaire(
-          input.questionnaire_id as string | undefined,
-          input.questionnaire as Record<string, unknown> | undefined,
-          input.subject_reference as string,
-          fwdHeaders
-        );
-
-      case "questionnaire_extract":
-        return this.extractQuestionnaire(
-          input.questionnaire_response as Record<string, unknown>,
-          input.questionnaire as Record<string, unknown> | undefined,
-          (input.dry_run as boolean) ?? false,
-          fwdHeaders
-        );
-
-      case "fhir_propose_write":
-        return this.proposeWrite(
-          input.resource as Record<string, unknown>,
-          input.operation as string,
-          fwdHeaders
-        );
-
-      case "fhir_commit_write":
-        return this.commitWrite(
-          input.resource as Record<string, unknown>,
-          input.operation as string,
-          fwdHeaders
-        );
-
-      // Additional tools (mix of R6-specific and standard FHIR)
-      case "fhir_stats":
-        return this.observationStats(
-          input.code as string | undefined,
-          input.patient as string | undefined,
-          fwdHeaders
-        );
-
-      case "fhir_interpret_labs":
-        return this.interpretLabs(
-          input.observation as Record<string, unknown> | undefined,
-          input.bundle as Record<string, unknown> | undefined,
-          input.subject as string | undefined,
-          fwdHeaders
-        );
-
-      case "care_gaps":
-        return this.careGaps(input.subject as string | undefined, fwdHeaders);
-
-      case "guardrail_conformance":
-        return this.guardrailConformance(input.fresh === true, fwdHeaders);
-
-      case "fhir_lastn":
-        return this.observationLastN(
-          input.code as string | undefined,
-          input.patient as string | undefined,
-          (input.max as number) || 1,
-          fwdHeaders
-        );
-
-      case "fhir_permission_evaluate":
-        return this.evaluatePermission(
-          input.subject as string | undefined,
-          input.action as string,
-          input.resource as string | undefined,
-          fwdHeaders
-        );
-
-      case "fhir_subscription_topics":
-        return this.listSubscriptionTopics(fwdHeaders);
-
-      case "sources_check":
-        return this.sourcesCheck(tenantId, fwdHeaders);
-
-      case "fhir_compiled_truth":
-        return this.compiledTruth(
-          input.resource_type as string,
-          input.resource_id as string,
-          fwdHeaders
-        );
-
-      case "wearables_sync_status":
-        return this.wearablesSyncStatus(
-          (input.tenant_id as string) || tenantId,
-          fwdHeaders
-        );
-
-      case "curatr_evaluate":
-        return this.curatrEvaluate(
-          input.resource_type as string,
-          input.resource_id as string,
-          fwdHeaders
-        );
-
-      case "curatr_apply_fix":
-        return this.curatrApplyFix(
-          input.resource_type as string,
-          input.resource_id as string,
-          input.fixes as Array<{ field_path: string; new_value: unknown }>,
-          input.patient_intent as string,
-          fwdHeaders
-        );
-
-      case "fhir_get_token": {
-        // Token MUST be bound to the same tenant the write will run as.
-        // Fall back to the request's X-Tenant-Id (resolved above as
-        // header → TENANT_ID env → desktop-demo) — NOT a hardcoded default,
-        // or a token minted for desktop-demo gets rejected when the actual
-        // call runs as another tenant ("Token tenant mismatch").
-        const tokenTenant = (input.tenant_id as string) || tenantId;
-        const resp = await fetchWithTimeout(`${this.baseUrl}/internal/step-up-token`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            // Non-public tenants require the mint secret when it's set.
-            "X-Internal-Secret": process.env.INTERNAL_TOKEN_MINT_SECRET || "",
-            ...fwdHeaders,
-          },
-          body: JSON.stringify({ tenant_id: tokenTenant }),
-        });
-        const data = (await resp.json()) as Record<string, unknown>;
-        if (!resp.ok) return { error: "Failed to issue token", detail: data };
-        return {
-          token: data.token,
-          tenant_id: tokenTenant,
-          expires_in_seconds: 300,
-          _mcp_summary: "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, action_commit, shl_generate, or curatr_apply_fix.",
-        };
-      }
-
-      case "fhir_seed": {
-        const seedTenant = (input.tenant_id as string) || tenantId;
-        // 30s budget: seeding inserts the whole demo bundle with a
-        // per-resource audit-event commit each (r6/seed.py), which can
-        // legitimately exceed 15s on a cold backend + cold database.
-        const resp = await fetchWithTimeout(
-          `${this.baseUrl}/internal/seed`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...fwdHeaders },
-            body: JSON.stringify({ tenant_id: seedTenant }),
-          },
-          30_000
-        );
-        const data = (await resp.json()) as Record<string, unknown>;
-        if (!resp.ok) return { error: "Seed failed", detail: data };
-        return {
-          ...data,
-          _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${seedTenant}'. The step_up_token is ready for write operations.`,
-        };
-      }
-
-      case "rx_transfer_request":
-        return this.proposeRxTransfer(input, fwdHeaders);
-      case "action_propose":
-        return this.proposeAction(
-          input.kind as string,
-          input.payload as Record<string, unknown>,
-          fwdHeaders
-        );
-
-      case "action_commit":
-        return this.commitAction(input.action_id as string, fwdHeaders);
-
-      case "action_status":
-        return this.getActionStatus(input.action_id as string, fwdHeaders);
-
-      case "shl_generate":
-        return this.generateShl(input, fwdHeaders);
-
-      case "search":
-        return this.connectorSearch(input.query as string, fwdHeaders);
-
-      case "fetch":
-        return this.connectorFetch(input.id as string, fwdHeaders);
-
-      default:
-        return { error: `Unimplemented tool: ${toolName}` };
-    }
+    return tool.handler({ input: effectiveInput, headers: fwdHeaders, tenantId });
   }
 
   async getContext(

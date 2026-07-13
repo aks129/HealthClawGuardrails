@@ -254,6 +254,20 @@ describe("Tool Schema Tests", () => {
       expect((tool as unknown as Record<string, unknown>).tier).toBeUndefined();
     }
   });
+
+  it("uses the listed registry as the single dispatch source", async () => {
+    for (const schema of schemas) {
+      const result = await tools.executeTool(
+        schema.name,
+        null as unknown as Record<string, unknown>
+      );
+
+      expect(result).toMatchObject({
+        error: "Invalid tool input",
+        tool: schema.name,
+      });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -587,6 +601,34 @@ describe("Tool Execution Tests", () => {
   });
 
   // -- Unknown tool --
+
+  it("rejects schema-invalid input before calling the backend", async () => {
+    const result = await tools.executeTool("fhir_read", {
+      resource_type: "Patient",
+    });
+
+    expect(result).toMatchObject({
+      error: "Invalid tool input",
+      tool: "fhir_read",
+    });
+    expect(result.details).toEqual(
+      expect.arrayContaining([expect.stringContaining("resource_id")])
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid primitive and enum values", async () => {
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "NotAFhirResource",
+      _count: "many",
+    });
+
+    expect(result).toMatchObject({
+      error: "Invalid tool input",
+      tool: "fhir_search",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
   it("unknown tool returns error", async () => {
     const result = await tools.executeTool("fhir_nonexistent", {});
