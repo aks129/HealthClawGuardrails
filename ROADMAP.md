@@ -30,6 +30,7 @@ Making the first two actions *real*:
 
 - **Encrypted SMART Health Link delivery.** The forms rail ships a signed, expiring download link today; the next step wraps it in a full SHL envelope (encrypted manifest + one-time flag), reusing the Node server's SHL builder, so the PDF can be shared through the standard SHL viewer ecosystem.
 - **FHIR Implementation Guide.** A continuous-build IG so the guardrails are reviewable in the community's own terms: a two-agent AuditEvent profile (AI agent + human verifier), a Provenance-per-action profile, SDC-conformant questionnaires, and the six guardrail properties as testable requirements. Standards-native expression of what the code already does.
+- **Production rigor for de-identification and validation** ([#112](../../issues/112)). Today redaction is HIPAA **Safe-Harbor-*style* field redaction** (demographics), not Expert Determination, and `fhir_validate` is **structural**, not full StructureDefinition/terminology conformance. The guardrail *contract* (redact + audit + step-up + human-confirm + tenant isolation + [error fidelity](../../pull/108)) is what's demonstrated today; closing the de-id gap (profile-specific recursive allowlists, an Expert-Determination path, PHI-canary tests) and the validation gap (profile-aware conformance + terminology binding) is how it becomes production-grade. Pairs with the IG above.
 - **Granular SMART v2 scopes** per tool; regulatory-posture doc (patient-directed access under 45 CFR 164.524; FTC Health Breach Notification Rule).
 
 ## 🔭 Later — booking, consumer, ecosystem
