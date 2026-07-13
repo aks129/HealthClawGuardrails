@@ -640,7 +640,8 @@ in-process cache when Redis is unavailable).
 ## Known Limitations
 
 - Local mode: JSON blob storage with table-scan search (no indexed fields)
-- Structural validation only (no StructureDefinition conformance or terminology binding)
+- **Redaction is HIPAA Safe-Harbor-*style* field redaction** (demographics), **not Expert Determination**. It's a compensating control that removes identifier-class fields; it is not a legal de-identification determination. Production de-id rigor (profile-specific recursive allowlists, an Expert-Determination path) is on the [roadmap](ROADMAP.md) ([#112](../../issues/112)).
+- **Validation is structural**, not full StructureDefinition/profile conformance or terminology binding. What's demonstrated is the guardrail *contract* (redact + audit + step-up + human-confirm + tenant isolation + error fidelity), not production validation depth — that's tracked in [#112](../../issues/112).
 - SubscriptionTopic stored but notifications not dispatched
 - Clinical FHIR writes gate human-in-the-loop with a header flag (`X-Human-Confirmed`), not cryptographic confirmation — a compensating control for the demo, not proof a human acted. Real-world actions (phone/SMS/etc.) no longer use that header: `commit` only submits the action for out-of-band approval (202 `awaiting_confirmation`), and the patient's Approve tap consumes a single-use `ActionConfirmation` credential server-side before anything executes.
 - OAuth endpoints are for discovery/SMART advertisement; route enforcement is via step-up + read-auth tokens, and the auto-approve authorize flow is limited to public/demo tenants (no per-user consent screen)
