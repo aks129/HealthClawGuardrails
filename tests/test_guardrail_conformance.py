@@ -299,6 +299,10 @@ def test_corrective_outcome_rejects_unsafe_sibling_issue():
     }
 
     assert not _outcome_names_parameter_and_supported_set(outcome, "datetime")
+    outcome["issue"][1]["details"]["text"] = (
+        "Supported parameters: use _lastUpdated instead of datetime"
+    )
+    assert not _outcome_names_parameter_and_supported_set(outcome, "datetime")
 
 
 def test_lenient_warning_rejects_unsafe_sibling_outcome_entry():
@@ -331,6 +335,10 @@ def test_lenient_warning_rejects_unsafe_sibling_outcome_entry():
         ],
     }
 
+    assert not _has_outcome_warning(bundle, "datetime")
+    bundle["entry"][1] = outcome_entry(
+        "Supported parameters: use _lastUpdated instead of datetime"
+    )
     assert not _has_outcome_warning(bundle, "datetime")
 
 

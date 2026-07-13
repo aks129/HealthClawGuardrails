@@ -510,13 +510,25 @@ def _outcome_has_unsafe_last_updated_suggestion(body) -> bool:
     """
     if not _is_operation_outcome(body):
         return False
+
+    def strip_exact_supported_set(match: re.Match) -> str:
+        declared = {
+            token.lower()
+            for token in re.findall(
+                r"[A-Za-z_][A-Za-z0-9_-]*", match.group(1))
+        }
+        if declared == _LOCAL_SUPPORTED_PARAMETER_EVIDENCE:
+            return ""
+        return match.group(0)
+
     for issue in body.get("issue", []):
         if not isinstance(issue, dict):
             continue
         details = issue.get("details")
         text = details.get("text", "") if isinstance(details, dict) else ""
         if (isinstance(text, str)
-                and "_lastupdated" in _SUPPORTED_SET_RE.sub("", text).lower()):
+                and "_lastupdated" in _SUPPORTED_SET_RE.sub(
+                    strip_exact_supported_set, text).lower()):
             return True
     return False
 
