@@ -25,13 +25,31 @@ _MUTATING = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 _STATEFUL_HOST = 'https://app.healthclaw.io'
 
 
+def _is_state_mutating_get(path):
+    parts = path.strip('/').split('/')
+    return (
+        len(parts) == 4
+        and parts[:2] == ['fasten', 'connections']
+        and parts[3] == 'agent-access'
+    ) or (
+        len(parts) == 3
+        and parts[:2] == ['r6', 'actions']
+    )
+
+
 def _refuse_serverless_writes():
     """On Vercel (VERCEL=1 is set by the platform), mutating requests to
     stateful paths get 405 + a pointer instead of a silent no-op write."""
     if not os.environ.get('VERCEL'):
         return None
     from flask import request, jsonify
-    if request.method in _MUTATING and request.path.startswith(_STATEFUL_PREFIXES):
+    mutates = (
+        request.method in _MUTATING
+        and request.path.startswith(_STATEFUL_PREFIXES)
+    ) or (
+        request.method == 'GET' and _is_state_mutating_get(request.path)
+    )
+    if mutates:
         return jsonify({
             'error': 'read-only deployment',
             'detail': ('This host serves the marketing site with ephemeral '

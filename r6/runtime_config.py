@@ -31,7 +31,13 @@ def resolve_app_env(environ: Mapping[str, str] | None = None) -> str:
     env = os.environ if environ is None else environ
     if "APP_ENV" in env:
         source = "APP_ENV"
-        value = env.get(source, "").strip().lower()
+        value = env.get(source, "")
+        if value not in VALID_APP_ENVS:
+            allowed = ", ".join(sorted(VALID_APP_ENVS))
+            raise RuntimeError(
+                f"APP_ENV must be exactly one of: {allowed} "
+                "(lowercase, without surrounding whitespace)"
+            )
         if "FLASK_ENV" in env:
             legacy = env.get("FLASK_ENV", "").strip().lower()
             if legacy not in VALID_APP_ENVS:
@@ -64,6 +70,42 @@ def validate_runtime_environment(
     if app_env != "production":
         return app_env
 
+    if env.get("READ_AUTH_ENABLED", "").strip().lower() not in TRUE_VALUES:
+        raise RuntimeError("READ_AUTH_ENABLED must be true in production")
+
+    # Presence is distinct from truthiness: an explicit empty value is the
+    # safest private-only allowlist and must remain valid.
+    if "PUBLIC_TENANTS" not in env:
+        raise RuntimeError(
+            "PUBLIC_TENANTS must be explicitly set in production "
+            "(use an empty value for no public tenants)"
+        )
+
+    # Vercel serves the public, read-only marketing/demo copy. Mutations are
+    # refused by api/index.py before any blueprint handler runs, command-center
+    # sessions are disabled, and only explicitly public synthetic data is
+    # readable. Requiring signing secrets or shared Redis on that stateless
+    # surface would force secrets into vercel.json and prevent cold starts.
+    read_only_vercel = (
+        env.get("VERCEL", "").strip().lower() in TRUE_VALUES
+        and env.get("READ_ONLY_DEPLOYMENT", "").strip().lower() in TRUE_VALUES
+    )
+    if read_only_vercel:
+        if env.get("DISABLE_COMMAND_CENTER", "").strip().lower() not in TRUE_VALUES:
+            raise RuntimeError(
+                "DISABLE_COMMAND_CENTER must be true for a read-only Vercel deployment"
+            )
+        public = {
+            tenant.strip()
+            for tenant in env.get("PUBLIC_TENANTS", "").split(",")
+            if tenant.strip()
+        }
+        if public != {"desktop-demo"}:
+            raise RuntimeError(
+                "read-only Vercel PUBLIC_TENANTS must be exactly desktop-demo"
+            )
+        return app_env
+
     session_secret = env.get("SESSION_SECRET", "").strip()
     if (
         len(session_secret) < _MIN_SECRET_LENGTH
@@ -82,17 +124,6 @@ def validate_runtime_environment(
         raise RuntimeError(
             "STEP_UP_SECRET must be explicitly set to a non-default value "
             "of at least 32 characters in production"
-        )
-
-    if env.get("READ_AUTH_ENABLED", "").strip().lower() not in TRUE_VALUES:
-        raise RuntimeError("READ_AUTH_ENABLED must be true in production")
-
-    # Presence is distinct from truthiness: an explicit empty value is the
-    # safest private-only allowlist and must remain valid.
-    if "PUBLIC_TENANTS" not in env:
-        raise RuntimeError(
-            "PUBLIC_TENANTS must be explicitly set in production "
-            "(use an empty value for no public tenants)"
         )
 
     if not env.get("REDIS_URL", "").strip():

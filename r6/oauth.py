@@ -22,6 +22,7 @@ import time
 import uuid
 from functools import wraps
 from flask import request, jsonify
+from r6.runtime_config import resolve_app_env
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,10 @@ _OAUTH_STORES = {
 }
 
 
+def _is_production():
+    return resolve_app_env() == 'production'
+
+
 def _get_redis_client():
     global _redis_client
     if _redis_client is not None:
@@ -84,7 +89,7 @@ def _oauth_store_set(kind, key, value, ttl=None):
             return
         except Exception as exc:  # noqa: BLE001 - Redis errors vary
             logger.error('OAuth Redis write failed: %s', type(exc).__name__)
-            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+            if _is_production():
                 raise RuntimeError('OAuth state store unavailable') from None
     _OAUTH_STORES[kind][key] = value
 
@@ -104,7 +109,7 @@ def _oauth_store_get(kind, key):
             return _decode_oauth_value(client.get(_oauth_key(kind, key)))
         except Exception as exc:  # noqa: BLE001
             logger.error('OAuth Redis read failed: %s', type(exc).__name__)
-            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+            if _is_production():
                 return None
     return _OAUTH_STORES[kind].get(key)
 
@@ -117,7 +122,7 @@ def _oauth_store_pop(kind, key):
             return _decode_oauth_value(client.getdel(_oauth_key(kind, key)))
         except Exception as exc:  # noqa: BLE001
             logger.error('OAuth Redis consume failed: %s', type(exc).__name__)
-            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+            if _is_production():
                 return None
     return _OAUTH_STORES[kind].pop(key, None)
 
@@ -141,7 +146,7 @@ def _oauth_revoke(token, ttl):
             return
         except Exception as exc:  # noqa: BLE001
             logger.error('OAuth Redis revoke failed: %s', type(exc).__name__)
-            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+            if _is_production():
                 raise RuntimeError('OAuth state store unavailable') from None
     _revoked_tokens.add(token_hash)
 
@@ -154,7 +159,7 @@ def _oauth_is_revoked(token_hash):
         except Exception as exc:  # noqa: BLE001
             logger.error('OAuth Redis revocation read failed: %s',
                          type(exc).__name__)
-            if (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production':
+            if _is_production():
                 return True
     return token_hash in _revoked_tokens
 

@@ -83,7 +83,7 @@ class TestProposeRoute:
         r = self._seed_med(client, auth_headers, tenant_headers,
                            "Metformin 500 mg tablet")
         assert r.status_code == 201, r.get_data(as_text=True)
-        resp = self._propose(client, tenant_headers, {
+        resp = self._propose(client, auth_headers, {
             "to_pharmacy": TO_PHARMACY, "from_pharmacy": FROM_PHARMACY})
         assert resp.status_code == 201, resp.get_data(as_text=True)
         body = resp.get_json()

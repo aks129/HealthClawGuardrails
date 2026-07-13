@@ -19,6 +19,8 @@ import secrets
 import threading
 import time
 
+from r6.runtime_config import resolve_app_env
+
 logger = logging.getLogger(__name__)
 
 # Default TTL for step-up tokens (5 minutes)
@@ -43,7 +45,7 @@ READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 # multi-worker deployment this should be backed by Redis; the in-memory map is
 # adequate for the single-process reference deployment and for tests.
 # ---------------------------------------------------------------------------
-_seen_nonces = {}  # nonce -> exp (unix seconds)
+_seen_nonces: dict[str, float] = {}  # nonce -> exp (unix seconds)
 _nonce_lock = threading.Lock()
 _redis_client = None
 _MAX_SEEN_NONCES = 10_000
@@ -62,7 +64,7 @@ def _get_redis_client():
 
 
 def _is_production():
-    return (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production'
+    return resolve_app_env() == 'production'
 
 
 def _evict_expired_nonces(now=None):

@@ -248,6 +248,20 @@ def propose_rx_transfer():
                        'required).'),
         }), 422
 
+    # This endpoint becomes a write only when a transferable draft exists.
+    # Read-scoped credentials may preview the no-action/refusal response above,
+    # but persisting a ProposedAction requires an explicit write-capable token.
+    step_up_token = (request.headers.get('X-Step-Up-Token') or '').strip()
+    if not step_up_token:
+        auth = (request.headers.get('Authorization') or '').strip()
+        if auth.lower().startswith('bearer '):
+            step_up_token = auth[7:].strip()
+    if not step_up_token:
+        return _error(401, 'write-scoped X-Step-Up-Token required')
+    valid, _token_error = validate_step_up_token(step_up_token, tenant_id)
+    if not valid:
+        return _error(401, 'write-scoped token rejected')
+
     refusal = _emergency_refusal_or_none(tenant_id,
                                          result['action_payload'].get('body'))
     if refusal is not None:

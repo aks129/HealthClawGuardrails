@@ -10,7 +10,9 @@ import logging
 import os
 import threading
 import time
+from typing import Any
 from flask import g, request, jsonify
+from r6.runtime_config import resolve_app_env
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,7 @@ DEFAULT_RATE_LIMIT = 120  # requests per minute
 DEFAULT_WINDOW_SECONDS = 60
 
 # In-memory store: tenant_id -> {count, reset_at}
-_rate_limits = {}
+_rate_limits: dict[str, dict[str, Any]] = {}
 _rate_limits_lock = threading.Lock()
 _redis_client = None
 _MAX_MEMORY_BUCKETS = 10_000
@@ -48,7 +50,7 @@ def _get_redis_client():
 
 
 def _is_production():
-    return (os.environ.get('APP_ENV') or os.environ.get('FLASK_ENV')) == 'production'
+    return resolve_app_env() == 'production'
 
 
 def _prune_memory_buckets(now):

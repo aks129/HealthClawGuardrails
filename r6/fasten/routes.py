@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 
 from models import db
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
+from r6.fasten.enrollment import (
+    consume_enrollment,
+    enrollment_tenant,
+    establish_enrollment,
+)
 from r6.fasten.models import FastenConnection, FastenJob
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
@@ -354,6 +359,8 @@ def register_connection():
         org_connection_id=org_connection_id
     ).first()
     if existing:
+        if existing.tenant_id != tenant_id:
+            return jsonify({'error': 'connection belongs to another tenant'}), 409
         return jsonify({
             'status': 'already_registered',
             'org_connection_id': org_connection_id,
@@ -378,15 +385,20 @@ def register_connection():
             pass  # ignore malformed timestamps
 
     db.session.add(conn)
-    db.session.commit()
-
-    record_audit_event(
-        event_type='fasten_connection_registered',
-        agent_id='fasten-connect',
-        tenant_id=tenant_id,
-        outcome='success',
-        detail=f'platform={conn.platform_type}',
-    )
+    try:
+        db.session.flush()
+        establish_enrollment(tenant_id, org_connection_id)
+        add_audit_event(
+            event_type='fasten_connection_registered',
+            agent_id='fasten-connect',
+            tenant_id=tenant_id,
+            outcome='success',
+            detail=f'platform={conn.platform_type}',
+        )
+        db.session.commit()
+    except RuntimeError:
+        db.session.rollback()
+        return jsonify({'error': 'enrollment proof unavailable'}), 503
 
     return jsonify({
         'status': 'registered',
@@ -693,9 +705,20 @@ def agent_access(org_connection_id):
     Not yet verified -> 202 {pending}: the page polls briefly; the webhook
     usually lands within seconds of widget completion.
     """
-    tenant_id, auth_error = _tenant_for_read()
-    if auth_error is not None:
-        return auth_error
+    enrolled_tenant = enrollment_tenant(org_connection_id)
+    claimed_header = request.headers.get('X-Tenant-Id', '').strip()
+    using_enrollment = (
+        enrolled_tenant is not None
+        and (not claimed_header or claimed_header == enrolled_tenant)
+    )
+    if using_enrollment:
+        tenant_id = enrolled_tenant
+    else:
+        tenant_id, auth_error = _tenant_for_read()
+        if auth_error is not None:
+            if not request.headers.get('X-Tenant-Id'):
+                return jsonify({'error': 'enrollment proof required'}), 401
+            return auth_error
 
     conn = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id, tenant_id=tenant_id).first()
@@ -723,15 +746,26 @@ def agent_access(org_connection_id):
     except ValueError:
         return jsonify({'error': 'server not configured to mint'}), 503
 
-    conn.agent_token_issued_at = datetime.now(timezone.utc)
-    db.session.commit()
-    record_audit_event(
+    issued_at = datetime.now(timezone.utc)
+    claimed = FastenConnection.query.filter_by(
+        org_connection_id=org_connection_id,
+        tenant_id=tenant_id,
+        agent_token_issued_at=None,
+    ).update({'agent_token_issued_at': issued_at}, synchronize_session=False)
+    if claimed != 1:
+        db.session.rollback()
+        return jsonify({'error': 'already issued'}), 410
+    add_audit_event(
         event_type='agent_read_token_issued',
         agent_id='fasten-connect',
         tenant_id=tenant_id,
         outcome='success',
         detail='read-scoped patient connect token (30d) issued after webhook verification',
     )
+    if using_enrollment and not consume_enrollment(tenant_id, org_connection_id):
+        db.session.rollback()
+        return jsonify({'error': 'enrollment proof expired or already used'}), 401
+    db.session.commit()
     expires = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
     return jsonify({
         'tenant_id': tenant_id,

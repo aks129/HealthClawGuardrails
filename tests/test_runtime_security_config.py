@@ -106,6 +106,13 @@ def test_invalid_app_env_is_rejected():
     assert "APP_ENV" in (result.stdout + result.stderr)
 
 
+@pytest.mark.parametrize("value", ["Production", " production", "production "])
+def test_noncanonical_app_env_is_rejected(value):
+    result = _startup({"APP_ENV": value})
+    assert result.returncode != 0
+    assert "APP_ENV" in (result.stdout + result.stderr)
+
+
 def test_conflicting_app_and_flask_environments_are_rejected():
     result = _startup({"APP_ENV": "development", "FLASK_ENV": "production"})
     assert result.returncode != 0
@@ -159,3 +166,87 @@ def test_app_env_production_closes_internal_token_mint(client, monkeypatch):
     )
     assert response.status_code == 403
     assert "token" not in response.get_json()
+
+
+class _BrokenRedis:
+    def set(self, *args, **kwargs):
+        raise ConnectionError("redis unavailable")
+
+    def eval(self, *args, **kwargs):
+        raise ConnectionError("redis unavailable")
+
+
+def test_stepup_uses_canonical_environment_resolver(monkeypatch):
+    from r6 import stepup
+
+    monkeypatch.setenv("APP_ENV", " Production ")
+    monkeypatch.setattr(stepup, "_redis_client", _BrokenRedis())
+    with pytest.raises(RuntimeError, match="APP_ENV"):
+        stepup.mark_nonce_used("noncanonical-stepup", 9999999999)
+
+
+def test_rate_limit_uses_canonical_environment_resolver(monkeypatch):
+    from r6 import rate_limit
+
+    monkeypatch.setenv("APP_ENV", " Production ")
+    monkeypatch.setattr(rate_limit, "_redis_client", _BrokenRedis())
+    with pytest.raises(RuntimeError, match="APP_ENV"):
+        rate_limit.check_rate_limit("noncanonical-rate-limit")
+
+
+def test_oauth_uses_canonical_environment_resolver(monkeypatch):
+    from r6 import oauth
+
+    monkeypatch.setenv("APP_ENV", " Production ")
+    monkeypatch.setattr(oauth, "_redis_client", _BrokenRedis())
+    with pytest.raises(RuntimeError, match="APP_ENV"):
+        oauth._oauth_store_set(
+            "client", "noncanonical-oauth", {"client_id": "test"}, ttl=60
+        )
+
+
+def test_vercel_read_only_cold_start_needs_no_stateful_secrets():
+    result = _startup(
+        {
+            "VERCEL": "1",
+            "READ_ONLY_DEPLOYMENT": "1",
+            "PUBLIC_TENANTS": "desktop-demo",
+            "DISABLE_COMMAND_CENTER": "1",
+        },
+        removed=(
+            "SESSION_SECRET",
+            "STEP_UP_SECRET",
+            "REDIS_URL",
+            "SQLALCHEMY_DATABASE_URI",
+        ),
+        code="import api.index",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_vercel_contract_has_only_nonsecret_security_flags():
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    with open(os.path.join(repo_root, "vercel.json"), encoding="utf-8") as handle:
+        config = json.load(handle)
+    env = config["env"]
+    assert env["APP_ENV"] == "production"
+    assert env["READ_AUTH_ENABLED"] == "true"
+    assert env["PUBLIC_TENANTS"] == "desktop-demo"
+    assert env["DISABLE_COMMAND_CENTER"] == "1"
+    assert env["READ_ONLY_DEPLOYMENT"] == "1"
+    assert "REDIS_URL" not in env
+    assert "SESSION_SECRET" not in env
+    assert "STEP_UP_SECRET" not in env
+
+
+def test_vercel_blocks_mutating_agent_access_get(app, monkeypatch):
+    from api.index import _refuse_serverless_writes
+
+    monkeypatch.setenv("VERCEL", "1")
+    with app.test_request_context(
+        "/fasten/connections/org-123/agent-access", method="GET"
+    ):
+        response = _refuse_serverless_writes()
+    assert response is not None
+    _body, status = response
+    assert status == 405

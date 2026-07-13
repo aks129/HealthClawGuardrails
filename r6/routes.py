@@ -35,11 +35,11 @@ from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
     authorize_tenant_read,
-    public_tenants as _public_read_tenants,
     read_auth_enabled as _read_auth_enabled,
     read_auth_required as _read_auth_required,
 )
 from r6.runtime_config import resolve_app_env
+from r6.version import __version__
 from r6.rate_limit import rate_limit_middleware
 from r6.health_compliance import (
     add_disclaimer, enforce_human_in_loop, deidentify_resource,
@@ -1623,7 +1623,7 @@ def health_check():
     """
     health = {
         'status': 'healthy',
-        'version': '1.0.0',
+        'version': __version__,
         'fhirVersion': R6_FHIR_VERSION,
         'mode': 'upstream' if is_proxy_enabled() else 'local',
         'checks': {}
