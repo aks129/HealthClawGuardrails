@@ -84,6 +84,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - MCP_BASE_URL=http://agent-orchestrator:3001
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
       - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
       - REDIS_URL=redis://redis:6379/0
       - STEP_UP_SECRET=${STEP_UP_SECRET}
