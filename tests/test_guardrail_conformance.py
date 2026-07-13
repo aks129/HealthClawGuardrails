@@ -271,6 +271,69 @@ def test_local_contract_rejects_false_a_evidence():
     assert not _corrective_outcome(corrective_plus_hostile, {"invalid"})
 
 
+def test_corrective_outcome_rejects_unsafe_sibling_issue():
+    from r6.conformance.probes import (
+        _outcome_names_parameter_and_supported_set,
+    )
+
+    outcome = {
+        "resourceType": "OperationOutcome",
+        "issue": [
+            {
+                "severity": "error",
+                "code": "invalid",
+                "details": {"text": (
+                    "Unsupported parameter: datetime. Supported parameters: "
+                    "patient, code, status, _lastUpdated, _count, _sort, "
+                    "_summary, context-id."
+                )},
+            },
+            {
+                "severity": "error",
+                "code": "invalid",
+                "details": {"text": (
+                    "Use _lastUpdated instead of datetime for time filtering."
+                )},
+            },
+        ],
+    }
+
+    assert not _outcome_names_parameter_and_supported_set(outcome, "datetime")
+
+
+def test_lenient_warning_rejects_unsafe_sibling_outcome_entry():
+    from r6.conformance.probes import _has_outcome_warning
+
+    def outcome_entry(text):
+        return {
+            "search": {"mode": "outcome"},
+            "resource": {
+                "resourceType": "OperationOutcome",
+                "issue": [{
+                    "severity": "warning",
+                    "code": "not-supported",
+                    "details": {"text": text},
+                }],
+            },
+        }
+
+    bundle = {
+        "resourceType": "Bundle",
+        "entry": [
+            outcome_entry(
+                "Unsupported parameter: datetime. Supported parameters: "
+                "patient, code, status, _lastUpdated, _count, _sort, "
+                "_summary, context-id."
+            ),
+            outcome_entry(
+                "Use _lastUpdated instead of datetime for time filtering."
+            ),
+        ],
+    }
+
+    assert not _has_outcome_warning(bundle, "datetime")
+
+
 def test_lenient_audit_requires_ignored_parameter_evidence():
     from r6.conformance.probes import _new_audit_warning_grade
 

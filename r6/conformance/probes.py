@@ -502,10 +502,31 @@ def _rejection_grade(status, body, expected_status=400) -> str:
     return "C"
 
 
+def _outcome_has_unsafe_last_updated_suggestion(body) -> bool:
+    """Reject `_lastUpdated` as a proposed substitute for clinical datetime.
+
+    A supported-parameter list may name `_lastUpdated` factually. Any mention
+    elsewhere in any issue is ambiguous or unsafe correction evidence.
+    """
+    if not _is_operation_outcome(body):
+        return False
+    for issue in body.get("issue", []):
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details")
+        text = details.get("text", "") if isinstance(details, dict) else ""
+        if (isinstance(text, str)
+                and "_lastupdated" in _SUPPORTED_SET_RE.sub("", text).lower()):
+            return True
+    return False
+
+
 def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
     """A local rejection is corrective only if it identifies the bad key and
     tells the caller which search parameters are supported."""
     if not _is_operation_outcome(body):
+        return False
+    if _outcome_has_unsafe_last_updated_suggestion(body):
         return False
     for issue in body.get("issue", []):
         if not isinstance(issue, dict):
@@ -522,11 +543,6 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
         }
         parameter_lower = parameter.lower()
         remaining = text[:match.start()] + text[match.end():]
-        # `_lastUpdated` is record modification time, not clinical datetime.
-        # Any mention outside the factual supported-set list is an ambiguous or
-        # unsafe correction, so it cannot earn A.
-        if "_lastupdated" in remaining.lower():
-            continue
         parameter_token = re.escape(parameter_lower)
         rejection = re.search(
             rf"(?:^|[.!?]\s*)(?:"
@@ -615,6 +631,8 @@ def _has_outcome_warning(bundle, parameter: str) -> bool:
             continue
         outcome = entry.get("resource")
         if not _safe_warning_outcome(outcome):
+            return False
+        if _outcome_has_unsafe_last_updated_suggestion(outcome):
             return False
         saw_corrective_warning = (
             saw_corrective_warning
