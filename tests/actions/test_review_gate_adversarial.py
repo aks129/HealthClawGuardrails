@@ -6,8 +6,6 @@ that silently drops a real allergy or asserts "no known allergies" without an
 explicit human attestation. Mirrors the hands-on verification done for the SDC
 populate NKA invariant.
 """
-import json
-
 from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
