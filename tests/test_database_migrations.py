@@ -290,3 +290,49 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
     with engine.connect() as c:
         rows = list(c.execute(text("SELECT id, tenant_id FROM r6_resources")))
     assert rows == [("p1", "t1")]
+
+
+def test_legacy_create_all_upgrade_on_configured_database():
+    """The prod-down bug: a create_all-era database (real tables, no
+    alembic_version) must be ADOPTED, not re-created. Runs against whatever
+    SQLALCHEMY_DATABASE_URI is configured — the Postgres CI lane exercises the
+    real Railway scenario; elsewhere it uses a temp SQLite file."""
+    import tempfile
+    from r6.database_migrations import upgrade_database
+    import main as main_module
+    from models import db
+
+    main_module.register_model_metadata()
+
+    url = os.environ.get("SQLALCHEMY_DATABASE_URI", "")
+    is_pg = url.startswith(("postgresql://", "postgres://"))
+    if is_pg:
+        engine = create_engine(url.replace("postgres://", "postgresql://", 1))
+        with engine.begin() as c:
+            c.execute(text("DROP SCHEMA public CASCADE"))
+            c.execute(text("CREATE SCHEMA public"))
+        cleanup = engine
+    else:
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        engine = create_engine(f"sqlite:///{tmp.name}")
+        cleanup = None
+
+    try:
+        db.metadata.create_all(engine)  # pre-Alembic boot path
+        assert "alembic_version" not in inspect(engine).get_table_names()
+
+        revision = upgrade_database(engine)  # must not raise "already exists"
+
+        assert revision == "0002_current_contract"
+        assert "alembic_version" in inspect(engine).get_table_names()
+        assert upgrade_database(engine) == "0002_current_contract"  # idempotent
+        assert inspect(engine).get_pk_constraint("r6_resources")[
+            "constrained_columns"
+        ] == ["tenant_id", "resource_type", "id"]
+    finally:
+        if cleanup is not None:
+            with cleanup.begin() as c:
+                c.execute(text("DROP SCHEMA public CASCADE"))
+                c.execute(text("CREATE SCHEMA public"))
+        engine.dispose()
