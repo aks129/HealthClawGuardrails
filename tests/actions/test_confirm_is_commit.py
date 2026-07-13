@@ -312,15 +312,18 @@ def test_commit_does_not_consume_token_only_confirm_does(
 # executor result mapping at confirm
 # ---------------------------------------------------------------------------
 
-def test_unregistered_kind_fails_loud_at_confirm(client, tenant_headers,
-                                                 auth_headers, app,
-                                                 action_registry,
-                                                 fake_providers):
-    """form-fill is a VALID_KIND with no rail — proposable, but Approve
-    fails loud instead of pretending."""
+def test_form_fill_without_public_base_url_fails_loud_at_confirm(
+        client, tenant_headers, auth_headers, app, action_registry,
+        fake_providers, monkeypatch):
+    """form-fill has a registered rail (Task 3), but it's a skeleton:
+    execute() fails loud instead of pretending when PUBLIC_BASE_URL isn't
+    configured — same fail-loud contract as an unregistered kind, now
+    routed through the executor itself rather than the no-executor path."""
+    monkeypatch.delenv('PUBLIC_BASE_URL', raising=False)
     action_id = _propose(client, tenant_headers, body={
         'kind': 'form-fill',
-        'payload': {'to': 'Intake portal', 'body': 'demographics form'},
+        'payload': {'to': 'Intake portal', 'questionnaire': 'healthclaw-intake',
+                    'body': 'demographics form'},
     })
     _commit(client, auth_headers, action_id)
     resp = _confirm(client, auth_headers, action_id)
@@ -330,7 +333,7 @@ def test_unregistered_kind_fails_loud_at_confirm(client, tenant_headers,
     with app.app_context():
         row = db.session.get(ProposedAction, action_id)
         assert row.status == 'failed'
-        assert 'form-fill' in row.outcome_summary
+        assert row.outcome_summary == errors.PROVIDER_NOT_CONFIGURED
 
 
 def test_needs_review_result_maps_to_needs_review(client, tenant_headers,
