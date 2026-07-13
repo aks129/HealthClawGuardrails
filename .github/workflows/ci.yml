@@ -175,6 +175,11 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     needs: [python-tests]
+    # MCP_AUTH_TOKEN is a required compose variable (the MCP transports are
+    # auth-gated); docker compose interpolates the whole file even when only
+    # the Flask service is started, so it must be set for the lane to run.
+    env:
+      MCP_AUTH_TOKEN: ci-compose-smoke-token
     steps:
       - uses: actions/checkout@v7
 
@@ -301,6 +306,8 @@ jobs:
     env:
       STEP_UP_SECRET: ci-compliance-secret
       TENANT_ID: compliance-test
+      # Required compose variable (MCP transports are auth-gated).
+      MCP_AUTH_TOKEN: ci-compliance-token
     steps:
       - uses: actions/checkout@v7
 
