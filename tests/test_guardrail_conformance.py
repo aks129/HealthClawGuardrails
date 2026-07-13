@@ -104,6 +104,7 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
                 "strict unknown parameter is rejected",
                 "strict rejection is audited as a failure",
                 "lenient unknown parameter carries an outcome warning",
+                "lenient warning is audited truthfully",
                 "unsupported modifier is rejected",
             ],
         },
@@ -114,6 +115,7 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
         "strict unknown parameter is rejected",
         "strict rejection is audited as a failure",
         "lenient unknown parameter carries an outcome warning",
+        "lenient warning is audited truthfully",
         "unsupported modifier is rejected",
     }
     assert report.score == (6, 7)
@@ -212,7 +214,10 @@ def test_optional_mcp_profile_rejects_unsanitized_operation_outcome(
 
 
 def test_audit_correlation_uses_new_event_ids_not_only_latest_entry():
-    from r6.conformance.probes import _new_audit_outcome_grade
+    from r6.conformance.probes import (
+        _new_audit_outcome_codes,
+        _new_audit_outcome_grade,
+    )
 
     def bundle(*events):
         return {
@@ -233,6 +238,43 @@ def test_audit_correlation_uses_new_event_ids_not_only_latest_entry():
 
     assert _new_audit_outcome_grade(before, after) == "A"
     assert _new_audit_outcome_grade(before, ambiguous) == "C"
+    assert _new_audit_outcome_codes(before, ambiguous) == ["0", "8"]
+
+
+def test_proxy_a_requires_a_corrective_operation_outcome():
+    from r6.conformance.probes import _corrective_outcome
+
+    assert not _corrective_outcome(
+        {"resourceType": "OperationOutcome"}, {"invalid"})
+    assert not _corrective_outcome({
+        "resourceType": "OperationOutcome",
+        "issue": [{"severity": "error", "code": "security"}],
+    }, {"invalid"})
+    assert _corrective_outcome({
+        "resourceType": "OperationOutcome",
+        "issue": [{
+            "severity": "error",
+            "code": "invalid",
+            "details": {"text": "The request was invalid."},
+        }],
+    }, {"invalid"})
+
+
+def test_error_fidelity_crash_does_not_claim_optional_profiles_ran():
+    class BrokenLocalClient:
+        base = "broken"
+
+        def request(self, *args, **kwargs):
+            raise RuntimeError("synthetic failure")
+
+    report = run_conformance(
+        BrokenLocalClient(), ProbeContext("tenant", "token"),
+        mcp_client=object(), proxy_client=object())
+
+    result = next(r for r in report.results if r.key == "error_fidelity")
+    assert result.coverage == "local-fhir-only"
+    assert result.profiles["mcp"] == {"status": "not_run", "checks": []}
+    assert result.profiles["proxy"] == {"status": "not_run", "checks": []}
 
 
 def test_live_mcp_probe_client_initializes_then_calls_tool():

@@ -512,14 +512,25 @@ def _audit_events(bundle) -> dict[str, str]:
 
 def _new_audit_outcome_grade(before, after) -> str:
     """Grade only a uniquely correlated audit event; ambiguity is opaque."""
-    before_ids = set(_audit_events(before))
-    new_codes = [
-        code for event_id, code in _audit_events(after).items()
-        if event_id not in before_ids
-    ]
+    new_codes = _new_audit_outcome_codes(before, after)
     if len(new_codes) != 1:
         return "C"
     return "A" if new_codes[0] == "8" else ("F" if new_codes[0] == "0" else "C")
+
+
+def _new_audit_outcome_codes(before, after) -> list[str]:
+    before_ids = set(_audit_events(before))
+    return [
+        code for event_id, code in _audit_events(after).items()
+        if event_id not in before_ids
+    ]
+
+
+def _new_audit_expected_grade(before, after, expected_code: str) -> str:
+    new_codes = _new_audit_outcome_codes(before, after)
+    if len(new_codes) != 1:
+        return "C"
+    return "A" if new_codes[0] == expected_code else "F"
 
 
 def _profile(status: str, *, grade: Optional[str] = None,
@@ -530,48 +541,72 @@ def _profile(status: str, *, grade: Optional[str] = None,
     return result
 
 
+def _corrective_outcome(body, expected_codes: set[str]) -> bool:
+    if not _is_operation_outcome(body):
+        return False
+    issues = body.get("issue", [])
+    if not isinstance(issues, list) or not issues:
+        return False
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details")
+        text = details.get("text") if isinstance(details, dict) else None
+        if (issue.get("severity") in {"fatal", "error"}
+                and issue.get("code") in expected_codes
+                and isinstance(text, str)
+                and text.strip()):
+            return True
+    return False
+
+
 def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
     hostile_name = "Quintavious Zzyzxbarton"
     hostile_url = "https://db.internal.example/patient/secret"
+
+    _, audit_before, _ = proxy_client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
 
     rejected_status, rejected_body, rejected_text = proxy_client.request(
         "GET", "/Observation?__conformance_case=rejection", ctx.read_headers())
     rejected_blob = rejected_text or json.dumps(rejected_body or {})
     rejection_safe = hostile_name not in rejected_blob and hostile_url not in rejected_blob
     rejection_ok = (rejected_status == 400
-                    and _is_operation_outcome(rejected_body)
+                    and _corrective_outcome(
+                        rejected_body,
+                        {"invalid", "structure", "value", "not-supported"})
                     and rejection_safe)
     rejection_grade = ("A" if rejection_ok else
                        ("F" if rejected_status == 200 or not rejection_safe else "C"))
 
     auth_status, auth_body, _ = proxy_client.request(
         "GET", "/Patient/conformance-auth", ctx.read_headers())
-    auth_issue = (auth_body.get("issue", [{}])[0]
-                  if _is_operation_outcome(auth_body) else {})
     auth_ok = (auth_status in (401, 403, 502)
-               and _is_operation_outcome(auth_body)
-               and auth_issue.get("code") == "security")
+               and _corrective_outcome(auth_body, {"security"}))
     auth_grade = "A" if auth_ok else ("F" if auth_status in (200, 404) else "C")
 
     server_status, server_body, _ = proxy_client.request(
         "GET", "/Observation?__conformance_case=server", ctx.read_headers())
-    server_ok = server_status >= 500 and _is_operation_outcome(server_body)
+    server_ok = (server_status >= 500
+                 and _corrective_outcome(
+                     server_body, {"exception", "transient", "processing"}))
     server_grade = "A" if server_ok else ("F" if server_status == 200 else "C")
 
     timeout_status, timeout_body, _ = proxy_client.request(
         "GET", "/Observation?__conformance_case=timeout", ctx.read_headers())
-    timeout_ok = timeout_status >= 500 and _is_operation_outcome(timeout_body)
+    timeout_ok = (timeout_status >= 500
+                  and _corrective_outcome(timeout_body, {"timeout", "transient"}))
     timeout_grade = "A" if timeout_ok else ("F" if timeout_status == 200 else "C")
 
-    _, audit_body, _ = proxy_client.request(
-        "GET", "/AuditEvent?entity-type=Observation&_count=3", ctx.read_headers())
-    audit_codes = _audit_outcome_codes(audit_body)
-    audit_blob = json.dumps(audit_body or {})
+    _, audit_after, _ = proxy_client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
+    audit_codes = _new_audit_outcome_codes(audit_before, audit_after)
+    audit_blob = json.dumps(audit_after or {})
     audit_safe = hostile_name not in audit_blob and hostile_url not in audit_blob
-    audit_ok = (len(audit_codes) >= 3
-                and all(code == "8" for code in audit_codes[:3])
+    audit_ok = (len(audit_codes) == 3
+                and all(code == "8" for code in audit_codes)
                 and audit_safe)
-    audit_grade = "A" if audit_ok else ("F" if "0" in audit_codes[:2] else "C")
+    audit_grade = "A" if audit_ok else ("F" if "0" in audit_codes else "C")
 
     grade = _error_fidelity_grade([
         rejection_grade, auth_grade, server_grade, timeout_grade, audit_grade,
@@ -692,12 +727,18 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
     if strict_status == 200:
         audit_grade = "F"
 
+    _, lenient_audit_before, _ = client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     lenient_status, lenient_body, _ = client.request(
         "GET", "/Observation?datetime=x", ctx.read_headers())
+    _, lenient_audit_after, _ = client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     lenient_ok = (lenient_status == 200
                   and _has_outcome_warning(lenient_body)
                   and _self_link_omits(lenient_body, "datetime"))
     lenient_grade = "A" if lenient_ok else ("F" if lenient_status == 200 else "C")
+    lenient_audit_grade = _new_audit_expected_grade(
+        lenient_audit_before, lenient_audit_after, "0")
 
     modifier_status, modifier_body, _ = client.request(
         "GET", "/Observation?code:exact=x", ctx.read_headers())
@@ -711,7 +752,8 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
     ])
 
     local_grade = _error_fidelity_grade([
-        strict_grade, audit_grade, lenient_grade, modifier_grade,
+        strict_grade, audit_grade, lenient_grade, lenient_audit_grade,
+        modifier_grade,
     ])
     checks = [
         Check("strict unknown parameter is rejected", strict_grade == "A",
@@ -721,6 +763,9 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
         Check("lenient unknown parameter carries an outcome warning",
               lenient_grade == "A",
               f"grade {lenient_grade}; status {lenient_status}"),
+        Check("lenient warning is audited truthfully",
+              lenient_audit_grade == "A",
+              f"grade {lenient_audit_grade}"),
         Check("unsupported modifier is rejected", modifier_grade == "A",
               f"grade {modifier_grade}; statuses "
               f"{modifier_status},{modifier_strict_status}"),
@@ -745,7 +790,13 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
             f"grade {mcp_grade}"))
 
     if proxy_client is not None:
-        proxy_grade, proxy_checks = _proxy_profile(proxy_client, ctx)
+        try:
+            proxy_grade, proxy_checks = _proxy_profile(proxy_client, ctx)
+        except Exception as exc:
+            proxy_grade = "F"
+            proxy_checks = [
+                Check("proxy profile executed", False, type(exc).__name__)
+            ]
         profiles["proxy"] = _profile(
             "run", grade=proxy_grade,
             checks=[check.name for check in proxy_checks])
@@ -792,10 +843,8 @@ def run_conformance(client, ctx: ProbeContext, *, mcp_client=None,
             grade="F", coverage="local-fhir-only",
             profiles={
                 "local": _profile("run", grade="F", checks=["probe executed"]),
-                "mcp": (_profile("run", grade="F", checks=["probe executed"])
-                        if mcp_client is not None else _profile("not_run")),
-                "proxy": (_profile("run", grade="F", checks=["probe executed"])
-                          if proxy_client is not None else _profile("not_run")),
+                "mcp": _profile("not_run"),
+                "proxy": _profile("not_run"),
             }))
     return ConformanceReport(results, base=getattr(client, "base", ""),
                              tenant=ctx.tenant)
