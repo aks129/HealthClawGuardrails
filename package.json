@@ -1,0 +1,11 @@
+{
+  "name": "healthclaw-guardrails-mcp",
+  "version": "1.8.0",
+  "private": true,
+  "description": "Root entry for the HealthClaw Guardrails MCP stdio server. Delegates to services/agent-orchestrator so MCP catalogs (Glama, the MCP registry, Claude Desktop) that expect `npm start` at the repository root launch the stdio transport, which lists all tools without a live FHIR backend.",
+  "license": "MIT",
+  "scripts": {
+    "build": "cd services/agent-orchestrator && npm ci && npm run build",
+    "start": "node services/agent-orchestrator/dist/stdio.js"
+  }
+}
