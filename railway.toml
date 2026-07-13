@@ -20,9 +20,13 @@ healthcheckPath = "/r6/fhir/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+# Railway's preDeployCommand accepts at most ONE element — a multi-element
+# array is a config parse error that fails the whole deploy before anything
+# runs. Chain both steps in a single command: migrate first, then seed only if
+# the migration succeeded (&&). Seeding stays separate from the migration
+# transaction and is never run by WSGI imports.
 preDeployCommand = [
-  "flask --app main init-db",
-  "flask --app main seed-demo --tenant-id desktop-demo",
+  "flask --app main init-db && flask --app main seed-demo --tenant-id desktop-demo",
 ]
 
 # This Railway project is the explicit public synthetic desktop demo. Seeding

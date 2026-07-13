@@ -125,10 +125,17 @@ def test_deploy_configs_run_migrations_before_web_processes():
     }
 
     railway = (ROOT / "railway.toml").read_text()
-    migrate = '"flask --app main init-db"'
-    seed = '"flask --app main seed-demo --tenant-id desktop-demo"'
     assert "preDeployCommand" in railway
-    assert railway.index(migrate) < railway.index(seed)
+    # Migration must run before seeding. They are chained in ONE preDeploy
+    # command because Railway's preDeployCommand accepts at most one element —
+    # a multi-element array is a config parse error that fails the deploy.
+    assert railway.index("flask --app main init-db") < railway.index(
+        "flask --app main seed-demo --tenant-id desktop-demo"
+    )
+    import tomllib
+    pre = tomllib.loads(railway)["deploy"]["preDeployCommand"]
+    assert isinstance(pre, list) and len(pre) == 1, pre
+    assert "&&" in pre[0]
     assert "SEED_DEMO_TENANT" not in railway
 
 
