@@ -47,6 +47,95 @@ def test_populate_by_id(client, app, tenant_id, tenant_headers):
     assert qr["item"][0]["answer"][0]["valueString"] == "Ada"
 
 
+def test_populate_auto_loads_medications_allergies_conditions(
+        client, app, tenant_id, tenant_headers):
+    """$populate over the API (not just the pure populate_questionnaire
+    function) should auto-load a patient's MedicationRequest/
+    AllergyIntolerance/Condition resources from the tenant store, the same
+    way it already auto-loads Observations — the forms rail isn't complete
+    if a caller has to hand-assemble a content Bundle just to see a
+    patient's med list.
+    """
+    _store(app, {"resourceType": "Patient", "id": "p1",
+                 "name": [{"given": ["Ada"]}]}, tenant_id)
+    _store(app, {"resourceType": "MedicationRequest", "id": "m1",
+                 "status": "active", "intent": "order",
+                 "subject": {"reference": "Patient/p1"},
+                 "medicationCodeableConcept": {"text": "Metformin"}},
+           tenant_id)
+    _store(app, {"resourceType": "AllergyIntolerance", "id": "a1",
+                 "patient": {"reference": "Patient/p1"},
+                 "code": {"text": "Penicillin"}}, tenant_id)
+    _store(app, {"resourceType": "Condition", "id": "c1",
+                 "subject": {"reference": "Patient/p1"},
+                 "clinicalStatus": {"coding": [{"code": "active"}]},
+                 "verificationStatus": {"coding": [{"code": "confirmed"}]},
+                 "code": {"text": "Type 2 diabetes"}}, tenant_id)
+    _store(app, {"resourceType": "Questionnaire", "id": "healthclaw-intake",
+                 "status": "active",
+                 "item": [
+                     {"linkId": "medications", "type": "group", "item": [
+                         {"linkId": "medications.item", "type": "group",
+                          "repeats": True, "item": [
+                              {"linkId": "medications.item.name",
+                               "type": "string",
+                               "definition":
+                                   "http://hl7.org/fhir/StructureDefinition/"
+                                   "MedicationRequest#MedicationRequest."
+                                   "medicationCodeableConcept.text"}]}]},
+                     {"linkId": "allergies", "type": "group", "item": [
+                         {"linkId": "allergies.no-known-allergies",
+                          "type": "boolean"},
+                         {"linkId": "allergies.item", "type": "group",
+                          "repeats": True, "item": [
+                              {"linkId": "allergies.item.allergen",
+                               "type": "string",
+                               "definition":
+                                   "http://hl7.org/fhir/StructureDefinition/"
+                                   "AllergyIntolerance#AllergyIntolerance."
+                                   "code.text"}]}]},
+                     {"linkId": "conditions", "type": "group", "item": [
+                         {"linkId": "conditions.item", "type": "group",
+                          "repeats": True, "item": [
+                              {"linkId": "conditions.item.name",
+                               "type": "string",
+                               "definition":
+                                   "http://hl7.org/fhir/StructureDefinition/"
+                                   "Condition#Condition.code.text"}]}]},
+                 ]},
+           tenant_id)
+
+    resp = client.post(
+        "/r6/fhir/Questionnaire/healthclaw-intake/$populate",
+        headers=tenant_headers,
+        json={"resourceType": "Parameters",
+              "parameter": [{"name": "subject",
+                             "valueReference": {"reference": "Patient/p1"}}]},
+    )
+
+    assert resp.status_code == 200
+    qr = _param(resp.get_json(), "response")
+
+    def by_link_id(items, link_id):
+        for item in items:
+            if item["linkId"] == link_id:
+                return item
+            if "item" in item:
+                found = by_link_id(item["item"], link_id)
+                if found:
+                    return found
+        return None
+
+    med_name = by_link_id(qr["item"], "medications.item.name")
+    assert med_name["answer"][0]["valueString"] == "Metformin"
+    allergen = by_link_id(qr["item"], "allergies.item.allergen")
+    assert allergen["answer"][0]["valueString"] == "Penicillin"
+    nka = by_link_id(qr["item"], "allergies.no-known-allergies")
+    assert "answer" not in nka
+    condition_name = by_link_id(qr["item"], "conditions.item.name")
+    assert condition_name["answer"][0]["valueString"] == "Type 2 diabetes"
+
+
 def test_extract_requires_step_up(client, tenant_headers):
     resp = client.post(
         "/r6/fhir/QuestionnaireResponse/$extract",

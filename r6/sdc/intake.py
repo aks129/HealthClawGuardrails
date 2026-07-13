@@ -12,9 +12,11 @@ Sections:
   - medications / allergies / conditions: repeating `<section>.item` groups
     structured with `definition` pointing at the relevant resource type
     (MedicationRequest / AllergyIntolerance / Condition). They intentionally
-    carry NO initialExpression yet — populate.py only matches Observations
-    by item.code and Patient-rooted FHIRPath today. Wiring these groups to
-    fill one repeat per matching list resource is Task 2.
+    carry NO initialExpression — populate.py (Task 2) fills them by matching
+    `definition` against list resources in the supplied content directly,
+    emitting one repeat per matching resource (see
+    r6/sdc/populate.py:_populate_list_group and
+    tests/test_populate_lists.py).
 
 NKA (no-known-allergies) invariant — READ THIS BEFORE TOUCHING
 `allergies.no-known-allergies`:
@@ -24,10 +26,14 @@ NKA (no-known-allergies) invariant — READ THIS BEFORE TOUCHING
     initialExpression, because silence about allergies is not consent —
     a default here would let the form-fill rail present "no known
     allergies" for a patient who was simply never asked, which is a
-    patient-safety hazard. Task 2's list-resource population must not
-    touch this item; it stays operator/patient-entered only.
+    patient-safety hazard. List-resource population (Task 2) never touches
+    this item — it only fills the repeating `allergies.item` group, and
+    zero AllergyIntolerance resources simply means zero repeats, never an
+    inferred answer here. It stays operator/patient-entered only.
     Enforced by tests/test_intake_questionnaire.py::
-    test_no_known_allergies_invariant_never_defaulted.
+    test_no_known_allergies_invariant_never_defaulted and
+    tests/test_populate_lists.py::
+    test_zero_allergies_never_infers_no_known_allergies.
 """
 
 import copy
@@ -43,8 +49,11 @@ INITIAL_EXPRESSION_URL = (
 # to Patient because demographics is the only section that both populates
 # and extracts correctly today. The `definition` values on the medications /
 # allergies / conditions items point at their real target resource types
-# (MedicationRequest / AllergyIntolerance / Condition) for Task 2 to wire up;
-# until then those items simply won't have answers for extract to touch.
+# (MedicationRequest / AllergyIntolerance / Condition) and populate.py (Task
+# 2) does fill answers for them from list resources — but extract.py's
+# single-target-type limitation means writing those answers back out to
+# MedicationRequest/AllergyIntolerance/Condition resources is still future
+# work, not this task.
 DEFINITION_EXTRACT_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
     "sdc-questionnaire-definitionExtract"
