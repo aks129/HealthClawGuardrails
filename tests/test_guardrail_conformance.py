@@ -97,9 +97,18 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
     assert result.grade == "F"
     assert result.coverage == "local-fhir-only"
     assert result.profiles == {
-        "local": {"status": "run", "grade": "F"},
-        "mcp": {"status": "not_run"},
-        "proxy": {"status": "not_run"},
+        "local": {
+            "status": "run",
+            "grade": "F",
+            "checks": [
+                "strict unknown parameter is rejected",
+                "strict rejection is audited as a failure",
+                "lenient unknown parameter carries an outcome warning",
+                "unsupported modifier is rejected",
+            ],
+        },
+        "mcp": {"status": "not_run", "checks": []},
+        "proxy": {"status": "not_run", "checks": []},
     }
     assert {check.name for check in result.checks} == {
         "strict unknown parameter is rejected",
@@ -117,7 +126,7 @@ def test_optional_mcp_profile_records_status_only_errors_as_c(client, tenant_id,
     class StatusOnlyMCPClient:
         def call_tool(self, name, arguments):
             assert name == "fhir_search"
-            assert arguments["resource_type"] == "Widget"
+            assert arguments["resource_type"] == "WidgetQuintaviousZzyzxbarton"
             return {
                 "content": [{
                     "type": "text",
@@ -132,7 +141,10 @@ def test_optional_mcp_profile_records_status_only_errors_as_c(client, tenant_id,
     result = next(r for r in report.results if r.key == "error_fidelity")
     assert result.grade == "F"  # local F is weaker than MCP C
     assert result.coverage == "local+mcp"
-    assert result.profiles["mcp"] == {"status": "run", "grade": "C"}
+    assert result.profiles["mcp"] == {
+        "status": "run", "grade": "C",
+        "checks": ["MCP tool failure is corrective and flagged"],
+    }
     assert any(c.name == "MCP tool failure is corrective and flagged"
                for c in result.checks)
 
@@ -163,7 +175,64 @@ def test_optional_mcp_profile_accepts_flagged_operation_outcome(
         mcp_client=CorrectiveMCPClient())
 
     result = next(r for r in report.results if r.key == "error_fidelity")
-    assert result.profiles["mcp"] == {"status": "run", "grade": "A"}
+    assert result.profiles["mcp"] == {
+        "status": "run", "grade": "A",
+        "checks": ["MCP tool failure is corrective and flagged"],
+    }
+
+
+def test_optional_mcp_profile_rejects_unsanitized_operation_outcome(
+        client, tenant_id, step_up_token):
+    class UnsafeMCPClient:
+        def call_tool(self, name, arguments):
+            return {
+                "isError": True,
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps({
+                        "resourceType": "OperationOutcome",
+                        "issue": [{
+                            "severity": "error",
+                            "code": "not-supported",
+                            "details": {"text": "Patient Quintavious Zzyzxbarton"},
+                            "diagnostics": "https://db.internal.example/secret",
+                        }],
+                    }),
+                }],
+            }
+
+    import json
+
+    report = run_conformance(
+        FlaskProbeClient(client), _ctx(None, tenant_id, step_up_token),
+        mcp_client=UnsafeMCPClient())
+
+    result = next(r for r in report.results if r.key == "error_fidelity")
+    assert result.profiles["mcp"]["grade"] != "A"
+
+
+def test_audit_correlation_uses_new_event_ids_not_only_latest_entry():
+    from r6.conformance.probes import _new_audit_outcome_grade
+
+    def bundle(*events):
+        return {
+            "resourceType": "Bundle",
+            "entry": [
+                {"resource": {
+                    "resourceType": "AuditEvent",
+                    "id": event_id,
+                    "outcome": {"code": {"code": outcome}},
+                }}
+                for event_id, outcome in events
+            ],
+        }
+
+    before = bundle(("old", "0"))
+    after = bundle(("probe", "8"), ("old", "0"))
+    ambiguous = bundle(("concurrent", "0"), ("probe", "8"), ("old", "0"))
+
+    assert _new_audit_outcome_grade(before, after) == "A"
+    assert _new_audit_outcome_grade(before, ambiguous) == "C"
 
 
 def test_live_mcp_probe_client_initializes_then_calls_tool():
@@ -270,10 +339,26 @@ def test_injected_mock_proxy_profile_passes_the_full_error_contract(
     result = next(r for r in report.results if r.key == "error_fidelity")
     assert result.grade == "F"  # local F remains the weakest profile
     assert result.coverage == "local+proxy"
-    assert result.profiles["proxy"] == {"status": "run", "grade": "A"}
+    assert result.profiles["proxy"] == {
+        "status": "run", "grade": "A",
+        "checks": [
+            "proxy rejection preserves sanitized outcome",
+            "proxy auth failure is not not-found",
+            "proxy server failure is truthful",
+            "proxy timeout is truthful",
+            "proxy failure audit is truthful",
+        ],
+    }
     proxy_checks = [c for c in result.checks if c.name.startswith("proxy ")]
     assert proxy_checks and all(c.passed for c in proxy_checks)
     assert hostile_name not in json.dumps(result.profiles)
     assert hostile_url not in report.render()
     assert hostile_name not in caplog.text
     assert hostile_url not in caplog.text
+    from r6.models import AuditEventRecord
+    details = [
+        event.detail or ""
+        for event in AuditEventRecord.query.filter_by(tenant_id=tenant_id).all()
+    ]
+    assert all(hostile_name not in detail for detail in details)
+    assert all(hostile_url not in detail for detail in details)

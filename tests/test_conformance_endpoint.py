@@ -21,7 +21,8 @@ def test_conformance_endpoint_grades_the_live_app(client):
         p for p in body["properties"] if p["key"] == "error_fidelity")
     assert error_fidelity["grade"] == "F"
     assert error_fidelity["coverage"] == "local-fhir-only"
-    assert error_fidelity["profiles"]["proxy"] == {"status": "not_run"}
+    assert error_fidelity["profiles"]["proxy"] == {
+        "status": "not_run", "checks": []}
 
 
 def test_conformance_endpoint_text_format(client):
