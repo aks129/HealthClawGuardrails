@@ -167,6 +167,11 @@ from r6.actions.routes import actions_blueprint
 from r6.actions.registry import all_kinds as _action_kinds
 import r6.actions.rails
 r6.actions.rails.register_all()
+# Import for side effect: registers the /<id>/review GET+POST routes on
+# actions_blueprint (Task 6 structured per-item review page). MUST precede
+# register_blueprint — routes can't be added to a blueprint after it is
+# registered on the app.
+import r6.actions.review  # noqa: F401
 app.register_blueprint(actions_blueprint)
 logger.info("Actions Blueprint registered at /r6/actions (rails: %s)",
             ', '.join(_action_kinds()))

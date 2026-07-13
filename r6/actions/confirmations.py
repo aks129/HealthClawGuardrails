@@ -10,7 +10,7 @@ from datetime import timedelta
 from models import db
 from r6.actions.models import _utcnow
 
-APPROVED_VIA_VALUES = ('telegram', 'dashboard')
+APPROVED_VIA_VALUES = ('telegram', 'dashboard', 'review-page')
 
 
 class ActionConfirmation(db.Model):
