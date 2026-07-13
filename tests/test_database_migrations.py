@@ -214,3 +214,125 @@ def test_postgres_fresh_install_and_v1_8_upgrade_path():
             connection.execute(text("DROP SCHEMA public CASCADE"))
             connection.execute(text("CREATE SCHEMA public"))
         engine.dispose()
+
+
+def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
+    """THE PROD UPGRADE PATH: every deployed database predating #103 was built
+    by db.create_all() and has real tables but NO alembic_version. Running the
+    baseline migration against it dies with 'table already exists' (found live:
+    the compose migrate service failed exactly this way on a reused volume).
+    upgrade_database() must detect that state, STAMP the baseline, and then
+    upgrade to head — 0002 reconciles drift idempotently (inspects first)."""
+    from r6.database_migrations import upgrade_database
+    import main as main_module  # registers every model on db.metadata
+    from models import db
+
+    main_module.register_model_metadata()
+    url = f"sqlite:///{tmp_path / 'legacy.db'}"
+    engine = create_engine(url)
+    db.metadata.create_all(engine)  # what every pre-Alembic deploy did at boot
+
+    inspector = inspect(engine)
+    assert "r6_resources" in inspector.get_table_names()
+    assert "alembic_version" not in inspector.get_table_names()
+
+    revision = upgrade_database(engine)  # must NOT raise 'already exists'
+
+    assert revision == "0002_current_contract"
+    inspector = inspect(engine)
+    assert "alembic_version" in inspector.get_table_names()
+    # And it must be repeatable (deploys run it every release).
+    assert upgrade_database(engine) == "0002_current_contract"
+
+
+def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
+    """A pre-W0 SQLite deployment (docker-compose default) has r6_resources
+    with an UNNAMED single-column primary key, VARCHAR(64) id, and nullable
+    tenant_id. 0002 must rebuild it to the composite identity without dying on
+    'No such constraint' (found live: compose migrate failed exactly here on a
+    reused volume)."""
+    from r6.database_migrations import upgrade_database
+    import main as main_module
+    from models import db
+
+    main_module.register_model_metadata()
+    url = f"sqlite:///{tmp_path / 'pre-w0.db'}"
+    engine = create_engine(url)
+    # Realistic legacy state: the complete schema the old boot path built,
+    # with r6_resources swapped for its pre-W0 shape (single unnamed PK,
+    # 64-char id, nullable tenant). A DB missing whole tables is older than
+    # any supported deployment — 0002 fails loud there by design.
+    db.metadata.create_all(engine)
+    with engine.begin() as c:
+        c.execute(text("DROP TABLE r6_resources"))
+        c.execute(text(
+            "CREATE TABLE r6_resources ("
+            " id VARCHAR(64) NOT NULL PRIMARY KEY,"
+            " resource_type VARCHAR(64) NOT NULL,"
+            " tenant_id VARCHAR(64),"
+            " resource_json TEXT NOT NULL,"
+            " version_id INTEGER,"
+            " last_updated DATETIME)"
+        ))
+        c.execute(text(
+            "INSERT INTO r6_resources (id, resource_type, tenant_id,"
+            " resource_json, version_id) VALUES"
+            " ('p1', 'Patient', 't1', '{}', 1)"
+        ))
+
+    revision = upgrade_database(engine)
+    assert revision == "0002_current_contract"
+
+    inspector = inspect(engine)
+    pk = inspector.get_pk_constraint("r6_resources")
+    assert pk["constrained_columns"] == ["tenant_id", "resource_type", "id"]
+    # Data survives the rebuild.
+    with engine.connect() as c:
+        rows = list(c.execute(text("SELECT id, tenant_id FROM r6_resources")))
+    assert rows == [("p1", "t1")]
+
+
+def test_legacy_create_all_upgrade_on_configured_database():
+    """The prod-down bug: a create_all-era database (real tables, no
+    alembic_version) must be ADOPTED, not re-created. Runs against whatever
+    SQLALCHEMY_DATABASE_URI is configured — the Postgres CI lane exercises the
+    real Railway scenario; elsewhere it uses a temp SQLite file."""
+    import tempfile
+    from r6.database_migrations import upgrade_database
+    import main as main_module
+    from models import db
+
+    main_module.register_model_metadata()
+
+    url = os.environ.get("SQLALCHEMY_DATABASE_URI", "")
+    is_pg = url.startswith(("postgresql://", "postgres://"))
+    if is_pg:
+        engine = create_engine(url.replace("postgres://", "postgresql://", 1))
+        with engine.begin() as c:
+            c.execute(text("DROP SCHEMA public CASCADE"))
+            c.execute(text("CREATE SCHEMA public"))
+        cleanup = engine
+    else:
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        engine = create_engine(f"sqlite:///{tmp.name}")
+        cleanup = None
+
+    try:
+        db.metadata.create_all(engine)  # pre-Alembic boot path
+        assert "alembic_version" not in inspect(engine).get_table_names()
+
+        revision = upgrade_database(engine)  # must not raise "already exists"
+
+        assert revision == "0002_current_contract"
+        assert "alembic_version" in inspect(engine).get_table_names()
+        assert upgrade_database(engine) == "0002_current_contract"  # idempotent
+        assert inspect(engine).get_pk_constraint("r6_resources")[
+            "constrained_columns"
+        ] == ["tenant_id", "resource_type", "id"]
+    finally:
+        if cleanup is not None:
+            with cleanup.begin() as c:
+                c.execute(text("DROP SCHEMA public CASCADE"))
+                c.execute(text("CREATE SCHEMA public"))
+        engine.dispose()

@@ -73,7 +73,14 @@ def _upgrade_resource_identity() -> None:
         if not needs_rebuild:
             return
         constraint_name = pk.get("name") or "pk_r6_resources_legacy"
-        with op.batch_alter_table("r6_resources", recreate="always") as batch:
+        batch_kwargs = {"recreate": "always"}
+        if not pk.get("name"):
+            # A legacy-boot-era SQLite PK is unnamed; drop_constraint would
+            # raise "No such constraint". Alembic's documented recipe: give
+            # reflection a naming convention so the legacy PK gets exactly the
+            # deterministic name we then drop.
+            batch_kwargs["naming_convention"] = {"pk": "pk_%(table_name)s_legacy"}
+        with op.batch_alter_table("r6_resources", **batch_kwargs) as batch:
             batch.alter_column(
                 "id",
                 existing_type=sa.String(64),

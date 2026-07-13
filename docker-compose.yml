@@ -15,11 +15,24 @@ services:
       - FHIR_VALIDATOR_URL=${FHIR_VALIDATOR_URL:-http://localhost:8080}
       - REDIS_URL=redis://redis:6379/0
       - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+      # Read authorization (hardening): when enabled, non-public tenants
+      # require a tenant-bound step-up token / OAuth read scope on reads.
+      # PUBLIC_TENANTS is the explicit allowlist that may be read anonymously.
+      - READ_AUTH_ENABLED=${READ_AUTH_ENABLED:-}
+      - PUBLIC_TENANTS=${PUBLIC_TENANTS:-desktop-demo}
+      # SMART OAuth token signing (hardening). Falls back to STEP_UP_SECRET
+      # when unset so local tokens still validate.
+      - OAUTH_SECRET=${OAUTH_SECRET:-}
+      - OAUTH_ISSUER=${OAUTH_ISSUER:-}
       # Upstream FHIR server proxy (set to connect to real data)
       # Examples: https://hapi.fhir.org/baseR4, https://r4.smarthealthit.org
       - FHIR_UPSTREAM_URL=${FHIR_UPSTREAM_URL:-}
       - FHIR_UPSTREAM_TIMEOUT=${FHIR_UPSTREAM_TIMEOUT:-15}
       - FHIR_LOCAL_BASE_URL=http://localhost:5000/r6/fhir
+      # Base URL for links handed to humans (form-fill delivery links, action
+      # webhook callbacks). The form-fill rail fails loud without it — give
+      # the local stack a working default; real deployments set their host.
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://127.0.0.1:${HOST_PORT:-5000}}
       # Fasten Connect (https://docs.connect.fastenhealth.com)
       - FASTEN_PUBLIC_KEY=${FASTEN_PUBLIC_KEY:-}
       - FASTEN_PRIVATE_KEY=${FASTEN_PRIVATE_KEY:-}
