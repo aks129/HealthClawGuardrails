@@ -167,6 +167,13 @@ describe("Tool Schema Tests", () => {
     expect(schemas).toHaveLength(29);
   });
 
+  it("describes error fidelity as the seventh conformance property", () => {
+    const schema = schemas.find((tool) => tool.name === "guardrail_conformance");
+
+    expect(schema?.description).toContain("seven guardrail properties");
+    expect(schema?.description).toContain("error fidelity");
+  });
+
   it("defaults to a registry without token-mint and seed tools", () => {
     const restrictedTools = new FHIRTools("http://localhost:5000/r6/fhir");
     const names = restrictedTools.getMCPToolSchemas().map((tool) => tool.name);

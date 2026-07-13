@@ -31,6 +31,9 @@ def test_conformance_endpoint_text_format(client):
     text = r.get_data(as_text=True)
     assert "Grade: B" in text and "PHI Redaction" in text
     assert "Error Fidelity — F (local-fhir-only)" in text
+    assert "local: run — F" in text
+    assert "mcp: not_run" in text
+    assert "proxy: not_run" in text
     assert "PHI Redaction — A (full)" not in text
 
 
@@ -48,6 +51,7 @@ def test_conformance_shields_badge_format(client):
     assert b["label"] == "guardrail conformance"
     assert b["message"] == "B (6/7; error fidelity F, local-fhir-only)"
     assert b["color"] == "yellow"
+    assert set(b) == {"schemaVersion", "label", "message", "color"}
 
 
 def test_conformance_is_cached_between_calls(client):

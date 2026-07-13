@@ -612,6 +612,7 @@ def test_live_mcp_probe_client_initializes_then_calls_tool():
         session=session,
         tenant="tenant-a",
         step_up_token="synthetic-token",
+        mcp_auth_token="synthetic-mcp-transport-token",
     )
     result = client.call_tool("fhir_search", {"resource_type": "Widget"})
 
@@ -621,6 +622,11 @@ def test_live_mcp_probe_client_initializes_then_calls_tool():
     assert session.calls[2][1]["headers"]["Mcp-Session-Id"] == "session-1"
     assert session.calls[2][1]["headers"]["X-Tenant-Id"] == "tenant-a"
     assert session.calls[2][1]["headers"]["X-Step-Up-Token"] == "synthetic-token"
+    assert all(
+        call[1]["headers"]["Authorization"]
+        == "Bearer synthetic-mcp-transport-token"
+        for call in session.calls
+    )
     assert session.calls[2][1]["json"]["method"] == "tools/call"
 
 
@@ -680,10 +686,10 @@ def test_local_error_probes_always_bound_searches_to_a_synthetic_subject():
         base = "recording"
 
         def __init__(self):
-            self.paths = []
+            self.calls = []
 
         def request(self, method, path, headers=None, json_body=None):
-            self.paths.append(path)
+            self.calls.append((path, (headers or {}).get("Prefer")))
             if path.startswith("/AuditEvent"):
                 return 200, {"resourceType": "Bundle", "entry": []}, ""
             return 200, {
@@ -696,9 +702,12 @@ def test_local_error_probes_always_bound_searches_to_a_synthetic_subject():
     probe_error_fidelity(client, ProbeContext("tenant", "token"))
 
     observation_paths = [
-        path for path in client.paths if path.startswith("/Observation?")]
+        path for path, _ in client.calls if path.startswith("/Observation?")]
     assert observation_paths
     assert all("patient=" in path for path in observation_paths)
+    modifier_preferences = [
+        prefer for path, prefer in client.calls if "code%3Aexact" in path]
+    assert modifier_preferences == [None, "handling=strict", "handling=lenient"]
 
 
 def test_scripted_local_contract_can_reach_a_without_reading_real_data():

@@ -174,6 +174,16 @@ class ConformanceReport:
             if r.grade is not None:
                 label += f" — {r.effective_grade} ({r.coverage})"
             lines.append(f"  [{'PASS' if r.passed else 'FAIL'}] {label}")
+            for profile_name, profile in r.profiles.items():
+                status = profile.get("status", "unknown")
+                profile_grade = profile.get("grade")
+                grade_suffix = f" — {profile_grade}" if profile_grade else ""
+                lines.append(
+                    f"        {profile_name}: {status}{grade_suffix}")
+                profile_checks = profile.get("checks", [])
+                if profile_checks:
+                    lines.append(
+                        f"          checks: {', '.join(profile_checks)}")
             for c in r.checks:
                 mark = "✓" if c.passed else "✗"
                 suffix = f" — {c.detail}" if c.detail and not c.passed else ""
@@ -274,7 +284,8 @@ def _mcp_response_json(response, expected_id=None) -> dict:
 class LiveMCPProbeClient:
     """Small Streamable HTTP MCP client used only by optional conformance probes."""
 
-    def __init__(self, mcp_url, session=None, tenant=None, step_up_token=None):
+    def __init__(self, mcp_url, session=None, tenant=None, step_up_token=None,
+                 mcp_auth_token=None):
         import requests
         self._url = mcp_url.rstrip("/")
         self._s = session or requests.Session()
@@ -282,6 +293,7 @@ class LiveMCPProbeClient:
         self._protocol_version = "2025-06-18"
         self._tenant = tenant
         self._step_up_token = step_up_token
+        self._mcp_auth_token = mcp_auth_token
 
     def _headers(self):
         headers = {
@@ -295,6 +307,8 @@ class LiveMCPProbeClient:
             headers["X-Tenant-Id"] = self._tenant
         if self._step_up_token:
             headers["X-Step-Up-Token"] = self._step_up_token
+        if self._mcp_auth_token:
+            headers["Authorization"] = f"Bearer {self._mcp_auth_token}"
         return headers
 
     def _initialize(self):
@@ -951,8 +965,14 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
         "GET", f"/Observation?{modifier_query}", strict_headers)
     modifier_strict_grade = _rejection_grade(
         modifier_strict_status, modifier_strict_body)
+    lenient_headers = ctx.read_headers()
+    lenient_headers["Prefer"] = "handling=lenient"
+    modifier_lenient_status, modifier_lenient_body, _ = client.request(
+        "GET", f"/Observation?{modifier_query}", lenient_headers)
+    modifier_lenient_grade = _rejection_grade(
+        modifier_lenient_status, modifier_lenient_body)
     modifier_grade = _error_fidelity_grade([
-        modifier_grade, modifier_strict_grade,
+        modifier_grade, modifier_strict_grade, modifier_lenient_grade,
     ])
 
     local_grade = _error_fidelity_grade([
@@ -972,7 +992,8 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
               f"grade {lenient_audit_grade}"),
         Check("unsupported modifier is rejected", modifier_grade == "A",
               f"grade {modifier_grade}; statuses "
-              f"{modifier_status},{modifier_strict_status}"),
+              f"{modifier_status},{modifier_strict_status},"
+              f"{modifier_lenient_status}"),
     ]
     local_check_names = [check.name for check in checks]
     profiles = {

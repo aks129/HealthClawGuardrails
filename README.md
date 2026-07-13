@@ -142,7 +142,8 @@ properties pass while local search still accepts unsupported filters. The same
 harness runs against the Flask test client as a **CI baseline**
 (`tests/test_guardrail_conformance.py`), so grade movement is explicit rather
 than hidden. `--json` emits a machine-readable report; `--mcp-url` also probes
-MCP `tools/call` error signaling. Library API:
+MCP `tools/call` error signaling. For an authenticated MCP deployment, set
+`MCP_AUTH_TOKEN` or pass `--mcp-auth-token`. Library API:
 `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
 
 ## Install as a Claude Plugin
