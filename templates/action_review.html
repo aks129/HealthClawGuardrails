@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Review your intake form — HealthClaw Guardrails{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+
+    <div class="d-flex align-items-center mb-3">
+      <i class="fas fa-clipboard-check me-2" style="color:var(--r6-primary);font-size:1.6rem"></i>
+      <div>
+        <h2 class="mb-0">Review each item before we generate your form</h2>
+        <p class="text-muted mb-0">
+          Nothing is submitted until you confirm every medication and allergy
+          below. "No known allergies" is never assumed on your behalf.
+        </p>
+      </div>
+    </div>
+
+    <form id="review-form" method="post"
+          action="/r6/actions/{{ action_id }}/review">
+
+      <!-- Demographics: read-only, straight from your records -->
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="fas fa-id-card me-2"></i>Demographics</span>
+          <span class="badge bg-secondary">read-only · from your records</span>
+        </div>
+        <div class="card-body">
+          {% if demographics %}
+          <dl class="row mb-0">
+            {% for label, value in demographics %}
+            <dt class="col-sm-4 text-muted">{{ label }}</dt>
+            <dd class="col-sm-8">{{ value }}</dd>
+            {% endfor %}
+          </dl>
+          {% else %}
+          <p class="text-muted mb-0">No demographic details found in your records.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Medications: confirm each one individually -->
+      <div class="card mb-4">
+        <div class="card-header"><i class="fas fa-pills me-2"></i>Current medications</div>
+        <div class="card-body">
+          {% if meds %}
+          <p class="text-muted small">Each medication below is <strong>from your records</strong>. Tell us whether you are still taking it.</p>
+          {% for med in meds %}
+          <div class="med-row border rounded p-3 mb-2 d-flex flex-wrap justify-content-between align-items-center"
+               data-row-index="{{ loop.index0 }}">
+            <div class="me-3">
+              <div class="fw-bold">{{ med.name }}</div>
+              {% if med.dose %}<div class="text-muted small">{{ med.dose }}</div>{% endif %}
+              <div class="text-muted small"><i class="fas fa-database me-1"></i>from your records</div>
+            </div>
+            <div class="btn-group" role="group" aria-label="Still taking {{ med.name }}?">
+              <input type="radio" class="btn-check med-choice" name="med-{{ loop.index0 }}"
+                     id="med-{{ loop.index0 }}-yes" value="yes" required>
+              <label class="btn btn-outline-success btn-sm" for="med-{{ loop.index0 }}-yes">Still taking</label>
+
+              <input type="radio" class="btn-check med-choice" name="med-{{ loop.index0 }}"
+                     id="med-{{ loop.index0 }}-no" value="no">
+              <label class="btn btn-outline-warning btn-sm" for="med-{{ loop.index0 }}-no">Not anymore</label>
+
+              <input type="radio" class="btn-check med-choice" name="med-{{ loop.index0 }}"
+                     id="med-{{ loop.index0 }}-remove" value="remove">
+              <label class="btn btn-outline-danger btn-sm" for="med-{{ loop.index0 }}-remove">Remove</label>
+            </div>
+          </div>
+          {% endfor %}
+          {% else %}
+          <p class="text-muted mb-0">No medications found in your records.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Allergies: confirm each, and the explicit NKA attestation -->
+      <div class="card mb-4 border-warning">
+        <div class="card-header"><i class="fas fa-triangle-exclamation me-2"></i>Allergies</div>
+        <div class="card-body">
+          {% if allergies %}
+          <p class="text-muted small">Each allergy below is <strong>from your records</strong>. Confirm or remove each one.</p>
+          {% for allergy in allergies %}
+          <div class="allergy-row border rounded p-3 mb-2 d-flex flex-wrap justify-content-between align-items-center"
+               data-row-index="{{ loop.index0 }}">
+            <div class="me-3">
+              <div class="fw-bold">{{ allergy.allergen }}</div>
+              {% if allergy.reaction %}<div class="text-muted small">Reaction: {{ allergy.reaction }}</div>{% endif %}
+              <div class="text-muted small"><i class="fas fa-database me-1"></i>from your records</div>
+            </div>
+            <div class="btn-group" role="group" aria-label="Confirm {{ allergy.allergen }}?">
+              <input type="radio" class="btn-check allergy-choice" name="allergy-{{ loop.index0 }}"
+                     id="allergy-{{ loop.index0 }}-confirm" value="confirm">
+              <label class="btn btn-outline-success btn-sm" for="allergy-{{ loop.index0 }}-confirm">Confirm</label>
+
+              <input type="radio" class="btn-check allergy-choice" name="allergy-{{ loop.index0 }}"
+                     id="allergy-{{ loop.index0 }}-remove" value="remove">
+              <label class="btn btn-outline-danger btn-sm" for="allergy-{{ loop.index0 }}-remove">Remove</label>
+            </div>
+          </div>
+          {% endfor %}
+          {% else %}
+          <div class="alert alert-warning mb-3" role="alert">
+            <i class="fas fa-circle-info me-1"></i>
+            No allergies found in your records — add them or affirmatively confirm none below.
+          </div>
+          {% endif %}
+
+          <div class="form-check mt-2 p-3 bg-body-secondary rounded">
+            <!-- CRITICAL: never pre-checked. NKA is an explicit attestation,
+                 never inferred from the absence of allergy data. -->
+            <input class="form-check-input" type="checkbox" name="nka" id="nka" value="true">
+            <label class="form-check-label fw-bold" for="nka">
+              No known allergies (patient confirmed)
+            </label>
+            <div class="text-muted small">
+              Only check this if the patient has affirmatively stated they have no known allergies.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Conditions: confirmable -->
+      {% if conditions %}
+      <div class="card mb-4">
+        <div class="card-header"><i class="fas fa-notes-medical me-2"></i>Problems / conditions</div>
+        <div class="card-body">
+          <p class="text-muted small">Each condition below is <strong>from your records</strong>.</p>
+          {% for condition in conditions %}
+          <div class="border rounded p-3 mb-2 d-flex flex-wrap justify-content-between align-items-center">
+            <div class="me-3">
+              <div class="fw-bold">{{ condition.name }}</div>
+              <div class="text-muted small"><i class="fas fa-database me-1"></i>from your records</div>
+            </div>
+            <div class="btn-group" role="group">
+              <input type="radio" class="btn-check" name="condition-{{ loop.index0 }}"
+                     id="condition-{{ loop.index0 }}-confirm" value="confirm" checked>
+              <label class="btn btn-outline-success btn-sm" for="condition-{{ loop.index0 }}-confirm">Confirm</label>
+
+              <input type="radio" class="btn-check" name="condition-{{ loop.index0 }}"
+                     id="condition-{{ loop.index0 }}-remove" value="remove">
+              <label class="btn btn-outline-danger btn-sm" for="condition-{{ loop.index0 }}-remove">Remove</label>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div id="review-gate-msg" class="alert alert-secondary" role="alert">
+        Review every medication and allergy, then confirm an allergy or check
+        "No known allergies" to continue.
+      </div>
+
+      <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>
+        <i class="fas fa-check me-1"></i>Approve &amp; generate
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Client-side UX only. The SERVER POST re-populates from FHIR and is the
+  // real, un-craftable gate (see r6/actions/review.py).
+  (function () {
+    var TENANT = {{ tenant_id | tojson }};
+    var TOKEN = {{ step_up_token | tojson }};
+    var form = document.getElementById('review-form');
+    var btn = document.getElementById('approve-btn');
+    var gateMsg = document.getElementById('review-gate-msg');
+
+    function medRows() {
+      var names = {};
+      form.querySelectorAll('.med-choice').forEach(function (el) { names[el.name] = true; });
+      return Object.keys(names);
+    }
+    function allergyRows() {
+      var names = {};
+      form.querySelectorAll('.allergy-choice').forEach(function (el) { names[el.name] = true; });
+      return Object.keys(names);
+    }
+    function selected(name) {
+      var el = form.querySelector('input[name="' + name + '"]:checked');
+      return el ? el.value : null;
+    }
+    function evaluate() {
+      var allMeds = medRows().every(function (n) { return selected(n) !== null; });
+      var allAllergies = allergyRows().every(function (n) { return selected(n) !== null; });
+      var confirmedAllergy = allergyRows().some(function (n) { return selected(n) === 'confirm'; });
+      var nka = form.querySelector('#nka').checked;
+      var ok = allMeds && allAllergies && (confirmedAllergy || nka);
+      btn.disabled = !ok;
+      gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';
+      gateMsg.textContent = ok
+        ? 'Ready to generate. The server will re-verify every item on submit.'
+        : 'Review every medication and allergy, then confirm an allergy or check "No known allergies" to continue.';
+      return ok;
+    }
+    form.addEventListener('change', evaluate);
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!evaluate()) { return; }
+      var payload = {};
+      new FormData(form).forEach(function (v, k) { payload[k] = v; });
+      if (form.querySelector('#nka').checked) { payload['nka'] = 'true'; }
+      fetch(form.action, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Tenant-Id': TENANT,
+          'X-Step-Up-Token': TOKEN
+        },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json().then(function (b) { return { r: r, b: b }; }); })
+        .then(function (res) {
+          if (res.r.ok) {
+            gateMsg.className = 'alert alert-success';
+            gateMsg.textContent = 'Review recorded. ' + (res.b.next_step || '');
+            btn.disabled = true;
+          } else {
+            gateMsg.className = 'alert alert-danger';
+            gateMsg.textContent = res.b.error || 'Submission rejected.';
+          }
+        });
+    });
+
+    evaluate();
+  })();
+</script>
+{% endblock %}

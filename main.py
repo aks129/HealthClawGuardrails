@@ -167,6 +167,11 @@ from r6.actions.routes import actions_blueprint
 from r6.actions.registry import all_kinds as _action_kinds
 import r6.actions.rails
 r6.actions.rails.register_all()
+# Import for side effect: registers the /<id>/review GET+POST routes on
+# actions_blueprint (Task 6 structured per-item review page). MUST precede
+# register_blueprint — routes can't be added to a blueprint after it is
+# registered on the app.
+import r6.actions.review  # noqa: F401
 app.register_blueprint(actions_blueprint)
 logger.info("Actions Blueprint registered at /r6/actions (rails: %s)",
             ', '.join(_action_kinds()))
@@ -183,6 +188,13 @@ logger.info("Ops Blueprint registered at /r6/ops")
 from r6.smbp.routes import smbp_blueprint
 app.register_blueprint(smbp_blueprint)
 logger.info("SMBP Blueprint registered at /r6/smbp")
+
+# Register SDC delivery Blueprint — public signed download route for intake
+# PDFs. On its OWN blueprint (not r6_blueprint) so it is reachable without
+# X-Tenant-Id / X-Step-Up-Token headers: the signed URL is the credential.
+from r6.sdc.delivery import sdc_delivery_blueprint
+app.register_blueprint(sdc_delivery_blueprint)
+logger.info("SDC delivery Blueprint registered at /r6/sdc")
 
 # Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
 from r6.wearables.routes import wearables_blueprint

@@ -16,6 +16,7 @@ The contract floor for real actions is on `main`:
 - **The action rail + public extension point.** Real-world capabilities are `ActionExecutor`s registered in a plugin registry. Adding a capability behind the full guardrail rail (validation → human gate → audit → observability) is ~50 lines and touches no core code. See [Extending the action rail](#extending-the-action-rail).
 - **Durable execution.** Attempt ledger, provider reconciliation, an external-tick reaper, and an append-only action-event log — a crashed worker can't strand or double-fire a real-world action.
 - **Reliability floor.** Config preflight (`GET /r6/ops/preflight`), a Postgres CI lane (kills the SQLite-masks-varchar bug class), MCP fetch timeouts, poller storm-detection, source-aware resource identity `(tenant, type, id)`, and a mandatory red-flag emergency screen on action text.
+- **The forms rail — first end-to-end real action.** `$populate` fills the canonical intake questionnaire from the patient's own record → a **structured per-item review** (every medication and allergy confirmed individually; "no known allergies" is rejected server-side unless explicitly attested, and the item list is re-derived from FHIR so a crafted request can't skip a row) → a reviewed `QuestionnaireResponse` → a provenance-stamped PDF persisted as a FHIR `DocumentReference` → a **signed, expiring download link**. The `form-fill` executor fails loud (`needs_review` / `provider_not_configured` / `stale_source_data`) and only reports `completed` on a fully rendered, persisted, linked PDF. See [the demo run-of-show](docs/demos/forms-rail-run-of-show.md).
 
 ## 🔜 Now — the comms rail
 
@@ -25,9 +26,9 @@ Making the first two actions *real*:
 - Two-phase call scripts (verify you've reached a human before disclosing anything; AI + recording disclosure), contact-by-reference (the model never handles a raw phone number), and RxNorm→DEA schedule awareness for prescription-related calls.
 - Action observability: a dashboard panel + daily digest so a 2am failure is known by breakfast.
 
-## 🟡 Next — forms + standards
+## 🟡 Next — standards + delivery hardening
 
-- **Form completion.** SDC `$populate` fills a standard intake questionnaire from the patient's own record → a **structured per-item review** (meds and allergies confirmed individually; "no known allergies" is never inferred) → a completed PDF delivered via encrypted SMART Health Link.
+- **Encrypted SMART Health Link delivery.** The forms rail ships a signed, expiring download link today; the next step wraps it in a full SHL envelope (encrypted manifest + one-time flag), reusing the Node server's SHL builder, so the PDF can be shared through the standard SHL viewer ecosystem.
 - **FHIR Implementation Guide.** A continuous-build IG so the guardrails are reviewable in the community's own terms: a two-agent AuditEvent profile (AI agent + human verifier), a Provenance-per-action profile, SDC-conformant questionnaires, and the six guardrail properties as testable requirements. Standards-native expression of what the code already does.
 - **Granular SMART v2 scopes** per tool; regulatory-posture doc (patient-directed access under 45 CFR 164.524; FTC Health Breach Notification Rule).
 
