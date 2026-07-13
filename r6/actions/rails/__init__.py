@@ -18,8 +18,10 @@ to reach a known-good registry state rather than relying on import order.
 Scope note: 'insurance-call' registers here too (Task 10) — a tiny subclass
 of PhoneCallExecutor in phone.py that only overrides kind (same Bland.ai
 transport; the insurance script source lives with the proposer). 'form-fill'
-stays unregistered on purpose: proposable, but Approve fails loud at the
-confirm route instead of pretending to execute.
+(Task 3) is also registered now, but its execute() is a skeleton: it fails
+loud without PUBLIC_BASE_URL and otherwise returns an honest needs_review
+placeholder — the full populate/review/render/DocumentReference orchestration
+lands in Task 8.
 """
 
 import logging
@@ -102,14 +104,14 @@ def reconcile_needs_review():
     return ExecutionResult(status='needs_review', outcome={'reason': 'reconcile_unreachable'})
 
 
-from r6.actions.rails import phone, sms  # noqa: E402  (registration side effect)
+from r6.actions.rails import form_fill, phone, sms  # noqa: E402  (registration side effect)
 
 
 def register_all():
     """(Re-)register every rail executor. Idempotent: safe to call after
     registry._clear(), and safe to call repeatedly — duplicate-kind
     registrations are swallowed."""
-    for module in (phone, sms):
+    for module in (phone, sms, form_fill):
         try:
             module.register()
         except ValueError:

@@ -78,9 +78,10 @@ def _emergency_refusal_or_none(tenant_id, text):
 
 
 def _rail_validation_or_none(kind, payload):
-    """Executor validation when a rail is registered for this kind. Kinds
-    with no rail (e.g. form-fill) skip this — VALID_KINDS remains the
-    propose gate; they fail loud at confirm instead."""
+    """Executor validation when a rail is registered for this kind. A
+    VALID_KINDS entry with no registered rail (none today; possible for a
+    future kind) skips this — VALID_KINDS remains the propose gate, and
+    such a kind fails loud at confirm instead."""
     ex = get_executor(kind)
     if ex is None:
         return None
@@ -523,9 +524,11 @@ def confirm_action(action_id):
                                         json.dumps(action.summary())),
     )
 
-    # (e) A kind with no registered rail fails loud — never a fake success
-    # (form-fill is proposable but not yet executable). Checked before the
-    # provider_request_at stamp: no provider call is even possible here.
+    # (e) A kind with no registered rail fails loud — never a fake success.
+    # Every VALID_KINDS entry has a rail today (form-fill's is a Task-3
+    # skeleton), so this is defensive for a future kind added to
+    # VALID_KINDS ahead of its rail. Checked before the provider_request_at
+    # stamp: no provider call is even possible here.
     ex = get_executor(action.kind)
     if ex is None:
         summary = 'No executor for kind: %s' % action.kind
