@@ -23,7 +23,8 @@ from flask import Blueprint, request, jsonify, current_app
 from models import db
 from r6.audit import add_audit_event, record_audit_event
 from r6.fasten.enrollment import (
-    consume_enrollment,
+    clear_enrollment_session,
+    enrollment_proof_hash,
     enrollment_tenant,
     establish_enrollment,
 )
@@ -387,7 +388,11 @@ def register_connection():
     db.session.add(conn)
     try:
         db.session.flush()
-        establish_enrollment(tenant_id, org_connection_id)
+        proof_hash, proof_expires_at = establish_enrollment(
+            tenant_id, org_connection_id
+        )
+        conn.enrollment_proof_hash = proof_hash
+        conn.enrollment_expires_at = proof_expires_at
         add_audit_event(
             event_type='fasten_connection_registered',
             agent_id='fasten-connect',
@@ -396,8 +401,10 @@ def register_connection():
             detail=f'platform={conn.platform_type}',
         )
         db.session.commit()
-    except RuntimeError:
+    except Exception as exc:  # noqa: BLE001 - database drivers vary
         db.session.rollback()
+        clear_enrollment_session()
+        logger.error('Fasten connection registration failed: %s', type(exc).__name__)
         return jsonify({'error': 'enrollment proof unavailable'}), 503
 
     return jsonify({
@@ -747,25 +754,51 @@ def agent_access(org_connection_id):
         return jsonify({'error': 'server not configured to mint'}), 503
 
     issued_at = datetime.now(timezone.utc)
-    claimed = FastenConnection.query.filter_by(
+    claim_query = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id,
         tenant_id=tenant_id,
         agent_token_issued_at=None,
-    ).update({'agent_token_issued_at': issued_at}, synchronize_session=False)
-    if claimed != 1:
+    ).filter(FastenConnection.webhook_verified_at.isnot(None))
+    claim_values = {
+        'agent_token_issued_at': issued_at,
+        'enrollment_proof_hash': None,
+        'enrollment_expires_at': None,
+    }
+    if using_enrollment:
+        proof_hash = enrollment_proof_hash(org_connection_id)
+        if proof_hash is None:
+            return jsonify({'error': 'enrollment proof expired or already used'}), 401
+        claim_query = claim_query.filter(
+            FastenConnection.enrollment_proof_hash == proof_hash,
+            FastenConnection.enrollment_expires_at >= issued_at,
+        )
+
+    try:
+        claimed = claim_query.update(claim_values, synchronize_session=False)
+        if claimed != 1:
+            db.session.rollback()
+            current = FastenConnection.query.filter_by(
+                org_connection_id=org_connection_id,
+                tenant_id=tenant_id,
+            ).first()
+            if current and current.agent_token_issued_at is not None:
+                return jsonify({'error': 'already issued'}), 410
+            return jsonify({'error': 'enrollment proof expired or already used'}), 401
+        add_audit_event(
+            event_type='agent_read_token_issued',
+            agent_id='fasten-connect',
+            tenant_id=tenant_id,
+            outcome='success',
+            detail='read-scoped patient connect token (30d) issued after webhook verification',
+        )
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001 - database drivers vary
         db.session.rollback()
-        return jsonify({'error': 'already issued'}), 410
-    add_audit_event(
-        event_type='agent_read_token_issued',
-        agent_id='fasten-connect',
-        tenant_id=tenant_id,
-        outcome='success',
-        detail='read-scoped patient connect token (30d) issued after webhook verification',
-    )
-    if using_enrollment and not consume_enrollment(tenant_id, org_connection_id):
-        db.session.rollback()
-        return jsonify({'error': 'enrollment proof expired or already used'}), 401
-    db.session.commit()
+        logger.error('Fasten enrollment issuance failed: %s', type(exc).__name__)
+        return jsonify({'error': 'enrollment issuance unavailable'}), 503
+
+    if using_enrollment:
+        clear_enrollment_session()
     expires = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
     return jsonify({
         'tenant_id': tenant_id,

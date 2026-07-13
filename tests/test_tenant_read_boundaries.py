@@ -218,6 +218,86 @@ def test_bare_reregistration_cannot_rotate_browser_enrollment(client, app, monke
     assert client.get(f"/fasten/connections/{org_id}/agent-access").status_code == 200
 
 
+def test_enrollment_issuance_db_failure_rolls_back_and_retries(
+    client, app, monkeypatch
+):
+    import json
+    from unittest.mock import patch
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    org_id = "enrollment-rollback-org"
+    assert client.post(
+        "/fasten/connections",
+        headers={"X-Tenant-Id": PRIVATE_TENANT},
+        json={"org_connection_id": org_id},
+    ).status_code == 201
+
+    webhook = {
+        "type": "patient.connection_success",
+        "data": {"org_connection_id": org_id, "external_id": PRIVATE_TENANT},
+    }
+    with patch("r6.fasten.routes.verify_webhook", return_value=True):
+        assert client.post(
+            "/fasten/webhook", data=json.dumps(webhook), content_type="application/json"
+        ).status_code == 200
+
+    with patch(
+        "r6.fasten.routes.db.session.commit",
+        side_effect=RuntimeError("injected commit failure"),
+    ):
+        try:
+            failed = client.get(f"/fasten/connections/{org_id}/agent-access")
+        except RuntimeError:
+            pytest.fail("issuance database failure escaped the route")
+    assert failed.status_code == 503
+
+    from models import db
+    from r6.fasten.models import FastenConnection
+
+    db.session.expire_all()
+    conn = db.session.get(FastenConnection, org_id)
+    assert conn.agent_token_issued_at is None
+    assert conn.enrollment_proof_hash is not None
+    assert client.get(f"/fasten/connections/{org_id}/agent-access").status_code == 200
+
+
+def test_enrollment_conditional_consume_allows_exactly_one_claim(
+    client, app, monkeypatch
+):
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    org_id = "enrollment-conditional-org"
+    assert client.post(
+        "/fasten/connections",
+        headers={"X-Tenant-Id": PRIVATE_TENANT},
+        json={"org_connection_id": org_id},
+    ).status_code == 201
+
+    cookie_name = app.config["SESSION_COOKIE_NAME"]
+    enrollment_cookie = client.get_cookie(cookie_name)
+    assert enrollment_cookie is not None
+    competing_browser = app.test_client()
+    competing_browser.set_cookie(cookie_name, enrollment_cookie.value)
+
+    from models import db
+    from r6.fasten.models import FastenConnection
+
+    conn = db.session.get(FastenConnection, org_id)
+    assert getattr(conn, "enrollment_proof_hash", None) is not None
+    conn.webhook_verified_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    first = client.get(f"/fasten/connections/{org_id}/agent-access")
+    second = competing_browser.get(f"/fasten/connections/{org_id}/agent-access")
+    assert first.status_code == 200
+    assert second.status_code == 410
+
+    db.session.expire_all()
+    consumed = db.session.get(FastenConnection, org_id)
+    assert consumed.agent_token_issued_at is not None
+    assert consumed.enrollment_proof_hash is None
+    assert consumed.enrollment_expires_at is None
+
+
 def test_connect_page_polls_with_same_origin_enrollment_cookie():
     page = (
         Path(__file__).resolve().parents[1] / "templates" / "fasten_connect.html"
@@ -271,7 +351,6 @@ def test_rx_transfer_proposal_accepts_bound_credential(client):
 
 def test_rx_read_token_cannot_persist_proposal(client, app):
     import json
-    from models import db
     from r6.actions.models import ProposedAction
 
     write_token = generate_step_up_token(PRIVATE_TENANT)
