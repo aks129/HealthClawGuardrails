@@ -31,6 +31,7 @@ def test_conformance_endpoint_text_format(client):
     text = r.get_data(as_text=True)
     assert "Grade: B" in text and "PHI Redaction" in text
     assert "Error Fidelity — F (local-fhir-only)" in text
+    assert "PHI Redaction — A (full)" not in text
 
 
 def test_conformance_uses_isolated_selftest_tenant(client):

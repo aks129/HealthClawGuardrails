@@ -13,8 +13,11 @@ against a real deployment never touches patient data.
 from __future__ import annotations
 
 import json
+import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 # Distinctive synthetic tokens — if any survive a redacted read, redaction failed.
 _SSN = "000-00-9999"
@@ -36,6 +39,15 @@ PROPERTIES = (
 _ERROR_FIDELITY_GRADE_ORDER = {"F": 0, "C": 1, "A": 2}
 _MCP_INVALID_RESOURCE = "WidgetQuintaviousZzyzxbarton"
 _MCP_HOSTILE_URL = "https://db.internal.example/patient/secret"
+_REQUEST_ERROR_CODES = {"invalid", "structure", "value", "not-supported"}
+_LOCAL_SUPPORTED_PARAMETER_EVIDENCE = {
+    "patient", "code", "status", "_lastupdated",
+    "_count", "_sort", "_summary", "context-id",
+}
+_SUPPORTED_SET_RE = re.compile(
+    r"(?:^|[.!?]\s+)supported parameters?\s*:\s*([^.!?]+)",
+    re.IGNORECASE,
+)
 
 
 def _error_fidelity_grade(grades: list[str]) -> str:
@@ -144,7 +156,7 @@ class ConformanceReport:
             "score": {"passed": p, "total": t},
             "properties": [
                 {"key": r.key, "property": r.property, "passed": r.passed,
-                 "grade": r.effective_grade, "coverage": r.coverage,
+                 "grade": r.grade, "coverage": r.coverage,
                  "profiles": r.profiles, "note": r.note,
                  "checks": [{"name": c.name, "passed": c.passed, "detail": c.detail}
                             for c in r.checks]}
@@ -231,15 +243,45 @@ class LiveProbeClient:
         return r.status_code, body, r.text
 
 
+def _mcp_response_json(response, expected_id=None) -> dict:
+    """Decode either JSON or an SSE message from Streamable HTTP."""
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "text/event-stream" not in content_type:
+        body = response.json()
+        if (isinstance(body, dict)
+                and (expected_id is None or body.get("id") == expected_id)):
+            return body
+        raise RuntimeError("MCP response was not a JSON object")
+
+    for event in response.text.replace("\r\n", "\n").split("\n\n"):
+        data = "\n".join(
+            line[5:].lstrip() for line in event.splitlines()
+            if line.startswith("data:")
+        )
+        if not data:
+            continue
+        try:
+            body = json.loads(data)
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(body, dict)
+                and (expected_id is None or body.get("id") == expected_id)
+                and ("result" in body or "error" in body)):
+            return body
+    raise RuntimeError("MCP SSE response contained no JSON message")
+
+
 class LiveMCPProbeClient:
     """Small Streamable HTTP MCP client used only by optional conformance probes."""
 
-    def __init__(self, mcp_url, session=None):
+    def __init__(self, mcp_url, session=None, tenant=None, step_up_token=None):
         import requests
         self._url = mcp_url.rstrip("/")
         self._s = session or requests.Session()
         self._session_id = None
         self._protocol_version = "2025-06-18"
+        self._tenant = tenant
+        self._step_up_token = step_up_token
 
     def _headers(self):
         headers = {
@@ -249,6 +291,10 @@ class LiveMCPProbeClient:
         }
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
+        if self._tenant:
+            headers["X-Tenant-Id"] = self._tenant
+        if self._step_up_token:
+            headers["X-Step-Up-Token"] = self._step_up_token
         return headers
 
     def _initialize(self):
@@ -268,12 +314,10 @@ class LiveMCPProbeClient:
             timeout=15,
         )
         response.raise_for_status()
-        body = response.json()
+        body = _mcp_response_json(response, expected_id=1)
         if not isinstance(body, dict) or "error" in body:
             raise RuntimeError("MCP initialize failed")
         self._session_id = response.headers.get("Mcp-Session-Id")
-        if not self._session_id:
-            raise RuntimeError("MCP initialize returned no session id")
         result = body.get("result", {})
         if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
             self._protocol_version = result["protocolVersion"]
@@ -301,7 +345,7 @@ class LiveMCPProbeClient:
             timeout=25,
         )
         response.raise_for_status()
-        body = response.json()
+        body = _mcp_response_json(response, expected_id=2)
         if not isinstance(body, dict) or "error" in body:
             raise RuntimeError("MCP tools/call failed")
         result = body.get("result")
@@ -434,7 +478,8 @@ def _is_operation_outcome(body) -> bool:
 def _rejection_grade(status, body, expected_status=400) -> str:
     if status == 200:
         return "F"
-    if status == expected_status and _is_operation_outcome(body):
+    if status == expected_status and _corrective_outcome(
+            body, _REQUEST_ERROR_CODES):
         return "A"
     return "C"
 
@@ -449,27 +494,77 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
             continue
         details = issue.get("details", {})
         text = details.get("text", "") if isinstance(details, dict) else ""
-        if parameter in text and "supported" in text.lower():
+        match = _SUPPORTED_SET_RE.search(text)
+        if match is None:
+            continue
+        declared = {
+            token.lower()
+            for token in re.findall(
+                r"[A-Za-z_][A-Za-z0-9_-]*", match.group(1))
+        }
+        supported = declared & _LOCAL_SUPPORTED_PARAMETER_EVIDENCE
+        parameter_lower = parameter.lower()
+        remaining = text[:match.start()] + text[match.end():]
+        parameter_token = re.escape(parameter_lower)
+        rejection = re.search(
+            rf"(?:^|[.!?]\s*)(?:"
+            rf"(?:unsupported|unknown|invalid)\s+(?:search\s+)?"
+            rf"parameter\s*:?\s*{parameter_token}"
+            rf"|{parameter_token}\s+(?:(?:is|was)\s+)?"
+            rf"(?:ignored|unsupported|rejected|invalid|unknown)"
+            rf"|{parameter_token}\s+is\s+not\s+implemented"
+            rf")\s*(?=[.!?]|$)",
+            remaining.lower(),
+        )
+        if (parameter_lower not in declared
+                and rejection is not None
+                and len(supported) >= 2):
             return True
     return False
 
 
-def _has_outcome_warning(bundle) -> bool:
+def _safe_warning_outcome(outcome) -> bool:
+    if not _is_operation_outcome(outcome):
+        return False
+    if set(outcome) != {"resourceType", "issue"}:
+        return False
+    issues = outcome.get("issue", [])
+    if not isinstance(issues, list) or not issues:
+        return False
+    return (all(
+        isinstance(issue, dict)
+        and not set(issue) - {"severity", "code", "details"}
+        and issue.get("severity") in {"warning", "information"}
+        and issue.get("code") in _REQUEST_ERROR_CODES
+        and isinstance(issue.get("details"), dict)
+        and set(issue["details"]) == {"text"}
+        and isinstance(issue["details"]["text"], str)
+        and bool(issue["details"]["text"].strip())
+        for issue in issues
+    ) and _outcome_omits_hostile_values(outcome))
+
+
+def _has_outcome_warning(bundle, parameter: str) -> bool:
     if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle":
         return False
-    for entry in bundle.get("entry", []):
+    entries = bundle.get("entry", [])
+    if not isinstance(entries, list):
+        return False
+    saw_corrective_warning = False
+    for entry in entries:
         if not isinstance(entry, dict):
-            continue
-        if entry.get("search", {}).get("mode") != "outcome":
+            return False
+        search = entry.get("search")
+        if not isinstance(search, dict) or search.get("mode") != "outcome":
             continue
         outcome = entry.get("resource")
-        if not _is_operation_outcome(outcome):
-            continue
-        issues = outcome.get("issue", [])
-        severities = {i.get("severity") for i in issues if isinstance(i, dict)}
-        if issues and not severities.intersection({"fatal", "error"}):
-            return True
-    return False
+        if not _safe_warning_outcome(outcome):
+            return False
+        saw_corrective_warning = (
+            saw_corrective_warning
+            or _outcome_names_parameter_and_supported_set(outcome, parameter)
+        )
+    return saw_corrective_warning
 
 
 def _self_link_omits(bundle, parameter: str) -> bool:
@@ -477,35 +572,71 @@ def _self_link_omits(bundle, parameter: str) -> bool:
         return False
     links = bundle.get("link", [])
     self_urls = [link.get("url", "") for link in links
-                 if isinstance(link, dict) and link.get("relation") == "self"]
-    return bool(self_urls) and all(f"{parameter}=" not in url for url in self_urls)
+                 if isinstance(link, dict) and link.get("relation") == "self"
+                 and isinstance(link.get("url"), str)]
+    return bool(self_urls) and all(
+        parameter not in {key for key, _ in parse_qsl(
+            urlsplit(url).query, keep_blank_values=True)}
+        for url in self_urls
+    )
 
 
-def _audit_outcome_codes(bundle) -> list[str]:
+def _self_link_includes(bundle, parameter: str, value: str) -> bool:
     if not isinstance(bundle, dict):
-        return []
-    codes = []
+        return False
+    self_urls = [link.get("url", "") for link in bundle.get("link", [])
+                 if isinstance(link, dict) and link.get("relation") == "self"
+                 and isinstance(link.get("url"), str)]
+    return bool(self_urls) and all(
+        (parameter, value) in parse_qsl(
+            urlsplit(url).query, keep_blank_values=True)
+        for url in self_urls
+    )
+
+
+def _bundle_matches_subject(bundle, subject_ref: str) -> bool:
+    """A supposedly bounded search may return only the synthetic subject."""
+    if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle":
+        return False
+    entries = bundle.get("entry", [])
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        resource = entry.get("resource")
+        search = entry.get("search")
+        mode = search.get("mode") if isinstance(search, dict) else None
+        if _is_operation_outcome(resource) and mode == "outcome":
+            continue
+        if not isinstance(resource, dict):
+            return False
+        subject = resource.get("subject")
+        if (not isinstance(subject, dict)
+                or subject.get("reference") != subject_ref):
+            return False
+    return True
+
+
+def _audit_resources(bundle) -> dict[str, dict]:
+    if not isinstance(bundle, dict):
+        return {}
+    resources = {}
     for entry in bundle.get("entry", []):
         if not isinstance(entry, dict):
             continue
-        resource = entry.get("resource", {})
-        code = resource.get("outcome", {}).get("code", {}).get("code")
-        if isinstance(code, str):
-            codes.append(code)
-    return codes
+        resource = entry.get("resource")
+        if (isinstance(resource, dict)
+                and isinstance(resource.get("id"), str)):
+            resources[resource["id"]] = resource
+    return resources
 
 
 def _audit_events(bundle) -> dict[str, str]:
-    if not isinstance(bundle, dict):
-        return {}
     events = {}
-    for entry in bundle.get("entry", []):
-        if not isinstance(entry, dict):
-            continue
-        resource = entry.get("resource", {})
-        event_id = resource.get("id")
+    for event_id, resource in _audit_resources(bundle).items():
         code = resource.get("outcome", {}).get("code", {}).get("code")
-        if isinstance(event_id, str) and isinstance(code, str):
+        if isinstance(code, str):
             events[event_id] = code
     return events
 
@@ -526,11 +657,31 @@ def _new_audit_outcome_codes(before, after) -> list[str]:
     ]
 
 
-def _new_audit_expected_grade(before, after, expected_code: str) -> str:
-    new_codes = _new_audit_outcome_codes(before, after)
-    if len(new_codes) != 1:
+def _new_audit_warning_grade(before, after, parameter: str) -> str:
+    before_ids = set(_audit_resources(before))
+    new_resources = [
+        resource for event_id, resource in _audit_resources(after).items()
+        if event_id not in before_ids
+    ]
+    if len(new_resources) != 1:
         return "C"
-    return "A" if new_codes[0] == expected_code else "F"
+    outcome = new_resources[0].get("outcome", {})
+    if outcome.get("code", {}).get("code") != "0":
+        return "F"
+    details = outcome.get("detail", [])
+    if not isinstance(details, list):
+        return "C"
+    texts = [detail.get("text", "") for detail in details
+             if isinstance(detail, dict)
+             and isinstance(detail.get("text"), str)]
+    lowered = " ".join(texts).lower()
+    if f"{parameter.lower()}=" in lowered or "http://" in lowered or "https://" in lowered:
+        return "F"
+    if "applied" in lowered and parameter.lower() in lowered:
+        return "C"
+    if "ignored" in lowered and parameter.lower() in lowered:
+        return "A"
+    return "C"
 
 
 def _profile(status: str, *, grade: Optional[str] = None,
@@ -547,17 +698,43 @@ def _corrective_outcome(body, expected_codes: set[str]) -> bool:
     issues = body.get("issue", [])
     if not isinstance(issues, list) or not issues:
         return False
+    if set(body) - {"resourceType", "issue"}:
+        return False
+    saw_expected = False
     for issue in issues:
-        if not isinstance(issue, dict):
-            continue
+        if (not isinstance(issue, dict)
+                or set(issue) - {"severity", "code", "details"}):
+            return False
         details = issue.get("details")
         text = details.get("text") if isinstance(details, dict) else None
-        if (issue.get("severity") in {"fatal", "error"}
-                and issue.get("code") in expected_codes
-                and isinstance(text, str)
-                and text.strip()):
-            return True
-    return False
+        if (issue.get("severity") not in {"fatal", "error"}
+                or issue.get("code") not in expected_codes
+                or not isinstance(details, dict)
+                or set(details) != {"text"}
+                or not isinstance(text, str)
+                or not text.strip()):
+            return False
+        saw_expected = True
+    return saw_expected and _outcome_omits_hostile_values(body)
+
+
+def _outcome_omits_hostile_values(value) -> bool:
+    blob = json.dumps(value).lower()
+    unsafe_tokens = (
+        _GIVEN.lower(), _FAMILY.lower(),
+        "quintavious zzyzxbarton",
+        _MCP_INVALID_RESOURCE.lower(),
+        "http://", "https://",
+    )
+    return not any(token in blob for token in unsafe_tokens)
+
+
+def _response_omits_hostile_values(body, text) -> bool:
+    blob = (text or json.dumps(body or {})).lower()
+    return not any(token in blob for token in (
+        _GIVEN.lower(), _FAMILY.lower(),
+        "quintavious zzyzxbarton", "http://", "https://",
+    ))
 
 
 def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
@@ -569,8 +746,8 @@ def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
 
     rejected_status, rejected_body, rejected_text = proxy_client.request(
         "GET", "/Observation?__conformance_case=rejection", ctx.read_headers())
-    rejected_blob = rejected_text or json.dumps(rejected_body or {})
-    rejection_safe = hostile_name not in rejected_blob and hostile_url not in rejected_blob
+    rejection_safe = _response_omits_hostile_values(
+        rejected_body, rejected_text)
     rejection_ok = (rejected_status == 400
                     and _corrective_outcome(
                         rejected_body,
@@ -579,23 +756,29 @@ def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
     rejection_grade = ("A" if rejection_ok else
                        ("F" if rejected_status == 200 or not rejection_safe else "C"))
 
-    auth_status, auth_body, _ = proxy_client.request(
+    auth_status, auth_body, auth_text = proxy_client.request(
         "GET", "/Patient/conformance-auth", ctx.read_headers())
+    # In server-credential proxy mode an upstream 401/403 is deliberately
+    # mapped to 502: the caller cannot repair the proxy's credential. In
+    # caller-auth mode the original 401/403 remains truthful.
     auth_ok = (auth_status in (401, 403, 502)
-               and _corrective_outcome(auth_body, {"security"}))
+               and _corrective_outcome(auth_body, {"security"})
+               and _response_omits_hostile_values(auth_body, auth_text))
     auth_grade = "A" if auth_ok else ("F" if auth_status in (200, 404) else "C")
 
-    server_status, server_body, _ = proxy_client.request(
+    server_status, server_body, server_text = proxy_client.request(
         "GET", "/Observation?__conformance_case=server", ctx.read_headers())
     server_ok = (server_status >= 500
                  and _corrective_outcome(
-                     server_body, {"exception", "transient", "processing"}))
+                     server_body, {"exception", "transient", "processing"})
+                 and _response_omits_hostile_values(server_body, server_text))
     server_grade = "A" if server_ok else ("F" if server_status == 200 else "C")
 
-    timeout_status, timeout_body, _ = proxy_client.request(
+    timeout_status, timeout_body, timeout_text = proxy_client.request(
         "GET", "/Observation?__conformance_case=timeout", ctx.read_headers())
     timeout_ok = (timeout_status >= 500
-                  and _corrective_outcome(timeout_body, {"timeout", "transient"}))
+                  and _corrective_outcome(timeout_body, {"timeout", "transient"})
+                  and _response_omits_hostile_values(timeout_body, timeout_text))
     timeout_grade = "A" if timeout_ok else ("F" if timeout_status == 200 else "C")
 
     _, audit_after, _ = proxy_client.request(
@@ -621,7 +804,7 @@ def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
         Check("proxy timeout is truthful", timeout_grade == "A",
               f"grade {timeout_grade}; status {timeout_status}"),
         Check("proxy failure audit is truthful", audit_grade == "A",
-              f"grade {audit_grade}; outcomes {','.join(audit_codes) or 'missing'}"),
+              f"grade {audit_grade}; observed {len(audit_codes)} outcomes"),
     ]
 
 
@@ -640,15 +823,29 @@ def _mcp_profile_grade(mcp_client) -> str:
 
     payloads = []
     structured = result.get("structuredContent")
+    malformed_content = ("structuredContent" in result
+                         and not isinstance(structured, dict))
     if isinstance(structured, dict):
         payloads.append(structured)
-    for item in result.get("content", []):
-        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+    content = result.get("content", [])
+    malformed_content = malformed_content or not isinstance(content, list)
+    if malformed_content:
+        content = []
+    for item in content:
+        if (not isinstance(item, dict)
+                or set(item) != {"type", "text"}
+                or item.get("type") != "text"
+                or not isinstance(item.get("text"), str)):
+            malformed_content = True
             continue
         try:
-            payloads.append(json.loads(item["text"]))
+            payload = json.loads(item["text"])
         except (TypeError, ValueError):
-            payloads.append({"text": item["text"]})
+            malformed_content = True
+            payload = {"text": item["text"]}
+        if not isinstance(payload, dict):
+            malformed_content = True
+        payloads.append(payload)
 
     outcomes = [payload for payload in payloads if _is_operation_outcome(payload)]
     has_outcome = bool(outcomes)
@@ -659,6 +856,7 @@ def _mcp_profile_grade(mcp_client) -> str:
     )
     if (result.get("isError") is True
             and has_outcome
+            and not malformed_content
             and len(payloads) == len(outcomes)
             and _mcp_result_omits_hostile_values(result)
             and all(_safe_corrective_mcp_outcome(outcome) for outcome in outcomes)):
@@ -712,10 +910,13 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
     """Grade failure-path truthfulness without fixing the known gaps."""
     strict_headers = ctx.read_headers()
     strict_headers["Prefer"] = "handling=strict"
+    subject_ref = f"Patient/conformance-error-fidelity-{uuid.uuid4().hex}"
+    strict_query = urlencode({"patient": subject_ref, "datetime": "x"})
+    modifier_query = urlencode({"patient": subject_ref, "code:exact": "x"})
     _, audit_before, _ = client.request(
         "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     strict_status, strict_body, _ = client.request(
-        "GET", "/Observation?datetime=x", strict_headers)
+        "GET", f"/Observation?{strict_query}", strict_headers)
     strict_grade = _rejection_grade(strict_status, strict_body)
     if strict_grade == "A" and not _outcome_names_parameter_and_supported_set(
             strict_body, "datetime"):
@@ -730,21 +931,24 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
     _, lenient_audit_before, _ = client.request(
         "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     lenient_status, lenient_body, _ = client.request(
-        "GET", "/Observation?datetime=x", ctx.read_headers())
+        "GET", f"/Observation?{strict_query}", ctx.read_headers())
     _, lenient_audit_after, _ = client.request(
         "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     lenient_ok = (lenient_status == 200
-                  and _has_outcome_warning(lenient_body)
-                  and _self_link_omits(lenient_body, "datetime"))
+                  and _has_outcome_warning(lenient_body, "datetime")
+                  and _self_link_omits(lenient_body, "datetime")
+                  and _self_link_includes(
+                      lenient_body, "patient", subject_ref)
+                  and _bundle_matches_subject(lenient_body, subject_ref))
     lenient_grade = "A" if lenient_ok else ("F" if lenient_status == 200 else "C")
-    lenient_audit_grade = _new_audit_expected_grade(
-        lenient_audit_before, lenient_audit_after, "0")
+    lenient_audit_grade = _new_audit_warning_grade(
+        lenient_audit_before, lenient_audit_after, "datetime")
 
     modifier_status, modifier_body, _ = client.request(
-        "GET", "/Observation?code:exact=x", ctx.read_headers())
+        "GET", f"/Observation?{modifier_query}", ctx.read_headers())
     modifier_grade = _rejection_grade(modifier_status, modifier_body)
     modifier_strict_status, modifier_strict_body, _ = client.request(
-        "GET", "/Observation?code:exact=x", strict_headers)
+        "GET", f"/Observation?{modifier_query}", strict_headers)
     modifier_strict_grade = _rejection_grade(
         modifier_strict_status, modifier_strict_body)
     modifier_grade = _error_fidelity_grade([

@@ -93,8 +93,9 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 - The whole set is enforced by the **conformance harness**:
   `tests/test_guardrail_conformance.py` pins the measured CI baseline, and
   `GET /r6/fhir/$conformance` grades any live deployment. The current baseline
-  is intentionally Grade B (6/7): error fidelity remains F until the local
-  search and MCP transport follow-ups land.
+  is intentionally Grade B (6/7): the in-process error-fidelity profile remains
+  F until the local-search follow-up lands. The optional CLI MCP profile remains
+  C until its separate transport follow-up lands.
 
 ## Deploy notes (maintainers)
 

@@ -46,7 +46,11 @@ def main():
 
     ctx = ProbeContext(tenant=args.tenant, step_up_token=args.step_up_token,
                        second_tenant=args.second_tenant)
-    mcp_client = LiveMCPProbeClient(args.mcp_url) if args.mcp_url else None
+    mcp_client = (LiveMCPProbeClient(
+        args.mcp_url,
+        tenant=args.tenant,
+        step_up_token=args.step_up_token,
+    ) if args.mcp_url else None)
     report = run_conformance(
         LiveProbeClient(args.base_url), ctx, mcp_client=mcp_client)
 
