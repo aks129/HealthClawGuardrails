@@ -94,6 +94,7 @@ jobs:
       - name: Run DB-shape-sensitive tests against Postgres
         env:
           SQLALCHEMY_DATABASE_URI: postgresql://postgres:postgres@localhost:5432/test
+          MIGRATION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         run: |
           uv run python -m pytest \
             tests/actions/ \
@@ -103,6 +104,7 @@ jobs:
             tests/test_fasten_webhook_shape.py \
             tests/test_fasten_verify_signature.py \
             tests/test_fasten_job_recovery.py \
+            tests/test_database_migrations.py \
             -v --tb=short
 
   node-tests:

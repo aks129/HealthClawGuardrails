@@ -170,6 +170,10 @@ Each skill is auto-discoverable — Claude loads it when your prompt matches the
 # Install dependencies
 uv sync
 
+# Apply deterministic database migrations
+STEP_UP_SECRET=your-secret uv run flask --app main init-db
+STEP_UP_SECRET=your-secret uv run flask --app main seed-demo --tenant-id desktop-demo
+
 # Run (local mode with SQLite)
 STEP_UP_SECRET=your-secret python main.py
 
@@ -488,6 +492,12 @@ Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 | `MCP_AUTH_TOKEN` | HTTP MCP | — | Bearer credential required by MCP HTTP transports |
 | `FHIR_UPSTREAM_TIMEOUT` | No | 15 | Upstream request timeout (seconds) |
 | `FHIR_LOCAL_BASE_URL` | No | — | Local URL for response URL rewriting |
+
+Database DDL is never run during WSGI import. Run `flask --app main init-db`
+before each release; it applies the locked Alembic revisions. Operators adopting
+Alembic on an existing v1.8.0 Postgres deployment must follow the
+[database migration runbook](docs/runbooks/database-migrations.md) to verify and
+stamp the compatibility baseline before upgrading.
 
 ## Project Structure
 

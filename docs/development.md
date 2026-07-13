@@ -44,13 +44,25 @@ uv run flask --app main seed-demo --tenant-id desktop-demo
 uv run flask --app main recover-zombies
 ```
 
+`init-db` runs `alembic upgrade head` against the same SQLAlchemy engine as the
+application. New revisions belong in `migrations/versions/`; they must contain
+explicit reversible DDL and must not call `db.create_all()` or
+`metadata.create_all()`. Check model/schema drift locally with:
+
+```bash
+uv run alembic upgrade head
+uv run alembic check
+```
+
+Do not run `alembic stamp` on an existing database until completing the schema
+checks in the [database migration runbook](runbooks/database-migrations.md).
+
 `initialize_database(app)`, `seed_demo_tenant(app)`,
 `recover_zombie_jobs(app)`, and `start_wearables_poller(app)` are also available
-for process supervisors and deployment scripts. Existing deployments that
-temporarily require the pre-factory behavior may set
-`HEALTHCLAW_LEGACY_BOOT=1`; this opt-in runs all legacy boot tasks while the app
-is constructed. Prefer the explicit commands because each WSGI worker imports
-`main` independently.
+for process supervisors and deployment scripts. Environment flags cannot run
+these operations during application construction; each WSGI worker imports
+`main` independently, so deploy hooks or the explicit CLI commands own all
+mutable lifecycle work.
 
 ## Architecture map
 

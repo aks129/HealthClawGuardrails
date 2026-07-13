@@ -37,7 +37,55 @@ services:
       - OPEN_WEARABLES_API_KEY=${OPEN_WEARABLES_API_KEY:-}
       - WEARABLES_POLL_INTERVAL=${WEARABLES_POLL_INTERVAL:-900}
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+      seed-demo:
+        condition: service_completed_successfully
+    volumes:
+      - ./instance:/app/instance
+    networks:
+      - fhir-net
+
+  # Operator-controlled schema lifecycle. This one-shot container must finish
+  # before the web process starts; WSGI import never mutates the database.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["flask", "--app", "main", "init-db"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - FLASK_ENV=development
+      - SQLALCHEMY_DATABASE_URI=sqlite:///mcp_server.db
+      - REDIS_URL=redis://redis:6379/0
+      - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+    volumes:
+      - ./instance:/app/instance
+    networks:
+      - fhir-net
+
+  # Seeding remains separate from schema migration. It is idempotent and is
+  # appropriate only for this local synthetic desktop-demo stack.
+  seed-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["flask", "--app", "main", "seed-demo", "--tenant-id", "desktop-demo"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - FLASK_ENV=development
+      - SQLALCHEMY_DATABASE_URI=sqlite:///mcp_server.db
+      - REDIS_URL=redis://redis:6379/0
+      - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - ./instance:/app/instance
     networks:

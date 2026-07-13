@@ -19,9 +19,8 @@ from typing import Any
 
 import click
 from flask import Flask, g, request as flask_request
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
-
 from models import db
+from r6.database_migrations import upgrade_database
 from r6.runtime_config import validate_runtime_environment
 
 
@@ -98,38 +97,13 @@ def register_model_metadata() -> None:
     import r6.wearables.models  # noqa: F401
 
 
-def initialize_database(flask_app: Flask) -> list[str]:
-    """Create missing tables and reconcile model columns explicitly."""
+def initialize_database(flask_app: Flask) -> str:
+    """Upgrade the configured database to the current Alembic revision."""
     register_model_metadata()
     with flask_app.app_context():
-        try:
-            db.create_all()
-            logger.info(
-                "Database tables created (R6 + Fasten + Wearables + Command Center)"
-            )
-        except (OperationalError, IntegrityError, ProgrammingError) as exc:
-            # Concurrent workers may race if an operator deliberately runs
-            # this hook during a rolling deploy.
-            message = str(exc).lower()
-            if any(
-                marker in message
-                for marker in ("already exists", "pg_type_typname", "duplicate key")
-            ):
-                logger.info("Database tables already exist (created concurrently)")
-                db.session.rollback()
-            else:
-                raise
-
-        try:
-            from r6.schema_sync import reconcile_schema
-
-            added = reconcile_schema(db.engine, db.metadata)
-            if added:
-                logger.info("schema_sync added %d columns", len(added))
-            return added
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("schema_sync failed (non-fatal): %s", exc)
-            return []
+        revision = upgrade_database(db.engine)
+    logger.info("Database upgraded to Alembic revision %s", revision)
+    return revision
 
 
 def seed_demo_tenant(flask_app: Flask, tenant_id: str | None = None) -> int:
@@ -193,9 +167,9 @@ def run_legacy_boot_tasks(flask_app: Flask) -> None:
 def _register_lifecycle_cli(flask_app: Flask) -> None:
     @flask_app.cli.command("init-db")
     def init_db_command() -> None:
-        """Create missing tables and reconcile the configured database."""
-        added = initialize_database(flask_app)
-        click.echo(f"Database initialized; reconciled {len(added)} column(s).")
+        """Upgrade the configured database to the current schema."""
+        revision = initialize_database(flask_app)
+        click.echo(f"Database upgraded to Alembic revision {revision}.")
 
     @flask_app.cli.command("seed-demo")
     @click.option("--tenant-id", default=None, help="Tenant to seed.")
@@ -337,10 +311,6 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
         VERCEL=os.environ.get("VERCEL", ""),
         SEED_DEMO_TENANT=os.environ.get("SEED_DEMO_TENANT", ""),
         DEMO_TENANT_ID=os.environ.get("DEMO_TENANT_ID", "desktop-demo"),
-        LEGACY_BOOT_ON_CREATE=(
-            os.environ.get("HEALTHCLAW_LEGACY_BOOT", "")
-            or os.environ.get("LEGACY_BOOT_ON_CREATE", "")
-        ),
     )
     flask_app.config.update(supplied_settings)
 
@@ -380,13 +350,6 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
             "Running in local mode (SQLite JSON blobs). Set FHIR_UPSTREAM_URL "
             "for upstream proxy."
         )
-
-    if _is_true(flask_app.config.get("LEGACY_BOOT_ON_CREATE")):
-        logger.warning(
-            "HEALTHCLAW_LEGACY_BOOT is enabled; running mutable lifecycle "
-            "tasks during application construction"
-        )
-        run_legacy_boot_tasks(flask_app)
 
     return flask_app
 
