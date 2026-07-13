@@ -106,6 +106,7 @@ def test_local_contract_rejects_false_a_evidence():
         _corrective_outcome,
         _has_outcome_warning,
         _outcome_names_parameter_and_supported_set,
+        _outcome_names_unsupported_modifier,
         _self_link_omits,
     )
 
@@ -131,6 +132,10 @@ def test_local_contract_rejects_false_a_evidence():
         "datetime was not rejected. Supported parameters: patient, code, status.",
         "There are no unknown problems with datetime. Supported parameters: "
         "patient, code, status.",
+        "datetime is unsupported. Use _lastUpdated instead. Supported parameters: "
+        "patient, code, status, _lastUpdated, _count, _sort, _summary, context-id.",
+        "datetime is unsupported. Supported parameters: patient, code, status, "
+        "_lastUpdated, _count, _sort, _summary, context-id, invented-filter.",
     ):
         body = {
             "resourceType": "OperationOutcome",
@@ -185,6 +190,31 @@ def test_local_contract_rejects_false_a_evidence():
             }],
         },
     }
+    assert not _has_outcome_warning({
+        "resourceType": "Bundle",
+        "entry": [safe_warning],
+    }, "datetime")
+
+    generic_modifier = {
+        "resourceType": "OperationOutcome",
+        "issue": [{
+            "severity": "error",
+            "code": "not-supported",
+            "details": {"text": "The requested modifier is not supported."},
+        }],
+    }
+    named_modifier = {
+        "resourceType": "OperationOutcome",
+        "issue": [{
+            "severity": "error",
+            "code": "not-supported",
+            "details": {"text": "Modifier code:exact is not supported."},
+        }],
+    }
+    assert not _outcome_names_unsupported_modifier(
+        generic_modifier, "code:exact")
+    assert _outcome_names_unsupported_modifier(named_modifier, "code:exact")
+
     hostile_extra_warning = {
         "search": {"mode": "outcome"},
         "resource": {
@@ -287,9 +317,10 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
             "checks": [
                 "strict unknown parameter is rejected",
                 "strict rejection is audited as a failure",
-                "lenient unknown parameter carries an outcome warning",
-                "lenient warning is audited truthfully",
-                "unsupported modifier is rejected",
+                    "lenient unknown parameter carries an outcome warning",
+                    "lenient warning is audited truthfully",
+                    "unsupported modifier is rejected",
+                    "unsupported modifier rejections are audited as failures",
             ],
         },
         "mcp": {"status": "not_run", "checks": []},
@@ -301,6 +332,7 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
         "lenient unknown parameter carries an outcome warning",
         "lenient warning is audited truthfully",
         "unsupported modifier is rejected",
+        "unsupported modifier rejections are audited as failures",
     }
     assert report.score == (6, 7)
     assert report.grade == "B"
@@ -514,6 +546,15 @@ def test_proxy_a_requires_a_corrective_operation_outcome():
     }, {"invalid"})
 
 
+def test_hostile_value_check_considers_parsed_body_and_raw_text():
+    from r6.conformance.probes import _response_omits_hostile_values
+
+    assert not _response_omits_hostile_values(
+        {"detail": "Quintavious"}, '{"detail":"safe"}')
+    assert not _response_omits_hostile_values(
+        {"detail": "safe"}, '{"detail":"ZzYzXbArToN"}')
+
+
 def test_proxy_profile_does_not_echo_malformed_audit_codes():
     import json
 
@@ -558,7 +599,7 @@ def test_proxy_profile_does_not_echo_malformed_audit_codes():
     assert hostile not in json.dumps([check.detail for check in checks])
 
 
-def test_error_fidelity_crash_does_not_claim_optional_profiles_ran():
+def test_error_fidelity_crash_still_runs_configured_optional_profiles():
     class BrokenLocalClient:
         base = "broken"
 
@@ -570,9 +611,15 @@ def test_error_fidelity_crash_does_not_claim_optional_profiles_ran():
         mcp_client=object(), proxy_client=object())
 
     result = next(r for r in report.results if r.key == "error_fidelity")
-    assert result.coverage == "local-fhir-only"
-    assert result.profiles["mcp"] == {"status": "not_run", "checks": []}
-    assert result.profiles["proxy"] == {"status": "not_run", "checks": []}
+    assert result.coverage == "full"
+    assert result.profiles["mcp"] == {
+        "status": "run", "grade": "C",
+        "checks": ["MCP tool failure is corrective and flagged"],
+    }
+    assert result.profiles["proxy"] == {
+        "status": "run", "grade": "F",
+        "checks": ["proxy profile executed"],
+    }
 
 
 def test_live_mcp_probe_client_initializes_then_calls_tool():
@@ -716,7 +763,8 @@ def test_scripted_local_contract_can_reach_a_without_reading_real_data():
     from r6.conformance.probes import probe_error_fidelity
 
     corrective_text = (
-        "datetime is not implemented. Supported parameters: patient, code, status."
+        "datetime is not implemented. Supported parameters: patient, code, status, "
+        "_lastUpdated, _count, _sort, _summary, context-id."
     )
 
     def audit_event(event_id, code, detail=None):
@@ -747,17 +795,20 @@ def test_scripted_local_contract_can_reach_a_without_reading_real_data():
                 self.audit_call += 1
                 old = audit_event("old", "0")
                 strict = audit_event("strict", "8")
+                lenient = audit_event(
+                    "lenient", "0", "ignored parameter: datetime")
                 if self.audit_call == 1:
                     body = audit_bundle(old)
                 elif self.audit_call in (2, 3):
                     body = audit_bundle(strict, old)
+                elif self.audit_call in (4, 5):
+                    body = audit_bundle(lenient, strict, old)
                 else:
                     body = audit_bundle(
-                        audit_event(
-                            "lenient", "0", "ignored parameter: datetime"),
-                        strict,
-                        old,
-                    )
+                        audit_event("modifier-default", "8"),
+                        audit_event("modifier-strict", "8"),
+                        audit_event("modifier-lenient", "8"),
+                        lenient, strict, old)
                 return 200, body, ""
 
             self.observation_call += 1
@@ -796,7 +847,7 @@ def test_scripted_local_contract_can_reach_a_without_reading_real_data():
                 "issue": [{
                     "severity": "error",
                     "code": "not-supported",
-                    "details": {"text": "The requested modifier is not supported."},
+                    "details": {"text": "Modifier code:exact is not supported."},
                 }],
             }
             return 400, body, ""
@@ -805,6 +856,11 @@ def test_scripted_local_contract_can_reach_a_without_reading_real_data():
         LocalAClient(), ProbeContext("tenant", "token"))
     assert result.grade == "A"
     assert result.passed is True
+    assert any(
+        check.name == "unsupported modifier rejections are audited as failures"
+        and check.passed
+        for check in result.checks
+    )
 
 
 def test_injected_mock_proxy_profile_passes_the_full_error_contract(

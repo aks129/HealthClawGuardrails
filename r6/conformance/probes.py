@@ -39,6 +39,10 @@ PROPERTIES = (
 _ERROR_FIDELITY_GRADE_ORDER = {"F": 0, "C": 1, "A": 2}
 _MCP_INVALID_RESOURCE = "WidgetQuintaviousZzyzxbarton"
 _MCP_HOSTILE_URL = "https://db.internal.example/patient/secret"
+_HOSTILE_VALUE_TOKENS = (
+    _GIVEN.lower(), _FAMILY.lower(), "db.internal.example",
+)
+_URL_SCHEME_TOKENS = ("http://", "https://")
 _REQUEST_ERROR_CODES = {"invalid", "structure", "value", "not-supported"}
 _LOCAL_SUPPORTED_PARAMETER_EVIDENCE = {
     "patient", "code", "status", "_lastupdated",
@@ -516,9 +520,13 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
             for token in re.findall(
                 r"[A-Za-z_][A-Za-z0-9_-]*", match.group(1))
         }
-        supported = declared & _LOCAL_SUPPORTED_PARAMETER_EVIDENCE
         parameter_lower = parameter.lower()
         remaining = text[:match.start()] + text[match.end():]
+        # `_lastUpdated` is record modification time, not clinical datetime.
+        # Any mention outside the factual supported-set list is an ambiguous or
+        # unsafe correction, so it cannot earn A.
+        if "_lastupdated" in remaining.lower():
+            continue
         parameter_token = re.escape(parameter_lower)
         rejection = re.search(
             rf"(?:^|[.!?]\s*)(?:"
@@ -532,9 +540,42 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
         )
         if (parameter_lower not in declared
                 and rejection is not None
-                and len(supported) >= 2):
+                and declared == _LOCAL_SUPPORTED_PARAMETER_EVIDENCE):
             return True
     return False
+
+
+def _outcome_names_unsupported_modifier(body, modifier: str) -> bool:
+    """Require a corrective rejection to identify the unsupported modifier."""
+    if not _is_operation_outcome(body):
+        return False
+    token = re.escape(modifier.lower())
+    rejection = re.compile(
+        rf"(?:^|[.!?]\s*)(?:"
+        rf"(?:unsupported|invalid|rejected)\s+modifier\s*:?\s*{token}"
+        rf"|modifier\s*:?\s*{token}\s+(?:(?:is|was)\s+)?"
+        rf"(?:unsupported|not\s+supported|rejected|invalid|not\s+implemented)"
+        rf"|{token}\s+modifier\s+(?:(?:is|was)\s+)?"
+        rf"(?:unsupported|not\s+supported|rejected|invalid|not\s+implemented)"
+        rf")\s*(?=[.!?]|$)",
+        re.IGNORECASE,
+    )
+    for issue in body.get("issue", []):
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details")
+        text = details.get("text", "") if isinstance(details, dict) else ""
+        if isinstance(text, str) and rejection.search(text):
+            return True
+    return False
+
+
+def _modifier_rejection_grade(status, body, modifier: str) -> str:
+    grade = _rejection_grade(status, body)
+    if (grade == "A"
+            and not _outcome_names_unsupported_modifier(body, modifier)):
+        return "C"
+    return grade
 
 
 def _safe_warning_outcome(outcome) -> bool:
@@ -555,7 +596,8 @@ def _safe_warning_outcome(outcome) -> bool:
         and isinstance(issue["details"]["text"], str)
         and bool(issue["details"]["text"].strip())
         for issue in issues
-    ) and _outcome_omits_hostile_values(outcome))
+    ) and _values_omit_hostile_tokens(
+        outcome, extra_tokens=_URL_SCHEME_TOKENS))
 
 
 def _has_outcome_warning(bundle, parameter: str) -> bool:
@@ -663,6 +705,16 @@ def _new_audit_outcome_grade(before, after) -> str:
     return "A" if new_codes[0] == "8" else ("F" if new_codes[0] == "0" else "C")
 
 
+def _new_audit_failures_grade(before, after, expected_count: int) -> str:
+    """Grade a bounded batch of rejected requests from their new audit codes."""
+    new_codes = _new_audit_outcome_codes(before, after)
+    if len(new_codes) != expected_count:
+        return "C"
+    if all(code == "8" for code in new_codes):
+        return "A"
+    return "F" if "0" in new_codes else "C"
+
+
 def _new_audit_outcome_codes(before, after) -> list[str]:
     before_ids = set(_audit_events(before))
     return [
@@ -729,32 +781,29 @@ def _corrective_outcome(body, expected_codes: set[str]) -> bool:
                 or not text.strip()):
             return False
         saw_expected = True
-    return saw_expected and _outcome_omits_hostile_values(body)
+    return saw_expected and _values_omit_hostile_tokens(
+        body, extra_tokens=_URL_SCHEME_TOKENS)
 
 
-def _outcome_omits_hostile_values(value) -> bool:
-    blob = json.dumps(value).lower()
-    unsafe_tokens = (
-        _GIVEN.lower(), _FAMILY.lower(),
-        "quintavious zzyzxbarton",
-        _MCP_INVALID_RESOURCE.lower(),
-        "http://", "https://",
-    )
+def _values_omit_hostile_tokens(*values, extra_tokens=()) -> bool:
+    """Fail closed if any serialized evidence contains a synthetic leak token."""
+    try:
+        blob = "\n".join(
+            value if isinstance(value, str) else json.dumps(value)
+            for value in values
+        ).lower()
+    except (TypeError, ValueError):
+        return False
+    unsafe_tokens = (*_HOSTILE_VALUE_TOKENS, *extra_tokens)
     return not any(token in blob for token in unsafe_tokens)
 
 
 def _response_omits_hostile_values(body, text) -> bool:
-    blob = (text or json.dumps(body or {})).lower()
-    return not any(token in blob for token in (
-        _GIVEN.lower(), _FAMILY.lower(),
-        "quintavious zzyzxbarton", "http://", "https://",
-    ))
+    return _values_omit_hostile_tokens(
+        body, text, extra_tokens=_URL_SCHEME_TOKENS)
 
 
 def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
-    hostile_name = "Quintavious Zzyzxbarton"
-    hostile_url = "https://db.internal.example/patient/secret"
-
     _, audit_before, _ = proxy_client.request(
         "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
 
@@ -798,8 +847,7 @@ def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
     _, audit_after, _ = proxy_client.request(
         "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     audit_codes = _new_audit_outcome_codes(audit_before, audit_after)
-    audit_blob = json.dumps(audit_after or {})
-    audit_safe = hostile_name not in audit_blob and hostile_url not in audit_blob
+    audit_safe = _values_omit_hostile_tokens(audit_after)
     audit_ok = (len(audit_codes) == 3
                 and all(code == "8" for code in audit_codes)
                 and audit_safe)
@@ -872,7 +920,8 @@ def _mcp_profile_grade(mcp_client) -> str:
             and has_outcome
             and not malformed_content
             and len(payloads) == len(outcomes)
-            and _mcp_result_omits_hostile_values(result)
+            and _values_omit_hostile_tokens(
+                result, extra_tokens=_URL_SCHEME_TOKENS)
             and all(_safe_corrective_mcp_outcome(outcome) for outcome in outcomes)):
         return "A"
     if has_failure or result.get("isError") is True:
@@ -905,19 +954,42 @@ def _safe_corrective_mcp_outcome(outcome) -> bool:
         text = details["text"]
         if not isinstance(text, str) or not text.strip():
             return False
-    return saw_expected_category and _mcp_result_omits_hostile_values(outcome)
+    return saw_expected_category and _values_omit_hostile_tokens(
+        outcome, extra_tokens=_URL_SCHEME_TOKENS)
 
 
-def _mcp_result_omits_hostile_values(value) -> bool:
-    blob = json.dumps(value).lower()
-    unsafe_tokens = (
-        _MCP_INVALID_RESOURCE.lower(),
-        "quintavious",
-        "zzyzxbarton",
-        "http://",
-        "https://",
-    )
-    return not any(token in blob for token in unsafe_tokens)
+def _run_optional_error_fidelity_profiles(
+        result: ProbeResult, ctx: ProbeContext, *, mcp_client=None,
+        proxy_client=None) -> ProbeResult:
+    """Run each configured optional profile even if another profile failed."""
+    executed_grades = [result.grade or "F"]
+    if mcp_client is not None:
+        mcp_grade = _mcp_profile_grade(mcp_client)
+        mcp_check_name = "MCP tool failure is corrective and flagged"
+        result.profiles["mcp"] = _profile(
+            "run", grade=mcp_grade, checks=[mcp_check_name])
+        executed_grades.append(mcp_grade)
+        result.coverage = "local+mcp"
+        result.checks.append(Check(
+            mcp_check_name, mcp_grade == "A", f"grade {mcp_grade}"))
+
+    if proxy_client is not None:
+        try:
+            proxy_grade, proxy_checks = _proxy_profile(proxy_client, ctx)
+        except Exception as exc:
+            proxy_grade = "F"
+            proxy_checks = [
+                Check("proxy profile executed", False, type(exc).__name__)
+            ]
+        result.profiles["proxy"] = _profile(
+            "run", grade=proxy_grade,
+            checks=[check.name for check in proxy_checks])
+        executed_grades.append(proxy_grade)
+        result.checks.extend(proxy_checks)
+        result.coverage = "full" if mcp_client is not None else "local+proxy"
+
+    result.grade = _error_fidelity_grade(executed_grades)
+    return result
 
 
 def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> ProbeResult:
@@ -958,26 +1030,36 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
     lenient_audit_grade = _new_audit_warning_grade(
         lenient_audit_before, lenient_audit_after, "datetime")
 
+    _, modifier_audit_before, _ = client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
     modifier_status, modifier_body, _ = client.request(
         "GET", f"/Observation?{modifier_query}", ctx.read_headers())
-    modifier_grade = _rejection_grade(modifier_status, modifier_body)
+    modifier_grade = _modifier_rejection_grade(
+        modifier_status, modifier_body, "code:exact")
     modifier_strict_status, modifier_strict_body, _ = client.request(
         "GET", f"/Observation?{modifier_query}", strict_headers)
-    modifier_strict_grade = _rejection_grade(
-        modifier_strict_status, modifier_strict_body)
+    modifier_strict_grade = _modifier_rejection_grade(
+        modifier_strict_status, modifier_strict_body, "code:exact")
     lenient_headers = ctx.read_headers()
     lenient_headers["Prefer"] = "handling=lenient"
     modifier_lenient_status, modifier_lenient_body, _ = client.request(
         "GET", f"/Observation?{modifier_query}", lenient_headers)
-    modifier_lenient_grade = _rejection_grade(
-        modifier_lenient_status, modifier_lenient_body)
+    modifier_lenient_grade = _modifier_rejection_grade(
+        modifier_lenient_status, modifier_lenient_body, "code:exact")
     modifier_grade = _error_fidelity_grade([
         modifier_grade, modifier_strict_grade, modifier_lenient_grade,
     ])
+    _, modifier_audit_after, _ = client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=200", ctx.read_headers())
+    modifier_audit_grade = _new_audit_failures_grade(
+        modifier_audit_before, modifier_audit_after, 3)
+    if 200 in (
+            modifier_status, modifier_strict_status, modifier_lenient_status):
+        modifier_audit_grade = "F"
 
     local_grade = _error_fidelity_grade([
         strict_grade, audit_grade, lenient_grade, lenient_audit_grade,
-        modifier_grade,
+        modifier_grade, modifier_audit_grade,
     ])
     checks = [
         Check("strict unknown parameter is rejected", strict_grade == "A",
@@ -994,6 +1076,9 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
               f"grade {modifier_grade}; statuses "
               f"{modifier_status},{modifier_strict_status},"
               f"{modifier_lenient_status}"),
+        Check("unsupported modifier rejections are audited as failures",
+              modifier_audit_grade == "A",
+              f"grade {modifier_audit_grade}"),
     ]
     local_check_names = [check.name for check in checks]
     profiles = {
@@ -1001,40 +1086,14 @@ def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> Pro
         "mcp": _profile("not_run"),
         "proxy": _profile("not_run"),
     }
-    executed_grades = [local_grade]
-    coverage = "local-fhir-only"
-    if mcp_client is not None:
-        mcp_grade = _mcp_profile_grade(mcp_client)
-        mcp_check_name = "MCP tool failure is corrective and flagged"
-        profiles["mcp"] = _profile(
-            "run", grade=mcp_grade, checks=[mcp_check_name])
-        executed_grades.append(mcp_grade)
-        coverage = "local+mcp"
-        checks.append(Check(
-            mcp_check_name, mcp_grade == "A",
-            f"grade {mcp_grade}"))
-
-    if proxy_client is not None:
-        try:
-            proxy_grade, proxy_checks = _proxy_profile(proxy_client, ctx)
-        except Exception as exc:
-            proxy_grade = "F"
-            proxy_checks = [
-                Check("proxy profile executed", False, type(exc).__name__)
-            ]
-        profiles["proxy"] = _profile(
-            "run", grade=proxy_grade,
-            checks=[check.name for check in proxy_checks])
-        executed_grades.append(proxy_grade)
-        checks.extend(proxy_checks)
-        coverage = "full" if mcp_client is not None else "local+proxy"
-
-    return ProbeResult(
+    result = ProbeResult(
         "error_fidelity", "Error Fidelity", checks,
-        grade=_error_fidelity_grade(executed_grades),
-        coverage=coverage,
+        grade=local_grade,
+        coverage="local-fhir-only",
         profiles=profiles,
     )
+    return _run_optional_error_fidelity_profiles(
+        result, ctx, mcp_client=mcp_client, proxy_client=proxy_client)
 
 
 _PROBES = (
@@ -1062,7 +1121,7 @@ def run_conformance(client, ctx: ProbeContext, *, mcp_client=None,
         results.append(probe_error_fidelity(
             client, ctx, mcp_client=mcp_client, proxy_client=proxy_client))
     except Exception as exc:  # a probe crash is a FAIL, never a harness crash
-        results.append(ProbeResult(
+        failure = ProbeResult(
             "error_fidelity", "Error Fidelity",
             [Check("probe executed", False, type(exc).__name__)],
             grade="F", coverage="local-fhir-only",
@@ -1070,6 +1129,8 @@ def run_conformance(client, ctx: ProbeContext, *, mcp_client=None,
                 "local": _profile("run", grade="F", checks=["probe executed"]),
                 "mcp": _profile("not_run"),
                 "proxy": _profile("not_run"),
-            }))
+            })
+        results.append(_run_optional_error_fidelity_profiles(
+            failure, ctx, mcp_client=mcp_client, proxy_client=proxy_client))
     return ConformanceReport(results, base=getattr(client, "base", ""),
                              tenant=ctx.tenant)
