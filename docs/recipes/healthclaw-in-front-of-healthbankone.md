@@ -56,11 +56,11 @@ at the HBO-backed deployment:
 ```bash
 python scripts/guardrail_conformance.py --base-url https://<deployment> \
   --tenant <hbo-tenant> --step-up-token <token>
-# → Grade A (6/6): PHI Redaction · Audit · Step-Up · Human-in-the-Loop · Tenant Isolation · Disclaimers
+# → Current baseline Grade B (6/7): the original six pass; Error Fidelity is F
 ```
 
-A partner (or a regulator) can run it and see, on synthetic data, that every
-guardrail fires regardless of the backend.
+A partner (or a regulator) can run it on synthetic data and see exactly which
+guardrails hold and which still fail, regardless of the backend.
 
 ## Identity: OAuth/OIDC scope authorization (roadmap)
 

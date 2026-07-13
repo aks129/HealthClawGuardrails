@@ -112,7 +112,7 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
 ## Prove it: guardrail conformance
 
 The guardrails are **verifiable, not marketing.** A runnable harness probes any
-deployment with synthetic data and emits a scorecard across all six properties —
+deployment with synthetic data and emits a scorecard across all seven properties —
 run it against your own instance (or ours):
 
 ```bash
@@ -123,10 +123,11 @@ python scripts/guardrail_conformance.py \
 
 ```text
 HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-demo]
-  Grade: A   (6/6 properties)
+  Grade: B   (6/7 properties)
   [PASS] PHI Redaction            [PASS] Human-in-the-Loop
   [PASS] Immutable Audit Trail    [PASS] Tenant Isolation
   [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
+  [FAIL] Error Fidelity — F (local-fhir-only)
 ```
 
 Or hit the **one-URL self-test** on any running deployment — no token needed, it
@@ -136,9 +137,14 @@ self-tenants internally and returns 200 at Grade A (503 otherwise):
 curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
 ```
 
-The same harness runs against the Flask test client as a **CI gate** (`tests/test_guardrail_conformance.py`),
-so a guardrail regression fails the build. `--json` emits a machine-readable
-report. Library API: `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
+The initial error-fidelity baseline is intentionally B: the original six
+properties pass while local search still accepts unsupported filters. The same
+harness runs against the Flask test client as a **CI baseline**
+(`tests/test_guardrail_conformance.py`), so grade movement is explicit rather
+than hidden. `--json` emits a machine-readable report; `--mcp-url` also probes
+MCP `tools/call` error signaling. For an authenticated MCP deployment, set
+`MCP_AUTH_TOKEN` or pass `--mcp-auth-token`. Library API:
+`from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
 
 ## Install as a Claude Plugin
 
@@ -215,7 +221,7 @@ Tool names use underscores (not dots) for Claude Desktop / MCP client compatibil
 | `fhir_lastn` | Most recent N observations per code |
 | `fhir_interpret_labs` | Lab reference-range interpretation (`$interpret`) — decision support, not diagnosis |
 | `care_gaps` | Preventive-care gaps (`$care-gaps`) — screenings/immunizations that may be due, from the patient's own records |
-| `guardrail_conformance` | Run the guardrail conformance self-test — graded A–F scorecard across all six properties |
+| `guardrail_conformance` | Run the guardrail conformance self-test — graded A–F scorecard across all seven properties |
 | `fhir_permission_evaluate` | R6 Permission access control evaluation |
 | `fhir_subscription_topics` | List available SubscriptionTopics |
 | `questionnaire_populate` | SDC `$populate` — pre-fill a Questionnaire for a subject |

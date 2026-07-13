@@ -65,9 +65,9 @@ or a pre-issued bearer.)
 ## Prove the guardrails hold
 
 Run the conformance harness against the HealthClaw instance sitting in front of
-Aidbox — it grades all six properties A–F, so you can *show* (not assert) that
-redaction, audit, step-up, human-in-the-loop, tenant isolation, and disclaimers
-are enforced on the path to your box:
+Aidbox — it grades all seven properties A–F, so you can *show* (not assert)
+which protections hold and which failure paths still need work on the path to
+your box:
 
 ```bash
 curl "$BASE/r6/fhir/\$conformance?format=text"

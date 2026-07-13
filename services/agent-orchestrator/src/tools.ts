@@ -592,7 +592,7 @@ export class FHIRTools {
         name: "guardrail_conformance",
         title: "Guardrail Conformance Scorecard",
         description:
-          "Run the guardrail conformance self-test on the connected HealthClaw deployment and return the graded scorecard (A-F across PHI redaction, immutable audit, step-up auth, human-in-the-loop, tenant isolation, medical disclaimers). Uses synthetic data only. Set fresh=true to force a new run instead of the cached result.",
+          "Run the guardrail conformance self-test on the connected HealthClaw deployment and return the graded scorecard across seven guardrail properties: PHI redaction, immutable audit, step-up auth, human-in-the-loop, tenant isolation, medical disclaimers, and error fidelity. Uses synthetic data only. Set fresh=true to force a new run instead of the cached result.",
         tier: "read",
         handler: ({ input, headers }) =>
           this.guardrailConformance(input.fresh === true, headers),

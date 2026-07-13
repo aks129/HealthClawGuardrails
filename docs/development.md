@@ -91,8 +91,11 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 - Redaction imports: `from r6.redaction import apply_redaction` (Safe Harbor)
   or `apply_patient_controlled_redaction(resource, patient_id)`.
 - The whole set is enforced by the **conformance harness**:
-  `tests/test_guardrail_conformance.py` is a CI gate (must stay Grade A), and
-  `GET /r6/fhir/$conformance` grades any live deployment.
+  `tests/test_guardrail_conformance.py` pins the measured CI baseline, and
+  `GET /r6/fhir/$conformance` grades any live deployment. The current baseline
+  is intentionally Grade B (6/7): the in-process error-fidelity profile remains
+  F until the local-search follow-up lands. The optional CLI MCP profile remains
+  C until its separate transport follow-up lands.
 
 ## Deploy notes (maintainers)
 
