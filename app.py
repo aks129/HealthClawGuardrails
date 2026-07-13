@@ -20,19 +20,11 @@ from pathlib import Path
 import httpx
 import yaml
 from email_validator import EmailNotValidError, validate_email
-from flask import Response, jsonify, render_template, request
-from main import app
+from flask import Blueprint, Response, current_app, jsonify, render_template, request
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Global request body cap — oversized payloads are rejected with 413 by
-# Werkzeug before any handler runs. 16 MB headroom: full US Core R4 history
-# Bundles ($ingest-context) and base64 PDF attachments in welcome/SHL flows
-# can exceed 5 MB, so we use the larger cap to avoid breaking legitimate
-# ingests while still stopping multi-hundred-MB body floods.
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+web_blueprint = Blueprint("web", __name__)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +100,7 @@ _CONTENT_SECURITY_POLICY = (
 )
 
 
-@app.after_request
+@web_blueprint.after_app_request
 def _security_headers(response):
     # setdefault throughout so we never clobber a header a handler already set.
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -131,7 +123,7 @@ def _security_headers(response):
 # ---------------------------------------------------------------------------
 # robots.txt — deny indexing of the personal tenant host
 # ---------------------------------------------------------------------------
-@app.route('/robots.txt')
+@web_blueprint.route('/robots.txt')
 def robots_txt():
     """
     Personal deployments (app.healthclaw.io) return a blanket disallow to
@@ -145,19 +137,19 @@ def robots_txt():
     return Response(body, mimetype="text/plain")
 
 
-@app.route('/')
+@web_blueprint.route('/')
 def index():
     """Landing page."""
     return render_template('index.html')
 
 
-@app.route('/r6-dashboard')
+@web_blueprint.route('/r6-dashboard')
 def r6_dashboard():
     """Health Data Dashboard (FHIR) — interactive guardrail showcase."""
     return render_template('r6_dashboard.html')
 
 
-@app.route('/fhir-control-panel')
+@web_blueprint.route('/fhir-control-panel')
 def fhir_control_panel():
     """
     FHIR Control Panel — live Dev Days demo surface.
@@ -169,7 +161,7 @@ def fhir_control_panel():
     return render_template('fhir_control_panel.html')
 
 
-@app.route('/demo/intake-form')
+@web_blueprint.route('/demo/intake-form')
 def demo_intake_form():
     """
     A realistic (fictional) new-patient intake form for the form-fill demo.
@@ -184,7 +176,7 @@ import re as _re
 _TENANT_ID_PATTERN = _re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
 
 
-@app.route('/connect/<tenant_id>')
+@web_blueprint.route('/connect/<tenant_id>')
 def fasten_connect(tenant_id):
     """
     Lean Fasten-Connect TEFCA verification page bound to a specific tenant.
@@ -201,31 +193,31 @@ def fasten_connect(tenant_id):
     )
 
 
-@app.route('/faq')
+@web_blueprint.route('/faq')
 def faq():
     """Frequently Asked Questions."""
     return render_template('faq.html')
 
 
-@app.route('/wiki')
+@web_blueprint.route('/wiki')
 def wiki():
     """Project Wiki — architecture, concepts, and how-tos."""
     return render_template('wiki.html')
 
 
-@app.route('/privacy')
+@web_blueprint.route('/privacy')
 def privacy():
     """Privacy Policy."""
     return render_template('privacy.html')
 
 
-@app.route('/terms')
+@web_blueprint.route('/terms')
 def terms():
     """Terms & Conditions."""
     return render_template('terms.html')
 
 
-@app.route('/skills')
+@web_blueprint.route('/skills')
 def skills_index():
     """Browseable index of every OpenClaw skill in this repo."""
     return render_template('skills.html', skills=_SKILLS_CACHE)
@@ -275,15 +267,15 @@ _WELLKNOWN_SKILL_PATHS: dict[str, Path] = {
 }
 
 
-@app.route('/.well-known/agent-skills/index.json')
-@app.route('/.well-known/skills/index.json')
+@web_blueprint.route('/.well-known/agent-skills/index.json')
+@web_blueprint.route('/.well-known/skills/index.json')
 def wellknown_skills_discovery():
     return jsonify({"$schema": _SKILLS_DISCOVERY_SCHEMA,
                     "skills": _WELLKNOWN_SKILLS_CACHE})
 
 
-@app.route('/.well-known/agent-skills/<slug>/SKILL.md')
-@app.route('/.well-known/skills/<slug>/SKILL.md')
+@web_blueprint.route('/.well-known/agent-skills/<slug>/SKILL.md')
+@web_blueprint.route('/.well-known/skills/<slug>/SKILL.md')
 def wellknown_skill_md(slug):
     # Only ever serve a slug that is already in our known-skills allowlist —
     # the request value is used purely as a dictionary key, never joined into a
@@ -291,8 +283,9 @@ def wellknown_skill_md(slug):
     known = _WELLKNOWN_SKILL_PATHS.get(slug)
     if known is None:
         return jsonify({"error": "unknown skill"}), 404
-    return app.response_class(known.read_bytes(),
-                              mimetype="text/markdown; charset=utf-8")
+    return current_app.response_class(
+        known.read_bytes(), mimetype="text/markdown; charset=utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +404,7 @@ def _send_welcome_email(email: str, api_key: str) -> None:
         logger.warning("welcome email network error: %s", exc)
 
 
-@app.route('/api/subscribe', methods=['POST'])
+@web_blueprint.route('/api/subscribe', methods=['POST'])
 def api_subscribe():
     payload = request.get_json(silent=True) or request.form
     raw_email = (payload.get("email") or "").strip()

@@ -32,7 +32,14 @@ from r6.audit import record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.stepup import validate_step_up_token, generate_step_up_token
-from r6.oauth import register_oauth_routes, validate_bearer_token
+from r6.oauth import register_oauth_routes
+from r6.read_auth import (
+    authorize_tenant_read,
+    read_auth_enabled as _read_auth_enabled,
+    read_auth_required as _read_auth_required,
+)
+from r6.runtime_config import resolve_app_env
+from r6.version import __version__
 from r6.rate_limit import rate_limit_middleware
 from r6.health_compliance import (
     add_disclaimer, enforce_human_in_loop, deidentify_resource,
@@ -148,46 +155,6 @@ def _is_exempt_discovery_path(path):
     return any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
 
 
-# --- Read Authentication (flag-gated) ---
-
-
-def _read_auth_enabled():
-    """True only when READ_AUTH_ENABLED is explicitly turned on.
-
-    Defaults OFF — deploying this code changes nothing until the flag is
-    flipped. Re-read every call so the flag can be toggled without restart.
-    """
-    return os.environ.get('READ_AUTH_ENABLED', '').strip().lower() in (
-        '1', 'true', 'yes',
-    )
-
-
-def _public_read_tenants():
-    """Tenants readable without authentication (synthetic demo data).
-
-    Parsed from PUBLIC_TENANTS (comma-separated). Empty/unset → no public
-    tenants. Re-read every call so changes take effect without restart.
-    """
-    raw = os.environ.get('PUBLIC_TENANTS', '').strip()
-    if not raw:
-        return frozenset()
-    return frozenset(t.strip() for t in raw.split(',') if t.strip())
-
-
-def _read_auth_required(tenant_id):
-    """Whether a read for `tenant_id` must present a tenant-bound token.
-
-    False when the flag is off (no-op default) or the tenant is public.
-    True otherwise — caller must then validate a step-up token bound to
-    this tenant.
-    """
-    if not _read_auth_enabled():
-        return False
-    if tenant_id in _public_read_tenants():
-        return False
-    return True
-
-
 # --- Tenant Enforcement ---
 
 @r6_blueprint.before_request
@@ -246,34 +213,13 @@ def authenticate_tenant_read(tenant_id):
     Mirrors the gate semantics: public tenants and the disabled flag pass;
     otherwise a tenant-bound step-up token OR a SMART bearer is required.
     """
-    if not _read_auth_enabled():
+    if authorize_tenant_read(tenant_id) is not None:
         return None
-    if not _read_auth_required(tenant_id):
-        return None
-
-    bearer = ''
-    auth = (request.headers.get('Authorization') or '').strip()
-    if auth.lower().startswith('bearer '):
-        bearer = auth[7:].strip()
-    step_up = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
-
-    valid = False
-    if step_up:
-        # validate_step_up_token returns (bool, str) — destructure both;
-        # never coerce the tuple to a boolean. require_scope=None: reads
-        # accept both full tokens and read-scoped patient connect tokens.
-        valid, _err = validate_step_up_token(step_up, tenant_id,
-                                             require_scope=None)
-    if not valid and bearer:
-        valid = _validate_oauth_read(bearer, tenant_id)
-
-    if not valid:
-        # Do NOT leak whether the tenant exists or why the token failed.
-        return _operation_outcome(
-            'error', 'security',
-            f"Read access to tenant '{tenant_id}' requires authentication",
-        ), 401
-    return None
+    # Do NOT leak whether the tenant exists or why the token failed.
+    return _operation_outcome(
+        'error', 'security',
+        f"Read access to tenant '{tenant_id}' requires authentication",
+    ), 401
 
 
 @r6_blueprint.before_request
@@ -324,32 +270,6 @@ def authenticate_read():
     # Delegated to the reusable helper so POST read-shaped operations can
     # apply the exact same gate.
     return authenticate_tenant_read(tenant_id)
-
-
-# Scopes that grant FHIR read access. patient/*.read is the SMART-on-FHIR v2
-# read scope; fhir.read is this server's coarse read scope. Either authorizes
-# a redacted read.
-_OAUTH_READ_SCOPES = frozenset({
-    'patient/*.read', 'smart/patient/*.read', 'fhir.read', 'user/*.read',
-    'system/*.read',
-})
-
-
-def _validate_oauth_read(bearer, tenant_id):
-    """Validate an OAuth bearer access token for a read of `tenant_id`.
-
-    Returns True only when the token is valid (not expired/revoked), its
-    associated tenant matches X-Tenant-Id (no cross-tenant reuse), and it
-    carries a read scope. This is what makes the CapabilityStatement's
-    SMART-on-FHIR advertisement actually authorize reads.
-    """
-    ok, info = validate_bearer_token(bearer)
-    if not ok or not isinstance(info, dict):
-        return False
-    if info.get('tenant_id') != tenant_id:
-        return False
-    token_scopes = set(info.get('scopes') or [])
-    return bool(token_scopes & _OAUTH_READ_SCOPES)
 
 
 # --- Human-in-the-Loop Enforcement ---
@@ -692,25 +612,7 @@ def update_resource(resource_type, resource_id):
         return _operation_outcome('error', 'invalid',
                                   f'Resource id in body ({body["id"]}) does not match URL ({resource_id})'), 400
 
-    # Enforce tenant isolation
-    resource = R6Resource.query.filter_by(
-        id=resource_id, resource_type=resource_type,
-        is_deleted=False, tenant_id=tenant_id
-    ).first()
-
-    if not resource:
-        return _operation_outcome('error', 'not-found',
-                                  f'{resource_type}/{resource_id} not found'), 404
-
-    # ETag/If-Match concurrency control
     if_match = request.headers.get('If-Match')
-    if if_match:
-        # Normalize: strip W/ prefix and quotes for comparison
-        expected = if_match.strip().lstrip('W/').strip('"')
-        actual = str(resource.version_id)
-        if expected != actual:
-            return _operation_outcome('error', 'conflict',
-                                      'Resource has been modified (ETag mismatch)'), 409
 
     # Run $validate pre-commit
     validation_result = validator.validate_resource(body)
@@ -742,6 +644,25 @@ def update_resource(resource_type, resource_id):
                                   'Upstream FHIR server rejected the update'), status_code
 
     # --- Local mode ---
+    # Local tenant isolation and optimistic concurrency are evaluated only
+    # after proxy selection: an upstream-only resource has no shadow DB row.
+    resource = R6Resource.query.filter_by(
+        id=resource_id, resource_type=resource_type,
+        is_deleted=False, tenant_id=tenant_id
+    ).first()
+
+    if not resource:
+        return _operation_outcome('error', 'not-found',
+                                  f'{resource_type}/{resource_id} not found'), 404
+
+    if if_match:
+        # Normalize: strip W/ prefix and quotes for comparison.
+        expected = if_match.strip().lstrip('W/').strip('"')
+        actual = str(resource.version_id)
+        if expected != actual:
+            return _operation_outcome('error', 'conflict',
+                                      'Resource has been modified (ETag mismatch)'), 409
+
     resource_json = json.dumps(body, separators=(',', ':'), sort_keys=True)
     resource.update_resource(resource_json)
 
@@ -1058,6 +979,27 @@ def ingest_context():
 
     tenant_id = request.headers.get('X-Tenant-Id')
 
+    # In hardened deployments, bundle ingestion is a write boundary—not a
+    # read-shaped convenience operation. Public/demo tenants remain usable in
+    # local compatibility mode, while production enables this gate at startup.
+    if _read_auth_enabled():
+        step_up_token = request.headers.get('X-Step-Up-Token', '').strip()
+        valid, _error = validate_step_up_token(
+            step_up_token, tenant_id, require_scope='write'
+        )
+        if not valid:
+            record_audit_event(
+                'create', 'Bundle', None,
+                agent_id=request.headers.get('X-Agent-Id'),
+                tenant_id=tenant_id,
+                outcome='failure',
+                detail='ingest-context authorization rejected',
+            )
+            return _operation_outcome(
+                'error', 'security',
+                'Bundle ingestion requires a tenant-bound write token',
+            ), 401
+
     try:
         result = context_builder.ingest_bundle(body, tenant_id=tenant_id)
         record_audit_event('create', 'Bundle', None,
@@ -1068,9 +1010,9 @@ def ingest_context():
         return jsonify(result), 201
     except ValueError as e:
         return _operation_outcome('error', 'invalid', str(e)), 400
-    except Exception as e:
+    except Exception as exc:
         db.session.rollback()
-        logger.error(f'Failed to ingest bundle: {e}')
+        logger.error('Failed to ingest bundle: %s', type(exc).__name__)
         return _operation_outcome('error', 'exception',
                                   'Failed to ingest bundle'), 500
 
@@ -1540,7 +1482,7 @@ def evaluate_permission():
 
 @r6_blueprint.route('/<resource_type>/<resource_id>/$deidentify', methods=['GET'])
 def deidentify_endpoint(resource_type, resource_id):
-    """Return a HIPAA Safe Harbor de-identified copy of a resource."""
+    """Return a conservative de-identification preview of a resource."""
     if not R6Resource.is_supported_type(resource_type):
         return _operation_outcome('error', 'not-supported',
                                   f'Resource type {resource_type} is not supported'), 400
@@ -1561,7 +1503,7 @@ def deidentify_endpoint(resource_type, resource_id):
                        detail='de-identification export')
 
     fhir_json = resource.to_fhir_json()
-    mode = request.args.get('mode', 'hipaa-safe-harbor')
+    mode = request.args.get('mode', 'deidentified-preview')
 
     if mode == 'patient-controlled':
         patient_id = request.args.get('patient_id', resource_id)
@@ -1640,7 +1582,10 @@ def privacy_policy():
         },
         'data_protection': {
             'redaction': 'PHI redaction applied on all read paths (identifiers, addresses, telecom)',
-            'de_identification': 'HIPAA Safe Harbor de-identification available via $deidentify operation',
+            'de_identification': (
+                'Conservative de-identification preview available via '
+                '$deidentify; expert review is required before disclosure'
+            ),
             'encryption': 'TLS required for all production deployments',
             'audit_trail': 'Immutable, append-only AuditEvent records for all operations',
             'tenant_isolation': 'Mandatory tenant-scoped data isolation on all queries',
@@ -1678,7 +1623,7 @@ def health_check():
     """
     health = {
         'status': 'healthy',
-        'version': '1.0.0',
+        'version': __version__,
         'fhirVersion': R6_FHIR_VERSION,
         'mode': 'upstream' if is_proxy_enabled() else 'local',
         'checks': {}
@@ -1730,7 +1675,7 @@ def _internal_mint_authorized(tenant_id):
         provided = request.headers.get('X-Internal-Secret', '')
         return hmac.compare_digest(provided, mint_secret)
     # Secret unset → open only outside production.
-    return os.environ.get('FLASK_ENV') != 'production'
+    return resolve_app_env() != 'production'
 
 
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
@@ -2280,9 +2225,9 @@ def curatr_apply_fix(resource_type, resource_id):
           "patient_intent": "Updating from retired ICD-9 to ICD-10-CM"
         }
 
-    Requires step-up authorization (X-Step-Up-Token) and human
-    confirmation (X-Human-Confirmed: true) — Condition is a clinical
-    resource type.
+    Production requires an operation-bound, single-use Curatr approval token.
+    ``X-Human-Confirmed`` remains a compatibility signal, but is not treated as
+    proof of approval by itself.
 
     Creates a linked Provenance resource with full change attribution.
     """
@@ -2300,7 +2245,14 @@ def curatr_apply_fix(resource_type, resource_id):
             'Write operations require X-Step-Up-Token header'
         ), 403
 
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
+    production_approval = resolve_app_env() == 'production'
+    operation = f'curatr-apply-fix:{resource_type}/{resource_id}'
+    valid, err = validate_step_up_token(
+        step_up_token,
+        tenant_id,
+        require_audience='curatr' if production_approval else None,
+        require_operation=operation if production_approval else None,
+    )
     if not valid:
         return _operation_outcome(
             'error', 'security',
@@ -2321,6 +2273,21 @@ def curatr_apply_fix(resource_type, resource_id):
             'error', 'invalid', 'fixes array is required and must not be empty'
         ), 400
 
+    if production_approval:
+        # Consume only after the request shape is valid so malformed attempts
+        # cannot burn a legitimate one-time approval credential.
+        valid, err = validate_step_up_token(
+            step_up_token,
+            tenant_id,
+            consume_nonce=True,
+            require_audience='curatr',
+            require_operation=operation,
+        )
+        if not valid:
+            return _operation_outcome(
+                'error', 'security', f'Step-up token rejected: {err}'
+            ), 403
+
     try:
         result = _curatr_apply_fix(
             resource_type=resource_type,
@@ -2331,8 +2298,10 @@ def curatr_apply_fix(resource_type, resource_id):
             agent_id=request.headers.get('X-Agent-Id', 'curatr'),
         )
     except RuntimeError as exc:
-        logger.error('curatr_apply_fix failed: %s', exc)
-        return _operation_outcome('error', 'exception', str(exc)), 500
+        logger.error('curatr_apply_fix failed: %s', type(exc).__name__)
+        return _operation_outcome(
+            'error', 'exception', 'Curatr fix could not be applied'
+        ), 500
 
     if 'error' in result:
         return _operation_outcome('error', 'not-found', result['error']), 404
@@ -2351,7 +2320,8 @@ def curatr_apply_fix(resource_type, resource_id):
             result['quality_score'] = compute_quality_score(fresh_result)
     except Exception as exc:
         logger.warning(
-            'curation state promotion failed (fix still committed): %s', exc,
+            'curation state promotion failed (fix still committed): %s',
+            type(exc).__name__,
         )
 
     return jsonify(result)

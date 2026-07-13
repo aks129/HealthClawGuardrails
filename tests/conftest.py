@@ -25,11 +25,15 @@ TEST_TENANT_ID = 'test-tenant'
 @pytest.fixture
 def app():
     """Create a test Flask application."""
-    from main import app as flask_app
-    flask_app.config['TESTING'] = True
-    # Respect the module-level env var (sqlite by default, Postgres when a CI
-    # lane or migration rehearsal pre-sets SQLALCHEMY_DATABASE_URI).
-    flask_app.config['SQLALCHEMY_DATABASE_URI'] = os.environ['SQLALCHEMY_DATABASE_URI']
+    from main import create_app
+    # Respect the module-level env var (SQLite by default, Postgres when a CI
+    # lane or migration rehearsal pre-sets SQLALCHEMY_DATABASE_URI) while
+    # giving each test a fresh Flask application and extension state.
+    flask_app = create_app({
+        'TESTING': True,
+        'SQLALCHEMY_DATABASE_URI': os.environ['SQLALCHEMY_DATABASE_URI'],
+        'LEGACY_BOOT_ON_CREATE': False,
+    })
 
     from models import db
     with flask_app.app_context():

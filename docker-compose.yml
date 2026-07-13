@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${HOST_PORT:-5000}:5000"
+      - "127.0.0.1:${HOST_PORT:-5000}:5000"
     env_file:
       - path: .env
         required: false
@@ -37,7 +37,55 @@ services:
       - OPEN_WEARABLES_API_KEY=${OPEN_WEARABLES_API_KEY:-}
       - WEARABLES_POLL_INTERVAL=${WEARABLES_POLL_INTERVAL:-900}
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+      seed-demo:
+        condition: service_completed_successfully
+    volumes:
+      - ./instance:/app/instance
+    networks:
+      - fhir-net
+
+  # Operator-controlled schema lifecycle. This one-shot container must finish
+  # before the web process starts; WSGI import never mutates the database.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["flask", "--app", "main", "init-db"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - FLASK_ENV=development
+      - SQLALCHEMY_DATABASE_URI=sqlite:///mcp_server.db
+      - REDIS_URL=redis://redis:6379/0
+      - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+    volumes:
+      - ./instance:/app/instance
+    networks:
+      - fhir-net
+
+  # Seeding remains separate from schema migration. It is idempotent and is
+  # appropriate only for this local synthetic desktop-demo stack.
+  seed-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["flask", "--app", "main", "seed-demo", "--tenant-id", "desktop-demo"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - FLASK_ENV=development
+      - SQLALCHEMY_DATABASE_URI=sqlite:///mcp_server.db
+      - REDIS_URL=redis://redis:6379/0
+      - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - ./instance:/app/instance
     networks:
@@ -54,8 +102,10 @@ services:
       context: ./services/agent-orchestrator
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
+      - NODE_ENV=production
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
       - MCP_PORT=3001
       - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
       - TENANT_ID=${TENANT_ID:-desktop-demo}
@@ -64,11 +114,9 @@ services:
     depends_on:
       - fhir-mcp-guardrails
     # node:20-slim ships no curl, so the probe uses node's global fetch.
-    # tools/list on the /mcp/rpc bridge is the strongest liveness signal:
-    # it exercises the Express stack, JSON-RPC dispatch, and the tool
-    # registry (asserts a non-empty tools array), not just process-up.
+    # /health stays public even when MCP transports require bearer auth.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/mcp/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})}).then(r=>r.json()).then(b=>process.exit(b.result&&Array.isArray(b.result.tools)&&b.result.tools.length>0?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -84,6 +132,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - MCP_BASE_URL=http://agent-orchestrator:3001
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
       - FHIR_BASE_URL=http://fhir-mcp-guardrails:5000/r6/fhir
       - REDIS_URL=redis://redis:6379/0
       - STEP_UP_SECRET=${STEP_UP_SECRET}

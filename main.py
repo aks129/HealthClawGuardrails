@@ -1,285 +1,380 @@
-"""
-FHIR R6 MCP Showcase — Flask Application Entry Point.
+"""Flask application factory and WSGI entry point for HealthClaw Guardrails.
 
-Initializes the Flask app, database, and R6 FHIR Blueprint.
-Run with: python main.py (development) or gunicorn main:app (production)
+``create_app`` only configures an application. Database DDL, schema
+reconciliation, seeding, recovery jobs, and background workers are explicit
+lifecycle operations so importing ``main`` is safe in tests, CLIs, and WSGI
+worker processes.
 """
+
+from __future__ import annotations
 
 import json
-import os
 import logging
+import os
 import time
 import uuid
-from flask import Flask, request as flask_request, g
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import click
+from flask import Flask, g, request as flask_request
 from models import db
+from r6.database_migrations import upgrade_database
+from r6.runtime_config import validate_runtime_environment
 
-# Configure logging — structured JSON in production, human-readable in dev
-log_level = os.environ.get('LOG_LEVEL', 'DEBUG' if os.environ.get('FLASK_ENV') == 'development' else 'INFO')
-
-if os.environ.get('FLASK_ENV') == 'production' or os.environ.get('LOG_FORMAT') == 'json':
-    class JSONFormatter(logging.Formatter):
-        def format(self, record):
-            log_entry = {
-                'timestamp': self.formatTime(record),
-                'level': record.levelname,
-                'logger': record.name,
-                'message': record.getMessage(),
-            }
-            if record.exc_info:
-                log_entry['exception'] = self.formatException(record.exc_info)
-            return json.dumps(log_entry)
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(JSONFormatter())
-    logging.root.handlers = [handler]
-    logging.root.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-else:
-    logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO),
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 logger = logging.getLogger(__name__)
+request_logger = logging.getLogger("request")
+_ROOT_DIR = Path(__file__).resolve().parent
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
-# Create the Flask app with explicit paths for Vercel compatibility
-_root_dir = os.path.dirname(os.path.abspath(__file__))
-app = Flask(__name__,
-            template_folder=os.path.join(_root_dir, 'templates'),
-            static_folder=os.path.join(_root_dir, 'static'))
-app.secret_key = os.environ.get("SESSION_SECRET") or "a-development-secret-key"
 
-# Configure database — require explicit URI in production (unless VERCEL)
-db_uri = os.environ.get("SQLALCHEMY_DATABASE_URI")
-if not db_uri:
-    if os.environ.get('VERCEL'):
-        # Vercel serverless: use ephemeral SQLite in /tmp
-        db_uri = "sqlite:////tmp/mcp_server.db"
-    elif os.environ.get('FLASK_ENV') == 'production':
-        raise RuntimeError(
-            'SQLALCHEMY_DATABASE_URI environment variable is required in production. '
-            'SQLite is not suitable for production use.'
-        )
+class JSONFormatter(logging.Formatter):
+    """Compact structured formatter used by production deployments."""
+
+    def format(self, record):
+        log_entry = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+def _is_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in _TRUE_VALUES
+
+
+def _configure_logging(app_env: str) -> None:
+    log_level = os.environ.get(
+        "LOG_LEVEL", "DEBUG" if app_env == "development" else "INFO"
+    )
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    if app_env == "production" or os.environ.get("LOG_FORMAT") == "json":
+        handler = logging.StreamHandler()
+        handler.setFormatter(JSONFormatter())
+        logging.root.handlers = [handler]
+        logging.root.setLevel(level)
     else:
-        db_uri = "sqlite:///mcp_server.db"
-
-app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
-logger.info("Database configured (URI not logged for security)")
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-# Database connection pooling (PostgreSQL in production)
-if 'postgresql' in db_uri or 'postgres' in db_uri:
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_size": int(os.environ.get("DB_POOL_SIZE", "10")),
-        "pool_recycle": 3600,
-        "pool_pre_ping": True,
-    }
-
-# Require STEP_UP_SECRET in production (auto-generate on Vercel for demo)
-if os.environ.get('FLASK_ENV') == 'production' and not os.environ.get('STEP_UP_SECRET'):
-    if os.environ.get('VERCEL'):
-        import secrets
-        os.environ['STEP_UP_SECRET'] = secrets.token_hex(32)
-        logger.info("STEP_UP_SECRET auto-generated for Vercel demo deployment")
-    else:
-        raise RuntimeError(
-            'STEP_UP_SECRET environment variable is required in production. '
-            'Generate a secure random secret: python -c "import secrets; print(secrets.token_hex(32))"'
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
 
-# Initialize database
-db.init_app(app)
 
-with app.app_context():
+def _database_uri(app_env: str, settings: Mapping[str, Any]) -> str:
+    configured = settings.get("SQLALCHEMY_DATABASE_URI")
+    db_uri = str(configured).strip() if configured else os.environ.get(
+        "SQLALCHEMY_DATABASE_URI", ""
+    ).strip()
+    if db_uri:
+        return db_uri
+    if os.environ.get("VERCEL"):
+        return "sqlite:////tmp/mcp_server.db"
+    if app_env == "production":
+        raise RuntimeError(
+            "SQLALCHEMY_DATABASE_URI environment variable is required in "
+            "production. SQLite is not suitable for production use."
+        )
+    return "sqlite:///mcp_server.db"
+
+
+def register_model_metadata() -> None:
+    """Import every model module that database lifecycle tasks must see."""
+    from r6.models import R6Resource  # noqa: F401
+    import r6.actions.confirmations  # noqa: F401
+    import r6.actions.events  # noqa: F401
+    import r6.actions.models  # noqa: F401
+    import r6.command_center.models  # noqa: F401
+    import r6.fasten.models  # noqa: F401
+    import r6.smbp.models  # noqa: F401
+    import r6.wearables.models  # noqa: F401
+
+
+def initialize_database(flask_app: Flask) -> str:
+    """Upgrade the configured database to the current Alembic revision."""
+    register_model_metadata()
+    with flask_app.app_context():
+        revision = upgrade_database(db.engine)
+    logger.info("Database upgraded to Alembic revision %s", revision)
+    return revision
+
+
+def seed_demo_tenant(flask_app: Flask, tenant_id: str | None = None) -> int:
+    """Seed one demo tenant if it has no existing resources."""
     from r6.models import R6Resource
-    import r6.actions.models  # noqa: F401 — registers ProposedAction table
-    import r6.actions.events  # noqa: F401 — registers ActionEvent table for create_all/schema_sync
-    import r6.actions.confirmations  # noqa: F401 — registers ActionConfirmation table for create_all/schema_sync
-    import r6.smbp.models  # noqa: F401 — registers SMBPSession table
-    # Import EVERY model module BEFORE create_all/reconcile_schema. Anything
-    # missing here is invisible to schema_sync, so new columns on its tables
-    # are never ALTERed onto long-lived Postgres (found live 2026-07-08:
-    # fasten_connections.webhook_verified_at was missing in prod and every
-    # Fasten webhook 500'd).
-    import r6.fasten.models  # noqa: F401 — FastenConnection/FastenJob
-    import r6.wearables.models  # noqa: F401 — WearableConnection
-    import r6.command_center.models  # noqa: F401 — ConversationMessage/AgentTask
-    from sqlalchemy.exc import OperationalError, IntegrityError, ProgrammingError
-    try:
-        db.create_all()
-        logger.info("Database tables created (R6 + Fasten + Wearables + Command Center)")
-    except (OperationalError, IntegrityError, ProgrammingError) as e:
-        # Concurrent gunicorn workers can race on first-boot table creation.
-        # Seen on Postgres as IntegrityError on pg_type_typname_nsp_index;
-        # on SQLite as OperationalError "already exists".
-        msg = str(e).lower()
-        if "already exists" in msg or "pg_type_typname" in msg or "duplicate key" in msg:
-            logger.info("Database tables already exist (created by another worker)")
-            db.session.rollback()
-        else:
-            raise
+    from r6.seed import seed_demo_data
 
-    # Add any model columns missing from long-lived Postgres databases
-    # (no-op on SQLite). Safe to run every boot.
-    try:
-        from r6.schema_sync import reconcile_schema
-        added = reconcile_schema(db.engine, db.metadata)
-        if added:
-            logger.info("schema_sync added %d columns", len(added))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("schema_sync failed (non-fatal): %s", e)
+    selected_tenant = tenant_id or flask_app.config.get(
+        "DEMO_TENANT_ID", "desktop-demo"
+    )
+    with flask_app.app_context():
+        existing = R6Resource.query.filter_by(tenant_id=selected_tenant).first()
+        if existing is not None:
+            logger.info(
+                "Demo tenant '%s' already has data, skipping auto-seed",
+                selected_tenant,
+            )
+            return 0
+        count = seed_demo_data(selected_tenant)
+        logger.info("Seeded %d resources into tenant '%s'", count, selected_tenant)
+        return count
 
-    # Recover Fasten jobs stranded in non-terminal states by a restart
-    # mid-ingest (zombie jobs): re-trigger a FRESH EHI export so new signed
-    # URLs arrive via webhook (the persisted ones expire). Wrapped so a
-    # reaper failure NEVER blocks boot.
+
+def recover_zombie_jobs(flask_app: Flask) -> int:
+    """Run Fasten restart recovery without allowing it to block a deploy."""
     try:
         from r6.fasten.reaper import reap_zombie_jobs
-        _reaped = reap_zombie_jobs()
-        if _reaped:
-            logger.info("Fasten boot reaper: re-triggered %d zombie job(s)",
-                        _reaped)
-    except Exception as e:  # noqa: BLE001
-        logger.error("Fasten boot reaper failed (non-fatal, boot continues): %s", e)
 
-    # Auto-seed demo tenant on first boot (Railway / Docker deployments)
-    if os.environ.get('SEED_DEMO_TENANT'):
-        _demo_tenant = os.environ.get('DEMO_TENANT_ID', 'desktop-demo')
-        _existing = R6Resource.query.filter_by(tenant_id=_demo_tenant).first()
-        if _existing is None:
-            from r6.seed import seed_demo_data
-            _count = seed_demo_data(_demo_tenant)
-            logger.info("Auto-seeded %d resources into tenant '%s'", _count, _demo_tenant)
-        else:
-            logger.info("Demo tenant '%s' already has data, skipping auto-seed", _demo_tenant)
+        with flask_app.app_context():
+            reaped = reap_zombie_jobs()
+        if reaped:
+            logger.info("Fasten reaper re-triggered %d zombie job(s)", reaped)
+        return reaped
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Fasten reaper failed (non-fatal): %s", exc)
+        return 0
 
-# Register R6 FHIR Blueprint
-from r6.routes import r6_blueprint
-app.register_blueprint(r6_blueprint)
-logger.info("R6 FHIR Blueprint registered at /r6/fhir")
 
-# Register Fasten Connect Blueprint
-from r6.fasten.routes import fasten_blueprint
-app.register_blueprint(fasten_blueprint)
-logger.info("Fasten Connect Blueprint registered at /fasten")
-
-# Register Actions Blueprint + rail executors. register_all() is idempotent
-# and guarantees the registry is populated even if the rail modules were
-# already in sys.modules (see r6/actions/rails/__init__.py).
-from r6.actions.routes import actions_blueprint
-from r6.actions.registry import all_kinds as _action_kinds
-import r6.actions.rails
-r6.actions.rails.register_all()
-# Import for side effect: registers the /<id>/review GET+POST routes on
-# actions_blueprint (Task 6 structured per-item review page). MUST precede
-# register_blueprint — routes can't be added to a blueprint after it is
-# registered on the app.
-import r6.actions.review  # noqa: F401
-app.register_blueprint(actions_blueprint)
-logger.info("Actions Blueprint registered at /r6/actions (rails: %s)",
-            ', '.join(_action_kinds()))
-
-# Register Ops Blueprint — config preflight + external-tick reaper
-# (spec W0 §1 + Durable execution). No new models; reads env + the existing
-# action tables only. Registered after the actions rails so preflight's
-# per-rail required_env checks see the populated registry.
-from r6.ops.routes import ops_blueprint
-app.register_blueprint(ops_blueprint)
-logger.info("Ops Blueprint registered at /r6/ops")
-
-# Register SMBP Blueprint
-from r6.smbp.routes import smbp_blueprint
-app.register_blueprint(smbp_blueprint)
-logger.info("SMBP Blueprint registered at /r6/smbp")
-
-# Register SDC delivery Blueprint — public signed download route for intake
-# PDFs. On its OWN blueprint (not r6_blueprint) so it is reachable without
-# X-Tenant-Id / X-Step-Up-Token headers: the signed URL is the credential.
-from r6.sdc.delivery import sdc_delivery_blueprint
-app.register_blueprint(sdc_delivery_blueprint)
-logger.info("SDC delivery Blueprint registered at /r6/sdc")
-
-# Register Wearables Blueprint (opt-in via OPEN_WEARABLES_URL)
-from r6.wearables.routes import wearables_blueprint
-app.register_blueprint(wearables_blueprint)
-logger.info("Wearables Blueprint registered at /wearables")
-
-# Start wearables poller daemon thread if configured. Safe no-op when
-# OPEN_WEARABLES_URL is unset or on serverless platforms.
-if not os.environ.get('VERCEL'):
+def start_wearables_poller(flask_app: Flask) -> bool:
+    """Explicitly start the in-process wearables poller when supported."""
+    if _is_true(flask_app.config.get("VERCEL")):
+        logger.info("Wearables poller disabled on Vercel")
+        return False
     from r6.wearables.poller import start_poller
-    if start_poller(app):
+
+    started = start_poller(flask_app)
+    if started:
         logger.info("Wearables poller started (background thread)")
-
-# Register SmartHealthConnect Bridge Blueprint
-from r6.shc.routes import shc_blueprint
-app.register_blueprint(shc_blueprint)
-logger.info("SmartHealthConnect bridge registered at /shc")
-
-# Register inbound email relay (Resend receiving webhook -> maintainer)
-from r6.email_inbound import email_blueprint
-app.register_blueprint(email_blueprint)
-logger.info("Inbound email relay registered at /email/inbound")
-
-# Register Command Center Blueprint — "My Health in Good Hands" dashboard.
-# Skipped on Vercel (healthclaw.io is the public marketing/demo surface;
-# the command center lives on Railway behind auth).
-if os.environ.get('DISABLE_COMMAND_CENTER', '').lower() in ('1', 'true', 'yes'):
-    logger.info("Command Center disabled via DISABLE_COMMAND_CENTER env var")
-else:
-    from r6.command_center.routes import command_center_blueprint
-    app.register_blueprint(command_center_blueprint)
-    logger.info("Command Center Blueprint registered at /command-center")
-
-# Log upstream FHIR server configuration
-_upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()
-if _upstream_url:
-    logger.info(f"Upstream FHIR proxy enabled: {_upstream_url}")
-    logger.info("Guardrails (redaction, audit, step-up, tenant isolation) apply to upstream data")
-else:
-    logger.info("Running in local mode (SQLite JSON blobs). Set FHIR_UPSTREAM_URL for upstream proxy.")
-
-# Structured request logging with correlation IDs
-request_logger = logging.getLogger('request')
+    return started
 
 
-@app.context_processor
-def inject_fasten_public_key():
-    """Expose FASTEN_PUBLIC_KEY to all templates (safe — public key only)."""
-    return {'fasten_public_key': os.environ.get('FASTEN_PUBLIC_KEY', '')}
+def run_legacy_boot_tasks(flask_app: Flask) -> None:
+    """Run the pre-factory boot sequence for explicitly opted-in deployments."""
+    initialize_database(flask_app)
+    recover_zombie_jobs(flask_app)
+    if _is_true(flask_app.config.get("SEED_DEMO_TENANT")):
+        seed_demo_tenant(flask_app)
+    start_wearables_poller(flask_app)
 
 
-@app.context_processor
-def inject_health_context():
-    """Expose health context to all templates (single-sourced version, etc.)."""
-    from r6.health_context import load_health_context
-    return {'health_context': load_health_context()}
+def _register_lifecycle_cli(flask_app: Flask) -> None:
+    @flask_app.cli.command("init-db")
+    def init_db_command() -> None:
+        """Upgrade the configured database to the current schema."""
+        revision = initialize_database(flask_app)
+        click.echo(f"Database upgraded to Alembic revision {revision}.")
+
+    @flask_app.cli.command("seed-demo")
+    @click.option("--tenant-id", default=None, help="Tenant to seed.")
+    def seed_demo_command(tenant_id: str | None) -> None:
+        """Seed an empty demo tenant."""
+        count = seed_demo_tenant(flask_app, tenant_id)
+        click.echo(f"Seeded {count} resource(s).")
+
+    @flask_app.cli.command("recover-zombies")
+    def recover_zombies_command() -> None:
+        """Retry eligible Fasten jobs stranded by a process restart."""
+        count = recover_zombie_jobs(flask_app)
+        click.echo(f"Recovered {count} job(s).")
+
+    @flask_app.cli.command("legacy-boot")
+    def legacy_boot_command() -> None:
+        """Run all legacy boot tasks once under operator control."""
+        run_legacy_boot_tasks(flask_app)
+        click.echo("Legacy boot tasks completed.")
 
 
-@app.before_request
-def attach_request_id():
-    g.request_id = flask_request.headers.get('X-Request-Id', str(uuid.uuid4())[:8])
-    g.request_start = time.time()
+def _register_blueprints(flask_app: Flask) -> None:
+    from r6.routes import r6_blueprint
 
-@app.after_request
-def log_request(response):
-    if flask_request.path.startswith('/static'):
+    flask_app.register_blueprint(r6_blueprint)
+
+    from r6.fasten.routes import fasten_blueprint
+
+    flask_app.register_blueprint(fasten_blueprint)
+
+    from r6.actions.routes import actions_blueprint
+    from r6.actions.registry import all_kinds as action_kinds
+    import r6.actions.rails
+
+    r6.actions.rails.register_all()
+    # Import for side effect: registers the /<id>/review GET+POST routes on
+    # actions_blueprint (Task 6 structured per-item review page). MUST precede
+    # register_blueprint — routes can't be added to a blueprint after it is
+    # registered on the app.
+    import r6.actions.review  # noqa: F401
+
+    flask_app.register_blueprint(actions_blueprint)
+    logger.info(
+        "Actions Blueprint registered at /r6/actions (rails: %s)",
+        ", ".join(action_kinds()),
+    )
+
+    from r6.ops.routes import ops_blueprint
+
+    flask_app.register_blueprint(ops_blueprint)
+
+    from r6.smbp.routes import smbp_blueprint
+
+    flask_app.register_blueprint(smbp_blueprint)
+
+    # SDC delivery Blueprint — public signed download route for intake PDFs
+    # (Task 7). On its OWN blueprint (not r6_blueprint) so it is reachable
+    # without X-Tenant-Id / X-Step-Up-Token headers: the signed URL is the
+    # credential.
+    from r6.sdc.delivery import sdc_delivery_blueprint
+
+    flask_app.register_blueprint(sdc_delivery_blueprint)
+
+    from r6.wearables.routes import wearables_blueprint
+
+    flask_app.register_blueprint(wearables_blueprint)
+
+    from r6.shc.routes import shc_blueprint
+
+    flask_app.register_blueprint(shc_blueprint)
+
+    from r6.email_inbound import email_blueprint
+
+    flask_app.register_blueprint(email_blueprint)
+
+    if _is_true(flask_app.config.get("DISABLE_COMMAND_CENTER")):
+        logger.info("Command Center disabled via DISABLE_COMMAND_CENTER")
+    else:
+        from r6.command_center.routes import command_center_blueprint
+
+        flask_app.register_blueprint(command_center_blueprint)
+
+    from app import web_blueprint
+
+    # Preserve the historical endpoint names used by templates while the
+    # route declarations themselves now live on a reusable Blueprint.
+    flask_app.register_blueprint(web_blueprint, name="")
+
+
+def _register_request_hooks(flask_app: Flask) -> None:
+    @flask_app.context_processor
+    def inject_fasten_public_key():
+        return {"fasten_public_key": os.environ.get("FASTEN_PUBLIC_KEY", "")}
+
+    @flask_app.context_processor
+    def inject_health_context():
+        from r6.health_context import load_health_context
+
+        return {"health_context": load_health_context()}
+
+    @flask_app.before_request
+    def attach_request_id():
+        g.request_id = flask_request.headers.get(
+            "X-Request-Id", str(uuid.uuid4())[:8]
+        )
+        g.request_start = time.time()
+
+    @flask_app.after_request
+    def log_request(response):
+        if flask_request.path.startswith("/static"):
+            return response
+        duration_ms = round(
+            (time.time() - getattr(g, "request_start", time.time())) * 1000, 1
+        )
+        request_logger.info(
+            json.dumps(
+                {
+                    "request_id": getattr(g, "request_id", "-"),
+                    "method": flask_request.method,
+                    "path": flask_request.path,
+                    "status": response.status_code,
+                    "duration_ms": duration_ms,
+                    "tenant_id": flask_request.headers.get("X-Tenant-Id", "-"),
+                    "agent_id": flask_request.headers.get("X-Agent-Id", "-"),
+                }
+            )
+        )
+        response.headers["X-Request-Id"] = getattr(g, "request_id", "-")
         return response
-    duration_ms = round((time.time() - getattr(g, 'request_start', time.time())) * 1000, 1)
-    request_logger.info(json.dumps({
-        'request_id': getattr(g, 'request_id', '-'),
-        'method': flask_request.method,
-        'path': flask_request.path,
-        'status': response.status_code,
-        'duration_ms': duration_ms,
-        'tenant_id': flask_request.headers.get('X-Tenant-Id', '-'),
-        'agent_id': flask_request.headers.get('X-Agent-Id', '-'),
-    }))
-    response.headers['X-Request-Id'] = getattr(g, 'request_id', '-')
-    return response
 
-# Import web UI routes
-from app import *  # noqa: F401,F403,E402
+
+def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
+    """Create and configure an independent Flask application instance."""
+    supplied_settings = dict(settings or {})
+    app_env = validate_runtime_environment()
+    _configure_logging(app_env)
+
+    flask_app = Flask(
+        __name__,
+        template_folder=str(_ROOT_DIR / "templates"),
+        static_folder=str(_ROOT_DIR / "static"),
+    )
+    flask_app.config.from_mapping(
+        APP_ENV=app_env,
+        SECRET_KEY=os.environ.get("SESSION_SECRET")
+        or "a-development-secret-key",
+        SQLALCHEMY_DATABASE_URI=_database_uri(app_env, supplied_settings),
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        # Large FHIR history Bundles and base64 PDF attachments can exceed
+        # 5 MB; retain bounded headroom without accepting huge request bodies.
+        MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+        DISABLE_COMMAND_CENTER=os.environ.get("DISABLE_COMMAND_CENTER", ""),
+        VERCEL=os.environ.get("VERCEL", ""),
+        SEED_DEMO_TENANT=os.environ.get("SEED_DEMO_TENANT", ""),
+        DEMO_TENANT_ID=os.environ.get("DEMO_TENANT_ID", "desktop-demo"),
+    )
+    flask_app.config.update(supplied_settings)
+
+    if app_env == "production":
+        flask_app.config.update(
+            SESSION_COOKIE_SECURE=True,
+            SESSION_COOKIE_HTTPONLY=True,
+            SESSION_COOKIE_SAMESITE="Lax",
+        )
+
+    db_uri = flask_app.config["SQLALCHEMY_DATABASE_URI"]
+    if (
+        ("postgresql" in db_uri or "postgres" in db_uri)
+        and "SQLALCHEMY_ENGINE_OPTIONS" not in supplied_settings
+    ):
+        flask_app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+            "pool_size": int(os.environ.get("DB_POOL_SIZE", "10")),
+            "pool_recycle": 3600,
+            "pool_pre_ping": True,
+        }
+
+    db.init_app(flask_app)
+    register_model_metadata()
+    _register_blueprints(flask_app)
+    _register_request_hooks(flask_app)
+    _register_lifecycle_cli(flask_app)
+
+    upstream_url = os.environ.get("FHIR_UPSTREAM_URL", "").strip()
+    if upstream_url:
+        logger.info("Upstream FHIR proxy enabled: %s", upstream_url)
+        logger.info(
+            "Guardrails (redaction, audit, step-up, tenant isolation) apply "
+            "to upstream data"
+        )
+    else:
+        logger.info(
+            "Running in local mode (SQLite JSON blobs). Set FHIR_UPSTREAM_URL "
+            "for upstream proxy."
+        )
+
+    return flask_app
+
+
+# Thin WSGI compatibility layer for gunicorn ``main:app`` and Vercel.
+app = create_app()
+
 
 if __name__ == "__main__":
-    # Never default the Werkzeug debugger (RCE console) on — opt in via FLASK_DEBUG=1
-    # for local debugging only. Production serves via gunicorn (main:app), not this.
-    app.run(host="0.0.0.0", port=5000,
-            debug=os.environ.get("FLASK_DEBUG") == "1")
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=os.environ.get("FLASK_DEBUG") == "1",
+    )

@@ -87,7 +87,7 @@ Applied automatically (skip with `--no-deidentify`).
 **Other resource types** are exported as-is — they contain clinical observations
 and codes, not patient demographics.
 
-> For HIPAA Safe Harbor de-identification (birthDate truncated to year, zip to 3 digits),
+> For the conservative de-identification preview (birthDate truncated to year),
 > call `POST /r6/fhir/Patient/:id/$deidentify` before export, or use the
 > `phi-redaction` skill after import.
 
@@ -174,5 +174,5 @@ The complete automated flow replaces the previous manual Claude session pull:
 
 - `fhir-r6-guardrails` — Stack setup and MCP tool reference
 - `curatr` — Evaluate and fix data quality issues in exported records
-- `phi-redaction` — HIPAA Safe Harbor de-identification (stricter than patient-controlled)
+- `phi-redaction` — conservative de-identification preview (stricter than patient-controlled)
 - `fasten-connect` — Patient-authorized EHR ingestion (upstream of this export)

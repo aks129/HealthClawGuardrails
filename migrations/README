@@ -1,0 +1,7 @@
+HealthClaw database migrations
+================================
+
+Run ``alembic upgrade head`` (or ``flask --app main init-db``) as a deploy
+step before starting web or worker processes. Migration modules contain
+explicit DDL and never construct the Flask application or call
+``metadata.create_all``.

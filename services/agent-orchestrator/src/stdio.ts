@@ -18,16 +18,20 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { FHIRTools } from "./tools";
 
+const { version: SERVER_VERSION } = require("../package.json") as {
+  version: string;
+};
+
 const FHIR_BASE_URL =
   process.env.FHIR_BASE_URL || "http://localhost:5000/r6/fhir";
 
 console.error(`[healthclaw-guardrails] stdio transport starting`);
 console.error(`[healthclaw-guardrails] FHIR backend: ${FHIR_BASE_URL}`);
 
-const fhirTools = new FHIRTools(FHIR_BASE_URL);
+const fhirTools = new FHIRTools(FHIR_BASE_URL, { allowPrivileged: true });
 
 const server = new Server(
-  { name: "healthclaw-guardrails", version: "1.0.0" },
+  { name: "healthclaw-guardrails", version: SERVER_VERSION },
   { capabilities: { tools: {} } }
 );
 

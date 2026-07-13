@@ -262,6 +262,7 @@
     try {
       var resp = await fetch('/fasten/connections', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', 'X-Tenant-Id': {{ tenant_id | tojson }} },
         body: JSON.stringify({
           org_connection_id: data.org_connection_id || null,
@@ -296,7 +297,7 @@
     }
     try {
       var r = await fetch('/fasten/connections/' + encodeURIComponent(orgConnectionId) + '/agent-access', {
-        headers: { 'X-Tenant-Id': {{ tenant_id | tojson }} }
+        credentials: 'same-origin'
       });
       if (r.status === 200) { _showAgentAccess(await r.json()); return; }
       if (r.status !== 202) return;  // 409/410/404: nothing to show

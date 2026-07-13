@@ -2,4 +2,6 @@ name: security-baseline
 on: [pull_request, push]
 jobs:
   scan:
-    uses: aks129/security-baseline/.github/workflows/scan-reusable.yml@main
+    # Pinned to the reviewed 2026-07-12 main commit. Dependabot updates the
+    # reference explicitly so upstream changes cannot execute implicitly.
+    uses: aks129/security-baseline/.github/workflows/scan-reusable.yml@17db8c45efdff3734504e5bbcd4727fe5f83f954

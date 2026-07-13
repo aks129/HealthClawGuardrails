@@ -35,9 +35,12 @@ class TestHealthEndpoint:
         assert data['checks']['database'] == 'ok'
 
     def test_health_includes_version(self, client):
+        from r6.version import __version__
         resp = client.get('/r6/fhir/health')
         data = resp.get_json()
-        assert data['version'] == '1.0.0'
+        # Version is sourced from package metadata (r6.version), not hardcoded,
+        # so this stays correct across releases.
+        assert data['version'] == __version__
         assert '6.0.0' in data['fhirVersion']
 
     def test_health_no_tenant_required(self, client):
@@ -582,9 +585,11 @@ class TestPhase2VersionUpdate:
     """Test version is updated for Phase 2."""
 
     def test_health_shows_phase2_version(self, client):
+        from r6.version import __version__
         resp = client.get('/r6/fhir/health')
         data = resp.get_json()
-        assert data['version'] == '1.0.0'
+        # Sourced from package metadata (r6.version) — never a hardcoded string.
+        assert data['version'] == __version__
 
 
 class TestPhase2EndToEndWorkflow:

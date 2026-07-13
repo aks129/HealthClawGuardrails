@@ -1,7 +1,7 @@
 ---
 name: phi-redaction
 description: >
-  PHI redaction patterns for FHIR resources following HIPAA Safe Harbor. Use when:
+  Conservative PHI redaction patterns for FHIR resources. Use when:
   (1) Redacting patient health information from FHIR resources before AI agent access,
   (2) Implementing de-identification for clinical data pipelines,
   (3) Understanding what fields are stripped, masked, or truncated in FHIR resources,
@@ -11,7 +11,8 @@ description: >
 # PHI Redaction for FHIR Resources
 
 Standard redaction profile for Protected Health Information (PHI) applied on all
-read paths in the FHIR MCP guardrail stack. Based on HIPAA Safe Harbor method.
+read paths in the FHIR MCP guardrail stack. This is a technical minimization
+preview, not a legal Safe Harbor determination.
 
 ## When to Use This Skill
 
@@ -77,9 +78,9 @@ Key implementation notes:
 - Apply on ALL read paths: direct reads, search results, context envelopes,
   upstream proxy responses
 
-## HIPAA Safe Harbor Coverage
+## De-identification Preview Coverage
 
-This redaction profile covers these Safe Harbor identifiers:
+This redaction profile minimizes these common identifier classes:
 - Names (partial)
 - Geographic data smaller than state (addresses stripped)
 - Dates (birth date truncated to year)
@@ -99,5 +100,5 @@ The redaction is applied automatically by the guardrail stack. MCP tools like
 `fhir.read`, `fhir.search`, `fhir.lastn`, and `context.get` all return
 redacted data. No additional action is needed by the agent.
 
-The `$deidentify` operation provides explicit HIPAA Safe Harbor de-identification
-on demand, useful for export or analysis workflows.
+The `$deidentify` operation provides an explicit conservative preview on demand.
+Expert review is still required before export or disclosure.

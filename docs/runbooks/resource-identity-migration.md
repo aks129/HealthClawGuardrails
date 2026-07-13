@@ -1,5 +1,10 @@
 # Runbook: r6_resources identity migration — (tenant_id, resource_type, id)
 
+> **Legacy v1.8 procedure.** New deployments and upgrades now apply this
+> constraint through Alembic revision `0002_current_contract`. Follow the
+> [database migration runbook](database-migrations.md). Keep this document only
+> for recovery of a deployment that has not yet adopted Alembic.
+
 **Change:** swap the `r6_resources` primary key from the raw FHIR `id`
 (global) to the composite `(tenant_id, resource_type, id)`.
 
@@ -25,10 +30,10 @@ current row counts). Ingest jobs running at that moment will briefly queue.
 
 Either order is safe — neither step makes anything worse than today:
 
-* **New code + old (un-migrated) DB:** boots fine. `db.create_all()` skips
-  existing tables, and `r6/schema_sync.py` only ADDs missing columns and
-  WIDENs varchars — it never inspects or alters constraints, so the PK
-  mismatch between the ORM model and the live table is invisible at boot.
+* **New code + old (un-migrated) DB:** the web process starts without changing
+  schema. Writes can still fail until the operator stamps the verified v1.8
+  compatibility baseline and runs `alembic upgrade head`; schema mutation is
+  intentionally a separate deploy step.
   Cross-tenant collisions still fail at the DB level exactly as before
   (per-resource, rolled back, counted as `failed`) until the migration runs.
 * **Migrated DB + old code:** also fine — old code never inserts a

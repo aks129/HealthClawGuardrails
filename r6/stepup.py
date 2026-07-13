@@ -16,7 +16,10 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
+
+from r6.runtime_config import resolve_app_env
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,26 @@ READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 # multi-worker deployment this should be backed by Redis; the in-memory map is
 # adequate for the single-process reference deployment and for tests.
 # ---------------------------------------------------------------------------
-_seen_nonces = {}  # nonce -> exp (unix seconds)
+_seen_nonces: dict[str, float] = {}  # nonce -> exp (unix seconds)
+_nonce_lock = threading.Lock()
+_redis_client = None
+_MAX_SEEN_NONCES = 10_000
+
+
+def _get_redis_client():
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    redis_url = os.environ.get('REDIS_URL', '').strip()
+    if not redis_url:
+        return None
+    import redis
+    _redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _is_production():
+    return resolve_app_env() == 'production'
 
 
 def _evict_expired_nonces(now=None):
@@ -65,16 +87,36 @@ def mark_nonce_used(nonce, exp):
         # No nonce to track — treat as a fresh use, never a replay.
         return True
     now = time.time()
-    _evict_expired_nonces(now)
-    if nonce in _seen_nonces and _seen_nonces[nonce] >= now:
-        return False
-    _seen_nonces[nonce] = exp
-    return True
+    client = _get_redis_client()
+    if client is not None:
+        key_hash = hashlib.sha256(nonce.encode('utf-8')).hexdigest()
+        ttl = max(1, int(exp - now))
+        try:
+            return bool(client.set(
+                f'healthclaw:stepup-nonce:{key_hash}', 'used', nx=True, ex=ttl
+            ))
+        except Exception as exc:  # noqa: BLE001 - Redis client errors vary
+            logger.error('Redis nonce consumption failed: %s',
+                         type(exc).__name__)
+            if _is_production():
+                return False
+
+    # Development/testing fallback: bounded and atomic within this process.
+    with _nonce_lock:
+        _evict_expired_nonces(now)
+        if nonce in _seen_nonces and _seen_nonces[nonce] >= now:
+            return False
+        if len(_seen_nonces) >= _MAX_SEEN_NONCES:
+            oldest = min(_seen_nonces, key=_seen_nonces.get)
+            _seen_nonces.pop(oldest, None)
+        _seen_nonces[nonce] = exp
+        return True
 
 
 def clear_nonce_cache():
     """Clear the replay-guard nonce cache. Intended for tests."""
-    _seen_nonces.clear()
+    with _nonce_lock:
+        _seen_nonces.clear()
 
 
 def _get_secret():
@@ -84,7 +126,7 @@ def _get_secret():
 
 def generate_step_up_token(tenant_id, agent_id=None,
                            ttl_seconds=DEFAULT_TOKEN_TTL_SECONDS,
-                           scope=None):
+                           scope=None, audience=None, operation=None):
     """
     Generate a signed step-up authorization token.
 
@@ -95,6 +137,8 @@ def generate_step_up_token(tenant_id, agent_id=None,
         scope: Optional capability scope. 'read' produces a token the read
             gate accepts but every write path rejects. None (default) omits
             the claim — the historical full-capability token shape.
+        audience: Optional service or feature audience binding.
+        operation: Optional exact operation/resource binding.
 
     Returns:
         Signed token string: {base64_payload}.{hmac_signature}
@@ -114,6 +158,10 @@ def generate_step_up_token(tenant_id, agent_id=None,
     }
     if scope:
         payload['scope'] = scope
+    if audience:
+        payload['aud'] = audience
+    if operation:
+        payload['op'] = operation
     payload_b64 = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(',', ':')).encode()
     ).decode()
@@ -124,7 +172,8 @@ def generate_step_up_token(tenant_id, agent_id=None,
 
 
 def validate_step_up_token(token, tenant_id, consume_nonce=False,
-                           require_scope='write'):
+                           require_scope='write', require_audience=None,
+                           require_operation=None):
     """
     Validate a step-up authorization token.
 
@@ -148,6 +197,8 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
             site stays strict without modification (fail-safe). Read paths
             pass require_scope=None to accept any valid tenant-bound token.
             Legacy tokens without a scope claim satisfy 'write' (back-compat).
+        require_audience: Exact audience claim required for this operation.
+        require_operation: Exact operation claim required for this operation.
 
     Returns:
         tuple: (is_valid: bool, error_message: str or None)
@@ -190,6 +241,12 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
     # Scope gate: a read-scoped token can never authorize a write path.
     if require_scope == 'write' and payload.get('scope') == 'read':
         return False, 'Read-scoped token cannot authorize this operation'
+
+    if require_audience is not None and payload.get('aud') != require_audience:
+        return False, 'Token audience mismatch'
+
+    if require_operation is not None and payload.get('op') != require_operation:
+        return False, 'Token operation mismatch'
 
     # Optional replay guard — only when the caller opts in.
     if consume_nonce:

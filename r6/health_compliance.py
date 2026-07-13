@@ -4,7 +4,7 @@ Health Compliance Module for FHIR R6 MCP.
 Implements OpenAI Health App and marketplace requirements:
 - Medical disclaimer injection on all clinical responses
 - Human-in-the-loop enforcement for write operations
-- De-identification mode (HIPAA Safe Harbor method)
+- Conservative de-identification preview (expert review required)
 - Audit trail NDJSON export for compliance review
 """
 
@@ -131,10 +131,10 @@ def enforce_human_in_loop():
             }), 428  # Precondition Required
 
 
-# --- De-identification (HIPAA Safe Harbor, 45 CFR 164.514(b)) ---
+# --- De-identification preview (not a certified HIPAA determination) ---
 
-# The 18 Safe Harbor identifiers that must be removed
-SAFE_HARBOR_FIELDS = {
+# Direct identifier-bearing FHIR fields removed by the preview policy.
+DEIDENTIFICATION_FIELDS = {
     'name', 'address', 'telecom',
     'identifier', 'photo', 'contact',
 }
@@ -145,21 +145,16 @@ DATE_FIELDS = {'birthDate', 'deceasedDateTime'}
 
 def deidentify_resource(resource):
     """
-    Apply HIPAA Safe Harbor de-identification to a FHIR resource.
+    Apply the conservative HealthClaw de-identification preview.
 
-    Removes or generalizes all 18 Safe Harbor identifiers per
-    45 CFR 164.514(b)(2). More aggressive than standard redaction.
+    This is a technical data-minimization aid, not a legal determination that
+    a dataset satisfies the HIPAA Safe Harbor method. Deployment-specific
+    expert review remains required before external disclosure.
 
     Returns a deep copy with PHI removed.
     """
     deidentified = json.loads(json.dumps(resource))
-    _strip_safe_harbor(deidentified)
-
-    # Also de-identify contained resources
-    if 'contained' in deidentified and isinstance(deidentified['contained'], list):
-        for contained in deidentified['contained']:
-            if isinstance(contained, dict):
-                _strip_safe_harbor(contained)
+    _strip_deidentification_preview(deidentified)
 
     # Add de-identification tag
     meta = deidentified.setdefault('meta', {})
@@ -173,20 +168,25 @@ def deidentify_resource(resource):
     return deidentified
 
 
-def _strip_safe_harbor(resource):
-    """Remove Safe Harbor identifiers from a resource dict (in-place)."""
+def _strip_deidentification_preview(resource):
+    """Recursively remove common identifying FHIR values in-place."""
+    if not isinstance(resource, dict):
+        return
+
     # Remove direct identifiers
-    for field in SAFE_HARBOR_FIELDS:
+    for field in DEIDENTIFICATION_FIELDS:
         resource.pop(field, None)
 
     # Remove text narratives (may contain PHI)
     resource.pop('text', None)
 
     # Generalize dates to year only
-    for field in DATE_FIELDS:
-        if field in resource and isinstance(resource[field], str):
-            # Keep only year (e.g., "1990-03-15" -> "1990")
-            resource[field] = resource[field][:4]
+    for field in list(resource):
+        value = resource.get(field)
+        if (field in DATE_FIELDS or field.endswith('Date')
+                or field.endswith('DateTime') or field.endswith('Instant')):
+            if isinstance(value, str):
+                resource[field] = value[:4]
 
     # Remove age if > 89 (Safe Harbor requirement)
     age_fields = ['_age', 'age']
@@ -198,28 +198,23 @@ def _strip_safe_harbor(resource):
                 if isinstance(val, (int, float)) and val > 89:
                     resource[af] = {'value': 90, 'comparator': '>='}
 
-    # Remove geographic data below state level
-    if 'address' in resource and isinstance(resource['address'], list):
-        for addr in resource['address']:
-            addr.pop('line', None)
-            addr.pop('text', None)
-            addr.pop('postalCode', None)
-            addr.pop('city', None)
-            # Keep only state, country
-
     # Remove notes, comments, descriptions (free text may contain PHI)
-    for field in ['note', 'comment', 'description']:
+    for field in [
+        'note', 'comment', 'description', 'display', 'reference',
+        'valueString', 'valueMarkdown', 'valueUrl', 'valueUri',
+        'valueCanonical', 'valueBase64Binary',
+    ]:
         resource.pop(field, None)
 
     # Strip CodeableConcept.text fields (may contain regional identifiers)
     _strip_codeable_concept_text(resource)
 
-    # Remove URLs that may be identifying (extensions)
-    if 'extension' in resource and isinstance(resource['extension'], list):
-        resource['extension'] = [
-            ext for ext in resource['extension']
-            if not _is_identifying_extension(ext)
-        ]
+    # Attachment payloads and signed URLs can carry PHI directly.
+    if ('contentType' in resource
+            and any(k in resource for k in ('data', 'url', 'title'))):
+        resource.pop('data', None)
+        resource.pop('url', None)
+        resource.pop('title', None)
 
     # Generate a replacement pseudonymous ID
     if 'id' in resource:
@@ -227,6 +222,19 @@ def _strip_safe_harbor(resource):
         resource['id'] = hashlib.sha256(
             f'deidentified:{original_id}'.encode()
         ).hexdigest()[:16]
+
+    for value in list(resource.values()):
+        if isinstance(value, dict):
+            _strip_deidentification_preview(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _strip_deidentification_preview(item)
+
+
+# Backward-compatible private alias for integrations that imported it despite
+# the leading underscore. The public claim is deliberately no longer Safe Harbor.
+_strip_safe_harbor = _strip_deidentification_preview
 
 
 def _strip_codeable_concept_text(obj):

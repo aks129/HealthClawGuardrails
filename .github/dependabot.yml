@@ -23,6 +23,20 @@ updates:
           - minor
           - patch
 
+  # Browser end-to-end suite has its own lockfile and release cadence.
+  - package-ecosystem: npm
+    directory: "/e2e"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
   # Python (Flask app + scripts) — resolved via uv.lock
   - package-ecosystem: pip
     directory: "/"

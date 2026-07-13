@@ -36,6 +36,7 @@ from models import db
 from r6.command_center import projector, access, gateway
 from r6.command_center.models import ConversationMessage, AgentTask
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
+from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
@@ -47,10 +48,10 @@ command_center_blueprint = Blueprint(
 )
 
 DEFAULT_TENANT = "desktop-demo"
-SESSION_KEY = "cc_tenant"
+SESSION_KEY = TENANT_SESSION_KEY
 
 
-def _tenant() -> str:
+def _tenant() -> str | None:
     """
     Resolve the active tenant for the current request. Priority:
     1. Session (set after a signed-link login) — authoritative
@@ -58,39 +59,22 @@ def _tenant() -> str:
     3. ?tenant= query param / X-Tenant-Id header — ONLY for public tenants
     4. DEFAULT_TENANT (desktop-demo)
 
-    Non-public tenants require a session OR a valid step-up token. A bare
-    ?tenant=<your-tenant> with no auth silently falls back to the default —
-    it never leaks personal data.
+    Non-public tenants require a matching session, step-up token, or SMART
+    OAuth bearer. An unauthorized claim returns None; callers reject it
+    without querying any tenant data.
     """
     sess_tenant = session.get(SESSION_KEY)
-    if sess_tenant:
-        return sess_tenant
-
     candidate = (
-        request.args.get("tenant")
+        sess_tenant
+        or request.args.get("tenant")
         or request.headers.get("X-Tenant-Id")
         or DEFAULT_TENANT
     )
-    if access.is_public(candidate):
-        return candidate
-
-    # Trust the candidate tenant if the request carries a valid step-up for it
-    step_up = request.headers.get("X-Step-Up-Token")
-    if step_up:
-        valid, _ = validate_step_up_token(step_up, candidate)
-        if valid:
-            return candidate
-
-    return DEFAULT_TENANT
-
-
-def _authorized_for(tenant_id: str) -> bool:
-    """Check if the current session/request is authorized for this tenant."""
-    if access.is_public(tenant_id):
-        return True
-    if session.get(SESSION_KEY) == tenant_id:
-        return True
-    return False
+    return authorize_tenant_read(
+        candidate,
+        session_tenant=sess_tenant,
+        always_require=True,
+    )
 
 
 def _require_session_or_public():
@@ -103,23 +87,8 @@ def _require_session_or_public():
     token for that tenant (server-to-server clients — Telegram bot, Kristy
     watcher, OpenClaw).
     """
-    sess_tenant = session.get(SESSION_KEY)
-    candidate = (
-        request.args.get("tenant")
-        or request.headers.get("X-Tenant-Id")
-    )
-    if not candidate:
+    if _tenant() is not None:
         return None
-    if access.is_public(candidate):
-        return None
-    if sess_tenant == candidate:
-        return None
-    # Allow step-up token as a server-to-server auth mechanism
-    step_up = request.headers.get("X-Step-Up-Token")
-    if step_up:
-        valid, _ = validate_step_up_token(step_up, candidate)
-        if valid:
-            return None
     return jsonify({"error": "authentication required for this tenant"}), 401
 
 
@@ -145,22 +114,17 @@ def dashboard():
             error="This link has expired or is invalid. Ask your Telegram agent for a fresh one.",
         ), 401
 
-    # Explicit request for a non-public tenant without a matching session
-    # gets 401, rather than silently falling back to a public tenant view.
-    requested = request.args.get("tenant") or request.headers.get("X-Tenant-Id")
-    if requested and not access.is_public(requested) and session.get(SESSION_KEY) != requested:
+    tenant = _tenant()
+    if tenant is None:
+        requested = (
+            request.args.get("tenant")
+            or request.headers.get("X-Tenant-Id")
+            or DEFAULT_TENANT
+        )
         return render_template(
             "command_center_login.html",
             error=None,
             tenant=requested,
-        ), 401
-
-    tenant = _tenant()
-    if not _authorized_for(tenant):
-        return render_template(
-            "command_center_login.html",
-            error=None,
-            tenant=tenant,
         ), 401
 
     return render_template(

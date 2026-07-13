@@ -21,10 +21,17 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 
 from models import db
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
+from r6.fasten.enrollment import (
+    clear_enrollment_session,
+    enrollment_proof_hash,
+    enrollment_tenant,
+    establish_enrollment,
+)
 from r6.fasten.models import FastenConnection, FastenJob
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
+from r6.read_auth import authorize_tenant_read
 from r6.stepup import generate_step_up_token, READ_TOKEN_TTL_SECONDS
 from r6.fasten.api import trigger_ehi_export
 
@@ -287,12 +294,25 @@ def _handle_connection_success(payload: dict) -> None:
 # Connection registry
 # ---------------------------------------------------------------------------
 
+def _tenant_for_read():
+    """Resolve a tenant claim only after the shared read-auth gate."""
+    candidate = request.headers.get('X-Tenant-Id', '').strip()
+    if not candidate:
+        return None, (jsonify({'error': 'X-Tenant-Id header required'}), 400)
+    tenant_id = authorize_tenant_read(candidate)
+    if tenant_id is None:
+        return None, (jsonify({
+            'error': 'authentication required for this tenant',
+        }), 401)
+    return tenant_id, None
+
+
 @fasten_blueprint.route('/connections', methods=['GET'])
 def list_connections():
     """List EHR connections for the requesting tenant (max 50, newest first)."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
 
     conns = (
         FastenConnection.query
@@ -340,6 +360,8 @@ def register_connection():
         org_connection_id=org_connection_id
     ).first()
     if existing:
+        if existing.tenant_id != tenant_id:
+            return jsonify({'error': 'connection belongs to another tenant'}), 409
         return jsonify({
             'status': 'already_registered',
             'org_connection_id': org_connection_id,
@@ -364,15 +386,26 @@ def register_connection():
             pass  # ignore malformed timestamps
 
     db.session.add(conn)
-    db.session.commit()
-
-    record_audit_event(
-        event_type='fasten_connection_registered',
-        agent_id='fasten-connect',
-        tenant_id=tenant_id,
-        outcome='success',
-        detail=f'platform={conn.platform_type}',
-    )
+    try:
+        db.session.flush()
+        proof_hash, proof_expires_at = establish_enrollment(
+            tenant_id, org_connection_id
+        )
+        conn.enrollment_proof_hash = proof_hash
+        conn.enrollment_expires_at = proof_expires_at
+        add_audit_event(
+            event_type='fasten_connection_registered',
+            agent_id='fasten-connect',
+            tenant_id=tenant_id,
+            outcome='success',
+            detail=f'platform={conn.platform_type}',
+        )
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001 - database drivers vary
+        db.session.rollback()
+        clear_enrollment_session()
+        logger.error('Fasten connection registration failed: %s', type(exc).__name__)
+        return jsonify({'error': 'enrollment proof unavailable'}), 503
 
     return jsonify({
         'status': 'registered',
@@ -387,7 +420,9 @@ def register_connection():
 @fasten_blueprint.route('/connections/<org_connection_id>', methods=['GET'])
 def get_connection(org_connection_id: str):
     """Get connection status. Requires X-Tenant-Id for tenant isolation."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
     conn = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id,
         tenant_id=tenant_id,
@@ -415,9 +450,9 @@ def get_connection(org_connection_id: str):
 @fasten_blueprint.route('/jobs', methods=['GET'])
 def list_jobs():
     """List EHI ingestion jobs for the requesting tenant (max 50, newest first)."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
 
     jobs = (
         FastenJob.query
@@ -433,7 +468,9 @@ def list_jobs():
 @fasten_blueprint.route('/jobs/<task_id>', methods=['GET'])
 def get_job(task_id: str):
     """Get status of a specific EHI ingestion job."""
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    tenant_id, auth_error = _tenant_for_read()
+    if auth_error is not None:
+        return auth_error
     job = FastenJob.query.filter_by(
         task_id=task_id, tenant_id=tenant_id
     ).first()
@@ -675,9 +712,20 @@ def agent_access(org_connection_id):
     Not yet verified -> 202 {pending}: the page polls briefly; the webhook
     usually lands within seconds of widget completion.
     """
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    enrolled_tenant = enrollment_tenant(org_connection_id)
+    claimed_header = request.headers.get('X-Tenant-Id', '').strip()
+    using_enrollment = (
+        enrolled_tenant is not None
+        and (not claimed_header or claimed_header == enrolled_tenant)
+    )
+    if using_enrollment:
+        tenant_id = enrolled_tenant
+    else:
+        tenant_id, auth_error = _tenant_for_read()
+        if auth_error is not None:
+            if not request.headers.get('X-Tenant-Id'):
+                return jsonify({'error': 'enrollment proof required'}), 401
+            return auth_error
 
     conn = FastenConnection.query.filter_by(
         org_connection_id=org_connection_id, tenant_id=tenant_id).first()
@@ -705,15 +753,52 @@ def agent_access(org_connection_id):
     except ValueError:
         return jsonify({'error': 'server not configured to mint'}), 503
 
-    conn.agent_token_issued_at = datetime.now(timezone.utc)
-    db.session.commit()
-    record_audit_event(
-        event_type='agent_read_token_issued',
-        agent_id='fasten-connect',
+    issued_at = datetime.now(timezone.utc)
+    claim_query = FastenConnection.query.filter_by(
+        org_connection_id=org_connection_id,
         tenant_id=tenant_id,
-        outcome='success',
-        detail='read-scoped patient connect token (30d) issued after webhook verification',
-    )
+        agent_token_issued_at=None,
+    ).filter(FastenConnection.webhook_verified_at.isnot(None))
+    claim_values = {
+        'agent_token_issued_at': issued_at,
+        'enrollment_proof_hash': None,
+        'enrollment_expires_at': None,
+    }
+    if using_enrollment:
+        proof_hash = enrollment_proof_hash(org_connection_id)
+        if proof_hash is None:
+            return jsonify({'error': 'enrollment proof expired or already used'}), 401
+        claim_query = claim_query.filter(
+            FastenConnection.enrollment_proof_hash == proof_hash,
+            FastenConnection.enrollment_expires_at >= issued_at,
+        )
+
+    try:
+        claimed = claim_query.update(claim_values, synchronize_session=False)
+        if claimed != 1:
+            db.session.rollback()
+            current = FastenConnection.query.filter_by(
+                org_connection_id=org_connection_id,
+                tenant_id=tenant_id,
+            ).first()
+            if current and current.agent_token_issued_at is not None:
+                return jsonify({'error': 'already issued'}), 410
+            return jsonify({'error': 'enrollment proof expired or already used'}), 401
+        add_audit_event(
+            event_type='agent_read_token_issued',
+            agent_id='fasten-connect',
+            tenant_id=tenant_id,
+            outcome='success',
+            detail='read-scoped patient connect token (30d) issued after webhook verification',
+        )
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001 - database drivers vary
+        db.session.rollback()
+        logger.error('Fasten enrollment issuance failed: %s', type(exc).__name__)
+        return jsonify({'error': 'enrollment issuance unavailable'}), 503
+
+    if using_enrollment:
+        clear_enrollment_session()
     expires = datetime.now(timezone.utc).timestamp() + READ_TOKEN_TTL_SECONDS
     return jsonify({
         'tenant_id': tenant_id,

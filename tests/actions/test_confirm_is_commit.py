@@ -458,7 +458,7 @@ def test_rx_transfer_propose_next_step_describes_new_flow(client, auth_headers,
                     data=json.dumps(med))
     assert r.status_code == 201
     resp = client.post('/r6/actions/rx-transfer/propose',
-                       headers=tenant_headers,
+                       headers=auth_headers,
                        json={'to_pharmacy': {'name': 'CVS #1234',
                                              'phone': '617-555-0100'}})
     assert resp.status_code == 201

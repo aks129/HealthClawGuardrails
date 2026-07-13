@@ -27,6 +27,10 @@ import {
 import crypto from "crypto";
 import { FHIRTools } from "./tools";
 
+const { version: SERVER_VERSION } = require("../package.json") as {
+  version: string;
+};
+
 const app = express();
 app.use(express.json());
 
@@ -38,6 +42,54 @@ app.use((req, _res, next) => {
   const ua = (req.headers["user-agent"] || "-").toString().slice(0, 80);
   const ct = req.headers["content-type"] || "-";
   console.error(`[req] ${req.method} ${req.url} origin=${origin} ct=${ct} ua=${ua}`);
+  next();
+});
+
+function isMCPTransportPath(path: string): boolean {
+  const normalizedPath = path.toLowerCase();
+  return (
+    normalizedPath === "/mcp" ||
+    normalizedPath.startsWith("/mcp/") ||
+    normalizedPath === "/sse" ||
+    normalizedPath.startsWith("/sse/") ||
+    normalizedPath === "/messages" ||
+    normalizedPath.startsWith("/messages/")
+  );
+}
+
+function tokenMatches(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    actualBytes.length === expectedBytes.length &&
+    crypto.timingSafeEqual(actualBytes, expectedBytes)
+  );
+}
+
+function isMCPBearerCredential(authorization: string | undefined): boolean {
+  const expectedToken = process.env.MCP_AUTH_TOKEN;
+  const match = /^Bearer (.+)$/i.exec(authorization || "");
+  return Boolean(
+    expectedToken && match && tokenMatches(match[1], expectedToken)
+  );
+}
+
+// Health probes and CORS preflight remain public. When configured, every MCP
+// network transport requires the deployment-scoped bearer credential.
+app.use((req, res, next) => {
+  const expectedToken = process.env.MCP_AUTH_TOKEN;
+  if (
+    req.method === "OPTIONS" ||
+    !expectedToken ||
+    !isMCPTransportPath(req.path)
+  ) {
+    return next();
+  }
+
+  if (!isMCPBearerCredential(req.headers.authorization)) {
+    res.setHeader("WWW-Authenticate", "Bearer");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   next();
 });
 
@@ -80,6 +132,7 @@ app.use((req, res, next) => {
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -114,7 +167,9 @@ function extractHeaders(req: express.Request): Record<string, string> {
   const agentId = req.headers["x-agent-id"];
   if (typeof agentId === "string") h["x-agent-id"] = agentId;
   const auth = req.headers["authorization"];
-  if (typeof auth === "string") h["authorization"] = auth;
+  if (typeof auth === "string" && !isMCPBearerCredential(auth)) {
+    h["authorization"] = auth;
+  }
   const humanConfirmed = req.headers["x-human-confirmed"];
   if (typeof humanConfirmed === "string") h["x-human-confirmed"] = humanConfirmed;
   // SHARP-on-MCP context headers (Standardised Healthcare Agent Remote Protocol).
@@ -182,7 +237,7 @@ const SHARP_CAPABILITIES = {
 
 function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
   const server = new Server(
-    { name: "healthclaw-guardrails", version: "1.0.0" },
+    { name: "healthclaw-guardrails", version: SERVER_VERSION },
     { capabilities: SHARP_CAPABILITIES }
   );
 
@@ -236,7 +291,12 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
 
 // --- Streamable HTTP Transport (preferred — /mcp endpoint) ---
 
-const streamableSessions = new Map<string, Server>();
+interface StreamableSession {
+  server: Server;
+  lastActivity: number;
+}
+
+const streamableSessions = new Map<string, StreamableSession>();
 
 // Negotiate protocol version: pick the best match between client and server
 function negotiateProtocolVersion(clientVersion?: string): string {
@@ -266,6 +326,11 @@ app.post("/mcp", async (req, res) => {
 
   const reqHeaders = extractHeaders(req);
   const { id, method, params } = body;
+  const requestSessionId = req.headers["mcp-session-id"] as string | undefined;
+  const existingSession = requestSessionId
+    ? streamableSessions.get(requestSessionId)
+    : undefined;
+  if (existingSession) existingSession.lastActivity = Date.now();
 
   try {
     switch (method) {
@@ -273,7 +338,7 @@ app.post("/mcp", async (req, res) => {
         // Server ALWAYS generates session ID (prevent session fixation)
         const sessionId = crypto.randomUUID();
         const server = createMCPServer();
-        streamableSessions.set(sessionId, server);
+        streamableSessions.set(sessionId, { server, lastActivity: Date.now() });
 
         // Protocol version negotiation
         const clientVersion = params?.protocolVersion as string | undefined;
@@ -286,7 +351,7 @@ app.post("/mcp", async (req, res) => {
           result: {
             protocolVersion: negotiatedVersion,
             capabilities: SHARP_CAPABILITIES,
-            serverInfo: { name: "healthclaw-guardrails", version: "1.0.0" },
+            serverInfo: { name: "healthclaw-guardrails", version: SERVER_VERSION },
           },
         });
       }
@@ -303,8 +368,7 @@ app.post("/mcp", async (req, res) => {
 
       case "tools/call": {
         // Require valid session for tool calls
-        const sessionId = req.headers["mcp-session-id"] as string;
-        if (!sessionId || !streamableSessions.has(sessionId)) {
+        if (!requestSessionId || !existingSession) {
           return res.status(400).json({
             jsonrpc: "2.0",
             id,
@@ -376,9 +440,26 @@ app.delete("/mcp", (req, res) => {
 });
 
 // --- Session cleanup: expire sessions after 30 minutes of inactivity ---
-const sessionCleanupInterval = setInterval(() => {
-  // In production, sessions would have last-activity timestamps
-  // For now, cap total sessions to prevent memory exhaustion
+function cleanupExpiredRuntimeState(now: number = Date.now()): void {
+  for (const [sessionId, session] of streamableSessions) {
+    if (now - session.lastActivity > SESSION_TTL_MS) {
+      streamableSessions.delete(sessionId);
+    }
+  }
+
+  for (const [sessionId, session] of activeSessions) {
+    if (now - session.lastActivity > SESSION_TTL_MS) {
+      activeSessions.delete(sessionId);
+      void session.transport.close().catch((error: unknown) => {
+        console.error("Failed to close expired SSE session:", error);
+      });
+    }
+  }
+
+  for (const [clientIp, bucket] of rateLimitMap) {
+    if (now > bucket.resetAt) rateLimitMap.delete(clientIp);
+  }
+
   const MAX_SESSIONS = 1000;
   if (streamableSessions.size > MAX_SESSIONS) {
     const iterator = streamableSessions.keys();
@@ -388,12 +469,18 @@ const sessionCleanupInterval = setInterval(() => {
       if (key) streamableSessions.delete(key);
     }
   }
-}, 60_000);
+}
+
+const sessionCleanupInterval = setInterval(cleanupExpiredRuntimeState, 60_000);
 sessionCleanupInterval.unref?.();
 
 // --- SSE Transport (legacy MCP, still supported) ---
 
-const activeSessions = new Map<string, { transport: SSEServerTransport; headers: Record<string, string> }>();
+const activeSessions = new Map<string, {
+  transport: SSEServerTransport;
+  headers: Record<string, string>;
+  lastActivity: number;
+}>();
 
 app.get("/sse", async (req, res) => {
   // Capture headers from the SSE connection request and pass them into the
@@ -401,7 +488,11 @@ app.get("/sse", async (req, res) => {
   const reqHeaders = extractHeaders(req);
   const server = createMCPServer(reqHeaders);
   const transport = new SSEServerTransport("/messages", res);
-  activeSessions.set(transport.sessionId, { transport, headers: reqHeaders });
+  activeSessions.set(transport.sessionId, {
+    transport,
+    headers: reqHeaders,
+    lastActivity: Date.now(),
+  });
 
   res.on("close", () => {
     activeSessions.delete(transport.sessionId);
@@ -416,6 +507,7 @@ app.post("/messages", async (req, res) => {
   if (!session) {
     return res.status(400).json({ error: "Invalid or expired session" });
   }
+  session.lastActivity = Date.now();
   await session.transport.handlePostMessage(req, res);
 });
 
@@ -502,7 +594,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "healthy",
     service: "healthclaw-guardrails",
-    version: "1.0.0",
+    version: SERVER_VERSION,
     transports: ["streamable-http", "sse", "http-bridge"],
     protocol: "MCP",
     protocolVersion: SUPPORTED_PROTOCOL_VERSIONS[0],
@@ -528,9 +620,16 @@ app.get("/health", (_req, res) => {
 
 // --- Start Server ---
 
+function assertMCPAuthConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV === "production" && !env.MCP_AUTH_TOKEN?.trim()) {
+    throw new Error("MCP_AUTH_TOKEN is required when NODE_ENV=production");
+  }
+}
+
 if (require.main === module) {
+  assertMCPAuthConfigured();
   app.listen(PORT, () => {
-    console.error(`FHIR R6 MCP Server v0.9.0 running on port ${PORT}`);
+    console.error(`FHIR R6 MCP Server v${SERVER_VERSION} running on port ${PORT}`);
     console.error(`FHIR Base URL: ${FHIR_BASE_URL}`);
     console.error(`Streamable HTTP: http://localhost:${PORT}/mcp`);
     console.error(`SSE endpoint:    http://localhost:${PORT}/sse`);
@@ -546,4 +645,25 @@ function closeMCPServerForTests(): void {
   activeSessions.clear();
 }
 
-export { app, closeMCPServerForTests };
+function cleanupExpiredRuntimeStateForTests(now: number): void {
+  cleanupExpiredRuntimeState(now);
+}
+
+function getRuntimeStateForTests(): {
+  streamableSessions: number;
+  rateLimitBuckets: number;
+} {
+  return {
+    streamableSessions: streamableSessions.size,
+    rateLimitBuckets: rateLimitMap.size,
+  };
+}
+
+export {
+  app,
+  assertMCPAuthConfigured,
+  cleanupExpiredRuntimeStateForTests,
+  closeMCPServerForTests,
+  getRuntimeStateForTests,
+  SERVER_VERSION,
+};
