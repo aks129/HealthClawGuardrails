@@ -14,22 +14,22 @@ def _ctx(app, tenant_id, step_up_token):
     return ProbeContext(tenant=tenant_id, step_up_token=step_up_token)
 
 
-def test_our_deployment_records_the_known_error_fidelity_baseline(
+def test_our_deployment_records_full_conformance(
         client, tenant_id, step_up_token):
     report = run_conformance(FlaskProbeClient(client), _ctx(None, tenant_id, step_up_token))
 
     assert {r.key for r in report.results} == set(PROPERTIES)
-    assert report.score == (6, 7)
-    assert report.grade == "B"
-    assert report.passed is False
-    assert [r.key for r in report.results if not r.passed] == ["error_fidelity"]
+    assert report.score == (7, 7)
+    assert report.grade == "A"
+    assert report.passed is True
+    assert [r.key for r in report.results if not r.passed] == []
 
 
 def test_report_is_json_serializable(client, tenant_id, step_up_token):
     report = run_conformance(FlaskProbeClient(client), _ctx(None, tenant_id, step_up_token))
     d = report.to_dict()
-    assert d["passed"] is False
-    assert d["grade"] == "B"
+    assert d["passed"] is True
+    assert d["grade"] == "A"
     assert len(d["properties"]) == len(PROPERTIES)
     for prop in d["properties"]:
         assert "checks" in prop and prop["checks"]
@@ -373,18 +373,18 @@ def test_lenient_audit_requires_ignored_parameter_evidence():
         before, bundle("echo", "ignored parameter: datetime=x"), "datetime") == "F"
 
 
-def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
-                                                            step_up_token):
+def test_local_error_fidelity_records_grade_a(client, tenant_id,
+                                              step_up_token):
     report = run_conformance(
         FlaskProbeClient(client), _ctx(None, tenant_id, step_up_token))
 
     result = next(r for r in report.results if r.key == "error_fidelity")
-    assert result.grade == "F"
+    assert result.grade == "A"
     assert result.coverage == "local-fhir-only"
     assert result.profiles == {
         "local": {
             "status": "run",
-            "grade": "F",
+            "grade": "A",
             "checks": [
                 "strict unknown parameter is rejected",
                 "strict rejection is audited as a failure",
@@ -405,9 +405,9 @@ def test_local_error_fidelity_records_the_known_f_baseline(client, tenant_id,
         "unsupported modifier is rejected",
         "unsupported modifier rejections are audited as failures",
     }
-    assert report.score == (6, 7)
-    assert report.grade == "B"
-    assert report.passed is False
+    assert report.score == (7, 7)
+    assert report.grade == "A"
+    assert report.passed is True
 
 
 def test_optional_mcp_profile_records_status_only_errors_as_c(client, tenant_id,
@@ -428,7 +428,7 @@ def test_optional_mcp_profile_records_status_only_errors_as_c(client, tenant_id,
         mcp_client=StatusOnlyMCPClient())
 
     result = next(r for r in report.results if r.key == "error_fidelity")
-    assert result.grade == "F"  # local F is weaker than MCP C
+    assert result.grade == "C"  # MCP C is weaker than local A
     assert result.coverage == "local+mcp"
     assert result.profiles["mcp"] == {
         "status": "run", "grade": "C",
@@ -994,7 +994,7 @@ def test_injected_mock_proxy_profile_passes_the_full_error_contract(
         proxy.close()
 
     result = next(r for r in report.results if r.key == "error_fidelity")
-    assert result.grade == "F"  # local F remains the weakest profile
+    assert result.grade == "A"  # local A and proxy A agree
     assert result.coverage == "local+proxy"
     assert result.profiles["proxy"] == {
         "status": "run", "grade": "A",
