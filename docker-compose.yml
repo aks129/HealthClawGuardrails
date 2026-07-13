@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${HOST_PORT:-5000}:5000"
+      - "127.0.0.1:${HOST_PORT:-5000}:5000"
     env_file:
       - path: .env
         required: false
@@ -54,7 +54,7 @@ services:
       context: ./services/agent-orchestrator
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       - NODE_ENV=production
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
