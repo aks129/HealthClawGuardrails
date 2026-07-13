@@ -1,10 +1,10 @@
 """Guardrail conformance probes.
 
-Runs the six HealthClaw guardrail properties against a live endpoint (or the
+Runs the seven HealthClaw guardrail properties against a live endpoint (or the
 Flask test client) and emits a scorecard. The point: the guardrail claims are
 *verifiable*, not marketing — a partner can run this against any deployment and
-prove PHI redaction, audit, step-up, human-in-the-loop, tenant isolation, and
-medical disclaimers actually hold.
+prove PHI redaction, audit, step-up, human-in-the-loop, tenant isolation,
+medical disclaimers, and truthful failure behavior actually hold.
 
 The probes create SYNTHETIC data (obviously-fake PHI tokens) so a live run
 against a real deployment never touches patient data.
@@ -30,7 +30,20 @@ PROPERTIES = (
     "human_in_the_loop",
     "tenant_isolation",
     "medical_disclaimer",
+    "error_fidelity",
 )
+
+_ERROR_FIDELITY_GRADE_ORDER = {"F": 0, "C": 1, "A": 2}
+
+
+def _error_fidelity_grade(grades: list[str]) -> str:
+    """Return the weakest executed error-fidelity profile grade."""
+    if not grades:
+        return "F"
+    unknown = set(grades) - set(_ERROR_FIDELITY_GRADE_ORDER)
+    if unknown:
+        raise ValueError(f"Unknown error-fidelity grade: {sorted(unknown)}")
+    return min(grades, key=_ERROR_FIDELITY_GRADE_ORDER.__getitem__)
 
 
 def _synthetic_patient():
@@ -70,10 +83,21 @@ class ProbeResult:
     property: str
     checks: list[Check] = field(default_factory=list)
     note: str = ""
+    grade: Optional[str] = None
+    coverage: str = "full"
+    profiles: dict = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
+        if self.grade is not None:
+            return self.grade == "A"
         return bool(self.checks) and all(c.passed for c in self.checks)
+
+    @property
+    def effective_grade(self) -> str:
+        if self.grade is not None:
+            return self.grade
+        return "A" if self.passed else "F"
 
 
 def _grade(passed: int, total: int) -> str:
@@ -118,7 +142,8 @@ class ConformanceReport:
             "score": {"passed": p, "total": t},
             "properties": [
                 {"key": r.key, "property": r.property, "passed": r.passed,
-                 "note": r.note,
+                 "grade": r.effective_grade, "coverage": r.coverage,
+                 "profiles": r.profiles, "note": r.note,
                  "checks": [{"name": c.name, "passed": c.passed, "detail": c.detail}
                             for c in r.checks]}
                 for r in self.results
@@ -131,7 +156,10 @@ class ConformanceReport:
                  f"[tenant={self.tenant}]",
                  f"  Grade: {self.grade}   ({p}/{t} properties)", ""]
         for r in self.results:
-            lines.append(f"  [{'PASS' if r.passed else 'FAIL'}] {r.property}")
+            label = r.property
+            if r.grade is not None:
+                label += f" — {r.effective_grade} ({r.coverage})"
+            lines.append(f"  [{'PASS' if r.passed else 'FAIL'}] {label}")
             for c in r.checks:
                 mark = "✓" if c.passed else "✗"
                 suffix = f" — {c.detail}" if c.detail and not c.passed else ""
@@ -201,7 +229,86 @@ class LiveProbeClient:
         return r.status_code, body, r.text
 
 
-# --- The six probes ------------------------------------------------------------
+class LiveMCPProbeClient:
+    """Small Streamable HTTP MCP client used only by optional conformance probes."""
+
+    def __init__(self, mcp_url, session=None):
+        import requests
+        self._url = mcp_url.rstrip("/")
+        self._s = session or requests.Session()
+        self._session_id = None
+        self._protocol_version = "2025-06-18"
+
+    def _headers(self):
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": self._protocol_version,
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        return headers
+
+    def _initialize(self):
+        response = self._s.post(
+            self._url,
+            headers=self._headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": self._protocol_version,
+                    "capabilities": {},
+                    "clientInfo": {"name": "healthclaw-conformance", "version": "1"},
+                },
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or "error" in body:
+            raise RuntimeError("MCP initialize failed")
+        self._session_id = response.headers.get("Mcp-Session-Id")
+        if not self._session_id:
+            raise RuntimeError("MCP initialize returned no session id")
+        result = body.get("result", {})
+        if isinstance(result, dict) and isinstance(result.get("protocolVersion"), str):
+            self._protocol_version = result["protocolVersion"]
+
+        initialized = self._s.post(
+            self._url,
+            headers=self._headers(),
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            timeout=15,
+        )
+        initialized.raise_for_status()
+
+    def call_tool(self, name, arguments):
+        if self._session_id is None:
+            self._initialize()
+        response = self._s.post(
+            self._url,
+            headers=self._headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+            timeout=25,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or "error" in body:
+            raise RuntimeError("MCP tools/call failed")
+        result = body.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("MCP tools/call returned no result")
+        return result
+
+
+# --- Guardrail probes ----------------------------------------------------------
 
 def _create_synthetic(client, ctx) -> tuple[Optional[str], object]:
     status, body, _ = client.request(
@@ -318,6 +425,258 @@ def probe_medical_disclaimer(client, ctx) -> ProbeResult:
     return r
 
 
+def _is_operation_outcome(body) -> bool:
+    return isinstance(body, dict) and body.get("resourceType") == "OperationOutcome"
+
+
+def _rejection_grade(status, body, expected_status=400) -> str:
+    if status == 200:
+        return "F"
+    if status == expected_status and _is_operation_outcome(body):
+        return "A"
+    return "C"
+
+
+def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
+    """A local rejection is corrective only if it identifies the bad key and
+    tells the caller which search parameters are supported."""
+    if not _is_operation_outcome(body):
+        return False
+    for issue in body.get("issue", []):
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details", {})
+        text = details.get("text", "") if isinstance(details, dict) else ""
+        if parameter in text and "supported" in text.lower():
+            return True
+    return False
+
+
+def _has_outcome_warning(bundle) -> bool:
+    if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle":
+        return False
+    for entry in bundle.get("entry", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("search", {}).get("mode") != "outcome":
+            continue
+        outcome = entry.get("resource")
+        if not _is_operation_outcome(outcome):
+            continue
+        issues = outcome.get("issue", [])
+        severities = {i.get("severity") for i in issues if isinstance(i, dict)}
+        if issues and not severities.intersection({"fatal", "error"}):
+            return True
+    return False
+
+
+def _self_link_omits(bundle, parameter: str) -> bool:
+    if not isinstance(bundle, dict):
+        return False
+    links = bundle.get("link", [])
+    self_urls = [link.get("url", "") for link in links
+                 if isinstance(link, dict) and link.get("relation") == "self"]
+    return bool(self_urls) and all(f"{parameter}=" not in url for url in self_urls)
+
+
+def _latest_audit_outcome_code(bundle):
+    if not isinstance(bundle, dict):
+        return None
+    entries = bundle.get("entry", [])
+    if not entries or not isinstance(entries[0], dict):
+        return None
+    resource = entries[0].get("resource", {})
+    return resource.get("outcome", {}).get("code", {}).get("code")
+
+
+def _audit_outcome_codes(bundle) -> list[str]:
+    if not isinstance(bundle, dict):
+        return []
+    codes = []
+    for entry in bundle.get("entry", []):
+        if not isinstance(entry, dict):
+            continue
+        resource = entry.get("resource", {})
+        code = resource.get("outcome", {}).get("code", {}).get("code")
+        if isinstance(code, str):
+            codes.append(code)
+    return codes
+
+
+def _proxy_profile(proxy_client, ctx) -> tuple[str, list[Check]]:
+    hostile_name = "Quintavious Zzyzxbarton"
+    hostile_url = "https://db.internal.example/patient/secret"
+
+    rejected_status, rejected_body, rejected_text = proxy_client.request(
+        "GET", "/Observation?__conformance_case=rejection", ctx.read_headers())
+    rejected_blob = rejected_text or json.dumps(rejected_body or {})
+    rejection_safe = hostile_name not in rejected_blob and hostile_url not in rejected_blob
+    rejection_ok = (rejected_status == 400
+                    and _is_operation_outcome(rejected_body)
+                    and rejection_safe)
+    rejection_grade = ("A" if rejection_ok else
+                       ("F" if rejected_status == 200 or not rejection_safe else "C"))
+
+    auth_status, auth_body, _ = proxy_client.request(
+        "GET", "/Patient/conformance-auth", ctx.read_headers())
+    auth_issue = (auth_body.get("issue", [{}])[0]
+                  if _is_operation_outcome(auth_body) else {})
+    auth_ok = (auth_status in (401, 403, 502)
+               and _is_operation_outcome(auth_body)
+               and auth_issue.get("code") == "security")
+    auth_grade = "A" if auth_ok else ("F" if auth_status in (200, 404) else "C")
+
+    server_status, server_body, _ = proxy_client.request(
+        "GET", "/Observation?__conformance_case=server", ctx.read_headers())
+    server_ok = server_status >= 500 and _is_operation_outcome(server_body)
+    server_grade = "A" if server_ok else ("F" if server_status == 200 else "C")
+
+    timeout_status, timeout_body, _ = proxy_client.request(
+        "GET", "/Observation?__conformance_case=timeout", ctx.read_headers())
+    timeout_ok = timeout_status >= 500 and _is_operation_outcome(timeout_body)
+    timeout_grade = "A" if timeout_ok else ("F" if timeout_status == 200 else "C")
+
+    _, audit_body, _ = proxy_client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=3", ctx.read_headers())
+    audit_codes = _audit_outcome_codes(audit_body)
+    audit_blob = json.dumps(audit_body or {})
+    audit_safe = hostile_name not in audit_blob and hostile_url not in audit_blob
+    audit_ok = (len(audit_codes) >= 3
+                and all(code == "8" for code in audit_codes[:3])
+                and audit_safe)
+    audit_grade = "A" if audit_ok else ("F" if "0" in audit_codes[:2] else "C")
+
+    grade = _error_fidelity_grade([
+        rejection_grade, auth_grade, server_grade, timeout_grade, audit_grade,
+    ])
+    return grade, [
+        Check("proxy rejection preserves sanitized outcome", rejection_grade == "A",
+              f"grade {rejection_grade}; status {rejected_status}"),
+        Check("proxy auth failure is not not-found", auth_grade == "A",
+              f"grade {auth_grade}; status {auth_status}"),
+        Check("proxy server failure is truthful", server_grade == "A",
+              f"grade {server_grade}; status {server_status}"),
+        Check("proxy timeout is truthful", timeout_grade == "A",
+              f"grade {timeout_grade}; status {timeout_status}"),
+        Check("proxy failure audit is truthful", audit_grade == "A",
+              f"grade {audit_grade}; outcomes {','.join(audit_codes) or 'missing'}"),
+    ]
+
+
+def _mcp_profile_grade(mcp_client) -> str:
+    try:
+        result = mcp_client.call_tool(
+            "fhir_search", {"resource_type": "Widget", "_count": 1})
+    except Exception:  # transport probe executed but did not return a tool result
+        return "C"
+    if not isinstance(result, dict):
+        return "F"
+
+    payloads = []
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        payloads.append(structured)
+    for item in result.get("content", []):
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            continue
+        try:
+            payloads.append(json.loads(item["text"]))
+        except (TypeError, ValueError):
+            payloads.append({"text": item["text"]})
+
+    has_outcome = any(_is_operation_outcome(payload) for payload in payloads)
+    has_failure = has_outcome or any(
+        isinstance(payload, dict)
+        and ("error" in payload or "failed" in str(payload.get("text", "")).lower())
+        for payload in payloads
+    )
+    if result.get("isError") is True and has_outcome:
+        return "A"
+    if has_failure or result.get("isError") is True:
+        return "C"
+    return "F"
+
+
+def probe_error_fidelity(client, ctx, mcp_client=None, proxy_client=None) -> ProbeResult:
+    """Grade failure-path truthfulness without fixing the known gaps."""
+    strict_headers = ctx.read_headers()
+    strict_headers["Prefer"] = "handling=strict"
+    strict_status, strict_body, _ = client.request(
+        "GET", "/Observation?datetime=x", strict_headers)
+    strict_grade = _rejection_grade(strict_status, strict_body)
+    if strict_grade == "A" and not _outcome_names_parameter_and_supported_set(
+            strict_body, "datetime"):
+        strict_grade = "C"
+
+    _, audit_body, _ = client.request(
+        "GET", "/AuditEvent?entity-type=Observation&_count=1", ctx.read_headers())
+    audit_code = _latest_audit_outcome_code(audit_body)
+    audit_grade = "A" if audit_code == "8" else ("F" if audit_code == "0" else "C")
+
+    lenient_status, lenient_body, _ = client.request(
+        "GET", "/Observation?datetime=x", ctx.read_headers())
+    lenient_ok = (lenient_status == 200
+                  and _has_outcome_warning(lenient_body)
+                  and _self_link_omits(lenient_body, "datetime"))
+    lenient_grade = "A" if lenient_ok else ("F" if lenient_status == 200 else "C")
+
+    modifier_status, modifier_body, _ = client.request(
+        "GET", "/Observation?code:exact=x", ctx.read_headers())
+    modifier_grade = _rejection_grade(modifier_status, modifier_body)
+    modifier_strict_status, modifier_strict_body, _ = client.request(
+        "GET", "/Observation?code:exact=x", strict_headers)
+    modifier_strict_grade = _rejection_grade(
+        modifier_strict_status, modifier_strict_body)
+    modifier_grade = _error_fidelity_grade([
+        modifier_grade, modifier_strict_grade,
+    ])
+
+    local_grade = _error_fidelity_grade([
+        strict_grade, audit_grade, lenient_grade, modifier_grade,
+    ])
+    checks = [
+        Check("strict unknown parameter is rejected", strict_grade == "A",
+              f"grade {strict_grade}; status {strict_status}"),
+        Check("strict rejection is audited as a failure", audit_grade == "A",
+              f"grade {audit_grade}; outcome {audit_code or 'missing'}"),
+        Check("lenient unknown parameter carries an outcome warning",
+              lenient_grade == "A",
+              f"grade {lenient_grade}; status {lenient_status}"),
+        Check("unsupported modifier is rejected", modifier_grade == "A",
+              f"grade {modifier_grade}; statuses "
+              f"{modifier_status},{modifier_strict_status}"),
+    ]
+    profiles = {
+        "local": {"status": "run", "grade": local_grade},
+        "mcp": {"status": "not_run"},
+        "proxy": {"status": "not_run"},
+    }
+    executed_grades = [local_grade]
+    coverage = "local-fhir-only"
+    if mcp_client is not None:
+        mcp_grade = _mcp_profile_grade(mcp_client)
+        profiles["mcp"] = {"status": "run", "grade": mcp_grade}
+        executed_grades.append(mcp_grade)
+        coverage = "local+mcp"
+        checks.append(Check(
+            "MCP tool failure is corrective and flagged", mcp_grade == "A",
+            f"grade {mcp_grade}"))
+
+    if proxy_client is not None:
+        proxy_grade, proxy_checks = _proxy_profile(proxy_client, ctx)
+        profiles["proxy"] = {"status": "run", "grade": proxy_grade}
+        executed_grades.append(proxy_grade)
+        checks.extend(proxy_checks)
+        coverage = "full" if mcp_client is not None else "local+proxy"
+
+    return ProbeResult(
+        "error_fidelity", "Error Fidelity", checks,
+        grade=_error_fidelity_grade(executed_grades),
+        coverage=coverage,
+        profiles=profiles,
+    )
+
+
 _PROBES = (
     probe_phi_redaction,
     probe_audit_trail,
@@ -328,7 +687,8 @@ _PROBES = (
 )
 
 
-def run_conformance(client, ctx: ProbeContext) -> ConformanceReport:
+def run_conformance(client, ctx: ProbeContext, *, mcp_client=None,
+                    proxy_client=None) -> ConformanceReport:
     results = []
     for probe in _PROBES:
         try:
@@ -338,5 +698,20 @@ def run_conformance(client, ctx: ProbeContext) -> ConformanceReport:
             results.append(ProbeResult(
                 key, key.replace("_", " ").title(),
                 [Check("probe executed", False, type(exc).__name__)]))
+    try:
+        results.append(probe_error_fidelity(
+            client, ctx, mcp_client=mcp_client, proxy_client=proxy_client))
+    except Exception as exc:  # a probe crash is a FAIL, never a harness crash
+        results.append(ProbeResult(
+            "error_fidelity", "Error Fidelity",
+            [Check("probe executed", False, type(exc).__name__)],
+            grade="F", coverage="local-fhir-only",
+            profiles={
+                "local": {"status": "run", "grade": "F"},
+                "mcp": ({"status": "run", "grade": "F"}
+                        if mcp_client is not None else {"status": "not_run"}),
+                "proxy": ({"status": "run", "grade": "F"}
+                          if proxy_client is not None else {"status": "not_run"}),
+            }))
     return ConformanceReport(results, base=getattr(client, "base", ""),
                              tenant=ctx.tenant)

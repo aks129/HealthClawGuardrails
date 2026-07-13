@@ -8,21 +8,28 @@ the scorecard — a one-URL "prove the guardrails hold" for partners and demos.
 
 def test_conformance_endpoint_grades_the_live_app(client):
     r = client.get("/r6/fhir/$conformance")
-    assert r.status_code == 200
+    assert r.status_code == 503
     body = r.get_json()
-    assert body["passed"] is True
-    assert body["grade"] == "A"
-    assert body["score"]["passed"] == body["score"]["total"] == 6
+    assert body["passed"] is False
+    assert body["grade"] == "B"
+    assert body["score"] == {"passed": 6, "total": 7}
     keys = {p["key"] for p in body["properties"]}
     assert keys == {"phi_redaction", "audit_trail", "step_up_enforcement",
-                    "human_in_the_loop", "tenant_isolation", "medical_disclaimer"}
+                    "human_in_the_loop", "tenant_isolation", "medical_disclaimer",
+                    "error_fidelity"}
+    error_fidelity = next(
+        p for p in body["properties"] if p["key"] == "error_fidelity")
+    assert error_fidelity["grade"] == "F"
+    assert error_fidelity["coverage"] == "local-fhir-only"
+    assert error_fidelity["profiles"]["proxy"] == {"status": "not_run"}
 
 
 def test_conformance_endpoint_text_format(client):
     r = client.get("/r6/fhir/$conformance?format=text")
-    assert r.status_code == 200
+    assert r.status_code == 503
     text = r.get_data(as_text=True)
-    assert "Grade: A" in text and "PHI Redaction" in text
+    assert "Grade: B" in text and "PHI Redaction" in text
+    assert "Error Fidelity — F (local-fhir-only)" in text
 
 
 def test_conformance_uses_isolated_selftest_tenant(client):
@@ -37,8 +44,8 @@ def test_conformance_shields_badge_format(client):
     b = r.get_json()
     assert b["schemaVersion"] == 1
     assert b["label"] == "guardrail conformance"
-    assert b["message"].startswith("A")           # e.g. "A (6/6)"
-    assert b["color"] in ("brightgreen", "green")
+    assert b["message"] == "B (6/7; error fidelity F, local-fhir-only)"
+    assert b["color"] == "yellow"
 
 
 def test_conformance_is_cached_between_calls(client):

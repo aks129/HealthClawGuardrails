@@ -28,10 +28,21 @@ def _shields(report_dict):
     p = report_dict["score"]["passed"]
     t = report_dict["score"]["total"]
     grade = report_dict["grade"]
+    error_fidelity = next(
+        (p for p in report_dict["properties"]
+         if p["key"] == "error_fidelity"),
+        None,
+    )
+    fidelity_suffix = ""
+    if error_fidelity is not None:
+        fidelity_suffix = (
+            f"; error fidelity {error_fidelity['grade']}, "
+            f"{error_fidelity['coverage']}"
+        )
     return {
         "schemaVersion": 1,
         "label": "guardrail conformance",
-        "message": f"{grade} ({p}/{t})",
+        "message": f"{grade} ({p}/{t}{fidelity_suffix})",
         "color": "brightgreen" if report_dict["passed"] else
                  ("yellow" if grade in ("B", "C") else "red"),
     }
@@ -77,7 +88,11 @@ def register_conformance_routes(blueprint, deps):
                 ProbeResult(
                     p["key"], p["property"],
                     [Check(c["name"], c["passed"], c["detail"]) for c in p["checks"]],
-                    p.get("note", ""))
+                    note=p.get("note", ""),
+                    grade=p.get("grade"),
+                    coverage=p.get("coverage", "full"),
+                    profiles=p.get("profiles", {}),
+                )
                 for p in body["properties"]
             ]
             rep = ConformanceReport(results, base=body.get("target", ""),
