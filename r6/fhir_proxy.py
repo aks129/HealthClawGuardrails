@@ -34,6 +34,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from r6.version import __version__
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -57,7 +59,10 @@ def _get_redis():
         client.ping()
         return client
     except Exception as exc:
-        logger.debug('Redis unavailable, using in-process token cache: %s', exc)
+        logger.debug(
+            'Redis unavailable; using in-process token cache (%s)',
+            type(exc).__name__,
+        )
         return None
 
 
@@ -76,7 +81,7 @@ def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
             if cached:
                 return cached.decode()
         except Exception as exc:
-            logger.debug('Redis get failed: %s', exc)
+            logger.debug('Redis token-cache read failed (%s)', type(exc).__name__)
 
     # 2. Try in-process cache
     if _medplum_cache['token'] and time.time() < _medplum_cache['expires_at']:
@@ -104,7 +109,7 @@ def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
         try:
             r.setex('medplum:access_token', ttl, token)
         except Exception as exc:
-            logger.debug('Redis setex failed: %s', exc)
+            logger.debug('Redis token-cache write failed (%s)', type(exc).__name__)
 
     # 5. Store in-process fallback
     _medplum_cache['token'] = token
@@ -357,11 +362,11 @@ class FHIRUpstreamProxy:
             follow_redirects=False,
             headers={
                 'Accept': 'application/fhir+json, application/json',
-                'User-Agent': 'HealthClaw-Guardrails/1.0.0',
+                'User-Agent': f'HealthClaw-Guardrails/{__version__}',
             },
         )
         self._upstream_host = urlparse(upstream_url).netloc
-        logger.info('FHIR upstream proxy initialized: %s', self.upstream_url)
+        logger.info('FHIR upstream proxy initialized')
 
     def healthy(self) -> dict:
         """Check upstream server reachability via /metadata."""
@@ -513,8 +518,8 @@ class FHIRUpstreamProxy:
             if data:
                 data = self._rewrite_urls(data)
             return data, resp.status_code
-        except Exception as e:
-            logger.error(f'Upstream operation {path} failed: {e}')
+        except Exception as exc:
+            logger.error('Upstream operation failed (%s)', type(exc).__name__)
             return None, 502
 
     def close(self):
@@ -566,7 +571,7 @@ class MedplumProxy(FHIRUpstreamProxy):
         self._client_secret = client_secret
         # Inject auth into every request via httpx event hook
         self._client.event_hooks['request'] = [self._inject_bearer]
-        logger.info('Medplum proxy initialized: %s', self.upstream_url)
+        logger.info('Medplum proxy initialized')
 
     def _inject_bearer(self, request: httpx.Request) -> None:
         """httpx event hook — adds Authorization header before each send."""
@@ -574,7 +579,9 @@ class MedplumProxy(FHIRUpstreamProxy):
             token = _fetch_medplum_token(self._client_id, self._client_secret)
             request.headers['Authorization'] = f'Bearer {token}'
         except Exception as exc:
-            logger.error('Failed to obtain Medplum token: %s', exc)
+            logger.error(
+                'Failed to obtain Medplum token (%s)', type(exc).__name__
+            )
 
 
 # --- Module-level singleton ---
