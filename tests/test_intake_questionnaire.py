@@ -8,8 +8,11 @@ Covers:
   - The NKA (no-known-allergies) invariant: it is a distinct affirmative
     attestation, never defaulted and never inferrable from absent data.
   - $populate still runs end-to-end against the new Questionnaire and mirrors
-    its structure in the QuestionnaireResponse, even though meds/allergies/
-    conditions won't actually fill until Task 2 wires list-resource matching.
+    its structure in the QuestionnaireResponse. List-resource population
+    itself (filling medications/allergies/conditions from FHIR resources) is
+    covered in tests/test_populate_lists.py (Task 2); this file only checks
+    that, absent any list resources, those groups populate to zero repeats
+    rather than fabricating anything.
 """
 
 from r6.sdc.intake import intake_questionnaire
@@ -191,17 +194,20 @@ def test_populate_mirrors_new_structure():
                   if i["linkId"] == "demographics.family-name")
     assert family["answer"][0]["valueString"] == "Lovelace"
 
-    # Meds/allergies/conditions groups don't populate yet (Task 2), but the
-    # leaf items still mirror the questionnaire's structure with no answer.
+    # No MedicationRequest/AllergyIntolerance/Condition resources were
+    # supplied, so the repeating medications.item/allergies.item groups
+    # populate to zero repeats (Task 2: list-resource population never
+    # fabricates a repeat, and absence of data never flips a sibling
+    # boolean — see test_populate_lists.py for the full Task 2 coverage).
     meds_group = next(i for i in qr["item"] if i["linkId"] == "medications")
-    meds_repeat = next(i for i in meds_group["item"]
-                        if i["linkId"] == "medications.item")
-    meds_name = next(i for i in meds_repeat["item"]
-                      if i["linkId"] == "medications.item.name")
-    assert "answer" not in meds_name
+    assert all(i["linkId"] != "medications.item" for i in meds_group["item"])
+    no_current_meds = next(i for i in meds_group["item"]
+                            if i["linkId"] == "medications.no-current-medications")
+    assert "answer" not in no_current_meds
 
     allergies_group = next(i for i in qr["item"]
                             if i["linkId"] == "allergies")
+    assert all(i["linkId"] != "allergies.item" for i in allergies_group["item"])
     nka = next(i for i in allergies_group["item"]
                if i["linkId"] == "allergies.no-known-allergies")
     assert "answer" not in nka

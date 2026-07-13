@@ -174,7 +174,9 @@ def register_sdc_routes(blueprint, deps):
         if subject:
             content.append(subject)
         if subject and subject.get("id"):
-            content.extend(_load_observations(subject["id"], tenant_id))
+            for resource_type, subject_field in _AUTO_LOADED_RESOURCE_TYPES:
+                content.extend(_load_resources_for_patient(
+                    resource_type, subject_field, subject["id"], tenant_id))
         bundle = _param_resource(params, "content")
         if bundle and bundle.get("resourceType") == "Bundle":
             content.extend(e["resource"] for e in bundle.get("entry", [])
@@ -212,15 +214,29 @@ def _load_stored(resource_type, resource_id, tenant_id):
     return row.to_fhir_json() if row else None
 
 
-def _load_observations(patient_id, tenant_id):
+# Resource types $populate auto-loads for the subject, alongside the field
+# each one uses to reference its patient (R4 is inconsistent here —
+# AllergyIntolerance uses `patient`, everything else here uses `subject`).
+# MedicationRequest/AllergyIntolerance/Condition feed r6/sdc/populate.py's
+# list-resource population (medications/allergies/conditions repeating
+# groups on the intake Questionnaire); Observation feeds item.code matching.
+_AUTO_LOADED_RESOURCE_TYPES = [
+    ("Observation", "subject"),
+    ("MedicationRequest", "subject"),
+    ("AllergyIntolerance", "patient"),
+    ("Condition", "subject"),
+]
+
+
+def _load_resources_for_patient(resource_type, subject_field, patient_id, tenant_id):
     rows = R6Resource.query.filter_by(
-        resource_type="Observation", tenant_id=tenant_id).all()
+        resource_type=resource_type, tenant_id=tenant_id).all()
     out = []
     ref = f"Patient/{patient_id}"
     for row in rows:
-        obs = row.to_fhir_json()
-        if obs.get("subject", {}).get("reference") == ref:
-            out.append(obs)
+        resource = row.to_fhir_json()
+        if resource.get(subject_field, {}).get("reference") == ref:
+            out.append(resource)
     return out
 
 
