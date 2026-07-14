@@ -13,6 +13,9 @@ set -euo pipefail
 HOST="${1:-root@187.77.4.50}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+echo "→ ensure target dirs exist"
+ssh "$HOST" 'id -u careagents &>/dev/null || useradd --system --home /opt/careagents careagents; mkdir -p /opt/careagents/app /etc/careagents'
+
 echo "→ rsync app to $HOST"
 rsync -az --delete \
   "$REPO_ROOT/careagents" \
@@ -62,6 +65,10 @@ ssh "$HOST" bash -s <<'REMOTE'
 set -euo pipefail
 # Point nginx's `location /` at the app (both :80 and :443 servers), once.
 CFG=/etc/nginx/sites-enabled/careagents.cloud
+# The existing `location /health` is a PREFIX match that would shadow app
+# routes like /healthz — pin it to an exact match. Idempotent.
+sed -i 's|location /health {|location = /health {|' "$CFG"
+
 if ! grep -q "proxy_pass http://127.0.0.1:8600" "$CFG"; then
   cp "$CFG" "$CFG.bak-$(date +%s)"
   python3 - "$CFG" <<'PY'
