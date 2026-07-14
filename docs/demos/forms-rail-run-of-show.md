@@ -19,6 +19,18 @@ and a crafted request can't dodge it because the server re-derives the item list
 from FHIR rather than trusting the client. Silence about allergies is never
 consent. That is the whole pitch — safety you can watch fail closed.
 
+## One-command readiness check
+
+Before the webinar (and any time you touch the deployment), run the smoke test —
+it drives this whole path end to end and fails loudly on any broken beat:
+
+```bash
+python scripts/demo_smoke.py                 # live prod (app.healthclaw.io)
+python scripts/demo_smoke.py --base http://127.0.0.1:5000   # local stack
+```
+
+Green all the way down means the demo is ready to present.
+
 ## Pre-flight (before you present)
 
 1. Stack up locally or point at a demo deployment:
