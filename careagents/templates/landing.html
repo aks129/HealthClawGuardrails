@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block bodyclass %}page-landing{% endblock %}
+{% block content %}
+<main class="hero">
+  <div class="hero-inner">
+    <p class="kicker">Your health, with someone finally on your side of the desk</p>
+    <h1>An agent that actually<br>knows your health —<br><em>and asks before it acts.</em></h1>
+    <p class="sub">
+      Meet your personal care agent. It reads your records through a guardrail
+      layer that redacts what it shouldn't see, writes every access to an audit
+      trail, and hands <strong>you</strong> the pen before anything real happens.
+    </p>
+    <div class="cta-row">
+      {% if me %}
+        <a class="btn-primary" href="/chat">Back to {{ me.name }} →</a>
+      {% else %}
+        <a class="btn-primary" href="/start">Create your agent</a>
+      {% endif %}
+      <span class="cta-note">about a minute · no account needed</span>
+    </div>
+    <div class="trust-strip" id="trust-strip">
+      <span class="trust-chip" id="badge-chip" title="Live conformance grade of the guardrail layer">
+        <span class="dot"></span> guardrails: <b id="badge-text">checking…</b>
+      </span>
+      <span class="trust-chip">every access audited</span>
+      <span class="trust-chip">you approve every action</span>
+    </div>
+  </div>
+</main>
+
+<section class="how">
+  <h2>How it works</h2>
+  <ol class="steps">
+    <li>
+      <span class="step-n">1</span>
+      <h3>Name your agent</h3>
+      <p>Pick a name and a voice. It starts with clearly-labeled sample
+      records, so you can feel how it works before connecting anything.</p>
+    </li>
+    <li>
+      <span class="step-n">2</span>
+      <h3>Ask real questions</h3>
+      <p>“What do my labs say?” “Am I due for a screening?” Answers come from
+      the records — redacted, interpreted, and grounded, never invented.</p>
+    </li>
+    <li>
+      <span class="step-n">3</span>
+      <h3>Let it do real work — with your sign-off</h3>
+      <p>It fills your new-patient intake form from the records. You confirm
+      every medication and allergy yourself — it structurally cannot claim
+      “no known allergies” for you — then you get a provenance-stamped PDF.</p>
+    </li>
+  </ol>
+</section>
+
+<section class="honesty">
+  <div class="honesty-card">
+    <h3>Why the guardrails matter</h3>
+    <p>Most health-AI demos ask you to trust them. This one shows its work: the
+    guardrail layer underneath (<a href="https://healthclaw.io" target="_blank" rel="noopener">HealthClaw</a>,
+    open source) grades its own deployment A–F across seven safety properties —
+    redaction, audit, step-up auth, human-in-the-loop, tenant isolation,
+    disclaimers, and truthful failure paths — live, in public.
+    <a href="https://app.healthclaw.io/r6/fhir/$conformance?format=text" target="_blank" rel="noopener">See today’s grade</a>.</p>
+  </div>
+</section>
+
+<script>
+fetch('/api/trust').then(r => r.json()).then(d => {
+  const el = document.getElementById('badge-text');
+  el.textContent = d.badge && d.badge !== 'unavailable' ? 'Grade ' + d.badge.split(' ')[0] : 'live';
+}).catch(() => {});
+</script>
+{% endblock %}

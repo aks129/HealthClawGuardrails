@@ -1,0 +1,27 @@
+# CareAgents — systemd unit (careagents.cloud VPS)
+# Install: /etc/systemd/system/careagents.service
+# ONE worker by design: chat history is process-local (see careagents/app.py).
+[Unit]
+Description=CareAgents hosted experience (careagents.cloud)
+After=network.target
+
+[Service]
+Type=simple
+User=careagents
+Group=careagents
+WorkingDirectory=/opt/careagents/app
+EnvironmentFile=/etc/careagents/careagents.env
+ExecStart=/opt/careagents/venv/bin/gunicorn careagents.wsgi:app \
+  --bind 127.0.0.1:8600 --workers 1 --threads 8 --timeout 120 \
+  --access-logfile - --error-logfile - \
+  --access-logformat '%%(h)s "%%(r)s" %%(s)s %%(M)sms'
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/careagents
+
+[Install]
+WantedBy=multi-user.target
