@@ -13,7 +13,7 @@ This roadmap is public so contributors can see where we're going and pick up wor
 The contract floor for real actions is on `main`:
 
 - **Provably out-of-band human gate.** An agent can *propose* an action, but `commit` only *submits* it (HTTP 202). Execution happens exclusively through a separate approval endpoint that requires a single-use step-up credential and wins an expiry-guarded atomic claim — there is no code path where the agent's own tools can approve their own action. The old spoofable `X-Human-Confirmed` header is gone.
-- **The action rail + public extension point.** Real-world capabilities are `ActionExecutor`s registered in a plugin registry. Adding a capability behind the full guardrail rail (validation → human gate → audit → observability) is ~50 lines and touches no core code. See [Extending the action rail](#extending-the-action-rail).
+- **The action rail + public extension point.** Real-world capabilities are `ActionExecutor`s registered in a plugin registry. Adding a capability behind the full guardrail rail (validation → human gate → audit → observability) is ~50 lines and touches no core code. See [Build an ActionExecutor](docs/extending-the-action-rail.md).
 - **Durable execution.** Attempt ledger, provider reconciliation, an external-tick reaper, and an append-only action-event log — a crashed worker can't strand or double-fire a real-world action.
 - **Reliability floor.** Config preflight (`GET /r6/ops/preflight`), a Postgres CI lane (kills the SQLite-masks-varchar bug class), MCP fetch timeouts, poller storm-detection, source-aware resource identity `(tenant, type, id)`, and a mandatory red-flag emergency screen on action text.
 - **Seven provable guardrail properties (Grade A).** `GET /r6/fhir/$conformance` grades a live deployment A–F across PHI redaction, immutable audit, step-up authorization, human-in-the-loop, tenant isolation, medical disclaimers, and **error fidelity** — the failure-path property (unknown parameters and unsupported modifiers are rejected or flagged, never silently swallowed). Enforced as a CI gate (`tests/test_guardrail_conformance.py`) and served as a self-grading endpoint.
@@ -66,6 +66,8 @@ class ActionExecutor(Protocol):
 ```
 
 Register it from a module under `r6/actions/rails/` and it's live. The generic contract test suite runs against every registered executor automatically — pass it and your rail is a first-class citizen. Ideas we'd love PRs for are labeled [`area: action-rail`](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+action-rail%22).
+
+For the full walkthrough and a runnable synthetic example, see [Build an ActionExecutor](docs/extending-the-action-rail.md).
 
 ## How we work
 
