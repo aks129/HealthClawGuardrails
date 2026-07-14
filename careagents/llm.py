@@ -35,6 +35,10 @@ class ToolCall:
 class LLMTurn:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Provider-native tool_call objects, replayed verbatim on the next turn.
+    # Some OpenAI-compatible backends (Gemini) require echoing opaque fields
+    # like thought_signature that a reconstructed call would drop.
+    raw_tool_calls: list = field(default_factory=list)
 
 
 class LLMError(RuntimeError):
@@ -106,28 +110,35 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
                                "tool_call_id": m["tool_call_id"],
                                "content": m["content"]})
         elif m["role"] == "assistant" and m.get("tool_calls"):
+            # Replay the provider's exact tool_call objects when we captured
+            # them (preserves Gemini's thought_signature); else reconstruct.
+            raw = m.get("_openai_tool_calls")
+            tool_calls = raw or [{
+                "id": c["id"], "type": "function",
+                "function": {"name": c["name"],
+                             "arguments": json.dumps(c["arguments"])}}
+                for c in m["tool_calls"]]
             o_messages.append({"role": "assistant",
                                "content": m.get("content") or None,
-                               "tool_calls": [{
-                                   "id": c["id"], "type": "function",
-                                   "function": {
-                                       "name": c["name"],
-                                       "arguments": json.dumps(c["arguments"]),
-                                   }} for c in m["tool_calls"]]})
+                               "tool_calls": tool_calls})
         else:
             o_messages.append({"role": m["role"], "content": m["content"]})
 
     r = requests.post(
         f"{cfg.openai_base}/chat/completions",
         headers={"Authorization": f"Bearer {cfg.openai_api_key}"},
+        # Generous budget: some OpenAI-compatible backends (e.g. Gemini's
+        # compat endpoint) spend completion tokens on internal reasoning
+        # before the visible answer.
         json={"model": cfg.openai_model, "messages": o_messages,
-              "tools": o_tools, "max_tokens": 1200},
+              "tools": o_tools, "max_tokens": 4000},
         timeout=90)
     if r.status_code != 200:
         raise LLMError(f"model call failed (HTTP {r.status_code})")
     msg = r.json()["choices"][0]["message"]
 
-    turn = LLMTurn(text=msg.get("content") or "")
+    turn = LLMTurn(text=msg.get("content") or "",
+                   raw_tool_calls=msg.get("tool_calls") or [])
     for c in msg.get("tool_calls") or []:
         try:
             args = json.loads(c["function"].get("arguments") or "{}")

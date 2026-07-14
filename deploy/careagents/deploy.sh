@@ -38,9 +38,16 @@ CARE_ENV=production
 HEALTHCLAW_BASE=https://app.healthclaw.io
 CARE_SESSION_SECRET=__SET_ME_32_CHARS_MIN__
 HEALTHCLAW_MINT_SECRET=__SET_ME__
-# ANTHROPIC_API_KEY takes precedence when set
+# Provider: ANTHROPIC_API_KEY (claude-sonnet-5) takes precedence when set.
+# Otherwise the OpenAI-compatible fallback is used — works with OpenAI or,
+# as shipped today, Google Gemini's compat endpoint:
+#   OPENAI_API_KEY=<gemini key>
+#   OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+#   CARE_OPENAI_MODEL=gemini-3.5-flash
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
+OPENAI_BASE_URL=
+CARE_OPENAI_MODEL=
 CARE_MODEL=claude-sonnet-5
 ENV
   chmod 600 /etc/careagents/careagents.env

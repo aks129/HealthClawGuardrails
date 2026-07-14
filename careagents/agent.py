@@ -161,7 +161,10 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
         history.append({"role": "assistant", "content": turn.text,
                         "tool_calls": [{"id": c.id, "name": c.name,
                                         "arguments": c.arguments}
-                                       for c in turn.tool_calls]})
+                                       for c in turn.tool_calls],
+                        # Preserve provider-native call objects for replay
+                        # (Gemini thought_signature); ignored by Anthropic.
+                        "_openai_tool_calls": turn.raw_tool_calls})
         for call in turn.tool_calls:
             yield {"type": "tool", "name": call.name,
                    "label": TOOL_LABELS.get(call.name, call.name)}
