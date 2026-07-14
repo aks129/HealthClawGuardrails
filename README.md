@@ -123,11 +123,11 @@ python scripts/guardrail_conformance.py \
 
 ```text
 HealthClaw Guardrail Conformance — https://app.healthclaw.io [tenant=desktop-demo]
-  Grade: B   (6/7 properties)
+  Grade: A   (7/7 properties)
   [PASS] PHI Redaction            [PASS] Human-in-the-Loop
   [PASS] Immutable Audit Trail    [PASS] Tenant Isolation
   [PASS] Step-Up Authorization    [PASS] Medical Disclaimers
-  [FAIL] Error Fidelity — F (local-fhir-only)
+  [PASS] Error Fidelity — A (local-fhir-only)
 ```
 
 Or hit the **one-URL self-test** on any running deployment — no token needed, it
@@ -137,9 +137,10 @@ self-tenants internally and returns 200 at Grade A (503 otherwise):
 curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
 ```
 
-The initial error-fidelity baseline is intentionally B: the original six
-properties pass while local search still accepts unsupported filters. The same
-harness runs against the Flask test client as a **CI baseline**
+All seven properties pass, including error fidelity — the deployment tells an
+agent the truth on the failure paths (unknown search parameters and unsupported
+modifiers are rejected or flagged, never silently swallowed), not just the happy
+path. The same harness runs against the Flask test client as a **CI baseline**
 (`tests/test_guardrail_conformance.py`), so grade movement is explicit rather
 than hidden. `--json` emits a machine-readable report; `--mcp-url` also probes
 MCP `tools/call` error signaling. For an authenticated MCP deployment, set

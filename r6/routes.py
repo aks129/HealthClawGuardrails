@@ -685,6 +685,40 @@ def update_resource(resource_type, resource_id):
     return response
 
 
+# Error-fidelity contract (guardrail property 7): the search facade must tell
+# an agent the truth on the failure paths. The supported set below is the
+# single source of truth for both the query logic and the corrective error
+# text; keep them in sync.
+_SUPPORTED_SEARCH_PARAMS = frozenset({
+    'patient', 'code', 'status', '_lastUpdated',
+    '_count', '_sort', '_summary', 'context-id',
+})
+_SUPPORTED_PARAMS_TEXT = (
+    'patient, code, status, _lastUpdated, _count, _sort, _summary, context-id'
+)
+
+
+def _error_fidelity_outcome(severity, code, text):
+    """Build an OperationOutcome shaped for the error-fidelity contract.
+
+    Unlike _operation_outcome (which uses `diagnostics`), the failure-path
+    contract requires `details.text` and an issue carrying nothing else, so a
+    consuming agent gets a machine-checkable, corrective message.
+    """
+    return {
+        'resourceType': 'OperationOutcome',
+        'issue': [{'severity': severity, 'code': code,
+                   'details': {'text': text}}],
+    }
+
+
+def _parse_prefer_handling():
+    """Return 'strict' or 'lenient' (default) from the Prefer header."""
+    prefer = request.headers.get('Prefer', '') or ''
+    m = re.search(r'handling\s*=\s*(strict|lenient)', prefer, re.IGNORECASE)
+    return m.group(1).lower() if m else 'lenient'
+
+
 @r6_blueprint.route('/<resource_type>', methods=['GET'])
 def search_resources(resource_type):
     """
@@ -787,6 +821,42 @@ def search_resources(resource_type):
                            detail=f'search (upstream): {len(entries)} results')
 
         return jsonify(result)
+
+    # --- Error fidelity: tell the agent the truth about unsupported inputs ---
+    handling = _parse_prefer_handling()
+    agent_id = request.headers.get('X-Agent-Id')
+    modifier_keys = [k for k in request.args if ':' in k]
+    ignored_params = [k for k in request.args
+                      if ':' not in k and k not in _SUPPORTED_SEARCH_PARAMS]
+
+    # An unsupported search modifier is always rejected (none are implemented):
+    # silently dropping it would change the query's meaning unbeknownst to the
+    # caller. Audited as a failure, in every handling mode.
+    if modifier_keys:
+        modifier = sorted(modifier_keys)[0]
+        record_audit_event('read', resource_type, None, agent_id=agent_id,
+                           tenant_id=tenant_id, outcome='failure',
+                           detail=('search rejected: unsupported modifier '
+                                   f'{modifier}'))
+        return jsonify(_error_fidelity_outcome(
+            'error', 'not-supported',
+            f'Unsupported modifier: {modifier}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.')), 400
+
+    # An unknown parameter under strict handling is rejected; under lenient
+    # handling (the default) it is ignored but reported — a warning entry in
+    # the bundle, an audit note, and kept out of the self link — never
+    # silently swallowed.
+    if ignored_params and handling == 'strict':
+        unknown = sorted(ignored_params)[0]
+        record_audit_event('read', resource_type, None, agent_id=agent_id,
+                           tenant_id=tenant_id, outcome='failure',
+                           detail=('search rejected: unknown parameter '
+                                   f'{unknown}'))
+        return jsonify(_error_fidelity_outcome(
+            'error', 'not-supported',
+            f'Unknown parameter: {unknown}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.')), 400
 
     # --- Local mode: query SQLite ---
     query = R6Resource.query.filter_by(
@@ -903,6 +973,24 @@ def search_resources(resource_type):
     if search_params:
         self_link += '?' + '&'.join(search_params)
 
+    # Lenient handling of an unknown parameter: append a corrective warning
+    # entry (search.mode=outcome) naming the ignored parameter + the supported
+    # set. The self link already omits unknown params (built from the supported
+    # set above), so the caller can see exactly which query actually ran.
+    audit_note = ''
+    if ignored_params:
+        ignored = sorted(ignored_params)[0]
+        entries.append({
+            'search': {'mode': 'outcome'},
+            'resource': _error_fidelity_outcome(
+                'warning', 'not-supported',
+                f'Unknown parameter: {ignored}. '
+                f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.'),
+        })
+        # PHI-free, and deliberately without "<param>=" or any URL so the audit
+        # trail's truthfulness check sees a clean corrective note.
+        audit_note = f'; ignored unsupported parameter {ignored}'
+
     bundle = {
         'resourceType': 'Bundle',
         'type': 'searchset',
@@ -923,7 +1011,7 @@ def search_resources(resource_type):
                        agent_id=request.headers.get('X-Agent-Id'),
                        context_id=context_id,
                        tenant_id=tenant_id,
-                       detail=f'search: {", ".join(detail_parts)}')
+                       detail=f'search: {", ".join(detail_parts)}{audit_note}')
 
     return jsonify(bundle)
 

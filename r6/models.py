@@ -230,7 +230,11 @@ class AuditEventRecord(db.Model):
                     'system': 'http://hl7.org/fhir/audit-event-outcome',
                     'code': '0' if self.outcome == 'success' else '8',
                     'display': 'Success' if self.outcome == 'success' else 'Serious failure'
-                }
+                },
+                # Surface the PHI-free outcome note (e.g. "ignored unsupported
+                # parameter <name>") so the audit trail truthfully records
+                # corrective/failure detail, not just the coarse code.
+                **({'detail': [{'text': self.detail}]} if self.detail else {}),
             },
             'agent': [
                 {
