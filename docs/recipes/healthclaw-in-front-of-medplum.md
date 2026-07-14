@@ -81,5 +81,6 @@ PASS/FAIL per guardrail. See `scripts/smoke_medplum.py` for details.
 Redaction is HIPAA Safe-Harbor-style field redaction (demographics), not Expert
 Determination; validation is structural, not full StructureDefinition/terminology
 conformance. The guardrail *contract* (redact + audit + step-up + human-confirm +
-tenant isolation) is what's demonstrated here — production de-id/validation rigor
-is on the roadmap.
+tenant isolation) is what's demonstrated here; Grade-A error fidelity currently
+applies to local-store search, while proxied-search behavior remains
+upstream-dependent. Production de-id/validation rigor is on the roadmap.

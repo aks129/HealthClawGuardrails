@@ -45,9 +45,8 @@ Green all the way down means the demo is ready to present.
    (Penicillin) so the review page has something to confirm.
 3. Mint a step-up token: `POST /r6/fhir/internal/step-up-token {"tenant_id": "desktop-demo"}`.
 4. Open the guardrail scorecard in a browser tab you can flip to:
-   `GET /r6/fhir/$conformance?format=text` — **Grade A (7/7)**: every guardrail
-   property passes, including Error Fidelity (the deployment tells an agent the
-   truth on the failure paths, not just the happy path).
+   `GET /r6/fhir/$conformance?format=text` — the local FHIR profile should show
+   Grade A, with all seven properties passing.
 
 ## Run of show
 
@@ -60,7 +59,7 @@ Green all the way down means the demo is ready to present.
 | **5. Honest submit** | Confirm the Penicillin allergy (or check NKA if that were true), confirm meds, submit. The review page issues the confirmation. | "Now I attest, item by item. This is the human-in-the-loop, and it's recorded." |
 | **6. Execute** | The out-of-band confirm (`POST /r6/actions/<id>/confirm`) runs `execute()`: reviewed answers → PDF → FHIR `DocumentReference` → signed link. Show the action now `completed` with a `delivery_link`. | "Only *after* I approved does it render anything. No approval, no PDF — it fails closed." |
 | **7. The artifact** | Open the `delivery_link` in a fresh browser (no login, no headers — the signature in the URL is the credential). The PDF opens with the provenance footer: *populated from records by an automated system, reviewed by the patient on <date>.* | "Here's the shareable form. It's stamped with exactly how it was made and that a human reviewed it. That footer is the difference between a document a clinic can trust and one it can't." |
-| **8. Prove it** | Flip to the `$conformance` tab: **Grade A (7/7)** — all seven guardrail properties pass, including error fidelity. | "None of this is 'trust me.' The guardrails grade themselves A–F in CI across all seven properties — redaction, audit, step-up, human-in-the-loop, tenant isolation, disclaimers, and truthful failure paths. This deployment is A. Run it against your own stack and see your grade." |
+| **8. Prove it** | Flip to the `$conformance` tab: Grade A (7/7), including Error Fidelity. | "None of this is 'trust me.' The guardrails grade themselves A–F in CI, including strict rejection, lenient warnings, and their audit evidence." |
 
 ## Fallbacks if something misbehaves
 

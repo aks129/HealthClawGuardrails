@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def _new_audit_event(event_type, resource_type=None, resource_id=None,
                      agent_id=None, context_id=None, outcome='success',
-                     detail=None, tenant_id=None):
+                     detail=None, tenant_id=None, outcome_detail_code=None):
     return AuditEventRecord(
         event_type=event_type,
         resource_type=resource_type,
@@ -28,13 +28,14 @@ def _new_audit_event(event_type, resource_type=None, resource_id=None,
             or _hc_get('audit_agent_default', 'healthclaw-guardrails')
         ),
         outcome=outcome,
+        outcome_detail_code=outcome_detail_code,
         detail=detail,
     )
 
 
 def add_audit_event(event_type, resource_type=None, resource_id=None,
                     agent_id=None, context_id=None, outcome='success',
-                    detail=None, tenant_id=None):
+                    detail=None, tenant_id=None, outcome_detail_code=None):
     """Add and flush an AuditEvent inside the caller-owned transaction.
 
     Write paths should use this function before their domain commit so the
@@ -43,7 +44,7 @@ def add_audit_event(event_type, resource_type=None, resource_id=None,
     """
     audit = _new_audit_event(
         event_type, resource_type, resource_id, agent_id, context_id,
-        outcome, detail, tenant_id,
+        outcome, detail, tenant_id, outcome_detail_code,
     )
     db.session.add(audit)
     db.session.flush()
@@ -52,7 +53,7 @@ def add_audit_event(event_type, resource_type=None, resource_id=None,
 
 def record_audit_event(event_type, resource_type=None, resource_id=None,
                        agent_id=None, context_id=None, outcome='success',
-                       detail=None, tenant_id=None):
+                       detail=None, tenant_id=None, outcome_detail_code=None):
     """
     Record an audit event for a FHIR operation.
 
@@ -68,12 +69,13 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         outcome: Event outcome (success, failure)
         detail: Additional detail text
         tenant_id: Tenant identifier for isolation
+        outcome_detail_code: Allowlisted public outcome-evidence code
     """
     try:
         nested = db.session.begin_nested()
         audit = _new_audit_event(
             event_type, resource_type, resource_id, agent_id, context_id,
-            outcome, detail, tenant_id,
+            outcome, detail, tenant_id, outcome_detail_code,
         )
         db.session.add(audit)
         nested.commit()

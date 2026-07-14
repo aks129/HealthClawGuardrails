@@ -12,6 +12,24 @@ from datetime import datetime, timezone
 from models import db
 
 
+_AUDIT_OUTCOME_DETAIL_TEXT = {
+    'ignored-date': 'ignored unsupported parameter date',
+    'ignored-datetime': 'ignored unsupported parameter datetime',
+    'ignored-date-datetime': (
+        'ignored unsupported parameters date and datetime'),
+    'ignored-unnamed': 'ignored unsupported parameters',
+    'ignored-date-unnamed': (
+        'ignored unsupported parameter date; additional unsupported '
+        'parameters ignored'),
+    'ignored-datetime-unnamed': (
+        'ignored unsupported parameter datetime; additional unsupported '
+        'parameters ignored'),
+    'ignored-date-datetime-unnamed': (
+        'ignored unsupported parameters date and datetime; additional '
+        'unsupported parameters ignored'),
+}
+
+
 class R6Resource(db.Model):
     """
     Minimal resource store for FHIR R6 resources.
@@ -193,11 +211,16 @@ class AuditEventRecord(db.Model):
     tenant_id = db.Column(db.String(64), nullable=True, index=True)
     agent_id = db.Column(db.String(128), nullable=True)
     outcome = db.Column(db.String(32), default='success')  # success, failure
+    # Only allowlisted codes cross the public FHIR boundary. Generic detail is
+    # an internal operational note and is never projected into the response.
+    outcome_detail_code = db.Column(db.String(64), nullable=True)
     detail = db.Column(db.Text, nullable=True)
     recorded = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_fhir_json(self):
         """Convert to a FHIR R6 AuditEvent-like JSON."""
+        outcome_detail_text = _AUDIT_OUTCOME_DETAIL_TEXT.get(
+            self.outcome_detail_code)
         # Build entity list carefully to avoid null references
         entity = []
         if self.resource_type and self.resource_id:
@@ -231,10 +254,8 @@ class AuditEventRecord(db.Model):
                     'code': '0' if self.outcome == 'success' else '8',
                     'display': 'Success' if self.outcome == 'success' else 'Serious failure'
                 },
-                # Surface the PHI-free outcome note (e.g. "ignored unsupported
-                # parameter <name>") so the audit trail truthfully records
-                # corrective/failure detail, not just the coarse code.
-                **({'detail': [{'text': self.detail}]} if self.detail else {}),
+                **({'detail': [{'text': outcome_detail_text}]}
+                   if outcome_detail_text else {}),
             },
             'agent': [
                 {
@@ -244,6 +265,15 @@ class AuditEventRecord(db.Model):
             ],
             'entity': entity
         }
+
+    @staticmethod
+    def ignored_parameters_outcome_code(safe_keys, has_unnamed):
+        """Return an allowlisted code for ignored-parameter audit evidence."""
+        parts = ['ignored', *safe_keys]
+        if has_unnamed:
+            parts.append('unnamed')
+        code = '-'.join(parts)
+        return code if code in _AUDIT_OUTCOME_DETAIL_TEXT else None
 
     def _map_event_code(self):
         mapping = {

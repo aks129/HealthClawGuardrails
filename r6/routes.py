@@ -20,6 +20,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from flask import (
     Blueprint, request, jsonify, Response, stream_with_context,
     render_template,
@@ -108,6 +109,31 @@ _VALID_BUNDLE_TYPES = {
 
 # Valid FHIR search patient reference pattern
 _PATIENT_REF_PATTERN = re.compile(r'^Patient/[A-Za-z0-9\-.]{1,64}$')
+
+# Local-search contract: discovery, validation, corrective messages, and self
+# links all derive from this ordered registry.
+_SEARCH_PARAMETER_SPECS = (
+    {'name': 'patient', 'type': 'reference',
+     'documentation': 'Filter by subject.reference (Patient/{id})'},
+    {'name': 'code', 'type': 'token',
+     'documentation': 'Filter by code.coding[].code (JSON string match)'},
+    {'name': 'status', 'type': 'token',
+     'documentation': 'Filter by status field'},
+    {'name': '_lastUpdated', 'type': 'date',
+     'documentation': 'Filter by last updated (ge/le/gt/lt prefix)'},
+    {'name': '_count', 'type': 'number',
+     'documentation': 'Max results (0-200)'},
+    {'name': '_sort', 'type': 'string',
+     'documentation': '_lastUpdated or -_lastUpdated'},
+    {'name': '_summary', 'type': 'token',
+     'documentation': 'count'},
+    {'name': 'context-id', 'type': 'token',
+     'documentation': 'Filter by local context envelope'},
+)
+_SUPPORTED_SEARCH_PARAMS = frozenset(
+    spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
+_SUPPORTED_PARAMS_TEXT = ', '.join(
+    spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
 
 # The blueprint's url_prefix. Exemptions are matched against the full request
 # path, so they must be anchored to this prefix — NOT matched by suffix.
@@ -380,22 +406,13 @@ def _resource_capability(resource_type):
         {'code': 'update'},
         {'code': 'search-type'},
     ]
-    search_params = [
-        {'name': '_count', 'type': 'number', 'documentation': 'Max results (1-200)'},
-        {'name': '_sort', 'type': 'string', 'documentation': '_lastUpdated or -_lastUpdated'},
-        {'name': '_lastUpdated', 'type': 'date', 'documentation': 'Filter by last updated (ge/le prefix)'},
-        {'name': '_summary', 'type': 'token', 'documentation': 'count'},
-        {'name': 'code', 'type': 'token', 'documentation': 'Filter by code.coding[].code (JSON string match)'},
-        {'name': 'status', 'type': 'token', 'documentation': 'Filter by status field'},
-        {'name': 'patient', 'type': 'reference', 'documentation': 'Filter by subject.reference (Patient/{id})'},
-    ]
     return {
         'type': resource_type,
         'interaction': interactions,
         'versioning': 'versioned',
         'readHistory': False,
         'updateCreate': False,
-        'searchParam': search_params,
+        'searchParam': [dict(spec) for spec in _SEARCH_PARAMETER_SPECS],
     }
 
 
@@ -685,17 +702,32 @@ def update_resource(resource_type, resource_id):
     return response
 
 
-# Error-fidelity contract (guardrail property 7): the search facade must tell
-# an agent the truth on the failure paths. The supported set below is the
-# single source of truth for both the query logic and the corrective error
-# text; keep them in sync.
-_SUPPORTED_SEARCH_PARAMS = frozenset({
-    'patient', 'code', 'status', '_lastUpdated',
-    '_count', '_sort', '_summary', 'context-id',
+# Query keys are untrusted input too. Only these locally defined semantic
+# aliases may be named in responses or audit evidence; every other unsupported
+# key gets a generic corrective message.
+_SAFE_UNSUPPORTED_SEARCH_KEYS = frozenset({'date', 'datetime'})
+_SAFE_MODIFIER_TOKENS = frozenset({
+    'above', 'below', 'contains', 'exact', 'identifier', 'in', 'iterate',
+    'missing', 'not', 'not-in', 'of-type', 'text', 'type',
+    # Fixed synthetic token used by the public issue contract.
+    'frobnicate',
 })
-_SUPPORTED_PARAMS_TEXT = (
-    'patient, code, status, _lastUpdated, _count, _sort, _summary, context-id'
-)
+
+
+def _safe_unsupported_key(key):
+    if key in _SAFE_UNSUPPORTED_SEARCH_KEYS:
+        return key
+    if ':' in key:
+        base, modifier = key.split(':', 1)
+        if (base in _SUPPORTED_SEARCH_PARAMS
+                and modifier in _SAFE_MODIFIER_TOKENS):
+            return key
+    return None
+
+
+def _unsupported_input_text(kind, key):
+    safe_key = _safe_unsupported_key(key)
+    return f'{kind}: {safe_key}' if safe_key else kind
 
 
 def _error_fidelity_outcome(severity, code, text):
@@ -712,10 +744,27 @@ def _error_fidelity_outcome(severity, code, text):
     }
 
 
+def _reject_local_search(resource_type, agent_id, tenant_id, code, message):
+    """Return and audit a static, value-free local-search rejection."""
+    audit_detail = {
+        'invalid': 'search rejected: invalid parameter',
+        'not-supported': 'search rejected: unsupported parameter',
+    }.get(code, 'search rejected')
+    record_audit_event('read', resource_type, None, agent_id=agent_id,
+                       tenant_id=tenant_id, outcome='failure',
+                       detail=audit_detail)
+    return jsonify(_error_fidelity_outcome(
+        'error', code, message)), 400
+
+
 def _parse_prefer_handling():
     """Return 'strict' or 'lenient' (default) from the Prefer header."""
     prefer = request.headers.get('Prefer', '') or ''
-    m = re.search(r'handling\s*=\s*(strict|lenient)', prefer, re.IGNORECASE)
+    m = re.search(
+        r'(?:^|,)\s*handling\s*=\s*(strict|lenient)\s*(?=;|,|$)',
+        prefer,
+        re.IGNORECASE,
+    )
     return m.group(1).lower() if m else 'lenient'
 
 
@@ -739,8 +788,9 @@ def search_resources(resource_type):
         return search_audit_events()
 
     if not R6Resource.is_supported_type(resource_type):
-        return _operation_outcome('error', 'not-supported',
-                                  f'Resource type {resource_type} is not supported'), 400
+        return jsonify(_error_fidelity_outcome(
+            'error', 'not-supported',
+            'Resource type is not supported.')), 400
 
     tenant_id = request.headers.get('X-Tenant-Id')
 
@@ -834,14 +884,12 @@ def search_resources(resource_type):
     # caller. Audited as a failure, in every handling mode.
     if modifier_keys:
         modifier = sorted(modifier_keys)[0]
-        record_audit_event('read', resource_type, None, agent_id=agent_id,
-                           tenant_id=tenant_id, outcome='failure',
-                           detail=('search rejected: unsupported modifier '
-                                   f'{modifier}'))
-        return jsonify(_error_fidelity_outcome(
-            'error', 'not-supported',
-            f'Unsupported modifier: {modifier}. '
-            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.')), 400
+        modifier_text = _unsupported_input_text('Unsupported modifier', modifier)
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'not-supported',
+            f'{modifier_text}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
+        )
 
     # An unknown parameter under strict handling is rejected; under lenient
     # handling (the default) it is ignored but reported — a warning entry in
@@ -849,14 +897,46 @@ def search_resources(resource_type):
     # silently swallowed.
     if ignored_params and handling == 'strict':
         unknown = sorted(ignored_params)[0]
-        record_audit_event('read', resource_type, None, agent_id=agent_id,
-                           tenant_id=tenant_id, outcome='failure',
-                           detail=('search rejected: unknown parameter '
-                                   f'{unknown}'))
-        return jsonify(_error_fidelity_outcome(
-            'error', 'not-supported',
-            f'Unknown parameter: {unknown}. '
-            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.')), 400
+        unknown_text = _unsupported_input_text('Unknown parameter', unknown)
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'not-supported',
+            f'{unknown_text}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
+        )
+
+    repeated_control = next((
+        spec['name'] for spec in _SEARCH_PARAMETER_SPECS
+        if len(request.args.getlist(spec['name'])) > 1
+    ), None)
+    if repeated_control:
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'invalid',
+            f'Repeated {repeated_control} parameters are not supported.',
+        )
+
+    # Supported controls with invalid values are failures, not permission to
+    # silently substitute defaults. Messages and audit notes name only the
+    # locally defined control, never the submitted value.
+    invalid_control = None
+    count_param = request.args.get('_count')
+    if (count_param is not None
+            and (len(count_param) > 10
+                 or not re.fullmatch(r'[0-9]+', count_param))):
+        invalid_control = ('_count', '_count must be a non-negative integer.')
+    sort_control = request.args.get('_sort')
+    if (invalid_control is None and sort_control is not None
+            and sort_control not in ('_lastUpdated', '-_lastUpdated')):
+        invalid_control = (
+            '_sort', '_sort must be _lastUpdated or -_lastUpdated.')
+    summary_control = request.args.get('_summary')
+    if (invalid_control is None and summary_control is not None
+            and summary_control != 'count'):
+        invalid_control = ('_summary', '_summary only supports count.')
+    if invalid_control:
+        _, message = invalid_control
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'invalid', message,
+        )
 
     # --- Local mode: query SQLite ---
     query = R6Resource.query.filter_by(
@@ -867,8 +947,10 @@ def search_resources(resource_type):
     patient_ref = request.args.get('patient')
     if patient_ref:
         if not _PATIENT_REF_PATTERN.match(patient_ref):
-            return _operation_outcome('error', 'invalid',
-                                      'Patient reference must match Patient/{id}'), 400
+            return _reject_local_search(
+                resource_type, agent_id, tenant_id, 'invalid',
+                'Patient reference must match Patient/{id}.',
+            )
         query = query.filter(
             db.or_(
                 R6Resource.resource_json.contains(f'"reference":"{patient_ref}"'),
@@ -912,12 +994,20 @@ def search_resources(resource_type):
                 dt = datetime.fromisoformat(last_updated_param.replace('Z', '+00:00'))
                 query = query.filter(R6Resource.last_updated >= dt)
         except (ValueError, TypeError):
-            return _operation_outcome('error', 'invalid',
-                                      '_lastUpdated must be a valid ISO datetime with optional ge/le/gt/lt prefix'), 400
+            return _reject_local_search(
+                resource_type, agent_id, tenant_id, 'invalid',
+                '_lastUpdated must be a valid ISO datetime with optional '
+                'ge/le/gt/lt prefix.',
+            )
 
     # --- context-id filter (restrict to resources in a context envelope) ---
     context_id = request.args.get('context-id')
     if context_id:
+        if not _FHIR_ID_PATTERN.match(context_id):
+            return _reject_local_search(
+                resource_type, agent_id, tenant_id, 'invalid',
+                'context-id must be a valid FHIR id.',
+            )
         from r6.models import ContextItem
         context_refs = [item.resource_ref for item in
                         ContextItem.query.filter_by(context_id=context_id).all()]
@@ -937,21 +1027,20 @@ def search_resources(resource_type):
     else:
         query = query.order_by(R6Resource.last_updated.desc())
 
-    # Support _summary=count
+    # Support _summary=count without bypassing response finalization. Count
+    # summaries omit matching resources, but still need a truthful self link,
+    # lenient warning evidence, and an AuditEvent.
     summary = request.args.get('_summary')
-    if summary == 'count':
+    summary_count = summary == 'count' or count_param == '0'
+    if summary_count:
         total = query.count()
-        bundle = {
-            'resourceType': 'Bundle',
-            'type': 'searchset',
-            'total': total,
-        }
-        return jsonify(bundle)
-
-    # Clamp _count to [1, 200]
-    count = request.args.get('_count', 50, type=int)
-    count = max(1, min(count, 200))
-    resources = query.limit(count).all()
+        resources = []
+    else:
+        # Clamp _count to [1, 200]
+        count = int(count_param) if count_param is not None else 50
+        count = max(1, min(count, 200))
+        resources = query.limit(count).all()
+        total = len(resources)
 
     # Apply redaction and disclaimer on all search results
     entries = []
@@ -965,13 +1054,14 @@ def search_resources(resource_type):
 
     # Build self link with search params for transparency
     search_params = []
-    for key in ('patient', 'code', 'status', '_lastUpdated', '_count', '_sort'):
+    for spec in _SEARCH_PARAMETER_SPECS:
+        key = spec['name']
         val = request.args.get(key)
         if val:
-            search_params.append(f'{key}={val}')
+            search_params.append((key, val))
     self_link = f'{request.host_url.rstrip("/")}/r6/fhir/{resource_type}'
     if search_params:
-        self_link += '?' + '&'.join(search_params)
+        self_link += '?' + urlencode(search_params)
 
     # Lenient handling of an unknown parameter: append a corrective warning
     # entry (search.mode=outcome) naming the ignored parameter + the supported
@@ -979,39 +1069,51 @@ def search_resources(resource_type):
     # set above), so the caller can see exactly which query actually ran.
     audit_note = ''
     if ignored_params:
-        ignored = sorted(ignored_params)[0]
-        entries.append({
-            'search': {'mode': 'outcome'},
-            'resource': _error_fidelity_outcome(
-                'warning', 'not-supported',
-                f'Unknown parameter: {ignored}. '
-                f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.'),
-        })
-        # PHI-free, and deliberately without "<param>=" or any URL so the audit
-        # trail's truthfulness check sees a clean corrective note.
-        audit_note = f'; ignored unsupported parameter {ignored}'
+        safe_ignored = sorted({key for key in ignored_params
+                               if _safe_unsupported_key(key)})
+        has_unnamed = any(not _safe_unsupported_key(key)
+                          for key in ignored_params)
+        # The allowlist has two unknown semantic aliases, plus at most one
+        # generic warning for every other key. This caps attacker-controlled
+        # warning growth at three entries regardless of query size.
+        warning_keys = [*safe_ignored]
+        if has_unnamed:
+            warning_keys.append(None)
+        for ignored in warning_keys:
+            ignored_text = ('Unknown parameter'
+                            if ignored is None else
+                            f'Unknown parameter: {ignored}')
+            entries.append({
+                'search': {'mode': 'outcome'},
+                'resource': _error_fidelity_outcome(
+                    'warning', 'not-supported',
+                    f'{ignored_text}. '
+                    f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.'),
+            })
+
+        ignored_count = len(ignored_params)
+        audit_note = ('; unsupported search parameter ignored'
+                      if ignored_count == 1 else
+                      f'; {ignored_count} unsupported search parameters ignored')
 
     bundle = {
         'resourceType': 'Bundle',
         'type': 'searchset',
-        'total': len(resources),
+        'total': total,
         'link': [{'relation': 'self', 'url': self_link}],
-        'entry': entries
     }
-
-    detail_parts = [f'{len(resources)} results']
-    if patient_ref:
-        detail_parts.append(f'patient={patient_ref}')
-    if code_param:
-        detail_parts.append(f'code={code_param}')
-    if status_param:
-        detail_parts.append(f'status={status_param}')
+    if entries:
+        bundle['entry'] = entries
 
     record_audit_event('read', resource_type, None,
                        agent_id=request.headers.get('X-Agent-Id'),
                        context_id=context_id,
                        tenant_id=tenant_id,
-                       detail=f'search: {", ".join(detail_parts)}{audit_note}')
+                       detail=f'search: {total} results{audit_note}',
+                       outcome_detail_code=(
+                           AuditEventRecord.ignored_parameters_outcome_code(
+                               safe_ignored, has_unnamed)
+                           if ignored_params else None))
 
     return jsonify(bundle)
 

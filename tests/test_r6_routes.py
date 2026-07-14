@@ -47,6 +47,42 @@ class TestR6Metadata:
         data = resp.get_json()
         assert data['software']['version'] == expected
 
+    def test_search_discovery_matches_applied_parameters_and_correction(
+            self, client, tenant_headers):
+        from urllib.parse import parse_qsl, urlencode, urlsplit
+
+        metadata = client.get('/r6/fhir/metadata').get_json()
+        observation = next(resource for resource in
+                           metadata['rest'][0]['resource']
+                           if resource['type'] == 'Observation')
+        documented = {param['name'] for param in observation['searchParam']}
+        values = {
+            'patient': 'Patient/test-subject',
+            'code': 'code with spaces',
+            'status': 'final',
+            '_lastUpdated': 'ge1970-01-01T00:00:00Z',
+            '_count': '1',
+            '_sort': '_lastUpdated',
+            '_summary': 'count',
+            'context-id': 'test-context',
+        }
+
+        bundle = client.get(
+            f'/r6/fhir/Observation?{urlencode(values)}',
+            headers=tenant_headers,
+        ).get_json()
+        self_url = bundle['link'][0]['url']
+        applied = dict(parse_qsl(urlsplit(self_url).query))
+        assert applied == values
+        assert documented == set(applied)
+
+        strict_headers = {**tenant_headers, 'Prefer': 'handling=strict'}
+        outcome = client.get('/r6/fhir/Observation?datetime=x',
+                             headers=strict_headers).get_json()
+        supported_text = outcome['issue'][0]['details']['text'].split(
+            'Supported parameters: ', 1)[1].removesuffix('.')
+        assert set(supported_text.split(', ')) == documented
+
 
 class TestTenantEnforcement:
     """Test mandatory tenant isolation."""
@@ -458,13 +494,49 @@ class TestSearchFeatures:
         assert data['total'] >= 1
         assert 'entry' not in data
 
+    def test_summary_count_preserves_lenient_warning_link_and_audit(
+            self, client, tenant_headers):
+        response = client.get(
+            '/r6/fhir/Observation?_summary=count&datetime=x',
+            headers=tenant_headers,
+        )
+
+        assert response.status_code == 200
+        bundle = response.get_json()
+        assert bundle['link'][0]['relation'] == 'self'
+        assert '_summary=count' in bundle['link'][0]['url']
+        assert 'datetime=' not in bundle['link'][0]['url']
+        assert bundle['entry'][0]['search'] == {'mode': 'outcome'}
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        assert audit_response.status_code == 200
+        assert 'ignored unsupported parameter datetime' in json.dumps(
+            audit_response.get_json())
+
+    def test_count_zero_is_a_count_only_search(
+            self, client, sample_patient, auth_headers, tenant_headers):
+        client.post('/r6/fhir/Patient',
+                    data=json.dumps(sample_patient),
+                    content_type='application/json',
+                    headers=auth_headers)
+
+        response = client.get('/r6/fhir/Patient?_count=0',
+                              headers=tenant_headers)
+        bundle = response.get_json()
+
+        assert response.status_code == 200
+        assert bundle['total'] >= 1
+        assert 'entry' not in bundle
+        assert '_count=0' in bundle['link'][0]['url']
+
     def test_patient_ref_validation(self, client, tenant_headers):
         """Invalid patient reference format should be rejected."""
         resp = client.get('/r6/fhir/Observation?patient=bad-ref',
                          headers=tenant_headers)
         assert resp.status_code == 400
         data = resp.get_json()
-        assert 'Patient/' in data['issue'][0]['diagnostics']
+        assert 'Patient/' in data['issue'][0]['details']['text']
 
     def test_valid_patient_ref_search(self, client, tenant_headers):
         """Valid patient reference format should work."""
@@ -474,6 +546,181 @@ class TestSearchFeatures:
         data = resp.get_json()
         assert data['resourceType'] == 'Bundle'
         assert data['type'] == 'searchset'
+
+    def test_search_audit_response_omits_filter_values(self, client,
+                                                       tenant_headers):
+        client.get(
+            '/r6/fhir/Observation?patient=Patient/audit-secret-subject'
+            '&code=audit-secret-code&status=audit-secret-status',
+            headers=tenant_headers,
+        )
+
+        response = client.get('/r6/fhir/AuditEvent?_count=200',
+                              headers=tenant_headers)
+        body = json.dumps(response.get_json())
+
+        assert response.status_code == 200
+        assert 'audit-secret-subject' not in body
+        assert 'audit-secret-code' not in body
+        assert 'audit-secret-status' not in body
+
+    def test_audit_outcome_detail_codes_fail_closed(self, client,
+                                                    tenant_headers):
+        from models import db
+        from r6.models import AuditEventRecord
+
+        db.session.add(AuditEventRecord(
+            event_type='read',
+            resource_type='Observation',
+            tenant_id=tenant_headers['X-Tenant-Id'],
+            outcome='success',
+            outcome_detail_code='Patient Alice',
+        ))
+        db.session.commit()
+
+        response = client.get('/r6/fhir/AuditEvent?_count=200',
+                              headers=tenant_headers)
+        assert response.status_code == 200
+        assert 'Patient Alice' not in json.dumps(response.get_json())
+
+    def test_search_never_reflects_hostile_parameter_name(self, client,
+                                                          tenant_headers):
+        headers = {**tenant_headers, 'Prefer': 'handling=strict'}
+        response = client.get(
+            '/r6/fhir/Observation?Patient%20Alice=secret-value',
+            headers=headers,
+        )
+
+        assert response.status_code == 400
+        assert 'Patient Alice' not in json.dumps(response.get_json())
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        assert audit_response.status_code == 200
+        assert 'Patient Alice' not in json.dumps(audit_response.get_json())
+
+        modifier_response = client.get(
+            '/r6/fhir/Observation?code:frobnicate=x',
+            headers=tenant_headers,
+        )
+        assert modifier_response.status_code == 400
+        assert 'code:frobnicate' in json.dumps(modifier_response.get_json())
+
+        hostile_modifier = client.get(
+            '/r6/fhir/Observation?code:Patient%20Alice=x',
+            headers=tenant_headers,
+        )
+        hostile_body = json.dumps(hostile_modifier.get_json())
+        assert hostile_modifier.status_code == 400
+        assert 'Patient Alice' not in hostile_body
+
+        hostile_resource_type = client.get(
+            '/r6/fhir/Patient%20Alice?datetime=x',
+            headers=tenant_headers,
+        )
+        assert hostile_resource_type.status_code == 400
+        assert 'Patient Alice' not in json.dumps(
+            hostile_resource_type.get_json())
+
+    def test_prefer_handling_requires_an_exact_preference(self, client,
+                                                          tenant_headers):
+        malformed = (
+            'handling=strictly',
+            'xhandling=strict',
+            'foo="handling=strict"',
+        )
+        for prefer in malformed:
+            headers = {**tenant_headers, 'Prefer': prefer}
+            response = client.get('/r6/fhir/Observation?datetime=x',
+                                  headers=headers)
+            assert response.status_code == 200, prefer
+
+        strict_headers = {
+            **tenant_headers,
+            'Prefer': 'respond-async, handling=strict',
+        }
+        strict_response = client.get('/r6/fhir/Observation?datetime=x',
+                                     headers=strict_headers)
+        assert strict_response.status_code == 400
+
+    def test_invalid_search_controls_fail_without_reflecting_values(
+            self, client, tenant_headers):
+        cases = (
+            ('_count', 'secret-count-value'),
+            ('_count', '9' * 5000),
+            ('_sort', 'secret-sort-value'),
+            ('_summary', 'secret-summary-value'),
+        )
+        for key, value in cases:
+            response = client.get(f'/r6/fhir/Observation?{key}={value}',
+                                  headers=tenant_headers)
+            body = response.get_json()
+            assert response.status_code == 400, key
+            assert body['issue'][0]['code'] == 'invalid'
+            assert value not in json.dumps(body)
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        audit_events = [entry['resource'] for entry in
+                        audit_response.get_json().get('entry', [])]
+        failures = [event for event in audit_events
+                    if event['outcome']['code']['code'] == '8']
+        assert len(failures) >= len(cases)
+        audit_body = json.dumps(audit_response.get_json())
+        for _, value in cases:
+            assert value not in audit_body
+
+    def test_lenient_unknown_parameter_warnings_are_safe_and_bounded(
+            self, client, tenant_headers):
+        response = client.get(
+            '/r6/fhir/Observation?datetime=x&date=y'
+            '&Patient%20Alice=one&Secret%20Bob=two',
+            headers=tenant_headers,
+        )
+        bundle = response.get_json()
+        body = json.dumps(bundle)
+
+        assert response.status_code == 200
+        warnings = [entry for entry in bundle.get('entry', [])
+                    if entry.get('search') == {'mode': 'outcome'}]
+        assert len(warnings) <= 3
+        assert 'datetime' in body
+        assert 'date' in body
+        assert 'Patient Alice' not in body
+        assert 'Secret Bob' not in body
+        assert '=x' not in body
+        assert '=y' not in body
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        audit_body = json.dumps(audit_response.get_json())
+        assert 'Patient Alice' not in audit_body
+        assert 'Secret Bob' not in audit_body
+
+    def test_invalid_filters_and_repeated_controls_are_audited(
+            self, client, tenant_headers):
+        cases = (
+            ('patient=secret-patient-value', 'secret-patient-value'),
+            ('_lastUpdated=secret-date-value', 'secret-date-value'),
+            ('context-id=secret%20context', 'secret context'),
+            ('_sort=_lastUpdated&_sort=-_lastUpdated', None),
+        )
+        for query, hostile_value in cases:
+            response = client.get(f'/r6/fhir/Observation?{query}',
+                                  headers=tenant_headers)
+            body = response.get_json()
+            assert response.status_code == 400, query
+            assert body['issue'][0]['code'] == 'invalid'
+            assert set(body['issue'][0]) == {'severity', 'code', 'details'}
+            if hostile_value:
+                assert hostile_value not in json.dumps(body)
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        failures = [entry['resource'] for entry in
+                    audit_response.get_json().get('entry', [])
+                    if entry['resource']['outcome']['code']['code'] == '8']
+        assert len(failures) >= len(cases)
 
 
 # ===== Phase 2-5: New Feature Tests =====

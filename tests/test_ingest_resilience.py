@@ -76,6 +76,13 @@ def test_audit_resource_id_column_fits_real_ehr_ids():
             >= R6Resource.__table__.c.id.type.length)
 
 
+def test_audit_public_outcome_detail_code_is_bounded():
+    from r6.models import AuditEventRecord
+    column = AuditEventRecord.__table__.c.outcome_detail_code
+    assert column.type.length == 64
+    assert column.nullable is True
+
+
 def test_curatr_engine_api_matches_ingester_usage():
     # The Fasten post-ingest scan imports CuratrEngine and calls
     # evaluate(resource) -> result.issues. Pin that contract so the import/

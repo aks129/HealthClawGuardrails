@@ -92,10 +92,10 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   or `apply_patient_controlled_redaction(resource, patient_id)`.
 - The whole set is enforced by the **conformance harness**:
   `tests/test_guardrail_conformance.py` pins the measured CI baseline, and
-  `GET /r6/fhir/$conformance` grades any live deployment. The current baseline
-  is intentionally Grade B (6/7): the in-process error-fidelity profile remains
-  F until the local-search follow-up lands. The optional CLI MCP profile remains
-  C until its separate transport follow-up lands.
+  `GET /r6/fhir/$conformance` grades any live deployment. The in-process local
+  FHIR profile is Grade A (7/7). The optional CLI MCP profile remains a separate
+  grade until its transport follow-up lands; enabling it can therefore lower the
+  combined result without changing the local profile.
 
 ## Deploy notes (maintainers)
 
