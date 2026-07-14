@@ -173,6 +173,36 @@ class HealthClawClient:
             body = {"error": "unexpected response"}
         return r.status_code, body
 
+    # --- Fasten (verified-provider real records) -----------------------------
+
+    def fasten_connect_url(self, tenant: str, public_key: str,
+                           connect_base: str) -> str:
+        """The provider-picker widget URL. `external_id` carries our tenant so
+        Fasten's HMAC-verified success webhook ingests into the right space."""
+        from urllib.parse import urlencode
+        q = urlencode({"public_id": public_key, "external_id": tenant})
+        return f"{connect_base.rstrip('/')}/patients/connect?{q}"
+
+    def tenant_has_records(self, tenant: str) -> bool:
+        """Poll for whether real records have landed (pending → active)."""
+        try:
+            bundle = self.search(tenant, "Patient", {"_summary": "count"})
+            return int(bundle.get("total") or 0) > 0
+        except HealthClawError:
+            return False
+
+    # --- surfaces: Telegram binding ------------------------------------------
+
+    def bind_telegram(self, tenant: str, chat_id: int) -> bool:
+        r = self.http.post(
+            f"{self.fhir}/internal/bind-telegram",
+            json={"tenant_id": tenant, "chat_id": chat_id},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Step-Up-Token": self.mint_token(tenant),
+                     "X-Internal-Secret": self.mint_secret},
+            timeout=self.timeout)
+        return r.ok
+
     # --- trust panel ----------------------------------------------------------
 
     def conformance_badge(self) -> dict:

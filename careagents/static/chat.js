@@ -1,6 +1,7 @@
 /* CareAgents chat — SSE over fetch, tool chips, review/PDF cards,
    typewriter render. No frameworks. */
 (function () {
+  const AGENT = window.CARE_AGENT || "";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -64,7 +65,8 @@
       "Your agent filled it from the records — now every medication and " +
       "allergy waits for your say-so. Nothing is generated until you approve."));
     const a = el("a", "btn-primary", "Open the review");
-    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    a.href = "/review/" + AGENT + "/" + actionId;
+    a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
     log.appendChild(c); scroll();
     watchForm(actionId);
@@ -85,7 +87,7 @@
     if (pollers[actionId]) return;
     pollers[actionId] = setInterval(async () => {
       try {
-        const r = await fetch("/api/form/" + actionId);
+        const r = await fetch("/api/form/" + actionId + "?agent=" + encodeURIComponent(AGENT));
         if (!r.ok) return;
         const d = await r.json();
         if (d.status === "completed" && d.delivery_link) {
@@ -110,7 +112,7 @@
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, agent_id: AGENT }),
       });
       if (resp.status === 429) {
         typing.remove();
@@ -157,20 +159,10 @@
   document.querySelectorAll(".starter").forEach((b) =>
     b.addEventListener("click", () => send(b.textContent)));
 
-  const saveBtn = document.getElementById("save-btn");
-  if (saveBtn) saveBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(saveBtn.dataset.link);
-      saveBtn.textContent = "link copied ✓";
-      setTimeout(() => (saveBtn.textContent = "save my agent"), 2500);
-    } catch (e) { window.prompt("Your private agent link:", saveBtn.dataset.link); }
-  });
-
   fetch("/api/trust").then((r) => r.json()).then((d) => {
     const pill = document.getElementById("trust-pill");
     const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "guardrails " + grade +
-      (d.audit_events ? " · " + d.audit_events + " audited events" : "");
+    pill.textContent = "guardrails " + grade;
   }).catch(() => {});
 
   box.focus();

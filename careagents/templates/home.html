@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Your hub — CareAgents{% endblock %}
+{% block bodyclass %}page-home{% endblock %}
+{% block head %}<link rel="manifest" href="/manifest.webmanifest">{% endblock %}
+{% block content %}
+<main class="hub">
+  <div class="hub-head">
+    <div>
+      <h1>Welcome back</h1>
+      <p class="hub-sub">{{ me.email }}
+        {% if not has_passkey %}· <a href="/auth">add a passkey</a>{% endif %}
+      </p>
+    </div>
+    <form method="post" action="/logout"><button class="pill">Sign out</button></form>
+  </div>
+
+  <!-- AGENTS -->
+  <section class="hub-section">
+    <div class="section-head"><h2>Your agents</h2>
+      <button class="pill pill-cta" id="new-agent-btn">+ New agent</button></div>
+    <div class="card-grid" id="agents">
+      {% for a in agents %}
+      <a class="hub-card agent-card" href="/chat?agent={{ a.id }}">
+        <span class="hub-emoji">{{ personas[a.persona].emoji if a.persona in personas else '🌿' }}</span>
+        <div class="hub-card-name">{{ a.name }}</div>
+        <div class="hub-card-sub">{{ personas[a.persona].name if a.persona in personas else 'Care agent' }}</div>
+        <span class="open-hint">Open chat →</span>
+      </a>
+      {% endfor %}
+      {% if not agents %}
+      <div class="empty">No agents yet. Add a connection, then create one.</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- CONNECTIONS -->
+  <section class="hub-section">
+    <div class="section-head"><h2>Your connections</h2></div>
+    <div class="card-grid" id="connections">
+      {% for c in connections %}
+      <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}">
+        <div class="hub-card-name">{{ c.label }}</div>
+        <div class="hub-card-sub">{{ c.provider or c.kind }}</div>
+        <span class="status status-{{ c.status }}">{{ c.status }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="add-row">
+      <button class="btn-secondary" id="add-sample">Add sample records</button>
+      <button class="btn-primary" id="add-fasten">Connect real records</button>
+      <span class="add-note">Real records connect through your provider’s own
+        login (verified). We never see your password.</span>
+    </div>
+  </section>
+
+  <!-- SURFACES -->
+  <section class="hub-section">
+    <div class="section-head"><h2>Where you can reach your agent</h2></div>
+    <div class="surface-row">
+      <div class="surface on"><b>Web</b><span>always on</span></div>
+      <div class="surface" id="tg-surface"><b>Telegram</b>
+        <span id="tg-state">connect →</span></div>
+      <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
+      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
+    </div>
+  </section>
+</main>
+
+<!-- New-agent modal -->
+<div class="modal" id="agent-modal" hidden>
+  <div class="modal-card">
+    <h3>New agent</h3>
+    <label class="field-label" for="a-name">Name</label>
+    <input class="field" id="a-name" maxlength="48" placeholder="Juniper, Ada, Coach…">
+    <span class="field-label">Voice</span>
+    <div class="persona-grid">
+      {% for key, p in personas.items() %}
+      <label class="persona-card"><input type="radio" name="ag-persona" value="{{ key }}" {% if loop.first %}checked{% endif %}>
+        <span class="persona-emoji">{{ p.emoji }}</span>
+        <span class="persona-name">{{ p.name }}</span></label>
+      {% endfor %}
+    </div>
+    <span class="field-label">Records</span>
+    <select class="field" id="a-conn">
+      {% for c in connections %}<option value="{{ c.id }}">{{ c.label }} ({{ c.status }})</option>{% endfor %}
+    </select>
+    <div id="modal-err" class="form-error" hidden></div>
+    <button class="btn-primary btn-block" id="create-agent">Create</button>
+    <button class="linkish" id="close-modal">Cancel</button>
+  </div>
+</div>
+
+<script>window.CARE = { telegramBot: {{ (telegram_bot or '')|tojson }} };</script>
+<script src="{{ url_for('static', filename='home.js') }}"></script>
+{% endblock %}
