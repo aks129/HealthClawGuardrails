@@ -25,6 +25,11 @@ from flask import (
     Blueprint, request, jsonify, Response, stream_with_context,
     render_template,
 )
+from werkzeug.http import (
+    parse_list_header,
+    parse_options_header,
+    unquote_header_value,
+)
 from models import db
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
@@ -135,6 +140,19 @@ _SUPPORTED_SEARCH_PARAMS = frozenset(
 _SUPPORTED_PARAMS_TEXT = ', '.join(
     spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
 
+_AUDIT_SEARCH_PARAMETER_SPECS = (
+    {'name': 'context-id', 'type': 'token',
+     'documentation': 'Filter by local context envelope'},
+    {'name': 'entity-type', 'type': 'token',
+     'documentation': 'Filter by audited resource type'},
+    {'name': '_count', 'type': 'number',
+     'documentation': 'Max results (0-200)'},
+)
+_AUDIT_SEARCH_PARAMS = frozenset(
+    spec['name'] for spec in _AUDIT_SEARCH_PARAMETER_SPECS)
+_AUDIT_PARAMS_TEXT = ', '.join(
+    spec['name'] for spec in _AUDIT_SEARCH_PARAMETER_SPECS)
+
 # The blueprint's url_prefix. Exemptions are matched against the full request
 # path, so they must be anchored to this prefix — NOT matched by suffix.
 # FHIR resource ids match [A-Za-z0-9.\-]{1,64}, so a suffix test like
@@ -218,7 +236,7 @@ def enforce_tenant_id():
             }]
         }), 400
     # Validate tenant_id format
-    if not _TENANT_ID_PATTERN.match(tenant_id):
+    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
         return jsonify({
             'resourceType': 'OperationOutcome',
             'issue': [{
@@ -406,13 +424,16 @@ def _resource_capability(resource_type):
         {'code': 'update'},
         {'code': 'search-type'},
     ]
+    search_specs = (_AUDIT_SEARCH_PARAMETER_SPECS
+                    if resource_type == 'AuditEvent'
+                    else _SEARCH_PARAMETER_SPECS)
     return {
         'type': resource_type,
         'interaction': interactions,
         'versioning': 'versioned',
         'readHistory': False,
         'updateCreate': False,
-        'searchParam': [dict(spec) for spec in _SEARCH_PARAMETER_SPECS],
+        'searchParam': [dict(spec) for spec in search_specs],
     }
 
 
@@ -457,7 +478,7 @@ def create_resource(resource_type):
 
     # Validate client-supplied id if present
     client_id = body.get('id')
-    if client_id and not _FHIR_ID_PATTERN.match(client_id):
+    if client_id and not _FHIR_ID_PATTERN.fullmatch(client_id):
         return _operation_outcome('error', 'invalid',
                                   'Resource id must match [A-Za-z0-9\\-.]{1,64}'), 400
 
@@ -744,6 +765,31 @@ def _error_fidelity_outcome(severity, code, text):
     }
 
 
+def _lenient_search_warning_entries(ignored_params, supported_params_text):
+    """Build bounded, value-free warnings for ignored local search keys."""
+    safe_ignored = sorted({key for key in ignored_params
+                           if _safe_unsupported_key(key)})
+    has_unnamed = any(not _safe_unsupported_key(key)
+                      for key in ignored_params)
+    warning_keys = [*safe_ignored]
+    if has_unnamed:
+        warning_keys.append(None)
+
+    entries = []
+    for ignored in warning_keys:
+        ignored_text = ('Unknown parameter' if ignored is None else
+                        f'Unknown parameter: {ignored}')
+        entries.append({
+            'search': {'mode': 'outcome'},
+            'resource': _error_fidelity_outcome(
+                'warning', 'not-supported',
+                f'{ignored_text}. '
+                f'Supported parameters: {supported_params_text}.',
+            ),
+        })
+    return entries, safe_ignored, has_unnamed
+
+
 def _reject_local_search(resource_type, agent_id, tenant_id, code, message):
     """Return and audit a static, value-free local-search rejection."""
     audit_detail = {
@@ -760,12 +806,19 @@ def _reject_local_search(resource_type, agent_id, tenant_id, code, message):
 def _parse_prefer_handling():
     """Return 'strict' or 'lenient' (default) from the Prefer header."""
     prefer = request.headers.get('Prefer', '') or ''
-    m = re.search(
-        r'(?:^|,)\s*handling\s*=\s*(strict|lenient)\s*(?=;|,|$)',
-        prefer,
-        re.IGNORECASE,
-    )
-    return m.group(1).lower() if m else 'lenient'
+    for item in parse_list_header(prefer):
+        preference, _parameters = parse_options_header(item)
+        name, separator, raw_value = preference.partition('=')
+        if name.strip().lower() != 'handling':
+            continue
+        # RFC 7240 applies only the first occurrence of a preference. An
+        # absent or unsupported value therefore stays at our lenient default;
+        # a later duplicate must not override it.
+        if not separator:
+            return 'lenient'
+        value = unquote_header_value(raw_value.strip()).lower()
+        return value if value in ('strict', 'lenient') else 'lenient'
+    return 'lenient'
 
 
 @r6_blueprint.route('/<resource_type>', methods=['GET'])
@@ -946,7 +999,7 @@ def search_resources(resource_type):
     # --- patient reference filter ---
     patient_ref = request.args.get('patient')
     if patient_ref:
-        if not _PATIENT_REF_PATTERN.match(patient_ref):
+        if not _PATIENT_REF_PATTERN.fullmatch(patient_ref):
             return _reject_local_search(
                 resource_type, agent_id, tenant_id, 'invalid',
                 'Patient reference must match Patient/{id}.',
@@ -963,14 +1016,16 @@ def search_resources(resource_type):
     if code_param:
         # Match "code":"<value>" inside the JSON — works for coding arrays
         query = query.filter(
-            R6Resource.resource_json.contains(f'"code":"{code_param}"')
+            R6Resource.resource_json.contains(
+                f'"code":"{code_param}"', autoescape=True)
         )
 
     # --- status filter (matches "status":"<value>" in JSON) ---
     status_param = request.args.get('status')
     if status_param:
         query = query.filter(
-            R6Resource.resource_json.contains(f'"status":"{status_param}"')
+            R6Resource.resource_json.contains(
+                f'"status":"{status_param}"', autoescape=True)
         )
 
     # --- _lastUpdated filter (ge/le prefix on DB column) ---
@@ -1003,7 +1058,7 @@ def search_resources(resource_type):
     # --- context-id filter (restrict to resources in a context envelope) ---
     context_id = request.args.get('context-id')
     if context_id:
-        if not _FHIR_ID_PATTERN.match(context_id):
+        if not _FHIR_ID_PATTERN.fullmatch(context_id):
             return _reject_local_search(
                 resource_type, agent_id, tenant_id, 'invalid',
                 'context-id must be a valid FHIR id.',
@@ -1032,15 +1087,14 @@ def search_resources(resource_type):
     # lenient warning evidence, and an AuditEvent.
     summary = request.args.get('_summary')
     summary_count = summary == 'count' or count_param == '0'
+    total = query.order_by(None).count()
     if summary_count:
-        total = query.count()
         resources = []
     else:
         # Clamp _count to [1, 200]
         count = int(count_param) if count_param is not None else 50
         count = max(1, min(count, 200))
         resources = query.limit(count).all()
-        total = len(resources)
 
     # Apply redaction and disclaimer on all search results
     entries = []
@@ -1069,27 +1123,13 @@ def search_resources(resource_type):
     # set above), so the caller can see exactly which query actually ran.
     audit_note = ''
     if ignored_params:
-        safe_ignored = sorted({key for key in ignored_params
-                               if _safe_unsupported_key(key)})
-        has_unnamed = any(not _safe_unsupported_key(key)
-                          for key in ignored_params)
         # The allowlist has two unknown semantic aliases, plus at most one
         # generic warning for every other key. This caps attacker-controlled
         # warning growth at three entries regardless of query size.
-        warning_keys = [*safe_ignored]
-        if has_unnamed:
-            warning_keys.append(None)
-        for ignored in warning_keys:
-            ignored_text = ('Unknown parameter'
-                            if ignored is None else
-                            f'Unknown parameter: {ignored}')
-            entries.append({
-                'search': {'mode': 'outcome'},
-                'resource': _error_fidelity_outcome(
-                    'warning', 'not-supported',
-                    f'{ignored_text}. '
-                    f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.'),
-            })
+        warning_entries, safe_ignored, has_unnamed = (
+            _lenient_search_warning_entries(
+                ignored_params, _SUPPORTED_PARAMS_TEXT))
+        entries.extend(warning_entries)
 
         ignored_count = len(ignored_params)
         audit_note = ('; unsupported search parameter ignored'
@@ -1274,9 +1314,55 @@ def get_context(context_id):
 def search_audit_events():
     """Search AuditEvent records, optionally filtered by context-id."""
     tenant_id = request.headers.get('X-Tenant-Id')
+    agent_id = request.headers.get('X-Agent-Id')
+    modifier_keys = [key for key in request.args if ':' in key]
+    ignored_params = [key for key in request.args
+                      if ':' not in key and key not in _AUDIT_SEARCH_PARAMS]
+
+    if modifier_keys:
+        modifier = sorted(modifier_keys)[0]
+        modifier_text = _unsupported_input_text(
+            'Unsupported modifier', modifier)
+        return _reject_local_search(
+            'AuditEvent', agent_id, tenant_id, 'not-supported',
+            f'{modifier_text}. Supported parameters: {_AUDIT_PARAMS_TEXT}.',
+        )
+
+    if ignored_params and _parse_prefer_handling() == 'strict':
+        unknown = sorted(ignored_params)[0]
+        unknown_text = _unsupported_input_text('Unknown parameter', unknown)
+        return _reject_local_search(
+            'AuditEvent', agent_id, tenant_id, 'not-supported',
+            f'{unknown_text}. Supported parameters: {_AUDIT_PARAMS_TEXT}.',
+        )
+
+    repeated_control = next((
+        spec['name'] for spec in _AUDIT_SEARCH_PARAMETER_SPECS
+        if len(request.args.getlist(spec['name'])) > 1
+    ), None)
+    if repeated_control:
+        return _reject_local_search(
+            'AuditEvent', agent_id, tenant_id, 'invalid',
+            f'Repeated {repeated_control} parameters are not supported.',
+        )
+
+    count_param = request.args.get('_count')
+    if (count_param is not None
+            and (len(count_param) > 10
+                 or not re.fullmatch(r'[0-9]+', count_param))):
+        return _reject_local_search(
+            'AuditEvent', agent_id, tenant_id, 'invalid',
+            '_count must be a non-negative integer.',
+        )
+
     context_id = request.args.get('context-id')
+    if context_id and not _FHIR_ID_PATTERN.fullmatch(context_id):
+        return _reject_local_search(
+            'AuditEvent', agent_id, tenant_id, 'invalid',
+            'context-id must be a valid FHIR id.',
+        )
     resource_type = request.args.get('entity-type')
-    count = request.args.get('_count', 50, type=int)
+    count = int(count_param) if count_param is not None else 50
     count = max(1, min(count, 200))
 
     # Enforce tenant isolation on audit events
@@ -1289,20 +1375,58 @@ def search_audit_events():
     if resource_type:
         query = query.filter_by(resource_type=resource_type)
 
-    events = query.limit(count).all()
+    total = query.order_by(None).count()
+    events = [] if count_param == '0' else query.limit(count).all()
+    entries = [
+        {
+            'fullUrl': (
+                f'{request.host_url.rstrip("/")}/r6/fhir/AuditEvent/{event.id}'
+            ),
+            'resource': event.to_fhir_json(),
+        }
+        for event in events
+    ]
+
+    safe_ignored = []
+    has_unnamed = False
+    audit_note = ''
+    if ignored_params:
+        warning_entries, safe_ignored, has_unnamed = (
+            _lenient_search_warning_entries(
+                ignored_params, _AUDIT_PARAMS_TEXT))
+        entries.extend(warning_entries)
+
+        ignored_count = len(ignored_params)
+        audit_note = ('; unsupported search parameter ignored'
+                      if ignored_count == 1 else
+                      f'; {ignored_count} unsupported search parameters ignored')
+
+    search_params = []
+    for spec in _AUDIT_SEARCH_PARAMETER_SPECS:
+        value = request.args.get(spec['name'])
+        if value:
+            search_params.append((spec['name'], value))
+    self_link = f'{request.host_url.rstrip("/")}/r6/fhir/AuditEvent'
+    if search_params:
+        self_link += '?' + urlencode(search_params)
 
     bundle = {
         'resourceType': 'Bundle',
         'type': 'searchset',
-        'total': len(events),
-        'entry': [
-            {
-                'fullUrl': f'{request.host_url.rstrip("/")}/r6/fhir/AuditEvent/{e.id}',
-                'resource': e.to_fhir_json()
-            }
-            for e in events
-        ]
+        'total': total,
+        'link': [{'relation': 'self', 'url': self_link}],
     }
+    if entries:
+        bundle['entry'] = entries
+
+    record_audit_event(
+        'read', 'AuditEvent', None, agent_id=agent_id,
+        tenant_id=tenant_id, detail=f'search: {total} results{audit_note}',
+        outcome_detail_code=(
+            AuditEventRecord.ignored_parameters_outcome_code(
+                safe_ignored, has_unnamed)
+            if ignored_params else None),
+    )
 
     return jsonify(bundle)
 
@@ -1915,7 +2039,7 @@ def bind_telegram_chat():
         chat_id = int(chat_id_raw)
     except (TypeError, ValueError):
         return jsonify({'error': 'chat_id must be an integer'}), 400
-    if not _TENANT_ID_PATTERN.match(tenant_id):
+    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
         return jsonify({'error': 'invalid tenant_id format'}), 400
 
     from r6.stepup import validate_step_up_token

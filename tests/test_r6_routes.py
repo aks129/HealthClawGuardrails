@@ -83,6 +83,16 @@ class TestR6Metadata:
             'Supported parameters: ', 1)[1].removesuffix('.')
         assert set(supported_text.split(', ')) == documented
 
+    def test_audit_search_discovery_matches_its_dedicated_contract(
+            self, client):
+        metadata = client.get('/r6/fhir/metadata').get_json()
+        audit_event = next(resource for resource in
+                           metadata['rest'][0]['resource']
+                           if resource['type'] == 'AuditEvent')
+
+        assert {param['name'] for param in audit_event['searchParam']} == {
+            'context-id', 'entity-type', '_count'}
+
 
 class TestTenantEnforcement:
     """Test mandatory tenant isolation."""
@@ -110,6 +120,15 @@ class TestTenantEnforcement:
         assert resp.status_code == 400
         data = resp.get_json()
         assert 'X-Tenant-Id must match' in data['issue'][0]['diagnostics']
+
+    def test_line_terminated_tenant_id_is_rejected(self, client):
+        response = client.get(
+            '/r6/fhir/Patient',
+            environ_overrides={'HTTP_X_TENANT_ID': 'test-tenant\n'},
+        )
+
+        assert response.status_code == 400
+        assert response.get_json()['issue'][0]['code'] == 'invalid'
 
     def test_valid_tenant_id_formats(self, client):
         """Valid tenant IDs with hyphens and underscores should work."""
@@ -164,6 +183,20 @@ class TestR6CRUD:
         assert data['resourceType'] == 'Patient'
         assert 'meta' in data
         assert data['meta']['versionId'] == '1'
+
+    def test_create_rejects_line_terminated_resource_id(
+            self, client, sample_patient, auth_headers):
+        sample_patient['id'] = 'test-patient-1\n'
+
+        response = client.post(
+            '/r6/fhir/Patient',
+            data=json.dumps(sample_patient),
+            content_type='application/json',
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+        assert response.get_json()['issue'][0]['code'] == 'invalid'
 
     def test_read_resource(self, client, sample_patient, auth_headers, tenant_headers):
         # Create first
@@ -411,6 +444,23 @@ class TestR6ContextIngestion:
 class TestR6AuditEvents:
     """Test AuditEvent recording and querying."""
 
+    def test_clean_audit_event_search_is_audited(
+            self, client, tenant_headers):
+        from r6.models import AuditEventRecord
+
+        response = client.get('/r6/fhir/AuditEvent?_count=0',
+                              headers=tenant_headers)
+
+        assert response.status_code == 200
+        evidence = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_headers['X-Tenant-Id'],
+            event_type='read',
+            resource_type='AuditEvent',
+        ).all()
+        assert len(evidence) == 1
+        assert evidence[0].detail == 'search: 0 results'
+        assert evidence[0].outcome_detail_code is None
+
     def test_read_generates_audit_event(self, client, sample_patient,
                                          auth_headers, tenant_headers):
         client.post('/r6/fhir/Patient',
@@ -453,6 +503,98 @@ class TestR6AuditEvents:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['total'] == 0
+
+    def test_audit_event_search_honors_strict_unknown_parameters(
+            self, client, tenant_headers):
+        headers = {**tenant_headers, 'Prefer': 'handling=strict'}
+        response = client.get(
+            '/r6/fhir/AuditEvent?Patient%20Alice=secret-value',
+            headers=headers,
+        )
+        body = response.get_json()
+
+        assert response.status_code == 400
+        assert body['issue'][0]['code'] == 'not-supported'
+        assert set(body['issue'][0]) == {'severity', 'code', 'details'}
+        assert 'Patient Alice' not in json.dumps(body)
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        failures = [entry['resource'] for entry in
+                    audit_response.get_json().get('entry', [])
+                    if entry['resource']['outcome']['code']['code'] == '8']
+        assert failures
+
+    def test_audit_event_search_reports_lenient_unknown_parameters(
+            self, client, tenant_headers):
+        response = client.get('/r6/fhir/AuditEvent?datetime=x',
+                              headers=tenant_headers)
+        bundle = response.get_json()
+
+        assert response.status_code == 200
+        assert bundle['link'][0]['relation'] == 'self'
+        assert 'datetime=' not in bundle['link'][0]['url']
+        warnings = [entry for entry in bundle.get('entry', [])
+                    if entry.get('search') == {'mode': 'outcome'}]
+        assert len(warnings) == 1
+        assert 'datetime' in json.dumps(warnings[0])
+
+        audit_response = client.get('/r6/fhir/AuditEvent?_count=200',
+                                    headers=tenant_headers)
+        assert 'ignored unsupported parameter datetime' in json.dumps(
+            audit_response.get_json())
+
+    def test_audit_event_search_rejects_invalid_controls(
+            self, client, tenant_headers):
+        cases = (
+            '_count=secret-count',
+            '_count=1&_count=2',
+            'entity-type=Observation&entity-type=Patient',
+            'context-id=test-context%0A',
+            'entity-type:exact=Observation',
+        )
+
+        for query in cases:
+            response = client.get(f'/r6/fhir/AuditEvent?{query}',
+                                  headers=tenant_headers)
+            body = response.get_json()
+
+            assert response.status_code == 400, query
+            assert body['issue'][0]['code'] in {
+                'invalid', 'not-supported'}, query
+            assert set(body['issue'][0]) == {
+                'severity', 'code', 'details'}
+
+    def test_audit_event_count_reports_all_matches_and_supports_zero(
+            self, client, auth_headers, tenant_headers):
+        for resource_id in ('audit-count-one', 'audit-count-two',
+                            'audit-count-three'):
+            client.post(
+                '/r6/fhir/Patient',
+                data=json.dumps({
+                    'resourceType': 'Patient',
+                    'id': resource_id,
+                    'name': [{'family': 'Synthetic'}],
+                }),
+                content_type='application/json',
+                headers=auth_headers,
+            )
+
+        limited = client.get(
+            '/r6/fhir/AuditEvent?entity-type=Patient&_count=1',
+            headers=tenant_headers,
+        ).get_json()
+        count_only = client.get(
+            '/r6/fhir/AuditEvent?entity-type=Patient&_count=0',
+            headers=tenant_headers,
+        ).get_json()
+
+        assert limited['total'] == 3
+        assert len(limited['entry']) == 1
+        assert count_only['total'] == 3
+        assert count_only['link'][0]['url'].endswith(
+            'entity-type=Patient&_count=0')
+        assert 'entry' not in count_only
 
 
 class TestR6ImportStub:
@@ -537,6 +679,23 @@ class TestSearchFeatures:
         assert resp.status_code == 400
         data = resp.get_json()
         assert 'Patient/' in data['issue'][0]['details']['text']
+
+    def test_search_ids_reject_line_terminated_values(self, client,
+                                                       tenant_headers):
+        for query in (
+            'patient=Patient/test-id%0A',
+            'patient=Patient/test-id%0D',
+            'context-id=test-context%0A',
+            'context-id=test-context%0D',
+        ):
+            response = client.get(f'/r6/fhir/Observation?{query}',
+                                  headers=tenant_headers)
+            body = response.get_json()
+
+            assert response.status_code == 400, query
+            assert body['issue'][0]['code'] == 'invalid', query
+            assert set(body['issue'][0]) == {
+                'severity', 'code', 'details'}
 
     def test_valid_patient_ref_search(self, client, tenant_headers):
         """Valid patient reference format should work."""
@@ -642,6 +801,26 @@ class TestSearchFeatures:
         strict_response = client.get('/r6/fhir/Observation?datetime=x',
                                      headers=strict_headers)
         assert strict_response.status_code == 400
+
+        quoted_strict_headers = {
+            **tenant_headers,
+            'Prefer': 'respond-async, handling="strict"',
+        }
+        quoted_strict_response = client.get(
+            '/r6/fhir/Observation?datetime=x',
+            headers=quoted_strict_headers,
+        )
+        assert quoted_strict_response.status_code == 400
+
+        first_duplicate_wins = {
+            **tenant_headers,
+            'Prefer': 'handling=unsupported, handling=strict',
+        }
+        duplicate_response = client.get(
+            '/r6/fhir/Observation?datetime=x',
+            headers=first_duplicate_wins,
+        )
+        assert duplicate_response.status_code == 200
 
     def test_invalid_search_controls_fail_without_reflecting_values(
             self, client, tenant_headers):
@@ -1281,6 +1460,42 @@ class TestEnhancedSearch:
         for entry in data.get('entry', []):
             resource_json = json.dumps(entry['resource'])
             assert '2339-0' in resource_json
+
+    def test_token_search_treats_sql_wildcards_as_literal_characters(
+            self, client, auth_headers, tenant_headers):
+        self._seed_observations(client, auth_headers, [
+            {'resourceType': 'Observation', 'id': 'literal-token-glucose',
+             'status': 'final', 'code': {'coding': [{'code': '2339-0'}]}},
+            {'resourceType': 'Observation', 'id': 'literal-token-heart-rate',
+             'status': 'preliminary',
+             'code': {'coding': [{'code': '8867-4'}]}},
+        ])
+
+        for query in ('status=%25', 'status=f_nal', 'code=2339_0'):
+            response = client.get(f'/r6/fhir/Observation?{query}',
+                                  headers=tenant_headers)
+            bundle = response.get_json()
+
+            assert response.status_code == 200, query
+            assert bundle['total'] == 0, query
+            assert 'entry' not in bundle, query
+
+    def test_count_limits_entries_without_truncating_total(
+            self, client, auth_headers, tenant_headers):
+        self._seed_observations(client, auth_headers, [
+            {'resourceType': 'Observation', 'id': f'count-total-{index}',
+             'status': 'final',
+             'code': {'coding': [{'code': f'count-code-{index}'}]}}
+            for index in range(3)
+        ])
+
+        response = client.get('/r6/fhir/Observation?_count=1',
+                              headers=tenant_headers)
+        bundle = response.get_json()
+
+        assert response.status_code == 200
+        assert bundle['total'] == 3
+        assert len(bundle['entry']) == 1
 
     def test_search_by_status(self, client, auth_headers, tenant_headers):
         """Search Permission by status parameter."""
