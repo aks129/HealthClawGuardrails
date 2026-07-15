@@ -42,11 +42,11 @@ class Config:
         self.resend_api_key = e.get("RESEND_API_KEY", "")
         self.resend_from = e.get("CARE_EMAIL_FROM",
                                  "CareAgents <hello@careagents.cloud>")
-        # Fasten (verified-provider real records) — brokered via HealthClaw,
-        # but careagents builds the connect widget URL for the browser.
+        # Fasten (verified-provider real records) — the connect flow runs on
+        # HealthClaw's own /connect/<tenant> page (Stitch widget + verified
+        # key). careagents only needs the public key present to offer the
+        # button; it never builds a Fasten-hosted URL itself.
         self.fasten_public_key = e.get("FASTEN_PUBLIC_KEY", "")
-        self.fasten_connect_base = e.get(
-            "FASTEN_CONNECT_URL", "https://connect.fastenhealth.com")
         # Telegram deep-link target for surface binding.
         self.telegram_bot = e.get("CARE_TELEGRAM_BOT", "")
         # Secret for minting step-up tokens for careagents' non-public tenants

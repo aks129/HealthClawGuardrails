@@ -175,13 +175,16 @@ class HealthClawClient:
 
     # --- Fasten (verified-provider real records) -----------------------------
 
-    def fasten_connect_url(self, tenant: str, public_key: str,
-                           connect_base: str) -> str:
-        """The provider-picker widget URL. `external_id` carries our tenant so
-        Fasten's HMAC-verified success webhook ingests into the right space."""
-        from urllib.parse import urlencode
-        q = urlencode({"public_id": public_key, "external_id": tenant})
-        return f"{connect_base.rstrip('/')}/patients/connect?{q}"
+    def fasten_connect_url(self, tenant: str) -> str:
+        """Route to HealthClaw's own Fasten Connect page for this tenant.
+
+        That page (already wired on the deployment) embeds the Stitch widget
+        with the server's FASTEN_PUBLIC_KEY and external-id=<tenant>; Fasten's
+        HMAC-verified `patient.connection_success` webhook then registers the
+        org_connection_id back to this tenant and ingests the records. We do
+        NOT build a Fasten-hosted URL ourselves — the provider domain differs
+        by TEFCA/mode and only the HealthClaw page has the verified key."""
+        return f"{self.base}/connect/{tenant}"
 
     def tenant_has_records(self, tenant: str) -> bool:
         """Poll for whether real records have landed (pending → active)."""

@@ -189,8 +189,7 @@ def create_app(config: Config | None = None,
         cid = svc.add_connection(acct.id, "fasten", tenant,
                                  "My health provider", status="pending",
                                  provider="Connecting…")
-        url = hc.fasten_connect_url(tenant, cfg.fasten_public_key,
-                                    cfg.fasten_connect_base)
+        url = hc.fasten_connect_url(tenant)
         return jsonify({"id": cid, "connect_url": url, "status": "pending"})
 
     @app.get("/api/connections/<conn_tenant>/poll")

@@ -90,8 +90,10 @@ class FakeClient:
         self.bound.append((tenant, chat_id))
         return True
 
-    def fasten_connect_url(self, tenant, pk, base):
-        return f"{base}/patients/connect?public_id={pk}&external_id={tenant}"
+    base = "https://app.healthclaw.io"
+
+    def fasten_connect_url(self, tenant):
+        return f"{self.base}/connect/{tenant}"
 
     def conformance_badge(self):
         return {"message": "A (7/7)"}
@@ -257,8 +259,10 @@ def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     r = c.post("/api/connections/fasten")
     assert r.status_code == 200
     d = r.get_json()
-    assert d["status"] == "pending" and "external_id=" in d["connect_url"]
-    tenant = d["connect_url"].split("external_id=")[1]
+    # routes through HealthClaw's own wired-up connect page, not a Fasten URL
+    assert d["status"] == "pending" and "/connect/" in d["connect_url"]
+    assert "app.healthclaw.io" in d["connect_url"]
+    tenant = d["connect_url"].rsplit("/connect/", 1)[1]
     # the pending connection polls to active once records land
     assert c.get(f"/api/connections/{tenant}/poll").get_json()["status"] == "active"
     assert c.get("/api/connections/not-mine/poll").status_code == 404
