@@ -16,6 +16,9 @@
 }
 
 * { box-sizing: border-box; margin: 0; }
+/* The HTML `hidden` attribute must always win over component display rules
+   (e.g. `.modal { display:flex }`), or hidden overlays render on page load. */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: "Public Sans", -apple-system, sans-serif;
@@ -318,6 +321,21 @@ h1 em { font-style: italic; color: var(--clay); }
 .surface.on span { color: var(--sage); font-weight: 600; }
 .surface.soon { opacity: .6; cursor: default; }
 #tg-surface:hover { border-color: var(--clay); }
+
+/* --- onboarding cues ----------------------------------------------------- */
+.onboard-lead { color: var(--ink-soft); font-size: 16px; margin: 2px 0 26px;
+  max-width: 46ch; }
+.step-tag { font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--clay-deep);
+  background: #F6E6D9; border-radius: 999px; padding: 3px 10px; }
+.empty .linkish { font-weight: 600; }
+button.linkish { background: none; border: 0; color: var(--clay-deep);
+  cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+#connect-section.flash { animation: flashPulse 1.4s ease; border-radius: var(--radius); }
+@keyframes flashPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(194,83,46,0); }
+  30% { box-shadow: 0 0 0 4px rgba(194,83,46,.35); }
+}
 
 /* --- modal --------------------------------------------------------------- */
 .modal { position: fixed; inset: 0; background: rgba(34,25,14,.4);

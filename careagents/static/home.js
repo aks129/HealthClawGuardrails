@@ -43,20 +43,44 @@
 
   // --- new agent modal ---
   const modal = $("agent-modal");
-  $("new-agent-btn").addEventListener("click", () => {
-    if (!$("a-conn").options.length) { alert("Add a connection first."); return; }
+  const hasConn = () => $("a-conn") && $("a-conn").options.length > 0;
+
+  // With no records connected there's nothing to build an agent on — send the
+  // user to the connect step (highlight it) instead of opening a dead modal.
+  function needConnection() {
+    const sec = $("connect-section");
+    if (sec) {
+      sec.scrollIntoView({ behavior: "smooth", block: "center" });
+      sec.classList.add("flash");
+      setTimeout(() => sec.classList.remove("flash"), 1400);
+    }
+  }
+  function openAgentModal() {
+    if (!hasConn()) { needConnection(); return; }
+    $("modal-err").hidden = true;
     modal.hidden = false;
-  });
+    $("a-name").focus();
+  }
+  $("new-agent-btn").addEventListener("click", openAgentModal);
+  const emptyCta = $("empty-new-agent");
+  if (emptyCta) emptyCta.addEventListener("click", openAgentModal);
+
   $("close-modal").addEventListener("click", () => (modal.hidden = true));
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
   $("create-agent").addEventListener("click", async () => {
+    const conn = $("a-conn").value;
+    if (!conn) { const e = $("modal-err"); e.textContent = "Connect records first."; e.hidden = false; return; }
     const persona = document.querySelector('input[name="ag-persona"]:checked');
+    const btn = $("create-agent");
+    btn.disabled = true; btn.textContent = "Creating…";
     const res = await post("/api/agents", {
       name: $("a-name").value.trim() || "Juniper",
       persona: persona ? persona.value : "calm",
-      connection_id: $("a-conn").value,
+      connection_id: conn,
     });
-    if (res.ok) location.href = "/chat?agent=" + res.d.id;
-    else { const e = $("modal-err"); e.textContent = res.d.error || "Failed"; e.hidden = false; }
+    if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }
+    btn.disabled = false; btn.textContent = "Create";
+    const e = $("modal-err"); e.textContent = res.d.error || "Failed"; e.hidden = false;
   });
 
   // --- Telegram surface ---

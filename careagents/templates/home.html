@@ -14,10 +14,16 @@
     <form method="post" action="/logout"><button class="pill">Sign out</button></form>
   </div>
 
+  {% if not connections %}
+  <!-- FIRST RUN: guide to connect records before anything else -->
+  <p class="onboard-lead">Two quick steps: connect your health records, then
+    spin up an agent that can read them.</p>
+  {% endif %}
+
   <!-- AGENTS -->
   <section class="hub-section">
     <div class="section-head"><h2>Your agents</h2>
-      <button class="pill pill-cta" id="new-agent-btn">+ New agent</button></div>
+      <button type="button" class="pill pill-cta" id="new-agent-btn">+ New agent</button></div>
     <div class="card-grid" id="agents">
       {% for a in agents %}
       <a class="hub-card agent-card" href="/chat?agent={{ a.id }}">
@@ -28,14 +34,20 @@
       </a>
       {% endfor %}
       {% if not agents %}
-      <div class="empty">No agents yet. Add a connection, then create one.</div>
+        {% if connections %}
+        <div class="empty">Records connected. <button type="button" class="linkish" id="empty-new-agent">Create your first agent →</button></div>
+        {% else %}
+        <div class="empty"><b>Step 2.</b> Once your records are connected below,
+          create your first agent here.</div>
+        {% endif %}
       {% endif %}
     </div>
   </section>
 
   <!-- CONNECTIONS -->
-  <section class="hub-section">
-    <div class="section-head"><h2>Your connections</h2></div>
+  <section class="hub-section" id="connect-section">
+    <div class="section-head"><h2>Your connections</h2>
+      {% if not connections %}<span class="step-tag">Step 1</span>{% endif %}</div>
     <div class="card-grid" id="connections">
       {% for c in connections %}
       <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}">
@@ -46,8 +58,8 @@
       {% endfor %}
     </div>
     <div class="add-row">
-      <button class="btn-secondary" id="add-sample">Add sample records</button>
-      <button class="btn-primary" id="add-fasten">Connect real records</button>
+      <button type="button" class="btn-secondary" id="add-sample">Add sample records</button>
+      <button type="button" class="btn-primary" id="add-fasten">Connect real records</button>
       <span class="add-note">Real records connect through your provider’s own
         login (verified). We never see your password.</span>
     </div>
@@ -85,8 +97,8 @@
       {% for c in connections %}<option value="{{ c.id }}">{{ c.label }} ({{ c.status }})</option>{% endfor %}
     </select>
     <div id="modal-err" class="form-error" hidden></div>
-    <button class="btn-primary btn-block" id="create-agent">Create</button>
-    <button class="linkish" id="close-modal">Cancel</button>
+    <button type="button" class="btn-primary btn-block" id="create-agent">Create</button>
+    <button type="button" class="linkish" id="close-modal">Cancel</button>
   </div>
 </div>
 

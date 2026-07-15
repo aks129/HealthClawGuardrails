@@ -145,6 +145,21 @@ def test_email_code_creates_account_and_session(app, svc, monkeypatch):
     assert c.get("/home").status_code == 200
 
 
+def test_fresh_home_gates_agent_modal_and_shows_onboarding(app, svc, monkeypatch):
+    """A brand-new account (no connections) must not have a visible agent modal
+    and should be guided to connect records first (regression: the modal used
+    to render on load because `.modal{display:flex}` beat the hidden attr)."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    html = c.get("/home").data.decode()
+    # the modal element is present but carries the `hidden` attribute
+    assert 'id="agent-modal"' in html
+    modal = html.split('id="agent-modal"')[1][:40]
+    assert "hidden" in modal
+    # first-run onboarding: Step 1 points at connections, not the agent
+    assert "Step 1" in html and "connect" in html.lower()
+
+
 def test_wrong_email_code_rejected(app, svc, monkeypatch):
     c = app.test_client()
     import careagents.mail as mailmod
