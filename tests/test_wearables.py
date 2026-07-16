@@ -24,6 +24,7 @@ import pytest
 from r6.wearables.mapper import (
     sample_to_observation,
     samples_to_bundle,
+    sleep_session_to_observation,
 )
 
 
@@ -130,6 +131,75 @@ class TestSamplesToBundle:
         assert bundle['resourceType'] == 'Bundle'
         assert bundle['type'] == 'collection'
         assert len(bundle['entry']) == 2
+
+
+class TestSleepSessionMapper:
+    """Sleep sessions (incl. naps) come from Open Wearables' events/sleep feed
+    — the SleepSession schema with an `is_nap` flag — not the samples feed."""
+
+    _SESSION = {
+        'id': 'sess-1',
+        'start_time': '2026-07-15T13:20:00Z',
+        'end_time': '2026-07-15T13:50:00Z',
+        'duration_seconds': 1800,
+        'sleep_duration_seconds': 1620,
+        'efficiency_percent': 90.0,
+    }
+
+    def _tags(self, obs):
+        return {t['code'] for t in obs['meta']['tag']}
+
+    def test_main_sleep_tagged_and_coded(self):
+        obs = sleep_session_to_observation(
+            {**self._SESSION, 'is_nap': False, 'sleep_duration_seconds': 27000},
+            patient_ref='Patient/x', provider='oura')
+        assert obs['code']['coding'][0]['code'] == '93832-4'
+        assert obs['code']['text'] == 'Sleep duration'
+        assert obs['valueQuantity'] == {
+            'value': 7.5, 'unit': 'h',
+            'system': 'http://unitsofmeasure.org', 'code': 'h'}
+        assert obs['effectivePeriod']['start'] == '2026-07-15T13:20:00Z'
+        assert 'sleep-main' in self._tags(obs)
+        assert 'sleep-nap' not in self._tags(obs)
+
+    def test_nap_distinguished_by_text_and_tag(self):
+        obs = sleep_session_to_observation(
+            {**self._SESSION, 'is_nap': True},
+            patient_ref='Patient/x', provider='oura')
+        assert obs['code']['text'] == 'Nap duration'
+        assert obs['code']['coding'][0]['code'] == '93832-4'  # still sleep LOINC
+        assert 'sleep-nap' in self._tags(obs)
+        assert obs['valueQuantity']['value'] == 0.45  # 1620s -> 0.45h
+
+    def test_missing_is_nap_treated_as_main_sleep(self):
+        obs = sleep_session_to_observation(
+            self._SESSION, patient_ref='Patient/x', provider='apple')
+        # Apple never flags naps at 0.6.3 — absence is expected, not a bug.
+        assert obs['code']['text'] == 'Sleep duration'
+        assert 'sleep-main' in self._tags(obs)
+
+    def test_efficiency_becomes_component(self):
+        obs = sleep_session_to_observation(
+            self._SESSION, patient_ref='Patient/x', provider='whoop')
+        comp = obs['component'][0]
+        assert comp['code']['coding'][0]['code'] == '93831-6'
+        assert comp['valueQuantity']['value'] == 90.0
+
+    def test_falls_back_to_session_span_when_no_asleep_time(self):
+        obs = sleep_session_to_observation(
+            {'id': 's', 'start_time': '2026-07-15T13:20:00Z',
+             'end_time': '2026-07-15T13:50:00Z', 'duration_seconds': 1800,
+             'is_nap': True},
+            patient_ref='Patient/x', provider='garmin')
+        assert obs['valueQuantity']['value'] == 0.5  # 1800s -> 0.5h
+
+    def test_missing_bounds_or_duration_returns_none(self):
+        assert sleep_session_to_observation(
+            {'start_time': 'x', 'duration_seconds': 1}, patient_ref='P',
+            provider='oura') is None
+        assert sleep_session_to_observation(
+            {'start_time': 'x', 'end_time': 'y'}, patient_ref='P',
+            provider='oura') is None
 
 
 # ─────────────────────────────────────────────
