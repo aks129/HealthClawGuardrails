@@ -171,6 +171,54 @@ def test_wrong_email_code_rejected(app, svc, monkeypatch):
     assert r.status_code == 400
 
 
+def test_email_code_burns_after_max_attempts(svc, monkeypatch):
+    """Anti-brute-force: a login code is burned after MAX_CODE_ATTEMPTS wrong
+    guesses — even the correct code no longer works afterwards."""
+    from careagents.accounts import MAX_CODE_ATTEMPTS, AuthError
+    import careagents.mail as mailmod
+    cap = {}
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: cap.__setitem__("c", code))
+    svc.start_email_code("brute@example.com")
+    real = cap["c"]
+    assert len(real) == 8  # higher entropy than 6 digits
+    for _ in range(MAX_CODE_ATTEMPTS):
+        with pytest.raises(AuthError):
+            svc.verify_email_code("brute@example.com", "00000001")
+    with pytest.raises(AuthError):  # correct code is now burned
+        svc.verify_email_code("brute@example.com", real)
+
+
+def test_email_resend_invalidates_prior_code(svc, monkeypatch):
+    """One live code at a time: a fresh send retires the previous code so an
+    attacker can't accumulate many simultaneously-valid guesses."""
+    from careagents.accounts import AuthError
+    import careagents.mail as mailmod
+    codes = []
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: codes.append(code))
+    monkeypatch.setattr("careagents.accounts.RESEND_COOLDOWN", 0)  # skip cooldown
+    svc.start_email_code("rotate@example.com")
+    first = codes[-1]
+    svc.start_email_code("rotate@example.com")
+    second = codes[-1]
+    with pytest.raises(AuthError):  # the old code was invalidated
+        svc.verify_email_code("rotate@example.com", first)
+    acct = svc.verify_email_code("rotate@example.com", second)
+    assert acct.email == "rotate@example.com"
+
+
+def test_email_resend_cooldown_suppresses_duplicate_send(svc, monkeypatch):
+    """Within the cooldown a repeat request does not mint/send a new code."""
+    import careagents.mail as mailmod
+    codes = []
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: codes.append(code))
+    svc.start_email_code("cool@example.com")
+    svc.start_email_code("cool@example.com")  # within cooldown → suppressed
+    assert len(codes) == 1
+
+
 def test_gated_pages_redirect_or_401_without_session(app):
     c = app.test_client()
     assert c.get("/home").status_code == 302

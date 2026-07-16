@@ -15,7 +15,7 @@ import secrets
 import time
 
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
-                        LargeBinary, String, create_engine)
+                        LargeBinary, String, create_engine, inspect, text)
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 
@@ -108,12 +108,34 @@ class EmailToken(Base):
     purpose = Column(String(16), default="verify")
     exp = Column(Float, nullable=False)
     used = Column(Boolean, default=False)
+    # Failed-guess counter so a login code can be burned after a few misses
+    # (anti-brute-force). See AccountService.verify_email_code.
+    attempts = Column(Integer, default=0)
+
+
+def _ensure_columns(engine) -> None:
+    """Idempotently add columns introduced after a table first shipped.
+
+    create_all() only creates missing tables, never new columns on an existing
+    one — so the live SQLite DB needs this for `attempts`. SQLite and Postgres
+    both support ADD COLUMN ... DEFAULT.
+    """
+    insp = inspect(engine)
+    if "ca_email_tokens" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
+    if "attempts" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
+                "DEFAULT 0"))
 
 
 def make_engine(url: str):
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, future=True)
     Base.metadata.create_all(engine)
+    _ensure_columns(engine)
     return engine
 
 
