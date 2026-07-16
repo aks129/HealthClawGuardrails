@@ -440,8 +440,9 @@ def api_subscribe():
 
     try:
         email = validate_email(raw_email, check_deliverability=False).normalized
-    except EmailNotValidError as exc:
-        return jsonify({"error": f"invalid email: {exc}"}), 400
+    except EmailNotValidError:
+        # Don't echo the validator's exception text back to the client.
+        return jsonify({"error": "invalid email address"}), 400
 
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     audience_id = os.environ.get("RESEND_AUDIENCE_ID", "").strip()
