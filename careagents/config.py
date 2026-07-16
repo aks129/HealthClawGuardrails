@@ -30,6 +30,25 @@ class Config:
         self.healthclaw_base = (e.get("HEALTHCLAW_BASE")
                                 or "https://app.healthclaw.io").rstrip("/")
         self.session_secret = e.get("CARE_SESSION_SECRET", "")
+
+        # Accounts layer: own DB, WebAuthn relying-party, transactional email.
+        self.database_url = e.get("CARE_DATABASE_URL",
+                                  "sqlite:///careagents.db")
+        self.rp_id = e.get("CARE_RP_ID", "careagents.cloud")
+        self.rp_name = e.get("CARE_RP_NAME", "CareAgents")
+        # Absolute site origin for WebAuthn + magic links.
+        self.origin = (e.get("CARE_ORIGIN")
+                       or f"https://{self.rp_id}").rstrip("/")
+        self.resend_api_key = e.get("RESEND_API_KEY", "")
+        self.resend_from = e.get("CARE_EMAIL_FROM",
+                                 "CareAgents <hello@careagents.cloud>")
+        # Fasten (verified-provider real records) — the connect flow runs on
+        # HealthClaw's own /connect/<tenant> page (Stitch widget + verified
+        # key). careagents only needs the public key present to offer the
+        # button; it never builds a Fasten-hosted URL itself.
+        self.fasten_public_key = e.get("FASTEN_PUBLIC_KEY", "")
+        # Telegram deep-link target for surface binding.
+        self.telegram_bot = e.get("CARE_TELEGRAM_BOT", "")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
@@ -60,6 +79,8 @@ class Config:
                 raise ConfigError(
                     "an LLM key is required (ANTHROPIC_API_KEY preferred, "
                     "OPENAI_API_KEY fallback)")
+            _require("RESEND_API_KEY", self.resend_api_key,
+                     "email verification codes require a transactional sender")
         else:
             self.session_secret = self.session_secret or "dev-careagents-secret"
 

@@ -8,13 +8,12 @@
       <span class="chat-emoji">{{ persona.emoji }}</span>
       <div>
         <div class="chat-name">{{ me.name }}</div>
-        <div class="chat-sub">{{ persona.name }} · sample records</div>
+        <div class="chat-sub">{{ persona.name }}</div>
       </div>
     </div>
     <div class="chat-tools">
-      <button class="pill" id="save-btn" data-link="{{ magic_link }}"
-              title="Copy a private link that brings this agent back on any device">save my agent</button>
-      <span class="pill pill-quiet" id="trust-pill" title="Live guardrail grade + audit trail size">…</span>
+      <a class="pill" href="/home">← hub</a>
+      <span class="pill pill-quiet" id="trust-pill" title="Live guardrail grade">…</span>
     </div>
   </div>
 
@@ -27,10 +26,10 @@
       <p>What would you like to know?</p>
     </div>
     <div class="starters" id="starters">
-      <button class="starter">What do my labs say?</button>
-      <button class="starter">Any screenings I’m due for?</button>
-      <button class="starter">What medications am I on?</button>
-      <button class="starter">Fill out my intake form for a new doctor</button>
+      <button type="button" class="starter">What do my labs say?</button>
+      <button type="button" class="starter">Any screenings I’m due for?</button>
+      <button type="button" class="starter">What medications am I on?</button>
+      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     </div>
   </div>
 
@@ -40,5 +39,6 @@
     <button class="btn-primary" id="send" type="submit">Send</button>
   </form>
 </main>
+<script>window.CARE_AGENT = {{ agent_id|tojson }};</script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}

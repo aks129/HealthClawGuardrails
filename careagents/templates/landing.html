@@ -12,11 +12,11 @@
     </p>
     <div class="cta-row">
       {% if me %}
-        <a class="btn-primary" href="/chat">Back to {{ me.name }} →</a>
+        <a class="btn-primary" href="/home">Go to your hub →</a>
       {% else %}
-        <a class="btn-primary" href="/start">Create your agent</a>
+        <a class="btn-primary" href="/auth">Get started</a>
       {% endif %}
-      <span class="cta-note">about a minute · no account needed</span>
+      <span class="cta-note">passkey sign-in · your records stay yours</span>
     </div>
     <div class="trust-strip" id="trust-strip">
       <span class="trust-chip" id="badge-chip" title="Live conformance grade of the guardrail layer">
@@ -33,9 +33,10 @@
   <ol class="steps">
     <li>
       <span class="step-n">1</span>
-      <h3>Name your agent</h3>
-      <p>Pick a name and a voice. It starts with clearly-labeled sample
-      records, so you can feel how it works before connecting anything.</p>
+      <h3>Sign in with your face</h3>
+      <p>A passkey — Face ID, Touch ID, or your security key — is your login.
+      No password to phish or forget. Then connect your records through your
+      provider’s own verified login.</p>
     </li>
     <li>
       <span class="step-n">2</span>

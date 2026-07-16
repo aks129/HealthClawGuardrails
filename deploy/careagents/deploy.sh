@@ -32,7 +32,10 @@ if [ ! -x /opt/careagents/venv/bin/python ]; then
   python3 -m venv /opt/careagents/venv
 fi
 /opt/careagents/venv/bin/pip install --quiet --upgrade \
-  flask gunicorn requests itsdangerous anthropic
+  flask gunicorn requests itsdangerous anthropic webauthn sqlalchemy
+
+# accounts DB lives on a persisted, 0700 dir owned by the service user
+mkdir -p /opt/careagents/data
 
 # env file: create a template on first run; never overwrite
 if [ ! -f /etc/careagents/careagents.env ]; then
@@ -41,6 +44,24 @@ CARE_ENV=production
 HEALTHCLAW_BASE=https://app.healthclaw.io
 CARE_SESSION_SECRET=__SET_ME_32_CHARS_MIN__
 HEALTHCLAW_MINT_SECRET=__SET_ME__
+
+# --- accounts (identity: email codes + passkeys) ---
+# WebAuthn is bound to the public origin; these MUST match the browser URL.
+CARE_RP_ID=careagents.cloud
+CARE_RP_NAME=CareAgents
+CARE_ORIGIN=https://careagents.cloud
+# Account store — SQLite on the persisted data dir (survives redeploys).
+CARE_DATABASE_URL=sqlite:////opt/careagents/data/careagents.db
+# Transactional email for login codes (Resend). Without a key, prod refuses
+# to boot; in dev the code is logged to stderr instead.
+RESEND_API_KEY=__SET_ME__
+CARE_EMAIL_FROM=CareAgents <login@careagents.cloud>
+
+# --- verified-provider records (Fasten Connect) ---
+FASTEN_PUBLIC_KEY=
+# --- Telegram surface (bot username, no @) ---
+CARE_TELEGRAM_BOT=
+
 # Provider: ANTHROPIC_API_KEY (claude-sonnet-5) takes precedence when set.
 # Otherwise the OpenAI-compatible fallback is used — works with OpenAI or,
 # as shipped today, Google Gemini's compat endpoint:
@@ -57,6 +78,7 @@ ENV
   echo "!! populate /etc/careagents/careagents.env before the service will boot"
 fi
 chown -R careagents:careagents /opt/careagents
+chmod 700 /opt/careagents/data
 REMOTE
 
 echo "→ install unit + nginx"

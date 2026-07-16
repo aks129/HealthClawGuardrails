@@ -16,6 +16,9 @@
 }
 
 * { box-sizing: border-box; margin: 0; }
+/* The HTML `hidden` attribute must always win over component display rules
+   (e.g. `.modal { display:flex }`), or hidden overlays render on page load. */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: "Public Sans", -apple-system, sans-serif;
@@ -256,3 +259,90 @@ h1 em { font-style: italic; color: var(--clay); }
   border-top: 1px solid var(--hairline); margin-top: auto;
 }
 .footer-fine { margin-top: 6px; font-size: 12px; opacity: .8; }
+
+/* --- auth extras -------------------------------------------------------- */
+.btn-secondary {
+  display: inline-block; background: var(--card); color: var(--clay-deep);
+  font-weight: 600; font-size: 15px; font-family: inherit;
+  border: 1.5px solid var(--hairline); border-radius: 999px;
+  padding: 13px 26px; cursor: pointer; margin-top: 10px;
+}
+.btn-secondary:hover { border-color: var(--clay); }
+.or { text-align: center; color: var(--ink-soft); font-size: 13px;
+  margin: 20px 0 6px; position: relative; }
+.linkish { display: block; width: 100%; background: none; border: none;
+  color: var(--ink-soft); font-size: 13.5px; font-family: inherit;
+  cursor: pointer; margin-top: 14px; text-decoration: underline; }
+.code-input { font-size: 28px; letter-spacing: .35em; text-align: center; }
+#step-passkey { text-align: center; }
+
+/* --- hub ---------------------------------------------------------------- */
+.hub { max-width: 940px; margin: 0 auto; padding: 8px clamp(18px,5vw,40px) 60px; }
+.hub-head { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; padding: 8px 0 20px; }
+.hub-head h1 { font-size: clamp(28px, 5vw, 40px); }
+.hub-sub { color: var(--ink-soft); font-size: 14.5px; margin-top: 4px; }
+.hub-section { margin-top: 30px; }
+.section-head { display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px; }
+.section-head h2 { font-size: 22px; }
+.pill-cta { background: var(--clay); color: #fff; border-color: var(--clay); }
+.pill-cta:hover { background: var(--clay-deep); color: #fff; }
+.card-grid { display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.hub-card { background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 16px; padding: 20px; box-shadow: var(--shadow);
+  text-decoration: none; color: var(--ink); position: relative;
+  display: flex; flex-direction: column; gap: 3px; transition: transform .1s ease; }
+.agent-card:hover { transform: translateY(-2px); border-color: var(--clay); }
+.hub-emoji { font-size: 30px; }
+.hub-card-name { font-family: "Fraunces", serif; font-size: 19px; margin-top: 4px; }
+.hub-card-sub { font-size: 13px; color: var(--ink-soft); }
+.open-hint { font-size: 12.5px; color: var(--clay-deep); font-weight: 600;
+  margin-top: 10px; }
+.status { position: absolute; top: 16px; right: 16px; font-size: 11px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 4px 9px; border-radius: 999px; }
+.status-active { background: #EAF1EA; color: var(--sage); }
+.status-pending { background: #FBEFD9; color: #A97516; }
+.status-error { background: #FBE4DC; color: var(--clay-deep); }
+.empty { color: var(--ink-soft); font-size: 14px; padding: 8px 2px; }
+.add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px; }
+.add-note { font-size: 12.5px; color: var(--ink-soft); max-width: 340px; }
+.surface-row { display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.surface { background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column;
+  gap: 2px; cursor: pointer; }
+.surface b { font-size: 15px; }
+.surface span { font-size: 12.5px; color: var(--ink-soft); }
+.surface.on { border-color: #D8E2D8; background: #F3F7F3; cursor: default; }
+.surface.on span { color: var(--sage); font-weight: 600; }
+.surface.soon { opacity: .6; cursor: default; }
+#tg-surface:hover { border-color: var(--clay); }
+
+/* --- onboarding cues ----------------------------------------------------- */
+.onboard-lead { color: var(--ink-soft); font-size: 16px; margin: 2px 0 26px;
+  max-width: 46ch; }
+.step-tag { font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--clay-deep);
+  background: #F6E6D9; border-radius: 999px; padding: 3px 10px; }
+.empty .linkish { font-weight: 600; }
+button.linkish { background: none; border: 0; color: var(--clay-deep);
+  cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+#connect-section.flash { animation: flashPulse 1.4s ease; border-radius: var(--radius); }
+@keyframes flashPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(194,83,46,0); }
+  30% { box-shadow: 0 0 0 4px rgba(194,83,46,.35); }
+}
+
+/* --- modal --------------------------------------------------------------- */
+.modal { position: fixed; inset: 0; background: rgba(34,25,14,.4);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  z-index: 40; }
+.modal-card { background: var(--card); border-radius: 20px; padding: 28px;
+  width: 100%; max-width: 460px; box-shadow: 0 20px 60px rgba(34,25,14,.3); }
+.modal-card h3 { font-family: "Fraunces", serif; font-size: 22px; margin-bottom: 6px; }
+.modal-card .field, .modal-card select.field { margin-bottom: 4px; }
+.modal-card .btn-primary { margin-top: 20px; }
