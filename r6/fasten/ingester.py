@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 
@@ -28,6 +29,26 @@ logger = logging.getLogger(__name__)
 
 _PROGRESS_BATCH = 10  # commit progress every N resources (observability)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
+
+
+def _is_fasten_download_host(url: str) -> bool:
+    """True only when *url* is an https link whose host is fastenhealth.com or
+    a subdomain of it.
+
+    The Fasten private key is attached as Basic auth for the download hop, so
+    the host must be validated exactly — a substring check (`'fastenhealth.com'
+    in url`) would send the credentials to a look-alike host such as
+    ``https://evil.com/fastenhealth.com`` or ``https://fastenhealth.com.evil.com/``.
+    Requiring https also stops the key from ever going over cleartext.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme != 'https':
+        return False
+    host = (parsed.hostname or '').lower()
+    return host == 'fastenhealth.com' or host.endswith('.fastenhealth.com')
 
 # Clinical types eligible for automatic Curatr scan after ingestion
 _CURATR_ELIGIBLE = frozenset({
@@ -68,7 +89,7 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 _auth = None
                 _pub = os.environ.get('FASTEN_PUBLIC_KEY', '').strip()
                 _priv = os.environ.get('FASTEN_PRIVATE_KEY', '').strip()
-                if _pub and _priv and 'fastenhealth.com' in url:
+                if _pub and _priv and _is_fasten_download_host(url):
                     _auth = (_pub, _priv)
                 with httpx.stream(
                     'GET', url, timeout=_DOWNLOAD_TIMEOUT,
