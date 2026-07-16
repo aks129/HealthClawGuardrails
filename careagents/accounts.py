@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import secrets
 import time
 from contextlib import contextmanager
@@ -24,6 +25,10 @@ from careagents.models import (Account, Agent, Connection, EmailToken, Passkey,
                                Surface, make_engine, make_session_factory, now)
 
 CODE_TTL = 600  # 10 minutes
+MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
+RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts)
+                        # while a recent one is still in flight
+CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 
 
 class AuthError(RuntimeError):
@@ -58,8 +63,23 @@ class AccountService:
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
-        code = f"{secrets.randbelow(1_000_000):06d}"
+        code = None
         with self.session() as s:
+            # If a code was minted very recently, don't send another — this
+            # both avoids code-spam and stops an attacker from resetting the
+            # per-code attempt counter by re-requesting.
+            recent = (s.query(EmailToken)
+                      .filter_by(email=email, used=False)
+                      .filter(EmailToken.exp >= now())
+                      .order_by(EmailToken.exp.desc()).first())
+            if recent is not None and (recent.exp - now()) > (
+                    CODE_TTL - RESEND_COOLDOWN):
+                return
+            # One live code at a time: retire any prior unused codes so an
+            # attacker can't accumulate many simultaneously-valid guesses.
+            s.query(EmailToken).filter_by(
+                email=email, used=False).update({"used": True})
+            code = f"{secrets.randbelow(CODE_MAX):08d}"
             s.add(EmailToken(email=email, code_hash=self._hash(code),
                              purpose=purpose, exp=now() + CODE_TTL))
         mail.send_code(self.cfg, email, code, purpose)
@@ -67,23 +87,42 @@ class AccountService:
     def verify_email_code(self, email: str, code: str) -> Account:
         email = email.strip().lower()
         code = (code or "").strip()
+        # The session manager rolls back on any exception, so we must NOT raise
+        # inside it — that would undo the attempts increment / burn. Record the
+        # outcome, let the session commit, then raise afterwards.
+        error: str | None = None
+        result: _Row | None = None
         with self.session() as s:
+            # Fetch the single live code by email (not by hash) so a wrong
+            # guess is counted against it and the code can be burned.
             tok = (s.query(EmailToken)
-                   .filter_by(email=email, code_hash=self._hash(code),
-                              used=False)
+                   .filter_by(email=email, used=False)
+                   .filter(EmailToken.exp >= time.time())
                    .order_by(EmailToken.exp.desc()).first())
-            if not tok or tok.exp < time.time():
-                raise AuthError("That code is wrong or expired.")
-            tok.used = True
-            acct = s.query(Account).filter_by(email=email).first()
-            if acct is None:
-                acct = Account(email=email, email_verified_at=now())
-                s.add(acct)
-            elif acct.email_verified_at is None:
-                acct.email_verified_at = now()
-            acct.last_login_at = now()
-            s.flush()
-            return _detach(acct)
+            if tok is None:
+                error = "That code is wrong or expired."
+            elif (tok.attempts or 0) >= MAX_CODE_ATTEMPTS:
+                tok.used = True
+                error = "Too many attempts — request a new code."
+            elif not hmac.compare_digest(tok.code_hash, self._hash(code)):
+                tok.attempts = (tok.attempts or 0) + 1
+                if tok.attempts >= MAX_CODE_ATTEMPTS:
+                    tok.used = True
+                error = "That code is wrong or expired."
+            else:
+                tok.used = True
+                acct = s.query(Account).filter_by(email=email).first()
+                if acct is None:
+                    acct = Account(email=email, email_verified_at=now())
+                    s.add(acct)
+                elif acct.email_verified_at is None:
+                    acct.email_verified_at = now()
+                acct.last_login_at = now()
+                s.flush()
+                result = _detach(acct)
+        if error:
+            raise AuthError(error)
+        return result
 
     def get_account(self, account_id: str) -> Account | None:
         with self.session() as s:
