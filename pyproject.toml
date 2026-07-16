@@ -20,6 +20,7 @@ dependencies = [
     "reportlab>=4.0",
     "redis>=4.6.0",
     "requests>=2.33.0",
+    "webauthn>=3.0.0,<4",  # CareAgents passkey (WebAuthn) auth
 ]
 
 [project.optional-dependencies]
