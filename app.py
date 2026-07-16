@@ -131,16 +131,42 @@ def robots_txt():
     can set ALLOW_INDEXING=1 to serve a permissive robots.txt instead.
     """
     if os.environ.get("ALLOW_INDEXING", "").lower() in ("1", "true", "yes"):
-        body = "User-agent: *\nAllow: /\n"
+        base = os.environ.get("PUBLIC_SITE_URL", "https://healthclaw.io").rstrip("/")
+        body = f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n"
     else:
         body = "User-agent: *\nDisallow: /\n"
     return Response(body, mimetype="text/plain")
 
 
+# Public pages for search indexing. Only meaningful where ALLOW_INDEXING is on
+# (the healthclaw.io Vercel site); the personal app host stays disallowed.
+_SITEMAP_PATHS = [
+    ("/", "1.0"), ("/r6-dashboard", "0.8"), ("/skills", "0.7"),
+    ("/wiki", "0.7"), ("/faq", "0.6"), ("/privacy", "0.3"), ("/terms", "0.3"),
+]
+
+
+@web_blueprint.route('/sitemap.xml')
+def sitemap_xml():
+    """Minimal sitemap of public, indexable pages."""
+    if os.environ.get("ALLOW_INDEXING", "").lower() not in ("1", "true", "yes"):
+        return Response("Not found", status=404)
+    base = os.environ.get("PUBLIC_SITE_URL", "https://healthclaw.io").rstrip("/")
+    urls = "".join(
+        f"<url><loc>{base}{path}</loc><priority>{pri}</priority></url>"
+        for path, pri in _SITEMAP_PATHS)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+           f'{urls}</urlset>')
+    return Response(xml, mimetype="application/xml")
+
+
 @web_blueprint.route('/')
 def index():
     """Landing page."""
-    return render_template('index.html')
+    return render_template(
+        'index.html',
+        google_verification=os.environ.get("GOOGLE_SITE_VERIFICATION", "").strip())
 
 
 @web_blueprint.route('/r6-dashboard')

@@ -3,7 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HealthClaw Guardrails — healthclaw.io</title>
+  <title>HealthClaw Guardrails — the safety layer between AI agents and your health data</title>
+  <meta name="description" content="HealthClaw is an open-source guardrail layer between AI agents and FHIR health data — redaction, audit, and human sign-off enforced server-side. See it working in CareAgents: connect your records and spin up a health agent that reads them safely.">
+  <link rel="canonical" href="https://healthclaw.io/">
+  <meta name="robots" content="index, follow">
+  {% if google_verification %}<meta name="google-site-verification" content="{{ google_verification }}">{% endif %}
+  <!-- Open Graph / LinkedIn -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="HealthClaw Guardrails">
+  <meta property="og:url" content="https://healthclaw.io/">
+  <meta property="og:title" content="The guardrail layer between AI agents and clinical data">
+  <meta property="og:description" content="Open-source safety layer for AI + FHIR health data. Redaction, audit, and human sign-off enforced server-side. Try CareAgents — connect your records, spin up a guarded health agent.">
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="The guardrail layer between AI agents and clinical data">
+  <meta name="twitter:description" content="Open-source safety layer for AI + FHIR health data. Try CareAgents — connect your records, spin up a guarded health agent.">
+  <meta name="theme-color" content="#0A0E17">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -394,13 +409,19 @@
     </h1>
     <p class="hero-sub">
       FHIR standardized health data. MCP standardized how AI connects to tools.
-      Nobody standardized the guardrails in between &mdash; so we're building a shared, open
-      reference for that layer, in the open. Not a product. Use it, fork it, send a PR.
+      Nobody standardized the guardrails in between &mdash; so we built a shared, open
+      reference for that layer. See it working in <strong style="color:var(--white)">CareAgents</strong>:
+      sign in with your face, connect your records, and spin up a health agent
+      that reads them &mdash; redaction, audit, and human sign-off enforced server-side.
     </p>
     <div class="hero-ctas">
-      <a href="{{ url_for('r6_dashboard') }}" class="btn-primary">Try the Live Dashboard</a>
-      <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" class="btn-outline">Get involved &rarr;</a>
+      <a href="https://careagents.cloud" target="_blank" rel="noopener" class="btn-primary">Try CareAgents &rarr;</a>
+      <a href="{{ url_for('r6_dashboard') }}" class="btn-outline">Explore the live dashboard</a>
     </div>
+    <p style="margin-top:18px;font-size:13px;color:var(--gray)">
+      Building on it? It's MIT-licensed &mdash;
+      <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" style="color:var(--cyan)">use it, fork it, send a PR</a>.
+    </p>
   </div>
 </div>
 

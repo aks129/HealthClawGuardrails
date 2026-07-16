@@ -48,3 +48,6 @@ private/
 # Playwright MCP session artifacts
 .playwright-mcp/
 .codex/
+
+# LinkedIn digest pending drafts (local queue)
+.digest/

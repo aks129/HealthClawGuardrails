@@ -13,7 +13,6 @@ import hmac
 import json
 import logging
 import os
-import secrets
 import time
 from datetime import datetime, timezone
 
@@ -135,22 +134,24 @@ def oauth_start():
     # the same patient can hold multiple provider connections.
     ow_user_id = f'hc-{tenant_id}'
 
-    state = _sign_state({
-        'tenant_id': tenant_id,
-        'provider': provider,
-        'ow_user_id': ow_user_id,
-        'nonce': secrets.token_hex(8),
-        'exp': int(time.time()) + _STATE_TTL_SECONDS,
-    })
-
     base = request.host_url.rstrip('/')
     callback_url = f'{base}/wearables/oauth/callback'
-    kickoff = wc.oauth_kickoff_url(
+    # NOTE: Open Wearables owns the OAuth authorize+callback; its
+    # /oauth/{provider}/authorize returns the redirect URL but is guarded by
+    # developer-session auth (not our API key), so this returns None with only
+    # an API key. Reconciling the full connect flow (who holds developer auth,
+    # whose callback runs) is an open integration decision — see client.py.
+    kickoff = wc.oauth_authorize_url(
         provider,
         ow_user_id=ow_user_id,
-        callback_url=callback_url,
-        state=state,
+        redirect_uri=callback_url,
     )
+    if not kickoff:
+        return jsonify({
+            'error': 'wearables connect is not available on this deployment',
+            'detail': 'Open Wearables authorize requires developer-session '
+                      'auth; the connect flow needs integration wiring.',
+        }), 503
     return redirect(kickoff, code=302)
 
 
