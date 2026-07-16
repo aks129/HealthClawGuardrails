@@ -67,11 +67,24 @@ describe("agent-orchestrator reproducibility", () => {
   });
 
   it("keeps Jest, ts-jest, and Jest types on one compatible major", () => {
-    const majors = ["jest", "ts-jest", "@types/jest"].map((name) =>
-      declaredMajor(packageJson.devDependencies[name])
-    );
+    const jestMajor = declaredMajor(packageJson.devDependencies["jest"]);
+    const typesMajor = declaredMajor(packageJson.devDependencies["@types/jest"]);
 
-    expect(new Set(majors)).toEqual(new Set([29]));
+    // The Jest type package must track the Jest runtime major.
+    expect(typesMajor).toBe(jestMajor);
+
+    // ts-jest has no v30 release line; its 29.x builds declare peer support
+    // for both Jest 29 and 30, so its major intentionally trails Jest's.
+    // Assert the installed ts-jest actually supports the Jest major we depend
+    // on instead of forcing all three onto an identical major.
+    const tsJestPkg = JSON.parse(
+      fs.readFileSync(
+        path.join(serviceRoot, "node_modules", "ts-jest", "package.json"),
+        "utf8"
+      )
+    ) as { peerDependencies?: { jest?: string } };
+    const jestPeerRange = tsJestPkg.peerDependencies?.jest ?? "";
+    expect(jestPeerRange).toMatch(new RegExp(`\\^${jestMajor}\\.`));
   });
 
   it("keeps lockfile root metadata synchronized with package.json", () => {
