@@ -1,5 +1,10 @@
 name: security-baseline
 on: [pull_request, push]
+
+# The reusable scan workflow declares `contents: read`; grant exactly that.
+permissions:
+  contents: read
+
 jobs:
   scan:
     # Pinned to the reviewed 2026-07-12 main commit. Dependabot updates the
