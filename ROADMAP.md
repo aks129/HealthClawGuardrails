@@ -18,6 +18,16 @@ The contract floor for real actions is on `main`:
 - **Reliability floor.** Config preflight (`GET /r6/ops/preflight`), a Postgres CI lane (kills the SQLite-masks-varchar bug class), MCP fetch timeouts, poller storm-detection, source-aware resource identity `(tenant, type, id)`, and a mandatory red-flag emergency screen on action text.
 - **Seven provable guardrail properties (Grade A).** `GET /r6/fhir/$conformance` grades a live deployment A–F across PHI redaction, immutable audit, step-up authorization, human-in-the-loop, tenant isolation, medical disclaimers, and **error fidelity** — the failure-path property (unknown parameters and unsupported modifiers are rejected or flagged, never silently swallowed). Enforced as a CI gate (`tests/test_guardrail_conformance.py`) and served as a self-grading endpoint.
 - **The forms rail — first end-to-end real action.** `$populate` fills the canonical intake questionnaire from the patient's own record → a **structured per-item review** (every medication and allergy confirmed individually; "no known allergies" is rejected server-side unless explicitly attested, and the item list is re-derived from FHIR so a crafted request can't skip a row) → a reviewed `QuestionnaireResponse` → a provenance-stamped PDF persisted as a FHIR `DocumentReference` → a **signed, expiring download link**. The `form-fill` executor fails loud (`needs_review` / `provider_not_configured` / `stale_source_data`) and only reports `completed` on a fully rendered, persisted, linked PDF. See [the demo run-of-show](docs/demos/forms-rail-run-of-show.md).
+- **CareAgents — the hosted consumer experience.** A non-developer spins up a guardrailed health agent in a minute at [careagents.cloud](https://careagents.cloud): **sign in with your face** (WebAuthn passkey — biometric stays on-device), connect records (sample now; verified providers via Fasten), create an agent, chat, run the forms rail. CareAgents' *only* data path is the HealthClaw guardrail layer's HTTP API — it adds experience, never policy, and stores no PHI (a connection is a pointer to a HealthClaw tenant). Two identity tiers (email-code + passkey account; verified-provider health identity), an account-scoped hub, and surfaces (web + Telegram today).
+
+## 🎯 Consumer — CareAgents surfaces + connectors (the Aug 18 push)
+
+The near-term consumer track, tracked in **[#134](../../issues/134)** (milestone *Aug 18 — consumer demo*). North star: connect your **Apple Health** and a provider, create an agent, and **text it on iMessage**.
+
+- **A connector marketplace.** CareAgents' connection step becomes a universal front door over a pluggable registry — surfacing the sources HealthClaw already brokers (Fasten, wearables, SMART Health Links, direct FHIR) plus honest "coming soon" tiles. Design: [connector-marketplace spec](docs/superpowers/specs/2026-07-16-careagents-connector-marketplace-design.md). ([#138](../../issues/138))
+- **Apple Health / wearables — live via Open Wearables.** Open Wearables owns the phone bridge (Apple + Health Connect, nap detection), and our connector reads its API — so Apple Health is a live path with no native code on our side. Includes reconciling the client to the current OW API and mapping sleep sessions/naps to FHIR. ([#139](../../issues/139), [#140](../../issues/140), [#141](../../issues/141))
+- **iMessage surface + agent creation.** Bind an agent to iMessage from the hub and converse with it over a Mac-mini relay — the same guardrailed turn loop as web/Telegram, collapsed to a final message with a link to the human review card when an action needs approval. ([#135](../../issues/135), [#136](../../issues/136), [#137](../../issues/137))
+- **Demo readiness + exposure.** A rehearsable run-of-show, Anthropic capacity for a burst-proof live demo, ecosystem contributions (Open Wearables, Hermes MCP, Fasten, SMART Health IT), and consumer/MCP directory listings. ([#142](../../issues/142), [#143](../../issues/143), [#144](../../issues/144), [#145](../../issues/145))
 
 ## 🔜 Now — the comms rail
 
@@ -37,7 +47,7 @@ Making the first two actions *real*:
 ## 🔭 Later — booking, consumer, ecosystem
 
 - **Appointment booking** (voice-call booking with structured extraction; a confirmed slot becomes a `pending` FHIR Appointment until the patient acknowledges the transcript — never `booked` on extraction alone). Validated against a controlled target first; real-clinic reliability is measured, not claimed.
-- **Consumer onboarding.** A non-developer connects a family member's records from their phone in under 20 minutes, self-serve — plus a **caregiver/consent model** (one person managing several people's records, minor-turning-18, sharing with a sibling) and a non-Telegram-first approval channel.
+- **Caregiver / consent model.** Self-serve consumer onboarding has shipped (see CareAgents above); what remains is one person managing several people's records — proxy access, minor-turning-18, sharing with a sibling — and the consent surface around it.
 - **Standing approvals** for recurring low-risk actions; NPI/pharmacy-directory contact verification; electronic Rx transfer where a rail exists.
 
 ---
