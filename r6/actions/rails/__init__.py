@@ -104,14 +104,14 @@ def reconcile_needs_review():
     return ExecutionResult(status='needs_review', outcome={'reason': 'reconcile_unreachable'})
 
 
-from r6.actions.rails import form_fill, phone, sms  # noqa: E402  (registration side effect)
+from r6.actions.rails import form_fill, phone, sms, webhook_poster  # noqa: E402  (registration side effect)
 
 
 def register_all():
     """(Re-)register every rail executor. Idempotent: safe to call after
     registry._clear(), and safe to call repeatedly — duplicate-kind
     registrations are swallowed."""
-    for module in (phone, sms, form_fill):
+    for module in (phone, sms, form_fill, webhook_poster):
         try:
             module.register()
         except ValueError:
