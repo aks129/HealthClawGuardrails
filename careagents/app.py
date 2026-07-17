@@ -21,7 +21,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, new_binding_code)
-from careagents.agent import run_turn
+from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS, system_prompt
@@ -87,7 +87,8 @@ def create_app(config: Config | None = None,
             "home.html", me=acct, personas=PERSONAS,
             connections=data["connections"], agents=data["agents"],
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
-            telegram_bot=cfg.telegram_bot)
+            telegram_bot=cfg.telegram_bot,
+            imessage_handle=cfg.imessage_handle)
 
     @app.post("/logout")
     def logout():
@@ -380,6 +381,80 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "bind failed"}), 502
         svc.bind_surface(surface["id"], str(chat_id))
         return jsonify({"ok": True})
+
+    # --- iMessage surface ----------------------------------------------------
+    # Unlike Telegram (driven by the OpenClaw gateway), careagents runs the
+    # iMessage message loop itself: a Mac-mini relay POSTs inbound texts here
+    # (mint-secret gated) and we return the agent's reply for it to send back.
+
+    @app.post("/api/surfaces/imessage")
+    @login_required
+    def connect_imessage():
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        agent_id = body.get("agent_id", "")
+        if not svc.get_agent_context(acct.id, agent_id):
+            return jsonify({"error": "unknown agent"}), 404
+        code = new_binding_code()
+        sid = svc.add_surface(acct.id, agent_id, "imessage", code,
+                              status="pending")
+        return jsonify({"id": sid, "code": code,
+                        "handle": cfg.imessage_handle,
+                        "instructions": (
+                            f"Text  care {code}  to {cfg.imessage_handle}"
+                            if cfg.imessage_handle else
+                            "iMessage isn't configured on this deployment yet.")})
+
+    @app.post("/api/surfaces/imessage/bind")
+    def imessage_bind():
+        """Relay calls this when a user texts `care <code>`: bind the sender's
+        handle to the pending surface. Mint-secret gated (server-to-server)."""
+        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+            return jsonify({"error": "forbidden"}), 403
+        body = request.get_json(silent=True) or {}
+        code = str(body.get("code") or "").replace("care_", "").replace(
+            "care ", "").strip()
+        handle = str(body.get("handle") or "").strip()
+        if not handle:
+            return jsonify({"error": "missing handle"}), 400
+        surface = svc.find_surface_by_code(code, kind="imessage")
+        if not surface:
+            return jsonify({"error": "unknown code"}), 404
+        svc.bind_surface(surface["id"], handle)
+        return jsonify({"ok": True})
+
+    @app.post("/api/surfaces/imessage/inbound")
+    def imessage_inbound():
+        """Relay POSTs an inbound message {handle, text}; we route it to the
+        bound agent and return {reply} for the relay to send back."""
+        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+            return jsonify({"error": "forbidden"}), 403
+        body = request.get_json(silent=True) or {}
+        handle = str(body.get("handle") or "").strip()
+        text = (body.get("text") or "").strip()
+        surface = svc.find_surface_by_handle(handle, kind="imessage")
+        if not surface:
+            return jsonify({"error": "unbound handle"}), 404
+        ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
+        if not ctx:
+            return jsonify({"error": "unknown agent"}), 404
+        if not text or len(text) > 2000:
+            return jsonify({"error": "message must be 1-2000 characters"}), 400
+        if not _allow_turn(surface["account_id"]):
+            return jsonify({"reply": "One moment — too many messages just now. "
+                                     "Try again in a bit."}), 200
+        tenant = ctx["tenant"]
+        agent = ctx["agent"]
+        sysprompt = system_prompt(agent["name"], agent["persona"])
+        with hist_lock:
+            history = histories[tenant]
+        try:
+            reply = run_turn_to_message(cfg, hc, tenant, sysprompt, history,
+                                        text, origin=cfg.origin,
+                                        agent_id=agent["id"])
+        except Exception:  # noqa: BLE001
+            reply = "Something went wrong on our side. Please try again."
+        return jsonify({"reply": reply})
 
     # --- trust + ops ---------------------------------------------------------
 

@@ -259,10 +259,21 @@ class AccountService:
             s.flush()
             return x.id
 
-    def find_surface_by_code(self, code: str) -> dict | None:
+    def find_surface_by_code(self, code: str,
+                             kind: str = "telegram") -> dict | None:
         with self.session() as s:
             x = (s.query(Surface)
-                 .filter_by(handle=code, kind="telegram", status="pending")
+                 .filter_by(handle=code, kind=kind, status="pending")
+                 .first())
+            return _surf_dict(x) | {"account_id": x.account_id} if x else None
+
+    def find_surface_by_handle(self, handle: str,
+                               kind: str = "imessage") -> dict | None:
+        """Resolve an active surface by the bound external handle — used to
+        route an inbound message to the right agent."""
+        with self.session() as s:
+            x = (s.query(Surface)
+                 .filter_by(handle=handle, kind=kind, status="active")
                  .first())
             return _surf_dict(x) | {"account_id": x.account_id} if x else None
 

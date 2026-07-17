@@ -72,7 +72,12 @@
       <div class="surface on"><b>Web</b><span>always on</span></div>
       <div class="surface" id="tg-surface"><b>Telegram</b>
         <span id="tg-state">connect →</span></div>
+      {% if imessage_handle %}
+      <div class="surface" id="im-surface"><b>iMessage</b>
+        <span id="im-state">connect →</span></div>
+      {% else %}
       <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
+      {% endif %}
       <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
     </div>
   </section>
