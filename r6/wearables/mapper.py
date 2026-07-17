@@ -242,6 +242,116 @@ def sample_to_observation(
     return obs
 
 
+def sleep_session_to_observation(
+    session: dict[str, Any],
+    *,
+    patient_ref: str,
+    provider: str,
+    source_base_url: str = 'https://open-wearables.local',
+) -> dict[str, Any] | None:
+    """Map one Open Wearables **sleep session** to a FHIR R4 Observation.
+
+    Sleep sessions (including naps) are event records, not time-series
+    samples — Open Wearables exposes them via
+    ``GET /api/v1/users/{id}/events/sleep`` (the ``SleepSession`` schema),
+    *not* the samples/timeseries feed. A nap is a sleep session with
+    ``is_nap == true``; ``false``/missing is treated as main sleep, mirroring
+    Open Wearables' own ``coalesce(is_nap, False)``.
+
+    Both nap and main sleep use LOINC 93832-4 (Sleep duration); they are
+    distinguished by ``code.text`` and a queryable ``meta.tag`` (``sleep-nap``
+    vs ``sleep-main``) rather than by resource type, so a client can filter
+    either way without a second code system. Note: at Open Wearables 0.6.3,
+    Apple-sourced sessions never set ``is_nap`` — absence of naps for an Apple
+    user is expected, not a mapping gap.
+
+    Expected input keys (SleepSession): ``start_time``, ``end_time``,
+    ``duration_seconds`` (and/or ``sleep_duration_seconds``), optional
+    ``is_nap``, ``efficiency_percent``, ``id``. Returns None if the session
+    lacks a start/end or any usable duration.
+    """
+    start = session.get('start_time')
+    end = session.get('end_time')
+    if not start or not end:
+        return None
+
+    # Prefer asleep time; fall back to session span. Open Wearables reports
+    # seconds; LOINC 93832-4 is conventionally hours.
+    seconds = session.get('sleep_duration_seconds')
+    if seconds is None:
+        seconds = session.get('duration_seconds')
+    if seconds is None:
+        return None
+    try:
+        hours = round(float(seconds) / 3600.0, 3)
+    except (TypeError, ValueError):
+        return None
+
+    is_nap = bool(session.get('is_nap') or False)
+    session_id = session.get('id') or str(uuid.uuid4())
+
+    obs: dict[str, Any] = {
+        'resourceType': 'Observation',
+        'status': 'final',
+        'effectivePeriod': {'start': start, 'end': end},
+        'subject': {'reference': patient_ref},
+        'device': {'display': f'{provider} via Open Wearables'},
+        'identifier': [{
+            'system': f'{source_base_url}/sleep-session',
+            'value': str(session_id),
+        }],
+        'code': {
+            'coding': [{
+                'system': 'http://loinc.org',
+                'code': '93832-4',
+                'display': 'Sleep duration',
+            }],
+            'text': 'Nap duration' if is_nap else 'Sleep duration',
+        },
+        'category': [{'coding': [_CATEGORY_CODING['sleep']]}],
+        'valueQuantity': {
+            'value': hours,
+            'unit': 'h',
+            'system': 'http://unitsofmeasure.org',
+            'code': 'h',
+        },
+        'meta': {
+            'source': source_base_url,
+            'tag': [
+                {
+                    'system': 'https://healthclaw.io/tags',
+                    'code': 'wearable-sourced',
+                    'display': 'Wearable-sourced observation',
+                },
+                {
+                    'system': 'https://healthclaw.io/tags/sleep',
+                    'code': 'sleep-nap' if is_nap else 'sleep-main',
+                    'display': 'Nap' if is_nap else 'Main sleep',
+                },
+            ],
+        },
+    }
+
+    efficiency = session.get('efficiency_percent')
+    if efficiency is not None:
+        try:
+            obs['component'] = [{
+                'code': {'coding': [{
+                    'system': 'http://loinc.org',
+                    'code': '93831-6',
+                    'display': 'Sleep efficiency',
+                }], 'text': 'Sleep efficiency'},
+                'valueQuantity': {
+                    'value': round(float(efficiency), 1), 'unit': '%',
+                    'system': 'http://unitsofmeasure.org', 'code': '%',
+                },
+            }]
+        except (TypeError, ValueError):
+            pass
+
+    return obs
+
+
 def samples_to_bundle(
     samples: list[dict[str, Any]],
     *,
