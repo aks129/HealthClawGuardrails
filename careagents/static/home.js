@@ -95,4 +95,16 @@
     else prompt("Send this code to the CareAgents bot with /start:", res.d.code);
     $("tg-state").textContent = "pending — finish in Telegram";
   });
+
+  // --- iMessage surface ---
+  const im = $("im-surface");
+  if (im) im.addEventListener("click", async () => {
+    const firstAgent = document.querySelector(".agent-card");
+    if (!firstAgent) { alert("Create an agent first, then connect iMessage."); return; }
+    const agentId = new URL(firstAgent.href).searchParams.get("agent");
+    const res = await post("/api/surfaces/imessage", { agent_id: agentId });
+    if (!res.ok) return alert(res.d.error || "Failed");
+    $("im-state").textContent = "pending — text to finish";
+    prompt(res.d.instructions || "Text this code to connect:", "care " + res.d.code);
+  });
 })();

@@ -107,7 +107,8 @@ def cfg():
                        "OPENAI_API_KEY": "k",
                        "HEALTHCLAW_MINT_SECRET": "mint-secret",
                        "FASTEN_PUBLIC_KEY": "pub123",
-                       "CARE_TELEGRAM_BOT": "carebot"})
+                       "CARE_TELEGRAM_BOT": "carebot",
+                       "CARE_IMESSAGE_HANDLE": "+15550001111"})
 
 
 @pytest.fixture
@@ -362,6 +363,67 @@ def test_telegram_connect_and_bind_handshake(app, svc, monkeypatch, cfg):
     assert bind.post("/api/surfaces/telegram/bind",
                      json={"code": "care_bogus", "chat_id": 1},
                      headers={"X-Internal-Secret": cfg.mint_secret}).status_code == 404
+
+
+def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
+    """iMessage runs the message loop in careagents itself: connect (get a
+    code + handle) → relay binds the sender handle → relay forwards an inbound
+    message and gets the agent's reply. Both server-to-server hops are
+    mint-secret gated; the agent turn is faked (no LLM/network)."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "Iris", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    r = c.post("/api/surfaces/imessage", json={"agent_id": agent})
+    assert r.status_code == 200
+    body = r.get_json()
+    code = body["code"]
+    assert body["handle"] == "+15550001111" and code in body["instructions"]
+
+    relay = app.test_client()
+    hdrs = {"X-Internal-Secret": cfg.mint_secret}
+    # bind requires the mint secret
+    assert relay.post("/api/surfaces/imessage/bind",
+                      json={"code": code, "handle": "+15559998888"}
+                      ).status_code == 403
+    assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
+                      json={"code": code, "handle": "+15559998888"}
+                      ).status_code == 200
+    assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
+                      json={"code": "bogus", "handle": "+1"}
+                      ).status_code == 404
+
+    # inbound: fake the agent turn, assert the reply is relayed back
+    monkeypatch.setattr("careagents.app.run_turn_to_message",
+                        lambda *a, **k: "Your last A1c was 6.1% — in range.")
+    assert relay.post("/api/surfaces/imessage/inbound",
+                      json={"handle": "+15559998888", "text": "how's my a1c?"}
+                      ).status_code == 403  # needs mint secret
+    ok = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                    json={"handle": "+15559998888", "text": "how's my a1c?"})
+    assert ok.status_code == 200
+    assert "6.1%" in ok.get_json()["reply"]
+    # an unbound handle is not routed (don't answer strangers)
+    assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                      json={"handle": "+1000", "text": "hi"}
+                      ).status_code == 404
+
+
+def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):
+    """run_turn_to_message turns a review card into a link back to the web app
+    (the human approval gate never happens inline in the thread)."""
+    from careagents import agent as agent_mod
+    from careagents.llm import LLMTurn, ToolCall
+    seq = iter([LLMTurn(tool_calls=[ToolCall("1", "start_intake_form", {})]),
+                LLMTurn(text="I've drafted your intake form.")])
+    monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: next(seq))
+    reply = agent_mod.run_turn_to_message(
+        cfg, FakeClient(), "ca-x", "sys", [], "fill my intake form",
+        origin="https://careagents.cloud", agent_id="agent_1")
+    assert "drafted your intake form" in reply
+    assert "https://careagents.cloud/review/agent_1/act-1" in reply
 
 
 # --- agent loop (unchanged contract) -----------------------------------------

@@ -183,3 +183,34 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             history.append({"role": "user", "content": (
                 "(system: tool budget reached — answer now with what you "
                 "have)")})
+
+
+def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
+                        history: list[dict], user_text: str,
+                        *, origin: str = "", agent_id: str = "") -> str:
+    """Run one turn and collapse the streamed UI events into a single plain
+    reply, for non-streaming surfaces (SMS / iMessage).
+
+    Review and PDF cards become links back to the web app — the human approval
+    gate always lives there, never inline in the message thread.
+    """
+    parts: list[str] = []
+    extras: list[str] = []
+    base = (origin or "").rstrip("/")
+    for ev in run_turn(cfg, hc, tenant, system, history, user_text):
+        kind = ev.get("type")
+        if kind == "text" and ev.get("text"):
+            parts.append(ev["text"])
+        elif kind == "error":
+            return ev.get("text") or "Something went wrong on our side."
+        elif kind == "card" and ev.get("kind") == "review":
+            aid = ev.get("action_id", "")
+            link = (f"{base}/review/{agent_id}/{aid}"
+                    if base and agent_id and aid else "")
+            extras.append(
+                "I've prepared a form for your review — approve each item "
+                + (f"here: {link}" if link else "in the CareAgents app."))
+        elif kind == "card" and ev.get("kind") == "pdf" and ev.get("url"):
+            extras.append(f"Your signed document is ready: {ev['url']}")
+    reply = "\n\n".join([*parts, *extras]).strip()
+    return reply or "…"

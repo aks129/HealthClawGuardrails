@@ -61,6 +61,10 @@ CARE_EMAIL_FROM=CareAgents <login@careagents.cloud>
 FASTEN_PUBLIC_KEY=
 # --- Telegram surface (bot username, no @) ---
 CARE_TELEGRAM_BOT=
+# --- iMessage surface (the handle the Mac-mini relay sends/receives on;
+#     empty = tile hidden). The relay runs deploy/careagents/imessage_relay.py
+#     on the Mac mini with CAREAGENTS_MINT_SECRET=<this mint secret>. ---
+CARE_IMESSAGE_HANDLE=
 
 # Provider: ANTHROPIC_API_KEY (claude-sonnet-5) takes precedence when set.
 # Otherwise the OpenAI-compatible fallback is used — works with OpenAI or,

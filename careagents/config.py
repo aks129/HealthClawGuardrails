@@ -49,6 +49,9 @@ class Config:
         self.fasten_public_key = e.get("FASTEN_PUBLIC_KEY", "")
         # Telegram deep-link target for surface binding.
         self.telegram_bot = e.get("CARE_TELEGRAM_BOT", "")
+        # iMessage handle (phone/email) the Mac-mini relay sends/receives on —
+        # shown to users as "text your agent here". Empty = surface hidden.
+        self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE", "")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
