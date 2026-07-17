@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Sign in — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card" id="auth-card">
+    <h1>Your health, your keys</h1>
+    <p class="setup-sub">Sign in with your face or fingerprint. No passwords —
+    a passkey lives on your device and can't be phished.</p>
+
+    <div id="err" class="form-error" hidden></div>
+
+    <!-- Step: passkey-first -->
+    <div id="step-start">
+      <button class="btn-primary btn-block" id="passkey-btn">
+        Sign in with a passkey</button>
+      <div class="or">or use your email</div>
+      <label class="field-label" for="email">Email</label>
+      <input class="field" id="email" type="email" inputmode="email"
+             autocomplete="email" placeholder="you@example.com" autofocus>
+      <button class="btn-secondary btn-block" id="email-btn">
+        Email me a code</button>
+    </div>
+
+    <!-- Step: code -->
+    <div id="step-code" hidden>
+      <p class="setup-sub">We sent a 6-digit code to <b id="code-email"></b>.</p>
+      <label class="field-label" for="code">Code</label>
+      <input class="field code-input" id="code" inputmode="numeric"
+             maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+      <button class="btn-primary btn-block" id="verify-btn">Continue</button>
+      <button class="linkish" id="back-btn">← use a different email</button>
+    </div>
+
+    <!-- Step: add passkey after first verify -->
+    <div id="step-passkey" hidden>
+      <span class="persona-emoji">🔐</span>
+      <h2 style="font-size:22px;margin:8px 0">Add a passkey</h2>
+      <p class="setup-sub">Set up Face ID / Touch ID so next time is one tap.</p>
+      <button class="btn-primary btn-block" id="add-passkey-btn">
+        Create passkey</button>
+      <button class="linkish" id="skip-passkey-btn">Skip for now →</button>
+    </div>
+  </div>
+</main>
+<script src="{{ url_for('static', filename='auth.js') }}"></script>
+{% endblock %}

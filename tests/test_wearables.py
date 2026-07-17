@@ -202,6 +202,101 @@ class TestSleepSessionMapper:
             provider='oura') is None
 
 
+class TestWearablesClientOWApi:
+    """The client must target Open Wearables' real API surface (reconciled
+    against 0.6.3 source): X-Open-Wearables-API-Key auth and the real paths.
+
+    HTTP is mocked with httpx.MockTransport — no live instance is contacted.
+    """
+
+    def _client(self, handler):
+        import httpx
+
+        from r6.wearables.client import WearablesClient
+        wc = WearablesClient(base_url='https://ow.test', api_key='k-123')
+        wc._client = lambda: httpx.Client(  # type: ignore[method-assign]
+            base_url='https://ow.test',
+            transport=httpx.MockTransport(handler),
+            headers=wc._headers())
+        return wc
+
+    def test_uses_x_open_wearables_api_key_header(self):
+        seen = {}
+
+        def handler(request):
+            import httpx
+            seen['auth'] = request.headers.get('X-Open-Wearables-API-Key')
+            seen['bearer'] = request.headers.get('Authorization')
+            return httpx.Response(200, json=[])
+        self._client(handler).list_providers()
+        assert seen['auth'] == 'k-123'
+        assert seen['bearer'] is None  # not Bearer
+
+    def test_list_providers_hits_oauth_providers(self):
+        seen = {}
+
+        def handler(request):
+            import httpx
+            seen['path'] = request.url.path
+            return httpx.Response(200, json=[{'name': 'oura'}])
+        out = self._client(handler).list_providers()
+        assert seen['path'] == '/api/v1/oauth/providers'
+        assert out == [{'name': 'oura'}]
+
+    def test_fetch_deltas_hits_timeseries_and_normalizes(self):
+        seen = {}
+
+        def handler(request):
+            import httpx
+            seen['path'] = request.url.path
+            seen['types'] = request.url.params.get_list('types')
+            return httpx.Response(200, json=[
+                {'type': 'oxygen_saturation', 'value': 98, 'unit': '%',
+                 'timestamp': '2026-07-15T10:00:00Z', 'id': 's1'},
+                {'type': 'heart_rate', 'value': 61, 'unit': 'bpm',
+                 'timestamp': '2026-07-15T10:01:00Z', 'id': 's2'},
+            ])
+        out = self._client(handler).fetch_deltas(
+            ow_user_id='u1', provider='oura', since=None, limit=200)
+        assert seen['path'] == '/api/v1/users/u1/timeseries'
+        assert 'oxygen_saturation' in seen['types']
+        # SeriesType aliased to our METRIC_MAP key; timestamp -> recorded_at
+        assert out[0]['kind'] == 'spo2'
+        assert out[0]['recorded_at'] == '2026-07-15T10:00:00Z'
+        assert out[0]['value'] == 98 and out[0]['sample_id'] == 's1'
+        assert out[1]['kind'] == 'heart_rate'
+
+    def test_fetch_sleep_sessions_hits_events_sleep(self):
+        seen = {}
+
+        def handler(request):
+            import httpx
+            seen['path'] = request.url.path
+            return httpx.Response(200, json=[{'id': 'z', 'is_nap': True}])
+        out = self._client(handler).fetch_sleep_sessions(
+            ow_user_id='u1', since=None)
+        assert seen['path'] == '/api/v1/users/u1/events/sleep'
+        assert out == [{'id': 'z', 'is_nap': True}]
+
+    def test_oauth_authorize_url_returns_auth_url(self):
+        def handler(request):
+            import httpx
+            assert request.url.path == '/api/v1/oauth/oura/authorize'
+            return httpx.Response(200, json={'auth_url': 'https://oura/x',
+                                             'state': 'abc'})
+        url = self._client(handler).oauth_authorize_url(
+            'oura', ow_user_id='u1', redirect_uri='https://cb')
+        assert url == 'https://oura/x'
+
+    def test_oauth_authorize_url_none_on_developer_auth_401(self):
+        def handler(request):
+            import httpx
+            return httpx.Response(401, json={'detail': 'developer auth'})
+        url = self._client(handler).oauth_authorize_url(
+            'oura', ow_user_id='u1')
+        assert url is None  # surfaces as "not configured", not a crash
+
+
 # ─────────────────────────────────────────────
 # Model tests
 # ─────────────────────────────────────────────

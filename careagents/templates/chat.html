@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ me.name }} — CareAgents{% endblock %}
+{% block bodyclass %}page-chat{% endblock %}
+{% block content %}
+<main class="chat-wrap">
+  <div class="chat-head">
+    <div class="chat-id">
+      <span class="chat-emoji">{{ persona.emoji }}</span>
+      <div>
+        <div class="chat-name">{{ me.name }}</div>
+        <div class="chat-sub">{{ persona.name }}</div>
+      </div>
+    </div>
+    <div class="chat-tools">
+      <a class="pill" href="/home">← hub</a>
+      <span class="pill pill-quiet" id="trust-pill" title="Live guardrail grade">…</span>
+    </div>
+  </div>
+
+  <div class="chat-log" id="log">
+    <div class="msg agent">
+      <p>Hi — I’m {{ me.name }}. I can read the health records in this space
+      (sample data for now), explain labs in plain language, check what
+      preventive care is due, and fill out your new-patient intake form —
+      though you’ll approve every line of that yourself.</p>
+      <p>What would you like to know?</p>
+    </div>
+    <div class="starters" id="starters">
+      <button type="button" class="starter">What do my labs say?</button>
+      <button type="button" class="starter">Any screenings I’m due for?</button>
+      <button type="button" class="starter">What medications am I on?</button>
+      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
+    </div>
+  </div>
+
+  <form class="chat-input" id="composer">
+    <input id="box" autocomplete="off" maxlength="2000"
+           placeholder="Ask {{ me.name }} anything about the records…">
+    <button class="btn-primary" id="send" type="submit">Send</button>
+  </form>
+</main>
+<script>window.CARE_AGENT = {{ agent_id|tojson }};</script>
+<script src="{{ url_for('static', filename='chat.js') }}"></script>
+{% endblock %}

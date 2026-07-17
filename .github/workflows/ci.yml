@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, master]
 
+# Least privilege: every job here only reads the repo (tests, lint, gitleaks,
+# audits). No job writes contents, comments, or uploads results.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
