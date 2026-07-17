@@ -137,14 +137,13 @@ self-tenants internally and returns 200 at Grade A (503 otherwise):
 curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
 ```
 
-All seven properties pass, including error fidelity — the deployment tells an
-agent the truth on the failure paths (unknown search parameters and unsupported
-modifiers are rejected or flagged, never silently swallowed), not just the happy
-path. The same harness runs against the Flask test client as a **CI baseline**
-(`tests/test_guardrail_conformance.py`), so grade movement is explicit rather
-than hidden. `--json` emits a machine-readable report; `--mcp-url` also probes
-MCP `tools/call` error signaling. For an authenticated MCP deployment, set
-`MCP_AUTH_TOKEN` or pass `--mcp-auth-token`. Library API:
+The local FHIR profile is Grade A: unsupported local-search inputs are rejected
+or reported according to `Prefer: handling`, and every failure path is audited.
+The same harness runs against the Flask test client as a **CI baseline**
+(`tests/test_guardrail_conformance.py`). `--json` emits a machine-readable
+report; `--mcp-url` additionally grades MCP `tools/call` error signaling as a
+separate profile. For an authenticated MCP deployment, set `MCP_AUTH_TOKEN` or
+pass `--mcp-auth-token`. Library API:
 `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
 
 ## Install as a Claude Plugin
@@ -327,6 +326,14 @@ cd e2e && npm run test:ui        # interactive UI mode
 | `/r6/fhir/oauth/*` | * | OAuth 2.1 + PKCE + SMART discovery |
 | `/r6/fhir/{type}/{id}/$curatr-evaluate` | GET | Evaluate resource data quality (Curatr) |
 | `/r6/fhir/{type}/{id}/$curatr-apply-fix` | POST | Apply patient-approved fixes with Provenance |
+
+Local search accepts the parameters advertised by `/r6/fhir/metadata`.
+Unknown parameters default to lenient handling (a bounded
+`search.mode="outcome"` warning); `Prefer: handling=strict` returns a 400
+`OperationOutcome`. Unsupported modifiers and malformed supported values always
+return 400. `_count=0` and `_summary=count` are count-only searches. Self links
+contain exactly the applied, URL-encoded parameters, and audit output never
+echoes submitted filter values or arbitrary parameter names.
 
 ## Upstream Proxy
 

@@ -56,7 +56,7 @@ at the HBO-backed deployment:
 ```bash
 python scripts/guardrail_conformance.py --base-url https://<deployment> \
   --tenant <hbo-tenant> --step-up-token <token>
-# → Current baseline Grade B (6/7): the original six pass; Error Fidelity is F
+# → Local FHIR profile Grade A (7/7), including Error Fidelity
 ```
 
 A partner (or a regulator) can run it on synthetic data and see exactly which

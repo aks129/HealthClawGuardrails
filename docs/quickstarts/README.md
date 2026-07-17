@@ -60,7 +60,8 @@ stack. Everything runs against the synthetic demo tenant.
    > Run the guardrail conformance check and show me the grade.
 
    (Returns a live A–F scorecard proving PHI redaction, audit, step-up,
-   human-in-the-loop, tenant isolation, and disclaimers are all active.)
+   human-in-the-loop, tenant isolation, disclaimers, and error fidelity are
+   active.)
 
 8. **Show that writes are gated**
    > Try to write an observation to the record.

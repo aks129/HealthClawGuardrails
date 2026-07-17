@@ -57,6 +57,31 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         column["name"]: column for column in schema.get_columns("r6_resources")
     }
     assert resource_columns["id"]["type"].length == 255
+    assert "outcome_detail_code" in {
+        column["name"] for column in schema.get_columns("audit_events")
+    }
+    engine.dispose()
+
+
+def test_audit_outcome_detail_migration_is_reversible(tmp_path):
+    url = f"sqlite:///{tmp_path / 'audit-outcome.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    command.upgrade(config, "head")
+    assert "outcome_detail_code" in {
+        column["name"] for column in inspect(engine).get_columns("audit_events")
+    }
+
+    command.downgrade(config, "0002_current_contract")
+    assert "outcome_detail_code" not in {
+        column["name"] for column in inspect(engine).get_columns("audit_events")
+    }
+
+    command.upgrade(config, "head")
+    assert "outcome_detail_code" in {
+        column["name"] for column in inspect(engine).get_columns("audit_events")
+    }
     engine.dispose()
 
 
@@ -92,7 +117,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0002_current_contract"
+    assert revision == "0003_audit_outcome_detail"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -245,11 +270,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0002_current_contract"
+    assert revision == "0003_audit_outcome_detail"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0002_current_contract"
+    assert upgrade_database(engine) == "0003_audit_outcome_detail"
 
 
 def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
@@ -288,7 +313,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0002_current_contract"
+    assert revision == "0003_audit_outcome_detail"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -331,9 +356,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0002_current_contract"
+        assert revision == "0003_audit_outcome_detail"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0002_current_contract"  # idempotent
+        assert upgrade_database(engine) == "0003_audit_outcome_detail"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
