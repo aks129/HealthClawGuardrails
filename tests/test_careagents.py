@@ -32,6 +32,20 @@ def test_production_config_requires_every_secret():
     assert ok.provider == "openai" and ok.rp_id == "careagents.cloud"
 
 
+def test_anthropic_oauth_token_selects_anthropic_provider():
+    # An OAuth token (Claude subscription / OpenClaw) is a valid LLM credential
+    # and selects the Anthropic provider without an API key.
+    dev = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                      "HEALTHCLAW_MINT_SECRET": "m",
+                      "ANTHROPIC_OAUTH_TOKEN": "oat-abc"})
+    assert dev.provider == "anthropic" and dev.anthropic_oauth_token == "oat-abc"
+    prod = Config(env={"CARE_ENV": "production",
+                       "CARE_SESSION_SECRET": "x" * 32,
+                       "HEALTHCLAW_MINT_SECRET": "m", "RESEND_API_KEY": "r",
+                       "ANTHROPIC_OAUTH_TOKEN": "oat-abc"})
+    assert prod.provider == "anthropic"  # satisfies the prod LLM-cred gate
+
+
 def test_every_persona_shares_the_safety_core():
     for key in PERSONAS:
         p = system_prompt("Juniper", key)
