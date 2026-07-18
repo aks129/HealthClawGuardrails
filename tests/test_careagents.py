@@ -95,6 +95,9 @@ class FakeClient:
     def fasten_connect_url(self, tenant):
         return f"{self.base}/connect/{tenant}"
 
+    def wearables_connect_url(self, tenant, provider):
+        return f"{self.base}/wearables/oauth/start?provider={provider}&tenant_id={tenant}"
+
     def conformance_badge(self):
         return {"message": "A (7/7)"}
 
@@ -292,6 +295,51 @@ def test_sample_connection_agent_and_chat_gate(app, svc, monkeypatch):
     # chat api rejects an agent that isn't the account's
     assert c.post("/api/chat", json={"message": "hi", "agent_id": "nope"}
                   ).status_code == 404
+
+
+def test_connector_catalog_lists_apple_health(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    cat = c.get("/api/connections/catalog").get_json()["connectors"]
+    by_id = {m["id"]: m for m in cat}
+    assert by_id["sample"]["tier"] == "live"
+    assert by_id["fasten"]["tier"] == "live"  # fasten key set in the fixture
+    # wearable is "coming soon" until the sidecar is wired, but Apple Health is
+    # visible as a provider so the demo shows it's supported.
+    assert by_id["wearable"]["tier"] == "soon"
+    labels = {p["label"] for p in by_id["wearable"]["providers"]}
+    assert "Apple Health" in labels
+    assert by_id["healthex"]["tier"] == "soon"
+
+
+def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
+    from careagents import connectors
+    from careagents.app import create_app
+    from careagents.config import Config
+    # default (no CARE_WEARABLES_ENABLED) → soon, no client call
+    assert connectors.start("wearable", "apple", svc.cfg, FakeClient()) == {
+        "soon": True}
+    # enabled → live connect URL routed through HealthClaw wearables OAuth
+    cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                       "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
+                       "CARE_WEARABLES_ENABLED": "1"})
+    a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
+    a.config["TESTING"] = True
+    c = a.test_client()
+    _login(c, svc, monkeypatch, email="wear@example.com")
+    r = c.post("/api/connections/wearable", json={"provider": "apple"})
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["status"] == "pending"
+    assert "/wearables/oauth/start?provider=apple" in d["connect_url"]
+
+
+def test_coming_soon_connector_records_intent_not_error(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.post("/api/connections/healthex")
+    assert r.status_code == 200 and r.get_json()["soon"] is True
+    assert c.post("/api/connections/nonsense").status_code == 404
 
 
 def test_agent_requires_own_connection(app, svc, monkeypatch):

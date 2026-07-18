@@ -52,6 +52,11 @@ class Config:
         # iMessage handle (phone/email) the Mac-mini relay sends/receives on —
         # shown to users as "text your agent here". Empty = surface hidden.
         self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE", "")
+        # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
+        # where the sidecar + its OAuth developer auth are actually wired.
+        # Otherwise Apple Health / wearables show as a "coming soon" tile.
+        self.wearables_enabled = e.get(
+            "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")

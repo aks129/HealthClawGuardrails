@@ -21,6 +21,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, new_binding_code)
+from careagents import connectors
 from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
@@ -88,7 +89,8 @@ def create_app(config: Config | None = None,
             connections=data["connections"], agents=data["agents"],
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
             telegram_bot=cfg.telegram_bot,
-            imessage_handle=cfg.imessage_handle)
+            imessage_handle=cfg.imessage_handle,
+            catalog=connectors.catalog(cfg))
 
     @app.post("/logout")
     def logout():
@@ -166,32 +168,35 @@ def create_app(config: Config | None = None,
 
     # --- connections ---------------------------------------------------------
 
-    @app.post("/api/connections/sample")
+    @app.get("/api/connections/catalog")
     @login_required
-    def add_sample_connection():
-        acct = current_account()
-        tenant = hc.new_tenant_id()
-        try:
-            hc.seed(tenant)
-        except HealthClawError:
-            return jsonify({"error": "records service unavailable"}), 503
-        cid = svc.add_connection(acct.id, "sample", tenant, "Sample records",
-                                 status="active", provider="CareAgents sample")
-        return jsonify({"id": cid, "status": "active"})
+    def connections_catalog():
+        return jsonify({"connectors": connectors.catalog(cfg)})
 
-    @app.post("/api/connections/fasten")
+    @app.post("/api/connections/<connector_id>")
     @login_required
-    def add_fasten_connection():
+    def add_connection(connector_id):
         acct = current_account()
-        if not cfg.fasten_public_key:
-            return jsonify({"error": "real-records connect isn't configured "
-                                     "on this deployment yet"}), 503
-        tenant = hc.new_tenant_id()
-        cid = svc.add_connection(acct.id, "fasten", tenant,
-                                 "My health provider", status="pending",
-                                 provider="Connecting…")
-        url = hc.fasten_connect_url(tenant)
-        return jsonify({"id": cid, "connect_url": url, "status": "pending"})
+        body = request.get_json(silent=True) or {}
+        plan = connectors.start(connector_id, body.get("provider"), cfg, hc)
+        if plan.get("error"):
+            return jsonify({"error": plan["error"]}), plan.get("code", 400)
+        if plan.get("soon"):
+            # Not live yet — acknowledge intent (never a dead-end button).
+            return jsonify({"soon": True, "connector": connector_id})
+        tenant = plan["tenant"]
+        if plan.get("seed"):
+            try:
+                hc.seed(tenant)
+            except HealthClawError:
+                return jsonify({"error": "records service unavailable"}), 503
+        cid = svc.add_connection(acct.id, connector_id, tenant, plan["label"],
+                                 status=plan["status"],
+                                 provider=plan.get("provider"))
+        out = {"id": cid, "status": plan["status"]}
+        if plan.get("connect_url"):
+            out["connect_url"] = plan["connect_url"]
+        return jsonify(out)
 
     @app.get("/api/connections/<conn_tenant>/poll")
     @login_required

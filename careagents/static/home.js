@@ -10,23 +10,32 @@
     return { ok: r.ok, d: await r.json().catch(() => ({})) };
   }
 
-  // --- add sample connection ---
-  $("add-sample").addEventListener("click", async (e) => {
-    e.target.disabled = true; e.target.textContent = "Creating…";
-    const res = await post("/api/connections/sample");
-    if (res.ok) location.reload();
-    else { e.target.disabled = false; e.target.textContent = "Add sample records"; alert(res.d.error || "Failed"); }
-  });
-
-  // --- connect real records (Fasten, verified provider) ---
-  $("add-fasten").addEventListener("click", async (e) => {
-    e.target.disabled = true;
-    const res = await post("/api/connections/fasten");
-    e.target.disabled = false;
-    if (!res.ok) return alert(res.d.error || "Real-records connect isn't set up here yet.");
-    // open the provider picker; the pending card (after reload) polls to active
-    window.open(res.d.connect_url, "_blank", "noopener");
-    location.reload();
+  // --- connector marketplace: one handler for every tile ---
+  document.querySelectorAll(".connector-tile").forEach((tile) => {
+    tile.addEventListener("click", async () => {
+      const id = tile.dataset.connector;
+      if (tile.dataset.soon) {
+        await post("/api/connections/" + id);  // records intent, never errors
+        tile.querySelector(".connector-tag").textContent = "we'll let you know";
+        return;
+      }
+      let body = {};
+      if (tile.dataset.providers) {
+        const provs = JSON.parse(tile.dataset.providers);
+        const pick = prompt("Which do you use?\n" +
+          provs.map((p, i) => `${i + 1}. ${p.label}`).join("\n"), "1");
+        const idx = parseInt(pick, 10) - 1;
+        if (isNaN(idx) || !provs[idx]) return;
+        body.provider = provs[idx].id;
+      }
+      tile.disabled = true;
+      const res = await post("/api/connections/" + id, body);
+      tile.disabled = false;
+      if (!res.ok) return alert(res.d.error || "Couldn't connect that source.");
+      if (res.d.soon) { tile.querySelector(".connector-tag").textContent = "we'll let you know"; return; }
+      if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
+      location.reload();
+    });
   });
 
   // Poll pending connection cards until active.

@@ -186,6 +186,15 @@ class HealthClawClient:
         by TEFCA/mode and only the HealthClaw page has the verified key."""
         return f"{self.base}/connect/{tenant}"
 
+    def wearables_connect_url(self, tenant: str, provider: str) -> str:
+        """Route to HealthClaw's wearables OAuth kickoff for this tenant +
+        provider (Apple Health, Oura, Whoop, …). HealthClaw owns the Open
+        Wearables handshake; if the sidecar isn't wired it returns a clear
+        503 there rather than leaking any credential."""
+        from urllib.parse import urlencode
+        q = urlencode({"provider": provider, "tenant_id": tenant})
+        return f"{self.base}/wearables/oauth/start?{q}"
+
     def tenant_has_records(self, tenant: str) -> bool:
         """Poll for whether real records have landed (pending → active)."""
         try:
