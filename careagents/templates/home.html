@@ -57,12 +57,23 @@
       </div>
       {% endfor %}
     </div>
-    <div class="add-row">
-      <button type="button" class="btn-secondary" id="add-sample">Add sample records</button>
-      <button type="button" class="btn-primary" id="add-fasten">Connect real records</button>
-      <span class="add-note">Real records connect through your provider’s own
-        login (verified). We never see your password.</span>
+    <h3 class="add-heading">Connect records</h3>
+    <div class="marketplace" id="marketplace">
+      {% for m in catalog %}
+      <button type="button" class="connector-tile tier-{{ m.tier }}"
+              data-connector="{{ m.id }}"
+              {% if m.get('providers') %}data-providers='{{ m.providers|tojson }}'{% endif %}
+              {% if m.tier == 'soon' %}data-soon="1"{% endif %}>
+        <span class="connector-emoji">{{ m.icon }}</span>
+        <span class="connector-label">{{ m.label }}</span>
+        <span class="connector-blurb">{{ m.blurb }}</span>
+        {% if m.tier == 'soon' %}<span class="connector-tag">{{ m.note or 'coming soon' }}</span>
+        {% elif m.tier == 'import' %}<span class="connector-tag">import</span>{% endif %}
+      </button>
+      {% endfor %}
     </div>
+    <p class="add-note">Verified provider &amp; wearable logins happen on the
+      provider’s own site — we never see your password.</p>
   </section>
 
   <!-- SURFACES -->

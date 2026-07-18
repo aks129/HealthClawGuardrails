@@ -309,7 +309,33 @@ h1 em { font-style: italic; color: var(--clay); }
 .empty { color: var(--ink-soft); font-size: 14px; padding: 8px 2px; }
 .add-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 16px; }
-.add-note { font-size: 12.5px; color: var(--ink-soft); max-width: 340px; }
+.add-note { font-size: 12.5px; color: var(--ink-soft); max-width: 340px;
+  margin-top: 14px; }
+
+/* --- connector marketplace ------------------------------------------------ */
+.add-heading { font-family: "Fraunces", serif; font-size: 16px; font-weight: 560;
+  color: var(--ink-soft); margin: 22px 0 12px; }
+.marketplace { display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.connector-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  text-align: left; background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 16px; padding: 16px 16px 14px; cursor: pointer; font: inherit;
+  color: var(--ink); transition: border-color .12s ease, transform .12s ease,
+  box-shadow .12s ease; position: relative; }
+.connector-tile:hover { border-color: var(--clay);
+  transform: translateY(-2px); box-shadow: var(--shadow); }
+.connector-tile:disabled { opacity: .6; cursor: wait; transform: none; }
+.connector-emoji { font-size: 24px; }
+.connector-label { font-weight: 600; font-size: 15px; }
+.connector-blurb { font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
+.connector-tag { margin-top: 4px; font-size: 11px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; border-radius: 999px;
+  padding: 3px 9px; }
+.tier-live .connector-tag { color: var(--sage); background: #E9F0E7; }
+.tier-import .connector-tag { color: var(--clay-deep); background: #F6E6D9; }
+.tier-soon { border-style: dashed; }
+.tier-soon .connector-tag { color: var(--ink-soft); background: var(--paper); }
 .surface-row { display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .surface { background: var(--card); border: 1px solid var(--hairline);
