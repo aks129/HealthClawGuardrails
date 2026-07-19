@@ -2841,6 +2841,33 @@ def mcp_app_compiled_truth(resource_type, resource_id):
     return resp
 
 
+@r6_blueprint.route('/mcp-apps/care-gaps/', methods=['GET'])
+@r6_blueprint.route('/mcp-apps/care-gaps', methods=['GET'])
+def mcp_app_care_gaps():
+    """
+    MCP App: Preventive Care Gaps.
+
+    Renders the Patient/$care-gaps Parameters response (summary buckets,
+    per-rule cards, consumer lines, disclaimer). Linked from the
+    `care_gaps` MCP tool via `_meta.ui.resourceUri`. Layout ported from
+    SmartHealthConnect's care-gaps view (archived); data path rebuilt on
+    the engine's own operation so redaction + audit apply by construction.
+    """
+    tenant_id = (
+        request.headers.get('X-Tenant-Id')
+        or request.args.get('tenant_id')
+        or ''
+    )
+    html = render_template(
+        'mcp_apps/care_gaps.html',
+        tenant_id=tenant_id,
+    )
+    resp = Response(html, mimetype='text/html')
+    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
+    resp.headers['X-MCP-App'] = 'care-gaps'
+    return resp
+
+
 @r6_blueprint.route('/mcp-apps/wearables/', methods=['GET'])
 @r6_blueprint.route('/mcp-apps/wearables', methods=['GET'])
 def mcp_app_wearables():

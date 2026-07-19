@@ -67,3 +67,37 @@ def test_care_gaps_unknown_patient_is_ok_but_indeterminate(client, tenant_header
     summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
     # No patient found -> no birthDate/gender available -> indeterminate/not-run rules
     assert summary["total"] >= 0
+
+
+# ─────────────────────────────────────────────
+# MCP App page (embedded HTML surface)
+# ─────────────────────────────────────────────
+
+class TestCareGapsMcpApp:
+    """The care-gaps MCP App page — layout ported from SmartHealthConnect
+    (archived), data path rebuilt on the engine's own $care-gaps operation."""
+
+    def test_serves_html_with_mcp_app_profile(self, client):
+        resp = client.get('/r6/fhir/mcp-apps/care-gaps/?tenant_id=desktop-demo')
+        assert resp.status_code == 200
+        assert 'text/html' in resp.headers['Content-Type']
+        assert 'profile=mcp-app' in resp.headers['Content-Type']
+        assert resp.headers.get('X-MCP-App') == 'care-gaps'
+        body = resp.get_data(as_text=True)
+        assert '<title>Care Gaps' in body
+        assert 'desktop-demo' in body
+
+    def test_page_reads_through_the_guarded_operation_only(self, client):
+        """The page's only data path is the engine's $care-gaps operation —
+        no direct table reads, no alternate endpoints (the SHC failure mode)."""
+        body = client.get('/r6/fhir/mcp-apps/care-gaps/').get_data(as_text=True)
+        assert '/r6/fhir/Patient/$care-gaps' in body
+        # no other fetch targets appear in the page
+        import re
+        fetches = re.findall(r"fetch\('([^']+)'", body)
+        assert fetches == ['/r6/fhir/Patient/$care-gaps']
+
+    def test_no_tenant_renders_empty_shell(self, client):
+        resp = client.get('/r6/fhir/mcp-apps/care-gaps/')
+        assert resp.status_code == 200
+        assert 'Enter a tenant id' in resp.get_data(as_text=True)

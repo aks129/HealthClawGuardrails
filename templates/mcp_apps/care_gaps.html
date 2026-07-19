@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Care Gaps · HealthClaw</title>
+<meta name="mcp-app" content="care-gaps">
+<!-- Layout ported from SmartHealthConnect's care-gaps MCP-App view
+     (aks129/SmartHealthConnect, archived) — rebuilt on the engine's own
+     $care-gaps operation so redaction + audit + tenant scoping apply by
+     construction. Statuses follow the engine (due / up_to_date /
+     not_applicable / indeterminate), not SHC's overdue/completed. -->
+<style>
+  :root{
+    --bg:#0b0f14;--panel:#0f141b;--ink:#dbe3ef;--dim:#7b8496;
+    --border:#1c242f;--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;
+    --red:#f87171;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px}
+  header{display:flex;align-items:center;justify-content:space-between;
+    padding-bottom:16px;border-bottom:1px solid var(--border);
+    margin-bottom:20px;flex-wrap:wrap;gap:12px}
+  .title{font-size:18px;font-weight:600}
+  .title small{display:block;color:var(--dim);font-size:12px;margin-top:2px;
+    font-family:var(--mono)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+    gap:12px;margin-bottom:20px}
+  .stat{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:14px;text-align:center}
+  .stat .num{font-size:26px;font-weight:700;font-family:var(--mono)}
+  .stat .label{color:var(--dim);font-size:11.5px;margin-top:2px;
+    text-transform:uppercase;letter-spacing:.04em}
+  .stat.due .num{color:var(--amber)}
+  .stat.ok .num{color:var(--green)}
+  .stat.na .num{color:var(--dim)}
+  .card{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:16px;margin-bottom:12px}
+  .card h3{margin:0 0 6px;font-size:15px;font-weight:600}
+  .card .note{color:var(--dim);font-size:13px}
+  .pill{display:inline-block;padding:3px 10px;border-radius:999px;
+    font-size:11.5px;border:1px solid var(--border);background:var(--panel);
+    font-family:var(--mono);margin-right:6px}
+  .pill.due{color:var(--amber);border-color:rgba(251,191,36,.35)}
+  .pill.up_to_date{color:var(--green);border-color:rgba(52,211,153,.35)}
+  .pill.not_applicable,.pill.indeterminate{color:var(--dim)}
+  .consumer{background:rgba(34,211,238,.05);border:1px solid
+    rgba(34,211,238,.2);border-radius:8px;padding:14px 16px;margin:20px 0}
+  .consumer h3{margin:0 0 8px;font-size:13px;color:var(--cyan);
+    text-transform:uppercase;letter-spacing:.05em}
+  .consumer li{margin:4px 0}
+  .empty{color:var(--dim);padding:24px;text-align:center}
+  .err-box{color:var(--red);padding:12px;background:rgba(248,113,113,.06);
+    border:1px solid rgba(248,113,113,.2);border-radius:6px;margin:0 0 16px}
+  .tenant-input{background:var(--panel);color:var(--ink);
+    border:1px solid var(--border);padding:6px 10px;border-radius:6px;
+    font-family:var(--mono);font-size:12px;min-width:180px}
+  button{background:transparent;color:var(--ink);border:1px solid
+    var(--border);padding:7px 14px;border-radius:6px;font-size:12.5px;
+    cursor:pointer;font-family:inherit}
+  button:hover{border-color:var(--cyan);color:var(--cyan)}
+  .footer-note{color:var(--dim);font-size:11.5px;font-family:var(--mono);
+    margin-top:24px;padding-top:16px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="title">
+    Preventive Care Gaps
+    <small id="tenant-label">tenant: —</small>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <input class="tenant-input" id="tenant-input"
+           placeholder="tenant id" value="{{ tenant_id }}">
+    <button id="load-btn">Load</button>
+  </div>
+</header>
+
+<div id="err" class="err-box" hidden></div>
+<div id="content"><div class="empty">Enter a tenant id and press Load.</div></div>
+
+<p class="footer-note">Decision support from your own connected records
+  (USPSTF/ACIP/ADA guideline logic) — not a diagnosis or a directive.
+  Screening decisions belong with you and your clinician. Every read is
+  redacted and audited by the HealthClaw guardrail layer.</p>
+</div>
+
+<script>
+  const TENANT_ID = {{ tenant_id | tojson }};
+  const errEl = document.getElementById('err');
+  const contentEl = document.getElementById('content');
+
+  function param(parameters, name){
+    const p = (parameters.parameter || []).find(x => x.name === name);
+    if(!p) return null;
+    try { return JSON.parse(p.valueString); } catch { return p.valueString; }
+  }
+
+  function esc(s){
+    return String(s ?? '').replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function render(parameters){
+    const summary = param(parameters, 'summary') || {};
+    const consumer = param(parameters, 'consumerSummary') || {};
+    const detail = param(parameters, 'detail') || [];
+    const stats = `
+      <div class="stats">
+        <div class="stat due"><div class="num">${summary.due || 0}</div>
+          <div class="label">Due</div></div>
+        <div class="stat ok"><div class="num">${summary.up_to_date || 0}</div>
+          <div class="label">Up to date</div></div>
+        <div class="stat na"><div class="num">${summary.not_applicable || 0}</div>
+          <div class="label">Not applicable</div></div>
+        <div class="stat na"><div class="num">${summary.indeterminate || 0}</div>
+          <div class="label">Needs data</div></div>
+      </div>`;
+    const cards = (detail || []).map(r => `
+      <div class="card">
+        <h3>${esc(r.title || r.rule_id || 'Check')}</h3>
+        <div><span class="pill ${esc(r.status)}">${esc(
+          (r.status || '').replace(/_/g, ' '))}</span></div>
+        ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
+      </div>`).join('');
+    const lines = (consumer.lines || []).map(l => `<li>${esc(l)}</li>`).join('');
+    const consumerBox = lines ? `
+      <div class="consumer"><h3>In plain terms</h3><ul>${lines}</ul>
+        ${consumer.note ? `<div class="note">${esc(consumer.note)}</div>` : ''}
+      </div>` : '';
+    contentEl.innerHTML = stats + consumerBox +
+      (cards || '<div class="empty">No screenings evaluated.</div>');
+  }
+
+  async function load(){
+    const tenant = document.getElementById('tenant-input').value.trim();
+    if(!tenant){ return; }
+    document.getElementById('tenant-label').textContent = 'tenant: ' + tenant;
+    errEl.hidden = true;
+    contentEl.innerHTML = '<div class="empty">Loading…</div>';
+    try{
+      const res = await fetch('/r6/fhir/Patient/$care-gaps', {
+        method: 'POST',
+        headers: {'X-Tenant-Id': tenant, 'Content-Type': 'application/json'},
+        body: '{}',
+      });
+      if(!res.ok){
+        throw new Error('care-gaps returned HTTP ' + res.status +
+          (res.status === 401 ? ' — this tenant requires a step-up token' : ''));
+      }
+      render(await res.json());
+    }catch(e){
+      errEl.textContent = e.message || 'Failed to load care gaps.';
+      errEl.hidden = false;
+      contentEl.innerHTML = '<div class="empty">—</div>';
+    }
+  }
+
+  document.getElementById('load-btn').addEventListener('click', load);
+  if(TENANT_ID){ load(); }
+</script>
+</body>
+</html>

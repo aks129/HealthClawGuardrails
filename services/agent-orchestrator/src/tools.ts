@@ -576,10 +576,10 @@ export class FHIRTools {
         name: "care_gaps",
         title: "Preventive Care Gaps",
         description:
-          "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive.",
+          "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
         tier: "read",
-        handler: ({ input, headers }) =>
-          this.careGaps(input.subject as string | undefined, headers),
+        handler: ({ input, headers, tenantId }) =>
+          this.careGaps(input.subject as string | undefined, headers, tenantId),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
@@ -1747,7 +1747,8 @@ export class FHIRTools {
 
   private async careGaps(
     subject: string | undefined,
-    headers: Record<string, string>
+    headers: Record<string, string>,
+    tenantId = ""
   ): Promise<Record<string, unknown>> {
     const params = new URLSearchParams();
     if (subject) params.set("subject", subject);
@@ -1760,7 +1761,18 @@ export class FHIRTools {
     if (!resp.ok) {
       return { error: `$care-gaps failed with status ${resp.status}` };
     }
-    return (await resp.json()) as Record<string, unknown>;
+    const result = (await resp.json()) as Record<string, unknown>;
+    // Embeddable review UI (same pattern as wearables / compiled-truth):
+    // MCP clients that understand `_meta.ui.resourceUri` render it inline.
+    result._meta = {
+      ui: {
+        resourceUri:
+          `${this.baseUrl}/mcp-apps/care-gaps/` +
+          `?tenant_id=${encodeURIComponent(tenantId)}`,
+        profile: "mcp-app",
+      },
+    };
+    return result;
   }
 
   // --- Curatr: patient-facing data quality tools ---
