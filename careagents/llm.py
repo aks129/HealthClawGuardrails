@@ -56,7 +56,15 @@ def complete(cfg, system: str, messages: list[dict], tools: list[dict]) -> LLMTu
 def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+    # An OAuth access token (Claude subscription / OpenClaw) authenticates as a
+    # Bearer token with the oauth beta header, instead of an x-api-key. The
+    # token is short-lived — refresh it out of band when it expires.
+    if getattr(cfg, "anthropic_oauth_token", ""):
+        client = anthropic.Anthropic(
+            auth_token=cfg.anthropic_oauth_token,
+            default_headers={"anthropic-beta": cfg.anthropic_oauth_beta})
+    else:
+        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
     a_tools = [{"name": t["name"], "description": t["description"],
                 "input_schema": t["parameters"]} for t in tools]
     a_messages = _to_anthropic_messages(messages)

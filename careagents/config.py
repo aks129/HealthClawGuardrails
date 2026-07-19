@@ -64,6 +64,13 @@ class Config:
         # LLM provider: Anthropic preferred; OpenAI-compatible fallback so the
         # product works before an Anthropic key is provisioned.
         self.anthropic_api_key = e.get("ANTHROPIC_API_KEY", "")
+        # Claude subscription / OpenClaw OAuth access token (Authorization:
+        # Bearer + oauth beta header) — an alternative to an API key. Short-
+        # lived, so refresh it out of band (e.g. from the Mac-mini OpenClaw
+        # credential) when it expires.
+        self.anthropic_oauth_token = e.get("ANTHROPIC_OAUTH_TOKEN", "")
+        self.anthropic_oauth_beta = e.get(
+            "ANTHROPIC_OAUTH_BETA", "oauth-2025-04-20")
         self.openai_api_key = e.get("OPENAI_API_KEY", "")
         self.openai_base = (e.get("OPENAI_BASE_URL")
                             or "https://api.openai.com/v1").rstrip("/")
@@ -83,10 +90,11 @@ class Config:
                     "CARE_SESSION_SECRET must be at least 32 characters")
             _require("HEALTHCLAW_MINT_SECRET", self.mint_secret,
                      "careagents mints tenant-bound tokens server-side")
-            if not (self.anthropic_api_key or self.openai_api_key):
+            if not (self.anthropic_api_key or self.anthropic_oauth_token
+                    or self.openai_api_key):
                 raise ConfigError(
-                    "an LLM key is required (ANTHROPIC_API_KEY preferred, "
-                    "OPENAI_API_KEY fallback)")
+                    "an LLM credential is required (ANTHROPIC_API_KEY or "
+                    "ANTHROPIC_OAUTH_TOKEN preferred, OPENAI_API_KEY fallback)")
             _require("RESEND_API_KEY", self.resend_api_key,
                      "email verification codes require a transactional sender")
         else:
@@ -94,4 +102,6 @@ class Config:
 
     @property
     def provider(self) -> str:
-        return "anthropic" if self.anthropic_api_key else "openai"
+        if self.anthropic_api_key or self.anthropic_oauth_token:
+            return "anthropic"
+        return "openai"
