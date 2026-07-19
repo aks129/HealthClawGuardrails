@@ -1092,6 +1092,37 @@ describe("Tool Execution Tests", () => {
     expect(url).toBe(`${BASE}/Patient/$care-gaps`);
   });
 
+  it("care_gaps attaches the MCP App resourceUri (same pattern as wearables)", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    const result = (await tools.executeTool(
+      "care_gaps",
+      {},
+      { "x-tenant-id": "t-app" }
+    )) as Record<string, unknown>;
+
+    const meta = result._meta as { ui?: { resourceUri?: string; profile?: string } };
+    expect(meta?.ui?.profile).toBe("mcp-app");
+    expect(meta?.ui?.resourceUri).toBe(
+      `${BASE}/mcp-apps/care-gaps/?tenant_id=t-app`
+    );
+  });
+
+  it("care_gaps failure carries no resourceUri (no UI over an error)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({}, 500));
+
+    const result = (await tools.executeTool(
+      "care_gaps",
+      {},
+      { "x-tenant-id": "t1" }
+    )) as Record<string, unknown>;
+
+    expect(result.error).toBeDefined();
+    expect(result._meta).toBeUndefined();
+  });
+
   // -- fhir.permission_evaluate --
 
   it("fhir.permission_evaluate posts to Permission/$evaluate", async () => {
