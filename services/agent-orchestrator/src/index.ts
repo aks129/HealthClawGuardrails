@@ -22,10 +22,12 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
+  McpError,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import crypto from "crypto";
 import { FHIRTools } from "./tools";
+import { executeMCPTool } from "./mcp-tool-result";
 
 const { version: SERVER_VERSION } = require("../package.json") as {
   version: string;
@@ -280,10 +282,7 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
       delete toolArgs._patientId;
     }
 
-    const result = await fhirTools.executeTool(name, toolArgs, toolHeaders);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return executeMCPTool(fhirTools, name, toolArgs, toolHeaders);
   });
 
   return server;
@@ -376,10 +375,18 @@ app.post("/mcp", async (req, res) => {
           });
         }
 
-        const toolName = params?.name as string;
-        const toolInput = (params?.arguments ?? {}) as Record<string, unknown>;
+        if (!params || typeof params !== "object" || Array.isArray(params)) {
+          return res.json({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: "Invalid tool call parameters" },
+          });
+        }
 
-        if (!toolName) {
+        const toolName = params.name as string;
+        const rawToolInput = params.arguments;
+
+        if (typeof toolName !== "string" || !toolName) {
           return res.json({
             jsonrpc: "2.0",
             id,
@@ -387,13 +394,28 @@ app.post("/mcp", async (req, res) => {
           });
         }
 
-        const result = await fhirTools.executeTool(toolName, toolInput, reqHeaders);
+        if (
+          rawToolInput !== undefined &&
+          (!rawToolInput || typeof rawToolInput !== "object" || Array.isArray(rawToolInput))
+        ) {
+          return res.json({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: "Tool arguments must be an object" },
+          });
+        }
+        const toolInput = (rawToolInput ?? {}) as Record<string, unknown>;
+
+        const result = await executeMCPTool(
+          fhirTools,
+          toolName,
+          toolInput,
+          reqHeaders
+        );
         return res.json({
           jsonrpc: "2.0",
           id,
-          result: {
-            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          },
+          result,
         });
       }
 
@@ -405,6 +427,13 @@ app.post("/mcp", async (req, res) => {
         });
     }
   } catch (error: unknown) {
+    if (error instanceof McpError) {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        error: { code: error.code, message: error.message },
+      });
+    }
     const detail = error instanceof Error ? error.message : "Unknown error";
     console.error("Streamable HTTP error for method:", method, "-", detail);
     return res.json({
@@ -508,7 +537,7 @@ app.post("/messages", async (req, res) => {
     return res.status(400).json({ error: "Invalid or expired session" });
   }
   session.lastActivity = Date.now();
-  await session.transport.handlePostMessage(req, res);
+  await session.transport.handlePostMessage(req, res, req.body);
 });
 
 // --- Legacy HTTP Bridge (for Python agent_client) ---

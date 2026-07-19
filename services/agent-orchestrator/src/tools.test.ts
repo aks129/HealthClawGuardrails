@@ -49,6 +49,16 @@ function fakeResponse(body: Record<string, unknown>, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     json: jest.fn().mockResolvedValue(body),
+    text: jest.fn().mockResolvedValue(JSON.stringify(body)),
+  };
+}
+
+function fakeTextResponse(body: string, status: number) {
+  return {
+    ok: false,
+    status,
+    json: jest.fn().mockRejectedValue(new SyntaxError("Unexpected token")),
+    text: jest.fn().mockResolvedValue(body),
   };
 }
 
@@ -315,8 +325,10 @@ describe("Tool Execution Tests", () => {
       resource_id: "nonexistent",
     });
 
-    expect(result).toHaveProperty("error");
-    expect((result as Record<string, unknown>).error).toContain("404");
+    expect(result).toMatchObject({
+      status: 404,
+      error: { resourceType: "OperationOutcome" },
+    });
   });
 
   // -- fhir.search --
@@ -512,6 +524,255 @@ describe("Tool Execution Tests", () => {
     const summary = (result as Record<string, unknown>)._mcp_summary as Record<string, unknown>;
     expect(summary.total).toBe(0);
     expect(summary.note).toContain("No Observation resources found");
+  });
+
+  it("fhir.search preserves a bounded backend OperationOutcome and HTTP status", async () => {
+    const hostileText = "Patient Jane Doe https://internal.example?token=secret";
+    const issue = {
+      severity: "error",
+      code: "not-supported",
+      details: {
+        text: hostileText,
+      },
+      diagnostics: "must not survive",
+      extension: [{ url: "https://internal.example/secret" }],
+    };
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: Array.from({ length: 8 }, () => ({ ...issue })),
+          text: { div: "must not survive" },
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "Observation",
+    });
+
+    expect(result).toEqual({
+      status: 400,
+      error: {
+        resourceType: "OperationOutcome",
+        issue: Array.from({ length: 5 }, () => ({
+          severity: "error",
+          code: "not-supported",
+          details: {
+            text: "The FHIR backend does not support this request.",
+          },
+        })),
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(hostileText);
+    expect(JSON.stringify(result)).not.toContain("internal.example");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("fhir.search synthesizes a bounded failure without exposing a non-JSON body", async () => {
+    const hostileBody =
+      "<html>stack trace for Patient Jane Doe at https://internal.example?token=secret</html>";
+    mockFetch.mockResolvedValueOnce(fakeTextResponse(hostileBody, 502));
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "Observation",
+    });
+
+    expect(result).toEqual({
+      status: 502,
+      error: {
+        resourceType: "OperationOutcome",
+        issue: [
+          {
+            severity: "error",
+            code: "transient",
+            details: { text: "The FHIR backend could not complete the request." },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(hostileBody);
+    expect(JSON.stringify(result)).not.toContain("Jane Doe");
+    expect(JSON.stringify(result)).not.toContain("internal.example");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("fhir.search preserves only allowlisted local corrective guidance", async () => {
+    const localGuidance =
+      "Unknown parameter: datetime. Supported parameters: patient, code, status, _lastUpdated, _count, _sort, _summary, context-id.";
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "not-supported",
+              details: { text: localGuidance },
+            },
+          ],
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "Observation",
+    });
+
+    expect(result).toMatchObject({
+      status: 400,
+      error: {
+        issue: [{ details: { text: localGuidance } }],
+      },
+    });
+  });
+
+  it("fhir.search preserves the allowlisted AuditEvent corrective vocabulary", async () => {
+    const localGuidance =
+      "Unknown parameter: datetime. Supported parameters: context-id, entity-type, _count.";
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "not-supported",
+              details: { text: localGuidance },
+            },
+          ],
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "AuditEvent",
+    });
+
+    expect(result).toMatchObject({
+      status: 400,
+      error: {
+        issue: [{ details: { text: localGuidance } }],
+      },
+    });
+  });
+
+  it.each([
+    ["context_get", { context_id: "ctx-1" }],
+    ["fhir_read", { resource_type: "Patient", resource_id: "pt-1" }],
+    ["fhir_search", { resource_type: "Observation" }],
+    ["fhir_validate", { resource: { resourceType: "Patient" } }],
+    ["search", { query: "Observation?status=final" }],
+    ["fetch", { id: "Patient/pt-1" }],
+  ])("%s preserves the shared backend failure envelope", async (toolName, input) => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "invalid",
+              details: { text: "The locally sanitized corrective message." },
+            },
+          ],
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool(toolName, input);
+
+    expect(result).toMatchObject({
+      status: 400,
+      error: {
+        resourceType: "OperationOutcome",
+        issue: [
+          {
+            severity: "error",
+            code: "invalid",
+            details: { text: "The FHIR backend rejected the request as invalid." },
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not preserve details text when OperationOutcome tokens are malformed", async () => {
+    const hostileText = "Patient Jane Doe https://internal.example?token=secret";
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: { hostile: true },
+              code: ["invalid"],
+              details: { text: hostileText },
+            },
+          ],
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "Observation",
+    });
+
+    expect(result).toMatchObject({
+      status: 400,
+      error: {
+        issue: [
+          {
+            severity: "error",
+            code: "invalid",
+            details: { text: "The FHIR backend rejected the request as invalid." },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(hostileText);
+  });
+
+  it("does not parse or expose an oversized backend failure body", async () => {
+    const oversizedSecret = `Patient Jane Doe ${"x".repeat(70_000)}`;
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "invalid",
+              details: { text: oversizedSecret },
+            },
+          ],
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool("fhir_search", {
+      resource_type: "Observation",
+    });
+
+    expect(result).toMatchObject({
+      status: 400,
+      error: {
+        issue: [
+          {
+            severity: "error",
+            code: "invalid",
+            details: { text: "The FHIR backend rejected the request as invalid." },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("Jane Doe");
   });
 
   // -- fhir.commit_write (step-up enforcement) --
@@ -1446,8 +1707,10 @@ describe("Tool Execution Tests", () => {
 
     const result = await tools.executeTool("search", { query: "Patient" });
 
-    expect(result).toHaveProperty("error");
-    expect((result.error as string)).toContain("500");
+    expect(result).toMatchObject({
+      status: 500,
+      error: { resourceType: "OperationOutcome" },
+    });
   });
 
   it("fetch returns document shape for a valid ResourceType/id", async () => {
@@ -1498,8 +1761,10 @@ describe("Tool Execution Tests", () => {
 
     const result = await tools.executeTool("fetch", { id: "Patient/nonexistent" });
 
-    expect(result).toHaveProperty("error");
-    expect((result.error as string)).toContain("404");
+    expect(result).toMatchObject({
+      status: 404,
+      error: { resourceType: "OperationOutcome" },
+    });
   });
 });
 
