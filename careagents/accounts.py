@@ -208,11 +208,14 @@ class AccountService:
 
     def add_connection(self, account_id: str, kind: str, tenant_id: str,
                        label: str, status: str = "active",
-                       provider: str | None = None) -> str:
+                       provider: str | None = None,
+                       consent_version: str | None = None) -> str:
         with self.session() as s:
             c = Connection(account_id=account_id, kind=kind,
                            tenant_id=tenant_id, label=label[:120],
-                           status=status, provider=provider)
+                           status=status, provider=provider,
+                           consented_at=now() if consent_version else None,
+                           consent_version=consent_version)
             s.add(c)
             s.flush()
             return c.id

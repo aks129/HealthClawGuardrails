@@ -341,7 +341,8 @@ def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
     a.config["TESTING"] = True
     c = a.test_client()
     _login(c, svc, monkeypatch, email="wear@example.com")
-    r = c.post("/api/connections/wearable", json={"provider": "apple"})
+    r = c.post("/api/connections/wearable",
+               json={"provider": "apple", "consent": True})
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "pending"
@@ -367,7 +368,7 @@ def test_agent_requires_own_connection(app, svc, monkeypatch):
 def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/fasten")
+    r = c.post("/api/connections/fasten", json={"consent": True})
     assert r.status_code == 200
     d = r.get_json()
     # routes through HealthClaw's own wired-up connect page, not a Fasten URL
@@ -377,6 +378,61 @@ def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     # the pending connection polls to active once records land
     assert c.get(f"/api/connections/{tenant}/poll").get_json()["status"] == "active"
     assert c.get("/api/connections/not-mine/poll").status_code == 404
+
+
+# --- consent gate (real records only) ----------------------------------------
+
+def test_real_record_connect_refused_without_consent(app, svc, monkeypatch):
+    """The consent gate is server-side: skipping the card is refused."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    for payload in (None, {}, {"consent": False}, {"consent": "yes"},
+                    {"consent": 1}):
+        r = c.post("/api/connections/fasten", json=payload)
+        assert r.status_code == 428, payload
+        d = r.get_json()
+        assert d["error"] == "consent_required"
+        assert d["consent_version"]
+    # nothing was persisted by the refused attempts
+    with svc.session() as s:
+        from careagents.models import Connection
+        assert s.query(Connection).filter_by(kind="fasten").count() == 0
+
+
+def test_sample_connect_needs_no_consent(app, svc, monkeypatch):
+    """Synthetic records stay friction-free — no consent card, no record."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.post("/api/connections/sample")
+    assert r.status_code == 200
+    with svc.session() as s:
+        from careagents.models import Connection
+        conn = s.query(Connection).filter_by(kind="sample").first()
+        assert conn.consented_at is None and conn.consent_version is None
+
+
+def test_consent_is_recorded_with_version(app, svc, monkeypatch):
+    """An agreed consent persists timestamp + the version agreed to."""
+    from careagents.app import CONSENT_VERSION
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.post("/api/connections/fasten", json={"consent": True})
+    assert r.status_code == 200
+    with svc.session() as s:
+        from careagents.models import Connection
+        conn = s.query(Connection).filter_by(kind="fasten").first()
+        assert conn.consent_version == CONSENT_VERSION
+        assert conn.consented_at is not None
+
+
+def test_catalog_marks_real_record_sources_for_consent(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    by_id = {x["id"]: x for x in
+             c.get("/api/connections/catalog").get_json()["connectors"]}
+    assert by_id["fasten"].get("requires_consent") is True
+    assert by_id["wearable"].get("requires_consent") is True
+    assert "requires_consent" not in by_id["sample"]
 
 
 # --- review relay ------------------------------------------------------------

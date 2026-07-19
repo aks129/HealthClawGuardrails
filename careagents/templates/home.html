@@ -63,6 +63,7 @@
       <button type="button" class="connector-tile tier-{{ m.tier }}"
               data-connector="{{ m.id }}"
               {% if m.get('providers') %}data-providers='{{ m.providers|tojson }}'{% endif %}
+              {% if m.get('requires_consent') and m.tier != 'soon' %}data-consent="1"{% endif %}
               {% if m.tier == 'soon' %}data-soon="1"{% endif %}>
         <span class="connector-emoji">{{ m.icon }}</span>
         <span class="connector-label">{{ m.label }}</span>
@@ -93,6 +94,43 @@
     </div>
   </section>
 </main>
+
+<!-- Consent card: shown before any REAL-record connection starts.
+     Sample records skip this on purpose — synthetic data, zero risk.
+     Copy is versioned server-side (CONSENT_VERSION); keep them in step. -->
+<div class="modal" id="consent-modal" hidden>
+  <div class="modal-card consent-card">
+    <h3>Before you connect your real records</h3>
+    <p class="consent-lead">Plain answers to the questions that matter.
+      Take the 30 seconds.</p>
+    <ul class="consent-points">
+      <li><b>You're using your own right of access.</b> You are retrieving your
+        own health records and pointing them at a tool you chose. CareAgents is
+        not your doctor and not a hospital — different rules apply than you may
+        be used to.</li>
+      <li><b>Where your records live:</b> behind the HealthClaw guardrail
+        layer, in a private space scoped to you — with identifier redaction on
+        reads and an audit log of every access.
+        <b>CareAgents itself stores no health data</b> — only your account and
+        a pointer to that space.</li>
+      <li><b>What the AI sees:</b> redacted records, when a question needs
+        them. Your data is <b>never used to train models</b> and never sold.</li>
+      <li><b>The AI can be wrong</b> — and your connected records may be
+        incomplete. Don't treat either as a substitute for your official
+        records or for professional medical judgment.</li>
+      <li><b>Leaving:</b> email
+        <a href="mailto:support@healthclaw.io">support@healthclaw.io</a> and
+        we'll delete your data and confirm when it's done.</li>
+    </ul>
+    <p class="consent-fine">Full detail:
+      <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
+      <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
+        policy</a></p>
+    <button type="button" class="btn-primary btn-block" id="consent-agree">
+      I understand — connect my records</button>
+    <button type="button" class="linkish" id="consent-cancel">Not now</button>
+  </div>
+</div>
 
 <!-- New-agent modal -->
 <div class="modal" id="agent-modal" hidden>

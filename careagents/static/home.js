@@ -28,6 +28,13 @@
         if (isNaN(idx) || !provs[idx]) return;
         body.provider = provs[idx].id;
       }
+      // Real-record sources: informed consent before anything happens. The
+      // server refuses (428) without it, so this card is UX, not the gate.
+      if (tile.dataset.consent) {
+        const agreed = await showConsentCard();
+        if (!agreed) return;
+        body.consent = true;
+      }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
@@ -37,6 +44,19 @@
       location.reload();
     });
   });
+
+  // Consent card: resolves true only on an explicit "I agree".
+  function showConsentCard() {
+    return new Promise((resolve) => {
+      const modal = document.getElementById("consent-modal");
+      const agree = document.getElementById("consent-agree");
+      const cancel = document.getElementById("consent-cancel");
+      const done = (v) => { modal.hidden = true; resolve(v); };
+      agree.onclick = () => done(true);
+      cancel.onclick = () => done(false);
+      modal.hidden = false;
+    });
+  }
 
   // Poll pending connection cards until active.
   document.querySelectorAll('.conn-card .status-pending').forEach((el) => {

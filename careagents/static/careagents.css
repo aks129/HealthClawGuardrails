@@ -372,3 +372,16 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .modal-card h3 { font-family: "Fraunces", serif; font-size: 22px; margin-bottom: 6px; }
 .modal-card .field, .modal-card select.field { margin-bottom: 4px; }
 .modal-card .btn-primary { margin-top: 20px; }
+
+/* --- consent card (real-record connections) ------------------------------ */
+.consent-card { max-width: 520px; max-height: 88vh; overflow-y: auto; }
+.consent-lead { color: var(--ink-soft); margin: 4px 0 14px; }
+.consent-points { list-style: none; margin: 0; padding: 0; }
+.consent-points li { margin: 0 0 12px; padding-left: 22px; position: relative;
+  font-size: 14.5px; line-height: 1.5; }
+.consent-points li::before { content: "•"; position: absolute; left: 6px;
+  color: var(--clay-deep); }
+.consent-fine { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
+.auth-fine { font-size: 12.5px; color: var(--ink-soft); margin-top: 14px;
+  text-align: center; }
+.auth-fine a, .consent-fine a { color: var(--clay-deep); }

@@ -71,6 +71,13 @@ class Connection(Base):
     status = Column(String(16), default="active")       # active|pending|error
     provider = Column(String(120), nullable=True)       # e.g. Epic (Fasten)
     connected_at = Column(Float, default=now)
+    # Informed-consent record for real-record connections (CARIN CoC:
+    # "informed, proactive consent... in advance of personal data disclosure").
+    # Null for sample/synthetic connections, which carry no personal data.
+    # consent_version pins WHICH terms were consented to, so a later terms
+    # change doesn't silently claim consent it never obtained.
+    consented_at = Column(Float, nullable=True)
+    consent_version = Column(String(16), nullable=True)
     account = relationship("Account", back_populates="connections")
     agents = relationship("Agent", back_populates="connection")
 
@@ -121,14 +128,24 @@ def _ensure_columns(engine) -> None:
     both support ADD COLUMN ... DEFAULT.
     """
     insp = inspect(engine)
-    if "ca_email_tokens" not in insp.get_table_names():
-        return
-    cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
-    if "attempts" not in cols:
+    tables = insp.get_table_names()
+    if "ca_email_tokens" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
+        if "attempts" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
+                    "DEFAULT 0"))
+    if "ca_connections" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
-                "DEFAULT 0"))
+            if "consented_at" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE ca_connections ADD COLUMN consented_at FLOAT"))
+            if "consent_version" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE ca_connections ADD COLUMN consent_version "
+                    "VARCHAR(16)"))
 
 
 def make_engine(url: str):
