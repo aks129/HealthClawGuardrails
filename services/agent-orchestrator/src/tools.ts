@@ -25,6 +25,7 @@ import {
   BackendTimeoutError,
   backendTimeoutResult,
 } from "./fetch-timeout";
+import { backendFailureResult } from "./backend-failure";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
 import { encryptJWE } from "./ktc/jwe";
@@ -1108,6 +1109,10 @@ export class FHIRTools {
     }
   }
 
+  hasTool(toolName: string): boolean {
+    return this.registry.has(toolName as ToolName);
+  }
+
   private async executeToolInner(
     toolName: string,
     input: Record<string, unknown>,
@@ -1195,15 +1200,7 @@ export class FHIRTools {
       { headers }
     );
     if (!resp.ok) {
-      if (resp.status === 404) {
-        return {
-          error: "context not found",
-          detail:
-            "No context envelope with that id (envelopes are created by Bundle/$ingest-context and expire after ~30 minutes). " +
-            "To explore the record instead, use fhir_search / fhir_stats / fhir_read; for clinical summaries use fhir_interpret_labs or care_gaps.",
-        };
-      }
-      return { error: `Context fetch failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -1218,7 +1215,7 @@ export class FHIRTools {
       { headers }
     );
     if (!resp.ok) {
-      return { error: `Read failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -1248,7 +1245,7 @@ export class FHIRTools {
       { headers }
     );
     if (!resp.ok) {
-      return { error: `Search failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
     const result = (await resp.json()) as Record<string, unknown>;
 
@@ -1286,7 +1283,7 @@ export class FHIRTools {
       }
     );
     if (!resp.ok) {
-      return { error: `Validation request failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
     return (await resp.json()) as Record<string, unknown>;
   }
@@ -2205,7 +2202,7 @@ export class FHIRTools {
       { headers }
     );
     if (!resp.ok) {
-      return { error: `search failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
 
     const bundle = (await resp.json()) as Record<string, unknown>;
@@ -2247,7 +2244,7 @@ export class FHIRTools {
       { headers }
     );
     if (!resp.ok) {
-      return { error: `fetch failed with status ${resp.status}` };
+      return backendFailureResult(resp);
     }
 
     const resource = (await resp.json()) as Record<string, unknown>;

@@ -17,6 +17,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { FHIRTools } from "./tools";
+import { executeMCPTool } from "./mcp-tool-result";
 
 const { version: SERVER_VERSION } = require("../package.json") as {
   version: string;
@@ -62,19 +63,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     delete toolArgs._humanConfirmed;
   }
 
-  try {
-    const result = await fhirTools.executeTool(name, toolArgs, headers);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[healthclaw-guardrails] tool error (${name}):`, msg);
-    return {
-      content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
-      isError: true,
-    };
-  }
+  return executeMCPTool(fhirTools, name, toolArgs, headers);
 });
 
 const transport = new StdioServerTransport();
