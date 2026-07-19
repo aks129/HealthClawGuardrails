@@ -146,6 +146,16 @@
         <span class="persona-name">{{ p.name }}</span></label>
       {% endfor %}
     </div>
+    <span class="field-label">Specialty</span>
+    <select class="field" id="a-advisor">
+      {% for adv in advisors %}
+      {% if adv.available %}
+      <option value="{{ adv.id }}">{{ adv.emoji }} {{ adv.name }} — {{ adv.blurb }}</option>
+      {% else %}
+      <option value="" disabled>{{ adv.emoji }} {{ adv.name }} — {{ adv.note }}</option>
+      {% endif %}
+      {% endfor %}
+    </select>
     <span class="field-label">Records</span>
     <select class="field" id="a-conn">
       {% for c in connections %}<option value="{{ c.id }}">{{ c.label }} ({{ c.status }})</option>{% endfor %}

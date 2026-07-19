@@ -570,3 +570,72 @@ def test_healthz_and_manifest(app):
     assert c.get("/healthz").get_json()["accounts"] is True
     m = c.get("/manifest.webmanifest").get_json()
     assert m["name"] == "CareAgents" and m["start_url"] == "/home"
+
+# --- advisors (ported from SmartHealthConnect skills) -------------------------
+
+def test_advisor_catalog_shape_and_honesty():
+    """Available advisors have guidance; deferred ones state their blocker."""
+    from careagents import advisors
+    cat = {a["id"]: a for a in advisors.catalog()}
+    # 4 live specialties + general; research-monitor + kids-health deferred
+    for key in ("general", "healthy-habits", "care-completion",
+                "medication-refills", "diet-exercise"):
+        assert cat[key]["available"] is True, key
+    for key in ("research-monitor", "kids-health"):
+        assert cat[key]["available"] is False, key
+        assert cat[key]["note"]  # honest reason, never a silent dead tile
+    # guidance may only reference tools the agent loop actually has
+    from careagents.agent import TOOLS
+    real = {t["name"] for t in TOOLS}
+    import re
+    for key, a in advisors.ADVISORS.items():
+        for tool in re.findall(r"\b(get_[a-z_]+|search_records|start_intake_form|check_form_status|log_[a-z_]+|request_[a-z_]+|check_[a-z_]+|track_[a-z_]+|monitor_[a-z_]+)\b",
+                               a.get("guidance", "")):
+            assert tool in real, f"{key} guidance references nonexistent tool {tool}"
+
+
+def test_agent_with_advisor_gets_specialized_prompt(app, svc, monkeypatch):
+    from careagents.personas import system_prompt
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    r = c.post("/api/agents", json={"name": "Meds", "persona": "direct",
+                                    "advisor": "medication-refills",
+                                    "connection_id": conn})
+    assert r.status_code == 200
+    aid = r.get_json()["id"]
+    with svc.session() as s:
+        from careagents.models import Account
+        acct_id = s.query(Account).filter_by(
+            email="gene@example.com").one().id
+    ctx = svc.get_agent_context(acct_id, aid)
+    assert ctx["agent"]["advisor"] == "medication-refills"
+    sp = system_prompt(ctx["agent"]["name"], ctx["agent"]["persona"],
+                       ctx["agent"]["advisor"])
+    assert "medication picture" in sp            # advisor guidance present
+    assert "cannot SUBMIT refill requests" in sp  # rail honesty preserved
+    # persona (voice) is orthogonal: direct persona text still present
+    base = system_prompt(ctx["agent"]["name"], ctx["agent"]["persona"])
+    assert base in sp  # advisor only APPENDS; never rewrites the voice/safety
+
+
+def test_unavailable_advisor_refused_not_downgraded(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    for adv in ("kids-health", "research-monitor"):
+        r = c.post("/api/agents", json={"name": "X", "persona": "calm",
+                                        "advisor": adv,
+                                        "connection_id": conn})
+        assert r.status_code == 400, adv
+        assert r.get_json()["error"] == "advisor_not_available"
+        assert r.get_json()["note"]
+    r = c.post("/api/agents", json={"name": "X", "persona": "calm",
+                                    "advisor": "nonsense",
+                                    "connection_id": conn})
+    assert r.status_code == 400
+    # no advisor at all still works (general agent)
+    r = c.post("/api/agents", json={"name": "Plain", "persona": "calm",
+                                    "connection_id": conn})
+    assert r.status_code == 200
+

@@ -21,7 +21,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, new_binding_code)
-from careagents import connectors
+from careagents import advisors, connectors
 from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
@@ -99,6 +99,7 @@ def create_app(config: Config | None = None,
             imessage_handle=cfg.imessage_handle,
             terms_url=f"{cfg.healthclaw_base}/terms",
             privacy_url=f"{cfg.healthclaw_base}/privacy",
+            advisors=advisors.catalog(),
             catalog=connectors.catalog(cfg))
 
     @app.post("/logout")
@@ -240,9 +241,20 @@ def create_app(config: Config | None = None,
         name = (body.get("name") or "Juniper").strip()[:48] or "Juniper"
         persona = body.get("persona") if body.get(
             "persona") in PERSONAS else DEFAULT_PERSONA
+        # Advisor is optional; an unavailable/unknown one is refused rather
+        # than silently downgraded — never pretend a capability exists.
+        advisor = body.get("advisor") or None
+        if advisor:
+            spec = advisors.get(advisor)
+            if spec is None:
+                return jsonify({"error": "unknown advisor"}), 400
+            if not spec["available"]:
+                return jsonify({"error": "advisor_not_available",
+                                "note": spec.get("note", "")}), 400
         try:
             aid = svc.create_agent(acct.id, name, persona,
-                                   body.get("connection_id", ""))
+                                   body.get("connection_id", ""),
+                                   advisor=advisor)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"id": aid})
@@ -288,7 +300,8 @@ def create_app(config: Config | None = None,
 
         tenant = ctx["tenant"]
         agent = ctx["agent"]
-        sysprompt = system_prompt(agent["name"], agent["persona"])
+        sysprompt = system_prompt(agent["name"], agent["persona"],
+                                  agent.get("advisor"))
 
         def stream():
             with hist_lock:
@@ -469,7 +482,8 @@ def create_app(config: Config | None = None,
                                      "Try again in a bit."}), 200
         tenant = ctx["tenant"]
         agent = ctx["agent"]
-        sysprompt = system_prompt(agent["name"], agent["persona"])
+        sysprompt = system_prompt(agent["name"], agent["persona"],
+                                  agent.get("advisor"))
         with hist_lock:
             history = histories[tenant]
         try:

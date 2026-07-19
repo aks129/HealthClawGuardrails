@@ -88,6 +88,8 @@ class Agent(Base):
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     connection_id = Column(String(32), ForeignKey("ca_connections.id"))
     name = Column(String(48), default="Juniper")
+    # Capability specialization (advisors.py); persona stays the voice.
+    advisor = Column(String(32), nullable=True)
     persona = Column(String(16), default="calm")
     created_at = Column(Float, default=now)
     account = relationship("Account", back_populates="agents")
@@ -136,6 +138,12 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_email_tokens ADD COLUMN attempts INTEGER "
                     "DEFAULT 0"))
+    if "ca_agents" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_agents")}
+        if "advisor" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE ca_agents ADD COLUMN advisor VARCHAR(32)"))
     if "ca_connections" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_connections")}
         with engine.begin() as conn:

@@ -226,13 +226,13 @@ class AccountService:
                 c.status = status
 
     def create_agent(self, account_id: str, name: str, persona: str,
-                     connection_id: str) -> str:
+                     connection_id: str, advisor: str | None = None) -> str:
         with self.session() as s:
             if not s.query(Connection).filter_by(
                     id=connection_id, account_id=account_id).first():
                 raise AuthError("That connection isn't yours.")
             a = Agent(account_id=account_id, name=name[:48], persona=persona,
-                      connection_id=connection_id)
+                      connection_id=connection_id, advisor=advisor)
             s.add(a)
             s.flush()
             return a.id
@@ -308,7 +308,7 @@ def _conn_dict(c: Connection) -> dict:
 
 def _agent_dict(a: Agent) -> dict:
     return {"id": a.id, "name": a.name, "persona": a.persona,
-            "connection_id": a.connection_id}
+            "advisor": a.advisor, "connection_id": a.connection_id}
 
 
 def _surf_dict(x: Surface) -> dict:
