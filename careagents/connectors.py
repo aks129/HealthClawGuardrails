@@ -66,6 +66,9 @@ def catalog(cfg) -> list[dict]:
     out = []
     for c in _CATALOG:
         item = {k: c[k] for k in ("id", "label", "blurb", "icon", "tier")}
+        # Every live real-record source gets the consent card; sample doesn't.
+        if c["id"] in ("fasten", "wearable"):
+            item["requires_consent"] = True
         if c["id"] == "fasten" and not getattr(cfg, "fasten_public_key", ""):
             item["tier"] = "soon"
             item["note"] = "not configured on this deployment"
@@ -101,6 +104,8 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
         return {"error": "unknown connector", "code": 404}
 
     if connector_id == "sample":
+        # Synthetic data only — no personal data, so no consent gate. Keeping
+        # the try-it path friction-free is deliberate (see beta-tester-guide).
         return {"tenant": client.new_tenant_id(), "status": "active",
                 "label": "Sample records", "provider": "CareAgents sample",
                 "seed": True}
@@ -112,6 +117,7 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
         tenant = client.new_tenant_id()
         return {"tenant": tenant, "status": "pending",
                 "label": "My health provider", "provider": "Connecting…",
+                "requires_consent": True,
                 "connect_url": client.fasten_connect_url(tenant)}
 
     if connector_id == "wearable":
@@ -123,7 +129,7 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
         label = next(p["label"] for p in WEARABLE_PROVIDERS if p["id"] == prov)
         tenant = client.new_tenant_id()
         return {"tenant": tenant, "status": "pending", "label": label,
-                "provider": label,
+                "provider": label, "requires_consent": True,
                 "connect_url": client.wearables_connect_url(tenant, prov)}
 
     # import + soon tiers: no live flow yet — record intent, never dead-end.

@@ -27,6 +27,11 @@ from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS, system_prompt
 
+# Bump when the consent-card copy or the terms/privacy content it points at
+# changes materially. Stored per connection so we always know which version a
+# person agreed to — a later change never silently claims earlier consent.
+CONSENT_VERSION = "2026-07-19"
+
 
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
@@ -77,7 +82,9 @@ def create_app(config: Config | None = None,
     def auth():
         if session.get("account_id"):
             return redirect(url_for("home"))
-        return render_template("auth.html", rp_id=cfg.rp_id)
+        return render_template("auth.html", rp_id=cfg.rp_id,
+                               terms_url=f"{cfg.healthclaw_base}/terms",
+                               privacy_url=f"{cfg.healthclaw_base}/privacy")
 
     @app.get("/home")
     @login_required
@@ -90,6 +97,8 @@ def create_app(config: Config | None = None,
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
             telegram_bot=cfg.telegram_bot,
             imessage_handle=cfg.imessage_handle,
+            terms_url=f"{cfg.healthclaw_base}/terms",
+            privacy_url=f"{cfg.healthclaw_base}/privacy",
             catalog=connectors.catalog(cfg))
 
     @app.post("/logout")
@@ -184,6 +193,15 @@ def create_app(config: Config | None = None,
         if plan.get("soon"):
             # Not live yet — acknowledge intent (never a dead-end button).
             return jsonify({"soon": True, "connector": connector_id})
+        # Real-record connections require informed consent, enforced here so
+        # a client that skips the consent card is refused server-side (CARIN
+        # CoC: proactive consent in advance of personal data disclosure).
+        consent_version = None
+        if plan.get("requires_consent"):
+            if body.get("consent") is not True:
+                return jsonify({"error": "consent_required",
+                                "consent_version": CONSENT_VERSION}), 428
+            consent_version = CONSENT_VERSION
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:
@@ -192,7 +210,8 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "records service unavailable"}), 503
         cid = svc.add_connection(acct.id, connector_id, tenant, plan["label"],
                                  status=plan["status"],
-                                 provider=plan.get("provider"))
+                                 provider=plan.get("provider"),
+                                 consent_version=consent_version)
         out = {"id": cid, "status": plan["status"]}
         if plan.get("connect_url"):
             out["connect_url"] = plan["connect_url"]
