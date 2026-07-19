@@ -105,6 +105,7 @@
     const res = await post("/api/agents", {
       name: $("a-name").value.trim() || "Juniper",
       persona: persona ? persona.value : "calm",
+      advisor: ($("a-advisor") && $("a-advisor").value) || "general",
       connection_id: conn,
     });
     if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }

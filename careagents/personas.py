@@ -60,7 +60,9 @@ PERSONAS = {
 DEFAULT_PERSONA = "calm"
 
 
-def system_prompt(agent_name: str, persona_key: str) -> str:
+def system_prompt(agent_name: str, persona_key: str,
+                  advisor_key: str | None = None) -> str:
+    from careagents.advisors import prompt_block
     p = PERSONAS.get(persona_key, PERSONAS[DEFAULT_PERSONA])
     return (
         f"You are {agent_name}, a personal care agent on careagents.cloud, "
@@ -71,4 +73,5 @@ def system_prompt(agent_name: str, persona_key: str) -> str:
         "message, not a report. When you start the intake form, tell them a "
         "review card will appear and that nothing is sent until they approve "
         "each item."
+        + prompt_block(advisor_key)
     )
