@@ -346,13 +346,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # consumer channel, not BAA-covered transport; this is patient-directed
     # access to one's own records. See templates/privacy.html "Messaging
     # Platforms" for the full posture.
-    # TODO(nophi): wire a real /nophi toggle that flips this chat into
-    # summary-only mode (persist per chat_id, gate read formatters on it).
-    # Disclosure line is shipped now; the toggle is not yet implemented.
+    #
+    # This text must promise only controls that actually exist. A summary-only
+    # mode was advertised here before it was built; offering a privacy control
+    # that does nothing leaves the user worse off than saying nothing, because
+    # they choose to continue on the strength of it. If summary-only ships,
+    # add it back here and to the privacy policy's mitigations list together.
     risk_line = (
         '⚠️ Heads up: chat apps aren’t encrypted medical channels. '
         'You’re accessing your own records here; by continuing you accept '
-        'that for your own data. Reply /nophi to keep responses summary-only.'
+        'that for your own data.'
     )
 
     text = (

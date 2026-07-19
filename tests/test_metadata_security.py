@@ -121,4 +121,30 @@ class TestBotStartDisclosure:
         assert 'cmd_start' in src
         assert 'risk_line' in src
         assert 'chat apps aren' in src  # apostrophe variant tolerant
-        assert '/nophi' in src
+
+    def test_start_promises_no_unimplemented_privacy_control(self):
+        """The disclosure must not offer a control that does not exist.
+
+        A summary-only mode was advertised in /start (and listed as a live
+        mitigation in the privacy policy) before it was built. Offering a
+        privacy control that does nothing is worse than silence: the user
+        continues on an unencrypted consumer channel partly *because* they
+        were told a mitigation was available. Both claims were removed; this
+        test keeps them from returning ahead of an implementation.
+
+        If summary-only ships, assert the real toggle here instead of
+        deleting this test.
+        """
+        src = (
+            Path(__file__).resolve().parent.parent / 'openclaw' / 'bot.py'
+        ).read_text(encoding='utf-8')
+        assert '/nophi' not in src, (
+            'bot.py references /nophi — do not advertise summary-only mode '
+            'until a toggle is implemented and gates the read formatters')
+
+    def test_privacy_policy_lists_no_unimplemented_mitigation(self, client):
+        """Same claim, second location — the policy is a legal document."""
+        body = client.get('/privacy').get_data(as_text=True)
+        assert 'summary-only mode' not in body.lower(), (
+            'privacy policy lists summary-only mode as a mitigation, but it '
+            'is not implemented')
