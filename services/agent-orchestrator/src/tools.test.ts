@@ -1974,7 +1974,7 @@ describe("Express App Tests", () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("healthy");
-      expect(res.body.version).toBe("1.8.0");
+      expect(res.body.version).toBe(require("../package.json").version);
       expect(res.body.service).toBe("healthclaw-guardrails");
       expect(res.body.transports).toEqual(
         expect.arrayContaining(["streamable-http", "sse", "http-bridge"])
@@ -2014,7 +2014,7 @@ describe("Express App Tests", () => {
       expect(res.body.id).toBe(1);
       expect(res.body.result).toBeDefined();
       expect(res.body.result.serverInfo.name).toBe("healthclaw-guardrails");
-      expect(res.body.result.serverInfo.version).toBe("1.8.0");
+      expect(res.body.result.serverInfo.version).toBe(require("../package.json").version);
       expect(res.body.result.protocolVersion).toBe("2024-11-05");
       expect(res.body.result.capabilities).toHaveProperty("tools");
 

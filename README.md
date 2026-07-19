@@ -12,7 +12,7 @@
 <br/>
 
 <!-- Project -->
-[![Release](https://img.shields.io/badge/release-v1.8.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
+[![Release](https://img.shields.io/badge/release-v1.9.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
 [![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
 [![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
@@ -25,7 +25,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/aks129/HealthClawGuardrails?style=flat-square&color=64748b)](https://github.com/aks129/HealthClawGuardrails/commits/main)
 
 <!-- Stack & scope -->
-[![Tests](https://img.shields.io/badge/tests-1170%2B%20Python%20%2B%20112%20Node-22c55e?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1490%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
 [![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.8.0 · 1,170+ Python + 112 Node tests · 29 MCP tools · real-world action rail (provably out-of-band gate) · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms (`$populate`/`$extract`) · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · real-world actions (calls/SMS) · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.9.0 · 1,490+ Python + 170 Node tests · 29 MCP tools · **[CareAgents](https://careagents.cloud)** hosted consumer app (passkey sign-in, advisors, web/Telegram/iMessage) · real-world action rail (provably out-of-band gate) · forms rail end-to-end (`$populate` → human review → provenance PDF) · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) + embedded MCP-App view · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
 
 ## Try it in 60 seconds — no clone, no keys
 
@@ -80,6 +80,7 @@ Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/r
 
 | Version | Highlights |
 | --- | --- |
+| **v1.9.0** | **[CareAgents](https://careagents.cloud) — the hosted consumer experience**: sign up with a passkey, connect records through a pluggable connector marketplace (Fasten, Apple Health via Open Wearables, sample data), and spin up a guardrailed health agent reachable on web, Telegram, and iMessage · **advisor registry** — specialties ported from SmartHealthConnect (healthy-habits, care-completion, medication-refills, diet-exercise) as prompt-blocks over the guarded tool set, deferred ones honestly labeled · **versioned informed consent** enforced server-side (HTTP 428) before any real-record connection · **forms rail ships end-to-end** — `$populate` → per-item human review (NKA never inferred) → provenance-stamped PDF → signed expiring link · **error fidelity is conformance property seven (Grade A = 7/7)**, hardened across both MCP transports with a Python↔TypeScript drift guard · **MCP Apps** — care-gaps results embed an engine-served UI (`text/html; profile=mcp-app`) whose only fetch target is the guarded operation · security pass: fail-closed prod config, authenticated tenant reads, MCP transport auth, Alembic · SmartHealthConnect archived (skills frozen at v1.2.0; advisors are the live successors) |
 | **v1.8.0** | **Real-actions foundation** — an agent can *propose* a real-world action (call, SMS, form) but `commit` only *submits* it (HTTP 202); execution happens through a separate approval that requires a single-use step-up credential and an expiry-guarded atomic claim, so the agent's own toolchain can never approve its own action (the spoofable `X-Human-Confirmed` header is gone) · **`ActionExecutor` plugin registry** — add a real-world capability behind the full guardrail rail in ~50 lines, no core changes ([extend it](ROADMAP.md#extending-the-action-rail)) · mandatory red-flag emergency screen; fail-loud rails (no silent simulation) · **durable execution** — attempt ledger, provider reconciliation, external-tick reaper, append-only action-event log · **reliability floor** — config preflight (`GET /r6/ops/preflight`), Postgres CI lane, MCP fetch timeouts, poller 409-storm detection, source-aware resource identity `(tenant, type, id)`, Fasten hardening + zombie-job reaper · public [ROADMAP](ROADMAP.md) + contributor on-ramp · fixes: upstream FHIR error fidelity, quality measures default to current year |
 | **v1.7.0** | Preventive care-gaps engine (`Patient/$care-gaps`, USPSTF/ACIP/ADA + eCQM crosswalk) · patient connect flow: identity-verified Fasten onboarding mints a webhook-gated, read-scoped 30-day agent token · prescription transfer requests (`rx_transfer_request`, Schedule II refused) — 29 MCP tools · [per-agent quickstarts](docs/quickstarts/) (Claude/Perplexity/ChatGPT/Telegram) · HBO export→FHIR converter + embedded-XML PHI scrubber · hardening: fail-closed webhook verify, scoped tokens, serverless write guard, live-path contract tests · clinical fixes: SNOMED diabetes detection, inclusive panic thresholds, one-sided-range honesty |
 | **v1.6.0** | Lab reference-range interpreter (`Observation/$interpret`) · NQF 0018 quality measure (`Measure/$evaluate-measure`) · [any-agent-framework adapters](docs/recipes/any-agent-framework.md) (OpenAI/Gemini) · [Medplum-in-front recipe](docs/recipes/healthclaw-in-front-of-medplum.md) · SMBP triage on 2025 AHA/ACC · ruff lint gate · all dependency advisories remediated |
@@ -287,7 +288,7 @@ Both R4 and R6 resources flow through the same guardrail stack (PHI redaction, a
 ## Testing
 
 ```bash
-# Python tests (1,170+ across 80+ files; includes action-rail, SDC, quality, labs, ops suites)
+# Python tests (1,490+ across 90+ files; includes action-rail, SDC, quality, labs, ops, CareAgents suites)
 uv run python -m pytest tests/ -v
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # single test
 
