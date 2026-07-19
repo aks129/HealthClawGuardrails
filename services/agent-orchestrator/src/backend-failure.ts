@@ -68,6 +68,7 @@ const SAFE_MODIFIER_TOKENS = new Set([
   "of-type",
   "text",
   "type",
+  // Fixed synthetic token used by the public issue contract.
   "frobnicate",
 ]);
 const FIXED_LOCAL_SEARCH_MESSAGES = new Set([
