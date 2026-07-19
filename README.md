@@ -157,14 +157,14 @@ claude plugin marketplace add aks129/HealthClawGuardrails
 # Install the FHIR guardrail plugin (this repo)
 claude plugin install healthclaw-guardrails@healthclaw-marketplace
 
-# Install the personal-health companion plugin (SmartHealthConnect)
+# Install the personal-health companion plugin (frozen — upstream archived)
 claude plugin install smarthealthconnect@healthclaw-marketplace
 ```
 
 | Plugin | Skills | Source |
 | --- | --- | --- |
 | `healthclaw-guardrails` | curatr, fasten-connect, fhir-r6-guardrails, fhir-upstream-proxy, healthex-export, phi-redaction | [aks129/HealthClawGuardrails](https://github.com/aks129/HealthClawGuardrails) |
-| `smarthealthconnect` | care-completion, diet-exercise, healthy-habits, kids-health, medication-refills, research-monitor | [aks129/SmartHealthConnect](https://github.com/aks129/SmartHealthConnect) |
+| `smarthealthconnect` | care-completion, diet-exercise, healthy-habits, kids-health, medication-refills, research-monitor | [aks129/SmartHealthConnect](https://github.com/aks129/SmartHealthConnect) *(archived — skills frozen at v1.2.0; live successors are CareAgents advisors)* |
 
 Each skill is auto-discoverable — Claude loads it when your prompt matches the skill's trigger phrases (e.g. "check my care gaps", "redact this bundle", "run Curatr on my conditions").
 

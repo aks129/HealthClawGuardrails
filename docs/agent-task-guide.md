@@ -91,10 +91,12 @@ without touching core code. See
 [docs/extending-the-action-rail.md](extending-the-action-rail.md). If you find
 yourself building a *new* approval mechanism, stop: use the rail.
 
-**Two more repos.** [SmartHealthConnect](https://github.com/aks129/SmartHealthConnect)
-is the patient-facing surface (skills + MCP app); this repo is the engine. The
-split is declared in `.health-context.yaml` in each (`role: engine` /
-`role: surface`). Surfaces never read FHIR directly.
+**The engine/surface split.** This repo is the engine; CareAgents
+(`careagents/`, in-repo) is the consumer surface. The split is declared in
+`.health-context.yaml` (`role: engine`, with surfaces listed). Surfaces never
+read FHIR directly. SmartHealthConnect, the original external surface, was
+archived 2026-07-19 after violating exactly that rule — its skills live on as
+CareAgents advisors (`careagents/advisors.py`).
 
 ---
 

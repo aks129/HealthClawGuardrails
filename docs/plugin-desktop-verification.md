@@ -1,5 +1,7 @@
 # Claude Desktop Verification
 
+> **Note (2026-07-19):** SmartHealthConnect is archived — its plugin skills remain installable (frozen at v1.2.0) but new capability lands in CareAgents advisors. Verification steps below still work against the archived repo.
+
 Step-by-step test plan to verify `healthclaw-guardrails` and `smarthealthconnect` work in Claude Desktop before plugin submission. Run through once; every box must tick.
 
 The plugins ship **two surfaces**:

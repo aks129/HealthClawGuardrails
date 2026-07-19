@@ -77,14 +77,14 @@ Verified against the repos, not aspirational.
 | Engine | Guardrail conformance, graded A–F | ✅ Grade A, CI-gated |
 | Engine | Action rail + out-of-band human gate | ✅ forms rail end-to-end |
 | Engine | Compiled Truth (`fhir_compiled_truth`) | ✅ |
-| Surface | SmartHealthConnect v1.2.0 — 6 patient skills | ✅ built |
-| Surface | SHC MCP App — 7 views | ✅ built, ⚠️ not submitted |
-| Surface | SHC MCP server — ~30 tools | ✅ built, ⚠️ contract drift (§4.2) |
+| Surface | SmartHealthConnect v1.2.0 — 6 patient skills | 📦 archived — live on as CareAgents advisors (#175) |
+| Surface | SHC MCP App — 7 views | 📦 resolved — care-gaps ported to the engine, rest merged/dropped (#176) |
+| Surface | SHC MCP server — ~30 tools | 📦 archived — bypass closed by construction (SHC#12) |
 | Surface | CareAgents (`careagents.cloud`) | ✅ live, **independent deploy** |
 | Surface | CareAgents connector marketplace | ✅ live (7 sources) |
 | Surface | CareAgents iMessage | 🟡 code shipped, blocked on TCC grants |
 | Claude | HealthClaw MCP in registry (`server.json` v1.8.0) | ✅ published |
-| Claude | SmartHealthConnect MCP App in directory | ⚠️ blocked (§4.1) |
+| Claude | SmartHealthConnect MCP App in directory | 📦 mooted by archive; future App tracked in #164 |
 
 **The advisor roster today.** Six patient skills (`healthy-habits`,
 `care-completion`, `medication-refills`, `diet-exercise`, `kids-health`,

@@ -5,8 +5,9 @@
 # or tool that needs to know jurisdiction/audience/sensitivity without
 # re-asking.
 #
-# Sister file lives in SmartHealthConnect declaring the patient-facing surface
-# that calls into this engine. See ENGINE_CONTRACT.md.
+# The patient-facing surface is CareAgents (careagents/ in this repo), which
+# declares itself below. SmartHealthConnect, the original sister surface, was
+# archived 2026-07-19 (its skills live on as CareAgents advisors).
 
 name: HealthClaw Guardrails
 version: 1.8.0
@@ -39,6 +40,9 @@ audit_agent_default: healthclaw-guardrails
 
 # Surface products that call into this engine. Informational — not enforced.
 surfaces:
-  - name: SmartHealthConnect
-    repo: https://github.com/aks129/SmartHealthConnect
-    role: patient-facing PHR
+  - name: CareAgents
+    repo: https://github.com/aks129/HealthClawGuardrails/tree/main/careagents
+    role: consumer app (accounts, advisors, web/Telegram/iMessage)
+  # SmartHealthConnect (patient-facing PHR) archived 2026-07-19 —
+  # https://github.com/aks129/SmartHealthConnect (read-only; salvage record
+  # in its issue #12).
