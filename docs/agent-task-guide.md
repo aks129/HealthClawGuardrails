@@ -4,8 +4,13 @@ If you (human or coding agent) are starting work on an issue in this repo, read
 this first. It exists so you don't begin from scratch: it tells you where things
 live, what you may not break, and what "done" means here.
 
-**Read order:** this file → [CLAUDE.md](../CLAUDE.md) (architecture + invariants)
-→ [docs/development.md](development.md) (build/test/deploy detail) → the issue.
+**Read order:** this file → [docs/development.md](development.md)
+(build/test/deploy detail) → the issue.
+
+> Maintainers may also have a local `CLAUDE.md` with the same invariants. It is
+> deliberately not published, so everything you need is here or in
+> `docs/development.md` — if something is only in `CLAUDE.md`, that's a bug in
+> this guide and worth an issue.
 
 ---
 
@@ -181,7 +186,6 @@ auditor.
 
 ## Related
 
-- [CLAUDE.md](../CLAUDE.md) — architecture + invariants
 - [docs/development.md](development.md) — full contributor guide
 - [docs/healthcare-ai-advisors-roadmap.md](healthcare-ai-advisors-roadmap.md) — where this is all going
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — ground rules, DCO
