@@ -14,7 +14,7 @@ uv run python -m pytest tests/ -q
 uv run python -m pytest tests/test_r6_routes.py::test_name -v
 
 # Lint (CI-gated)
-pipx run ruff check r6/ tests/ scripts/ main.py app.py
+pipx run ruff check .
 
 # Node MCP server
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test

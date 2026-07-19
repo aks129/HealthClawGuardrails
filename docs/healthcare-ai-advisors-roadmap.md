@@ -325,6 +325,5 @@ Any advisor, any surface, any phase:
 
 - [docs/agent-task-guide.md](agent-task-guide.md) — **start here if you're picking up an issue**
 - [ROADMAP.md](../ROADMAP.md) — the engine roadmap (Now/Next/Later)
-- [CLAUDE.md](../CLAUDE.md) — engine architecture + invariants
 - [docs/development.md](development.md) — contributor guide, deploy steps
 - `.health-context.yaml` — engine/surface declarations (both repos)

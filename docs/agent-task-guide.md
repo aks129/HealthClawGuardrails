@@ -4,8 +4,13 @@ If you (human or coding agent) are starting work on an issue in this repo, read
 this first. It exists so you don't begin from scratch: it tells you where things
 live, what you may not break, and what "done" means here.
 
-**Read order:** this file → [CLAUDE.md](../CLAUDE.md) (architecture + invariants)
-→ [docs/development.md](development.md) (build/test/deploy detail) → the issue.
+**Read order:** this file → [docs/development.md](development.md)
+(build/test/deploy detail) → the issue.
+
+> Maintainers may also have a local `CLAUDE.md` with the same invariants. It is
+> deliberately not published, so everything you need is here or in
+> `docs/development.md` — if something is only in `CLAUDE.md`, that's a bug in
+> this guide and worth an issue.
 
 ---
 
@@ -104,7 +109,7 @@ STEP_UP_SECRET=dev-secret python main.py            # http://localhost:5000
 
 uv run python -m pytest tests/ -q                    # all Python tests
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # one test
-uvx ruff check r6/ tests/ scripts/ main.py app.py    # lint (CI-gated)
+uvx ruff check .                                     # lint (CI-gated)
 
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test
 ```
@@ -126,7 +131,7 @@ Revert incidental `uv.lock` churn before committing.
 An issue is done when all of these hold. State them explicitly in the PR.
 
 - [ ] `uv run python -m pytest tests/ -q` passes — quote the actual counts
-- [ ] `uvx ruff check r6/ tests/ scripts/ main.py app.py` clean
+- [ ] `uvx ruff check .` clean
 - [ ] Node changes: `npx tsc --noEmit` clean and `npm test` passes
 - [ ] Conformance still **Grade A** (`tests/test_guardrail_conformance.py`)
 - [ ] New behavior has tests — including a **negative** test (the guardrail
@@ -181,7 +186,6 @@ auditor.
 
 ## Related
 
-- [CLAUDE.md](../CLAUDE.md) — architecture + invariants
 - [docs/development.md](development.md) — full contributor guide
 - [docs/healthcare-ai-advisors-roadmap.md](healthcare-ai-advisors-roadmap.md) — where this is all going
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — ground rules, DCO
