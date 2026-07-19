@@ -20,9 +20,20 @@ test.describe('Landing page', () => {
     await expect(page.locator('h1.hero-title')).toContainText('AI agents');
   });
 
-  test('Try the Live Dashboard button navigates to dashboard', async ({ page }) => {
-    await page.getByRole('link', { name: 'Try the Live Dashboard' }).click();
+  // The hero CTAs were reworded in the SEO/CTA pass ("Try the Live Dashboard"
+  // → "Explore the live dashboard" + a new primary "Try CareAgents" link).
+  // The old locator matched nothing and timed out on every run — the sole
+  // red test behind issue #154.
+  test('dashboard CTA navigates to the live dashboard', async ({ page }) => {
+    await page.getByRole('link', { name: 'Explore the live dashboard' }).click();
     await expect(page).toHaveURL('/r6-dashboard');
+  });
+
+  test('primary CTA points at CareAgents', async ({ page }) => {
+    const cta = page.getByRole('link', { name: /Try CareAgents/ });
+    await expect(cta).toBeVisible();
+    // External link — assert the target rather than navigating away.
+    await expect(cta).toHaveAttribute('href', 'https://careagents.cloud');
   });
 
   test('PHI before/after section is visible', async ({ page }) => {
