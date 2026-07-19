@@ -13,7 +13,7 @@ Copy this into the release PR/issue and check items off.
 
 - [ ] Full Python suite green: `uv run python -m pytest tests/ -q`
 - [ ] Node suite green: `cd services/agent-orchestrator && npx tsc --noEmit && npm test`
-- [ ] Lint clean: `pipx run ruff check r6/ tests/ scripts/ main.py app.py`
+- [ ] Lint clean: `pipx run ruff check .`
 - [ ] Demo gates pass: `./scripts/demo_e2e.sh` (all 11 gates)
 - [ ] Dependabot alerts triaged (no open high/critical): repo → Security → Dependabot
 

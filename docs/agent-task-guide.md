@@ -104,7 +104,7 @@ STEP_UP_SECRET=dev-secret python main.py            # http://localhost:5000
 
 uv run python -m pytest tests/ -q                    # all Python tests
 uv run python -m pytest tests/test_r6_routes.py::test_name -v   # one test
-uvx ruff check r6/ tests/ scripts/ main.py app.py    # lint (CI-gated)
+uvx ruff check .                                     # lint (CI-gated)
 
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test
 ```
@@ -126,7 +126,7 @@ Revert incidental `uv.lock` churn before committing.
 An issue is done when all of these hold. State them explicitly in the PR.
 
 - [ ] `uv run python -m pytest tests/ -q` passes — quote the actual counts
-- [ ] `uvx ruff check r6/ tests/ scripts/ main.py app.py` clean
+- [ ] `uvx ruff check .` clean
 - [ ] Node changes: `npx tsc --noEmit` clean and `npm test` passes
 - [ ] Conformance still **Grade A** (`tests/test_guardrail_conformance.py`)
 - [ ] New behavior has tests — including a **negative** test (the guardrail

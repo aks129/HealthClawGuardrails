@@ -26,7 +26,7 @@ jobs:
         run: |
           pip install uv
           uv sync --frozen --group dev
-          uv run ruff check r6/ tests/ scripts/ main.py app.py
+          uv run ruff check .
 
       - name: Mypy (gradual typed security core)
         run: uv run mypy
