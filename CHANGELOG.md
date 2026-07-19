@@ -7,12 +7,101 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-07-19 — CareAgents Consumer App + Forms Rail End-to-End + Grade A (7/7)
+
+### Added
+- **CareAgents — the hosted consumer experience** (`careagents/`, live at
+  [careagents.cloud](https://careagents.cloud)): a non-developer signs up (email code +
+  WebAuthn passkey), connects records, and spins up a guardrailed health agent in about a
+  minute. Its *only* data path is HealthClaw's HTTP API — it stores no PHI, only accounts,
+  tenant pointers, and connection metadata. Shipped across the release:
+  - **Connector marketplace** — pluggable registry over the sources HealthClaw already
+    brokers (Fasten, wearables via Open Wearables, Apple Health, sample records), with
+    honest "coming soon" tiles for everything not yet wired.
+  - **iMessage surface** — bind an agent from the hub and text it over a relay; same
+    guardrailed turn loop as web and Telegram.
+  - **Advisor registry** — specialties ported from SmartHealthConnect as prompt-blocks over
+    the guarded tool set: healthy-habits 📊, care-completion ✅, medication-refills 💊
+    (read-side only, and says so), diet-exercise 🏃. Kids-health and research-monitor are
+    listed but honestly deferred (missing caregiver identity / missing tools).
+  - **Informed consent at the connect-real-records moment** — versioned consent
+    (`CONSENT_VERSION`) enforced server-side (HTTP 428 without an explicit `consent: true`),
+    CARIN-style plain-language copy, recorded per connection. Sample records skip it by
+    design (synthetic data).
+  - **Anthropic OAuth token support** — run the agent loop on a Claude subscription
+    (`ANTHROPIC_OAUTH_TOKEN`) instead of a metered API key.
+- **Forms rail end-to-end — the first real action ships whole.** `$populate` fills the
+  canonical intake questionnaire from the patient's record → structured per-item review
+  (every med/allergy confirmed individually; "no known allergies" rejected unless explicitly
+  attested; the item list is re-derived server-side so a crafted request can't skip a row) →
+  reviewed `QuestionnaireResponse` → provenance-stamped PDF persisted as a FHIR
+  `DocumentReference` → signed, expiring download link. Fails loud (`needs_review` /
+  `provider_not_configured` / `stale_source_data`).
+- **Error fidelity is guardrail property seven — Grade A is now 7/7.** `$conformance`
+  grades whether unknown parameters and unsupported modifiers are rejected or flagged,
+  never silently swallowed. Hardened across the stack: local search emits value-free
+  corrections with truthful totals, backend `OperationOutcome`s survive both MCP transports
+  through a PHI-safe sanitizer (thanks @ashish-b-work), and a drift guard pins
+  `SAFE_MODIFIER_TOKENS` to byte-identical values across the Python and TypeScript copies.
+- **MCP Apps — embedded UIs served by the engine.** `care_gaps` results now carry a
+  `_meta.ui.resourceUri` rendering an engine-served care-gaps view
+  (`/r6/fhir/mcp-apps/care-gaps/`, `text/html; profile=mcp-app`), joining the wearables
+  view. The page's only fetch target is the guarded `$care-gaps` operation — the UI
+  inherits the guardrails by construction.
+- **Open Wearables, for real:** client reconciled to the actual 0.6.3 API (the old one
+  targeted endpoints that don't exist), and sleep sessions + naps now map to FHIR.
+- **Security hardening pass:** fail-closed production config, authenticated tenant reads,
+  MCP transport auth, Alembic migrations, PHI minimization; Fasten download hosts validated
+  by parsed URL (not substring); CI workflow permissions tightened and email-error echo
+  removed (CodeQL).
+- Docs: public advisors-system roadmap + agent task guide, beta program + tester guide,
+  ActionExecutor cookbook example, Aidbox (Health Samurai) recipe, per-surface quickstart
+  CTA + site SEO.
+
 ### Changed
 - **Licensing posture documented (staying MIT).** After evaluating Fair Source (FSL-1.1-MIT)
   and open-core models, the project remains MIT while adoption grows. `LICENSING.md` records the
   posture: future releases may adopt FSL-1.1-MIT and/or open core based on adoption, any
   MIT-released version stays MIT forever, and the guardrail core stays freely available.
   Contributions now use DCO sign-off (`git commit -s`) to keep future licensing options clean.
+- **SmartHealthConnect archived** (2026-07-19). Its value was ported first: skills →
+  CareAgents advisors, MCP-App views → engine-served pages. The Claude plugin skills stay
+  installable, frozen at v1.2.0. CareAgents is now the declared consumer surface in
+  `.health-context.yaml`.
+- CI lints the whole repo (`ruff check .`), not an allowlist of directories.
+- Playwright e2e un-broken on `main`: stale CTA locator fixed, an HTML report actually
+  uploads on failure, and the port is overridable (`E2E_PORT`) for macOS AirPlay collisions.
+
+### Fixed
+- Stopped advertising an unimplemented "summary-only mode" privacy control (site copy +
+  OpenClaw bot); a metadata-security test now guards against re-introducing it. Rule of the
+  house: ship the mechanism, then the copy.
+- Railway production deploys unblocked (single-element `preDeployCommand`; legacy
+  `create_all` databases adopted by init-db).
+
+## [1.8.0] — 2026-07-12 — Real-Actions Foundation + Reliability
+
+*(Backfilled — this release shipped with GitHub release notes only.)*
+
+### Added
+- **Provably out-of-band human gate:** `commit` only *submits* an action (HTTP 202);
+  execution happens exclusively through a separate approval endpoint requiring a single-use
+  step-up credential and an expiry-guarded atomic claim. The spoofable `X-Human-Confirmed`
+  header is gone at both the Flask and MCP layers.
+- **`ActionExecutor` plugin registry** — add a real-world capability behind the full
+  guardrail rail (validation → human gate → audit → reconciliation) in ~50 lines, no core
+  changes. Mandatory red-flag emergency screen; fail-loud rails (no silent simulation).
+- **Durable execution:** attempt ledger, provider `reconcile()`, external-tick reaper,
+  append-only action-event log.
+- **Reliability floor:** config preflight (`GET /r6/ops/preflight`), Postgres CI lane,
+  MCP fetch timeouts, poller 409-storm detection, source-aware resource identity
+  `(tenant, resource_type, id)`, Fasten hardening + zombie-job boot reaper.
+- Public [ROADMAP.md](ROADMAP.md) (Now/Next/Later) + contributor on-ramp.
+
+### Fixed
+- Upstream FHIR errors surfaced through a PHI-safe sanitizer instead of collapsing into
+  empty bundles / fake 404s (thanks @aanishs). Quality measures default to the current
+  calendar year (thanks @leemeo3).
 
 ## [1.7.0] — 2026-07-08 — Own-Data Onboarding + Care Gaps + Rx Transfer
 

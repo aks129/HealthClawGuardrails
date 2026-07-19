@@ -10,7 +10,7 @@
 # archived 2026-07-19 (its skills live on as CareAgents advisors).
 
 name: HealthClaw Guardrails
-version: 1.8.0
+version: 1.9.0
 role: engine
 
 # Jurisdiction determines which regulatory overlay applies to reads/writes.
