@@ -375,6 +375,8 @@ app = create_app()
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
-        port=5000,
+        # Overridable so the e2e suite can run on machines where :5000 is
+        # taken (macOS AirPlay Receiver binds it by default).
+        port=int(os.environ.get("PORT", "5000")),
         debug=os.environ.get("FLASK_DEBUG") == "1",
     )

@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// Overridable so the suite can run where :5000 is taken (macOS AirPlay
+// Receiver binds it by default). CI keeps the default.
+const PORT = process.env.E2E_PORT || '5000';
+
 export default defineConfig({
   testDir: './tests',
   // Serial execution — shared SQLite instance, tests create resources
@@ -7,10 +11,16 @@ export default defineConfig({
   workers: 1,
   timeout: 30_000,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  // CI gets BOTH the inline annotations and an HTML report — the report is
+  // what the failure-artifact upload ships, and with only the 'github'
+  // reporter no report directory was ever produced (issue #154: every red
+  // run ended with "No files were found ... e2e/playwright-report/").
+  reporter: process.env.CI
+    ? [['github'], ['html', { open: 'never' }]]
+    : 'list',
 
   use: {
-    baseURL: 'http://localhost:5000',
+    baseURL: `http://localhost:${PORT}`,
     trace: 'on-first-retry',
   },
 
@@ -26,7 +36,7 @@ export default defineConfig({
     // explicit Alembic migrations). Initialize the DB, then serve — both
     // processes share one absolute SQLite path so the server sees the tables.
     command: 'cd .. && uv run flask --app main init-db && uv run python main.py',
-    url: 'http://localhost:5000/r6/fhir/health',
+    url: `http://localhost:${PORT}/r6/fhir/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
     env: {
@@ -35,6 +45,7 @@ export default defineConfig({
       STEP_UP_SECRET: 'e2e-test-secret-not-for-production',
       SQLALCHEMY_DATABASE_URI: 'sqlite:////tmp/e2e-healthclaw.db',
       FLASK_ENV: 'testing',
+      PORT,
     },
   },
 });
