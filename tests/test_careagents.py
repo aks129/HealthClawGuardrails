@@ -565,6 +565,17 @@ def test_landing_and_auth_render(app):
     assert a.status_code == 200 and b"passkey" in a.data.lower()
 
 
+def test_auth_code_input_fits_minted_codes(app):
+    # The server mints zero-padded codes of len(str(CODE_MAX - 1)) digits; the
+    # input's maxlength must match or the UI truncates the code and every
+    # sign-in fails (shipped broken as 6 vs 8 once — keep them locked).
+    from careagents.accounts import CODE_MAX
+    digits = len(str(CODE_MAX - 1))
+    body = app.test_client().get("/auth").get_data(as_text=True)
+    assert f'maxlength="{digits}"' in body
+    assert f"{digits}-digit code" in body
+
+
 def test_healthz_and_manifest(app):
     c = app.test_client()
     assert c.get("/healthz").get_json()["accounts"] is True
