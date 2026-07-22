@@ -76,7 +76,9 @@ class TestHAPIFHIRProxy:
         result, _ = self.proxy.search('Patient', {'_count': '3'})
         assert result['resourceType'] == 'Bundle'
         assert result['type'] == 'searchset'
-        assert 'total' in result or 'entry' in result
+        # total and entry are both optional in a searchset; public HAPI's
+        # offset paging can return a first page carrying only link.
+        assert 'total' in result or 'entry' in result or 'link' in result
 
     @skip_hapi
     def test_patient_search_with_params(self):
@@ -228,7 +230,9 @@ class TestCrossServerComparison:
         for result in [hapi_result, smart_result]:
             assert result['resourceType'] == 'Bundle'
             assert result['type'] == 'searchset'
-            assert 'entry' in result or 'total' in result
+            # total and entry are both optional in a searchset; public HAPI's
+            # offset paging can return a first page carrying only link.
+            assert 'entry' in result or 'total' in result or 'link' in result
 
     @pytest.mark.skipif(not (_hapi_available and _smart_available),
                         reason='Both FHIR servers must be reachable')
