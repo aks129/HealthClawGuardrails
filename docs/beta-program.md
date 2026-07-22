@@ -14,7 +14,9 @@ nowhere?"* — deserves a direct answer.
 **The building is not the problem. The evidence:**
 
 - Guardrail conformance is **Grade A, 7/7, verifiable live** on prod right now
-  (`GET /r6/fhir/$conformance`).
+  (`GET /r6/fhir/$conformance`). Scope, stated in the report itself: a
+  self-test of the guardrail layer against synthetic data — not a HIPAA
+  assessment, third-party audit, or pentest of the deployment ([#186](../../../issues/186)).
 - The own-data path is **proven end to end**: a real Epic record, 250 resources,
   Fasten connect → verify → export → webhook → ingest → agent read →
   `$interpret` + `$care-gaps`, all on prod.

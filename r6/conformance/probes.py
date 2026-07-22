@@ -14,10 +14,23 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit
+
+# Stated in every report output (#186): the grade must declare its own scope
+# so a Grade A is never mistaken for a HIPAA assessment or third-party audit.
+SCOPE_STATEMENT = (
+    "This grade covers the HealthClaw guardrail layer only (self-test, "
+    "synthetic data). It is NOT a HIPAA Security Rule assessment, a "
+    "third-party audit, or a penetration test of your deployment. "
+    "Infrastructure, BAAs, encryption, and access controls are the "
+    "deployer's responsibility. A third party can run this same harness "
+    "against any instance as one input to a real assessment — it does not "
+    "substitute for one."
+)
 
 # Distinctive synthetic tokens — if any survive a redacted read, redaction failed.
 _SSN = "000-00-9999"
@@ -157,6 +170,7 @@ class ConformanceReport:
         return {
             "target": self.base, "tenant": self.tenant,
             "passed": self.passed, "grade": self.grade,
+            "scope": SCOPE_STATEMENT,
             "score": {"passed": p, "total": t},
             "properties": [
                 {"key": r.key, "property": r.property, "passed": r.passed,
@@ -173,6 +187,10 @@ class ConformanceReport:
         lines = [f"HealthClaw Guardrail Conformance — {self.base or 'local'} "
                  f"[tenant={self.tenant}]",
                  f"  Grade: {self.grade}   ({p}/{t} properties)", ""]
+        lines += textwrap.wrap(
+            f"SCOPE: {SCOPE_STATEMENT}", width=78,
+            initial_indent="  ", subsequent_indent="  ")
+        lines.append("")
         for r in self.results:
             label = r.property
             if r.grade is not None:

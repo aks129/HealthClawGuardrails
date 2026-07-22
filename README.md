@@ -28,7 +28,7 @@
 [![Tests](https://img.shields.io/badge/tests-1490%2B%20Python%20%2B%20170%20Node-22c55e?style=flat-square)](#testing)
 [![MCP tools](https://img.shields.io/badge/MCP%20tools-29-6366f1?style=flat-square&logo=anthropic)](#mcp-tools-29)
 [![FHIR](https://img.shields.io/badge/FHIR-R4%20US%20Core%20v9-0ea5e9?style=flat-square)](#fhir-version-support)
-[![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#prove-it-guardrail-conformance)
+[![Guardrail conformance](https://img.shields.io/endpoint?url=https%3A%2F%2Fapp.healthclaw.io%2Fr6%2Ffhir%2F%24conformance%3Fformat%3Dshields&style=flat-square)](#what-this-grade-means-and-what-it-doesnt)
 [![Glama score](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails/badges/score.svg)](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white)](#docker)
@@ -146,6 +146,18 @@ report; `--mcp-url` additionally grades MCP `tools/call` error signaling as a
 separate profile. For an authenticated MCP deployment, set `MCP_AUTH_TOKEN` or
 pass `--mcp-auth-token`. Library API:
 `from r6.conformance import LiveProbeClient, ProbeContext, run_conformance`.
+
+### What this grade means (and what it doesn't)
+
+The grade covers the **HealthClaw guardrail layer only** — a self-test of the
+seven properties against synthetic data it just created. It is **not** a HIPAA
+Security Rule assessment, a third-party audit, or a penetration test of your
+deployment: infrastructure, BAAs, encryption at rest/in transit, and access
+controls remain the deployer's responsibility (see
+[Known Limitations](#known-limitations)). Because the harness is
+deployment-agnostic, a third party *can* run it against any instance as one
+input to a real assessment — it does not substitute for one. The report states
+this scope itself in every output format.
 
 ## Install as a Claude Plugin
 
@@ -654,6 +666,9 @@ in-process cache when Redis is unavailable).
 
 ## Known Limitations
 
+- **The conformance grade is a self-test of the guardrail layer, not a HIPAA
+  assessment or third-party audit** — see
+  [What this grade means](#what-this-grade-means-and-what-it-doesnt)
 - Local mode: JSON blob storage with table-scan search (no indexed fields)
 - **Redaction is HIPAA Safe-Harbor-*style* field redaction** (demographics), **not Expert Determination**. It's a compensating control that removes identifier-class fields; it is not a legal de-identification determination. Production de-id rigor (profile-specific recursive allowlists, an Expert-Determination path) is on the [roadmap](ROADMAP.md) ([#112](../../issues/112)).
 - **Validation is structural**, not full StructureDefinition/profile conformance or terminology binding. What's demonstrated is the guardrail *contract* (redact + audit + step-up + human-confirm + tenant isolation + error fidelity), not production validation depth — that's tracked in [#112](../../issues/112).
