@@ -54,6 +54,24 @@ def test_conformance_shields_badge_format(client):
     assert set(b) == {"schemaVersion", "label", "message", "color"}
 
 
+def test_conformance_report_states_its_own_scope(client):
+    # #186: a Grade A must never read as a HIPAA assessment or third-party
+    # audit — the report says so itself in every substantive output format.
+    from r6.conformance.probes import SCOPE_STATEMENT
+
+    assert "NOT a HIPAA Security Rule assessment" in SCOPE_STATEMENT
+    assert "guardrail layer only" in SCOPE_STATEMENT
+
+    body = client.get("/r6/fhir/$conformance").get_json()
+    assert body["scope"] == SCOPE_STATEMENT
+
+    text = client.get("/r6/fhir/$conformance?format=text").get_data(as_text=True)
+    assert "SCOPE:" in text
+    assert "NOT a HIPAA Security Rule assessment" in text
+    # Scope sits between the grade and the property scorecard.
+    assert text.index("Grade:") < text.index("SCOPE:") < text.index("[PASS]")
+
+
 def test_conformance_is_cached_between_calls(client):
     # ?fresh=1 forces a new run (so badge/monitor traffic can reuse the cache
     # instead of re-running the harness — and its synthetic writes — each hit).
