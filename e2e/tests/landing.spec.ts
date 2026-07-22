@@ -30,7 +30,9 @@ test.describe('Landing page', () => {
   });
 
   test('primary CTA points at CareAgents', async ({ page }) => {
-    const cta = page.getByRole('link', { name: /Try CareAgents/ });
+    // Exact name: the audience card's link also contains "Try CareAgents",
+    // so a substring match resolves to 2 elements and trips strict mode.
+    const cta = page.getByRole('link', { name: 'Try CareAgents →', exact: true });
     await expect(cta).toBeVisible();
     // External link — assert the target rather than navigating away.
     await expect(cta).toHaveAttribute('href', 'https://careagents.cloud');
