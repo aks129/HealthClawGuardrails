@@ -209,7 +209,7 @@ function sanitizeOperationOutcome(
     : undefined;
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+export async function readBoundedJson(response: Response): Promise<unknown> {
   const contentLength = response.headers?.get("content-length");
   if (contentLength) {
     const size = Number(contentLength);
@@ -243,6 +243,29 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+// Non-FHIR endpoints (action rail, SHL, internal token/seed, wearables,
+// sources) return `{ error: "message", ... }` rather than an OperationOutcome.
+// Forwarding that body verbatim leaked infra detail and could echo PHI-dense
+// request payloads to the agent. `sanitizeBackendDetail` surfaces ONLY the
+// controlled `error` string and drops every other field.
+const MAX_BACKEND_DETAIL_CHARS = 500;
+
+// Fixed, URL-free message for the exception path. node-fetch v2 formats a
+// connection error as `request to ${url} failed, reason: ...`, which would
+// otherwise leak FHIR_BASE_URL and the tenant_id query param via String(e).
+export const UPSTREAM_REQUEST_FAILED =
+  "The upstream request could not be completed.";
+
+export function sanitizeBackendDetail(body: unknown): { error: string } {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const err = (body as Record<string, unknown>).error;
+    if (typeof err === "string" && err.length > 0) {
+      return { error: err.slice(0, MAX_BACKEND_DETAIL_CHARS) };
+    }
+  }
+  return { error: UPSTREAM_REQUEST_FAILED };
 }
 
 export async function backendFailureResult(
