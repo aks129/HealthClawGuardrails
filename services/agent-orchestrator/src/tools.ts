@@ -25,7 +25,12 @@ import {
   BackendTimeoutError,
   backendTimeoutResult,
 } from "./fetch-timeout";
-import { backendFailureResult } from "./backend-failure";
+import {
+  backendFailureResult,
+  readBoundedJson,
+  sanitizeBackendDetail,
+  UPSTREAM_REQUEST_FAILED,
+} from "./backend-failure";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
 import { generateMasterSecret, deriveAuth, deriveKey } from "./ktc/hkdf";
 import { encryptJWE } from "./ktc/jwe";
@@ -858,7 +863,8 @@ export class FHIRTools {
             }
           );
           const data = (await resp.json()) as Record<string, unknown>;
-          if (!resp.ok) return { error: "Failed to issue token", detail: data };
+          if (!resp.ok)
+            return { error: "Failed to issue token", detail: sanitizeBackendDetail(data) };
           return {
             token: data.token,
             tenant_id: tokenTenant,
@@ -897,7 +903,7 @@ export class FHIRTools {
             30_000
           );
           const data = (await resp.json()) as Record<string, unknown>;
-          if (!resp.ok) return { error: "Seed failed", detail: data };
+          if (!resp.ok) return { error: "Seed failed", detail: sanitizeBackendDetail(data) };
           return {
             ...data,
             _mcp_summary: `Seeded ${(data.created as unknown[])?.length ?? 0} resources into tenant '${seedTenant}'. The step_up_token is ready for write operations.`,
@@ -1570,14 +1576,14 @@ export class FHIRTools {
       if (!resp.ok) {
         return {
           error: `wearables status failed with ${resp.status}`,
-          detail: status,
+          detail: sanitizeBackendDetail(status),
         };
       }
     } catch (e) {
       if (e instanceof BackendTimeoutError) throw e; // converted centrally in executeTool
       return {
         error: "wearables status request failed",
-        detail: String(e),
+        detail: UPSTREAM_REQUEST_FAILED,
       };
     }
 
@@ -1647,7 +1653,7 @@ export class FHIRTools {
       resp = await fetchWithTimeout(url, { headers });
     } catch (e) {
       if (e instanceof BackendTimeoutError) throw e; // converted centrally in executeTool
-      return { error: "sources_check request failed", detail: String(e) };
+      return { error: "sources_check request failed", detail: UPSTREAM_REQUEST_FAILED };
     }
 
     let data: Record<string, unknown>;
@@ -1660,7 +1666,7 @@ export class FHIRTools {
     if (!resp.ok) {
       const result: Record<string, unknown> = {
         error: `sources_check failed with status ${resp.status}`,
-        detail: data,
+        detail: sanitizeBackendDetail(data),
       };
       if (resp.status === 401) result.requires_step_up = true;
       return result;
@@ -1914,12 +1920,7 @@ export class FHIRTools {
       body: JSON.stringify({ kind, payload }),
     });
     if (!resp.ok) {
-      let detail: unknown = null;
-      try {
-        detail = await resp.json();
-      } catch {
-        try { detail = await resp.text(); } catch { detail = null; }
-      }
+      const detail = sanitizeBackendDetail(await readBoundedJson(resp));
       return { error: `action_propose failed with status ${resp.status}`, detail };
     }
     return (await resp.json()) as Record<string, unknown>;
@@ -1945,12 +1946,7 @@ export class FHIRTools {
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
-      let detail: unknown = null;
-      try {
-        detail = await resp.json();
-      } catch {
-        try { detail = await resp.text(); } catch { detail = null; }
-      }
+      const detail = sanitizeBackendDetail(await readBoundedJson(resp));
       return { error: `rx_transfer_request failed with status ${resp.status}`, detail };
     }
     return (await resp.json()) as Record<string, unknown>;
@@ -1984,16 +1980,9 @@ export class FHIRTools {
       return result;
     }
 
-    let detail: unknown = null;
-    try {
-      detail = await resp.json();
-    } catch {
-      try { detail = await resp.text(); } catch { detail = null; }
-    }
+    const detail = sanitizeBackendDetail(await readBoundedJson(resp));
     const serverMessage =
-      detail && typeof detail === "object" && "error" in (detail as Record<string, unknown>)
-        ? String((detail as Record<string, unknown>).error)
-        : undefined;
+      detail.error !== UPSTREAM_REQUEST_FAILED ? detail.error : undefined;
 
     const result: Record<string, unknown> = { error: `action_commit failed with status ${resp.status}`, detail };
     if (resp.status === 401) {
@@ -2017,12 +2006,7 @@ export class FHIRTools {
       headers,
     });
     if (!resp.ok) {
-      let detail: unknown = null;
-      try {
-        detail = await resp.json();
-      } catch {
-        try { detail = await resp.text(); } catch { detail = null; }
-      }
+      const detail = sanitizeBackendDetail(await readBoundedJson(resp));
       return { error: `action_status failed with status ${resp.status}`, detail };
     }
     return (await resp.json()) as Record<string, unknown>;
@@ -2052,13 +2036,9 @@ export class FHIRTools {
     });
 
     if (!bundleResp.ok) {
-      let detail: unknown = null;
-      try { detail = await bundleResp.json(); } catch {
-        try { detail = await bundleResp.text(); } catch { detail = null; }
-      }
       const result: Record<string, unknown> = {
         error: `share-bundle fetch failed with status ${bundleResp.status}`,
-        detail,
+        detail: sanitizeBackendDetail(await readBoundedJson(bundleResp)),
       };
       if (bundleResp.status === 401) result.requires_step_up = true;
       return result;
@@ -2096,11 +2076,10 @@ export class FHIRTools {
     });
 
     if (!createLinkResp.ok) {
-      let detail: unknown = null;
-      try { detail = await createLinkResp.json(); } catch {
-        try { detail = await createLinkResp.text(); } catch { detail = null; }
-      }
-      return { error: `SHL /api/links failed with status ${createLinkResp.status}`, detail };
+      return {
+        error: `SHL /api/links failed with status ${createLinkResp.status}`,
+        detail: sanitizeBackendDetail(await readBoundedJson(createLinkResp)),
+      };
     }
 
     const linkData = (await createLinkResp.json()) as { id: string; url: string };
@@ -2122,11 +2101,10 @@ export class FHIRTools {
     });
 
     if (!uploadResp.ok) {
-      let detail: unknown = null;
-      try { detail = await uploadResp.json(); } catch {
-        try { detail = await uploadResp.text(); } catch { detail = null; }
-      }
-      return { error: `SHL /api/manage/files failed with status ${uploadResp.status}`, detail };
+      return {
+        error: `SHL /api/manage/files failed with status ${uploadResp.status}`,
+        detail: sanitizeBackendDetail(await readBoundedJson(uploadResp)),
+      };
     }
 
     // Step 6: Build the shlink URI

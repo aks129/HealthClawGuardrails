@@ -1542,6 +1542,75 @@ describe("Tool Execution Tests", () => {
     expect(result).toHaveProperty("requires_step_up", true);
   });
 
+  // -- information leakage (issue #192) --
+
+  it("sources_check connection error does not leak the backend URL (String(e))", async () => {
+    // node-fetch v2 formats connection failures as
+    // `request to https://host/path?tenant=... failed, reason: ...`.
+    const netErr = new Error(
+      "request to https://internal-fhir.example.com/command-center/api/sources-summary?tenant=ev-personal failed, reason: getaddrinfo ENOTFOUND"
+    );
+    mockFetch.mockRejectedValueOnce(netErr);
+
+    const result = await tools.executeTool(
+      "sources_check",
+      {},
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("internal-fhir.example.com");
+    expect(serialized).not.toContain("tenant=ev-personal");
+    expect(serialized).not.toContain("ENOTFOUND");
+    expect(result.detail).toBe("The upstream request could not be completed.");
+  });
+
+  it("wearables_sync_status connection error does not leak the backend URL", async () => {
+    mockFetch.mockRejectedValueOnce(
+      new Error(
+        "request to https://internal-fhir.example.com/wearables/sync-status?tenant_id=ev-personal failed, reason: ECONNREFUSED"
+      )
+    );
+
+    const result = await tools.executeTool(
+      "wearables_sync_status",
+      {},
+      { "x-tenant-id": "ev-personal" }
+    );
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("internal-fhir.example.com");
+    expect(serialized).not.toContain("ECONNREFUSED");
+    expect(result.detail).toBe("The upstream request could not be completed.");
+  });
+
+  it("action_propose error detail drops non-error fields from the backend body", async () => {
+    // A backend error body could carry PHI-adjacent or infra fields alongside
+    // the controlled `error` string; only the string may be forwarded.
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          error: "Proposal validation failed",
+          patient_ssn: "000-00-9999",
+          upstream_url: "https://internal-fhir.example.com",
+        },
+        400
+      )
+    );
+
+    const result = await tools.executeTool(
+      "action_propose",
+      { kind: "phone-call", payload: { to: "Dr. Smith", phone: "+15551234567" } },
+      { "x-step-up-token": "t", "x-tenant-id": "ev-personal" }
+    );
+
+    const detail = result.detail as Record<string, unknown>;
+    expect(detail).toEqual({ error: "Proposal validation failed" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("000-00-9999");
+    expect(serialized).not.toContain("internal-fhir.example.com");
+  });
+
   // -- shl_generate --
 
   it("shl_generate without step-up token returns requires_step_up (no fetch made)", async () => {
