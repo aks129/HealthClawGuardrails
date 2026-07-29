@@ -2492,6 +2492,8 @@ describe("Express App Tests", () => {
     afterEach(() => {
       if (originalToken === undefined) delete process.env.MCP_AUTH_TOKEN;
       else process.env.MCP_AUTH_TOKEN = originalToken;
+      delete process.env.MCP_PUBLIC_DEMO;
+      delete process.env.MCP_DEMO_TENANT;
     });
 
     it.each([
@@ -2596,6 +2598,64 @@ describe("Express App Tests", () => {
       expect(() =>
         assertMCPAuthConfigured({ NODE_ENV: "production", MCP_AUTH_TOKEN: "configured" })
       ).not.toThrow();
+    });
+
+    // --- Public demo mode (MCP_PUBLIC_DEMO): open, but demo-tenant-only ---
+
+    it("allows production startup without a token when MCP_PUBLIC_DEMO is set", () => {
+      const assertMCPAuthConfigured = (
+        indexModule as unknown as {
+          assertMCPAuthConfigured: (env: NodeJS.ProcessEnv) => void;
+        }
+      ).assertMCPAuthConfigured;
+
+      expect(() =>
+        assertMCPAuthConfigured({ NODE_ENV: "production", MCP_PUBLIC_DEMO: "true" })
+      ).not.toThrow();
+      // Guard still fires when neither a token nor demo mode is configured.
+      expect(() => assertMCPAuthConfigured({ NODE_ENV: "production" })).toThrow(
+        "MCP_AUTH_TOKEN"
+      );
+    });
+
+    it("serves MCP unauthenticated in public demo mode", async () => {
+      delete process.env.MCP_AUTH_TOKEN;
+      process.env.MCP_PUBLIC_DEMO = "true";
+
+      const res = await request(app)
+        .post("/mcp/rpc")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.result.tools.length).toBeGreaterThan(0);
+    });
+
+    it("pins the synthetic demo tenant and drops a client-supplied tenant in demo mode", async () => {
+      delete process.env.MCP_AUTH_TOKEN;
+      process.env.MCP_PUBLIC_DEMO = "true";
+      mockFetch.mockResolvedValueOnce(
+        fakeResponse({ resourceType: "Patient", id: "pt-1" })
+      );
+
+      await request(app)
+        .post("/mcp/rpc")
+        .set("X-Tenant-Id", "attacker-real-tenant")
+        .send({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "fhir_read",
+            arguments: { resource_type: "Patient", resource_id: "pt-1" },
+          },
+        })
+        .expect(200);
+
+      // An open caller can never steer the backend at a real tenant: the
+      // request is forwarded as the pinned demo tenant, the attacker's is gone.
+      const serialized = JSON.stringify(mockFetch.mock.calls);
+      expect(serialized).toContain("desktop-demo");
+      expect(serialized).not.toContain("attacker-real-tenant");
     });
   });
 });

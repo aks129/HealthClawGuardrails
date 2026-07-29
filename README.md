@@ -59,9 +59,12 @@ The hosted demo runs synthetic data behind the full guardrail stack:
 curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
 ```
 
-Point any MCP client at the live server — URL `https://mcp-server-production-5112.up.railway.app/mcp`,
-header `X-Tenant-Id: desktop-demo` — then ask: *"Search my health records for lab results and explain
-them in plain language."* One-command installs:
+Point any MCP client at the **public demo server** — URL `https://mcp-demo-production-ee2c.up.railway.app/mcp`,
+no key required — then ask: *"Search my health records for lab results and explain them in plain
+language."* The demo server is unauthenticated but hard-pinned to a synthetic demo tenant, so it can
+only ever serve fake data. The **production endpoint** (`https://mcp-server-production-5112.up.railway.app/mcp`)
+requires a deployment-scoped `Authorization: Bearer <token>` — real records stay behind auth, always.
+One-command installs:
 `gemini extensions install https://github.com/aks129/HealthClawGuardrails` ·
 `claude plugin marketplace add aks129/HealthClawGuardrails` ·
 skills on [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails)
@@ -517,6 +520,8 @@ Coverage, ServiceRequest, Specimen, FamilyMemberHistory
 | `PUBLIC_TENANTS` | Production | — | Explicit comma-separated synthetic/demo tenant allowlist |
 | `REDIS_URL` | Production | — | Shared nonce, OAuth, rate-limit, and worker state |
 | `MCP_AUTH_TOKEN` | HTTP MCP | — | Bearer credential required by MCP HTTP transports |
+| `MCP_PUBLIC_DEMO` | No | `false` | Run an **unauthenticated** MCP server hard-pinned to a synthetic demo tenant (the public keyless demo). Never set on a server that reaches real tenants |
+| `MCP_DEMO_TENANT` | No | `desktop-demo` | Synthetic tenant the demo server is pinned to when `MCP_PUBLIC_DEMO` is set |
 | `FHIR_UPSTREAM_TIMEOUT` | No | 15 | Upstream request timeout (seconds) |
 | `FHIR_LOCAL_BASE_URL` | No | — | Local URL for response URL rewriting |
 

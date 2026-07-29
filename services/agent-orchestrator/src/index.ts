@@ -36,6 +36,22 @@ const { version: SERVER_VERSION } = require("../package.json") as {
 const app = express();
 app.use(express.json());
 
+// Public demo mode: an explicit, opt-in exception to the production auth
+// requirement. When MCP_PUBLIC_DEMO is set, the server runs UNAUTHENTICATED but
+// is hard-pinned to a single synthetic demo tenant — an open caller can never
+// reach a real tenant or bring-your-own PHI. This is how the keyless
+// "60-second" demo endpoint runs; the real product server keeps its
+// MCP_AUTH_TOKEN and never sets this flag. Read per-request (like
+// MCP_AUTH_TOKEN) rather than cached, so config is authoritative at call time.
+function isPublicDemo(): boolean {
+  return (
+    process.env.MCP_PUBLIC_DEMO === "true" || process.env.MCP_PUBLIC_DEMO === "1"
+  );
+}
+function demoTenant(): string {
+  return process.env.MCP_DEMO_TENANT || "desktop-demo";
+}
+
 // Minimal request access log so we can see which probes from marketplace
 // platforms (PromptOpinion, Devpost reviewers, Claude Desktop) actually reach
 // us. Logs to stderr only; bodies are NOT logged.
@@ -83,6 +99,7 @@ app.use((req, res, next) => {
   if (
     req.method === "OPTIONS" ||
     !expectedToken ||
+    isPublicDemo() ||
     !isMCPTransportPath(req.path)
   ) {
     return next();
@@ -162,6 +179,13 @@ app.use((req, res, next) => {
 
 function extractHeaders(req: express.Request): Record<string, string> {
   const h: Record<string, string> = {};
+  if (isPublicDemo()) {
+    // Open demo endpoint: pin to the synthetic demo tenant and ignore every
+    // client-supplied tenant, step-up, or bring-your-own-FHIR header, so an
+    // unauthenticated caller can only ever reach synthetic demo data.
+    h["x-tenant-id"] = demoTenant();
+    return h;
+  }
   const tenantId = req.headers["x-tenant-id"];
   if (typeof tenantId === "string") h["x-tenant-id"] = tenantId;
   const stepUp = req.headers["x-step-up-token"];
@@ -282,7 +306,12 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
       delete toolArgs._patientId;
     }
 
-    return executeMCPTool(fhirTools, name, toolArgs, toolHeaders);
+    // Demo mode overrides every client-supplied header (incl. _tenantId tool
+    // args) with the pinned synthetic tenant — an open caller stays boxed in.
+    const finalHeaders = isPublicDemo()
+      ? { "x-tenant-id": demoTenant() }
+      : toolHeaders;
+    return executeMCPTool(fhirTools, name, toolArgs, finalHeaders);
   });
 
   return server;
@@ -650,8 +679,13 @@ app.get("/health", (_req, res) => {
 // --- Start Server ---
 
 function assertMCPAuthConfigured(env: NodeJS.ProcessEnv = process.env): void {
-  if (env.NODE_ENV === "production" && !env.MCP_AUTH_TOKEN?.trim()) {
-    throw new Error("MCP_AUTH_TOKEN is required when NODE_ENV=production");
+  const demo =
+    env.MCP_PUBLIC_DEMO === "true" || env.MCP_PUBLIC_DEMO === "1";
+  if (env.NODE_ENV === "production" && !env.MCP_AUTH_TOKEN?.trim() && !demo) {
+    throw new Error(
+      "MCP_AUTH_TOKEN is required when NODE_ENV=production " +
+        "(or set MCP_PUBLIC_DEMO=true to run an unauthenticated, demo-tenant-only server)"
+    );
   }
 }
 
@@ -664,6 +698,9 @@ if (require.main === module) {
     console.error(`SSE endpoint:    http://localhost:${PORT}/sse`);
     console.error(`HTTP bridge:     http://localhost:${PORT}/mcp/rpc`);
     console.error(`CORS: ${ALLOWED_ORIGINS.length > 0 ? `allowlist (${ALLOWED_ORIGINS.join(", ")})` : "deny-all (set ALLOWED_ORIGINS to enable)"}`);
+    if (isPublicDemo()) {
+      console.error(`PUBLIC DEMO MODE: unauthenticated, hard-pinned to synthetic tenant '${demoTenant()}'`);
+    }
   });
 }
 
