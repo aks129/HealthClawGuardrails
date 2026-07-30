@@ -37,5 +37,8 @@
     "testMatch": [
       "**/*.test.ts"
     ]
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.9"
   }
 }
