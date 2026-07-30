@@ -78,6 +78,12 @@ class Connection(Base):
     # change doesn't silently claim consent it never obtained.
     consented_at = Column(Float, nullable=True)
     consent_version = Column(String(16), nullable=True)
+    # Refresh state. A refresh re-pulls the same tenant; HealthClaw's ingest
+    # upserts on (tenant, resource_type, id), so re-pulling never duplicates.
+    # last_count is the record count observed at the end of the last sync, so
+    # the next one can report "N new records" without diffing every resource.
+    last_synced_at = Column(Float, nullable=True)
+    last_count = Column(Integer, nullable=True)
     account = relationship("Account", back_populates="connections")
     agents = relationship("Agent", back_populates="connection")
 
@@ -154,6 +160,13 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_connections ADD COLUMN consent_version "
                     "VARCHAR(16)"))
+            if "last_synced_at" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE ca_connections ADD COLUMN last_synced_at "
+                    "FLOAT"))
+            if "last_count" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE ca_connections ADD COLUMN last_count INTEGER"))
 
 
 def make_engine(url: str):

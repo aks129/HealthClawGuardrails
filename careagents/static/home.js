@@ -70,6 +70,53 @@
     }, 5000);
   });
 
+  // --- refresh an existing connection: check the provider for new records ---
+  // Same server endpoint every surface uses, so the consent rules and the
+  // "what did we actually pull" reporting can't drift between web and chat.
+  document.querySelectorAll(".conn-refresh").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".conn-card");
+      const msg = card.querySelector(".conn-refresh-msg");
+      const say = (t) => { msg.textContent = t; msg.hidden = false; };
+      btn.disabled = true;
+      say("Checking…");
+      let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
+      // 428 means this deployment wants consent re-affirmed for the re-pull.
+      if (!res.ok && res.d.error === "consent_required") {
+        const agreed = await showConsentCard();
+        if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
+        res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
+                         { consent: true });
+      }
+      btn.disabled = false;
+      if (!res.ok) return say(res.d.error || "Couldn't refresh right now.");
+      if (res.d.unsupported) return say(res.d.reason);
+      if (res.d.reauth_url) {
+        window.open(res.d.reauth_url, "_blank", "noopener");
+        say("Finish signing in to your provider — new records appear here.");
+        watchForNewRecords(card, msg);
+      }
+    });
+  });
+
+  // After a re-authorization, poll until the provider delivers, then report
+  // the growth the server measured against the pre-refresh baseline.
+  function watchForNewRecords(card, msg) {
+    const tenant = card.dataset.tenant;
+    let ticks = 0;
+    const iv = setInterval(async () => {
+      if (++ticks > 60) return clearInterval(iv);  // ~5 min, then stop quietly
+      const r = await fetch(`/api/connections/${tenant}/poll`);
+      if (!r.ok) return;
+      const d = await r.json();
+      if (typeof d.new_records === "number" && d.new_records > 0) {
+        clearInterval(iv);
+        msg.textContent = `${d.new_records} new record` +
+          (d.new_records === 1 ? "" : "s") + " added.";
+      }
+    }, 5000);
+  }
+
   // --- new agent modal ---
   const modal = $("agent-modal");
   const hasConn = () => $("a-conn") && $("a-conn").options.length > 0;
