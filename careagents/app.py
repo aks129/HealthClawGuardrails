@@ -218,17 +218,74 @@ def create_app(config: Config | None = None,
             out["connect_url"] = plan["connect_url"]
         return jsonify(out)
 
+    @app.post("/api/connections/<conn_id>/refresh")
+    @login_required
+    def refresh_connection(conn_id):
+        """Re-pull an existing connection.
+
+        Surface-agnostic on purpose: web, Telegram, and iMessage all land here,
+        so the consent check and the sync bookkeeping cannot differ by surface.
+        Refresh reuses the connection's existing tenant — HealthClaw's ingest
+        upserts on (tenant, resource_type, id), so repeating this updates
+        records rather than duplicating them.
+        """
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None:
+            return jsonify({"error": "unknown connection"}), 404
+
+        body = request.get_json(silent=True) or {}
+        plan = connectors.refresh(conn["kind"], conn["tenant_id"],
+                                  body.get("provider"), cfg, hc)
+        if plan.get("error"):
+            return jsonify({"error": plan["error"]}), plan.get("code", 400)
+        if plan.get("unsupported"):
+            return jsonify({"unsupported": True, "reason": plan["reason"]})
+
+        # Same server-side consent gate as the initial connect: a client that
+        # skips the card is refused here, on every surface.
+        if plan.get("requires_consent") and body.get("consent") is not True:
+            return jsonify({"error": "consent_required",
+                            "consent_version": CONSENT_VERSION}), 428
+
+        # Baseline the count BEFORE re-authorizing so the follow-up poll can
+        # report what the refresh actually added.
+        try:
+            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+        except HealthClawError:
+            return jsonify({"error": "records service unavailable"}), 503
+
+        out = {"status": "reauth", "connection_id": conn_id}
+        if plan.get("reauth_url"):
+            out["reauth_url"] = plan["reauth_url"]
+        return jsonify(out)
+
     @app.get("/api/connections/<conn_tenant>/poll")
     @login_required
     def poll_connection(conn_tenant):
         acct = current_account()
         # ownership: the tenant must belong to one of the account's connections
-        owned = {c["tenant_id"] for c in svc.list_home(acct.id)["connections"]}
-        if conn_tenant not in owned:
+        conns = {c["tenant_id"]: c
+                 for c in svc.list_home(acct.id)["connections"]}
+        if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
         if hc.tenant_has_records(conn_tenant):
             svc.set_connection_status(conn_tenant, "active")
-            return jsonify({"status": "active"})
+            out = {"status": "active"}
+            # After a refresh, report growth against the baseline that refresh
+            # recorded. Read-only: the count is re-baselined by the next
+            # refresh, so repeated polls keep showing the same number instead
+            # of decaying to zero while the patient is still reading it.
+            baseline = conns[conn_tenant].get("last_count")
+            if baseline is not None:
+                try:
+                    current = hc.record_count(conn_tenant)
+                except HealthClawError:
+                    current = None
+                if current is not None:
+                    out["record_count"] = current
+                    out["new_records"] = max(0, current - int(baseline))
+            return jsonify(out)
         return jsonify({"status": "pending"})
 
     # --- agents --------------------------------------------------------------

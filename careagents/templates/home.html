@@ -50,10 +50,16 @@
       {% if not connections %}<span class="step-tag">Step 1</span>{% endif %}</div>
     <div class="card-grid" id="connections">
       {% for c in connections %}
-      <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}">
+      <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
+           data-conn="{{ c.id }}" data-kind="{{ c.kind }}">
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">{{ c.provider or c.kind }}</div>
         <span class="status status-{{ c.status }}">{{ c.status }}</span>
+        {% if c.kind != 'sample' %}
+        <button type="button" class="conn-refresh" data-conn="{{ c.id }}"
+                title="Check your provider for new records">Refresh</button>
+        <span class="conn-refresh-msg" hidden></span>
+        {% endif %}
       </div>
       {% endfor %}
     </div>

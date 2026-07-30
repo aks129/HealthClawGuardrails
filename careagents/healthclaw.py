@@ -203,6 +203,27 @@ class HealthClawClient:
         except HealthClawError:
             return False
 
+    # Counted on refresh to report growth. Deliberately a fixed, clinically
+    # meaningful set rather than every supported type — this is a progress
+    # signal for the patient, not an inventory.
+    COUNTED_TYPES = ("Condition", "Observation", "MedicationRequest",
+                     "AllergyIntolerance", "Immunization", "DocumentReference")
+
+    def record_count(self, tenant: str) -> int:
+        """Total records across the counted resource types (0 on failure).
+
+        Uses `_summary=count`, so this stays cheap and never pulls PHI into
+        this app — only totals cross the boundary.
+        """
+        total = 0
+        for rt in self.COUNTED_TYPES:
+            try:
+                bundle = self.search(tenant, rt, {"_summary": "count"})
+                total += int(bundle.get("total") or 0)
+            except HealthClawError:
+                continue
+        return total
+
     # --- surfaces: Telegram binding ------------------------------------------
 
     def bind_telegram(self, tenant: str, chat_id: int) -> bool:

@@ -134,3 +134,58 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
 
     # import + soon tiers: no live flow yet — record intent, never dead-end.
     return {"soon": True}
+
+
+def refresh(connector_id: str, tenant: str, provider: str | None,
+            cfg, client) -> dict:
+    """Plan a re-pull of an EXISTING connection. Sibling of `start`.
+
+    Returns one of:
+      {"reauth_url": url, "requires_consent": bool}  — patient must re-authorize
+      {"reingest": True}                             — server can re-pull alone
+      {"unsupported": True, "reason": str}           — nothing to refresh
+      {"error": msg, "code": int}                    — refuse
+
+    Refreshing reuses the SAME tenant, which is what makes this safe to repeat:
+    HealthClaw's ingest upserts on (tenant, resource_type, id), so a re-pull
+    updates existing resources instead of duplicating them.
+
+    We deliberately do NOT hold long-lived provider credentials to make this
+    one-tap. Re-authorizing per refresh keeps PHI-capable refresh tokens out of
+    this app entirely; the cost is one portal login, which the patient is
+    already used to. Fasten is the exception — its connection is server-side
+    and its webhook drives ingest, so it needs no patient round-trip.
+    """
+    spec = _BY_ID.get(connector_id)
+    if spec is None:
+        return {"error": "unknown connector", "code": 404}
+
+    if connector_id == "sample":
+        # Synthetic data is generated, not fetched — re-seeding would only
+        # rewrite the same fixture. Say so rather than pretending to sync.
+        return {"unsupported": True,
+                "reason": "Sample records are synthetic — there's nothing new "
+                          "to pull. Connect a real source to see updates."}
+
+    if connector_id == "fasten":
+        if not getattr(cfg, "fasten_public_key", ""):
+            return {"error": "real-records connect isn't configured on this "
+                             "deployment yet", "code": 503}
+        # The Fasten connection lives server-side and its webhook ingests the
+        # export, so the patient re-opens the same connect page and Fasten
+        # re-runs against the connection it already holds.
+        return {"reauth_url": client.fasten_connect_url(tenant),
+                "requires_consent": False}
+
+    if connector_id == "wearable":
+        if not getattr(cfg, "wearables_enabled", False):
+            return {"unsupported": True,
+                    "reason": "Wearables aren't wired on this deployment yet."}
+        prov = (provider or "").lower()
+        if prov not in _WEARABLE_IDS:
+            return {"error": "unknown wearable provider", "code": 400}
+        return {"reauth_url": client.wearables_connect_url(tenant, prov),
+                "requires_consent": False}
+
+    return {"unsupported": True,
+            "reason": "This source doesn't support refreshing yet."}

@@ -100,6 +100,12 @@ class FakeClient:
     def tenant_has_records(self, tenant):
         return True
 
+    # Settable so a test can simulate a refresh pulling additional records.
+    counted = 100
+
+    def record_count(self, tenant):
+        return self.counted
+
     def bind_telegram(self, tenant, chat_id):
         self.bound.append((tenant, chat_id))
         return True
@@ -378,6 +384,81 @@ def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     # the pending connection polls to active once records land
     assert c.get(f"/api/connections/{tenant}/poll").get_json()["status"] == "active"
     assert c.get("/api/connections/not-mine/poll").status_code == 404
+
+
+# --- refresh an existing connection ------------------------------------------
+
+def test_refresh_sample_connection_is_honestly_unsupported(app, svc, monkeypatch):
+    # Synthetic data is generated, not fetched — say so instead of pretending
+    # to sync (and instead of re-seeding the same fixture).
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    r = c.post(f"/api/connections/{conn}/refresh")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["unsupported"] is True
+    assert "synthetic" in d["reason"].lower()
+
+
+def test_refresh_real_connection_returns_reauth_url(app, svc, monkeypatch):
+    # No stored provider credentials by design: refresh hands the patient back
+    # to the same connect page rather than replaying a long-lived token.
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/fasten",
+                  json={"consent": True}).get_json()["id"]
+    r = c.post(f"/api/connections/{conn}/refresh")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["status"] == "reauth"
+    assert "/connect/" in d["reauth_url"]
+
+
+def test_refresh_rejects_a_connection_you_do_not_own(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert c.post("/api/connections/conn_someone_else/refresh").status_code == 404
+
+
+def test_refresh_requires_a_session(app):
+    assert app.test_client().post(
+        "/api/connections/conn_x/refresh").status_code == 401
+
+
+def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch):
+    # The whole point of refresh: tell the patient what it actually pulled.
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    # Refresh baselines the count at the current 100 ...
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    # ... then the provider delivers 12 more.
+    fake.counted = 112
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["status"] == "active"
+    assert d["record_count"] == 112
+    assert d["new_records"] == 12
+
+
+def test_first_sync_reports_no_phantom_new_records(svc):
+    # With no prior baseline every record would look "new" — report 0 rather
+    # than a misleading number.
+    cid = svc.add_connection("acct_unit_test", "fasten", "t-1", "My provider",
+                             status="pending", consent_version="v1")
+    assert svc.mark_synced(cid, 40) == {"new": 0, "total": 40}
+    assert svc.mark_synced(cid, 52) == {"new": 12, "total": 52}
+    # A shrinking count (provider removed records) never reports negative.
+    assert svc.mark_synced(cid, 50)["new"] == 0
 
 
 # --- consent gate (real records only) ----------------------------------------

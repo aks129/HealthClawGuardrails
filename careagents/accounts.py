@@ -225,6 +225,30 @@ class AccountService:
             for c in s.query(Connection).filter_by(tenant_id=tenant_id).all():
                 c.status = status
 
+    def get_connection(self, account_id: str, conn_id: str) -> dict | None:
+        """Fetch one connection scoped to its owner (never cross-account)."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(id=conn_id, account_id=account_id).first())
+            return _conn_dict(c) if c else None
+
+    def mark_synced(self, conn_id: str, count: int) -> dict:
+        """Record the end of a sync and report what changed since the last one.
+
+        Returns {"new": int, "total": int} where `new` is the growth since the
+        previous sync (0 on the first one, since there's no baseline to compare
+        against and every record is arguably 'new').
+        """
+        with self.session() as s:
+            c = s.query(Connection).filter_by(id=conn_id).first()
+            if c is None:
+                return {"new": 0, "total": count}
+            previous = c.last_count
+            c.last_count = count
+            c.last_synced_at = now()
+            new = 0 if previous is None else max(0, count - int(previous))
+            return {"new": new, "total": count}
+
     def create_agent(self, account_id: str, name: str, persona: str,
                      connection_id: str, advisor: str | None = None) -> str:
         with self.session() as s:
@@ -303,7 +327,8 @@ def _detach(acct: Account) -> _Row:
 
 def _conn_dict(c: Connection) -> dict:
     return {"id": c.id, "kind": c.kind, "tenant_id": c.tenant_id,
-            "label": c.label, "status": c.status, "provider": c.provider}
+            "label": c.label, "status": c.status, "provider": c.provider,
+            "last_synced_at": c.last_synced_at, "last_count": c.last_count}
 
 
 def _agent_dict(a: Agent) -> dict:
