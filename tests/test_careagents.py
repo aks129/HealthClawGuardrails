@@ -201,6 +201,21 @@ def app(cfg, svc):
     return a
 
 
+def _make_account(svc, monkeypatch, email):
+    """Create a real account row for service-level tests.
+
+    Connections/agents/surfaces carry a foreign key to ca_accounts. SQLite
+    doesn't enforce it by default, so a made-up account id passes locally and
+    fails on Postgres — use this instead of inventing ids.
+    """
+    import careagents.mail as mailmod
+    captured = {}
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: captured.setdefault("c", code))
+    svc.start_email_code(email)
+    return svc.verify_email_code(email, captured["c"])
+
+
 def _login(client, svc, monkeypatch, email="gene@example.com"):
     """Log a client in via the real email-code path (code captured from mail)."""
     captured = {}
@@ -503,10 +518,14 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["new_records"] == 12
 
 
-def test_first_sync_reports_no_phantom_new_records(svc):
+def test_first_sync_reports_no_phantom_new_records(svc, monkeypatch):
     # With no prior baseline every record would look "new" — report 0 rather
     # than a misleading number.
-    cid = svc.add_connection("acct_unit_test", "fasten", "t-1", "My provider",
+    # Uses a REAL account: ca_connections.account_id is a foreign key, which
+    # SQLite ignores by default but Postgres enforces (caught by the new
+    # careagents-on-Postgres CI lane).
+    acct = _make_account(svc, monkeypatch, "firstsync@example.com")
+    cid = svc.add_connection(acct.id, "fasten", "t-1", "My provider",
                              status="pending", consent_version="v1")
     assert svc.mark_synced(cid, 40) == {"new": 0, "total": 40}
     assert svc.mark_synced(cid, 52) == {"new": 12, "total": 52}
