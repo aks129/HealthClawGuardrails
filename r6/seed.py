@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import AuditWriteError, record_audit_event
 from r6.sdc.intake import intake_questionnaire
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,13 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
                 detail='seeded via auto-seed on first boot',
             )
             created += 1
+        except AuditWriteError:
+            # NOT a per-resource problem: the guardrail itself is broken, so
+            # every subsequent resource would land unaudited too. Propagate
+            # instead of logging 7 warnings and answering 201/created-0 (#182).
+            db.session.rollback()
+            logger.error("Seed aborted: audit trail unavailable for %s", rtype)
+            raise
         except Exception as e:
             # A fixed-id resource re-seeded onto an existing PK raises here.
             # Roll back the failed insert so it can't poison the final commit;

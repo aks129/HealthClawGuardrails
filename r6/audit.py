@@ -14,6 +14,16 @@ from r6.health_context import get as _hc_get
 logger = logging.getLogger(__name__)
 
 
+class AuditWriteError(RuntimeError):
+    """Raised when a mandatory AuditEvent could not be written.
+
+    "Every resource access emits an AuditEvent" is a graded conformance
+    property, so an access that cannot be audited must fail loudly rather
+    than proceed unrecorded. Swallowing this is what let a seed report
+    201/created-7 while persisting nothing (issue #182).
+    """
+
+
 def _new_audit_event(event_type, resource_type=None, resource_id=None,
                      agent_id=None, context_id=None, outcome='success',
                      detail=None, tenant_id=None, outcome_detail_code=None):
@@ -71,6 +81,7 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         tenant_id: Tenant identifier for isolation
         outcome_detail_code: Allowlisted public outcome-evidence code
     """
+    nested = None
     try:
         nested = db.session.begin_nested()
         audit = _new_audit_event(
@@ -86,8 +97,17 @@ def record_audit_event(event_type, resource_type=None, resource_id=None,
         )
     except Exception as exc:
         logger.error('Failed to record audit event: %s', type(exc).__name__)
-        # Roll back only the nested savepoint, not the caller's transaction
+        # Roll back ONLY the savepoint. A full db.session.rollback() here
+        # discarded the caller's uncommitted work — the audit failure then
+        # became silent data loss behind a success status (#182).
         try:
-            db.session.rollback()
+            if nested is not None:
+                nested.rollback()
         except Exception:
+            # The savepoint is already gone (or was never opened); leave the
+            # caller's transaction alone rather than escalating to a full
+            # rollback, which is the bug this handler exists to avoid.
             pass
+        # Fail loud: an un-audited access must not be reported as success.
+        raise AuditWriteError(
+            f'audit write failed: {type(exc).__name__}') from exc
