@@ -7,14 +7,15 @@ Everything a contributor needs, regardless of editor or AI tooling.
 ```bash
 # Python (Flask app) — deps via uv
 uv sync
+uv run flask --app main init-db                   # REQUIRED once — see traps below
 STEP_UP_SECRET=dev-secret python main.py          # http://localhost:5000
 
 # All Python tests / one file / one test
 uv run python -m pytest tests/ -q
 uv run python -m pytest tests/test_r6_routes.py::test_name -v
 
-# Lint (CI-gated)
-pipx run ruff check .
+# Lint (CI-gated) — `uv run`, not `uvx`/`pipx`; see traps below
+uv run ruff check .
 
 # Node MCP server
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test
@@ -31,6 +32,24 @@ them). A key present only in `.env` behaves as unset.
 
 Local dev works on Python 3.13, but **CI runs 3.11** — avoid 3.12+-only syntax
 (e.g. backslash escapes inside f-string expressions).
+
+### Three setup traps
+
+Each of these presents as something other than itself, so they cost more time
+than they should.
+
+- **Lint with `uv run ruff`, never `uvx ruff` or `pipx run ruff`.** CI uses the
+  version locked in the dev group (`ruff>=0.15,<1`); `uvx`/`pipx` fetch the
+  newest published release. A newer ruff reports hundreds of findings CI does
+  not — none of them caused by your change, and all of them a waste to chase.
+- **`init-db` is required before the server is usable.** Nothing auto-creates
+  tables. Skip it and the first request fails with `AuditWriteError:
+  OperationalError`, which reads like a bug in the audit layer but is a missing
+  schema. That the request fails at all is correct behaviour: the audit trail is
+  fail-loud, so anything that cannot be recorded is not served.
+- **Port 5000 collides with AirPlay Receiver on macOS**, surfacing only as
+  `Address already in use`. Use `PORT=5099 …`, or turn AirPlay off in System
+  Settings.
 
 ### Flask lifecycle commands
 
@@ -81,6 +100,32 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 `r6/routes.py`. Tests live in `tests/` (pytest, fixtures in `conftest.py`:
 `client`, `tenant_id`, `auth_headers`, `tenant_headers`, sample resources).
 
+### CareAgents (`careagents/`) — the consumer app, not the engine
+
+A second Flask app (`create_app()` factory, `CARE_*` env in `careagents/
+config.py`, fail-closed in production). Two boundaries hold the design together:
+
+- **Its only data path to PHI is HealthClaw's HTTP API** (`careagents/
+  healthclaw.py`). CareAgents stores **no PHI** — accounts, tenant ids and
+  connection metadata only. The live schema is the check: if a change would add
+  a table holding clinical text, that data belongs in HealthClaw instead.
+
+  Chat history is the worked example. Transcripts are PHI-adjacent, so they live
+  in HealthClaw's `ConversationMessage` per tenant — which `purge_tenant`
+  already covers, so "delete my records" removes conversations for free. What
+  CareAgents keeps in memory is only a cache, rebuilt on demand.
+
+- **Ids do not transfer across the boundary.** A CareAgents `agent_id` is not a
+  HealthClaw command-center agent id; sending one where the other is expected is
+  rejected (the conversation endpoint 400s on it). Because those writes are
+  best-effort by design, the rejection is silent — the feature simply does
+  nothing. Carry CareAgents identifiers in an unvalidated field such as
+  `metadata`.
+
+  CareAgents unit tests fake the HealthClaw client, so they prove a call is
+  *made*, not that the wire format is *accepted*. Exercise new cross-boundary
+  calls against a running HealthClaw before trusting them.
+
 ## Security invariants (do not regress)
 
 - `validate_step_up_token` returns `(bool, str)` — **destructure both**; never
@@ -96,6 +141,23 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     Prefer the action rail for anything new.
 - Redaction imports: `from r6.redaction import apply_redaction` (Safe Harbor)
   or `apply_patient_controlled_redaction(resource, patient_id)`.
+- **Never preserve an upstream `display` or `CodeableConcept.text` to make
+  records readable.** Real feeds put patient names in those fields — a LOINC
+  coding in `tests/test_recursive_redaction.py` carries `"Glucose for Jane
+  Secret"` (synthetic, but modelled on what upstream systems actually send).
+  That test exists because preserving `display` looks correct, passes
+  hand-written tests, and leaks PHI.
+
+  Readability comes from `r6/terminology.py` instead, and the order is the
+  point: `apply_redaction` strips everything the upstream sent, *then*
+  re-attaches labels from a table keyed by code. A code is safe precisely
+  because its meaning belongs to the code rather than to the patient — "E11.9
+  means type 2 diabetes" is true for everyone ever assigned E11.9. Unknown
+  codes stay unlabelled on purpose: an agent saying "a record is here I could
+  not read" is honest, and `unlabelled_codes()` reports misses so the table
+  grows from evidence rather than guesswork.
+- **"No known allergies" is never inferred** — the SDC populate/review flow
+  asserts NKA only from an explicit human attestation.
 - The whole set is enforced by the **conformance harness**:
   `tests/test_guardrail_conformance.py` pins the measured CI baseline, and
   `GET /r6/fhir/$conformance` grades any live deployment. The in-process local
@@ -118,11 +180,20 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     && railway up --service mcp-server --detach
   ```
 
+- **CareAgents runs on Railway** (`deploy/careagents/Dockerfile`, one gunicorn
+  worker) against its own private Postgres, and does **not** auto-deploy with
+  the main Flask app. `deploy/careagents/careagents.service` and `deploy.sh` are
+  the superseded VPS path, kept until the DNS cutover completes.
+
+  One worker is deliberate: the in-process conversation cache is per-process, so
+  a second worker would serve some turns from an empty one. Threads give
+  concurrency without splitting that state.
+
 - **CareAgents: migrating from SQLite to Postgres.** CareAgents keeps its own
   engine and metadata (`careagents/models.py`), separate from the Flask app's.
-  Production still defaults to SQLite, which is single-writer, host-local, and
-  lost with the host — fine for one tester, wrong for real accounts. It logs a
-  warning at boot until `CARE_DATABASE_URL` points at Postgres.
+  SQLite is single-writer, host-local, and lost with the host — fine for one
+  tester, wrong for real accounts. It logs a warning at boot until
+  `CARE_DATABASE_URL` points at Postgres.
 
   ```bash
   # 1. Provision Postgres and set the URL on the careagents.cloud host
@@ -140,6 +211,26 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   `_require` so a regression fails closed instead of warning. CI runs the
   CareAgents suite against real Postgres (`CARE_TEST_DATABASE_URL` in the
   `postgres-tests` lane), so schema incompatibilities surface before deploy.
+
+  Two things that lane exists to catch, both invisible on SQLite: varchar length
+  limits, and **foreign keys, which SQLite does not enforce by default** — an
+  invented id passes locally and fails only there. Note the lane runs a
+  **hardcoded allowlist of test paths** in `ci.yml`, so a new DB-touching test
+  file runs SQLite-only until someone adds it.
+
+- **Production is watched on a schedule.** `scripts/prod_watch.py` runs every
+  six hours (`.github/workflows/prod-watch.yml`) and checks that the engine is
+  alive and still grading A, that records come back readable (a regression of
+  the terminology labels would otherwise be silent), that CareAgents can reach
+  its database, that the sign-in page still accepts an 8-digit code, and that
+  the **token-locked MCP server refuses unauthenticated callers** — a 200 there
+  would mean the real tool surface had been left open. There are two MCP
+  deployments: that locked one, and a public demo pinned server-side to a
+  synthetic tenant.
+
+  Every check is unauthenticated by design, so it needs no credentials and no
+  synthetic account — and therefore does **not** cover the signed-in journey.
+  That limit is stated in the script rather than implied.
 
 - Release process: [RELEASING.md](../RELEASING.md). Drift guards
   (`tests/test_site_version_sync.py`, `tests/test_gemini_extension.py`) fail
