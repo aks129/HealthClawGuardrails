@@ -114,6 +114,23 @@ class Surface(Base):
     account = relationship("Account", back_populates="surfaces")
 
 
+class UsageDay(Base):
+    """Per-account daily LLM turn count — a durable spend ceiling.
+
+    The in-process burst limiter bounds bursts, but it resets on restart and
+    is per-worker, so under gunicorn it multiplies by worker count. Inference
+    is billed to the operator, so the daily cap has to live somewhere shared
+    and durable: one row per account per UTC day.
+
+    Counts only — no message content, nothing PHI-adjacent.
+    """
+    __tablename__ = "ca_usage_days"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("use"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    turns = Column(Integer, default=0)
+
+
 class EmailToken(Base):
     """One-time email code (sign-up verify / new-device login)."""
     __tablename__ = "ca_email_tokens"
