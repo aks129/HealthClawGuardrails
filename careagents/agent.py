@@ -83,6 +83,16 @@ def _summarize_bundle(bundle: dict, limit: int = 12) -> list[dict]:
             c.get("display", "") for c in (code.get("coding") or [])[:1])
         if text:
             item["name"] = text.strip()
+        else:
+            # A record exists but carries no readable label. Say so explicitly
+            # and pass the raw code through: dropping the name key entirely
+            # made the record look like nothing, and the model then reported
+            # the condition as ABSENT (#207). Unreadable is not absent.
+            coding = (code.get("coding") or [{}])[0]
+            raw = coding.get("code")
+            item["name"] = (f"unlabeled record, code {raw}" if raw
+                            else "unlabeled record")
+            item["unreadable"] = True
         if res.get("status"):
             item["status"] = res["status"]
         vq = res.get("valueQuantity")

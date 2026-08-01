@@ -99,6 +99,28 @@ def test_anthropic_oauth_token_selects_anthropic_provider():
     assert prod.provider == "anthropic"  # satisfies the prod LLM-cred gate
 
 
+def test_unreadable_record_is_never_summarized_as_nothing():
+    # #207: when a record had no readable label the summarizer dropped the
+    # name key, the model saw an empty item, and answered "no, you do not
+    # have that". An unnamed record must still be visible AND flagged.
+    from careagents.agent import _summarize_bundle
+    bundle = {"entry": [{"resource": {
+        "resourceType": "Condition",
+        "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-9-cm",
+                             "code": "250.00"}]},   # no display
+    }}]}
+    items = _summarize_bundle(bundle)
+    assert len(items) == 1
+    assert items[0]["unreadable"] is True
+    assert "250.00" in items[0]["name"]
+
+
+def test_safety_core_forbids_answering_absence_with_a_bare_no():
+    # The model must not convert "I couldn't read it" into "you don't have it".
+    assert "bare \"no\"" in SAFETY_CORE or "bare 'no'" in SAFETY_CORE
+    assert "unreadable" in SAFETY_CORE.lower()
+
+
 def test_every_persona_shares_the_safety_core():
     for key in PERSONAS:
         p = system_prompt("Juniper", key)
