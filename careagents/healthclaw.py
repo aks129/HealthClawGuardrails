@@ -12,7 +12,11 @@ import json
 import secrets
 import time
 
+import logging
+
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class HealthClawError(RuntimeError):
@@ -241,6 +245,73 @@ class HealthClawClient:
             raise HealthClawError(f"purge failed ({r.status_code})",
                                   r.status_code)
         return r.json()
+
+    # --- conversation history -------------------------------------------------
+    #
+    # Chat history lives in HealthClaw, per tenant, NOT in the CareAgents
+    # database. A conversation about someone's records is PHI-adjacent, and
+    # CareAgents stores no PHI — putting transcripts in its tables would trade
+    # away that boundary for a caching convenience. Keeping them tenant-scoped
+    # in the engine also means "delete my records" already removes them
+    # (r6/purge.py purges ConversationMessage).
+    #
+    # Only user and assistant text is persisted — never tool calls or their
+    # results. Those are point-in-time facts about records that may since have
+    # changed; replaying them as history would let a stale reading masquerade
+    # as current truth. On a cold start the agent re-reads instead.
+
+    def log_message(self, tenant: str, role: str, text: str,
+                    agent_id: str | None = None) -> bool:
+        """Append one turn. Returns False on failure rather than raising:
+        losing a transcript must never break the conversation in progress.
+
+        `agent_id` travels in metadata, NOT in the endpoint's own agent_id
+        field. Those are different namespaces: that field is validated against
+        HealthClaw's command-center agent registry, and a CareAgents agent id
+        is not in it, so sending one is rejected with 400 and — because this
+        method is best-effort — the turn is dropped silently. The conversation
+        is scoped by tenant anyway, which is how CareAgents keys its own
+        history.
+        """
+        try:
+            r = self.http.post(
+                f"{self.base}/command-center/api/conversations",
+                json={"tenant_id": tenant, "role": role, "text": text,
+                      "channel": "web",
+                      "metadata": {"careagents_agent_id": agent_id}},
+                headers={"X-Tenant-Id": tenant,
+                         "X-Step-Up-Token": self.mint_token(tenant)},
+                timeout=self.timeout)
+            if r.status_code != 201:
+                # Log it: a silent False is how the namespace mismatch above
+                # stayed invisible until acceptance testing.
+                logger.warning("chat turn rejected for %s: HTTP %s",
+                               tenant, r.status_code)
+                return False
+            return True
+        except (requests.RequestException, HealthClawError):
+            logger.warning("could not persist a chat turn for %s", tenant)
+            return False
+
+    def recent_messages(self, tenant: str, limit: int = 20) -> list[dict]:
+        """Oldest-first [{role, text}] for rehydrating a conversation."""
+        try:
+            r = self.http.get(
+                f"{self.base}/command-center/api/conversations",
+                params={"limit": limit, "full": "1", "tenant": tenant},
+                headers={"X-Tenant-Id": tenant,
+                         "X-Step-Up-Token": self.mint_token(tenant)},
+                timeout=self.timeout)
+            if r.status_code != 200:
+                return []
+            rows = r.json() or []
+        except (requests.RequestException, HealthClawError, ValueError):
+            logger.warning("could not load chat history for %s", tenant)
+            return []
+        out = [{"role": m["role"], "content": m.get("text") or ""}
+               for m in reversed(rows)          # endpoint returns newest-first
+               if m.get("role") in ("user", "assistant")]
+        return out
 
     # --- surfaces: Telegram binding ------------------------------------------
 

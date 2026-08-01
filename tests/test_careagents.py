@@ -123,6 +123,160 @@ def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
     assert "not" in body["message"].lower() or "couldn't" in body["message"]
 
 
+# --- chat persistence (#222) --------------------------------------------------
+
+def _turn(client, agent_id, message):
+    """Post a chat turn AND drain the SSE stream, as a browser does.
+
+    The response body is a generator; without reading it the turn never
+    actually runs to completion.
+    """
+    r = client.post("/api/chat",
+                    json={"agent_id": agent_id, "message": message})
+    r.get_data()
+    return r
+
+
+def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
+    """An app whose LLM answers immediately, plus a logged-in client."""
+    from careagents import agent as agent_mod
+    from careagents.app import create_app
+
+    class _Turn:
+        def __init__(self):
+            self.text, self.tool_calls, self.raw_tool_calls = reply, [], []
+
+    monkeypatch.setattr(agent_mod.llm, "complete",
+                        lambda *a, **k: _Turn())
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()
+    agent_id = c.post("/api/agents", json={
+        "name": "Juniper", "persona": "calm",
+        "connection_id": conn["id"]}).get_json()["id"]
+    return app, c, fake, agent_id, fake.tenants[-1]
+
+
+def test_log_message_does_not_send_a_careagents_agent_id_upstream():
+    """Caught in Phase 1 acceptance testing against a live stack, not by any
+    unit test.
+
+    HealthClaw's conversation endpoint validates `agent_id` against its own
+    command-center agent registry. CareAgents agent ids are a different
+    namespace, so sending one is rejected with 400 — and because persistence
+    is deliberately best-effort, every chat turn would have silently failed to
+    save in production while the feature looked shipped.
+
+    The other tests here use a FakeClient that accepts any agent_id, so they
+    prove the app CALLS log_message, not that log_message works. This one pins
+    the wire format where a fake cannot paper over it.
+    """
+    import careagents.healthclaw as hcmod
+
+    sent = {}
+
+    class _Resp:
+        status_code = 201
+
+    class _HTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent.update(json or {})
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "s")
+    client.http = _HTTP()
+    client.mint_token = lambda tenant: "tok"
+
+    assert client.log_message("t-1", "user", "hi", "ag_care_123") is True
+    assert "agent_id" not in sent, (
+        "a CareAgents agent id in the endpoint's agent_id field is a 400")
+    assert sent["metadata"]["careagents_agent_id"] == "ag_care_123"
+    assert sent["tenant_id"] == "t-1" and sent["text"] == "hi"
+
+
+def test_log_message_reports_failure_on_a_non_201():
+    import careagents.healthclaw as hcmod
+
+    class _Resp:
+        status_code = 400
+
+    class _HTTP:
+        def post(self, *a, **k):
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "s")
+    client.http = _HTTP()
+    client.mint_token = lambda tenant: "tok"
+    assert client.log_message("t-1", "user", "hi") is False
+
+
+def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
+        cfg, svc, monkeypatch):
+    # The transcript is PHI-adjacent, so it belongs behind the guardrails in
+    # the tenant — never in CareAgents' own tables.
+    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    _turn(c, agent_id, "hi there")
+
+    stored = fake.logged[tenant]
+    assert [m["role"] for m in stored] == ["user", "assistant"]
+    assert stored[0]["content"] == "hi there"
+    assert stored[1]["content"] == "here you go"
+
+
+def test_a_returning_person_sees_the_conversation_they_had(cfg, svc,
+                                                           monkeypatch):
+    # The core of #222: process memory is a cache, not the record. Wiping it
+    # (a deploy, a restart, idle eviction) must not make the agent forget.
+    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    _turn(c, agent_id, "am I due for a flu shot?")
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "am I due for a flu shot?" in page
+    assert "Picking up where you left off" in page
+
+
+def test_a_cold_process_rehydrates_instead_of_starting_over(cfg, svc,
+                                                            monkeypatch):
+    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    _turn(c, agent_id, "first question")
+
+    # Simulate the restart: everything in memory is gone, the store is not.
+    seen = []
+    from careagents import agent as agent_mod
+
+    class _Turn:
+        def __init__(self):
+            self.text, self.tool_calls, self.raw_tool_calls = "ok", [], []
+
+    def _capture(cfg_, system, history, tools):
+        seen.append([m.get("content") for m in history])
+        return _Turn()
+
+    monkeypatch.setattr(agent_mod.llm, "complete", _capture)
+    from careagents.app import create_app
+    fresh = create_app(config=cfg, client=fake, accounts=svc)
+    fresh.config["TESTING"] = True
+    c2 = fresh.test_client()
+    _login(c2, svc, monkeypatch)
+    _turn(c2, agent_id, "second question")
+
+    assert "first question" in seen[0], "the new process forgot the conversation"
+
+
+def test_a_storage_outage_does_not_break_the_chat(cfg, svc, monkeypatch):
+    # Losing the transcript is bad; failing the conversation in front of the
+    # person is worse. Persistence is best-effort by design.
+    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(fake, "log_message",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            HealthClawError("store down", 500)))
+    r = _turn(c, agent_id, "still works?")
+    assert r.status_code == 200
+
+
 def test_history_is_trimmed_but_never_orphans_a_tool_call():
     # Unbounded history meant cost grew every turn until the request blew past
     # the context window, after which that person's chat failed permanently.
@@ -270,10 +424,25 @@ class FakeClient:
     def __init__(self):
         self.bound = []
         self.seeded = []
+        # Tenants this client minted, so a test can name the one it just made.
+        self.tenants: list[str] = []
+        # Conversation store, keyed by tenant — stands in for HealthClaw's
+        # ConversationMessage table.
+        self.logged: dict[str, list] = {}
+
+    def log_message(self, tenant, role, text, agent_id=None):
+        self.logged.setdefault(tenant, []).append(
+            {"role": role, "content": text, "agent_id": agent_id})
+        return True
+
+    def recent_messages(self, tenant, limit=20):
+        return list(self.logged.get(tenant, []))[-limit:]
 
     def new_tenant_id(self):
         self.seeded.append(1)
-        return f"ca-{len(self.seeded):010d}"
+        tenant = f"ca-{len(self.seeded):010d}"
+        self.tenants.append(tenant)
+        return tenant
 
     def seed(self, tenant):
         return 7

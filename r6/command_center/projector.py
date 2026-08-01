@@ -649,8 +649,14 @@ def agents_status(tenant_id: str) -> list[dict]:
 # Conversations & tasks
 # ---------------------------------------------------------------------------
 
-def recent_conversations(tenant_id: str, limit: int = 15) -> list[dict]:
-    """Return the most recent chat turns across all agents + channels."""
+def recent_conversations(tenant_id: str, limit: int = 15,
+                         full: bool = False) -> list[dict]:
+    """Return the most recent chat turns across all agents + channels.
+
+    `full` returns untruncated text. The dashboard wants the 500-char preview
+    `to_dict()` gives it, but a client rehydrating a conversation needs what
+    was actually said — a truncated replay would quietly rewrite history.
+    """
     msgs = (
         ConversationMessage.query
         .filter_by(tenant_id=tenant_id)
@@ -662,6 +668,9 @@ def recent_conversations(tenant_id: str, limit: int = 15) -> list[dict]:
     for m in msgs:
         agent = get_agent(m.agent_id) if m.agent_id else None
         d = m.to_dict()
+        if full:
+            d["text"] = m.text or ""
+            d["truncated"] = False
         d["agent_name"] = agent["name"] if agent else None
         d["agent_emoji"] = agent["emoji"] if agent else None
         out.append(d)
