@@ -6,7 +6,10 @@ half-configured rather than running with weakened guarantees.
 
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigError(RuntimeError):
@@ -97,6 +100,19 @@ class Config:
                     "ANTHROPIC_OAUTH_TOKEN preferred, OPENAI_API_KEY fallback)")
             _require("RESEND_API_KEY", self.resend_api_key,
                      "email verification codes require a transactional sender")
+            # SQLite is single-writer and file-local: it does not survive a
+            # host rebuild, cannot be backed up consistently while running,
+            # and serialises concurrent users. Fine for one tester, wrong for
+            # real accounts. Warn rather than refuse, because the live
+            # deployment is still on SQLite and a hard failure here would take
+            # it down instead of migrating it — flip this to _require once
+            # CARE_DATABASE_URL points at Postgres (see docs/development.md).
+            if self.database_url.startswith("sqlite"):
+                logger.warning(
+                    "CareAgents is running production on SQLite (%s). Migrate "
+                    "CARE_DATABASE_URL to Postgres before onboarding real "
+                    "users: SQLite serialises writes and is lost with the host.",
+                    self.database_url)
         else:
             self.session_secret = self.session_secret or "dev-careagents-secret"
 

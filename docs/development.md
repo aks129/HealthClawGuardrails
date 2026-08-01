@@ -112,6 +112,29 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     && railway up --service mcp-server --detach
   ```
 
+- **CareAgents: migrating from SQLite to Postgres.** CareAgents keeps its own
+  engine and metadata (`careagents/models.py`), separate from the Flask app's.
+  Production still defaults to SQLite, which is single-writer, host-local, and
+  lost with the host — fine for one tester, wrong for real accounts. It logs a
+  warning at boot until `CARE_DATABASE_URL` points at Postgres.
+
+  ```bash
+  # 1. Provision Postgres and set the URL on the careagents.cloud host
+  CARE_DATABASE_URL=postgresql://user:pass@host:5432/careagents
+
+  # 2. Tables are created on first boot (create_all + _ensure_columns);
+  #    no Alembic chain here, unlike the Flask app.
+  # 3. Copy existing rows if the SQLite file has real accounts — dump
+  #    ca_accounts / ca_passkeys / ca_connections / ca_agents / ca_surfaces
+  #    BEFORE cutover; passkeys are binary columns, so use a real client
+  #    rather than a CSV round-trip.
+  ```
+
+  Once cut over, change the SQLite warning in `careagents/config.py` to a
+  `_require` so a regression fails closed instead of warning. CI runs the
+  CareAgents suite against real Postgres (`CARE_TEST_DATABASE_URL` in the
+  `postgres-tests` lane), so schema incompatibilities surface before deploy.
+
 - Release process: [RELEASING.md](../RELEASING.md). Drift guards
   (`tests/test_site_version_sync.py`, `tests/test_gemini_extension.py`) fail
   the suite if versions/tool counts diverge between `pyproject.toml`, the

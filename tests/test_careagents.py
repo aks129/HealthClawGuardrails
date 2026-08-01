@@ -32,6 +32,33 @@ def test_production_config_requires_every_secret():
     assert ok.provider == "openai" and ok.rp_id == "careagents.cloud"
 
 
+def test_production_on_sqlite_warns_loudly(caplog):
+    # SQLite in production is single-writer and host-local. It is not a hard
+    # failure yet (the live deployment still runs on it, and refusing to boot
+    # would take it down rather than migrate it) — but it must never be quiet.
+    import logging
+    with caplog.at_level(logging.WARNING, logger="careagents.config"):
+        Config(env={"CARE_ENV": "production", "CARE_SESSION_SECRET": "x" * 32,
+                    "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
+                    "RESEND_API_KEY": "r",
+                    "CARE_DATABASE_URL": "sqlite:///careagents.db"})
+    assert any("SQLite" in r.message and "Postgres" in r.message
+               for r in caplog.records)
+
+
+def test_production_on_postgres_does_not_warn(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="careagents.config"):
+        cfg = Config(env={"CARE_ENV": "production",
+                          "CARE_SESSION_SECRET": "x" * 32,
+                          "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
+                          "RESEND_API_KEY": "r",
+                          "CARE_DATABASE_URL":
+                              "postgresql://u:p@db:5432/care"})
+    assert cfg.database_url.startswith("postgresql")
+    assert not any("SQLite" in r.message for r in caplog.records)
+
+
 def test_anthropic_oauth_token_selects_anthropic_provider():
     # An OAuth token (Claude subscription / OpenClaw) is a valid LLM credential
     # and selects the Anthropic provider without an API key.
@@ -124,7 +151,24 @@ class FakeClient:
 
 @pytest.fixture
 def cfg():
-    return Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+    """App config for tests.
+
+    Defaults to in-memory SQLite. CI's Postgres lane sets
+    CARE_TEST_DATABASE_URL so this same suite runs against real Postgres —
+    careagents keeps its own engine and metadata, so SQLite-only coverage
+    would never catch a Postgres-specific schema or type problem (exactly
+    the class of bug the main app's Postgres lane exists to catch).
+    """
+    import os
+    url = os.environ.get("CARE_TEST_DATABASE_URL", "sqlite:///:memory:")
+    if not url.startswith("sqlite"):
+        # A shared server-side database persists between tests; start each one
+        # from a clean schema so ordering can't make the suite flaky.
+        from careagents.models import Base, make_engine
+        engine = make_engine(url)
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+    return Config(env={"CARE_DATABASE_URL": url,
                        "CARE_RP_ID": "localhost",
                        "CARE_ORIGIN": "http://localhost",
                        "OPENAI_API_KEY": "k",
