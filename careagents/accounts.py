@@ -10,9 +10,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 from contextlib import contextmanager
+
+from sqlalchemy import text
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -23,6 +26,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 from careagents import mail
 from careagents.models import (Account, Agent, Connection, EmailToken, Passkey,
                                Surface, make_engine, make_session_factory, now)
+
+logger = logging.getLogger(__name__)
 
 CODE_TTL = 600  # 10 minutes
 MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
@@ -123,6 +128,16 @@ class AccountService:
         if error:
             raise AuthError(error)
         return result
+
+    def ping(self) -> bool:
+        """True if the account store answers. Used by /healthz readiness."""
+        try:
+            with self.session() as s:
+                s.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            logger.exception("account store unreachable")
+            return False
 
     def get_account(self, account_id: str) -> Account | None:
         with self.session() as s:

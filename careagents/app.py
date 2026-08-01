@@ -609,7 +609,17 @@ def create_app(config: Config | None = None,
 
     @app.get("/healthz")
     def healthz():
-        return jsonify({"status": "ok", "provider": cfg.provider,
-                        "accounts": True})
+        """Readiness, not liveness: reports 503 when the account store is
+        unreachable.
+
+        This used to hard-code accounts=True, which meant a container that
+        could not reach its database still advertised itself as healthy — a
+        load balancer would route real sign-ins straight into failure. It now
+        round-trips a trivial query so the answer reflects reality.
+        """
+        accounts_ok = svc.ping()
+        body = {"status": "ok" if accounts_ok else "degraded",
+                "provider": cfg.provider, "accounts": accounts_ok}
+        return jsonify(body), (200 if accounts_ok else 503)
 
     return app
