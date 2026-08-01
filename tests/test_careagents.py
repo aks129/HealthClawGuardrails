@@ -148,6 +148,21 @@ def app(cfg, svc):
     return a
 
 
+def _make_account(svc, monkeypatch, email):
+    """Create a real account row for service-level tests.
+
+    Usage/connection rows carry a foreign key to ca_accounts. SQLite doesn't
+    enforce it by default, so a made-up account id passes locally and fails on
+    Postgres — use this instead of inventing ids.
+    """
+    import careagents.mail as mailmod
+    captured = {}
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: captured.setdefault("c", code))
+    svc.start_email_code(email)
+    return svc.verify_email_code(email, captured["c"])
+
+
 def _login(client, svc, monkeypatch, email="gene@example.com"):
     """Log a client in via the real email-code path (code captured from mail)."""
     captured = {}
@@ -463,22 +478,25 @@ def test_first_sync_reports_no_phantom_new_records(svc):
 
 # --- daily usage cap (inference spend control) -------------------------------
 
-def test_daily_turn_cap_counts_and_then_refuses(svc):
-    used = [svc.claim_daily_turn("acct_cap_test", cap=3) for _ in range(3)]
+def test_daily_turn_cap_counts_and_then_refuses(svc, monkeypatch):
+    acct = _make_account(svc, monkeypatch, "cap@example.com")
+    used = [svc.claim_daily_turn(acct.id, cap=3) for _ in range(3)]
     assert used == [(True, 1), (True, 2), (True, 3)]
     # Fourth is refused, and the count does not keep climbing past the cap.
-    assert svc.claim_daily_turn("acct_cap_test", cap=3) == (False, 3)
-    assert svc.claim_daily_turn("acct_cap_test", cap=3) == (False, 3)
+    assert svc.claim_daily_turn(acct.id, cap=3) == (False, 3)
+    assert svc.claim_daily_turn(acct.id, cap=3) == (False, 3)
 
 
-def test_daily_cap_is_per_account(svc):
-    svc.claim_daily_turn("acct_a", cap=1)
-    assert svc.claim_daily_turn("acct_a", cap=1)[0] is False
+def test_daily_cap_is_per_account(svc, monkeypatch):
+    a = _make_account(svc, monkeypatch, "capa@example.com")
+    b = _make_account(svc, monkeypatch, "capb@example.com")
+    svc.claim_daily_turn(a.id, cap=1)
+    assert svc.claim_daily_turn(a.id, cap=1)[0] is False
     # A different account is unaffected by the first one's spend.
-    assert svc.claim_daily_turn("acct_b", cap=1)[0] is True
+    assert svc.claim_daily_turn(b.id, cap=1)[0] is True
 
 
-def test_daily_cap_survives_a_service_restart(tmp_path):
+def test_daily_cap_survives_a_service_restart(tmp_path, monkeypatch):
     # The whole point of moving this out of process memory: a restart must not
     # hand the account a fresh allowance. Needs a real file DB — an in-memory
     # SQLite would be a brand-new database per service instance and would pass
@@ -490,11 +508,12 @@ def test_daily_cap_survives_a_service_restart(tmp_path):
                          "OPENAI_API_KEY": "k",
                          "HEALTHCLAW_MINT_SECRET": "mint-secret"})
     first = AccountService(db_cfg)
-    assert first.claim_daily_turn("acct_restart", cap=2)[0] is True
-    assert first.claim_daily_turn("acct_restart", cap=2)[0] is True
+    acct = _make_account(first, monkeypatch, "restart@example.com")
+    assert first.claim_daily_turn(acct.id, cap=2)[0] is True
+    assert first.claim_daily_turn(acct.id, cap=2)[0] is True
 
     reborn = AccountService(db_cfg)       # same DB file, new service instance
-    assert reborn.claim_daily_turn("acct_restart", cap=2) == (False, 2)
+    assert reborn.claim_daily_turn(acct.id, cap=2) == (False, 2)
 
 
 def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
