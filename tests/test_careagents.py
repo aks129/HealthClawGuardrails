@@ -59,6 +59,32 @@ def test_production_on_postgres_does_not_warn(caplog):
     assert not any("SQLite" in r.message for r in caplog.records)
 
 
+def test_healthz_reports_ok_when_the_account_store_answers(app):
+    r = app.test_client().get("/healthz")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["status"] == "ok" and d["accounts"] is True
+
+
+def test_healthz_reports_503_when_the_account_store_is_unreachable(app, svc,
+                                                                   monkeypatch):
+    # The point of a readiness check: a container that cannot reach its
+    # database must NOT advertise itself as healthy, or a load balancer will
+    # route real sign-ins straight into failure. This used to be hard-coded
+    # true, which would have made the Postgres cutover silently dangerous.
+    monkeypatch.setattr(svc, "ping", lambda: False)
+    r = app.test_client().get("/healthz")
+    assert r.status_code == 503
+    assert r.get_json()["accounts"] is False
+
+
+def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
+    def boom():
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(svc, "session", boom)
+    assert svc.ping() is False
+
+
 def test_anthropic_oauth_token_selects_anthropic_provider():
     # An OAuth token (Claude subscription / OpenClaw) is a valid LLM credential
     # and selects the Anthropic provider without an API key.
