@@ -100,9 +100,13 @@ jobs:
         env:
           SQLALCHEMY_DATABASE_URI: postgresql://postgres:postgres@localhost:5432/test
           MIGRATION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+          # careagents keeps its own engine + metadata, so SQLite-only coverage
+          # would miss Postgres-specific schema problems in its tables too.
+          CARE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         run: |
           uv run python -m pytest \
             tests/actions/ \
+            tests/test_careagents.py \
             tests/test_ingest_resilience.py \
             tests/test_actions_models.py \
             tests/test_fasten_export_trigger.py \
