@@ -2229,8 +2229,33 @@ def demo_agent_loop():
     6. Commit write with full audit trail — shows end-to-end
 
     Each step returns its result so the dashboard can render progressively.
+
+    IMPORTANT — this endpoint NARRATES the guardrail pattern for the demo
+    dashboard; it does not enforce it. The step descriptions below are scripted
+    copy, not the outcome of a live gate. Real enforcement lives on the actual
+    FHIR routes (redaction on read, step-up + human confirmation on write,
+    audit on everything) and is what `$conformance` grades.
+
+    Two step-up tokens used to be minted here and thrown away, which read like
+    authorization and was not. They are gone; the write authorization for this
+    endpoint is the `_internal_mint_authorized` gate below.
     """
     tenant_id = request.headers.get('X-Tenant-Id', 'demo-tenant')
+
+    # This endpoint WRITES (Patient, Permission, Observation) and soft-deletes
+    # every existing Permission for the tenant, and it lives under /demo/ —
+    # a prefix exempt from tenant enforcement and human-in-the-loop. Without a
+    # gate it is an anonymous cross-tenant write + access-policy-delete
+    # primitive against any tenant an attacker can name, which falsifies the
+    # whole "a client cannot bypass the guardrails" claim.
+    #
+    # Same fail-closed gate as seed/mint: public/synthetic tenants (what the
+    # demo is actually for) are allowed; anything else needs the internal
+    # secret. Deliberately reusing that helper rather than inventing a second
+    # authorization rule for a third kind of privileged write.
+    if not _internal_mint_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
+
     demo_id = str(uuid.uuid4())[:8]
     steps = []
 
@@ -2246,7 +2271,6 @@ def demo_agent_loop():
         'telecom': [{'system': 'phone', 'value': '617-555-0198', 'use': 'mobile'}],
     }
 
-    generate_step_up_token(tenant_id)
     resource_json = json.dumps(patient, separators=(',', ':'), sort_keys=True)
     pt_resource = R6Resource(
         resource_type='Patient',
@@ -2428,8 +2452,6 @@ def demo_agent_loop():
     record_audit_event('read', 'Observation', med_request['id'],
                        agent_id='demo-agent', tenant_id=tenant_id,
                        detail='Agent demo: step-up token issued, human confirmation required')
-
-    generate_step_up_token(tenant_id, agent_id='demo-agent')
 
     steps.append({
         'step': 5,
