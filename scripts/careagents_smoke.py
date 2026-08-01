@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """CareAgents live smoke — the product works, end to end, or this fails loud.
 
-    python scripts/careagents_smoke.py                        # careagents.cloud
     python scripts/careagents_smoke.py --base http://127.0.0.1:8600
 
 Drives: landing → create agent (fresh tenant, seeded) → one real chat turn
@@ -9,6 +8,26 @@ Drives: landing → create agent (fresh tenant, seeded) → one real chat turn
 allergy-attestation gate rejects a bare submit through the relay → honest
 submit → confirm/execute → signed PDF downloads. One LLM call is involved
 (the chat turn), so run against a configured deployment.
+
+STALE — DOES NOT RUN AGAINST PRODUCTION TODAY.
+----------------------------------------------
+This drives the pre-accounts API: an anonymous `POST /start` that created an
+agent, and `/api/chat` without an agent id. CareAgents now requires a signed-in
+account (email code or passkey) and scopes every agent to it, so these calls no
+longer exist and this script fails on its first check against the live site.
+
+Automating the signed-in journey needs the runner to read a real inbox for the
+one-time code, which is genuine work and a genuine decision — see #242. Until
+then:
+
+  * scripts/prod_watch.py checks production on a schedule, unauthenticated,
+    with its scope stated plainly (it does NOT cover the signed-in journey).
+  * This script is still useful against a LOCAL stack, where mail.send_code
+    logs the code instead of sending it.
+
+Left in place rather than deleted because the flow it encodes — including the
+allergy-attestation gate, which is a real safety property — is worth porting to
+the account-based API rather than rewriting from scratch.
 """
 from __future__ import annotations
 
