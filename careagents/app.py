@@ -12,6 +12,7 @@ guardrail layer; careagents holds identity + pointers only.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import defaultdict, deque
 from functools import wraps
@@ -20,17 +21,25 @@ from threading import Lock
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
-from careagents.accounts import (AccountService, AuthError, new_binding_code)
+from careagents.accounts import (AccountService, AuthError, MailError,
+                                 new_binding_code)
 from careagents import advisors, connectors
 from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS, system_prompt
 
+logger = logging.getLogger(__name__)
+
 # Bump when the consent-card copy or the terms/privacy content it points at
 # changes materially. Stored per connection so we always know which version a
 # person agreed to — a later change never silently claims earlier consent.
 CONSENT_VERSION = "2026-07-19"
+
+# In-memory conversation bounds. One worker holds every live chat, so these
+# cap memory and keep a long-running process from degrading (#218).
+MAX_LIVE_CONVERSATIONS = 200
+CONVERSATION_IDLE_SECONDS = 6 * 3600
 
 
 def create_app(config: Config | None = None,
@@ -49,6 +58,28 @@ def create_app(config: Config | None = None,
     histories: dict[str, list] = defaultdict(list)
     hist_lock = Lock()
     turns: dict[str, deque] = defaultdict(deque)
+    # Last time each conversation was touched, so idle ones can be released.
+    # Without this every tenant that ever chatted keeps its full transcript in
+    # memory for the life of the process.
+    hist_seen: dict[str, float] = {}
+
+    def touch_history(tenant: str) -> None:
+        """Mark a conversation live; release idle ones once we're holding many.
+
+        Deliberately simple: only sweeps when the map is already large, so the
+        common path is a single dict write. Chat history moves to durable
+        per-tenant storage in a follow-up (#222) — this is the bound that keeps
+        the process healthy until then.
+        """
+        seen_at = time.time()
+        hist_seen[tenant] = seen_at
+        if len(histories) <= MAX_LIVE_CONVERSATIONS:
+            return
+        for other, last in list(hist_seen.items()):
+            if other != tenant and seen_at - last > CONVERSATION_IDLE_SECONDS:
+                histories.pop(other, None)
+                turns.pop(other, None)
+                hist_seen.pop(other, None)
 
     # --- auth plumbing -------------------------------------------------------
 
@@ -117,6 +148,11 @@ def create_app(config: Config | None = None,
             svc.start_email_code(email, purpose)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        except MailError as exc:
+            # Never report "sent" when nothing was sent — this is the front
+            # door, and a silent failure leaves the person watching an empty
+            # inbox with no idea whether to wait or retry.
+            return jsonify({"error": str(exc), "sent": False}), 502
         return jsonify({"sent": True})
 
     @app.post("/api/auth/verify")
@@ -403,6 +439,7 @@ def create_app(config: Config | None = None,
         def stream():
             with hist_lock:
                 history = histories[tenant]
+                touch_history(tenant)
             try:
                 for event in run_turn(cfg, hc, tenant, sysprompt,
                                       history, text):
@@ -477,7 +514,22 @@ def create_app(config: Config | None = None,
             try:
                 hc.confirm_action(tenant, action_id)
             except HealthClawError:
-                pass
+                # The review was recorded but the confirmation didn't land, so
+                # the action is still sitting unexecuted. Swallowing this told
+                # the person they'd approved something that would never happen.
+                # Say so plainly and let them retry — same posture as the
+                # delete flow, which never claims an outcome it didn't get.
+                logger.exception("confirm failed after review for %s", action_id)
+                body = dict(body) if isinstance(body, dict) else {}
+                body.update({
+                    "confirmed": False,
+                    "message": ("Your review was saved, but we couldn't submit "
+                                "the approval. Nothing has been sent — please "
+                                "try approving again."),
+                })
+                return jsonify(body), 502
+            body = dict(body) if isinstance(body, dict) else {}
+            body["confirmed"] = True
         return jsonify(body), status
 
     # --- surfaces ------------------------------------------------------------
@@ -583,6 +635,7 @@ def create_app(config: Config | None = None,
                                   agent.get("advisor"))
         with hist_lock:
             history = histories[tenant]
+            touch_history(tenant)
         try:
             reply = run_turn_to_message(cfg, hc, tenant, sysprompt, history,
                                         text, origin=cfg.origin,

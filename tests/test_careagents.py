@@ -59,6 +59,143 @@ def test_production_on_postgres_does_not_warn(caplog):
     assert not any("SQLite" in r.message for r in caplog.records)
 
 
+def test_auth_email_reports_failure_instead_of_claiming_it_sent(app, svc,
+                                                                monkeypatch):
+    # Login is the front door. This used to discard send_code's return value
+    # and answer {"sent": true} even when Resend was down, leaving the person
+    # watching an empty inbox with no idea whether to wait or retry.
+    import careagents.mail as mailmod
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: False)
+    r = app.test_client().post("/api/auth/email",
+                               json={"email": "gene@example.com"})
+    assert r.status_code == 502
+    assert r.get_json()["sent"] is False
+
+
+def test_a_failed_send_does_not_block_the_retry(app, svc, monkeypatch):
+    # The code row is committed before the send, so an undelivered code left
+    # live would make the resend cooldown swallow the retry and report success
+    # without sending anything.
+    import careagents.mail as mailmod
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: False)
+    c = app.test_client()
+    assert c.post("/api/auth/email",
+                  json={"email": "retry@example.com"}).status_code == 502
+
+    sent = {}
+    monkeypatch.setattr(mailmod, "send_code",
+                        lambda cfg, e, code, purpose: sent.setdefault("c", code)
+                        is not None)
+    r = c.post("/api/auth/email", json={"email": "retry@example.com"})
+    assert r.status_code == 200 and sent.get("c"), "retry never sent a code"
+
+
+def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
+    # The person approved. If the confirmation doesn't land, the action sits
+    # unexecuted — telling them it succeeded is the worst possible answer.
+    from careagents.app import create_app
+
+    class _Fake(FakeClient):
+        def submit_review(self, tenant, action_id, decisions):
+            return 200, {"ok": True}
+
+        def confirm_action(self, tenant, action_id):
+            raise HealthClawError("upstream down", 500)
+
+    fake = _Fake()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/sample").get_json()
+    agent_id = c.post("/api/agents", json={
+        "name": "A", "persona": "calm",
+        "connection_id": created["id"]}).get_json()["id"]
+
+    monkeypatch.setattr(fake, "action_status",
+                        lambda t, a: {"status": "awaiting_confirmation"})
+    r = c.post(f"/review/{agent_id}/act-1/submit", json={"approved": []})
+    assert r.status_code == 502
+    body = r.get_json()
+    assert body["confirmed"] is False
+    assert "not" in body["message"].lower() or "couldn't" in body["message"]
+
+
+def test_history_is_trimmed_but_never_orphans_a_tool_call():
+    # Unbounded history meant cost grew every turn until the request blew past
+    # the context window, after which that person's chat failed permanently.
+    # The trim must not cut between an assistant tool_call and its tool result
+    # — the provider APIs reject that outright.
+    from careagents.agent import MAX_HISTORY_MESSAGES, _trim_history
+    history = []
+    for i in range(60):
+        history.append({"role": "user", "content": f"q{i}"})
+        history.append({"role": "assistant", "content": "",
+                        "tool_calls": [{"id": f"c{i}", "name": "get_labs",
+                                        "arguments": {}}]})
+        history.append({"role": "tool", "tool_call_id": f"c{i}",
+                        "content": "{}"})
+        history.append({"role": "assistant", "content": f"a{i}"})
+
+    _trim_history(history)
+
+    assert len(history) <= MAX_HISTORY_MESSAGES
+    assert history[0]["role"] == "user"           # cut at a safe boundary
+    # every surviving tool result still has its call in view
+    call_ids = {c["id"] for m in history for c in m.get("tool_calls", [])}
+    for msg in history:
+        if msg.get("role") == "tool":
+            assert msg["tool_call_id"] in call_ids
+
+
+def test_history_shorter_than_the_cap_is_left_alone():
+    from careagents.agent import _trim_history
+    history = [{"role": "user", "content": "hi"},
+               {"role": "assistant", "content": "hello"}]
+    _trim_history(history)
+    assert len(history) == 2
+
+
+def test_tool_loop_stops_at_the_budget_instead_of_spending_forever(
+        cfg, monkeypatch):
+    # The budget nudge used to be appended inside `while True` with no exit, so
+    # a model that kept calling tools was never stopped — it just collected
+    # another nudge each round.
+    from careagents import agent as agent_mod
+
+    calls = {"n": 0, "toolless": 0}
+
+    class _Call:
+        def __init__(self, i):
+            self.id, self.name, self.arguments = f"c{i}", "get_labs", {}
+
+    class _Turn:
+        def __init__(self, tool_calls):
+            self.text = "working" if tool_calls else "final answer"
+            self.tool_calls = tool_calls
+            self.raw_tool_calls = []
+
+    def fake_complete(cfg_, system, history, tools):
+        calls["n"] += 1
+        if not tools:                      # the forced final call
+            calls["toolless"] += 1
+            return _Turn([])
+        return _Turn([_Call(calls["n"])])  # never stops asking for tools
+
+    class _HC:
+        def interpret_labs(self, tenant):
+            return {"consumer": "ok", "disclaimer": "d"}
+
+    monkeypatch.setattr(agent_mod.llm, "complete", fake_complete)
+    events = list(agent_mod.run_turn(cfg, _HC(), "t-1", "sys", [], "hi"))
+
+    assert calls["toolless"] == 1, "must make one final tools-free call"
+    assert calls["n"] <= agent_mod.MAX_TOOL_ROUNDS + 1
+    assert events[-1] == {"type": "text", "text": "final answer"}
+
+
 def test_healthz_reports_ok_when_the_account_store_answers(app):
     r = app.test_client().get("/healthz")
     assert r.status_code == 200
@@ -264,6 +401,19 @@ def _make_account(svc, monkeypatch, email):
     return svc.verify_email_code(email, captured["c"])
 
 
+def _sink_code(sink):
+    """Stand-in for mail.send_code that records the code and reports success.
+
+    Returning True is load-bearing: a falsy return now means "the send failed"
+    and raises MailError (#220), so a fake that returns None — as bare
+    list.append and dict.__setitem__ do — reads as an outage.
+    """
+    def _send(cfg, email, code, purpose):
+        sink.append(code)
+        return True
+    return _send
+
+
 def _login(client, svc, monkeypatch, email="gene@example.com"):
     """Log a client in via the real email-code path (code captured from mail)."""
     captured = {}
@@ -305,7 +455,7 @@ def test_fresh_home_gates_agent_modal_and_shows_onboarding(app, svc, monkeypatch
 def test_wrong_email_code_rejected(app, svc, monkeypatch):
     c = app.test_client()
     import careagents.mail as mailmod
-    monkeypatch.setattr(mailmod, "send_code", lambda *a: None)
+    monkeypatch.setattr(mailmod, "send_code", lambda *a: True)
     c.post("/api/auth/email", json={"email": "x@y.com"})
     r = c.post("/api/auth/verify", json={"email": "x@y.com", "code": "000000"})
     assert r.status_code == 400
@@ -316,11 +466,10 @@ def test_email_code_burns_after_max_attempts(svc, monkeypatch):
     guesses — even the correct code no longer works afterwards."""
     from careagents.accounts import MAX_CODE_ATTEMPTS, AuthError
     import careagents.mail as mailmod
-    cap = {}
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: cap.__setitem__("c", code))
+    cap = []
+    monkeypatch.setattr(mailmod, "send_code", _sink_code(cap))
     svc.start_email_code("brute@example.com")
-    real = cap["c"]
+    real = cap[0]
     assert len(real) == 8  # higher entropy than 6 digits
     for _ in range(MAX_CODE_ATTEMPTS):
         with pytest.raises(AuthError):
@@ -335,8 +484,7 @@ def test_email_resend_invalidates_prior_code(svc, monkeypatch):
     from careagents.accounts import AuthError
     import careagents.mail as mailmod
     codes = []
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: codes.append(code))
+    monkeypatch.setattr(mailmod, "send_code", _sink_code(codes))
     monkeypatch.setattr("careagents.accounts.RESEND_COOLDOWN", 0)  # skip cooldown
     svc.start_email_code("rotate@example.com")
     first = codes[-1]
@@ -352,8 +500,7 @@ def test_email_resend_cooldown_suppresses_duplicate_send(svc, monkeypatch):
     """Within the cooldown a repeat request does not mint/send a new code."""
     import careagents.mail as mailmod
     codes = []
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: codes.append(code))
+    monkeypatch.setattr(mailmod, "send_code", _sink_code(codes))
     svc.start_email_code("cool@example.com")
     svc.start_email_code("cool@example.com")  # within cooldown → suppressed
     assert len(codes) == 1

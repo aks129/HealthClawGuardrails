@@ -40,6 +40,16 @@ class AuthError(RuntimeError):
     pass
 
 
+class MailError(RuntimeError):
+    """The one-time code could not be sent.
+
+    Distinct from AuthError: nothing is wrong with what the person typed, so
+    this is our failure to report (502), not theirs to correct (400). Login is
+    the front door — a silent failure here leaves them staring at an empty
+    inbox with no idea whether to wait or retry.
+    """
+
+
 class AccountService:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -87,7 +97,15 @@ class AccountService:
             code = f"{secrets.randbelow(CODE_MAX):08d}"
             s.add(EmailToken(email=email, code_hash=self._hash(code),
                              purpose=purpose, exp=now() + CODE_TTL))
-        mail.send_code(self.cfg, email, code, purpose)
+        if not mail.send_code(self.cfg, email, code, purpose):
+            # Burn the code we just minted. It was never delivered, and leaving
+            # it live would make the resend cooldown above swallow the person's
+            # retry — reporting "sent" without sending anything.
+            with self.session() as s:
+                s.query(EmailToken).filter_by(
+                    email=email, used=False).update({"used": True})
+            raise MailError(
+                "We couldn't send your code just now. Please try again.")
 
     def verify_email_code(self, email: str, code: str) -> Account:
         email = email.strip().lower()

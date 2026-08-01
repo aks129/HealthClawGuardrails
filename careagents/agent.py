@@ -23,6 +23,32 @@ from careagents.healthclaw import HealthClawClient, HealthClawError
 
 MAX_TOOL_ROUNDS = 6
 
+# Keep a conversation from growing without limit. Nothing trimmed these before,
+# so a heavy user's cost per turn climbed forever and eventually the request
+# exceeded the model's context window — at which point every further turn for
+# that person failed until the process restarted.
+MAX_HISTORY_MESSAGES = 40
+
+
+def _trim_history(history: list) -> None:
+    """Drop the oldest turns in place, cutting only at a safe boundary.
+
+    A tool call and its result must stay together: an assistant message with
+    tool_calls whose matching tool results were trimmed away is rejected
+    outright by the provider APIs. So rather than slicing at an arbitrary
+    index, cut forward to the next plain user message.
+    """
+    if len(history) <= MAX_HISTORY_MESSAGES:
+        return
+    start = len(history) - MAX_HISTORY_MESSAGES
+    while start < len(history):
+        msg = history[start]
+        if msg.get("role") == "user" and not msg.get("tool_call_id"):
+            break
+        start += 1
+    if start < len(history):
+        del history[:start]
+
 TOOLS = [
     {"name": "get_health_summary",
      "description": ("The person's current conditions, medications, and "
@@ -153,6 +179,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
 def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
              history: list[dict], user_text: str):
     """Generator of UI events for one user message. Mutates `history`."""
+    _trim_history(history)
     history.append({"role": "user", "content": user_text})
     rounds = 0
     while True:
@@ -190,9 +217,22 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
                 yield ev
 
         if rounds >= MAX_TOOL_ROUNDS:
+            # Budget spent. This used to append the nudge and keep looping, so
+            # a model that kept calling tools was never actually stopped — it
+            # just collected another nudge each round and spent indefinitely.
+            # Ask once more with NO tools offered, so the only thing it can do
+            # is answer, then return regardless of what comes back.
             history.append({"role": "user", "content": (
                 "(system: tool budget reached — answer now with what you "
                 "have)")})
+            try:
+                final = llm.complete(cfg, system, history, [])
+            except llm.LLMError as exc:
+                yield {"type": "error", "text": str(exc)}
+                return
+            history.append({"role": "assistant", "content": final.text})
+            yield {"type": "text", "text": final.text}
+            return
 
 
 def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
