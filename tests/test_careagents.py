@@ -376,6 +376,66 @@ def test_webauthn_options_are_issued_when_authed(app, svc, monkeypatch):
     assert login.status_code == 200 and "challenge" in login.get_json()
 
 
+def test_no_connector_tile_advertises_a_flow_that_does_not_exist(cfg):
+    # The house rule (#166, #170): ship the mechanism, then the copy. A tile
+    # that isn't wired must present as coming-soon rather than instructing an
+    # action that silently does nothing (#225).
+    from careagents import connectors
+    for item in connectors.catalog(cfg):
+        plan = connectors.start(item["id"], None, cfg, FakeClient())
+        if plan.get("soon"):
+            assert item["tier"] == "soon", (
+                f"{item['id']} is advertised as '{item['tier']}' but its "
+                f"start() is not implemented")
+
+
+def test_the_consent_card_points_at_the_delete_button_it_ships_with(
+        app, svc, monkeypatch):
+    # It told people to email support to leave, while self-serve Disconnect
+    # and Delete sat on the same page — understating our strongest privacy
+    # control in the one place people read carefully.
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    body = c.get("/home").get_data(as_text=True)
+    assert "Disconnect" in body and "Delete" in body
+    leaving = body[body.index("<b>Leaving:</b>"):][:600]
+    assert "yourself" in leaving
+
+
+def test_a_signed_in_person_can_still_add_a_passkey(app, svc, monkeypatch):
+    # #223: /auth bounced every logged-in visitor to /home, so the only chance
+    # to enrol was the one screen after first email verification. Skip it once
+    # and "sign in with your face" silently became email codes forever.
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+
+    r = c.get("/auth?enroll=1")
+    assert r.status_code == 200, "enrolment is unreachable once signed in"
+    body = r.get_data(as_text=True)
+
+    def _tag(div_id):
+        start = body.index(f'<div id="{div_id}"')
+        return body[start:body.index(">", start)]
+
+    # The enrolment step must be the visible one, and the sign-in step hidden —
+    # landing on a hidden panel would look like a blank page.
+    assert "hidden" not in _tag("step-passkey")
+    assert "hidden" in _tag("step-start")
+
+
+def test_plain_auth_still_sends_a_signed_in_person_home(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.get("/auth")
+    assert r.status_code == 302 and "/home" in r.headers["Location"]
+
+
+def test_the_hub_links_to_a_reachable_enrolment_page(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert "/auth?enroll=1" in c.get("/home").get_data(as_text=True)
+
+
 def test_passkey_registration_and_login_via_faked_verification(app, svc, monkeypatch):
     """Exercise the route wiring with the WebAuthn crypto faked (no browser)."""
     c = app.test_client()

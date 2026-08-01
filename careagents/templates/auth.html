@@ -10,8 +10,8 @@
 
     <div id="err" class="form-error" hidden></div>
 
-    <!-- Step: passkey-first -->
-    <div id="step-start">
+    <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
+    <div id="step-start" {% if enroll %}hidden{% endif %}>
       <button class="btn-primary btn-block" id="passkey-btn">
         Sign in with a passkey</button>
       <div class="or">or use your email</div>
@@ -36,14 +36,15 @@
       <button class="linkish" id="back-btn">← use a different email</button>
     </div>
 
-    <!-- Step: add passkey after first verify -->
-    <div id="step-passkey" hidden>
+    <!-- Step: add passkey — after first verify, or any time via ?enroll=1 -->
+    <div id="step-passkey" {% if not enroll %}hidden{% endif %}>
       <span class="persona-emoji">🔐</span>
       <h2 style="font-size:22px;margin:8px 0">Add a passkey</h2>
       <p class="setup-sub">Set up Face ID / Touch ID so next time is one tap.</p>
       <button class="btn-primary btn-block" id="add-passkey-btn">
         Create passkey</button>
-      <button class="linkish" id="skip-passkey-btn">Skip for now →</button>
+      <button class="linkish" id="skip-passkey-btn">
+        {% if enroll %}Back to your hub →{% else %}Skip for now →{% endif %}</button>
     </div>
   </div>
 </main>

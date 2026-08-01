@@ -8,7 +8,7 @@
     <div>
       <h1>Welcome back</h1>
       <p class="hub-sub">{{ me.email }}
-        {% if not has_passkey %}· <a href="/auth">add a passkey</a>{% endif %}
+        {% if not has_passkey %}· <a href="/auth?enroll=1">add a passkey</a>{% endif %}
       </p>
     </div>
     <form method="post" action="/logout"><button class="pill">Sign out</button></form>
@@ -132,9 +132,13 @@
       <li><b>The AI can be wrong</b> — and your connected records may be
         incomplete. Don't treat either as a substitute for your official
         records or for professional medical judgment.</li>
-      <li><b>Leaving:</b> email
-        <a href="mailto:support@healthclaw.io">support@healthclaw.io</a> and
-        we'll delete your data and confirm when it's done.</li>
+      <li><b>Leaving:</b> you can do it yourself, right here, whenever you
+        like. <b>Disconnect</b> stops new records arriving and keeps what's
+        already there; <b>Delete</b> permanently removes the records
+        themselves and tells you how many were deleted. The PHI-free audit
+        trail of who accessed what is kept — a deletion shouldn't be able to
+        erase the record of the access that came before it. Stuck? Email
+        <a href="mailto:support@healthclaw.io">support@healthclaw.io</a>.</li>
     </ul>
     <p class="consent-fine">Full detail:
       <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
