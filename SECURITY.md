@@ -21,7 +21,7 @@ The guardrail stack runs on every request:
 | **Tenant isolation** | Every database query is scoped to the requested tenant at the query layer; cross-tenant access is blocked. |
 | **Tenant-authenticated reads** | Hosted deployments handling real records require a tenant-bound token on reads (config: `READ_AUTH_ENABLED`); synthetic/demo tenants remain open. |
 | **Step-up authorization** | Writes require an HMAC-signed, tenant-bound, expiring token. |
-| **Human-in-the-loop** | Clinical writes and real-world actions return HTTP 428 until a human confirms (`X-Human-Confirmed`). |
+| **Human-in-the-loop** | Real-world actions require out-of-band approval at a separate endpoint with a single-use step-up credential — an agent cannot approve its own action. Direct clinical FHIR writes currently return HTTP 428 until the `X-Human-Confirmed` header is present; that header is client-supplied and is being migrated to the action-rail mechanism ([#214](https://github.com/aks129/HealthClawGuardrails/issues/214)). |
 | **Append-only audit** | Every read/write/action is logged immutably (no UPDATE/DELETE on audit rows, enforced at the ORM layer). |
 | **Transport & headers** | HTTPS; HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` on every response. |
 | **Abuse controls** | Per-tenant/per-IP rate limiting, request payload caps, and replay-resistant tokens. |
