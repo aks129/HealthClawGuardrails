@@ -743,6 +743,59 @@ class TestDemoAgentLoop:
                            content_type='application/json')
         assert resp.status_code == 200
 
+    def test_demo_loop_refuses_non_public_tenants_without_the_secret(
+            self, client, monkeypatch):
+        """The demo loop WRITES and soft-deletes every Permission for the
+        tenant it is pointed at, and it lives under /demo/ — a prefix exempt
+        from tenant enforcement and human-in-the-loop.
+
+        Ungated it was an anonymous cross-tenant write + access-policy-delete
+        primitive against any tenant an attacker could name, live in
+        production. It rides the same fail-closed gate as seed/mint.
+        """
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "s3cret")
+
+        denied = client.post('/r6/fhir/demo/agent-loop',
+                             content_type='application/json',
+                             headers={'X-Tenant-Id': 'someones-real-tenant'})
+        assert denied.status_code == 403
+
+        allowed = client.post('/r6/fhir/demo/agent-loop',
+                              content_type='application/json',
+                              headers={'X-Tenant-Id': 'someones-real-tenant',
+                                       'X-Internal-Secret': 's3cret'})
+        assert allowed.status_code == 200
+
+    def test_demo_loop_does_not_delete_permissions_it_cannot_write(
+            self, client, monkeypatch):
+        """The destructive half specifically: a refused call must not have
+        soft-deleted the target tenant's access-control policy on its way out.
+
+        Uses a NON-public tenant on purpose — the conftest marks 'test-tenant'
+        public, which is exactly the case the gate is supposed to allow.
+        """
+        from models import db
+        from r6.models import R6Resource
+
+        victim = 'someone-elses-private-tenant'
+        db.session.add(R6Resource(
+            resource_type='Permission',
+            resource_json=json.dumps({'resourceType': 'Permission',
+                                      'id': 'keep-me'}),
+            resource_id='keep-me', tenant_id=victim))
+        db.session.commit()
+
+        monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "s3cret")
+        refused = client.post('/r6/fhir/demo/agent-loop',
+                              content_type='application/json',
+                              headers={'X-Tenant-Id': victim})
+        assert refused.status_code == 403
+
+        survivor = R6Resource.query.filter_by(
+            resource_type='Permission', tenant_id=victim,
+            id='keep-me', is_deleted=False).first()
+        assert survivor is not None, "refused call still wiped the policy"
+
     def test_demo_loop_redaction_applied(self, client):
         """Step 1 shows redacted patient data."""
         resp = client.post('/r6/fhir/demo/agent-loop',
