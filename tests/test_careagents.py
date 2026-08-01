@@ -160,6 +160,59 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
     return app, c, fake, agent_id, fake.tenants[-1]
 
 
+def test_log_message_does_not_send_a_careagents_agent_id_upstream():
+    """Caught in Phase 1 acceptance testing against a live stack, not by any
+    unit test.
+
+    HealthClaw's conversation endpoint validates `agent_id` against its own
+    command-center agent registry. CareAgents agent ids are a different
+    namespace, so sending one is rejected with 400 — and because persistence
+    is deliberately best-effort, every chat turn would have silently failed to
+    save in production while the feature looked shipped.
+
+    The other tests here use a FakeClient that accepts any agent_id, so they
+    prove the app CALLS log_message, not that log_message works. This one pins
+    the wire format where a fake cannot paper over it.
+    """
+    import careagents.healthclaw as hcmod
+
+    sent = {}
+
+    class _Resp:
+        status_code = 201
+
+    class _HTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent.update(json or {})
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "s")
+    client.http = _HTTP()
+    client.mint_token = lambda tenant: "tok"
+
+    assert client.log_message("t-1", "user", "hi", "ag_care_123") is True
+    assert "agent_id" not in sent, (
+        "a CareAgents agent id in the endpoint's agent_id field is a 400")
+    assert sent["metadata"]["careagents_agent_id"] == "ag_care_123"
+    assert sent["tenant_id"] == "t-1" and sent["text"] == "hi"
+
+
+def test_log_message_reports_failure_on_a_non_201():
+    import careagents.healthclaw as hcmod
+
+    class _Resp:
+        status_code = 400
+
+    class _HTTP:
+        def post(self, *a, **k):
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "s")
+    client.http = _HTTP()
+    client.mint_token = lambda tenant: "tok"
+    assert client.log_message("t-1", "user", "hi") is False
+
+
 def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
         cfg, svc, monkeypatch):
     # The transcript is PHI-adjacent, so it belongs behind the guardrails in

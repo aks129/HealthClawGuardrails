@@ -263,16 +263,32 @@ class HealthClawClient:
     def log_message(self, tenant: str, role: str, text: str,
                     agent_id: str | None = None) -> bool:
         """Append one turn. Returns False on failure rather than raising:
-        losing a transcript must never break the conversation in progress."""
+        losing a transcript must never break the conversation in progress.
+
+        `agent_id` travels in metadata, NOT in the endpoint's own agent_id
+        field. Those are different namespaces: that field is validated against
+        HealthClaw's command-center agent registry, and a CareAgents agent id
+        is not in it, so sending one is rejected with 400 and — because this
+        method is best-effort — the turn is dropped silently. The conversation
+        is scoped by tenant anyway, which is how CareAgents keys its own
+        history.
+        """
         try:
             r = self.http.post(
                 f"{self.base}/command-center/api/conversations",
                 json={"tenant_id": tenant, "role": role, "text": text,
-                      "agent_id": agent_id, "channel": "web"},
+                      "channel": "web",
+                      "metadata": {"careagents_agent_id": agent_id}},
                 headers={"X-Tenant-Id": tenant,
                          "X-Step-Up-Token": self.mint_token(tenant)},
                 timeout=self.timeout)
-            return r.status_code == 201
+            if r.status_code != 201:
+                # Log it: a silent False is how the namespace mismatch above
+                # stayed invisible until acceptance testing.
+                logger.warning("chat turn rejected for %s: HTTP %s",
+                               tenant, r.status_code)
+                return False
+            return True
         except (requests.RequestException, HealthClawError):
             logger.warning("could not persist a chat turn for %s", tenant)
             return False
