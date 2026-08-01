@@ -170,8 +170,17 @@ def _ensure_columns(engine) -> None:
 
 
 def make_engine(url: str):
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    engine = create_engine(url, connect_args=connect_args, future=True)
+    is_sqlite = url.startswith("sqlite")
+    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    pool_kwargs = {}
+    if not is_sqlite:
+        # Managed Postgres (Railway) drops idle connections. Without these a
+        # quiet period is followed by intermittent "server closed the
+        # connection" 500s on the next request — check the connection before
+        # handing it out, and retire it well before the server would.
+        pool_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
+    engine = create_engine(url, connect_args=connect_args, future=True,
+                           **pool_kwargs)
     Base.metadata.create_all(engine)
     _ensure_columns(engine)
     return engine
