@@ -461,6 +461,65 @@ def test_first_sync_reports_no_phantom_new_records(svc):
     assert svc.mark_synced(cid, 50)["new"] == 0
 
 
+# --- daily usage cap (inference spend control) -------------------------------
+
+def test_daily_turn_cap_counts_and_then_refuses(svc):
+    used = [svc.claim_daily_turn("acct_cap_test", cap=3) for _ in range(3)]
+    assert used == [(True, 1), (True, 2), (True, 3)]
+    # Fourth is refused, and the count does not keep climbing past the cap.
+    assert svc.claim_daily_turn("acct_cap_test", cap=3) == (False, 3)
+    assert svc.claim_daily_turn("acct_cap_test", cap=3) == (False, 3)
+
+
+def test_daily_cap_is_per_account(svc):
+    svc.claim_daily_turn("acct_a", cap=1)
+    assert svc.claim_daily_turn("acct_a", cap=1)[0] is False
+    # A different account is unaffected by the first one's spend.
+    assert svc.claim_daily_turn("acct_b", cap=1)[0] is True
+
+
+def test_daily_cap_survives_a_service_restart(tmp_path):
+    # The whole point of moving this out of process memory: a restart must not
+    # hand the account a fresh allowance. Needs a real file DB — an in-memory
+    # SQLite would be a brand-new database per service instance and would pass
+    # this test for the wrong reason.
+    from careagents.accounts import AccountService
+    db_cfg = Config(env={"CARE_DATABASE_URL": f"sqlite:///{tmp_path}/care.db",
+                         "CARE_RP_ID": "localhost",
+                         "CARE_ORIGIN": "http://localhost",
+                         "OPENAI_API_KEY": "k",
+                         "HEALTHCLAW_MINT_SECRET": "mint-secret"})
+    first = AccountService(db_cfg)
+    assert first.claim_daily_turn("acct_restart", cap=2)[0] is True
+    assert first.claim_daily_turn("acct_restart", cap=2)[0] is True
+
+    reborn = AccountService(db_cfg)       # same DB file, new service instance
+    assert reborn.claim_daily_turn("acct_restart", cap=2) == (False, 2)
+
+
+def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
+    from careagents.app import create_app
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    monkeypatch.setattr("careagents.app.run_turn",
+                        lambda *a, **k: iter(["ok"]))
+    first = c.post("/api/chat", json={"agent_id": agent, "message": "hi"})
+    assert first.status_code == 200
+
+    second = c.post("/api/chat", json={"agent_id": agent, "message": "again"})
+    assert second.status_code == 429
+    d = second.get_json()
+    assert d["error"] == "daily_limit_reached" and d["limit"] == 1
+    assert "resets" in d["message"].lower()   # tells the user when, not just no
+
+
 # --- consent gate (real records only) ----------------------------------------
 
 def test_real_record_connect_refused_without_consent(app, svc, monkeypatch):

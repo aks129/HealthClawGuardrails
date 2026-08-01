@@ -22,7 +22,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 
 from careagents import mail
 from careagents.models import (Account, Agent, Connection, EmailToken, Passkey,
-                               Surface, make_engine, make_session_factory, now)
+                               Surface, UsageDay, make_engine,
+                               make_session_factory, now)
 
 CODE_TTL = 600  # 10 minutes
 MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
@@ -219,6 +220,28 @@ class AccountService:
             s.add(c)
             s.flush()
             return c.id
+
+    def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
+        """Count one chat turn against today's cap. Returns (allowed, used).
+
+        Durable and shared, unlike the in-process burst limiter — a restart or
+        a second gunicorn worker must not hand the account a fresh allowance,
+        because every turn costs the operator real money.
+        """
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self.session() as s:
+            row = (s.query(UsageDay)
+                   .filter_by(account_id=account_id, day=day).first())
+            if row is None:
+                row = UsageDay(account_id=account_id, day=day, turns=0)
+                s.add(row)
+                s.flush()
+            used = int(row.turns or 0)
+            if used >= cap:
+                return False, used
+            row.turns = used + 1
+            return True, used + 1
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
         with self.session() as s:
