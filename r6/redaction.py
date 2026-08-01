@@ -16,14 +16,24 @@ on all resource access paths (not just context ingestion).
 
 import json
 
+from r6.terminology import label_codings
+
 
 def apply_redaction(resource):
     """
     Apply standard redaction profile to a FHIR resource.
     Returns a deep copy with PHI fields redacted.
+
+    Redaction strips every `display` and `text`, because upstream systems write
+    patient names into them. That left records with no readable name at all —
+    measured at 0 of 65 labelled on a live tenant — so afterwards we put back
+    labels for codes the SERVER recognises (r6/terminology.py). The order
+    matters: strip whatever the upstream said, then add only what we know
+    ourselves, keyed by code. Unrecognised codes stay unlabelled on purpose.
     """
     redacted = json.loads(json.dumps(resource))  # Deep copy
     _redact_recursive(redacted)
+    label_codings(redacted)
 
     return redacted
 
