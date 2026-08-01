@@ -99,6 +99,54 @@
     });
   });
 
+  // --- disconnect: stop new records, keep what's already here ---
+  document.querySelectorAll(".conn-disconnect").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".conn-card");
+      const msg = card.querySelector(".conn-refresh-msg");
+      btn.disabled = true;
+      const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
+      if (!res.ok) {
+        btn.disabled = false;
+        msg.textContent = res.d.error || "Couldn't disconnect.";
+        msg.hidden = false;
+        return;
+      }
+      location.reload();
+    });
+  });
+
+  // --- delete: purge the records themselves ---
+  // Typed confirmation rather than a one-tap OK: deletion is irreversible and
+  // the patient should not be able to do it by reflex.
+  document.querySelectorAll(".conn-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".conn-card");
+      const msg = card.querySelector(".conn-refresh-msg");
+      const label = btn.dataset.label || "these records";
+      const typed = prompt(
+        `This permanently deletes the records in "${label}".\n\n` +
+        "The PHI-free audit trail (who accessed what) is kept as the record " +
+        "of what happened, and this deletion is added to it.\n\n" +
+        'Type DELETE to confirm:');
+      if (typed !== "DELETE") return;
+
+      btn.disabled = true;
+      msg.textContent = "Deleting…";
+      msg.hidden = false;
+      const r = await fetch(`/api/connections/${btn.dataset.conn}`,
+                            { method: "DELETE" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        btn.disabled = false;
+        // Say plainly that nothing was deleted — never imply a partial wipe.
+        msg.textContent = d.message || "Your records were not deleted.";
+        return;
+      }
+      location.reload();
+    });
+  });
+
   // After a re-authorization, poll until the provider delivers, then report
   // the growth the server measured against the pre-refresh baseline.
   function watchForNewRecords(card, msg) {

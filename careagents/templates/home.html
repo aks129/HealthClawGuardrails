@@ -58,8 +58,16 @@
         {% if c.kind != 'sample' %}
         <button type="button" class="conn-refresh" data-conn="{{ c.id }}"
                 title="Check your provider for new records">Refresh</button>
-        <span class="conn-refresh-msg" hidden></span>
         {% endif %}
+        {% if c.status != 'revoked' %}
+        <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
+                title="Stop new records arriving; keep what's already here"
+                >Disconnect</button>
+        {% endif %}
+        <button type="button" class="conn-delete" data-conn="{{ c.id }}"
+                data-label="{{ c.label }}"
+                title="Delete these records permanently">Delete</button>
+        <span class="conn-refresh-msg" hidden></span>
       </div>
       {% endfor %}
     </div>

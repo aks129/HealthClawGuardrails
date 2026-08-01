@@ -34,7 +34,7 @@ from models import db
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.stepup import validate_step_up_token, generate_step_up_token
@@ -2069,6 +2069,56 @@ def bind_telegram_chat():
         'chat_id': chat_id,
         'bound_at': row.bound_at.isoformat() if row.bound_at else None,
     }), 201
+
+
+@r6_blueprint.route('/internal/purge-tenant', methods=['POST'])
+def purge_tenant_route():
+    """Delete a tenant's PHI-bearing data — the engine behind "delete my records".
+
+    Gated exactly like seed/mint (fail-closed for non-public tenants) because
+    deletion is at least as sensitive as creation. The AuditEvent trail is
+    retained by design and the deletion itself is audited; see r6/purge.py.
+    """
+    body = request.get_json(silent=True) or {}
+    tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id')
+    if not tenant_id:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    if not _internal_mint_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
+
+    from r6.purge import purge_summary, purge_tenant
+
+    try:
+        deleted = purge_tenant(tenant_id)
+        # Audit the deletion BEFORE committing, so the record of what was
+        # removed is part of the same transaction as the removal. A failure
+        # here aborts the purge rather than deleting data unrecorded (#182).
+        add_audit_event(
+            event_type='delete',
+            resource_type='Tenant',
+            resource_id=tenant_id,
+            tenant_id=tenant_id,
+            agent_id='purge',
+            detail='tenant data purged on request',
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception('tenant purge failed for %s', tenant_id)
+        return jsonify({'error': 'purge failed', 'deleted': False}), 500
+
+    total = purge_summary(deleted)
+    logger.info('tenant purge complete: %s rows for %s', total, tenant_id)
+    return jsonify({
+        'tenant_id': tenant_id,
+        'deleted': True,
+        'rows_deleted': total,
+        'detail': deleted,
+        'audit_retained': True,
+        'note': ('Clinical data and connector state removed. The PHI-free '
+                 'audit trail is retained as the immutable record of prior '
+                 'access, and this deletion was added to it.'),
+    }), 200
 
 
 @r6_blueprint.route('/internal/seed', methods=['POST'])

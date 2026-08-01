@@ -106,6 +106,15 @@ class FakeClient:
     def record_count(self, tenant):
         return self.counted
 
+    purge_fails = False
+    purged = []
+
+    def purge_tenant(self, tenant):
+        if self.purge_fails:
+            raise HealthClawError("purge failed", 500)
+        self.purged.append(tenant)
+        return {"tenant_id": tenant, "deleted": True, "rows_deleted": 42}
+
     def bind_telegram(self, tenant, chat_id):
         self.bound.append((tenant, chat_id))
         return True
@@ -459,6 +468,71 @@ def test_first_sync_reports_no_phantom_new_records(svc):
     assert svc.mark_synced(cid, 52) == {"new": 12, "total": 52}
     # A shrinking count (provider removed records) never reports negative.
     assert svc.mark_synced(cid, 50)["new"] == 0
+
+
+# --- disconnect + delete (self-serve) ----------------------------------------
+
+def test_disconnect_marks_revoked_but_keeps_the_records(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    r = c.post(f"/api/connections/{conn}/disconnect")
+    assert r.status_code == 200 and r.get_json()["status"] == "revoked"
+    # still listed — disconnect stops new data, it doesn't erase what's here
+    home = c.get("/home").get_data(as_text=True)
+    assert "revoked" in home
+
+
+def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch):
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/sample").get_json()
+    conn = created["id"]
+
+    r = c.delete(f"/api/connections/{conn}")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["deleted"] is True and d["rows_deleted"] == 42
+    assert d["audit_retained"] is True          # says so to the patient
+    assert len(fake.purged) == 1                # records purged, not just unlinked
+    # connection is gone from the hub
+    assert c.post(f"/api/connections/{conn}/disconnect").status_code == 404
+
+
+def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
+    # Never leave a clean-looking hub while the data still sits in the engine,
+    # and never tell the patient it's deleted when it isn't.
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.purge_fails = True
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+
+    r = c.delete(f"/api/connections/{conn}")
+    assert r.status_code == 502
+    assert r.get_json()["deleted"] is False
+    # connection survives, so the patient can retry
+    assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
+
+
+def test_delete_and_disconnect_reject_other_peoples_connections(app, svc,
+                                                                monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert c.delete("/api/connections/conn_not_mine").status_code == 404
+    assert c.post(
+        "/api/connections/conn_not_mine/disconnect").status_code == 404
+
+
+def test_delete_requires_a_session(app):
+    assert app.test_client().delete("/api/connections/x").status_code == 401
 
 
 # --- consent gate (real records only) ----------------------------------------

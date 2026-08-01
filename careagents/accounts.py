@@ -225,6 +225,34 @@ class AccountService:
             for c in s.query(Connection).filter_by(tenant_id=tenant_id).all():
                 c.status = status
 
+    def revoke_connection(self, account_id: str, conn_id: str) -> bool:
+        """Disconnect: stop new data flowing, keep what's already here."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(id=conn_id, account_id=account_id).first())
+            if c is None:
+                return False
+            c.status = "revoked"
+            return True
+
+    def delete_connection(self, account_id: str, conn_id: str) -> bool:
+        """Remove the connection and any agents pointing at it.
+
+        Called only AFTER the records themselves are confirmed purged, so a
+        failed purge can never leave the patient with an empty hub and data
+        still sitting in the engine.
+        """
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(id=conn_id, account_id=account_id).first())
+            if c is None:
+                return False
+            for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
+                s.query(Surface).filter_by(agent_id=agent.id).delete()
+                s.delete(agent)
+            s.delete(c)
+            return True
+
     def get_connection(self, account_id: str, conn_id: str) -> dict | None:
         """Fetch one connection scoped to its owner (never cross-account)."""
         with self.session() as s:

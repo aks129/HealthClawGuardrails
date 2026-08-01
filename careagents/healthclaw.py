@@ -224,6 +224,24 @@ class HealthClawClient:
                 continue
         return total
 
+    def purge_tenant(self, tenant: str) -> dict:
+        """Delete this tenant's records in HealthClaw. Raises on failure.
+
+        Deliberately not best-effort: "deleted" is only reported to the
+        patient when the engine confirms it, never fire-and-forget.
+        """
+        r = self.http.post(
+            f"{self.fhir}/internal/purge-tenant",
+            json={"tenant_id": tenant},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Step-Up-Token": self.mint_token(tenant),
+                     "X-Internal-Secret": self.mint_secret},
+            timeout=self.timeout)
+        if r.status_code != 200:
+            raise HealthClawError(f"purge failed ({r.status_code})",
+                                  r.status_code)
+        return r.json()
+
     # --- surfaces: Telegram binding ------------------------------------------
 
     def bind_telegram(self, tenant: str, chat_id: int) -> bool:
