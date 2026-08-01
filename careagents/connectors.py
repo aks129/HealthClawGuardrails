@@ -42,13 +42,19 @@ _CATALOG = [
      "blurb": "Oura, Whoop, Garmin, Fitbit, Strava, and Apple Health — "
               "through Open Wearables.",
      "providers": WEARABLE_PROVIDERS},
-    {"id": "shl", "tier": "import", "icon": "🔗",
+    # These two are NOT live: start() returns {"soon": True} for both. They
+    # were advertised as an "import" tier whose blurbs told people to paste a
+    # link or drop in a file, neither of which did anything (#225). Presented
+    # as coming-soon until the flow actually exists (#227) — the house rule is
+    # ship the mechanism, then the copy.
+    {"id": "shl", "tier": "soon", "icon": "🔗",
      "label": "SMART Health Link",
-     "blurb": "Paste a SMART Health Link or scan its QR to import a shared "
-              "record."},
-    {"id": "direct", "tier": "import", "icon": "📄",
+     "blurb": "Import a record shared with you as a SMART Health Link. "
+              "Not open yet — we'll let you know."},
+    {"id": "direct", "tier": "soon", "icon": "📄",
      "label": "Upload records",
-     "blurb": "Drop in a FHIR bundle or a SMART Health Card file."},
+     "blurb": "Bring a FHIR bundle or SMART Health Card file yourself. "
+              "Not open yet — we'll let you know."},
     {"id": "healthex", "tier": "soon", "icon": "🧬",
      "label": "HealthEx",
      "blurb": "Connect your HealthEx account."},

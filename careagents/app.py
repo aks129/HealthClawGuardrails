@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 # Bump when the consent-card copy or the terms/privacy content it points at
 # changes materially. Stored per connection so we always know which version a
 # person agreed to — a later change never silently claims earlier consent.
-CONSENT_VERSION = "2026-07-19"
+# 2026-08-01: the "leaving" clause said to email support, while self-serve
+# Disconnect and Delete sat on the same page (#203). Understating our own
+# strongest privacy control in the one place people read carefully.
+CONSENT_VERSION = "2026-08-01"
 
 # In-memory conversation bounds. One worker holds every live chat, so these
 # cap memory and keep a long-running process from degrading (#218).
@@ -124,9 +127,15 @@ def create_app(config: Config | None = None,
 
     @app.get("/auth")
     def auth():
-        if session.get("account_id"):
+        # `?enroll=1` lets someone already signed in add a passkey. Without it
+        # the only enrolment moment was the single screen after first email
+        # verification: skip once and the "sign in with your face" promise
+        # quietly expired into email codes forever, because this route sent
+        # every logged-in visitor straight back to /home (#223).
+        enroll = request.args.get("enroll") == "1"
+        if session.get("account_id") and not enroll:
             return redirect(url_for("home"))
-        return render_template("auth.html", rp_id=cfg.rp_id,
+        return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
                                terms_url=f"{cfg.healthclaw_base}/terms",
                                privacy_url=f"{cfg.healthclaw_base}/privacy")
 
