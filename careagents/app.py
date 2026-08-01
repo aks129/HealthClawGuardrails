@@ -2,8 +2,14 @@
 
 Identity model: a signed cookie holds `account_id` after passkey/email login.
 Everything (connections, agents, surfaces) is account-scoped; a foreign id
-reads as 404. Chat history lives in process memory keyed by (agent tenant).
-Deploy with ONE gunicorn worker (threads for concurrency).
+reads as 404.
+
+Chat history is DURABLE and lives in HealthClaw, per tenant (#222). What sits
+in process memory here is only a cache of it, rebuilt by load_history() when
+cold — so a restart or an idle eviction costs a round trip, not the
+conversation. Deploy with ONE gunicorn worker (threads for concurrency): the
+cache is process-local, so a second worker would serve some turns from an
+empty one.
 
 No PHI is stored here — health data lives in HealthClaw tenants behind the
 guardrail layer; careagents holds identity + pointers only.
