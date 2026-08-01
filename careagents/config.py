@@ -84,6 +84,11 @@ class Config:
         # public, unauthenticated site).
         self.chat_turns_per_window = int(e.get("CARE_CHAT_TURNS", "20"))
         self.chat_window_seconds = int(e.get("CARE_CHAT_WINDOW", "600"))
+        # Durable daily ceiling per account. The burst limiter above is
+        # in-process, so it resets on restart and multiplies by gunicorn
+        # worker count; this one is DB-backed and is what actually bounds
+        # what a single account can cost the operator in a day.
+        self.chat_turns_per_day = int(e.get("CARE_CHAT_TURNS_PER_DAY", "200"))
 
         if prod:
             _require("CARE_SESSION_SECRET", self.session_secret,
