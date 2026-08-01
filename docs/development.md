@@ -86,8 +86,14 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 - `validate_step_up_token` returns `(bool, str)` — **destructure both**; never
   truthiness-test the tuple.
 - Every FHIR resource access emits an AuditEvent; audit `detail` is PHI-free.
-- Writes require a step-up token; **clinical** writes additionally require
-  `X-Human-Confirmed: true` (HTTP 428 otherwise).
+- Writes require a step-up token; **clinical** writes additionally require a
+  human confirmation, via one of two mechanisms:
+  - **Action rail** (`r6/actions/`): a separate approval endpoint consuming a
+    single-use step-up credential — genuinely out-of-band.
+  - **Direct clinical FHIR writes**: `X-Human-Confirmed: true` (HTTP 428
+    otherwise). The header is client-supplied and therefore spoofable by an
+    agent that already holds a write token — a known gap tracked in #214.
+    Prefer the action rail for anything new.
 - Redaction imports: `from r6.redaction import apply_redaction` (Safe Harbor)
   or `apply_patient_controlled_redaction(resource, patient_id)`.
 - The whole set is enforced by the **conformance harness**:

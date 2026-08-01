@@ -15,9 +15,16 @@ review bot reads THIS file, so keep it current.)
 2. **No secrets in code, tests, fixtures, or workflows.** No API keys,
    tokens, or webhook secrets — including "example" values that look real.
 3. **Every FHIR resource access emits an AuditEvent** (reads and writes).
-4. **Writes require step-up auth; clinical writes require human-in-the-loop**
-   (HTTP 428 without `X-Human-Confirmed`). New write paths must call
-   `validate_step_up_token` with its default `require_scope='write'`.
+4. **Writes require step-up auth; clinical writes require human-in-the-loop.**
+   New write paths must call `validate_step_up_token` with its default
+   `require_scope='write'`. Two mechanisms exist — flag any confusion between
+   them:
+   - **Action rail:** approval is a *separate endpoint* consuming a single-use
+     step-up credential. Never accept a header as approval here.
+   - **Direct clinical FHIR writes:** currently HTTP 428 without the
+     client-supplied `X-Human-Confirmed` header — spoofable by any agent
+     holding a write token. Known gap (#214). **Reject new write paths that
+     rely on this header**; route them through the action rail instead.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
