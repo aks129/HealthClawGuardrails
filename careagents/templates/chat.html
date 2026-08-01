@@ -18,11 +18,21 @@
   </div>
 
   <div class="chat-log" id="log">
+    {% if past %}
+    {# Returning: replay what was actually said rather than greeting them as a
+       stranger. The starters are for someone who hasn't asked anything yet. #}
+    <div class="chat-resumed">Picking up where you left off</div>
+    {% for m in past %}
+    <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
+      <p>{{ m.content }}</p>
+    </div>
+    {% endfor %}
+    {% else %}
     <div class="msg agent">
-      <p>Hi — I’m {{ me.name }}. I can read the health records in this space
-      (sample data for now), explain labs in plain language, check what
-      preventive care is due, and fill out your new-patient intake form —
-      though you’ll approve every line of that yourself.</p>
+      <p>Hi — I’m {{ me.name }}. I can read the health records in this space,
+      explain labs in plain language, check what preventive care is due, and
+      fill out your new-patient intake form — though you’ll approve every line
+      of that yourself.</p>
       <p>What would you like to know?</p>
     </div>
     <div class="starters" id="starters">
@@ -31,6 +41,7 @@
       <button type="button" class="starter">What medications am I on?</button>
       <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     </div>
+    {% endif %}
   </div>
 
   <form class="chat-input" id="composer">

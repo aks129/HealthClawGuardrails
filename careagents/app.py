@@ -63,13 +63,26 @@ def create_app(config: Config | None = None,
     # memory for the life of the process.
     hist_seen: dict[str, float] = {}
 
+    def load_history(tenant: str) -> list:
+        """The in-memory conversation, rehydrated from HealthClaw if cold.
+
+        Process memory is a cache, not the record. Deploys, restarts and idle
+        eviction all empty it, and before this the agent simply forgot the
+        person — a strange trait for a product promising a *persistent* health
+        agent. Call under hist_lock.
+        """
+        history = histories[tenant]
+        if not history:
+            history.extend(hc.recent_messages(tenant))
+        touch_history(tenant)
+        return history
+
     def touch_history(tenant: str) -> None:
         """Mark a conversation live; release idle ones once we're holding many.
 
         Deliberately simple: only sweeps when the map is already large, so the
-        common path is a single dict write. Chat history moves to durable
-        per-tenant storage in a follow-up (#222) — this is the bound that keeps
-        the process healthy until then.
+        common path is a single dict write. Evicting is now safe rather than
+        lossy — a dropped conversation reloads from HealthClaw on next use.
         """
         seen_at = time.time()
         hist_seen[tenant] = seen_at
@@ -401,8 +414,11 @@ def create_app(config: Config | None = None,
         if not ctx:
             return redirect(url_for("home"))
         p = PERSONAS.get(ctx["agent"]["persona"], PERSONAS[DEFAULT_PERSONA])
+        # Show the conversation they actually had. Rendering only the canned
+        # greeting made every return visit look like a first visit.
         return render_template("chat.html", me=ctx["agent"], persona=p,
-                               agent_id=agent_id)
+                               agent_id=agent_id,
+                               past=hc.recent_messages(ctx["tenant"], limit=30))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
@@ -436,17 +452,33 @@ def create_app(config: Config | None = None,
         sysprompt = system_prompt(agent["name"], agent["persona"],
                                   agent.get("advisor"))
 
+        def remember(role, body):
+            """Best-effort persist. Losing the transcript is bad; failing the
+            conversation in front of the person is worse."""
+            try:
+                hc.log_message(tenant, role, body, agent["id"])
+            except Exception:  # noqa: BLE001
+                logger.warning("chat turn not persisted for %s", tenant)
+
+        # Record the question before streaming the answer: they definitely
+        # asked it, even if they close the tab before the reply finishes.
+        remember("user", text)
+
         def stream():
             with hist_lock:
-                history = histories[tenant]
-                touch_history(tenant)
+                history = load_history(tenant)
+            reply = []
             try:
                 for event in run_turn(cfg, hc, tenant, sysprompt,
                                       history, text):
+                    if event.get("type") == "text" and event.get("text"):
+                        reply.append(event["text"])
                     yield f"data: {json.dumps(event)}\n\n"
             except Exception:  # noqa: BLE001
                 yield ('data: {"type": "error", "text": '
                        '"Something went wrong on our side."}\n\n')
+            if reply:
+                remember("assistant", "\n\n".join(reply))
             yield 'data: {"type": "done"}\n\n'
 
         return Response(stream(), mimetype="text/event-stream",
@@ -634,14 +666,18 @@ def create_app(config: Config | None = None,
         sysprompt = system_prompt(agent["name"], agent["persona"],
                                   agent.get("advisor"))
         with hist_lock:
-            history = histories[tenant]
-            touch_history(tenant)
+            history = load_history(tenant)
         try:
             reply = run_turn_to_message(cfg, hc, tenant, sysprompt, history,
                                         text, origin=cfg.origin,
                                         agent_id=agent["id"])
         except Exception:  # noqa: BLE001
             reply = "Something went wrong on our side. Please try again."
+        else:
+            # Same store as the web surface, so a conversation started in
+            # Telegram continues on the web and vice versa.
+            hc.log_message(tenant, "user", text, agent["id"])
+            hc.log_message(tenant, "assistant", reply, agent["id"])
         return jsonify({"reply": reply})
 
     # --- trust + ops ---------------------------------------------------------

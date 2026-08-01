@@ -212,7 +212,9 @@ def api_conversations_list():
     if (err := _require_session_or_public()):
         return err
     limit = min(int(request.args.get("limit", "15")), 100)
-    return jsonify(projector.recent_conversations(_tenant(), limit=limit))
+    full = request.args.get("full") in ("1", "true")
+    return jsonify(projector.recent_conversations(_tenant(), limit=limit,
+                                                  full=full))
 
 
 @command_center_blueprint.route("/api/tasks", methods=["GET"])

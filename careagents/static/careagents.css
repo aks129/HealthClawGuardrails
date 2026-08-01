@@ -202,6 +202,11 @@ h1 em { font-style: italic; color: var(--clay); }
 .msg.user { background: var(--clay); color: #fff;
   border-bottom-right-radius: 6px; align-self: flex-end; }
 
+/* Divider above a replayed conversation, so resuming is obvious rather than
+   looking like the agent repeated itself. */
+.chat-resumed { align-self: center; font-size: 12px; color: var(--muted, #5E5240);
+  letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+
 .chips { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;
