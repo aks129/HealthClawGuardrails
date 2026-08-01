@@ -218,6 +218,46 @@ def create_app(config: Config | None = None,
             out["connect_url"] = plan["connect_url"]
         return jsonify(out)
 
+    @app.post("/api/connections/<conn_id>/disconnect")
+    @login_required
+    def disconnect_connection(conn_id):
+        """Stop new data flowing; keep records already collected."""
+        acct = current_account()
+        if not svc.revoke_connection(acct.id, conn_id):
+            return jsonify({"error": "unknown connection"}), 404
+        return jsonify({"status": "revoked", "connection_id": conn_id})
+
+    @app.delete("/api/connections/<conn_id>")
+    @login_required
+    def delete_connection(conn_id):
+        """Delete the records themselves, then the connection.
+
+        Order matters: purge first and only unlink once the engine confirms
+        it. Unlinking first would leave the patient with a clean-looking hub
+        while their data still sat in HealthClaw, unreachable but present.
+        """
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None:
+            return jsonify({"error": "unknown connection"}), 404
+        try:
+            purged = hc.purge_tenant(conn["tenant_id"])
+        except HealthClawError:
+            # Never claim a deletion that did not happen.
+            return jsonify({"error": "deletion_failed", "deleted": False,
+                            "message": "Your records were not deleted. "
+                                       "Nothing was changed — please retry."}), 502
+        svc.delete_connection(acct.id, conn_id)
+        return jsonify({
+            "deleted": True,
+            "connection_id": conn_id,
+            "rows_deleted": purged.get("rows_deleted", 0),
+            "audit_retained": True,
+            "message": ("Your records were deleted. The PHI-free audit trail "
+                        "is kept as the record of who accessed what, and this "
+                        "deletion was added to it."),
+        })
+
     @app.post("/api/connections/<conn_id>/refresh")
     @login_required
     def refresh_connection(conn_id):
