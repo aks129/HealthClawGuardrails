@@ -2,6 +2,7 @@
    typewriter render. No frameworks. */
 (function () {
   const AGENT = window.CARE_AGENT || "";
+  const CONVERSATION = window.CARE_CONVERSATION || "";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -107,12 +108,17 @@
     addUser(text);
     box.value = "";
     const typing = addTyping();
+    const requestId = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 
     try {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, agent_id: AGENT }),
+        body: JSON.stringify({ message: text, agent_id: AGENT,
+                               conversation_id: CONVERSATION,
+                               request_id: requestId }),
       });
       if (resp.status === 429) {
         typing.remove();
@@ -143,6 +149,7 @@
           else if (ev.type === "card" && ev.kind === "pdf")
             addPdfCard(ev.url);
           else if (ev.type === "text") { typing.remove(); addAgentText(ev.text); }
+          else if (ev.type === "duplicate") { typing.remove(); }
           else if (ev.type === "error") { typing.remove(); addAgentText("⚠️ " + ev.text); }
         }
       }

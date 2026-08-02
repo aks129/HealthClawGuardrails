@@ -1,7 +1,7 @@
 """WSGI entry point: gunicorn 'careagents.wsgi:app'.
 
-Run with ONE worker (threads for concurrency) — chat history is
-process-local. See deploy/careagents/careagents.service.
+Conversation turns use a Redis-backed distributed lock when ``REDIS_URL`` is
+configured, with a process-local fallback for single-worker development.
 """
 
 from careagents.app import create_app

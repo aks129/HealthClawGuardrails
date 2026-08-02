@@ -152,8 +152,22 @@ class HealthClawClient:
         return r.json()
 
     def confirm_action(self, tenant: str, action_id: str) -> dict:
+        mint = self.http.post(
+            f"{self.actions}/{action_id}/approval-token",
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            timeout=self.timeout)
+        token = (mint.json() or {}).get("token") if mint.ok else None
+        if not token:
+            raise HealthClawError(
+                f"approval token mint failed ({mint.status_code})",
+                mint.status_code)
         r = self.http.post(f"{self.actions}/{action_id}/confirm",
-                           headers=self._headers(tenant), timeout=self.timeout)
+                           headers={"X-Tenant-Id": tenant,
+                                    "X-Step-Up-Token": token,
+                                    "X-Agent-Id": "careagents"},
+                           json={"approved_via": "review-page"},
+                           timeout=self.timeout)
         if not r.ok:
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)
@@ -260,45 +274,86 @@ class HealthClawClient:
     # changed; replaying them as history would let a stale reading masquerade
     # as current truth. On a cold start the agent re-reads instead.
 
-    def log_message(self, tenant: str, role: str, text: str,
-                    agent_id: str | None = None) -> bool:
-        """Append one turn. Returns False on failure rather than raising:
-        losing a transcript must never break the conversation in progress.
+    @staticmethod
+    def conversation_id(agent_id: str) -> str:
+        """Stable default thread shared by every surface for one agent."""
+        return f"careagents:{agent_id}"
 
-        `agent_id` travels in metadata, NOT in the endpoint's own agent_id
-        field. Those are different namespaces: that field is validated against
-        HealthClaw's command-center agent registry, and a CareAgents agent id
-        is not in it, so sending one is rejected with 400 and — because this
-        method is best-effort — the turn is dropped silently. The conversation
-        is scoped by tenant anyway, which is how CareAgents keys its own
-        history.
-        """
+    def _post_message(self, tenant: str, role: str, text: str,
+                      agent_id: str | None = None,
+                      conversation_id: str | None = None,
+                      surface: str = "web",
+                      request_id: str | None = None,
+                      reply_to: str | None = None) -> tuple[int | None, dict | None]:
         try:
             r = self.http.post(
                 f"{self.base}/command-center/api/conversations",
                 json={"tenant_id": tenant, "role": role, "text": text,
-                      "channel": "web",
+                      "agent_id": agent_id,
+                      "conversation_id": conversation_id,
+                      "surface": surface,
+                      "request_id": request_id,
+                      "reply_to": reply_to,
                       "metadata": {"careagents_agent_id": agent_id}},
                 headers={"X-Tenant-Id": tenant,
                          "X-Step-Up-Token": self.mint_token(tenant)},
                 timeout=self.timeout)
-            if r.status_code != 201:
-                # Log it: a silent False is how the namespace mismatch above
-                # stayed invisible until acceptance testing.
-                logger.warning("chat turn rejected for %s: HTTP %s",
-                               tenant, r.status_code)
-                return False
-            return True
-        except (requests.RequestException, HealthClawError):
+            body = r.json() if r.status_code in (200, 201) else None
+            return r.status_code, body
+        except (requests.RequestException, HealthClawError, ValueError,
+                AttributeError):
             logger.warning("could not persist a chat turn for %s", tenant)
-            return False
+            return None, None
 
-    def recent_messages(self, tenant: str, limit: int = 20) -> list[dict]:
+    def claim_inbound_message(self, tenant: str, text: str, agent_id: str,
+                              conversation_id: str, surface: str,
+                              request_id: str) -> tuple[bool | None, str | None]:
+        """Create an inbound turn once.
+
+        Returns ``(True, id)`` when created, ``(False, id)`` on an idempotent
+        replay, and ``(None, None)`` when durable storage is unavailable.
+        """
+        status, body = self._post_message(
+            tenant, "user", text, agent_id, conversation_id, surface,
+            request_id=request_id)
+        if status not in (200, 201) or not body:
+            if status is not None:
+                logger.warning("chat turn rejected for %s: HTTP %s",
+                               tenant, status)
+            return None, None
+        return status == 201, body.get("id")
+
+    def log_message(self, tenant: str, role: str, text: str,
+                    agent_id: str | None = None,
+                    conversation_id: str | None = None,
+                    surface: str = "web",
+                    reply_to: str | None = None) -> bool:
+        """Append one turn. Returns False on failure rather than raising:
+        losing a transcript must never break the conversation in progress.
+
+        The command-center API treats ``agent_id`` as an opaque tenant-scoped
+        identity, so CareAgents can preserve its own agent UUID explicitly.
+        """
+        status, _body = self._post_message(
+            tenant, role, text, agent_id, conversation_id, surface,
+            reply_to=reply_to)
+        if status not in (200, 201):
+            if status is not None:
+                logger.warning("chat turn rejected for %s: HTTP %s",
+                               tenant, status)
+            return False
+        return True
+
+    def recent_messages(self, tenant: str, limit: int = 20,
+                        conversation_id: str | None = None,
+                        agent_id: str | None = None) -> list[dict]:
         """Oldest-first [{role, text}] for rehydrating a conversation."""
         try:
             r = self.http.get(
                 f"{self.base}/command-center/api/conversations",
-                params={"limit": limit, "full": "1", "tenant": tenant},
+                params={"limit": limit, "full": "1", "tenant": tenant,
+                        "conversation_id": conversation_id,
+                        "agent_id": agent_id},
                 headers={"X-Tenant-Id": tenant,
                          "X-Step-Up-Token": self.mint_token(tenant)},
                 timeout=self.timeout)

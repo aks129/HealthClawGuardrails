@@ -58,7 +58,11 @@ def purge_tenant(tenant_id):
     # they are logged and re-raised.
     for import_path, attr, label in (
             ("r6.actions.models", "ProposedAction", "proposed_actions"),
+            ("r6.agent_runs.models", "AgentRunEvent", "agent_run_events"),
+            ("r6.agent_runs.models", "AgentToolCall", "agent_tool_calls"),
+            ("r6.agent_runs.models", "AgentRun", "agent_runs"),
             ("r6.command_center.models", "ConversationMessage", "messages"),
+            ("r6.command_center.models", "Conversation", "conversations"),
             ("r6.command_center.models", "AgentTask", "agent_tasks"),
             ("r6.fasten.models", "FastenConnection", "fasten_connections"),
             ("r6.fasten.models", "FastenJob", "fasten_jobs"),

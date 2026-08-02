@@ -139,10 +139,15 @@ def test_end_to_end_propose_review_confirm_download(client, app, tenant_headers,
     assert review.get_json()['reviewed_qr_id']
 
     # Out-of-band confirm — mirrors tests/actions/test_confirm_is_commit.py::
-    # _confirm (auth_headers carry a valid step-up token; commit/review are
-    # multi-use, confirm consumes the nonce).
+    # _confirm (commit/review use the normal write token; confirm requires a
+    # separately minted action-bound token).
+    from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
+    from r6.stepup import generate_step_up_token
+    approval_headers = dict(auth_headers)
+    approval_headers['X-Step-Up-Token'] = generate_step_up_token(
+        tenant, audience=ACTION_APPROVAL_AUDIENCE, operation=action_id)
     confirm = client.post('/r6/actions/%s/confirm' % action_id,
-                         headers=auth_headers, json={})
+                          headers=approval_headers, json={})
     assert confirm.status_code == 200, confirm.get_data(as_text=True)
     assert confirm.get_json()['status'] == 'completed'
 

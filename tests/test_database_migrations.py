@@ -43,7 +43,11 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         "action_events",
         "action_confirmations",
         "cc_conversation_messages",
+        "cc_conversations",
         "cc_agent_tasks",
+        "agent_runs",
+        "agent_tool_calls",
+        "agent_run_events",
         "wearable_connections",
         "smbp_sessions",
         "telegram_bindings",
@@ -53,6 +57,9 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         "resource_type",
         "id",
     ]
+    assert schema.get_pk_constraint("cc_conversations")[
+        "constrained_columns"
+    ] == ["tenant_id", "id"]
     resource_columns = {
         column["name"]: column for column in schema.get_columns("r6_resources")
     }
@@ -82,6 +89,75 @@ def test_audit_outcome_detail_migration_is_reversible(tmp_path):
     assert "outcome_detail_code" in {
         column["name"] for column in inspect(engine).get_columns("audit_events")
     }
+    engine.dispose()
+
+
+def test_conversation_migration_backfills_legacy_tenant_transcripts(tmp_path):
+    url = f"sqlite:///{tmp_path / 'conversation-backfill.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+    command.upgrade(config, "0003_audit_outcome_detail")
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO cc_conversation_messages "
+            "(id, tenant_id, agent_id, channel, role, text, created_at) "
+            "VALUES ('message-1', 'tenant-1', 'legacy-agent', 'telegram', "
+            "'user', 'preserve me', CURRENT_TIMESTAMP)"
+        ))
+
+    command.upgrade(config, "head")
+
+    with engine.connect() as connection:
+        conversation = connection.execute(text(
+            "SELECT id, tenant_id, created_by_surface FROM cc_conversations"
+        )).mappings().one()
+        message = connection.execute(text(
+            "SELECT conversation_id, text FROM cc_conversation_messages"
+        )).mappings().one()
+    assert dict(conversation) == {
+        "id": "legacy:tenant-1",
+        "tenant_id": "tenant-1",
+        "created_by_surface": "legacy",
+    }
+    assert dict(message) == {
+        "conversation_id": "legacy:tenant-1",
+        "text": "preserve me",
+    }
+
+    command.downgrade(config, "0003_audit_outcome_detail")
+    schema = inspect(engine)
+    assert "cc_conversations" not in schema.get_table_names()
+    assert {"conversation_id", "request_id", "reply_to"}.isdisjoint(
+        column["name"]
+        for column in schema.get_columns("cc_conversation_messages")
+    )
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT text FROM cc_conversation_messages WHERE id = 'message-1'"
+        )).scalar_one() == "preserve me"
+    engine.dispose()
+
+
+def test_agent_run_control_plane_migration_is_reversible(tmp_path):
+    url = f"sqlite:///{tmp_path / 'agent-runs.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    command.upgrade(config, "head")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    } <= set(inspect(engine).get_table_names())
+
+    command.downgrade(config, "0004_conversation_identity")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    }.isdisjoint(inspect(engine).get_table_names())
+    assert "cc_conversations" in inspect(engine).get_table_names()
+
+    command.upgrade(config, "head")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    } <= set(inspect(engine).get_table_names())
     engine.dispose()
 
 
@@ -117,7 +193,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0003_audit_outcome_detail"
+    assert revision == "0005_agent_run_control_plane"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -270,11 +346,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0003_audit_outcome_detail"
+    assert revision == "0005_agent_run_control_plane"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0003_audit_outcome_detail"
+    assert upgrade_database(engine) == "0005_agent_run_control_plane"
 
 
 def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
@@ -313,7 +389,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0003_audit_outcome_detail"
+    assert revision == "0005_agent_run_control_plane"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -356,9 +432,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0003_audit_outcome_detail"
+        assert revision == "0005_agent_run_control_plane"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0003_audit_outcome_detail"  # idempotent
+        assert upgrade_database(engine) == "0005_agent_run_control_plane"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]

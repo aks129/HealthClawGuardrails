@@ -91,6 +91,7 @@ def register_model_metadata() -> None:
     import r6.actions.confirmations  # noqa: F401
     import r6.actions.events  # noqa: F401
     import r6.actions.models  # noqa: F401
+    import r6.agent_runs.models  # noqa: F401
     import r6.command_center.models  # noqa: F401
     import r6.fasten.models  # noqa: F401
     import r6.smbp.models  # noqa: F401
@@ -216,6 +217,10 @@ def _register_blueprints(flask_app: Flask) -> None:
         "Actions Blueprint registered at /r6/actions (rails: %s)",
         ", ".join(action_kinds()),
     )
+
+    from r6.agent_runs.routes import agent_runs_blueprint
+
+    flask_app.register_blueprint(agent_runs_blueprint)
 
     from r6.ops.routes import ops_blueprint
 

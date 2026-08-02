@@ -22,6 +22,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 # never re-created — running the baseline migration against it dies with
 # "table ... already exists".
 _BASELINE_REVISION = "0001_v1_8_0"
+_CREATE_ALL_SCHEMA_REVISION = "0005_agent_run_control_plane"
 
 # A table that has existed since long before v1.8.0 — its presence (without
 # alembic_version) is the legacy-database fingerprint.
@@ -35,18 +36,45 @@ def alembic_config() -> Config:
     return config
 
 
-def _is_unstamped_legacy_database(connection) -> bool:
-    """True when the schema was built by pre-Alembic create_all: real tables
-    exist but Alembic has never recorded a revision.
+def _unstamped_adoption_revision(connection) -> str | None:
+    """Revision to stamp when ``create_all`` built an unstamped schema.
+
+    Older deployments have the v1.8 baseline shape. A current checkout can
+    also create a full present-day schema before the migration command runs;
+    stamping that at the old baseline would replay DDL for tables it already
+    contains. Distinguish the two shapes using the first table introduced
+    after the baseline.
 
     Checks the recorded REVISION, not mere table presence — an interrupted
     earlier run can leave an empty alembic_version table behind, and that
     state is still unstamped."""
     current = MigrationContext.configure(connection).get_current_revision()
     if current is not None:
-        return False
+        return None
     inspector = inspect(connection)
-    return _LEGACY_SENTINEL_TABLE in inspector.get_table_names()
+    tables = set(inspector.get_table_names())
+    if _LEGACY_SENTINEL_TABLE not in tables:
+        return None
+    if "cc_conversations" in tables:
+        message_columns = {
+            column["name"]
+            for column in inspector.get_columns("cc_conversation_messages")
+        }
+        resource_pk = inspector.get_pk_constraint("r6_resources").get(
+            "constrained_columns", [])
+        audit_columns = {
+            column["name"] for column in inspector.get_columns("audit_events")
+        }
+        if (
+            {"conversation_id", "request_id", "reply_to"} <= message_columns
+            and resource_pk == ["tenant_id", "resource_type", "id"]
+            and "outcome_detail_code" in audit_columns
+            and "agent_runs" in tables
+            and "agent_tool_calls" in tables
+            and "agent_run_events" in tables
+        ):
+            return _CREATE_ALL_SCHEMA_REVISION
+    return _BASELINE_REVISION
 
 
 def upgrade_database(engine: Engine, revision: str = "head") -> str:
@@ -61,12 +89,14 @@ def upgrade_database(engine: Engine, revision: str = "head") -> str:
     config = alembic_config()
     with engine.connect() as connection:
         config.attributes["connection"] = connection
-        if _is_unstamped_legacy_database(connection):
+        adoption_revision = _unstamped_adoption_revision(connection)
+        if adoption_revision:
             logger.info(
                 "Existing pre-Alembic schema detected (no alembic_version); "
-                "stamping baseline %s before upgrading", _BASELINE_REVISION,
+                "stamping matching revision %s before upgrading",
+                adoption_revision,
             )
-            command.stamp(config, _BASELINE_REVISION)
+            command.stamp(config, adoption_revision)
         command.upgrade(config, revision)
         current = MigrationContext.configure(connection).get_current_revision()
         # Alembic treats a SUPPLIED connection as externally managed and does

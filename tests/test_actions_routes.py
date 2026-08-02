@@ -11,6 +11,16 @@ import json
 from r6.actions.models import ProposedAction
 
 
+def _approval_headers(auth_headers, action_id):
+    from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
+    from r6.stepup import generate_step_up_token
+    headers = dict(auth_headers)
+    headers['X-Step-Up-Token'] = generate_step_up_token(
+        headers['X-Tenant-Id'], audience=ACTION_APPROVAL_AUDIENCE,
+        operation=action_id)
+    return headers
+
+
 PROPOSE_BODY = {
     'kind': 'phone-call',
     'payload': {
@@ -152,7 +162,8 @@ def test_commit_then_confirm_executes(client, tenant_headers, auth_headers,
     assert resp.status_code == 202
     assert fake_providers == []
     resp = client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=auth_headers, json={})
+                       headers=_approval_headers(auth_headers, action_id),
+                       json={})
     assert resp.status_code == 200
     assert resp.get_json()['status'] == 'executing'
     assert len(fake_providers) == 1
@@ -216,7 +227,8 @@ def test_confirm_outcome_unknown_maps_to_unknown_status(
 
     monkeypatch.setattr('requests.request', timeout)
     resp = client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=auth_headers, json={})
+                       headers=_approval_headers(auth_headers, action_id),
+                       json={})
     assert resp.status_code == 502
     with app.app_context():
         from models import db
@@ -236,7 +248,8 @@ def test_confirm_4xx_provider_error_is_failed(client, tenant_headers,
 
     monkeypatch.setattr('requests.request', lambda method, url, **kw: _Resp())
     resp = client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=auth_headers, json={})
+                       headers=_approval_headers(auth_headers, action_id),
+                       json={})
     assert resp.status_code == 502
     with app.app_context():
         from models import db
@@ -260,7 +273,8 @@ def test_confirm_5xx_provider_error_is_unknown(client, tenant_headers,
 
     monkeypatch.setattr('requests.request', lambda method, url, **kw: _Resp())
     resp = client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=auth_headers, json={})
+                       headers=_approval_headers(auth_headers, action_id),
+                       json={})
     assert resp.status_code == 502
     with app.app_context():
         from models import db

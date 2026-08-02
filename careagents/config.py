@@ -84,6 +84,10 @@ class Config:
         # public, unauthenticated site).
         self.chat_turns_per_window = int(e.get("CARE_CHAT_TURNS", "20"))
         self.chat_window_seconds = int(e.get("CARE_CHAT_WINDOW", "600"))
+        # Shared serialization for turns in the same durable conversation.
+        # A single development worker can fall back to a local lock; production
+        # deployments should provide Redis before increasing worker count.
+        self.redis_url = e.get("REDIS_URL", "")
         # Durable daily ceiling per account. The burst limiter above is
         # in-process, so it resets on restart and multiplies by gunicorn
         # worker count; this one is DB-backed and is what actually bounds
@@ -105,6 +109,8 @@ class Config:
                     "ANTHROPIC_OAUTH_TOKEN preferred, OPENAI_API_KEY fallback)")
             _require("RESEND_API_KEY", self.resend_api_key,
                      "email verification codes require a transactional sender")
+            _require("REDIS_URL", self.redis_url,
+                     "conversation turns must serialize across workers")
             # SQLite is single-writer and file-local: it does not survive a
             # host rebuild, cannot be backed up consistently while running,
             # and serialises concurrent users. Fine for one tester, wrong for
