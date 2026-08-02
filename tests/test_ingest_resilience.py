@@ -32,6 +32,48 @@ def test_long_id_resource_stores_and_round_trips(client, tenant_id):
     assert got is not None and got.id == long_id
 
 
+def test_fasten_ingest_still_accepts_real_epic_shaped_long_ids(client, tenant_id):
+    """Regression guard for #267's `_RESOURCE_ID_PATTERN`
+    (r6/fasten/ingester.py): `^[A-Za-z0-9\\-\\.]{1,64}$`, enforced
+    unconditionally inside `_ingest_one` -- the SAME function Fasten's
+    `stream_ingest` calls for every real EHR export, not just the
+    direct-upload path #267 was fixing.
+
+    `test_long_id_resource_stores_and_round_trips` above proves the DB
+    column is wide enough for a ~86-char Epic id, but it writes the
+    R6Resource row directly and never calls `_ingest_one` -- so it could
+    not have caught this. This test drives the real ingester entry point.
+
+    #267's own docstring says the pattern is "FHIR id: ... per the spec",
+    and 64 chars IS the FHIR spec limit -- but this file's docstring (and
+    the 2026-07-08 live-Epic-export incident it documents: 65/250 resource
+    ids over varchar(64), which is why R6Resource.id was widened to
+    varchar(128) instead of truncated or rejected) is the standing record
+    that real Epic exports routinely violate that limit. `_ingest_one`
+    previously stored whatever id Epic sent, subject only to the DB column
+    width; #267 now rejects it at the application layer as `invalid_id`
+    before it ever reaches the DB -- same ceiling the 128-char column was
+    widened specifically to avoid, reintroduced silently (a skipped/
+    invalid_id entry, not a crash) for the live Fasten/Epic connector.
+    """
+    from r6.fasten.ingester import _ingest_one
+
+    long_id = "e-" + uuid.uuid4().hex + uuid.uuid4().hex + "X" * 20  # ~86 chars
+    assert len(long_id) > 64
+    resource = {"resourceType": "Observation", "id": long_id, "status": "final"}
+
+    result, rid = _ingest_one(resource, tenant_id)
+
+    assert result == "ok" and rid == long_id, (
+        f"real Epic-shaped id (len={len(long_id)}) was refused as "
+        f"{result!r} by _RESOURCE_ID_PATTERN -- #267's id-shape "
+        "validation silently drops real Fasten/Epic resources whose "
+        "ids exceed 64 characters, exactly the case "
+        "test_resource_id_column_fits_real_ehr_ids above widened the "
+        "column for"
+    )
+
+
 def test_ingest_error_rolls_back_session_so_next_resource_succeeds(client, tenant_id):
     # The core resilience contract: a failed resource must not poison the
     # session for the ones after it. Simulate by forcing one flush to fail,
