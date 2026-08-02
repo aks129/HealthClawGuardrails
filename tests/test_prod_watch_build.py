@@ -11,6 +11,7 @@ No network: `prod_watch.get` is replaced wholesale.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -58,12 +59,22 @@ def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A"):
     return get
 
 
+_FRESH_BUILD_INFO = {"deployed": None, "built_at": None, "built": None,
+                     "asserted": False, "ok": None}
+
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
+    # `build_info` is a module global that `run()` does not reset, so without
+    # this an asserted run leaks `asserted=True` into every later test in the
+    # process — see the strict-xfail below, which pins that as a defect rather
+    # than papering over it here.
     prod_watch.results.clear()
+    prod_watch.build_info.update(_FRESH_BUILD_INFO)
     monkeypatch.setattr(prod_watch, "get", _fake_get())
     yield
     prod_watch.results.clear()
+    prod_watch.build_info.update(_FRESH_BUILD_INFO)
 
 
 def _named(name):
@@ -112,3 +123,136 @@ def test_without_an_expected_sha_the_build_is_reported_not_asserted(capsys):
     assert _named(prod_watch.BUILD_CHECK) == [], "must not count as a check"
     out = capsys.readouterr().out
     assert "4f2a91cbeef1" in out and prod_watch.BUILD_CHECK in out
+
+
+# --- the machine-readable verdict the workflow's two alarms are driven by ----
+#
+# .github/workflows/prod-watch.yml stopped inferring both alarms from the exit
+# code and now reads `build.asserted` / `build.ok` out of --json-out. Nothing
+# pinned that: every field below could be renamed, inverted, or dropped and the
+# suite stayed green while the stale-build alarm silently never fired again.
+# A monitor whose alarm wiring is untested is the shape of #258 itself.
+
+def _payload(argv, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["prod_watch.py", *argv])
+    code = prod_watch.main()
+    capsys.readouterr()
+    return code
+
+
+@pytest.mark.parametrize("argv,asserted,ok,exit_code", [
+    ([], False, None, 0),                          # informational
+    (["--expect-sha", TIP], True, True, 0),        # observed pass
+    (["--expect-sha", "0" * 40], True, False, 2),  # observed stale
+])
+def test_the_json_payload_carries_the_verdict_the_alarms_read(
+        argv, asserted, ok, exit_code, monkeypatch, capsys, tmp_path):
+    out = tmp_path / "status.json"
+    code = _payload([*argv, "--json-out", str(out)], monkeypatch, capsys)
+    assert code == exit_code
+    status = json.loads(out.read_text())
+    # Field names, not just values: the workflow reads these by name and a
+    # rename would disable the alarm without failing anything.
+    assert status["build"]["asserted"] is asserted
+    assert status["build"]["ok"] is ok
+    assert status["ok"] is (exit_code == 0)
+    # Three states, not two. `asserted is False` must be distinguishable from
+    # `ok is False`, or informational mode closes a live stale-build alarm.
+    assert not (asserted is False and status["build"]["ok"] is False)
+
+
+def test_the_reported_build_is_the_one_the_deployment_actually_named(
+        monkeypatch, capsys, tmp_path):
+    out = tmp_path / "status.json"
+    _payload(["--json-out", str(out)], monkeypatch, capsys)
+    build = json.loads(out.read_text())["build"]
+    assert build["deployed"] == "4f2a91cbeef1"
+    assert build["built_at"] == 1754056800
+    assert build["built"] == "2025-08-01T14:00Z"
+
+
+def test_json_and_json_out_cannot_disagree(monkeypatch, capsys, tmp_path):
+    # Two readers of the same run must not be told different things: one reads
+    # stdout and the alarm reads the file.
+    out = tmp_path / "status.json"
+    monkeypatch.setattr(sys, "argv", ["prod_watch.py", "--json",
+                                      "--json-out", str(out),
+                                      "--expect-sha", "0" * 40])
+    assert prod_watch.main() == 2
+    printed = capsys.readouterr().out
+    assert json.loads(printed[printed.index("{"):]) == \
+        json.loads(out.read_text())
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "DEFECT (pre-existing, and the one F5 leaned on): --json is documented as "
+    "'machine-readable' and --json-out as the flag that leaves 'stdout "
+    "human-readable', but --json prints the JSON *after* the ANSI-coloured "
+    "human lines on the same stream, so the documented machine-readable mode "
+    "cannot be parsed. Repro: "
+    "python scripts/prod_watch.py --json | python -m json.tool"))
+def test_the_documented_machine_readable_mode_is_machine_readable(monkeypatch,
+                                                                  capsys):
+    monkeypatch.setattr(sys, "argv", ["prod_watch.py", "--json"])
+    prod_watch.main()
+    json.loads(capsys.readouterr().out)
+
+
+def test_a_refused_run_writes_no_status_file_at_all(monkeypatch, capsys,
+                                                    tmp_path):
+    # The F2 refusal happens before run(), so no file is written. Pinned
+    # deliberately: the dangerous regression is writing a *default* payload
+    # here, which would hand the alarm step `asserted: false` and let it treat
+    # a refused run as a run that simply pinned nothing.
+    out = tmp_path / "status.json"
+    assert _payload(["--expect-sha", "", "--json-out", str(out)],
+                    monkeypatch, capsys) == 1
+    assert not out.exists(), "a refused run must not leave a verdict behind"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "DEFECT: build_info is a module global that run() never resets, so an "
+    "assertion leaks into a later run in the same process — an informational "
+    "run then reports asserted=True/ok=True and the workflow would CLOSE a "
+    "live stale-build alarm having checked nothing, which is exactly the F1 "
+    "defect this revision fixed, re-entering through global state. Repro: "
+    "prod_watch.run(1.0, [TIP]); prod_watch.run(1.0, []); "
+    "prod_watch.build_info['asserted'] is still True."))
+def test_an_earlier_assertion_does_not_leak_into_a_later_informational_run():
+    prod_watch.run(1.0, [TIP])
+    prod_watch.results.clear()
+    prod_watch.run(1.0, [])
+    assert prod_watch.build_info["asserted"] is False, (
+        "informational mode asserts nothing and must say so")
+    assert prod_watch.build_info["ok"] is None
+
+
+# --- the wiring between the script and the alarms ---------------------------
+
+WORKFLOW = (Path(__file__).parent.parent / ".github" / "workflows"
+            / "prod-watch.yml").read_text()
+
+
+def test_the_scheduled_run_still_writes_the_file_its_alarms_read():
+    # Drop `--json-out` from the workflow and the stale-build alarm goes silent
+    # forever: status.json is absent, `status?.build?.asserted` is undefined,
+    # and the alarm neither fires nor closes. Nothing else would notice.
+    assert "--json-out status.json" in WORKFLOW
+    assert "readFileSync('status.json'" in WORKFLOW
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "DEFECT: the stale alarm may now only be closed by an observed pass, but "
+    "the OUTAGE alarm is still closed by `!hardFailing`, i.e. by any exit code "
+    "that is not '1' — including 2 from uv's own usage error, 127, 137 from an "
+    "OOM kill, and an empty EXIT — in runs where status.json was never written "
+    "and production was never reached. A live outage issue is then closed with "
+    "'This check is passing again.' having verified nothing. The payload "
+    "already carries `ok`; the honest predicate is `status?.ok === true`. "
+    "Repro: node tests/tools/prod_watch_alarm_sim.js — rows 'exit 137', "
+    "'exit 127', and 'truncated json, exit 2' all print outage=CLOSED."))
+def test_the_outage_alarm_is_never_closed_by_an_exit_code_alone():
+    outage = "'prod-watch: production checks failing', hardFailing, !hardFailing"
+    assert outage not in WORKFLOW, (
+        "an alarm may only be closed by an observed pass, not by the absence "
+        "of one particular exit code")
