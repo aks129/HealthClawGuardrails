@@ -3,8 +3,16 @@
 
     python scripts/prod_watch.py                  # all deployments
     python scripts/prod_watch.py --json           # machine-readable
+    python scripts/prod_watch.py --expect-sha a1b2c3d,4f5e6d7   # pin the build
 
-Exits non-zero if any check fails, so a scheduled job can open an issue.
+Exit codes, so a scheduled job can open the right issue:
+
+    0  everything passing
+    1  hard failure — a deployment is down, degraded, or a guardrail regressed
+    2  the deployment is healthy but is running a build we did not expect
+
+Those are different alarms with different remedies, and a stale build holding
+the outage issue open would destroy the meaning of the outage issue.
 
 Why this exists
 ---------------
@@ -26,12 +34,18 @@ Covering that needs an inbox the runner can read, which is a real piece of work
 and a real decision; it is tracked separately rather than faked here. A monitor
 that quietly checks less than it appears to is worse than one with a narrow,
 stated scope.
+
+The build check (#258) closes a different blind spot with the same honesty
+limit: every other check here is equally satisfied by a months-old build, and
+this one proves WHICH ARTIFACT is deployed. It does not prove the code in that
+artifact works — a broken build carrying the right sha still passes it.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 
 import requests
 
@@ -44,6 +58,7 @@ CAREAGENTS = "https://careagents-production.up.railway.app"
 MCP_LOCKED = "https://mcp-server-production-5112.up.railway.app"
 MCP_DEMO = "https://mcp-demo-production-ee2c.up.railway.app"
 DEMO_TENANT = "desktop-demo"
+BUILD_CHECK = "careagents: running the current build"
 
 results: list[tuple[str, bool, str]] = []
 
@@ -55,6 +70,23 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     return ok
 
 
+def report(name: str, detail: str) -> None:
+    """Print a fact without asserting anything about it.
+
+    Deliberately NOT recorded as a passing check: this script's whole claim is
+    that every line it prints was actually verified.
+    """
+    print(f"{Y}INFO{X} {name} {D}— {detail}{X}")
+
+
+def _stamp(ts) -> str:
+    try:
+        return datetime.fromtimestamp(int(ts), timezone.utc).strftime(
+            "%Y-%m-%dT%H:%MZ")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
 def get(url: str, timeout: float, **kw):
     try:
         return requests.get(url, timeout=timeout, **kw)
@@ -62,7 +94,7 @@ def get(url: str, timeout: float, **kw):
         return type(exc).__name__
 
 
-def run(timeout: float) -> int:
+def run(timeout: float, expect_sha: list[str]) -> int:
     # --- the guardrail engine ------------------------------------------------
     r = get(f"{HEALTHCLAW}/r6/fhir/health", timeout)
     check("healthclaw: alive", getattr(r, "status_code", None) == 200,
@@ -117,6 +149,31 @@ def run(timeout: float) -> int:
           getattr(r, "status_code", None) == 200 and body.get("accounts") is True,
           f"status={getattr(r, 'status_code', r)} accounts={body.get('accounts')}")
 
+    # Same body, no second request. Every other check on this deployment is
+    # satisfied just as well by a months-old build — in #258 both CareAgents
+    # deployments were running code older than PR #241 while this script
+    # reported 9/9 green. This asks the one question the others cannot.
+    stale = False
+    deployed = str(body.get("build") or "unknown").lower()
+    built = _stamp(body.get("built_at"))
+    marker = deployed + (f" built {built}" if built else "")
+    if not expect_sha:
+        # No expected set means no honest assertion to make, so make none.
+        report(BUILD_CHECK, f"{marker} (informational — no --expect-sha given)")
+    else:
+        # Deployed sha is short; the expected set is full sha. A build still
+        # rolling out matches an hours-old commit and passes; "unknown" and
+        # anything "-dirty" match nothing, which is the intent.
+        ok = any(full.startswith(deployed) for full in expect_sha)
+        stale = not check(
+            BUILD_CHECK, ok,
+            marker if ok else
+            f"deployed build {deployed}"
+            + (f" (built {built})" if built else "")
+            + f" is not one of the {len(expect_sha)} commit(s) this run "
+            f"accepts (tip {expect_sha[0][:7]}). CareAgents does not "
+            "auto-deploy — redeploy per RELEASING.md §4.")
+
     r = get(f"{CAREAGENTS}/", timeout)
     html = getattr(r, "text", "") or ""
     check("careagents: landing renders",
@@ -152,10 +209,16 @@ def run(timeout: float) -> int:
           str(getattr(r, "status_code", r)))
 
     failed = [n for n, ok, _ in results if not ok]
+    hard = [n for n in failed if n != BUILD_CHECK]
     print()
     if failed:
         print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed))
+    # A stale build is not an outage. Reporting it as one would train the
+    # reader to ignore the outage alarm.
+    if hard:
         return 1
+    if stale:
+        return 2
     print(f"{G}all {len(results)} checks passing{X}")
     return 0
 
@@ -165,9 +228,20 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable results")
+    ap.add_argument("--expect-sha", action="append", default=[], metavar="SHA",
+                    help="full commit sha the CareAgents build may have been "
+                         "built from; repeatable or comma-separated. The "
+                         "scheduled run passes every commit merged to main in "
+                         "the last 24h plus the tip, so a deploy in flight is "
+                         "still accepted. Omit it and the deployed build is "
+                         "reported but not asserted.")
     args = ap.parse_args()
 
-    code = run(args.timeout)
+    # Order matters: the first sha is reported as the tip. De-duplicated so a
+    # tip that also appears in the last-24h list is not counted twice.
+    expect = list(dict.fromkeys(s.strip().lower() for arg in args.expect_sha
+                                for s in arg.split(",") if s.strip()))
+    code = run(args.timeout, expect)
     if args.json:
         print(json.dumps({"ok": code == 0,
                           "checks": [{"name": n, "ok": o, "detail": d}

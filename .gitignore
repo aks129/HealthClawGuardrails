@@ -8,6 +8,11 @@ coverage.json
 htmlcov/
 instance/
 *.db
+
+# Build provenance stamp — written at deploy time (deploy/careagents/deploy.sh)
+# and shipped with the tree. A committed one would go stale silently, which is
+# the exact failure it exists to catch (#258).
+careagents/BUILD_SHA
 node_modules/
 dist/
 .env

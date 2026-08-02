@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import os
 
+from careagents import _build
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +35,12 @@ class Config:
         self.healthclaw_base = (e.get("HEALTHCLAW_BASE")
                                 or "https://app.healthclaw.io").rstrip("/")
         self.session_secret = e.get("CARE_SESSION_SECRET", "")
+
+        # Build provenance (#258) — telemetry, never a gate. Deliberately not
+        # _require()d even in production: a missing marker must degrade to
+        # "unknown", not stop a boot. Nothing branches on these.
+        self.build_sha = _build.BUILD_SHA
+        self.build_time = _build.BUILD_TIME
 
         # Accounts layer: own DB, WebAuthn relying-party, transactional email.
         self.database_url = e.get("CARE_DATABASE_URL",

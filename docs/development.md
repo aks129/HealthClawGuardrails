@@ -118,6 +118,33 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     && railway up --service mcp-server --detach
   ```
 
+- **CareAgents does NOT auto-deploy either.** Neither path is wired to a push:
+  the VPS path rsyncs the tree (`./deploy/careagents/deploy.sh`) and the Railway
+  path is `railway up` from a staging dir. Merged work therefore sits unshipped
+  until a human runs one of them — in #258 both deployments were serving code
+  months older than `main` while `scripts/prod_watch.py` reported 9/9 green,
+  because nothing it checked could tell the two apart.
+
+  Every deploy must stamp `careagents/BUILD_SHA`, the two-line marker
+  (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
+  import and `/healthz` reports as `build` / `built_at`. It is gitignored on
+  purpose: a committed marker goes stale silently, which is the failure it
+  exists to catch. `deploy.sh` writes it for you; before `railway up`, write it
+  into the staging dir yourself:
+
+  ```bash
+  printf '%s\n%s\n' "$(git rev-parse --short=12 HEAD)" "$(git log -1 --format=%ct)" \
+    > careagents/BUILD_SHA
+  railway up --service careagents --detach
+  ```
+
+  Verify with `curl -s <deployment>/healthz` — `build` must be the commit you
+  deployed. `scripts/prod_watch.py --expect-sha <sha>` asserts the same thing,
+  and the scheduled prod-watch accepts any commit merged to `main` in the last
+  24h, exiting `2` (a separate, less urgent alarm than `1`) when the deployed
+  build matches none of them. The marker is telemetry only — nothing branches
+  on it, and a missing one reports `unknown` and still serves normally.
+
 - **CareAgents: migrating from SQLite to Postgres.** CareAgents keeps its own
   engine and metadata (`careagents/models.py`), separate from the Flask app's.
   Production still defaults to SQLite, which is single-writer, host-local, and
