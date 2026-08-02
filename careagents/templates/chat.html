@@ -31,29 +31,29 @@
     {# First visit with connected records: show real counts so the user sees
        immediate value rather than a generic capabilities list. #}
     <div class="msg agent">
-      <p>Hi — I’m {{ me.name }}. I found
-      <strong>{{ summary_counts.conditions }} condition{{ ‘s’ if summary_counts.conditions != 1 else ‘’ }}</strong>,
-      <strong>{{ summary_counts.medications }} medication{{ ‘s’ if summary_counts.medications != 1 else ‘’ }}</strong>,
-      and <strong>{{ summary_counts.labs }} lab result{{ ‘s’ if summary_counts.labs != 1 else ‘’ }}</strong>
+      <p>Hi — I'm {{ me.name }}. I found
+      <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>,
+      <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>,
+      and <strong>{{ summary_counts.labs }} lab result{{ 's' if summary_counts.labs != 1 else '' }}</strong>
       in your records. Want me to walk through what they show?</p>
     </div>
     <div class="starters" id="starters">
       <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I’m due for?</button>
+      <button type="button" class="starter">Any screenings I'm due for?</button>
       <button type="button" class="starter">What medications am I on?</button>
       <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     </div>
     {% else %}
     <div class="msg agent">
-      <p>Hi — I’m {{ me.name }}. I can read the health records in this space,
+      <p>Hi — I'm {{ me.name }}. I can read the health records in this space,
       explain labs in plain language, check what preventive care is due, and
-      fill out your new-patient intake form — though you’ll approve every line
+      fill out your new-patient intake form — though you'll approve every line
       of that yourself.</p>
       <p>What would you like to know?</p>
     </div>
     <div class="starters" id="starters">
       <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I’m due for?</button>
+      <button type="button" class="starter">Any screenings I'm due for?</button>
       <button type="button" class="starter">What medications am I on?</button>
       <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     </div>
