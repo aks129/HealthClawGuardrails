@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from r6.models import R6Resource, AuditEventRecord
 
@@ -372,7 +371,6 @@ def test_per_entry_exception_never_leaks_str_exc_to_caller(client,
     # Force `_ingest_one` to raise an exception whose message quotes a
     # (fake) SQL statement carrying PHI-shaped tokens. The response MUST
     # NOT echo the message; it MUST carry a stable code + correlation_id.
-    from r6 import routes as r6_routes
 
     class _BadExc(RuntimeError):
         pass
