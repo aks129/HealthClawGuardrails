@@ -3648,6 +3648,14 @@ register_caregaps_routes(r6_blueprint, {
     "authenticate_tenant_read": authenticate_tenant_read,
 })
 
+# --- Appointment Brief ($appointment-brief) ---
+from r6.brief.routes import register_brief_routes  # noqa: E402
+
+register_brief_routes(r6_blueprint, {
+    "operation_outcome": _operation_outcome,
+    "authenticate_tenant_read": authenticate_tenant_read,
+})
+
 # --- Guardrail conformance self-test ($conformance) ---
 from r6.conformance.routes import register_conformance_routes  # noqa: E402
 
