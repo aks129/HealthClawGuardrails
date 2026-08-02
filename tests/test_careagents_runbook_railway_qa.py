@@ -19,6 +19,7 @@ what would be sent, not that the live service still carries those names.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -292,6 +293,63 @@ def test_a_failed_enumeration_does_not_create_a_half_configured_service(
         f"{case}: enumeration yielded nothing yet `railway add` still ran and "
         f"would have created the worker service with {pairs} — guard the "
         f"pipeline before `railway add`")
+
+
+def _run_against_payload(tmp_path, shell, payload):
+    """Run the snippet with `railway variables list` returning `payload`."""
+    stub_dir = _stub_returning(tmp_path, json.dumps(payload), 0)
+    argv_file = tmp_path / "argv"
+    if argv_file.exists():
+        argv_file.unlink()
+    subprocess.run(
+        [shell, "-c", _snippet()], capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{stub_dir}:{os.environ['PATH']}",
+             "STUB_ADD_ARGV": str(argv_file)})
+    if not argv_file.exists():
+        return None  # the snippet refused to create the service
+    return [p.split("=", 1)[0] for p in _pairs(argv_file.read_text().splitlines())
+            if p != "CARE_ROLE=worker"]
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_service_is_not_created_without_care_env(tmp_path, shell):
+    # CARE_ENV is the keystone, not just another name. Without it Config()
+    # takes the development path (careagents/config.py: `prod = self.app_env ==
+    # "production"`), every _require is skipped, and the worker boots green
+    # while draining nothing — the failure this whole section exists to
+    # prevent. A count threshold cannot see that: fifteen names that happen to
+    # exclude CARE_ENV pass it.
+    payload = {n: "v" for n in EXPECTED_NAMES if n != "CARE_ENV"}
+    forwarded = _run_against_payload(tmp_path, shell, payload)
+    assert forwarded is None or "CARE_ENV" in forwarded, (
+        "the snippet created a worker service with no CARE_ENV; that service "
+        "boots green and claims nothing")
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_no_name_is_dropped_without_the_operator_being_told(tmp_path, shell):
+    # The guard counts the names that SURVIVED the filter, so filtering and
+    # enumeration failure are indistinguishable to it. If Railway returns a
+    # name the filter rejects, it vanishes: no error, no warning, and a count
+    # still above the threshold. The worker is then missing a variable nobody
+    # knows about. Every key must be either forwarded or excluded by a rule the
+    # runbook documents — never merely filtered away in silence.
+    documented_exclusions = {"PORT", "CARE_ROLE"}
+    odd = {"MY-VAR": "v", "MY.VAR": "v", "2FA_KEY": "v"}
+    payload = {n: "v" for n in EXPECTED_NAMES}
+    payload.update(odd)
+    payload["RAILWAY_SERVICE_NAME"] = "careagents"
+    payload["PORT"] = "8600"
+    forwarded = _run_against_payload(tmp_path, shell, payload)
+    if forwarded is None:
+        return  # refusing outright is a correct, loud outcome
+    dropped = [k for k in payload
+               if k not in forwarded
+               and k not in documented_exclusions
+               and not k.startswith("RAILWAY_")]
+    assert not dropped, (
+        f"{dropped} were silently dropped from the enumeration: the service "
+        f"was created without them and nothing said so")
 
 
 @pytest.mark.parametrize("shell", SHELLS)
