@@ -62,6 +62,84 @@ def test_production_on_postgres_does_not_warn(caplog):
     assert not any("SQLite" in r.message for r in caplog.records)
 
 
+# --- build provenance (#258) --------------------------------------------------
+# Both deployments were once found serving code months older than main while
+# every production check was green. The marker is what makes that visible — so
+# it has to survive being absent or damaged without taking the app down with it.
+
+def _marker(tmp_path, text: str):
+    p = tmp_path / "BUILD_SHA"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_build_marker_reports_the_deployed_commit(tmp_path):
+    from careagents import _build
+    assert _build._read(_marker(tmp_path, "4f2a91cbeef1\n1754056800\n")) == (
+        "4f2a91cbeef1", 1754056800)
+
+
+def test_build_marker_keeps_the_dirty_suffix(tmp_path):
+    # Deploying an uncommitted tree must be visible, and "-dirty" matches no
+    # acceptable sha in prod_watch — which is the intended outcome.
+    from careagents import _build
+    sha, _ = _build._read(_marker(tmp_path, "4f2a91cbeef1-dirty\n1754056800\n"))
+    assert sha == "4f2a91cbeef1-dirty"
+
+
+def test_missing_build_marker_degrades_to_unknown(tmp_path):
+    from careagents import _build
+    assert _build._read(tmp_path / "nope") == ("unknown", 0)
+
+
+@pytest.mark.parametrize("text", [
+    "", "\n\n", "not-a-sha\n1754056800\n", "\x00\xff garbage \x01\n",
+    "4f2a91cbeef1",  # truncated: sha present, timestamp line missing
+])
+def test_corrupt_build_marker_never_raises(tmp_path, text, monkeypatch):
+    # A damaged marker is a telemetry problem, not an outage. It must never be
+    # the reason a deployment fails to boot.
+    from careagents import _build
+    monkeypatch.delenv("CARE_BUILD_SHA", raising=False)
+    sha, when = _build._read(_marker(tmp_path, text))
+    assert when == 0
+    assert sha in ("unknown", "4f2a91cbeef1")
+
+
+def test_binary_build_marker_never_raises(tmp_path, monkeypatch):
+    from careagents import _build
+    monkeypatch.delenv("CARE_BUILD_SHA", raising=False)
+    p = tmp_path / "BUILD_SHA"
+    p.write_bytes(b"\xff\xfe\x00\x01 not utf-8")
+    assert _build._read(p) == ("unknown", 0)
+
+
+def test_build_marker_falls_back_to_the_environment(tmp_path, monkeypatch):
+    from careagents import _build
+    monkeypatch.setenv("CARE_BUILD_SHA", "a1b2c3d4e5f6")
+    assert _build._read(tmp_path / "nope") == ("a1b2c3d4e5f6", 0)
+
+
+def test_build_marker_prefers_the_file_over_the_environment(tmp_path,
+                                                            monkeypatch):
+    # The file ships with the code; the env var can be edited without touching
+    # the image, so it must not be able to override what the tree says.
+    from careagents import _build
+    monkeypatch.setenv("CARE_BUILD_SHA", "a1b2c3d4e5f6")
+    sha, _ = _build._read(_marker(tmp_path, "4f2a91cbeef1\n1754056800\n"))
+    assert sha == "4f2a91cbeef1"
+
+
+def test_config_never_fails_on_a_missing_build_marker():
+    # Telemetry, never config: production must boot without a marker.
+    cfg = Config(env={"CARE_ENV": "production", "CARE_SESSION_SECRET": "x" * 32,
+                      "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
+                      "RESEND_API_KEY": "r",
+                      "REDIS_URL": "redis://localhost:6379/1",
+                      "CARE_DATABASE_URL": "postgresql://u:p@db:5432/care"})
+    assert isinstance(cfg.build_sha, str) and isinstance(cfg.build_time, int)
+
+
 def test_auth_email_reports_failure_instead_of_claiming_it_sent(app, svc,
                                                                 monkeypatch):
     # Login is the front door. This used to discard send_code's return value
@@ -898,6 +976,37 @@ def test_healthz_reports_503_when_the_account_store_is_unreachable(app, svc,
     assert r.status_code == 503
     assert r.get_json()["accounts"] is False
 
+
+def test_healthz_reports_which_build_is_running(app, cfg, monkeypatch):
+    # #258: everything else this endpoint says is equally true of a build from
+    # months ago, so a monitor could report green over unshipped code.
+    monkeypatch.setattr(cfg, "build_sha", "4f2a91cbeef1")
+    monkeypatch.setattr(cfg, "build_time", 1754056800)
+    r = app.test_client().get("/healthz")
+    d = r.get_json()
+    assert r.status_code == 200, "the marker must not change readiness"
+    assert d["status"] == "ok" and d["accounts"] is True
+    assert d["build"] == "4f2a91cbeef1" and d["built_at"] == 1754056800
+
+
+def test_healthz_still_reports_the_build_when_degraded(app, cfg, svc,
+                                                       monkeypatch):
+    # A stale build is a likely suspect when a deployment is misbehaving, so
+    # the marker has to survive the 503 path — without softening it.
+    monkeypatch.setattr(cfg, "build_sha", "4f2a91cbeef1")
+    monkeypatch.setattr(svc, "ping", lambda: False)
+    r = app.test_client().get("/healthz")
+    assert r.status_code == 503
+    assert r.get_json()["build"] == "4f2a91cbeef1"
+
+
+def test_an_unstamped_build_is_still_ready(app, cfg, monkeypatch):
+    # Telemetry, never a gate: an unmarked deploy must still be routable, or
+    # the instrument becomes an outage of its own.
+    monkeypatch.setattr(cfg, "build_sha", "unknown")
+    monkeypatch.setattr(cfg, "build_time", 0)
+    r = app.test_client().get("/healthz")
+    assert r.status_code == 200 and r.get_json()["build"] == "unknown"
 
 def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
         cfg, svc, monkeypatch):

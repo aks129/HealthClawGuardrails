@@ -13,8 +13,9 @@ STEP_UP_SECRET=dev-secret python main.py          # http://localhost:5000
 uv run python -m pytest tests/ -q
 uv run python -m pytest tests/test_r6_routes.py::test_name -v
 
-# Lint (CI-gated)
-pipx run ruff check .
+# Lint (CI-gated). Must be `uv run`: pipx/uvx resolve an unpinned ruff, which
+# reports hundreds of findings CI does not.
+uv run ruff check .
 
 # Node MCP server
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test
@@ -117,6 +118,40 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     && railway link --project <project-id> --service mcp-server --environment production \
     && railway up --service mcp-server --detach
   ```
+
+- **CareAgents does NOT auto-deploy either.** Neither path is wired to a push:
+  the VPS path rsyncs the tree (`./deploy/careagents/deploy.sh`) and the Railway
+  path is `railway up` from a staging dir. Merged work therefore sits unshipped
+  until a human runs one of them — in #258 both deployments were serving code
+  months older than `main` while `scripts/prod_watch.py` reported 9/9 green,
+  because nothing it checked could tell the two apart.
+
+  Every deploy must stamp `careagents/BUILD_SHA`, the two-line marker
+  (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
+  import and `/healthz` reports as `build` / `built_at`. It is gitignored on
+  purpose: a committed marker goes stale silently, which is the failure it
+  exists to catch. `deploy/careagents/stamp_build.sh` is the only thing that
+  knows the format; both deploy paths call it, so they cannot drift apart.
+  `deploy.sh` runs it for you. On the Railway path, run it yourself against the
+  staging dir before `railway up` — it derives the repo from its own location,
+  so it works from anywhere and with a target outside the checkout, and it
+  refuses rather than writing nothing if you point it at the wrong directory:
+
+  ```bash
+  # $STAGE = the directory `railway up` uploads
+  ./deploy/careagents/stamp_build.sh "$STAGE"    # prints e.g. build 4f2a91cbeef1
+  ```
+
+  One caution. The marker is gitignored, so a `railway up` run from the
+  checkout itself can drop it from the upload and leave you with
+  `build: unknown` — stage into a plain directory instead.
+
+  Verify with `curl -s <deployment>/healthz` — `build` must be the commit you
+  deployed. `scripts/prod_watch.py --expect-sha <sha>` asserts the same thing,
+  and the scheduled prod-watch accepts any commit merged to `main` in the last
+  24h, exiting `2` (a separate, less urgent alarm than `1`) when the deployed
+  build matches none of them. The marker is telemetry only — nothing branches
+  on it, and a missing one reports `unknown` and still serves normally.
 
 - **CareAgents: migrating from SQLite to Postgres.** CareAgents keeps its own
   engine and metadata (`careagents/models.py`), separate from the Flask app's.

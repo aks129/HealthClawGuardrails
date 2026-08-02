@@ -831,13 +831,18 @@ def create_app(config: Config | None = None,
         could not reach its database still advertised itself as healthy — a
         load balancer would route real sign-ins straight into failure. It now
         round-trips a trivial query so the answer reflects reality.
+
+        It also reports which build is running (#258). That is telemetry, not
+        a gate: an absent marker reports "unknown" and changes nothing about
+        the status code, which still depends only on the account store.
         """
         accounts_ok = svc.ping()
         workers_ok = _workers_available()
         ready = accounts_ok and workers_ok
         body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
-                "run_workers": workers_ok}
+                "run_workers": workers_ok,
+                "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
 
     return app

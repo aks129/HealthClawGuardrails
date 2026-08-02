@@ -27,6 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # `git log --since` needs history. The default shallow clone returns
+          # exactly one commit, which would silently narrow the accepted set to
+          # the tip and fail every deploy that is legitimately in flight.
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -36,58 +41,122 @@ jobs:
         id: watch
         run: |
           set +e
-          uv run --with requests python scripts/prod_watch.py > result.txt 2>&1
+          # Accepted builds: the tip, plus everything merged to main in the
+          # last 24h. A deploy still rolling out matches an hours-old commit
+          # and passes; a months-old build matches nothing.
+          TIP="$(git rev-parse origin/main 2>/dev/null)"
+          # Fail loudly rather than passing a malformed set, which would raise
+          # a stale-build alarm about a build that is perfectly current. Note
+          # `git rev-parse` prints the ref name to stdout when it cannot
+          # resolve it, so an emptiness test alone would not catch this.
+          # Report through the alarm step rather than exiting here: a bare
+          # `exit 1` leaves steps.watch.outputs.exit unset, the alarm step
+          # skipped by `if: success()`, and the run reduced to a red badge —
+          # the "red X in a folder nobody reads" this workflow exists to avoid.
+          case "$TIP" in *[!0-9a-f]*|"")
+            echo "cannot resolve origin/main — the accepted-build set could not be built." > result.txt
+            echo "exit=1" >> "$GITHUB_OUTPUT"
+            exit 0;;
+          esac
+          EXPECT="--expect-sha $TIP"
+          for sha in $(git log --since=24.hours --format=%H origin/main); do
+            EXPECT="$EXPECT --expect-sha $sha"
+          done
+          uv run --with requests python scripts/prod_watch.py $EXPECT \
+            --json-out status.json > result.txt 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           # Strip ANSI so the issue body is readable.
           sed -i 's/\x1b\[[0-9;]*m//g' result.txt
           cat result.txt
 
-      - name: Open or update the alert issue
-        if: steps.watch.outputs.exit != '0'
+      - name: Sync the alert issues
         uses: actions/github-script@v7
+        env:
+          EXIT: ${{ steps.watch.outputs.exit }}
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('result.txt', 'utf8');
-            const title = 'prod-watch: production checks failing';
+            const body = fs.readFileSync('result.txt', 'utf8').trim();
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const text = [
-              'Scheduled production check failed.',
-              '', '```', body.trim(), '```', '',
-              `Run: ${run}`,
-              '',
-              'This issue closes automatically when the checks pass again.',
-            ].join('\n');
+            const exit = process.env.EXIT;
+            // Read the per-check verdicts rather than inferring both alarms
+            // from one exit code. An exit code is a single scalar; "production
+            // is down" and "the build is stale" are two independent facts, and
+            // during an outage the code is 1 even when the build check also
+            // failed. Deriving the stale alarm from `exit === '2'` therefore
+            // posted "passing again" onto a live stale-build issue and closed
+            // it, mid-outage, having verified nothing.
+            let status = null;
+            try { status = JSON.parse(fs.readFileSync('status.json', 'utf8')); }
+            catch (e) { status = null; }   // the run died before writing it
 
-            const { data: found } = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
-            });
-            if (found.total_count > 0) {
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: found.items[0].number, body: text,
+            const hardFailing = exit === '1';
+            // Closing needs a positive observation, not the absence of one.
+            // `!hardFailing` is true for every exit code that is not 1 — a
+            // runner OOM (137), a `uv` usage error (2), an unset step output —
+            // none of which checked production at all. `status.ok` is written
+            // only by a completed run in which every check passed.
+            // `hard_ok`, not `ok`: a healthy deployment running a stale build
+            // exits 2, so `ok` is false while nothing this alarm speaks for is
+            // wrong. Closing on `ok` would pin the outage issue open — claiming
+            // production is failing — for the whole window between a merge and
+            // a manual CareAgents redeploy, which is this repo's normal state.
+            // The stale alarm covers the build; this one must not also.
+            const allPassed = status?.hard_ok === true;
+            // A stale build detected but unreportable must not go silent: if
+            // the verdict file is unreadable we still have the exit code the
+            // old logic used, and 2 means exactly one thing. Belt and braces,
+            // because the failure this alarm exists to catch is invisible.
+            // `exit === '2'` alone is sufficient: prod_watch returns 2 for one
+            // reason only. Keeping it as an independent trigger means the
+            // alarm survives anything going wrong with the verdict file —
+            // absent, empty, truncated, or schema-drifted (rename `asserted`
+            // and the JSON-only predicate silently never fires again). A stray
+            // 2 from some other tool raises a false alarm, which is loud and
+            // recoverable; the failure this exists to catch is neither.
+            const staleFiring = exit === '2'
+                                || (status?.build?.asserted === true
+                                    && status?.build?.ok !== true);
+            // Three states, not two: failing, passing, and not-asserted.
+            // Informational mode (no --expect-sha) proves nothing about the
+            // build, so it must neither raise the alarm nor close it — only an
+            // observed pass may close one.
+            const buildResolved = status?.build?.asserted === true
+                                  && status?.build?.ok === true;
+            const alarms = [
+              ['prod-watch: production checks failing', hardFailing, allPassed,
+               'Scheduled production check failed.'],
+              ['prod-watch: deployed build is stale', staleFiring, buildResolved,
+               'Production is healthy, but it is not running the build we expect.'],
+            ];
+            for (const [title, firing, resolved, lead] of alarms) {
+              const { data: found } = await github.rest.search.issuesAndPullRequests({
+                q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
               });
-            } else {
-              await github.rest.issues.create({ ...context.repo, title, body: text });
-            }
-
-      - name: Close the alert issue on recovery
-        if: steps.watch.outputs.exit == '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const title = 'prod-watch: production checks failing';
-            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const { data: found } = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
-            });
-            for (const issue of found.items) {
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: issue.number,
-                body: `Production checks are passing again. Closing.\n\nRun: ${run}`,
-              });
-              await github.rest.issues.update({
-                ...context.repo, issue_number: issue.number, state: 'closed',
-              });
+              // Search is fuzzy and the two titles share words — match exactly.
+              const open = found.items.filter(i => i.title === title);
+              if (firing) {
+                const text = [lead, '', '```', body, '```', '', `Run: ${run}`, '',
+                  'This issue closes automatically when the check passes again.'].join('\n');
+                if (open.length) {
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: open[0].number, body: text });
+                } else {
+                  await github.rest.issues.create({ ...context.repo, title, body: text });
+                }
+              } else if (resolved) {
+                // Only an observed pass closes an alarm. If the check was not
+                // asserted this run, the issue stays open and silent — saying
+                // "passing again" about something nobody checked is how a
+                // monitor starts lying.
+                for (const issue of open) {
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: issue.number,
+                    body: `This check is passing again. Closing.\n\nRun: ${run}` });
+                  await github.rest.issues.update({
+                    ...context.repo, issue_number: issue.number, state: 'closed' });
+                }
+              }
             }
 
       - name: Fail the run so the badge reflects reality

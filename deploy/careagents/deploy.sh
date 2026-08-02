@@ -16,6 +16,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 echo "→ ensure target dirs exist"
 ssh "$HOST" 'id -u careagents &>/dev/null || useradd --system --home /opt/careagents careagents; mkdir -p /opt/careagents/app /etc/careagents'
 
+echo "→ stamp build marker"
+# So the running process can say which commit it is (#258): both deployments
+# were once months behind main while every production check was green. The
+# format lives in stamp_build.sh alone — the Railway path calls the same script
+# against its staging dir, so the two cannot disagree about what a marker means.
+"$REPO_ROOT/deploy/careagents/stamp_build.sh" "$REPO_ROOT"
+
 echo "→ rsync app to $HOST"
 rsync -az --delete \
   "$REPO_ROOT/careagents" \
