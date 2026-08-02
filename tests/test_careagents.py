@@ -1347,6 +1347,9 @@ class FakeClient:
     def care_gaps(self, tenant):
         return {"summary": {}, "consumer": {"due": []}}
 
+    def fetch_appointment_brief(self, tenant):
+        return None
+
     def start_form_action(self, tenant):
         return "act-1"
 
@@ -1713,6 +1716,101 @@ def test_sample_connection_agent_and_chat_gate(app, svc, monkeypatch):
     # chat api rejects an agent that isn't the account's
     assert c.post("/api/chat", json={"message": "hi", "agent_id": "nope"}
                   ).status_code == 404
+
+
+def test_brief_renders_with_available_records(app, svc, monkeypatch):
+    """Brief page fetches AppointmentBrief and renders section data."""
+    stub_brief = {
+        "resourceType": "Basic",
+        "extension": [
+            {
+                "url": "https://healthclaw.io/fhir/StructureDefinition/brief-section-problems",
+                "extension": [
+                    {"url": "field", "valueString": '{"label":"Hypertension","value":"Active since 2021-01","sourceType":"Condition","sourceId":"c-1"}'}
+                ],
+            },
+            {
+                "url": "https://healthclaw.io/fhir/StructureDefinition/brief-section-medications",
+                "extension": [],
+            },
+        ],
+    }
+
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.post("/api/connections/sample")
+    conn_id = r.get_json()["id"]
+    r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                    "connection_id": conn_id})
+    agent_id = r.get_json()["id"]
+
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: stub_brief)
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert b"Hypertension" in resp.data
+    assert b"Active since 2021-01" in resp.data
+    # empty section must NOT show absence words in user-visible text
+    # (check the empty-section paragraph specifically, not the full page which
+    # contains fill="none" in the base.html SVG shield icon)
+    body = resp.data.decode()
+    for phrase in ("no medications", "you have no", "you have none",
+                   "no labs", "no conditions"):
+        assert phrase.lower() not in body.lower(), f"Absence phrase {phrase!r} in brief"
+
+
+def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
+    """Brief page shows 'Not available' when the engine returns nothing."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    r = c.post("/api/connections/sample")
+    conn_id = r.get_json()["id"]
+    r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                    "connection_id": conn_id})
+    agent_id = r.get_json()["id"]
+
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: None)
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert b"Not available from your connected records" in resp.data
+
+
+def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert c.get("/brief?agent=nope").status_code == 302
+
+
+def test_parse_brief_sections_extracts_fields():
+    """_parse_brief_sections correctly deserializes section extensions."""
+    from careagents.app import _parse_brief_sections
+    resource = {
+        "extension": [
+            {
+                "url": "https://healthclaw.io/fhir/StructureDefinition/brief-section-labs",
+                "extension": [
+                    {"url": "field", "valueString": '{"label":"HbA1c","value":"7.2% (2026-06-01)","sourceType":"Observation","sourceId":"o-1"}'},
+                    {"url": "field", "valueString": '{"label":"BP","value":"128 mmHg (2026-07-15)","sourceType":"Observation","sourceId":"o-2"}'},
+                ],
+            },
+            {
+                "url": "https://healthclaw.io/fhir/StructureDefinition/brief-section-visits",
+                "extension": [],
+            },
+        ]
+    }
+    sections = _parse_brief_sections(resource)
+    assert len(sections["labs"]) == 2
+    assert sections["labs"][0]["label"] == "HbA1c"
+    assert sections["labs"][1]["sourceId"] == "o-2"
+    assert sections["visits"] == []
+
+
+def test_parse_brief_sections_tolerates_bad_input():
+    from careagents.app import _parse_brief_sections
+    assert _parse_brief_sections({}) == {}
+    assert _parse_brief_sections(None) == {}  # type: ignore[arg-type]
 
 
 def test_connector_catalog_lists_apple_health(app, svc, monkeypatch):

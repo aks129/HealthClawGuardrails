@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Appointment Brief — CareAgents{% endblock %}
+{% block bodyclass %}page-brief{% endblock %}
+{% block content %}
+<main class="hub">
+  <div class="hub-head">
+    <div>
+      <h1>Appointment Brief</h1>
+      <div class="hub-sub">A read-only snapshot of your records before your visit. Every item links to the source record it came from.</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin-top:4px">
+      <a class="pill" href="/chat?agent={{ agent_id|urlencode }}">← chat</a>
+      <a class="pill" href="/home">hub</a>
+    </div>
+  </div>
+
+  {# --- problems --- #}
+  <div class="hub-section">
+    <div class="section-head"><h2>Active problems</h2></div>
+    {% set fields = sections.get('problems', []) %}
+    {% if fields %}
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="brief-empty">Not available from your connected records.</p>
+    {% endif %}
+  </div>
+
+  {# --- medications --- #}
+  <div class="hub-section">
+    <div class="section-head"><h2>Current medications</h2></div>
+    {% set fields = sections.get('medications', []) %}
+    {% if fields %}
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="brief-empty">Not available from your connected records.</p>
+    {% endif %}
+  </div>
+
+  {# --- labs --- #}
+  <div class="hub-section">
+    <div class="section-head"><h2>Recent labs</h2></div>
+    {% set fields = sections.get('labs', []) %}
+    {% if fields %}
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="brief-empty">Not available from your connected records.</p>
+    {% endif %}
+  </div>
+
+  {# --- care gaps --- #}
+  <div class="hub-section">
+    <div class="section-head"><h2>Preventive care due</h2></div>
+    {% set fields = sections.get('care-gaps', []) %}
+    {% if fields %}
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="brief-empty">Not available from your connected records.</p>
+    {% endif %}
+  </div>
+
+  {# --- visits --- #}
+  <div class="hub-section">
+    <div class="section-head"><h2>Recent and upcoming visits</h2></div>
+    {% set fields = sections.get('visits', []) %}
+    {% if fields %}
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="brief-empty">Not available from your connected records.</p>
+    {% endif %}
+  </div>
+
+  <div class="hub-section">
+    <p class="brief-disclaimer">This brief is decision support, not medical advice. In an emergency, call 911.</p>
+  </div>
+
+</main>
+{% endblock %}

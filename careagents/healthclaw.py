@@ -295,6 +295,23 @@ class HealthClawClient:
                 continue
         return total
 
+    def fetch_appointment_brief(self, tenant: str) -> dict | None:
+        """Fetch the pre-appointment brief for this tenant.
+
+        Returns the FHIR Basic resource dict, or None on any failure.
+        Callers treat None as "brief unavailable" — never raise to the UI.
+        """
+        try:
+            r = self.http.get(
+                f"{self.fhir}/AppointmentBrief",
+                headers=self._headers(tenant),
+                timeout=self.timeout)
+            if r.status_code == 200:
+                return r.json()
+        except (requests.RequestException, HealthClawError, ValueError):
+            pass
+        return None
+
     def purge_tenant(self, tenant: str) -> dict:
         """Delete this tenant's records in HealthClaw. Raises on failure.
 
