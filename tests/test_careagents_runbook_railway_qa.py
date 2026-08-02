@@ -119,12 +119,22 @@ SECRET_FRAGMENTS = [
     "S3cr3tPassw0rd", "RtQm9xPLv2eWs7YbKd4NfHj6Uz1AoCg3",
     "mint_9f3a2b1c8d7e6f5a4b3c2d1e0f9a8b7c",
     "sk-proj-QAFAKEKEYQAFAKEKEYQAFAKEKEY", "re_QAFAKE_1234567890abcdef",
+    # The single-line FASTEN_PUBLIC_KEY, which only the `--kv` branch serves.
     "ZmFrZWtleWZvcnFhb25seQ",
+    # ...and the multi-line one the `--json` branch serves, which is the branch
+    # the snippet actually calls. Without this the leak assertion would not
+    # cover the value shape that motivated switching away from `--kv` at all.
+    "QUFAKEKEYQAFAKEKEYQAFAKEKEYQAFAKEKEY",
 ]
 
-# The operator's shell is whatever their terminal runs. On this project's
-# machines that is zsh; CI is Linux bash. Both must produce the same service.
-SHELLS = [name for name in ("bash", "zsh", "sh") if shutil.which(name)]
+# The block is fenced ```bash and uses bash/zsh arrays and a herestring, so it
+# is not POSIX sh — and it does not need to be. An operator pastes it into an
+# interactive shell, which on this project's machines is zsh and in CI is bash.
+# Running it under dash (Linux's /bin/sh) fails on `args=(` before reaching
+# anything under test, so `sh` is deliberately not in this list: it would pass
+# on macOS, where /bin/sh is bash, and fail in CI for a reason that is not a
+# defect.
+SHELLS = [name for name in ("bash", "zsh") if shutil.which(name)]
 
 
 def _snippet() -> str:
@@ -222,6 +232,93 @@ def test_railway_managed_and_role_variables_are_not_mirrored(stub, shell):
     assert "PORT" not in names
     assert names.count("CARE_ROLE") == 1
     assert "CARE_ROLE=worker" in _pairs(argv)
+
+
+# --- the snippet must not create a service it could not configure -----------
+
+# Every way `railway variables list` can fail to yield names. In each, the
+# enumeration produces nothing and the operator gets a traceback — but the
+# script keeps going, and `railway add` still runs.
+BROKEN_ENUMERATIONS = {
+    "empty-stdout": ("", 0),
+    "api-error-printed-to-stdout": ("Error: Project not found", 1),
+    "cli-warning-ahead-of-the-json": (
+        'warning: a new CLI version is available\n{"CARE_ENV":"production"}', 0),
+    "payload-is-null": ("null", 0),
+    "nothing-on-stdout-error-on-stderr": ("", 1),
+}
+
+
+def _stub_returning(path, stdout, code):
+    railway = path / "railway"
+    railway.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        f"  variables|variable) printf '%s' {stdout!r}; exit {code} ;;\n"
+        '  add) : > "$STUB_ADD_ARGV";'
+        ' for a in "$@"; do printf \'%s\\n\' "$a" >> "$STUB_ADD_ARGV"; done;'
+        ' echo "railway: created service careagents-worker" ;;\n'
+        "  *) exit 1 ;;\n"
+        "esac\n")
+    railway.chmod(0o755)
+    return path
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("case", list(BROKEN_ENUMERATIONS))
+def test_a_failed_enumeration_does_not_create_a_half_configured_service(
+        tmp_path, shell, case):
+    # The pipeline has no `set -o pipefail`, no exit check, and no count
+    # assertion, so a failed enumeration leaves NAMES empty and falls through
+    # to `railway add` with CARE_ROLE alone. That service is not a crash-loop
+    # an operator can find: with no CARE_ENV, Config() takes the development
+    # path, nothing is _require()d, and the container runs green while claiming
+    # nothing. It is the same silently-broken worker the enumeration rule was
+    # written to prevent, reached by a different route.
+    #
+    # The traceback on stderr is not the safeguard. It scrolls past, `railway
+    # add` prints "created service", and the deploy looks done.
+    stdout, code = BROKEN_ENUMERATIONS[case]
+    stub_dir = _stub_returning(tmp_path, stdout, code)
+    argv_file = tmp_path / "argv"
+    env = {**os.environ, "PATH": f"{stub_dir}:{os.environ['PATH']}",
+           "STUB_ADD_ARGV": str(argv_file)}
+    subprocess.run([shell, "-c", _snippet()], env=env, capture_output=True,
+                   text=True)
+    if not argv_file.exists():
+        return  # the snippet refused to create the service, which is correct
+    pairs = _pairs(argv_file.read_text().splitlines())
+    pytest.fail(
+        f"{case}: enumeration yielded nothing yet `railway add` still ran and "
+        f"would have created the worker service with {pairs} — guard the "
+        f"pipeline before `railway add`")
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_only_well_formed_variable_names_are_forwarded(stub, shell):
+    # The sed the snippet replaced matched `^[A-Za-z_][A-Za-z0-9_]*=` and so
+    # could only ever emit a conforming name. json.load emits every key
+    # verbatim, so that validation is gone: a name holding a space or a brace
+    # flows into `--variables "$name=\${{$WEB.$name}}"` and produces a
+    # reference Railway cannot resolve.
+    _, argv = _run(stub, shell)
+    for name in [p.split("=", 1)[0] for p in _pairs(argv)]:
+        assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name), (
+            f"{name!r} is not a shell-safe environment variable name")
+
+
+def test_the_runbook_no_longer_parses_kv_output_for_names():
+    # NEW MEDIUM-2, kept pinned now that the snippet calls --json and nothing
+    # else exercises the stub's --kv branch. --kv prints raw values, and a
+    # multi-line value's continuation line matches a NAME= pattern, so parsing
+    # it turns key material into a variable name and carries it into an argv.
+    # Comments may still explain why --kv is avoided; the commands may not use
+    # it.
+    commands = "\n".join(line for line in _snippet().splitlines()
+                         if not line.lstrip().startswith("#"))
+    assert "--json" in commands
+    assert "--kv" not in commands, (
+        "names must not be parsed out of raw --kv output")
 
 
 def test_the_enumerated_set_satisfies_the_production_config_requirements():
