@@ -138,7 +138,13 @@ service, which does not exist yet:
 railway link --project <project-id> --environment production
 ```
 
+The whole block runs in a subshell. It exits on any failure, and `exit` in a
+shell you pasted into is your session — which would also lose `$STAGE`, since
+that is a `mktemp -d` path held only in a shell variable, forcing you to redo
+the staging. The parentheses keep the failure inside.
+
 ```bash
+(
 WEB=careagents                      # the existing web service
 
 # Names only: --json keeps every value inside the pipe. Parsing --kv with sed
@@ -156,15 +162,17 @@ d = json.load(sys.stdin)                       # empty/banner/error output -> di
 if not isinstance(d, dict):
     sys.exit("expected a JSON object of variables")
 
+names = [k for k in d if not re.match(r"RAILWAY_|PORT$|CARE_ROLE$", k)]
+
 # Reject unreferenceable names LOUDLY. Filtering them would be a silent drop,
-# and the count below could not tell that from a healthy read. The rule is
+# and nothing downstream could tell that from a healthy read. The rule is
 # Railway/POSIX, not Python: str.isidentifier() accepts "CAFÉ_KEY" and the
 # Cyrillic-Е homoglyph "CARE_ЕNV", neither of which ${{web.NAME}} resolves.
-bad = sorted(k for k in d if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k))
+# Checked after the exclusion, so a name we were never going to forward cannot
+# block the run.
+bad = sorted(k for k in names if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k))
 if bad:
     sys.exit("cannot build a reference for: " + ", ".join(bad))
-
-names = [k for k in d if not re.match(r"RAILWAY_|PORT$|CARE_ROLE$", k)]
 
 # What the worker cannot boot without, from careagents/config.py. Named, not
 # counted: a threshold blocks a legitimate cleanup and waves through fifteen
@@ -192,7 +200,16 @@ while IFS= read -r name; do
 done <<< "$NAMES"
 
 railway add "${args[@]}"
+)
 ```
+
+If it refuses, it names what it found and nothing was created. **`cannot build
+a reference for: MY-VAR`** — Railway holds a name that `${{web.NAME}}` cannot
+express. Either rename it on the web service, or, if the worker does not need
+it, add it to the exclusion pattern beside `PORT` and `CARE_ROLE`.
+**`enumeration is missing CARE_ENV`** — you are reading the wrong service or
+project; check `railway status` before retrying. In both cases `$STAGE` is
+intact and you can re-run the block as-is.
 
 A reference resolves at deploy time, so rotating the web service's secret
 rotates the worker's with it and no secret is ever pasted into a second field.
