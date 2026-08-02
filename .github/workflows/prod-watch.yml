@@ -37,6 +37,15 @@ jobs:
         with:
           enable-cache: true
 
+      # Resolve dependencies before the checked step, so uv's download progress
+      # cannot end up in the issue body. The watch step merges stderr into
+      # result.txt on purpose — a traceback belongs in the alarm — but on a
+      # cold cache uv writes ~30 lines of "Downloading …" to the same stream,
+      # and the first real run pushed every check result below the fold of the
+      # issue somebody reads at 03:00.
+      - name: Warm the environment
+        run: uv run --with requests python -c ""
+
       - name: Check production
         id: watch
         run: |
