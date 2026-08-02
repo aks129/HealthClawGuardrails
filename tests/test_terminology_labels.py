@@ -97,7 +97,9 @@ def test_every_code_the_live_demo_tenant_serves_has_a_label():
     """Measured from the deployed demo tenant on 2026-08-01.
 
     These are what the HIMSS demo actually shows; if one loses its label the
-    demo silently regresses to "unlabeled record, code ...".
+    demo silently regresses to "unlabeled record, code ...". Unknown-code
+    behavior is covered separately by test_207_unreadable_never_absent.py;
+    demo coverage and the unreadable fallback are both required.
     """
     live = [(LOINC, "2339-0"), (LOINC, "4548-4"), (LOINC, "55284-4"),
             (LOINC, "2823-3"), (LOINC, "85354-9"), (LOINC, "13457-7"),
