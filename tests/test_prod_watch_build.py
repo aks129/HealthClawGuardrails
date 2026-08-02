@@ -210,14 +210,6 @@ def test_a_refused_run_writes_no_status_file_at_all(monkeypatch, capsys,
     assert not out.exists(), "a refused run must not leave a verdict behind"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: build_info is a module global that run() never resets, so an "
-    "assertion leaks into a later run in the same process — an informational "
-    "run then reports asserted=True/ok=True and the workflow would CLOSE a "
-    "live stale-build alarm having checked nothing, which is exactly the F1 "
-    "defect this revision fixed, re-entering through global state. Repro: "
-    "prod_watch.run(1.0, [TIP]); prod_watch.run(1.0, []); "
-    "prod_watch.build_info['asserted'] is still True."))
 def test_an_earlier_assertion_does_not_leak_into_a_later_informational_run():
     prod_watch.run(1.0, [TIP])
     prod_watch.results.clear()
@@ -241,16 +233,6 @@ def test_the_scheduled_run_still_writes_the_file_its_alarms_read():
     assert "readFileSync('status.json'" in WORKFLOW
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: the stale alarm may now only be closed by an observed pass, but "
-    "the OUTAGE alarm is still closed by `!hardFailing`, i.e. by any exit code "
-    "that is not '1' — including 2 from uv's own usage error, 127, 137 from an "
-    "OOM kill, and an empty EXIT — in runs where status.json was never written "
-    "and production was never reached. A live outage issue is then closed with "
-    "'This check is passing again.' having verified nothing. The payload "
-    "already carries `ok`; the honest predicate is `status?.ok === true`. "
-    "Repro: node tests/tools/prod_watch_alarm_sim.js — rows 'exit 137', "
-    "'exit 127', and 'truncated json, exit 2' all print outage=CLOSED."))
 def test_the_outage_alarm_is_never_closed_by_an_exit_code_alone():
     outage = "'prod-watch: production checks failing', hardFailing, !hardFailing"
     assert outage not in WORKFLOW, (

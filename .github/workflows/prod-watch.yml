@@ -91,17 +91,36 @@ jobs:
             catch (e) { status = null; }   // the run died before writing it
 
             const hardFailing = exit === '1';
+            // Closing needs a positive observation, not the absence of one.
+            // `!hardFailing` is true for every exit code that is not 1 — a
+            // runner OOM (137), a `uv` usage error (2), an unset step output —
+            // none of which checked production at all. `status.ok` is written
+            // only by a completed run in which every check passed.
+            const allPassed = status?.ok === true;
+            // A stale build detected but unreportable must not go silent: if
+            // the verdict file is unreadable we still have the exit code the
+            // old logic used, and 2 means exactly one thing. Belt and braces,
+            // because the failure this alarm exists to catch is invisible.
+            // `exit === '2'` alone is sufficient: prod_watch returns 2 for one
+            // reason only. Keeping it as an independent trigger means the
+            // alarm survives anything going wrong with the verdict file —
+            // absent, empty, truncated, or schema-drifted (rename `asserted`
+            // and the JSON-only predicate silently never fires again). A stray
+            // 2 from some other tool raises a false alarm, which is loud and
+            // recoverable; the failure this exists to catch is neither.
+            const staleFiring = exit === '2'
+                                || (status?.build?.asserted === true
+                                    && status?.build?.ok !== true);
             // Three states, not two: failing, passing, and not-asserted.
             // Informational mode (no --expect-sha) proves nothing about the
             // build, so it must neither raise the alarm nor close it — only an
             // observed pass may close one.
-            const buildAsserted = status?.build?.asserted === true;
-            const buildOk = status?.build?.ok === true;
+            const buildResolved = status?.build?.asserted === true
+                                  && status?.build?.ok === true;
             const alarms = [
-              ['prod-watch: production checks failing', hardFailing, !hardFailing,
+              ['prod-watch: production checks failing', hardFailing, allPassed,
                'Scheduled production check failed.'],
-              ['prod-watch: deployed build is stale',
-               buildAsserted && !buildOk, buildAsserted && buildOk,
+              ['prod-watch: deployed build is stale', staleFiring, buildResolved,
                'Production is healthy, but it is not running the build we expect.'],
             ];
             for (const [title, firing, resolved, lead] of alarms) {

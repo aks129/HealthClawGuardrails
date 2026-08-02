@@ -97,8 +97,12 @@ def report(name: str, detail: str) -> None:
 def _stamp(ts) -> str:
     # 0 is what an unstamped build reports, not a build time. Rendering it as
     # 1970-01-01 states a moment that never happened, on the very line a human
-    # reads at 03:00 on the alarm this check exists to raise.
-    if not ts:
+    # reads at 03:00 on the alarm this check exists to raise. Negatives are the
+    # same defect one value over: _build passes int() through unbounded.
+    try:
+        if not ts or int(ts) <= 0:
+            return ""
+    except (TypeError, ValueError):
         return ""
     try:
         return datetime.fromtimestamp(int(ts), timezone.utc).strftime(
@@ -115,6 +119,14 @@ def get(url: str, timeout: float, **kw):
 
 
 def run(timeout: float, expect_sha: list[str]) -> int:
+    # Reset, because this is module state and a stale verdict is worse than no
+    # verdict: a second run in informational mode would otherwise inherit the
+    # first run's `asserted=True, ok=True` and let the workflow close a live
+    # stale-build alarm on an assertion this run never made. Only one run per
+    # process happens today; that is a property of main(), not of run().
+    build_info.update(deployed=None, built_at=None, built=None,
+                      asserted=False, ok=None)
+
     # --- the guardrail engine ------------------------------------------------
     r = get(f"{HEALTHCLAW}/r6/fhir/health", timeout)
     check("healthclaw: alive", getattr(r, "status_code", None) == 200,
