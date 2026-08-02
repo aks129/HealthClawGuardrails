@@ -112,7 +112,7 @@ request shape and executor-specific failure modes, as
 Useful local checks while developing a rail:
 
 ```bash
-uvx ruff check r6/actions/rails tests/actions
+uv run ruff check r6/actions/rails tests/actions
 uv run python -m pytest tests/actions/test_contract_generic.py \
   tests/actions/test_webhook_poster_executor.py -v
 ```
