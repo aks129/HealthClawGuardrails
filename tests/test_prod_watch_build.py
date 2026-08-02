@@ -234,7 +234,66 @@ def test_the_scheduled_run_still_writes_the_file_its_alarms_read():
 
 
 def test_the_outage_alarm_is_never_closed_by_an_exit_code_alone():
-    outage = "'prod-watch: production checks failing', hardFailing, !hardFailing"
-    assert outage not in WORKFLOW, (
-        "an alarm may only be closed by an observed pass, not by the absence "
-        "of one particular exit code")
+    # Asserted positively, not as "the old wrong predicate is absent". The
+    # negative form passed for `status !== null` and for `status?.ok !== false`
+    # — the second of which is TRUE when status is null, so it closes the alarm
+    # on a missing verdict file and puts the whole defect straight back. What
+    # matters is that closing requires a positive observation, so pin the
+    # observation.
+    assert "const allPassed = status?.ok === true;" in WORKFLOW
+    assert "hardFailing, allPassed," in WORKFLOW
+
+
+def test_a_stale_build_still_alarms_when_the_verdict_file_is_unusable():
+    # The exit code is an INDEPENDENT trigger, deliberately. Every JSON-only
+    # predicate goes permanently silent under schema drift — rename `asserted`
+    # and the alarm never fires again with nothing red anywhere — and silence
+    # is the one failure mode this alarm cannot tolerate. Narrowing it to
+    # `exit === '2' && status === null` does not help: a drifted file parses
+    # fine, so the null guard never fires.
+    assert "const staleFiring = exit === '2'" in WORKFLOW
+    assert "|| (status?.build?.asserted === true" in WORKFLOW
+
+
+@pytest.mark.parametrize("ts", [0, -1, -1754056800, "-1", "", None, "abc",
+                                1e30, 10 ** 20])
+def test_no_timestamp_a_build_cannot_have_had_is_ever_rendered(ts):
+    # N8: `if not ts` let a negative through, so an unstamped-then-mangled
+    # marker printed "built 1969-12-31T23:59Z" — F4's defect one value over.
+    # _build passes int() through unbounded, so the monitor is the last gate.
+    assert prod_watch._stamp(ts) == ""
+
+
+def test_a_real_timestamp_still_renders():
+    # The other half: the guard must not swallow the value it exists to show.
+    assert prod_watch._stamp(1754056800) == "2025-08-01T14:00Z"
+    assert prod_watch._stamp("1754056800") == "2025-08-01T14:00Z"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "DEFECT: the outage alarm now closes on `status.ok === true`, but `ok` is "
+    "`code == 0` and a healthy deployment running a stale build exits 2. So a "
+    "live outage issue CANNOT close while the build is stale, even though "
+    "every hard check passed — production is up and the issue keeps saying it "
+    "is down. That is the mirror of N3, and it is the frequent case, not the "
+    "exotic one: CareAgents does not auto-deploy, so the build is stale for "
+    "most of the window between a merge and a manual redeploy, and production "
+    "reports build=unknown right now. scripts/prod_watch.py's own docstring "
+    "states the property being broken: 'a stale build holding the outage "
+    "issue open would destroy the meaning of the outage issue.' The payload "
+    "needs a hard-failure verdict the workflow can close on, separate from "
+    "the all-checks verdict. Repro: node tests/tools/prod_watch_alarm_sim.js, "
+    "row 'recovered but build STALE, outage issue open' -> outage=untouched."))
+def test_a_healthy_deployment_can_always_close_its_outage_alarm(
+        monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(build="0bad0bad0bad"))
+    out = tmp_path / "status.json"
+    assert _payload(["--expect-sha", TIP, "--json-out", str(out)],
+                    monkeypatch, capsys) == 2
+    status = json.loads(out.read_text())
+    hard = [c["name"] for c in status["checks"]
+            if not c["ok"] and c["name"] != prod_watch.BUILD_CHECK]
+    assert hard == [], "nothing but the build check failed"
+    assert status["hard_ok"] is True, (
+        "a run with no hard failure must say so, or the outage alarm it "
+        "closes on can never close while the build is stale")
