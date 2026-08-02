@@ -32,12 +32,10 @@ COPY careagents/ ./careagents/
 ENV PORT=8600
 EXPOSE 8600
 
-# The web role probes its readiness endpoint. The worker has no HTTP listener;
-# its role-specific health check is process liveness, which the container
-# runtime already enforces by restarting an exited process.
+# The web role probes its readiness endpoint. The worker role checks durable
+# queue presence, so a live-but-hung process cannot advertise itself healthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import os,urllib.request,sys; \
-sys.exit(0 if os.environ.get('CARE_ROLE')=='worker' else (0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8600')+'/healthz', timeout=4).status==200 else 1))"
+  CMD python -m careagents.healthcheck
 
 CMD ["sh", "-c", "gunicorn careagents.wsgi:app \
   --bind 0.0.0.0:${PORT:-8600} --workers ${CARE_WEB_WORKERS:-2} --threads 4 --timeout 180 \

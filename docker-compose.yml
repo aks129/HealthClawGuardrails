@@ -16,6 +16,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
       - INTERNAL_TOKEN_MINT_SECRET=${INTERNAL_TOKEN_MINT_SECRET:-dev-internal-secret-change-in-production}
+      - AGENT_RUN_RECONCILE_SECRET=${AGENT_RUN_RECONCILE_SECRET:-dev-reconcile-secret-change-in-production}
       # Read authorization (hardening): when enabled, non-public tenants
       # require a tenant-bound step-up token / OAuth read scope on reads.
       # PUBLIC_TENANTS is the explicit allowlist that may be read anonymously.
@@ -126,6 +127,7 @@ services:
       - CARE_RP_ID=localhost
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CARE_RUN_WORKER_STALE_SECONDS=${CARE_RUN_WORKER_STALE_SECONDS:-30}
     depends_on:
       fhir-mcp-guardrails:
         condition: service_started
@@ -150,6 +152,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CARE_RUN_WORKERS=${CARE_RUN_WORKERS:-2}
+      - CARE_RUN_WORKER_STALE_SECONDS=${CARE_RUN_WORKER_STALE_SECONDS:-30}
     depends_on:
       fhir-mcp-guardrails:
         condition: service_started

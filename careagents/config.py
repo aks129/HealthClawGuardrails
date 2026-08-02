@@ -100,6 +100,8 @@ class Config:
         self.run_lease_seconds = int(e.get("CARE_RUN_LEASE_SECONDS", "60"))
         self.run_worker_concurrency = int(e.get("CARE_RUN_WORKERS", "4"))
         self.run_poll_seconds = float(e.get("CARE_RUN_POLL_SECONDS", "0.5"))
+        self.run_worker_stale_seconds = int(e.get(
+            "CARE_RUN_WORKER_STALE_SECONDS", "30"))
         self.run_sse_poll_seconds = float(e.get(
             "CARE_RUN_SSE_POLL_SECONDS", "0.25"))
         self.run_sse_timeout_seconds = int(e.get(
@@ -112,6 +114,9 @@ class Config:
             raise ConfigError("CARE_RUN_WORKERS must be 1-32")
         if not 0.05 <= self.run_poll_seconds <= 30:
             raise ConfigError("CARE_RUN_POLL_SECONDS must be 0.05-30")
+        if not 5 <= self.run_worker_stale_seconds <= 300:
+            raise ConfigError(
+                "CARE_RUN_WORKER_STALE_SECONDS must be 5-300")
         if not 0.05 <= self.run_sse_poll_seconds <= 10:
             raise ConfigError("CARE_RUN_SSE_POLL_SECONDS must be 0.05-10")
         if not 10 <= self.run_sse_timeout_seconds <= 3600:

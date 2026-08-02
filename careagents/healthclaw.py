@@ -436,6 +436,31 @@ class HealthClawClient:
                 f"run claim failed ({r.status_code})", r.status_code)
         return r.json()
 
+    def agent_worker_health(self, max_age_seconds: int = 30) -> dict:
+        """Return queue-backed worker readiness, including unavailable/503."""
+        try:
+            r = self.http.get(
+                f"{self.base}/command-center/api/runs/workers/health",
+                params={"max_age_seconds": max_age_seconds},
+                headers=self._internal_headers(), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run worker health failed", 0) from exc
+        if r.status_code not in (200, 503):
+            raise HealthClawError(
+                f"run worker health failed ({r.status_code})", r.status_code)
+        try:
+            result = r.json()
+        except ValueError as exc:
+            raise HealthClawError(
+                "run worker health returned invalid data", r.status_code
+            ) from exc
+        if not isinstance(result, dict):
+            raise HealthClawError(
+                "run worker health returned invalid data", r.status_code)
+        result["available"] = r.status_code == 200 and bool(
+            result.get("available"))
+        return result
+
     def heartbeat_agent_run(self, run_id: str, worker_id: str,
                             lease_seconds: int = 60) -> dict:
         return self._run_internal_post(
@@ -456,6 +481,15 @@ class HealthClawClient:
         if error_class is not None:
             body["error_class"] = error_class
         return self._run_internal_post(f"/{run_id}/transition", body)
+
+    def finalize_agent_run(self, run_id: str, worker_id: str, text: str,
+                           checkpoint_id: str) -> dict:
+        """Atomically persist the assistant answer and run completion."""
+        return self._run_internal_post(
+            f"/{run_id}/finalize",
+            {"worker_id": worker_id, "text": text,
+             "checkpoint_id": checkpoint_id},
+        )
 
     def append_agent_run_event(self, run_id: str, worker_id: str,
                                event_type: str, payload=None) -> dict:

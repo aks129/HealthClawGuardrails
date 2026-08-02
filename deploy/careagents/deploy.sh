@@ -82,6 +82,7 @@ CARE_MODEL=claude-sonnet-5
 CARE_RUN_WORKERS=4
 CARE_RUN_DEADLINE_SECONDS=120
 CARE_RUN_LEASE_SECONDS=60
+CARE_RUN_WORKER_STALE_SECONDS=30
 ENV
   chmod 600 /etc/careagents/careagents.env
   echo "!! populate /etc/careagents/careagents.env before the service will boot"
@@ -128,6 +129,12 @@ systemctl restart careagents careagents-worker nginx
 sleep 2
 systemctl is-active careagents
 systemctl is-active careagents-worker
+for _attempt in {1..30}; do
+  if curl -sf http://127.0.0.1:8600/healthz >/dev/null; then
+    break
+  fi
+  sleep 1
+done
 curl -sf http://127.0.0.1:8600/healthz && echo
 REMOTE
 

@@ -430,6 +430,13 @@ def create_app(config: Config | None = None,
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
         return run.get("tenant_id") == tenant and run.get("agent_id") == agent_id
 
+    def _workers_available() -> bool:
+        try:
+            status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
+        except HealthClawError:
+            return False
+        return bool(status.get("available"))
+
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
         """Replay durable UI events. Disconnecting only stops this projection."""
         cursor = max(0, after)
@@ -482,6 +489,11 @@ def create_app(config: Config | None = None,
         text = (body.get("message") or "").strip()
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
+        if not _workers_available():
+            return jsonify({
+                "error": "run_workers_unavailable",
+                "message": "Chat is temporarily unavailable. Try again soon.",
+            }), 503
         if not _allow_turn(acct.id):
             return jsonify({"error": "rate_limited"}), 429
         # Durable daily ceiling — survives restarts and is shared across
@@ -717,6 +729,11 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
+        if not _workers_available():
+            return jsonify({
+                "error": "run_workers_unavailable",
+                "message": "Chat is temporarily unavailable. Try again soon.",
+            }), 503
         if not _allow_turn(surface["account_id"]):
             return jsonify({"reply": "One moment — too many messages just now. "
                                      "Try again in a bit."}), 200
@@ -816,8 +833,11 @@ def create_app(config: Config | None = None,
         round-trips a trivial query so the answer reflects reality.
         """
         accounts_ok = svc.ping()
-        body = {"status": "ok" if accounts_ok else "degraded",
-                "provider": cfg.provider, "accounts": accounts_ok}
-        return jsonify(body), (200 if accounts_ok else 503)
+        workers_ok = _workers_available()
+        ready = accounts_ok and workers_ok
+        body = {"status": "ok" if ready else "degraded",
+                "provider": cfg.provider, "accounts": accounts_ok,
+                "run_workers": workers_ok}
+        return jsonify(body), (200 if ready else 503)
 
     return app

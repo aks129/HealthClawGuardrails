@@ -145,18 +145,21 @@ def test_agent_run_control_plane_migration_is_reversible(tmp_path):
 
     command.upgrade(config, "head")
     assert {
-        "agent_runs", "agent_tool_calls", "agent_run_events"
+        "agent_runs", "agent_tool_calls", "agent_run_events",
+        "agent_worker_presence",
     } <= set(inspect(engine).get_table_names())
 
     command.downgrade(config, "0004_conversation_identity")
     assert {
-        "agent_runs", "agent_tool_calls", "agent_run_events"
+        "agent_runs", "agent_tool_calls", "agent_run_events",
+        "agent_worker_presence",
     }.isdisjoint(inspect(engine).get_table_names())
     assert "cc_conversations" in inspect(engine).get_table_names()
 
     command.upgrade(config, "head")
     assert {
-        "agent_runs", "agent_tool_calls", "agent_run_events"
+        "agent_runs", "agent_tool_calls", "agent_run_events",
+        "agent_worker_presence",
     } <= set(inspect(engine).get_table_names())
     engine.dispose()
 
@@ -193,7 +196,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0006_tool_reconciliation_state"
+    assert revision == "0007_agent_worker_presence"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -228,6 +231,12 @@ def test_deploy_configs_run_migrations_before_web_processes():
     assert "CARE_ROLE=worker" in services["careagents-worker"]["environment"]
     assert services["careagents-worker"]["command"] == [
         "python", "-m", "careagents.worker"]
+    assert any(
+        value.startswith("CARE_RUN_WORKER_STALE_SECONDS=")
+        for value in services["careagents-worker"]["environment"])
+    dockerfile = (ROOT / "deploy/careagents/Dockerfile").read_text()
+    assert "python -m careagents.healthcheck" in dockerfile
+    assert "CARE_ROLE')=='worker'" not in dockerfile
 
     railway = (ROOT / "railway.toml").read_text()
     assert "preDeployCommand" in railway
@@ -350,11 +359,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0006_tool_reconciliation_state"
+    assert revision == "0007_agent_worker_presence"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0006_tool_reconciliation_state"
+    assert upgrade_database(engine) == "0007_agent_worker_presence"
 
 
 def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
@@ -393,7 +402,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0006_tool_reconciliation_state"
+    assert revision == "0007_agent_worker_presence"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -436,9 +445,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0006_tool_reconciliation_state"
+        assert revision == "0007_agent_worker_presence"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0006_tool_reconciliation_state"  # idempotent
+        assert upgrade_database(engine) == "0007_agent_worker_presence"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]

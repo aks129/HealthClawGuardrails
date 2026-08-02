@@ -269,6 +269,78 @@ def test_confirm_action_mints_action_bound_credential_then_uses_it():
     assert calls[1][2]['X-Step-Up-Token'] == 'action-bound-token'
 
 
+def test_worker_health_client_accepts_fail_closed_503_projection():
+    import careagents.healthclaw as hcmod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 503
+
+        @staticmethod
+        def json():
+            return {"available": False, "active_workers": 0}
+
+    class _HTTP:
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            captured.update({"url": url, "params": params,
+                             "headers": headers, "timeout": timeout})
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "mint-secret")
+    client.http = _HTTP()
+
+    result = client.agent_worker_health(45)
+
+    assert result["available"] is False
+    assert captured["url"].endswith(
+        "/command-center/api/runs/workers/health")
+    assert captured["params"] == {"max_age_seconds": 45}
+    assert captured["headers"] == {
+        "X-Internal-Secret": "mint-secret",
+        "X-Agent-Id": "careagents-worker",
+    }
+
+
+def test_worker_container_probe_uses_authenticated_queue_readiness(monkeypatch):
+    from careagents import healthcheck
+
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["secret"] = request.get_header("X-internal-secret")
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", urlopen)
+    env = {"CARE_ROLE": "worker", "HEALTHCLAW_BASE": "http://healthclaw",
+           "HEALTHCLAW_MINT_SECRET": "worker-secret",
+           "CARE_RUN_WORKER_STALE_SECONDS": "45"}
+
+    assert healthcheck.healthy(env) is True
+    assert captured["url"].endswith(
+        "/command-center/api/runs/workers/health?max_age_seconds=45")
+    assert captured["secret"] == "worker-secret"
+
+
+def test_worker_container_probe_fails_closed_without_secret():
+    from careagents.healthcheck import healthy
+
+    assert healthy({"CARE_ROLE": "worker",
+                    "HEALTHCLAW_BASE": "http://healthclaw"}) is False
+
+
 def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
         cfg, svc, monkeypatch):
     # The transcript is PHI-adjacent, so it belongs behind the guardrails in
@@ -452,8 +524,67 @@ def test_worker_enforces_claimed_run_deadline_before_inference(
     RunWorker(cfg, fake, svc, "deadline-worker").run_once()
 
     assert fake.runs[run_id]["status"] == "failed"
-    assert any(event["type"] == "run.failed"
+    assert any(event["type"] == "run.deadline_exceeded"
                for event in fake.events[run_id])
+
+
+def test_sse_replay_terminates_expired_run_without_a_worker(
+        cfg, svc, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    response = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "worker disappears",
+        "request_id": "expire-without-worker"}, buffered=False)
+    stream = iter(response.response)
+    assert '"type": "accepted"' in next(stream).decode()
+    run_id = next(iter(fake.runs))
+    fake.runs[run_id]["deadline_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+
+    body = b"".join(stream).decode()
+
+    assert fake.runs[run_id]["status"] == "failed"
+    assert '"type": "done"' in body
+    assert '"status": "failed"' in body
+
+
+def test_late_provider_result_is_not_checkpointed_after_lease_loss(
+        cfg, svc, monkeypatch):
+    from careagents.worker import RunWorker
+
+    app, client, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    accepted = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "provider may hang",
+        "request_id": "late-provider"}, buffered=False)
+    next(iter(accepted.response))
+    accepted.close()
+    run = fake.claim_agent_run("late-worker")
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "late answer", [], []
+
+    monkeypatch.setattr(
+        "careagents.worker.llm.complete", lambda *_args: _Turn())
+
+    class _RevokedLease:
+        checks = 0
+
+        def check(self):
+            self.checks += 1
+            if self.checks > 1:
+                raise HealthClawError("worker lease was lost", 409)
+
+    with pytest.raises(HealthClawError):
+        RunWorker(cfg, fake, svc, "late-worker")._execute(
+            run, _RevokedLease())
+
+    assert [event["type"] for event in fake.events[run["id"]]] == [
+        "run.queued", "run.started"]
+    assert [message["role"] for message in fake.logged[
+        (tenant, fake.conversation_id(agent_id))]] == ["user"]
 
 
 def test_worker_pool_creates_only_the_configured_number_of_slots(
@@ -753,6 +884,7 @@ def test_healthz_reports_ok_when_the_account_store_answers(app):
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "ok" and d["accounts"] is True
+    assert d["run_workers"] is True
 
 
 def test_healthz_reports_503_when_the_account_store_is_unreachable(app, svc,
@@ -765,6 +897,58 @@ def test_healthz_reports_503_when_the_account_store_is_unreachable(app, svc,
     r = app.test_client().get("/healthz")
     assert r.status_code == 503
     assert r.get_json()["accounts"] is False
+
+
+def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
+        cfg, svc, monkeypatch):
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_available = False
+
+    health = client.get("/healthz")
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id,
+        "message": "do not strand this",
+        "request_id": "worker-absent",
+    })
+
+    assert health.status_code == 503
+    assert health.get_json()["run_workers"] is False
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_unavailable"
+    assert fake.runs == {}
+
+
+def test_chat_recovers_after_worker_queue_access_returns(
+        cfg, svc, monkeypatch):
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    payload = {"agent_id": agent_id, "message": "try once healthy",
+               "request_id": "worker-recovery"}
+    fake.worker_available = False
+    assert client.post("/api/chat", json=payload).status_code == 503
+
+    fake.worker_available = True
+    accepted = client.post("/api/chat", json=payload, buffered=False)
+    first = next(iter(accepted.response)).decode()
+    accepted.close()
+
+    assert accepted.status_code == 200
+    assert '"type": "accepted"' in first
+    assert len(fake.runs) == 1
+
+
+def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
+        cfg, svc, monkeypatch):
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+
+    assert client.get("/healthz").status_code == 503
+    response = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "upstream is unreachable"})
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "run_workers_unavailable"
 
 
 def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
@@ -833,6 +1017,8 @@ class FakeClient:
         self.events: dict[str, list[dict]] = {}
         self.tool_calls: dict[tuple[str, str], dict] = {}
         self._event_id = 0
+        self.worker_available = True
+        self.worker_health_error = False
 
     @staticmethod
     def conversation_id(agent_id):
@@ -920,11 +1106,26 @@ class FakeClient:
 
     def agent_run_events(self, tenant, run_id, after=0, limit=100):
         run = self.get_agent_run(tenant, run_id)
+        if run["status"] == "queued":
+            from datetime import datetime, timezone
+            deadline = datetime.fromisoformat(run["deadline_at"])
+            if datetime.now(timezone.utc) >= deadline:
+                self.runs[run_id]["status"] = "failed"
+                self._append_run_event(
+                    run_id, "run.deadline_exceeded", {"status": "failed"})
+                run = self.get_agent_run(tenant, run_id)
         events = [event for event in self.events.get(run_id, [])
                   if event["id"] > after][:limit]
         return {"run_id": run_id, "status": run["status"],
                 "events": events,
                 "next_cursor": events[-1]["id"] if events else after}
+
+    def agent_worker_health(self, max_age_seconds=30):
+        if self.worker_health_error:
+            raise HealthClawError("worker health unavailable", 0)
+        return {"available": self.worker_available,
+                "active_workers": 1 if self.worker_available else 0,
+                "max_age_seconds": max_age_seconds}
 
     def claim_agent_run(self, worker_id, lease_seconds=60):
         run = next((item for item in self.runs.values()
@@ -960,6 +1161,31 @@ class FakeClient:
             run_id, kwargs.get("event_type") or f"run.{status}",
             kwargs.get("payload") or {"status": status})
         return dict(run)
+
+    def finalize_agent_run(self, run_id, worker_id, text, checkpoint_id):
+        run = self.runs[run_id]
+        if run["status"] == "completed":
+            return {"run": dict(run), "idempotent_replay": True}
+        if run["status"] != "running" or run["worker_id"] != worker_id:
+            raise HealthClawError("worker does not own run", 409)
+        request_id = f"run:{run_id}:assistant"
+        rows = self.logged.setdefault(
+            (run["tenant_id"], run["conversation_id"]), [])
+        if not any(row.get("request_id") == request_id for row in rows):
+            rows.append({
+                "role": "assistant", "content": text,
+                "agent_id": run.get("agent_id"),
+                "surface": run.get("surface") or "web",
+                "reply_to": run.get("message_id"),
+                "request_id": request_id,
+            })
+        self._append_run_event(run_id, "agent.text", {
+            "checkpoint_id": checkpoint_id, "text": text})
+        run["status"] = "completed"
+        run["worker_id"] = None
+        self._append_run_event(run_id, "run.completed", {
+            "status": "completed"})
+        return {"run": dict(run), "idempotent_replay": False}
 
     def append_agent_run_event(self, run_id, worker_id, event_type,
                                payload=None):

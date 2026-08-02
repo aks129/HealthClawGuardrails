@@ -127,6 +127,18 @@ class RunWorker:
                 run_id, self.worker_id, "cancelled",
                 event_type="run.cancelled",
                 payload={"status": "cancelled"})
+        except RunDeadlineExceeded:
+            heartbeat.stop()
+            try:
+                self.hc.transition_agent_run(
+                    run_id, self.worker_id, "failed",
+                    event_type="run.deadline_exceeded",
+                    payload={"status": "failed"},
+                    error_class="RunDeadlineExceeded")
+            except HealthClawError:
+                # The authoritative heartbeat may already have committed the
+                # same terminal deadline transition and revoked this lease.
+                logger.info("run %s was already terminal at deadline", run_id)
         except AmbiguousToolOutcome:
             heartbeat.stop()
             self.hc.append_agent_run_event(
@@ -244,6 +256,11 @@ class RunWorker:
             if pending_checkpoint is None:
                 tools = TOOLS if round_number < MAX_TOOL_ROUNDS else []
                 turn = llm.complete(self.cfg, prompt, history, tools)
+                # The provider call may outlive the lease or hard deadline.
+                # Never checkpoint or persist a late result after the
+                # authoritative heartbeat transaction revoked ownership.
+                heartbeat.check()
+                self._check_deadline(run)
                 round_number += 1
                 checkpoint_id = f"round-{round_number}"
                 pending_checkpoint = {
@@ -371,20 +388,12 @@ class RunWorker:
         text = str(checkpoint.get("text") or "").strip() or "…"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
-        if marker not in emitted:
-            saved = self.hc.log_message(
-                run["tenant_id"], "assistant", text, run.get("agent_id"),
-                run["conversation_id"], surface=run.get("surface") or "web",
-                reply_to=run.get("message_id"),
-                request_id=f"run:{run_id}:assistant")
-            if not saved:
-                raise HealthClawError("assistant outcome was not persisted", 0)
-            self.hc.append_agent_run_event(
-                run_id, self.worker_id, "agent.text",
-                {"checkpoint_id": checkpoint_id, "text": text})
-        self.hc.transition_agent_run(
-            run_id, self.worker_id, "completed",
-            event_type="run.completed", payload={"status": "completed"})
+        # HealthClaw owns the final fencing transaction. A client-side
+        # heartbeat check cannot atomically order transcript persistence
+        # against a concurrent deadline sweep or lease recovery.
+        self.hc.finalize_agent_run(
+            run_id, self.worker_id, text, checkpoint_id)
+        emitted.add(marker)
 
     @staticmethod
     def _check_deadline(run: dict) -> None:

@@ -27,7 +27,18 @@ GET /api/chat/runs/<run_id>/events?agent_id=<agent_id>&after=<cursor>
   moves to `needs_reconciliation`, and its run pauses in
   `waiting_for_human`. Workers never retry that side effect blindly.
 - Assistant messages use `run:<run_id>:assistant` as their durable request key,
-  so recovery cannot append the final answer twice.
+  and HealthClaw commits that message, its `agent.text` event, and run
+  completion in one fenced transaction. Recovery cannot append the final
+  answer twice, and a stale worker cannot publish after lease revocation.
+- Idle claims and owned-run heartbeats update durable worker presence only
+  after a successful queue transaction. Web readiness and chat admission fail
+  closed when no presence is fresh. The readiness poll also sweeps a bounded
+  batch of overdue queued or running runs, so expiry does not depend on a
+  client or worker.
+- A run heartbeat never extends a lease beyond the hard run deadline. Once the
+  deadline is reached, the authoritative heartbeat transaction revokes
+  ownership before a late provider result can be persisted. Pure model work
+  fails; an in-flight side effect instead enters reconciliation.
 
 ## systemd
 
@@ -46,6 +57,7 @@ The worker pool is bounded by `CARE_RUN_WORKERS` (default 4). Important knobs:
 | `CARE_RUN_DEADLINE_SECONDS` | 120 | End-to-end run deadline |
 | `CARE_RUN_LEASE_SECONDS` | 60 | Claim lease, heartbeated every third |
 | `CARE_RUN_POLL_SECONDS` | 0.5 | Empty-queue polling delay |
+| `CARE_RUN_WORKER_STALE_SECONDS` | 30 | Maximum age of successful queue access |
 | `CARE_RUN_SSE_TIMEOUT_SECONDS` | 150 | One browser projection window |
 
 Scale worker processes horizontally only when both HealthClaw and the
@@ -74,11 +86,16 @@ SELECT id, worker_id, lease_expires_at
 FROM agent_runs
 WHERE status = 'running'
 ORDER BY lease_expires_at;
+SELECT worker_id, last_seen_at
+FROM agent_worker_presence
+ORDER BY last_seen_at DESC;
 SELECT id, run_id, tool_name, error_class
 FROM agent_tool_calls
 WHERE status = 'needs_reconciliation';
 ```
 
 An increasing `needs_reconciliation` count requires provider-specific truth
-lookup before an operator resolves a tool call. The reconciliation UI and
+lookup before an operator resolves a tool call. Reconciliation requires the
+separate `AGENT_RUN_RECONCILE_SECRET`, records only an opaque evidence ID, and
+never turns an abandoned run into a silent success. The reconciliation UI and
 alerts are tracked separately in issue #255.

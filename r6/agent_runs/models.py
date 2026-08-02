@@ -161,6 +161,24 @@ class AgentRunEvent(db.Model):
         return result
 
 
+class AgentWorkerPresence(db.Model):
+    """Last successful queue access for one durable-run worker slot."""
+
+    __tablename__ = "agent_worker_presence"
+
+    worker_id = db.Column(db.String(128), primary_key=True)
+    first_seen_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    last_seen_at = db.Column(
+        db.DateTime, nullable=False, default=utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "worker_id": self.worker_id,
+            "first_seen_at": _iso(self.first_seen_at),
+            "last_seen_at": _iso(self.last_seen_at),
+        }
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
