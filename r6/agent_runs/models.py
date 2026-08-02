@@ -86,7 +86,8 @@ class AgentToolCall(db.Model):
         db.UniqueConstraint(
             "run_id", "provider_call_id", name="uq_agent_tool_call_provider"),
         db.CheckConstraint(
-            "status IN ('pending','running','completed','failed')",
+            "status IN ('pending','running','completed','failed',"
+            "'needs_reconciliation')",
             name="ck_agent_tool_call_status",
         ),
     )
@@ -158,6 +159,24 @@ class AgentRunEvent(db.Model):
         if include_payload:
             result["payload"] = _json(self.payload_json) or {}
         return result
+
+
+class AgentWorkerPresence(db.Model):
+    """Last successful queue access for one durable-run worker slot."""
+
+    __tablename__ = "agent_worker_presence"
+
+    worker_id = db.Column(db.String(128), primary_key=True)
+    first_seen_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    last_seen_at = db.Column(
+        db.DateTime, nullable=False, default=utcnow, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "worker_id": self.worker_id,
+            "first_seen_at": _iso(self.first_seen_at),
+            "last_seen_at": _iso(self.last_seen_at),
+        }
 
 
 def _iso(value: datetime | None) -> str | None:

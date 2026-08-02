@@ -78,6 +78,10 @@ class HealthClawClient:
                 "X-Step-Up-Token": self.mint_token(tenant),
                 "X-Agent-Id": "careagents"}
 
+    def _internal_headers(self) -> dict:
+        return {"X-Internal-Secret": self.mint_secret,
+                "X-Agent-Id": "careagents-worker"}
+
     # --- reads (redacted + audited by the layer) -----------------------------
 
     def search(self, tenant: str, resource_type: str,
@@ -327,7 +331,8 @@ class HealthClawClient:
                     agent_id: str | None = None,
                     conversation_id: str | None = None,
                     surface: str = "web",
-                    reply_to: str | None = None) -> bool:
+                    reply_to: str | None = None,
+                    request_id: str | None = None) -> bool:
         """Append one turn. Returns False on failure rather than raising:
         losing a transcript must never break the conversation in progress.
 
@@ -336,7 +341,7 @@ class HealthClawClient:
         """
         status, _body = self._post_message(
             tenant, role, text, agent_id, conversation_id, surface,
-            reply_to=reply_to)
+            request_id=request_id, reply_to=reply_to)
         if status not in (200, 201):
             if status is not None:
                 logger.warning("chat turn rejected for %s: HTTP %s",
@@ -346,14 +351,16 @@ class HealthClawClient:
 
     def recent_messages(self, tenant: str, limit: int = 20,
                         conversation_id: str | None = None,
-                        agent_id: str | None = None) -> list[dict]:
+                        agent_id: str | None = None,
+                        through_message_id: str | None = None) -> list[dict]:
         """Oldest-first [{role, text}] for rehydrating a conversation."""
         try:
             r = self.http.get(
                 f"{self.base}/command-center/api/conversations",
                 params={"limit": limit, "full": "1", "tenant": tenant,
                         "conversation_id": conversation_id,
-                        "agent_id": agent_id},
+                        "agent_id": agent_id,
+                        "through_message_id": through_message_id},
                 headers={"X-Tenant-Id": tenant,
                          "X-Step-Up-Token": self.mint_token(tenant)},
                 timeout=self.timeout)
@@ -367,6 +374,169 @@ class HealthClawClient:
                for m in reversed(rows)          # endpoint returns newest-first
                if m.get("role") in ("user", "assistant")]
         return out
+
+    # --- durable agent runs --------------------------------------------------
+
+    def create_agent_run(self, tenant: str, message_id: str,
+                         deadline_seconds: int = 120) -> dict:
+        """Create (or retrieve) the one durable run for an inbound message."""
+        try:
+            r = self.http.post(
+                f"{self.base}/command-center/api/runs",
+                json={"tenant_id": tenant, "message_id": message_id,
+                      "deadline_seconds": deadline_seconds},
+                headers=self._headers(tenant), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run enqueue failed", 0) from exc
+        if r.status_code not in (200, 201):
+            raise HealthClawError(
+                f"run enqueue failed ({r.status_code})", r.status_code)
+        return r.json()
+
+    def get_agent_run(self, tenant: str, run_id: str) -> dict:
+        try:
+            r = self.http.get(
+                f"{self.base}/command-center/api/runs/{run_id}",
+                headers=self._headers(tenant), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run lookup failed", 0) from exc
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"run lookup failed ({r.status_code})", r.status_code)
+        return r.json()
+
+    def agent_run_events(self, tenant: str, run_id: str, after: int = 0,
+                         limit: int = 100) -> dict:
+        try:
+            r = self.http.get(
+                f"{self.base}/command-center/api/runs/{run_id}/events",
+                params={"after": max(0, int(after)), "limit": limit},
+                headers=self._headers(tenant), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run event replay failed", 0) from exc
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"run event replay failed ({r.status_code})", r.status_code)
+        return r.json()
+
+    def claim_agent_run(self, worker_id: str,
+                        lease_seconds: int = 60) -> dict | None:
+        try:
+            r = self.http.post(
+                f"{self.base}/command-center/api/runs/claim",
+                json={"worker_id": worker_id,
+                      "lease_seconds": lease_seconds},
+                headers=self._internal_headers(), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run claim failed", 0) from exc
+        if r.status_code == 204:
+            return None
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"run claim failed ({r.status_code})", r.status_code)
+        return r.json()
+
+    def agent_worker_health(self, max_age_seconds: int = 30) -> dict:
+        """Return queue-backed worker readiness, including unavailable/503."""
+        try:
+            r = self.http.get(
+                f"{self.base}/command-center/api/runs/workers/health",
+                params={"max_age_seconds": max_age_seconds},
+                headers=self._internal_headers(), timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run worker health failed", 0) from exc
+        if r.status_code not in (200, 503):
+            raise HealthClawError(
+                f"run worker health failed ({r.status_code})", r.status_code)
+        try:
+            result = r.json()
+        except ValueError as exc:
+            raise HealthClawError(
+                "run worker health returned invalid data", r.status_code
+            ) from exc
+        if not isinstance(result, dict):
+            raise HealthClawError(
+                "run worker health returned invalid data", r.status_code)
+        result["available"] = r.status_code == 200 and bool(
+            result.get("available"))
+        return result
+
+    def heartbeat_agent_run(self, run_id: str, worker_id: str,
+                            lease_seconds: int = 60) -> dict:
+        return self._run_internal_post(
+            f"/{run_id}/heartbeat",
+            {"worker_id": worker_id, "lease_seconds": lease_seconds})
+
+    def transition_agent_run(self, run_id: str, worker_id: str, status: str,
+                             *, event_type: str | None = None,
+                             payload=None,
+                             error_class: str | None = None,
+                             available_in_seconds: int = 0) -> dict:
+        body = {"worker_id": worker_id, "status": status,
+                "available_in_seconds": available_in_seconds}
+        if event_type is not None:
+            body["event_type"] = event_type
+        if payload is not None:
+            body["payload"] = payload
+        if error_class is not None:
+            body["error_class"] = error_class
+        return self._run_internal_post(f"/{run_id}/transition", body)
+
+    def finalize_agent_run(self, run_id: str, worker_id: str, text: str,
+                           checkpoint_id: str) -> dict:
+        """Atomically persist the assistant answer and run completion."""
+        return self._run_internal_post(
+            f"/{run_id}/finalize",
+            {"worker_id": worker_id, "text": text,
+             "checkpoint_id": checkpoint_id},
+        )
+
+    def append_agent_run_event(self, run_id: str, worker_id: str,
+                               event_type: str, payload=None) -> dict:
+        body = {"worker_id": worker_id, "type": event_type}
+        if payload is not None:
+            body["payload"] = payload
+        return self._run_internal_post(f"/{run_id}/events", body,
+                                       expected=(201,))
+
+    def register_agent_tool_call(self, run_id: str, worker_id: str,
+                                 provider_call_id: str, tool_name: str,
+                                 arguments: dict) -> dict:
+        return self._run_internal_post(
+            f"/{run_id}/tool-calls",
+            {"worker_id": worker_id,
+             "provider_call_id": provider_call_id,
+             "tool_name": tool_name,
+             "arguments": arguments},
+            expected=(200, 201))
+
+    def transition_agent_tool_call(self, run_id: str, call_id: str,
+                                   worker_id: str, status: str, *,
+                                   result=None, outcome_ref: str | None = None,
+                                   error_class: str | None = None) -> dict:
+        body = {"worker_id": worker_id, "status": status}
+        if result is not None:
+            body["result"] = result
+        if outcome_ref is not None:
+            body["outcome_ref"] = outcome_ref
+        if error_class is not None:
+            body["error_class"] = error_class
+        return self._run_internal_post(
+            f"/{run_id}/tool-calls/{call_id}/transition", body)
+
+    def _run_internal_post(self, path: str, body: dict,
+                           expected: tuple[int, ...] = (200,)) -> dict:
+        try:
+            r = self.http.post(
+                f"{self.base}/command-center/api/runs{path}",
+                json=body, headers=self._internal_headers(),
+                timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise HealthClawError("run worker request failed", 0) from exc
+        if r.status_code not in expected:
+            raise HealthClawError(
+                f"run worker request failed ({r.status_code})", r.status_code)
+        return r.json()
 
     # --- surfaces: Telegram binding ------------------------------------------
 

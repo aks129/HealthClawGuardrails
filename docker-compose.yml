@@ -15,6 +15,8 @@ services:
       - FHIR_VALIDATOR_URL=${FHIR_VALIDATOR_URL:-http://localhost:8080}
       - REDIS_URL=redis://redis:6379/0
       - STEP_UP_SECRET=${STEP_UP_SECRET:-dev-step-up-secret-change-in-production}
+      - INTERNAL_TOKEN_MINT_SECRET=${INTERNAL_TOKEN_MINT_SECRET:-dev-internal-secret-change-in-production}
+      - AGENT_RUN_RECONCILE_SECRET=${AGENT_RUN_RECONCILE_SECRET:-dev-reconcile-secret-change-in-production}
       # Read authorization (hardening): when enabled, non-public tenants
       # require a tenant-bound step-up token / OAuth read scope on reads.
       # PUBLIC_TENANTS is the explicit allowlist that may be read anonymously.
@@ -109,6 +111,59 @@ services:
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     networks:
       - fhir-net
+
+  careagents:
+    build:
+      context: .
+      dockerfile: deploy/careagents/Dockerfile
+    ports:
+      - "127.0.0.1:${CAREAGENTS_PORT:-8600}:8600"
+    environment:
+      - CARE_ENV=development
+      - CARE_DATABASE_URL=sqlite:////data/careagents.db
+      - HEALTHCLAW_BASE=http://fhir-mcp-guardrails:5000
+      - HEALTHCLAW_MINT_SECRET=${INTERNAL_TOKEN_MINT_SECRET:-dev-internal-secret-change-in-production}
+      - CARE_ORIGIN=http://localhost:${CAREAGENTS_PORT:-8600}
+      - CARE_RP_ID=localhost
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CARE_RUN_WORKER_STALE_SECONDS=${CARE_RUN_WORKER_STALE_SECONDS:-30}
+    depends_on:
+      fhir-mcp-guardrails:
+        condition: service_started
+    volumes:
+      - careagents-data:/data
+    networks:
+      - fhir-net
+    profiles:
+      - careagents
+
+  careagents-worker:
+    build:
+      context: .
+      dockerfile: deploy/careagents/Dockerfile
+    command: ["python", "-m", "careagents.worker"]
+    environment:
+      - CARE_ROLE=worker
+      - CARE_ENV=development
+      - CARE_DATABASE_URL=sqlite:////data/careagents.db
+      - HEALTHCLAW_BASE=http://fhir-mcp-guardrails:5000
+      - HEALTHCLAW_MINT_SECRET=${INTERNAL_TOKEN_MINT_SECRET:-dev-internal-secret-change-in-production}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CARE_RUN_WORKERS=${CARE_RUN_WORKERS:-2}
+      - CARE_RUN_WORKER_STALE_SECONDS=${CARE_RUN_WORKER_STALE_SECONDS:-30}
+    depends_on:
+      fhir-mcp-guardrails:
+        condition: service_started
+      careagents:
+        condition: service_started
+    volumes:
+      - careagents-data:/data
+    networks:
+      - fhir-net
+    profiles:
+      - careagents
 
   agent-orchestrator:
     build:
@@ -265,3 +320,4 @@ networks:
 volumes:
   wearables-pg-data:
   shl-data:
+  careagents-data:

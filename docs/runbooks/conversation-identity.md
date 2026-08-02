@@ -37,10 +37,10 @@ Run the normal migration command before starting web processes:
 uv run flask --app main init-db
 ```
 
-CareAgents production also requires `REDIS_URL`. Redis serializes a conversation
-across workers while the database uniqueness constraint remains the final
-idempotency boundary. Development can run without Redis and uses a process-local
-lock.
+CareAgents workers serialize a conversation by locking its durable
+`cc_conversations` row while claiming the next run. Multiple web and worker
+processes are therefore safe without a process-local transcript or Redis lock;
+the database uniqueness constraint remains the inbound idempotency boundary.
 
 After deployment, verify that every message has a conversation and that no
 duplicate request keys exist:

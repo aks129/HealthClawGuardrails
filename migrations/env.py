@@ -15,6 +15,7 @@ from models import db
 import r6.actions.confirmations  # noqa: F401
 import r6.actions.events  # noqa: F401
 import r6.actions.models  # noqa: F401
+import r6.agent_runs.models  # noqa: F401
 import r6.command_center.models  # noqa: F401
 import r6.fasten.models  # noqa: F401
 import r6.models  # noqa: F401

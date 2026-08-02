@@ -223,10 +223,16 @@ def api_conversations_list():
         return err
     limit = min(int(request.args.get("limit", "15")), 100)
     full = request.args.get("full") in ("1", "true")
+    through_message_id = request.args.get("through_message_id") or None
+    if through_message_id is not None and (
+            not isinstance(through_message_id, str)
+            or not _REQUEST_ID.fullmatch(through_message_id)):
+        return jsonify({"error": "invalid through_message_id"}), 400
     return jsonify(projector.recent_conversations(
         _tenant(), limit=limit, full=full,
         conversation_id=request.args.get("conversation_id") or None,
         agent_id=request.args.get("agent_id") or None,
+        through_message_id=through_message_id,
     ))
 
 
