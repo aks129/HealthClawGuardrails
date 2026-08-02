@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -59,8 +60,22 @@ MCP_LOCKED = "https://mcp-server-production-5112.up.railway.app"
 MCP_DEMO = "https://mcp-demo-production-ee2c.up.railway.app"
 DEMO_TENANT = "desktop-demo"
 BUILD_CHECK = "careagents: running the current build"
+# Same shape careagents/_build.py enforces on the way out. A "-dirty" marker
+# deliberately fails it: a build stamped from an uncommitted tree has no
+# provenance to assert.
+_SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 
 results: list[tuple[str, bool, str]] = []
+
+# The build check's verdict, kept separately from `results`, because an exit
+# code is one scalar and the two alarms it drives are not. Without this the
+# workflow had to infer "is the build stale?" from a code an unrelated outage
+# also sets, and closed a live stale-build alarm with "passing again" during an
+# outage — the same unverified green #258 exists to eliminate.
+# `asserted` is False in informational mode: not-asserted is not passing, and
+# only an observed pass may close an alarm.
+build_info: dict = {"deployed": None, "built_at": None, "built": None,
+                    "asserted": False, "ok": None}
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -80,6 +95,11 @@ def report(name: str, detail: str) -> None:
 
 
 def _stamp(ts) -> str:
+    # 0 is what an unstamped build reports, not a build time. Rendering it as
+    # 1970-01-01 states a moment that never happened, on the very line a human
+    # reads at 03:00 on the alarm this check exists to raise.
+    if not ts:
+        return ""
     try:
         return datetime.fromtimestamp(int(ts), timezone.utc).strftime(
             "%Y-%m-%dT%H:%MZ")
@@ -157,6 +177,8 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     deployed = str(body.get("build") or "unknown").lower()
     built = _stamp(body.get("built_at"))
     marker = deployed + (f" built {built}" if built else "")
+    build_info.update(deployed=deployed, built_at=body.get("built_at"),
+                      built=built or None)
     if not expect_sha:
         # No expected set means no honest assertion to make, so make none.
         report(BUILD_CHECK, f"{marker} (informational — no --expect-sha given)")
@@ -164,7 +186,13 @@ def run(timeout: float, expect_sha: list[str]) -> int:
         # Deployed sha is short; the expected set is full sha. A build still
         # rolling out matches an hours-old commit and passes; "unknown" and
         # anything "-dirty" match nothing, which is the intent.
-        ok = any(full.startswith(deployed) for full in expect_sha)
+        #
+        # Shape-check first. `startswith` alone means a build reporting "4"
+        # prefix-matches every expected sha and passes. _build.py gates the
+        # marker on its way out; this gates it on the way in, because the one
+        # thing a monitor must not do is accept the field it is auditing.
+        ok = (bool(_SHA_RE.fullmatch(deployed))
+              and any(full.startswith(deployed) for full in expect_sha))
         stale = not check(
             BUILD_CHECK, ok,
             marker if ok else
@@ -173,6 +201,7 @@ def run(timeout: float, expect_sha: list[str]) -> int:
             + f" is not one of the {len(expect_sha)} commit(s) this run "
             f"accepts (tip {expect_sha[0][:7]}). CareAgents does not "
             "auto-deploy — redeploy per RELEASING.md §4.")
+        build_info.update(asserted=True, ok=ok)
 
     r = get(f"{CAREAGENTS}/", timeout)
     html = getattr(r, "text", "") or ""
@@ -228,6 +257,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable results")
+    ap.add_argument("--json-out", metavar="PATH",
+                    help="write the same machine-readable results to PATH, "
+                         "leaving stdout human-readable. The scheduled run "
+                         "uses this to drive its two alarms from the checks "
+                         "themselves rather than from one exit code.")
     ap.add_argument("--expect-sha", action="append", default=[], metavar="SHA",
                     help="full commit sha the CareAgents build may have been "
                          "built from; repeatable or comma-separated. The "
@@ -241,11 +275,27 @@ def main() -> int:
     # tip that also appears in the last-24h list is not counted twice.
     expect = list(dict.fromkeys(s.strip().lower() for arg in args.expect_sha
                                 for s in arg.split(",") if s.strip()))
+    # `--expect-sha "$SHA"` with SHA unset parses to nothing. Falling back to
+    # informational mode there would tell a caller who explicitly asked to pin
+    # the build that everything passed, while silently dropping the assertion —
+    # the unset-variable footgun, reported as green.
+    if args.expect_sha and not expect:
+        print(f"{R}--expect-sha was given but contains no sha{X}", file=sys.stderr)
+        return 1
     code = run(args.timeout, expect)
+    payload = {"ok": code == 0,
+               "checks": [{"name": n, "ok": o, "detail": d}
+                          for n, o, d in results],
+               # Separate from `checks` on purpose: in informational mode the
+               # build is reported without being counted, so folding it in
+               # would inflate the count. Omitting it entirely left --json as
+               # blind to provenance as it was before #258.
+               "build": dict(build_info)}
     if args.json:
-        print(json.dumps({"ok": code == 0,
-                          "checks": [{"name": n, "ok": o, "detail": d}
-                                     for n, o, d in results]}, indent=2))
+        print(json.dumps(payload, indent=2))
+    if args.json_out:
+        with open(args.json_out, "w") as fh:
+            json.dump(payload, fh, indent=2)
     return code
 
 

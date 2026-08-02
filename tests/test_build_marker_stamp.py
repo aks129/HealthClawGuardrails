@@ -10,9 +10,11 @@ string a human typed, not a string the deploy actually produces.
 These run the real script against a throwaway git repo, so clean-vs-dirty and
 the refusal paths are exercised for real rather than described.
 
-The xfail-marked cases below are open defects found in review, not aspirations;
-each names its reproduction. They flip to XPASS (a failure) when fixed, which
-is the point — a fixed defect should force its marker to be deleted.
+Three cases below arrived as `xfail(strict=True)` markers for defects found in
+review — an `--expect-sha` that parsed away to nothing and passed silently, a
+one-character build that prefix-matched every commit, and an unstamped build
+claiming it was built in 1970. All three are fixed, so the markers are gone and
+the tests now assert the behaviour directly, which is what strict xfail is for.
 """
 
 from __future__ import annotations
@@ -305,40 +307,34 @@ def test_an_unasserted_build_never_inflates_the_count():
     assert code == 0 and "all 9 checks passing" in out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: an --expect-sha that parses to nothing (empty string, a bare "
-    "comma) silently downgrades the assertion to an INFO line and exits 0, so "
-    "a caller who asked to pin the build is told 'all 9 checks passing' and "
-    "never learns the pin was dropped. Repro: "
-    "uv run --with requests python scripts/prod_watch.py --expect-sha ''"))
-def test_an_expect_sha_that_parses_to_nothing_must_not_pass_silently():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--expect-sha", action="append", default=[])
-    args = ap.parse_args(["--expect-sha", ""])
-    assert args.expect_sha, "the flag was given"
-    expect = [s.strip().lower() for arg in args.expect_sha
-              for s in arg.split(",") if s.strip()]
-    assert expect, "a supplied --expect-sha must never parse away to nothing"
+@pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])
+def test_an_expect_sha_that_parses_to_nothing_must_not_pass_silently(supplied,
+                                                                    monkeypatch,
+                                                                    capsys):
+    """`--expect-sha "$SHA"` with SHA unset must not report all-green.
+
+    The original form of this test asserted that the *parse* could never yield
+    an empty list, which no implementation can satisfy — "" simply contains no
+    sha. What matters is observable: a caller who asked to pin the build must
+    never be told everything passed while the pin was silently discarded.
+    """
+    import prod_watch
+    monkeypatch.setattr(sys, "argv",
+                        ["prod_watch.py", "--expect-sha", supplied])
+    called = []
+    monkeypatch.setattr(prod_watch, "run",
+                        lambda *a, **k: called.append(a) or 0)
+    code = prod_watch.main()
+    assert code == 1, "a supplied but empty --expect-sha must fail loudly"
+    assert not called, "it must refuse before checking anything"
+    assert "all 9 checks passing" not in capsys.readouterr().out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: the deployed value is prefix-matched with no shape check, so a "
-    "one-character 'build' matches every expected sha and the stale-build "
-    "alarm reports OK. careagents/_build.py enforces >=7 hex on the way out; "
-    "scripts/prod_watch.py enforces nothing on the way in. Repro: serve "
-    "/healthz with {'build': '4'} and run with --expect-sha <any sha>."))
 def test_a_one_character_build_must_not_match_every_commit():
     code, _ = _prod_watch_with({**HEALTHY, "build": "4", "built_at": 1}, [TIP])
     assert code == 2, "a build value too short to identify a commit is not proof"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: an unstamped build reports built_at=0, which renders as "
-    "'built 1970-01-01T00:00Z' — a build time that never happened, on the "
-    "line a human reads at 03:00. A missing built_at renders correctly (no "
-    "suffix); zero should too. Repro: serve /healthz with "
-    "{'build': 'unknown', 'built_at': 0} and run with no --expect-sha."))
 def test_an_unstamped_build_does_not_claim_to_have_been_built_in_1970():
     _, out = _prod_watch_with({**HEALTHY, "build": "unknown", "built_at": 0}, [])
     assert "1970" not in out
