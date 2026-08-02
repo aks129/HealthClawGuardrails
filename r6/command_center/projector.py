@@ -1,11 +1,8 @@
 """
 Command center projector.
 
-Pure functions that read existing tables + runtime signals and produce
-the JSON shapes the dashboard consumes. No new DB tables are invented —
-everything is derived from AuditEventRecord, R6Resource, FastenConnection,
-FastenJob, WearableConnection, ConversationMessage, AgentTask, plus live
-probes (OpenClaw gateway, MCP server, FHIR_UPSTREAM_URL).
+Pure functions that read durable control-plane tables + runtime signals and
+produce the JSON shapes the dashboard consumes.
 """
 
 from __future__ import annotations
@@ -650,20 +647,24 @@ def agents_status(tenant_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def recent_conversations(tenant_id: str, limit: int = 15,
-                         full: bool = False) -> list[dict]:
+                         full: bool = False,
+                         conversation_id: str | None = None,
+                         agent_id: str | None = None) -> list[dict]:
     """Return the most recent chat turns across all agents + channels.
 
     `full` returns untruncated text. The dashboard wants the 500-char preview
     `to_dict()` gives it, but a client rehydrating a conversation needs what
     was actually said — a truncated replay would quietly rewrite history.
     """
-    msgs = (
-        ConversationMessage.query
-        .filter_by(tenant_id=tenant_id)
-        .order_by(desc(ConversationMessage.created_at))
-        .limit(limit)
-        .all()
-    )
+    query = ConversationMessage.query.filter_by(tenant_id=tenant_id)
+    if conversation_id:
+        query = query.filter_by(conversation_id=conversation_id)
+    if agent_id:
+        query = query.filter_by(agent_id=agent_id)
+    msgs = query.order_by(
+        desc(ConversationMessage.created_at),
+        desc(ConversationMessage.id),
+    ).limit(limit).all()
     out = []
     for m in msgs:
         agent = get_agent(m.agent_id) if m.agent_id else None

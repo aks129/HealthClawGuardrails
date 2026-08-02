@@ -50,6 +50,9 @@
     <button class="btn-primary" id="send" type="submit">Send</button>
   </form>
 </main>
-<script>window.CARE_AGENT = {{ agent_id|tojson }};</script>
+<script>
+window.CARE_AGENT = {{ agent_id|tojson }};
+window.CARE_CONVERSATION = {{ conversation_id|tojson }};
+</script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}

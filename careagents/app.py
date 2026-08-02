@@ -4,12 +4,10 @@ Identity model: a signed cookie holds `account_id` after passkey/email login.
 Everything (connections, agents, surfaces) is account-scoped; a foreign id
 reads as 404.
 
-Chat history is DURABLE and lives in HealthClaw, per tenant (#222). What sits
-in process memory here is only a cache of it, rebuilt by load_history() when
-cold — so a restart or an idle eviction costs a round trip, not the
-conversation. Deploy with ONE gunicorn worker (threads for concurrency): the
-cache is process-local, so a second worker would serve some turns from an
-empty one.
+Chat history is DURABLE and lives in HealthClaw, per conversation (#222/#247).
+What sits in process memory here is only a per-turn working copy refreshed by
+load_history(). Redis serializes turns in one conversation across workers; the database
+idempotency key is the final defense against duplicate inbound delivery.
 
 No PHI is stored here — health data lives in HealthClaw tenants behind the
 guardrail layer; careagents holds identity + pointers only.
@@ -20,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from functools import wraps
 from threading import Lock
@@ -32,6 +31,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
 from careagents import advisors, connectors
 from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
+from careagents.conversation_locks import ConversationLockError, ConversationTurnLocks
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS, system_prompt
 
@@ -45,8 +45,8 @@ logger = logging.getLogger(__name__)
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
 
-# In-memory conversation bounds. One worker holds every live chat, so these
-# cap memory and keep a long-running process from degrading (#218).
+# In-memory conversation bounds. Each worker caches the chats it serves, so
+# these cap memory and keep a long-running process from degrading (#218).
 MAX_LIVE_CONVERSATIONS = 200
 CONVERSATION_IDLE_SECONDS = 6 * 3600
 
@@ -66,27 +66,36 @@ def create_app(config: Config | None = None,
 
     histories: dict[str, list] = defaultdict(list)
     hist_lock = Lock()
+    turn_locks = ConversationTurnLocks(
+        cfg.redis_url, production=cfg.app_env == "production")
     turns: dict[str, deque] = defaultdict(deque)
     # Last time each conversation was touched, so idle ones can be released.
     # Without this every tenant that ever chatted keeps its full transcript in
     # memory for the life of the process.
     hist_seen: dict[str, float] = {}
 
-    def load_history(tenant: str) -> list:
-        """The in-memory conversation, rehydrated from HealthClaw if cold.
+    def conversation_key(tenant: str, conversation_id: str) -> str:
+        return f"{tenant}:{conversation_id}"
 
-        Process memory is a cache, not the record. Deploys, restarts and idle
-        eviction all empty it, and before this the agent simply forgot the
-        person — a strange trait for a product promising a *persistent* health
-        agent. Call under hist_lock.
+    def load_history(tenant: str, conversation_id: str,
+                     agent_id: str) -> list:
+        """Refresh the per-turn working history from durable HealthClaw state.
+
+        A worker may have served this thread earlier and then gone stale while
+        another worker handled a turn. Reloading after the shared turn lock is
+        acquired prevents that stale cache from dropping cross-worker or
+        cross-surface messages.
         """
-        history = histories[tenant]
-        if not history:
-            history.extend(hc.recent_messages(tenant))
-        touch_history(tenant)
+        key = conversation_key(tenant, conversation_id)
+        loaded = hc.recent_messages(
+            tenant, conversation_id=conversation_id, agent_id=agent_id)
+        with hist_lock:
+            history = histories[key]
+            history[:] = loaded
+        touch_history(key)
         return history
 
-    def touch_history(tenant: str) -> None:
+    def touch_history(key: str) -> None:
         """Mark a conversation live; release idle ones once we're holding many.
 
         Deliberately simple: only sweeps when the map is already large, so the
@@ -94,14 +103,14 @@ def create_app(config: Config | None = None,
         lossy — a dropped conversation reloads from HealthClaw on next use.
         """
         seen_at = time.time()
-        hist_seen[tenant] = seen_at
-        if len(histories) <= MAX_LIVE_CONVERSATIONS:
-            return
-        for other, last in list(hist_seen.items()):
-            if other != tenant and seen_at - last > CONVERSATION_IDLE_SECONDS:
-                histories.pop(other, None)
-                turns.pop(other, None)
-                hist_seen.pop(other, None)
+        with hist_lock:
+            hist_seen[key] = seen_at
+            if len(histories) <= MAX_LIVE_CONVERSATIONS:
+                return
+            for other, last in list(hist_seen.items()):
+                if other != key and seen_at - last > CONVERSATION_IDLE_SECONDS:
+                    histories.pop(other, None)
+                    hist_seen.pop(other, None)
 
     # --- auth plumbing -------------------------------------------------------
 
@@ -429,11 +438,16 @@ def create_app(config: Config | None = None,
         if not ctx:
             return redirect(url_for("home"))
         p = PERSONAS.get(ctx["agent"]["persona"], PERSONAS[DEFAULT_PERSONA])
+        conversation_id = hc.conversation_id(agent_id)
         # Show the conversation they actually had. Rendering only the canned
         # greeting made every return visit look like a first visit.
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
-                               past=hc.recent_messages(ctx["tenant"], limit=30))
+                               conversation_id=conversation_id,
+                               past=hc.recent_messages(
+                                   ctx["tenant"], limit=30,
+                                   conversation_id=conversation_id,
+                                   agent_id=agent_id))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
@@ -475,36 +489,64 @@ def create_app(config: Config | None = None,
 
         tenant = ctx["tenant"]
         agent = ctx["agent"]
+        conversation_id = (body.get("conversation_id")
+                           or hc.conversation_id(agent["id"]))
+        request_id = str(body.get("request_id") or uuid.uuid4())
+        if not 1 <= len(conversation_id) <= 128:
+            return jsonify({"error": "invalid conversation_id"}), 400
+        if not 1 <= len(request_id) <= 128:
+            return jsonify({"error": "invalid request_id"}), 400
         sysprompt = system_prompt(agent["name"], agent["persona"],
                                   agent.get("advisor"))
 
-        def remember(role, body):
+        def remember(role, message, reply_to=None):
             """Best-effort persist. Losing the transcript is bad; failing the
             conversation in front of the person is worse."""
             try:
-                hc.log_message(tenant, role, body, agent["id"])
+                hc.log_message(
+                    tenant, role, message, agent["id"], conversation_id,
+                    surface="web", reply_to=reply_to)
             except Exception:  # noqa: BLE001
                 logger.warning("chat turn not persisted for %s", tenant)
 
-        # Record the question before streaming the answer: they definitely
-        # asked it, even if they close the tab before the reply finishes.
-        remember("user", text)
-
         def stream():
-            with hist_lock:
-                history = load_history(tenant)
-            reply = []
             try:
-                for event in run_turn(cfg, hc, tenant, sysprompt,
-                                      history, text):
-                    if event.get("type") == "text" and event.get("text"):
-                        reply.append(event["text"])
-                    yield f"data: {json.dumps(event)}\n\n"
+                key = conversation_key(tenant, conversation_id)
+                with turn_locks.hold(key):
+                    # Rehydrate BEFORE claiming the inbound row. run_turn()
+                    # appends the current prompt exactly once to this list.
+                    history = load_history(
+                        tenant, conversation_id, agent["id"])
+                    created, user_message_id = hc.claim_inbound_message(
+                        tenant, text, agent["id"], conversation_id,
+                        "web", request_id)
+                    if created is None:
+                        yield ('data: {"type": "error", "text": '
+                               '"I could not save this message safely. '
+                               'Please retry."}\n\n')
+                        yield 'data: {"type": "done"}\n\n'
+                        return
+                    if not created:
+                        yield ('data: {"type": "duplicate", "request_id": '
+                               f'{json.dumps(request_id)}}}\n\n')
+                        yield 'data: {"type": "done"}\n\n'
+                        return
+
+                    reply = []
+                    for event in run_turn(cfg, hc, tenant, sysprompt,
+                                          history, text):
+                        if event.get("type") == "text" and event.get("text"):
+                            reply.append(event["text"])
+                        yield f"data: {json.dumps(event)}\n\n"
+                    if reply:
+                        remember("assistant", "\n\n".join(reply),
+                                 reply_to=user_message_id)
+            except ConversationLockError:
+                yield ('data: {"type": "error", "text": '
+                       '"This conversation is busy. Please retry shortly."}\n\n')
             except Exception:  # noqa: BLE001
                 yield ('data: {"type": "error", "text": '
                        '"Something went wrong on our side."}\n\n')
-            if reply:
-                remember("assistant", "\n\n".join(reply))
             yield 'data: {"type": "done"}\n\n'
 
         return Response(stream(), mimetype="text/event-stream",
@@ -689,21 +731,33 @@ def create_app(config: Config | None = None,
                                      "Try again in a bit."}), 200
         tenant = ctx["tenant"]
         agent = ctx["agent"]
+        conversation_id = (body.get("conversation_id")
+                           or hc.conversation_id(agent["id"]))
+        request_id = str(body.get("request_id") or uuid.uuid4())
         sysprompt = system_prompt(agent["name"], agent["persona"],
                                   agent.get("advisor"))
-        with hist_lock:
-            history = load_history(tenant)
         try:
-            reply = run_turn_to_message(cfg, hc, tenant, sysprompt, history,
-                                        text, origin=cfg.origin,
-                                        agent_id=agent["id"])
+            key = conversation_key(tenant, conversation_id)
+            with turn_locks.hold(key):
+                history = load_history(
+                    tenant, conversation_id, agent["id"])
+                created, user_message_id = hc.claim_inbound_message(
+                    tenant, text, agent["id"], conversation_id,
+                    "imessage", request_id)
+                if created is None:
+                    return jsonify({"error": "message store unavailable"}), 503
+                if not created:
+                    return jsonify({"duplicate": True, "reply": ""}), 200
+                reply = run_turn_to_message(
+                    cfg, hc, tenant, sysprompt, history, text,
+                    origin=cfg.origin, agent_id=agent["id"])
+                hc.log_message(
+                    tenant, "assistant", reply, agent["id"], conversation_id,
+                    surface="imessage", reply_to=user_message_id)
+        except ConversationLockError:
+            return jsonify({"error": "conversation busy"}), 409
         except Exception:  # noqa: BLE001
             reply = "Something went wrong on our side. Please try again."
-        else:
-            # Same store as the web surface, so a conversation started in
-            # Telegram continues on the web and vice versa.
-            hc.log_message(tenant, "user", text, agent["id"])
-            hc.log_message(tenant, "assistant", reply, agent["id"])
         return jsonify({"reply": reply})
 
     # --- trust + ops ---------------------------------------------------------

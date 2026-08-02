@@ -26,20 +26,30 @@ Routes:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from flask import (
     Blueprint, jsonify, redirect, render_template, request, session, url_for
 )
+from sqlalchemy.exc import IntegrityError
 
 from models import db
 from r6.command_center import projector, access, gateway
-from r6.command_center.models import ConversationMessage, AgentTask
+from r6.command_center.models import (
+    AgentTask,
+    Conversation,
+    ConversationMessage,
+    default_conversation_id,
+)
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
+
+_CONVERSATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 command_center_blueprint = Blueprint(
     "command_center",
@@ -213,8 +223,11 @@ def api_conversations_list():
         return err
     limit = min(int(request.args.get("limit", "15")), 100)
     full = request.args.get("full") in ("1", "true")
-    return jsonify(projector.recent_conversations(_tenant(), limit=limit,
-                                                  full=full))
+    return jsonify(projector.recent_conversations(
+        _tenant(), limit=limit, full=full,
+        conversation_id=request.args.get("conversation_id") or None,
+        agent_id=request.args.get("agent_id") or None,
+    ))
 
 
 @command_center_blueprint.route("/api/tasks", methods=["GET"])
@@ -311,10 +324,13 @@ def api_conversations_create():
 
     Body:
         tenant_id: str (required)
-        agent_id: str (optional)
-        channel: str (telegram|mcp|api|web, default 'unknown')
+        conversation_id: str (optional; stable tenant default when omitted)
+        agent_id: str (optional, opaque tenant-scoped identity)
+        channel/surface: str (telegram|mcp|api|web|imessage)
         session_id: str (e.g. telegram chat_id)
         user_id: str
+        request_id: str (optional idempotency key for an inbound user message)
+        reply_to: str (optional parent message id)
         role: str (user|assistant|system, required)
         text: str (required)
         metadata: dict (optional)
@@ -331,8 +347,67 @@ def api_conversations_create():
         return err
 
     agent_id = body.get("agent_id")
-    if agent_id and not get_agent(agent_id):
-        return jsonify({"error": f"unknown agent_id: {agent_id}"}), 400
+    if agent_id is not None and (
+            not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 64):
+        return jsonify({"error": "invalid agent_id"}), 400
+    conversation_id = body.get("conversation_id") or default_conversation_id(
+        tenant_id, agent_id)
+    request_id = body.get("request_id")
+    reply_to = body.get("reply_to")
+    channel = body.get("surface") or body.get("channel", "unknown")
+
+    if not isinstance(conversation_id, str) or not _CONVERSATION_ID.fullmatch(
+            conversation_id):
+        return jsonify({"error": "invalid conversation_id"}), 400
+    if request_id is not None and (
+            not isinstance(request_id, str)
+            or not _REQUEST_ID.fullmatch(request_id)):
+        return jsonify({"error": "invalid request_id"}), 400
+    if role not in ("user", "assistant", "system"):
+        return jsonify({"error": "role must be user, assistant, or system"}), 400
+    if not isinstance(text, str):
+        return jsonify({"error": "text must be a string"}), 400
+    if not isinstance(channel, str) or not 1 <= len(channel) <= 32:
+        return jsonify({"error": "invalid channel/surface"}), 400
+
+    conversation = Conversation.query.filter_by(
+        tenant_id=tenant_id, id=conversation_id).first()
+    if conversation is not None:
+        if conversation.agent_id != agent_id:
+            return jsonify({"error": "conversation belongs to another agent"}), 409
+    else:
+        conversation = Conversation(
+            id=conversation_id,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            created_by_surface=channel,
+        )
+        db.session.add(conversation)
+
+    if request_id:
+        prior = ConversationMessage.query.filter_by(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            request_id=request_id,
+        ).first()
+        if prior is not None:
+            if (prior.role != role or prior.text != text
+                    or prior.agent_id != agent_id):
+                return jsonify({
+                    "error": "request_id was already used for another message"
+                }), 409
+            replay = prior.to_dict()
+            replay["idempotent_replay"] = True
+            return jsonify(replay), 200
+
+    if reply_to:
+        parent = ConversationMessage.query.filter_by(
+            id=reply_to,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        ).first()
+        if parent is None:
+            return jsonify({"error": "reply_to is outside the conversation"}), 400
 
     import json as _json
     md = body.get("metadata")
@@ -340,17 +415,45 @@ def api_conversations_create():
 
     msg = ConversationMessage(
         tenant_id=tenant_id,
+        conversation_id=conversation_id,
         agent_id=agent_id,
-        channel=body.get("channel", "unknown"),
+        channel=channel,
         session_id=body.get("session_id"),
         user_id=body.get("user_id"),
         role=role,
         text=text,
+        request_id=request_id,
+        reply_to=reply_to,
         metadata_json=metadata_json,
     )
     db.session.add(msg)
-    db.session.commit()
-    return jsonify(msg.to_dict()), 201
+    conversation.updated_at = datetime.now(timezone.utc)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        # Two workers may claim the same inbound request concurrently. The
+        # database uniqueness constraint is authoritative; return the winner
+        # instead of leaking a 500 or running the agent twice.
+        if request_id:
+            prior = ConversationMessage.query.filter_by(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                request_id=request_id,
+            ).first()
+            if prior is not None:
+                if (prior.role != role or prior.text != text
+                        or prior.agent_id != agent_id):
+                    return jsonify({
+                        "error": "request_id was already used for another message"
+                    }), 409
+                replay = prior.to_dict()
+                replay["idempotent_replay"] = True
+                return jsonify(replay), 200
+        raise
+    created = msg.to_dict()
+    created["idempotent_replay"] = False
+    return jsonify(created), 201
 
 
 @command_center_blueprint.route("/api/tasks", methods=["POST"])

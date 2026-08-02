@@ -15,7 +15,7 @@ import json
 from models import db
 from r6.models import R6Resource, AuditEventRecord
 from r6.command_center import agents, projector, gateway
-from r6.command_center.models import ConversationMessage
+from r6.command_center.models import Conversation, ConversationMessage
 
 TENANT = "test-tenant"
 
@@ -127,8 +127,15 @@ class TestActionsAndAgents:
 
     def test_agents_status_includes_conversation_count(self, app):
         with app.app_context():
+            db.session.add(Conversation(
+                id="careagents:sally",
+                tenant_id=TENANT,
+                agent_id="sally",
+                created_by_surface="telegram",
+            ))
             db.session.add(ConversationMessage(
                 tenant_id=TENANT,
+                conversation_id="careagents:sally",
                 agent_id="sally",
                 channel="telegram",
                 role="user",
@@ -321,6 +328,8 @@ class TestRestEndpoints:
     def test_api_conversations_post_and_get(self, client, step_up_token):
         payload = {
             "tenant_id": TENANT,
+            "conversation_id": "careagents:sally",
+            "request_id": "telegram-update-123",
             "agent_id": "sally",
             "channel": "telegram",
             "session_id": "chat-123",
@@ -337,6 +346,8 @@ class TestRestEndpoints:
         created = resp.get_json()
         assert created["tenant_id"] == TENANT
         assert created["agent_id"] == "sally"
+        assert created["conversation_id"] == "careagents:sally"
+        assert created["request_id"] == "telegram-update-123"
 
         resp = client.get(
             "/command-center/api/conversations",
@@ -348,6 +359,108 @@ class TestRestEndpoints:
         assert msgs[0]["text"] == "/health"
         assert msgs[0]["agent_emoji"] == "🩺"
 
+    def test_api_conversations_replays_duplicate_request_once(
+            self, client, step_up_token):
+        payload = {
+            "tenant_id": TENANT,
+            "conversation_id": "careagents:juniper",
+            "agent_id": "juniper",
+            "surface": "web",
+            "request_id": "browser-request-1",
+            "role": "user",
+            "text": "show my medications",
+        }
+        headers = {"X-Step-Up-Token": step_up_token}
+
+        first = client.post(
+            "/command-center/api/conversations", json=payload, headers=headers)
+        replay = client.post(
+            "/command-center/api/conversations", json=payload, headers=headers)
+
+        assert first.status_code == 201
+        assert replay.status_code == 200
+        assert replay.get_json()["id"] == first.get_json()["id"]
+        assert replay.get_json()["idempotent_replay"] is True
+        conflict = client.post(
+            "/command-center/api/conversations",
+            json={**payload, "text": "different payload"},
+            headers=headers,
+        )
+        assert conflict.status_code == 409
+        rows = client.get(
+            "/command-center/api/conversations",
+            query_string={"tenant": TENANT,
+                          "conversation_id": "careagents:juniper"},
+        ).get_json()
+        assert [row["text"] for row in rows] == ["show my medications"]
+
+    def test_api_conversations_are_isolated_by_thread_and_agent(
+            self, client, step_up_token):
+        headers = {"X-Step-Up-Token": step_up_token}
+        for agent_id, text in (("agent-a", "thread A"),
+                               ("agent-b", "thread B")):
+            response = client.post(
+                "/command-center/api/conversations",
+                json={
+                    "tenant_id": TENANT,
+                    "conversation_id": f"careagents:{agent_id}",
+                    "agent_id": agent_id,
+                    "role": "user",
+                    "text": text,
+                },
+                headers=headers,
+            )
+            assert response.status_code == 201
+
+        rows = client.get(
+            "/command-center/api/conversations",
+            query_string={"tenant": TENANT,
+                          "conversation_id": "careagents:agent-a",
+                          "agent_id": "agent-a"},
+        ).get_json()
+        assert [row["text"] for row in rows] == ["thread A"]
+
+        mismatch = client.post(
+            "/command-center/api/conversations",
+            json={
+                "tenant_id": TENANT,
+                "conversation_id": "careagents:agent-a",
+                "agent_id": "agent-b",
+                "role": "user",
+                "text": "wrong owner",
+            },
+            headers=headers,
+        )
+        assert mismatch.status_code == 409
+
+    def test_same_external_conversation_id_is_tenant_scoped(self, client):
+        from r6.stepup import generate_step_up_token
+
+        for tenant, text in (("tenant-a", "A only"),
+                             ("tenant-b", "B only")):
+            token = generate_step_up_token(tenant)
+            response = client.post(
+                "/command-center/api/conversations",
+                json={
+                    "tenant_id": tenant,
+                    "conversation_id": "external-thread-1",
+                    "agent_id": "external-agent",
+                    "role": "user",
+                    "text": text,
+                },
+                headers={"X-Step-Up-Token": token},
+            )
+            assert response.status_code == 201
+
+        token = generate_step_up_token("tenant-a")
+        rows = client.get(
+            "/command-center/api/conversations",
+            query_string={"tenant": "tenant-a",
+                          "conversation_id": "external-thread-1"},
+            headers={"X-Step-Up-Token": token},
+        ).get_json()
+        assert [row["text"] for row in rows] == ["A only"]
+
     def test_api_conversations_post_rejects_missing_fields(self, client):
         resp = client.post(
             "/command-center/api/conversations",
@@ -355,7 +468,8 @@ class TestRestEndpoints:
         )
         assert resp.status_code == 400
 
-    def test_api_conversations_post_rejects_unknown_agent(self, client, step_up_token):
+    def test_api_conversations_accepts_opaque_agent_identity(
+            self, client, step_up_token):
         resp = client.post(
             "/command-center/api/conversations",
             json={
@@ -366,7 +480,8 @@ class TestRestEndpoints:
             },
             headers={"X-Step-Up-Token": step_up_token},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 201
+        assert resp.get_json()["agent_id"] == "bogus"
 
     def test_api_conversations_post_rejects_without_auth(self, client):
         resp = client.post(
