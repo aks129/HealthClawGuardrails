@@ -87,6 +87,7 @@
       </button>
       {% endfor %}
     </div>
+    <p class="inline-msg" id="connect-msg" hidden></p>
     <p class="add-note">Verified provider &amp; wearable logins happen on the
       provider’s own site — we never see your password.</p>
   </section>
@@ -106,6 +107,7 @@
       {% endif %}
       <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
     </div>
+    <p class="inline-msg" id="surfaces-msg" hidden></p>
   </section>
 </main>
 
@@ -181,6 +183,52 @@
     <div id="modal-err" class="form-error" hidden></div>
     <button type="button" class="btn-primary btn-block" id="create-agent">Create</button>
     <button type="button" class="linkish" id="close-modal">Cancel</button>
+  </div>
+</div>
+
+<!-- Provider picker: one large tappable row per provider, filled in by
+     home.js from the tile's data-providers. No numbers, no keyboard — the
+     browser prompt this replaces is dead on several in-app mobile browsers. -->
+<div class="modal sheet" id="provider-picker" role="dialog" aria-modal="true"
+     aria-labelledby="picker-title" hidden>
+  <div class="modal-card">
+    <h3 id="picker-title">Which do you use?</h3>
+    <div id="picker-rows"></div>
+    <button type="button" class="linkish" id="picker-cancel">Not now</button>
+  </div>
+</div>
+
+<!-- Pairing code card. What is shown in #pair-code is byte-identical to what
+     Copy writes, so the press-and-hold fallback can't copy the wrong string. -->
+<div class="modal" id="code-card" role="dialog" aria-modal="true"
+     aria-labelledby="code-title" hidden>
+  <div class="modal-card">
+    <h3 id="code-title">Your pairing code</h3>
+    <p id="code-instructions"></p>
+    <div id="pair-code"></div>
+    <button type="button" class="btn-secondary btn-block" id="copy-code">
+      <span id="copy-state">Copy</span></button>
+    <button type="button" class="btn-primary btn-block" id="code-done">Done</button>
+  </div>
+</div>
+
+<!-- Delete confirmation. Same copy and the same typed-DELETE requirement as
+     the prompt() it replaces — the friction is the point, only the container
+     changed. #delete-confirm ships disabled; home.js re-checks on click too. -->
+<div class="modal" id="delete-modal" role="dialog" aria-modal="true"
+     aria-labelledby="delete-title" hidden>
+  <div class="modal-card">
+    <h3 id="delete-title">Delete these records?</h3>
+    <p class="delete-warn">This permanently deletes the records in
+      "<span id="delete-label"></span>".</p>
+    <p class="delete-warn">The PHI-free audit trail (who accessed what) is kept
+      as the record of what happened, and this deletion is added to it.</p>
+    <label class="field-label" for="delete-input">Type DELETE to confirm:</label>
+    <input class="field" id="delete-input" autocomplete="off"
+           autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <button type="button" class="btn-primary btn-block" id="delete-confirm"
+            disabled>Delete these records</button>
+    <button type="button" class="linkish" id="delete-cancel">Cancel</button>
   </div>
 </div>
 
