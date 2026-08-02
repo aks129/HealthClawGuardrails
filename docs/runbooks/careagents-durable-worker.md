@@ -131,17 +131,30 @@ So do not hand-pick variables. The rule is: **mirror every non-`RAILWAY_*`
 variable from the web service**, as a reference rather than a copied value.
 Enumerate them rather than trusting a list in a document — the set drifts:
 
+Run this from the repo root, already linked to the project (the web deploy
+leaves you linked; otherwise `railway link` first — see below).
+
 ```bash
 WEB=careagents                      # the existing web service
-# --kv prints raw values; keep the output in the pipe, do not paste it.
-NAMES=$(railway variables list --service "$WEB" --kv \
-  | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
+
+# Names only. --json keeps every value inside the pipe: parsing --kv with sed
+# would put a multi-line value's continuation line into the name list, and from
+# there into an `railway add` argv and your shell history.
+NAMES=$(railway variables list --service "$WEB" --json \
+  | python3 -c 'import json,sys; [print(k) for k in json.load(sys.stdin)]' \
   | grep -Ev '^(RAILWAY_|PORT$|CARE_ROLE$)')
 
 args=(--service careagents-worker --variables "CARE_ROLE=worker")
-for name in $NAMES; do
-  args+=(--variables "$name=\${{$WEB.$name}}")
-done
+# `while read`, not `for name in $NAMES`: zsh does not word-split unquoted
+# expansions, so a for-loop runs ONCE over the whole list and collapses all 17
+# names into a single malformed --variables argument. The service then boots
+# without CARE_ENV, takes the development path where nothing is required, and
+# runs green while draining nothing — no ConfigError to find. This loop
+# behaves the same in bash and zsh.
+while IFS= read -r name; do
+  [ -n "$name" ] && args+=(--variables "$name=\${{$WEB.$name}}")
+done <<< "$NAMES"
+
 railway add "${args[@]}"
 ```
 
@@ -168,17 +181,26 @@ anyway (`careagents/healthcheck.py` checks queue presence for the worker).
 
 ### Deploy and confirm it worked
 
+**`cd` into the stage; do not pass it as an argument.** `railway up <path>`
+roots the archive at the *project directory* rather than at the path unless you
+add `--path-as-root`, and it applies `.gitignore` — which lists
+`careagents/BUILD_SHA`. Run from the repo root and the marker is dropped from
+the upload, leaving a deployment that reports `build: unknown` and alarms as
+stale forever. `cd`-then-`up` is the form that has actually been used to deploy
+this service.
+
 ```bash
 railway link --project <project-id> --service careagents-worker --environment production
-railway up "$STAGE" --service careagents-worker --detach
+cd "$STAGE" && railway up --service careagents-worker --detach
 ```
 
 One stage serves both roles. Upload it twice — once per service — and the two
 report the same `build`:
 
 ```bash
-railway up "$STAGE" --service careagents        --detach
-railway up "$STAGE" --service careagents-worker --detach
+cd "$STAGE"
+railway up --service careagents        --detach
+railway up --service careagents-worker --detach
 ```
 
 Then confirm from the **web** service, which is where the worker becomes

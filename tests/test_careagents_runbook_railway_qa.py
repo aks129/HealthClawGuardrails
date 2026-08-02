@@ -30,12 +30,44 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 RUNBOOK = REPO / "docs" / "runbooks" / "careagents-durable-worker.md"
 
-# Stands in for `railway variables list --service careagents --kv`: the names
-# the live web service carries, with values shaped like the real secrets so a
-# leak would be visible. `add` records its argv.
+# Stands in for `railway variables list --service careagents`: the names the
+# live web service carries, with values shaped like the real secrets so a leak
+# would be visible. `add` records its argv.
+#
+# It answers both output modes, because the two are not interchangeable and the
+# tests below rely on the difference. `--json` is what the runbook uses: values
+# are JSON-escaped, so a multi-line value stays one entry. `--kv` is the raw
+# form the runbook deliberately stopped parsing — a multi-line value's
+# continuation line matches `NAME=...` and becomes a phantom variable name
+# carrying key material. FASTEN_PUBLIC_KEY below is multi-line for exactly that
+# reason: it is the shape that makes the two modes diverge.
 STUB_RAILWAY = """#!/bin/sh
 case "$1" in
   variables|variable)
+    for a in "$@"; do
+      if [ "$a" = "--json" ]; then
+        cat <<'JSON'
+{"CARE_DATABASE_URL":"postgresql://care:S3cr3tPassw0rd@postgres-bfs.railway.internal:5432/railway",
+ "CARE_EMAIL_FROM":"CareAgents <hello@careagents.cloud>","CARE_ENV":"production",
+ "CARE_IMESSAGE_HANDLE":"+15550100","CARE_MODEL":"claude-sonnet-5",
+ "CARE_OPENAI_MODEL":"gpt-4o-mini","CARE_ORIGIN":"https://careagents.cloud",
+ "CARE_RP_ID":"careagents.cloud","CARE_RP_NAME":"CareAgents",
+ "CARE_SESSION_SECRET":"RtQm9xPLv2eWs7YbKd4NfHj6Uz1AoCg3=",
+ "CARE_TELEGRAM_BOT":"example_bot",
+ "FASTEN_PUBLIC_KEY":"-----BEGIN PUBLIC KEY-----\\\\nQUFAKEKEYQAFAKEKEYQAFAKEKEYQAFAKEKEY=\\\\n-----END PUBLIC KEY-----",
+ "HEALTHCLAW_BASE":"https://app.healthclaw.io",
+ "HEALTHCLAW_MINT_SECRET":"mint_9f3a2b1c8d7e6f5a4b3c2d1e0f9a8b7c",
+ "OPENAI_API_KEY":"sk-proj-QAFAKEKEYQAFAKEKEYQAFAKEKEY",
+ "OPENAI_BASE_URL":"https://api.openai.com/v1",
+ "RESEND_API_KEY":"re_QAFAKE_1234567890abcdef","PORT":"8600",
+ "RAILWAY_PRIVATE_DOMAIN":"careagents.railway.internal",
+ "RAILWAY_PROJECT_NAME":"awake-serenity",
+ "RAILWAY_PUBLIC_DOMAIN":"careagents-production.up.railway.app",
+ "RAILWAY_SERVICE_NAME":"careagents"}
+JSON
+        exit 0
+      fi
+    done
     cat <<'VARS'
 CARE_DATABASE_URL=postgresql://care:S3cr3tPassw0rd@postgres-bfs.railway.internal:5432/railway
 CARE_EMAIL_FROM=CareAgents <hello@careagents.cloud>
