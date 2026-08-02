@@ -13,8 +13,9 @@ STEP_UP_SECRET=dev-secret python main.py          # http://localhost:5000
 uv run python -m pytest tests/ -q
 uv run python -m pytest tests/test_r6_routes.py::test_name -v
 
-# Lint (CI-gated)
-pipx run ruff check .
+# Lint (CI-gated). Must be `uv run`: pipx/uvx resolve an unpinned ruff, which
+# reports hundreds of findings CI does not.
+uv run ruff check .
 
 # Node MCP server
 cd services/agent-orchestrator && npm ci && npx tsc --noEmit && npm test
@@ -129,14 +130,23 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
   import and `/healthz` reports as `build` / `built_at`. It is gitignored on
   purpose: a committed marker goes stale silently, which is the failure it
-  exists to catch. `deploy.sh` writes it for you; before `railway up`, write it
-  into the staging dir yourself:
+  exists to catch. `deploy.sh` writes it for you. On the Railway path, stamp it
+  yourself before `railway up` — `git` has to run in the checkout, not in the
+  staging dir, and the `-dirty` suffix has to match what `deploy.sh` produces:
 
   ```bash
-  printf '%s\n%s\n' "$(git rev-parse --short=12 HEAD)" "$(git log -1 --format=%ct)" \
-    > careagents/BUILD_SHA
-  railway up --service careagents --detach
+  # $REPO = this checkout; $STAGE = the directory `railway up` uploads
+  SHA="$(git -C "$REPO" rev-parse --short=12 HEAD)"
+  [ -z "$(git -C "$REPO" status --porcelain)" ] || SHA="$SHA-dirty"
+  printf '%s\n%s\n' "$SHA" "$(git -C "$REPO" log -1 --format=%ct)" \
+    > "$STAGE/careagents/BUILD_SHA"
   ```
+
+  Two cautions. The marker is gitignored, so a `railway up` run from the
+  checkout itself can drop it from the upload and leave you with
+  `build: unknown` — stage into a plain directory instead. And these four lines
+  are a second copy of what `deploy.sh` does: change one, change the other, or
+  the two deploy paths will start disagreeing about what a marker means.
 
   Verify with `curl -s <deployment>/healthz` — `build` must be the commit you
   deployed. `scripts/prod_watch.py --expect-sha <sha>` asserts the same thing,
