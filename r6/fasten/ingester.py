@@ -31,14 +31,25 @@ logger = logging.getLogger(__name__)
 _PROGRESS_BATCH = 10  # commit progress every N resources (observability)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
 
-# FHIR id: [A-Za-z0-9\-\.]{1,64} per the spec. A caller-supplied id outside
-# this shape was previously stored verbatim and copied into
+# The CHARSET is the security control here, not the length. A caller-supplied
+# id outside this shape was previously stored verbatim and copied into
 # AuditEventRecord.resource_id (#267 review) — audit `detail` stays PHI-free
-# by convention, but that convention did nothing for the adjacent column,
-# and health_compliance.py exports resource_id into the auditor-facing
-# compliance bundle. Validated before use, not filtered — an id this fails
-# is refused per-entry rather than silently truncated or replaced.
-_RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,64}$')
+# by convention, but that convention did nothing for the adjacent column, and
+# health_compliance.py exports resource_id into the auditor-facing compliance
+# bundle. An id restricted to [A-Za-z0-9-.] cannot carry a name, a date, a
+# path, or markup, which is what that finding was about.
+#
+# The ceiling is 255 (R6Resource.id / AuditEventRecord.resource_id are both
+# String(255)), NOT the FHIR spec's 64. Real Epic exports routinely violate
+# the spec limit — the 2026-07-08 live incident documented in
+# tests/test_ingest_resilience.py had 65/250 ids over 64 chars, running to
+# ~109, and is exactly why that column was widened rather than truncated.
+# Capping at 64 here would silently re-impose the ceiling that incident
+# forced us off, as `invalid_id` skips on the live Fasten connector rather
+# than a crash — which is worse, because nothing would page. Validated
+# before use, not filtered: a failing id is refused per-entry, never
+# truncated or replaced.
+_RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,255}$')
 
 
 def _is_fasten_download_host(url: str) -> bool:

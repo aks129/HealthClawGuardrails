@@ -134,3 +134,36 @@ def test_curatr_engine_api_matches_ingester_usage():
     result = engine.evaluate({"resourceType": "Condition", "id": "c1"})
     assert hasattr(result, "issues")
     assert isinstance(result.issues, list)
+
+
+def test_resource_id_pattern_is_a_charset_control_not_a_length_control():
+    """#267's id validation must keep rejecting injectable ids WITHOUT
+    re-imposing the 64-char FHIR ceiling this file's incident forced us off.
+
+    The security finding it closes is that a caller-supplied id reached
+    `AuditEventRecord.resource_id`, which `health_compliance.py` exports into
+    the auditor-facing compliance bundle — so an id could smuggle a name, a
+    date, a path, or markup into an audit artifact. The CHARSET stops that.
+    The LENGTH never had anything to do with it, and capping at 64 silently
+    skipped real Epic resources on the live Fasten connector (caught in
+    review, not by 1772 green tests).
+
+    Pinned in both directions so a future "tighten it to spec" edit fails
+    here instead of in production.
+    """
+    from r6.fasten.ingester import _RESOURCE_ID_PATTERN as pat
+    from r6.models import R6Resource
+
+    # Injectable shapes stay refused, regardless of length.
+    for bad in ("../../etc/passwd", "Jane Doe 1980-01-01 MRN 12345",
+                "<script>alert(1)</script>", "id with spaces", "a/b", "a_b"):
+        assert not pat.fullmatch(bad), bad
+
+    # Real Epic-shaped ids (~109 chars per the 2026-07-08 export) are fine.
+    assert pat.fullmatch("e-" + "a" * 107)
+
+    # The ceiling tracks the column width, so validation and storage cannot
+    # disagree: an id we accept must be an id we can store.
+    width = R6Resource.__table__.c.id.type.length
+    assert pat.fullmatch("a" * width)
+    assert not pat.fullmatch("a" * (width + 1))
