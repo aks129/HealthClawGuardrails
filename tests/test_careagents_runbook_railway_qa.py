@@ -394,6 +394,32 @@ def test_the_enumerated_set_satisfies_the_production_config_requirements():
             f"{name} is no longer required — re-check what the worker needs")
 
 
+def test_the_snippets_required_set_tracks_every_require_in_config_py():
+    # The snippet names what the worker cannot boot without. That list is a
+    # second source of truth for careagents/config.py, and a second source of
+    # truth is what this repo keeps getting burned by. Nothing about adding a
+    # `_require` to config.py makes the runbook follow it, and the symptom
+    # would be the familiar one: the enumeration passes, the service is
+    # created, and the worker crash-loops on a variable the runbook never
+    # mentioned.
+    #
+    # So derive the expectation from config.py rather than restating it.
+    config = (REPO / "careagents" / "config.py").read_text()
+    required = set(re.findall(r'_require\(\s*"([A-Z_]+)"', config))
+    assert required, "no _require() calls found — has config.py moved?"
+    snippet = _snippet()
+    for name in sorted(required):
+        assert name in snippet, (
+            f"careagents/config.py _require()s {name} in production, but the "
+            f"runbook's enumeration guard does not check for it — a worker "
+            f"missing it would be created and then crash-loop")
+    # CARE_ENV is not _require()d; it is the switch that decides whether any
+    # _require runs at all (config.py: prod = app_env == "production"), which
+    # is why its absence produces a green worker rather than a crash. It has to
+    # be checked even though the regex above cannot find it.
+    assert "CARE_ENV" in snippet
+
+
 def test_the_runbook_does_not_send_the_operator_back_to_a_repo_build():
     # A repo-connected build picks up the repo-root railway.toml, hence the
     # repo-root Dockerfile, which is the HealthClaw Flask app.
