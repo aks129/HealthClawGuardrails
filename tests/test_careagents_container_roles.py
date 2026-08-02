@@ -12,12 +12,19 @@ These tests extract the `CMD` from the Dockerfile and run that dispatch under
 each role takes is observed rather than pattern-matched, and the web argv is
 compared element by element rather than by substring.
 
+The shell is covered: the dispatch runs under the host's `/bin/sh` and, where
+present, under `/bin/dash` — which is `/bin/sh` on Debian, so it is the image's
+own shell and the one Linux CI uses.
+
 What they do not prove: no image is built and no container is run. Nothing here
 shows that gunicorn or careagents.worker exist in the image, that PATH resolves
 the same way inside it, that `exec` really makes the role process PID 1, or
-that the Railway services carry the environment the worker needs. The shell is
-the host's `/bin/sh`, not the image's dash. One property is pinned — which
-command each CARE_ROLE reaches, and that an unrecognised role reaches none.
+that the Railway services carry the environment the worker needs. One property
+is pinned — which command each CARE_ROLE reaches, and that an unrecognised role
+reaches none. (Reviewing #273, QA closed the container-level gaps against a
+real build: the stored CMD matches, `CARE_ROLE=worker` puts the worker at PID
+1, and `docker stop` returns in 0.2s with `exec` versus 30s and SIGKILL
+without.)
 """
 
 from __future__ import annotations
@@ -47,6 +54,9 @@ WEB_ARGV = [
     "--error-logfile", "-",
     "--access-logformat", '%(h)s "%(r)s" %(s)s %(M)sms',
 ]
+
+# /bin/dash is /bin/sh on Debian, so it is both the image's shell and CI's.
+SHELLS = [path for path in ("/bin/sh", "/bin/dash") if os.path.exists(path)]
 
 STUB = """#!/bin/sh
 : > "$RECORD"
@@ -140,6 +150,22 @@ def test_an_unknown_role_exits_instead_of_starting_a_second_web_server(stubs,
 def test_the_refusal_names_the_roles_the_image_can_run(stubs):
     _, _, stderr = _start(stubs, "wokrer")
     assert "web" in stderr and "worker" in stderr
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("role", [
+    r"a\cb",       # dash's echo expands \c, which ends output mid-message
+    r"a\nb",
+    "%s-%d",       # and a value must never be read as a printf format
+])
+def test_a_hostile_role_value_cannot_truncate_or_reformat_the_refusal(
+        stubs, role, shell):
+    # The operator reads this line to find out what they typed wrong. It has to
+    # survive whatever the dashboard field held, on the image's shell.
+    _, argv, stderr = _start(stubs, role, shell=shell)
+    assert argv is None
+    assert stderr.strip() == (
+        f"careagents: unknown CARE_ROLE '{role}' (expected web or worker)")
 
 
 @pytest.mark.skipif(not os.path.exists("/bin/dash"), reason="dash not present")

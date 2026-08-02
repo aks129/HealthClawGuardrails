@@ -47,11 +47,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # started a second web server would report itself healthy while nothing ever
 # drained the run queue. `${CARE_ROLE-web}`, not `${CARE_ROLE:-web}`, because
 # only an unset variable means "default" — an empty one is a broken config.
+# `printf`, not `echo`: dash's echo expands backslash escapes, so a role value
+# containing one would truncate its own error message.
 CMD ["sh", "-c", "case \"${CARE_ROLE-web}\" in \
   web) exec gunicorn careagents.wsgi:app \
   --bind 0.0.0.0:${PORT:-8600} --workers ${CARE_WEB_WORKERS:-2} --threads 4 --timeout 180 \
   --access-logfile - --error-logfile - \
   --access-logformat '%(h)s \"%(r)s\" %(s)s %(M)sms' ;; \
   worker) exec python -m careagents.worker ;; \
-  *) echo \"careagents: unknown CARE_ROLE '$CARE_ROLE' (expected web or worker)\" >&2; exit 2 ;; \
+  *) printf \"careagents: unknown CARE_ROLE '%s' (expected web or worker)\\n\" \"$CARE_ROLE\" >&2; exit 2 ;; \
 esac"]

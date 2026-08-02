@@ -67,44 +67,132 @@ hosts.
 
 ## Railway
 
-Two services, one image, differing only by `CARE_ROLE`. `railway add` has no
-start-command option, so the role has to travel in the environment:
+Two services built from one image. The only configuration that differs is
+`CARE_ROLE` — and the public domain, which only the web service needs.
+`railway add` has no start-command option, so the role has to travel in the
+environment:
 `deploy/careagents/Dockerfile` dispatches on it at start-up — `web` (the
 default) runs gunicorn, `worker` runs `python -m careagents.worker`, and any
 other value exits non-zero instead of quietly starting a second web server
 (#273).
 
-Create the worker service from the same repo and the same Dockerfile path as
-the web service, then set `CARE_ROLE=worker` on it. It performs the inference
-and the tool calls, so it needs the same configuration the web service has, not
-a subset — a worker pointed at a different HealthClaw, holding a different mint
-secret, or reading a different accounts database claims nothing and its
-presence never reaches the web role's readiness check. Railway variable
-*references* share that configuration without copying secret values anywhere:
+Two things own the role, and neither is the dashboard: the image, and
+`CARE_ROLE`. Leave `startCommand` unset on both services. A custom start
+command in the console silently overrides the dispatch, and `CARE_ROLE` then
+means nothing — the live web service runs on Railway defaults
+(`startCommand`, `builder`, `rootDirectory`, `restartPolicyType` all unset) for
+exactly that reason.
 
-| Worker variable | Value |
-| --- | --- |
-| `CARE_ROLE` | `worker` |
-| `HEALTHCLAW_BASE` | `${{careagents.HEALTHCLAW_BASE}}` |
-| `HEALTHCLAW_MINT_SECRET` | `${{careagents.HEALTHCLAW_MINT_SECRET}}` |
-| `CARE_DATABASE_URL` | `${{careagents.CARE_DATABASE_URL}}` |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | `${{careagents.ANTHROPIC_API_KEY}}` |
-| `CARE_ENV` | `${{careagents.CARE_ENV}}` |
+### Stage the build
 
-Substitute the web service's own name for `careagents`. A reference resolves at
-deploy time, so rotating the web service's secret rotates the worker's with it
-and the value is never pasted into a second dashboard field.
+**Do not create the service from the GitHub repo.** A repo-connected build
+picks up the repo-root `railway.toml`, which points at the repo-root
+`Dockerfile` — the HealthClaw Flask app, not CareAgents. You would get a
+"worker" serving `gunicorn main:app`, running the Flask migrations and demo
+seeding in `preDeployCommand` against whatever database is bound. Deploy from a
+staging directory instead, the same way the web service is deployed and for the
+same reason `docs/development.md` gives for the MCP server.
 
-Stamp the build marker for **both** services. Each is its own upload, so run
+From the repo root, on the commit you intend to ship:
 
 ```bash
-./deploy/careagents/stamp_build.sh "$STAGE"
+STAGE="$(mktemp -d)"
+cp pyproject.toml uv.lock "$STAGE/"
+cp -R careagents "$STAGE/"
+cp deploy/careagents/Dockerfile "$STAGE/Dockerfile"
+./deploy/careagents/stamp_build.sh "$STAGE"    # prints e.g. build 4f2a91cbeef1
 ```
 
-against the staging directory before every `railway up`, whichever service it
-targets. A worker deployed from an unstamped stage reports `build: unknown`
-while the web service reports the commit you meant to ship, which is precisely
-the pair of deployments #258 could not tell apart.
+That is everything the image's build context needs. The Dockerfile goes to the
+stage root under its default name so Railway's builder finds it without a
+`dockerfilePath` — the same reason it must not be a repo-connected build.
+
+Stamp last: `cp -R careagents` may carry a stale `BUILD_SHA` in from your
+checkout, and the stamp overwrites it. Stamp for **both** services — each
+`railway up` is its own upload, so a worker deployed from an unstamped stage
+reports `build: unknown` while the web service reports the commit you meant to
+ship. That is the pair of deployments #258 could not tell apart.
+
+### Create the worker service
+
+The worker runs `Config()` (`careagents/worker.py`), the same unconditional
+constructor the web app runs. In production it `_require`s
+`CARE_SESSION_SECRET` (32 chars or more), `HEALTHCLAW_MINT_SECRET`,
+`RESEND_API_KEY`, and an LLM credential — **including the two the worker never
+uses**. It sends no email and has no sessions; it still refuses to boot without
+them, and a worker service missing either crash-loops on:
+
+```text
+careagents.config.ConfigError: CARE_SESSION_SECRET is required in production
+careagents.config.ConfigError: RESEND_API_KEY is required in production
+```
+
+So do not hand-pick variables. The rule is: **mirror every non-`RAILWAY_*`
+variable from the web service**, as a reference rather than a copied value.
+Enumerate them rather than trusting a list in a document — the set drifts:
+
+```bash
+WEB=careagents                      # the existing web service
+# --kv prints raw values; keep the output in the pipe, do not paste it.
+NAMES=$(railway variables list --service "$WEB" --kv \
+  | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
+  | grep -Ev '^(RAILWAY_|PORT$|CARE_ROLE$)')
+
+args=(--service careagents-worker --variables "CARE_ROLE=worker")
+for name in $NAMES; do
+  args+=(--variables "$name=\${{$WEB.$name}}")
+done
+railway add "${args[@]}"
+```
+
+A reference resolves at deploy time, so rotating the web service's secret
+rotates the worker's with it and no secret is ever pasted into a second field.
+At the time of writing the web service carries 17 of them: `CARE_DATABASE_URL`,
+`CARE_EMAIL_FROM`, `CARE_ENV`, `CARE_IMESSAGE_HANDLE`, `CARE_MODEL`,
+`CARE_OPENAI_MODEL`, `CARE_ORIGIN`, `CARE_RP_ID`, `CARE_RP_NAME`,
+`CARE_SESSION_SECRET`, `CARE_TELEGRAM_BOT`, `FASTEN_PUBLIC_KEY`,
+`HEALTHCLAW_BASE`, `HEALTHCLAW_MINT_SECRET`, `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, `RESEND_API_KEY`. Note which LLM credential that is:
+`ANTHROPIC_API_KEY` is **not** set, which is why `/healthz` reports
+`provider: openai`. Referencing a variable the web service does not have gives
+you an empty value — a boot refusal if it was the only credential, or worse, a
+worker that claims runs and fails every one at inference while readiness reports
+green.
+
+Give the worker **no healthcheck path and no public domain**. It serves no
+HTTP, so Railway's default (no path configured, which is what the web service
+also runs with) is correct; a healthcheck path copied across from the web
+service leaves the deploy permanently un-healthy. The `HEALTHCHECK` in the
+Dockerfile is a different thing — Railway ignores it, and it is role-aware
+anyway (`careagents/healthcheck.py` checks queue presence for the worker).
+
+### Deploy and confirm it worked
+
+```bash
+railway link --project <project-id> --service careagents-worker --environment production
+railway up "$STAGE" --service careagents-worker --detach
+```
+
+One stage serves both roles. Upload it twice — once per service — and the two
+report the same `build`:
+
+```bash
+railway up "$STAGE" --service careagents        --detach
+railway up "$STAGE" --service careagents-worker --detach
+```
+
+Then confirm from the **web** service, which is where the worker becomes
+visible. Readiness flips only once a worker's presence is fresh:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://careagents.cloud/healthz   # 200
+curl -s https://careagents.cloud/healthz                                    # "run_workers": true
+```
+
+`200` with `"run_workers": true` and a `build` matching the commit you staged is
+the finish line. If it stays 503, the worker is not running: check its deploy
+logs for a `ConfigError`, and check presence directly with the
+`agent_worker_presence` query under [Operations](#operations).
 
 ### A deployment with only the web service
 
