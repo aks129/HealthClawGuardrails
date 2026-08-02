@@ -18,17 +18,10 @@ ssh "$HOST" 'id -u careagents &>/dev/null || useradd --system --home /opt/careag
 
 echo "→ stamp build marker"
 # So the running process can say which commit it is (#258): both deployments
-# were once months behind main while every production check was green. Written
-# here rather than committed — a checked-in marker goes stale silently. A dirty
-# tree is stamped as such, and `-dirty` matches no acceptable sha, which is the
-# intended outcome: deploying uncommitted code should be visible.
-BUILD_SHA="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
-  BUILD_SHA="$BUILD_SHA-dirty"
-fi
-printf '%s\n%s\n' "$BUILD_SHA" "$(git -C "$REPO_ROOT" log -1 --format=%ct)" \
-  > "$REPO_ROOT/careagents/BUILD_SHA"
-echo "  build $BUILD_SHA"
+# were once months behind main while every production check was green. The
+# format lives in stamp_build.sh alone — the Railway path calls the same script
+# against its staging dir, so the two cannot disagree about what a marker means.
+"$REPO_ROOT/deploy/careagents/stamp_build.sh" "$REPO_ROOT"
 
 echo "→ rsync app to $HOST"
 rsync -az --delete \

@@ -130,23 +130,21 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
   import and `/healthz` reports as `build` / `built_at`. It is gitignored on
   purpose: a committed marker goes stale silently, which is the failure it
-  exists to catch. `deploy.sh` writes it for you. On the Railway path, stamp it
-  yourself before `railway up` — `git` has to run in the checkout, not in the
-  staging dir, and the `-dirty` suffix has to match what `deploy.sh` produces:
+  exists to catch. `deploy/careagents/stamp_build.sh` is the only thing that
+  knows the format; both deploy paths call it, so they cannot drift apart.
+  `deploy.sh` runs it for you. On the Railway path, run it yourself against the
+  staging dir before `railway up` — it derives the repo from its own location,
+  so it works from anywhere and with a target outside the checkout, and it
+  refuses rather than writing nothing if you point it at the wrong directory:
 
   ```bash
-  # $REPO = this checkout; $STAGE = the directory `railway up` uploads
-  SHA="$(git -C "$REPO" rev-parse --short=12 HEAD)"
-  [ -z "$(git -C "$REPO" status --porcelain)" ] || SHA="$SHA-dirty"
-  printf '%s\n%s\n' "$SHA" "$(git -C "$REPO" log -1 --format=%ct)" \
-    > "$STAGE/careagents/BUILD_SHA"
+  # $STAGE = the directory `railway up` uploads
+  ./deploy/careagents/stamp_build.sh "$STAGE"    # prints e.g. build 4f2a91cbeef1
   ```
 
-  Two cautions. The marker is gitignored, so a `railway up` run from the
+  One caution. The marker is gitignored, so a `railway up` run from the
   checkout itself can drop it from the upload and leave you with
-  `build: unknown` — stage into a plain directory instead. And these four lines
-  are a second copy of what `deploy.sh` does: change one, change the other, or
-  the two deploy paths will start disagreeing about what a marker means.
+  `build: unknown` — stage into a plain directory instead.
 
   Verify with `curl -s <deployment>/healthz` — `build` must be the commit you
   deployed. `scripts/prod_watch.py --expect-sha <sha>` asserts the same thing,
