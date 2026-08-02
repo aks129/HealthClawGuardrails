@@ -10,7 +10,9 @@ from datetime import datetime, timedelta, timezone
 
 from models import db
 from r6.actions import errors
+from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
 from r6.actions.models import ProposedAction
+from r6.stepup import generate_step_up_token
 
 
 PROPOSE_BODY = {
@@ -39,9 +41,19 @@ def _commit(client, auth_headers, action_id):
                        headers=auth_headers)
 
 
-def _confirm(client, auth_headers, action_id, body=None):
+def _approval_headers(auth_headers, action_id):
+    headers = dict(auth_headers)
+    headers['X-Step-Up-Token'] = generate_step_up_token(
+        headers['X-Tenant-Id'], audience=ACTION_APPROVAL_AUDIENCE,
+        operation=action_id)
+    return headers
+
+
+def _confirm(client, auth_headers, action_id, body=None, headers=None):
     return client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=auth_headers, json=body or {})
+                       headers=headers or _approval_headers(auth_headers,
+                                                            action_id),
+                       json=body or {})
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +125,7 @@ def test_confirm_executes_exactly_once(client, tenant_headers, auth_headers,
     # (the first token's nonce is consumed by the first confirm — see the
     # replay tests below): the claim is already spent -> 409, and crucially
     # the provider was NOT called again.
-    from r6.stepup import generate_step_up_token
-    fresh = dict(auth_headers)
-    fresh['X-Step-Up-Token'] = generate_step_up_token(
-        tenant_headers['X-Tenant-Id'])
+    fresh = _approval_headers(auth_headers, action_id)
     second = _confirm(client, fresh, action_id)
     assert second.status_code == 409
     assert len(fake_providers) == 1
@@ -130,10 +139,66 @@ def test_confirm_requires_step_up(client, tenant_headers, auth_headers):
     assert resp.status_code == 401
 
 
+def test_approval_token_mint_requires_internal_secret_even_for_public_tenant(
+        client, tenant_headers, auth_headers, monkeypatch):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'human-surface-secret')
+    action_id = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, action_id).status_code == 202
+
+    missing = client.post('/r6/actions/%s/approval-token' % action_id,
+                          headers=tenant_headers)
+    wrong = client.post(
+        '/r6/actions/%s/approval-token' % action_id,
+        headers={**tenant_headers, 'X-Internal-Secret': 'wrong'})
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+
+    monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET')
+    unconfigured = client.post(
+        '/r6/actions/%s/approval-token' % action_id,
+        headers={**tenant_headers,
+                 'X-Internal-Secret': 'human-surface-secret'})
+    assert unconfigured.status_code == 403
+
+
+def test_human_surface_mints_bound_token_and_confirms(
+        client, tenant_headers, auth_headers, action_registry, fake_providers,
+        monkeypatch):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'human-surface-secret')
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    action_id = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, action_id).status_code == 202
+
+    mint = client.post(
+        '/r6/actions/%s/approval-token' % action_id,
+        headers={**tenant_headers,
+                 'X-Internal-Secret': 'human-surface-secret'})
+    assert mint.status_code == 200
+    token = mint.get_json()['token']
+    confirmed = client.post(
+        '/r6/actions/%s/confirm' % action_id,
+        headers={**tenant_headers, 'X-Step-Up-Token': token},
+        json={'approved_via': 'review-page'})
+    assert confirmed.status_code == 200
+    assert len(fake_providers) == 1
+
+
+def test_approval_token_mint_requires_pending_action(
+        client, tenant_headers, monkeypatch):
+    monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', 'human-surface-secret')
+    action_id = _propose(client, tenant_headers)
+    mint = client.post(
+        '/r6/actions/%s/approval-token' % action_id,
+        headers={**tenant_headers,
+                 'X-Internal-Secret': 'human-surface-secret'})
+    assert mint.status_code == 409
+
+
 def test_confirm_before_commit_conflicts(client, tenant_headers, auth_headers,
                                          action_registry, fake_providers):
     action_id = _propose(client, tenant_headers)
-    resp = _confirm(client, auth_headers, action_id)
+    resp = _confirm(client, auth_headers, action_id,
+                    headers=_approval_headers(auth_headers, action_id))
     assert resp.status_code == 409
     assert fake_providers == []
 
@@ -203,8 +268,9 @@ def test_confirm_tenant_isolation(client, tenant_headers, auth_headers,
                                   fake_providers):
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
-    resp = client.post('/r6/actions/%s/confirm' % action_id,
-                       headers=other_tenant_headers, json={})
+    resp = client.post(
+        '/r6/actions/%s/confirm' % action_id,
+        headers=_approval_headers(other_tenant_headers, action_id), json={})
     assert resp.status_code == 404
     assert fake_providers == []
 
@@ -236,8 +302,9 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
     monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
     action_id = _propose(client, tenant_headers)
     _commit(client, auth_headers, action_id)
+    approval = _approval_headers(auth_headers, action_id)
     resp = _confirm(client, auth_headers, action_id,
-                    body={'approved_via': 'carrier-pigeon'})
+                    body={'approved_via': 'carrier-pigeon'}, headers=approval)
     assert resp.status_code == 400
     assert fake_providers == []
     with app.app_context():
@@ -247,7 +314,7 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
     # The credential was NOT consumed by the 400 — the SAME token now
     # confirms successfully.
     retry = _confirm(client, auth_headers, action_id,
-                     body={'approved_via': 'dashboard'})
+                     body={'approved_via': 'dashboard'}, headers=approval)
     assert retry.status_code == 200
     assert len(fake_providers) == 1
 
@@ -259,10 +326,7 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
 def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
                                          app, action_registry, fake_providers,
                                          monkeypatch):
-    """Spec v3: /confirm consumes the step-up token's nonce. One token
-    authorizes at most ONE real-world execution — a captured token can't be
-    replayed against a second pending action. (Nonce cache is cleared by the
-    autouse fixture in tests/actions/conftest.py.)"""
+    """An action-bound token is single-use as well as action-specific."""
     monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
 
     first_action = _propose(client, tenant_headers)
@@ -270,12 +334,14 @@ def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
     assert _commit(client, auth_headers, first_action).status_code == 202
     assert _commit(client, auth_headers, second_action).status_code == 202
 
-    first = _confirm(client, auth_headers, first_action)
+    approval = _approval_headers(auth_headers, first_action)
+    first = _confirm(client, auth_headers, first_action, headers=approval)
     assert first.status_code == 200
     assert len(fake_providers) == 1
 
-    # Same token against the OTHER awaiting_confirmation action: replay.
-    second = _confirm(client, auth_headers, second_action)
+    # Same token against the SAME action is rejected as a nonce replay before
+    # the already-spent action state is considered.
+    second = _confirm(client, auth_headers, first_action, headers=approval)
     assert second.status_code == 401
     assert 'already used (replay)' in second.get_json()['error']
     assert len(fake_providers) == 1   # nothing executed
@@ -284,28 +350,41 @@ def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
         assert row.status == 'awaiting_confirmation'  # still approvable
 
 
-def test_commit_does_not_consume_token_only_confirm_does(
+def test_generic_commit_token_cannot_confirm(
         client, tenant_headers, auth_headers, action_registry,
         fake_providers, monkeypatch):
-    """A token used for commit and then confirm is legitimate: commit
-    validates multi-use (submit is not an execution), confirm consumes."""
+    """An agent's normal write token can submit but cannot self-approve."""
     monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
 
-    # propose -> commit (token X) -> confirm (token X): succeeds end-to-end.
     action_id = _propose(client, tenant_headers)
     assert _commit(client, auth_headers, action_id).status_code == 202
+    resp = _confirm(client, auth_headers, action_id, headers=auth_headers)
+    assert resp.status_code == 401
+    assert 'audience mismatch' in resp.get_json()['error']
+    assert fake_providers == []
+
+    # The rejected generic token was not consumed; the separately minted,
+    # action-bound approval credential authorizes exactly this confirmation.
     resp = _confirm(client, auth_headers, action_id)
     assert resp.status_code == 200
     assert len(fake_providers) == 1
 
-    # A NEW action: commit with token X still works (multi-use validation),
-    # but confirm with the now-spent token X is a replay -> 401.
-    new_action = _propose(client, tenant_headers)
-    assert _commit(client, auth_headers, new_action).status_code == 202
-    replay = _confirm(client, auth_headers, new_action)
-    assert replay.status_code == 401
-    assert 'already used (replay)' in replay.get_json()['error']
-    assert len(fake_providers) == 1
+
+def test_action_bound_token_cannot_confirm_a_different_action(
+        client, tenant_headers, auth_headers, action_registry,
+        fake_providers, monkeypatch):
+    monkeypatch.setenv('BLAND_AI_API_KEY', 'test-key')
+    first_action = _propose(client, tenant_headers)
+    second_action = _propose(client, tenant_headers)
+    assert _commit(client, auth_headers, first_action).status_code == 202
+    assert _commit(client, auth_headers, second_action).status_code == 202
+
+    approval = _approval_headers(auth_headers, first_action)
+    wrong_action = _confirm(client, auth_headers, second_action,
+                            headers=approval)
+    assert wrong_action.status_code == 401
+    assert 'operation mismatch' in wrong_action.get_json()['error']
+    assert fake_providers == []
 
 
 # ---------------------------------------------------------------------------

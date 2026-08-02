@@ -152,8 +152,22 @@ class HealthClawClient:
         return r.json()
 
     def confirm_action(self, tenant: str, action_id: str) -> dict:
+        mint = self.http.post(
+            f"{self.actions}/{action_id}/approval-token",
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            timeout=self.timeout)
+        token = (mint.json() or {}).get("token") if mint.ok else None
+        if not token:
+            raise HealthClawError(
+                f"approval token mint failed ({mint.status_code})",
+                mint.status_code)
         r = self.http.post(f"{self.actions}/{action_id}/confirm",
-                           headers=self._headers(tenant), timeout=self.timeout)
+                           headers={"X-Tenant-Id": tenant,
+                                    "X-Step-Up-Token": token,
+                                    "X-Agent-Id": "careagents"},
+                           json={"approved_via": "review-page"},
+                           timeout=self.timeout)
         if not r.ok:
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)

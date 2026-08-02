@@ -213,6 +213,40 @@ def test_log_message_reports_failure_on_a_non_201():
     assert client.log_message("t-1", "user", "hi") is False
 
 
+def test_confirm_action_mints_action_bound_credential_then_uses_it():
+    import careagents.healthclaw as hcmod
+
+    calls = []
+
+    class _Resp:
+        def __init__(self, body):
+            self.status_code = 200
+            self.ok = True
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    class _HTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            calls.append((url, json, headers))
+            if url.endswith('/approval-token'):
+                return _Resp({'token': 'action-bound-token'})
+            return _Resp({'status': 'completed'})
+
+    client = hcmod.HealthClawClient("http://local", "mint-secret")
+    client.http = _HTTP()
+
+    assert client.confirm_action("tenant-1", "action-1") == {
+        'status': 'completed'}
+    assert calls[0][0].endswith('/r6/actions/action-1/approval-token')
+    assert calls[0][2] == {
+        'X-Tenant-Id': 'tenant-1', 'X-Internal-Secret': 'mint-secret'}
+    assert calls[1][0].endswith('/r6/actions/action-1/confirm')
+    assert calls[1][1] == {'approved_via': 'review-page'}
+    assert calls[1][2]['X-Step-Up-Token'] == 'action-bound-token'
+
+
 def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
         cfg, svc, monkeypatch):
     # The transcript is PHI-adjacent, so it belongs behind the guardrails in
@@ -1354,4 +1388,3 @@ def test_unavailable_advisor_refused_not_downgraded(app, svc, monkeypatch):
     r = c.post("/api/agents", json={"name": "Plain", "persona": "calm",
                                     "connection_id": conn})
     assert r.status_code == 200
-

@@ -11,6 +11,7 @@ from models import db
 from r6.actions.models import _utcnow
 
 APPROVED_VIA_VALUES = ('telegram', 'dashboard', 'review-page')
+ACTION_APPROVAL_AUDIENCE = 'action-approval'
 
 
 class ActionConfirmation(db.Model):
