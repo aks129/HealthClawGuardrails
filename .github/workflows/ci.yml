@@ -342,6 +342,7 @@ jobs:
           curl -sf -X POST http://localhost:5000/r6/fhir/internal/seed \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
+            -H "X-Internal-Secret: $INTERNAL_TOKEN_MINT_SECRET" \
             -H "X-Step-Up-Token: $TOKEN" \
             -d '{"tenant_id":"compliance-test"}' > /dev/null
           # Read something
