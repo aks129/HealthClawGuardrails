@@ -242,15 +242,26 @@ the upload, leaving a deployment that reports `build: unknown` and alarms as
 stale forever. `cd`-then-`up` is the form that has actually been used to deploy
 this service.
 
+**`railway link` is per-directory, so you must link again inside the stage.**
+The earlier link applied to the repo root. `railway up` in an unlinked
+directory does not fail — it **creates a brand-new project** named after the
+directory and deploys there, printing a cheerful `✓ Project tmp.XXXXXXXX`.
+Your real services are untouched, the deploy you think you shipped is running
+somewhere nobody looks, and the only clue is a project name you did not choose.
+This happened on the first run of this runbook.
+
 ```bash
-cd "$STAGE" && railway up --service careagents-worker --detach
+cd "$STAGE"
+railway link --project <project-id> --service careagents-worker --environment production
+railway up --service careagents-worker --detach
 ```
 
-You linked the project before creating the service, and `--service` on each
-`railway up` picks the target, so no second `railway link` is needed.
+Sanity-check before you upload: `railway status` from inside `$STAGE` must name
+your real project. If it names anything else, stop — do not `railway up`.
 
 One stage serves both roles. Upload it twice — once per service — and the two
-report the same `build`:
+report the same `build`. You are already linked to the project from the step
+above, so `--service` alone picks the target:
 
 ```bash
 cd "$STAGE"
