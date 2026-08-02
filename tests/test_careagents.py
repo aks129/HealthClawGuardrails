@@ -1355,3 +1355,99 @@ def test_unavailable_advisor_refused_not_downgraded(app, svc, monkeypatch):
                                     "connection_id": conn})
     assert r.status_code == 200
 
+
+# --- hub UI source guards (#224) ---------------------------------------------
+# Honest scope: these are SOURCE-level guards on careagents/static/home.js,
+# careagents/static/careagents.css and careagents/templates/home.html. They
+# execute no JavaScript and prove no behaviour — the behaviour has to be driven
+# in a real browser. What they do buy is a cheap regression fence around the
+# properties that are invisible in review and expensive to get wrong: no
+# blocking browser dialogs, no markup built from server strings, and a delete
+# confirmation that cannot decay into one tap.
+
+import pathlib as _pathlib
+
+_CA = _pathlib.Path(__file__).resolve().parents[1] / "careagents"
+_HOME_JS = (_CA / "static" / "home.js").read_text()
+_HOME_HTML = (_CA / "templates" / "home.html").read_text()
+_CSS = (_CA / "static" / "careagents.css").read_text()
+
+
+def test_hub_js_uses_no_blocking_browser_dialogs():
+    """prompt/alert/confirm are silently dead in several in-app mobile browsers
+    (the whole point of #224): a flow built on them just stops with no error."""
+    import re
+    for fn in ("prompt", "alert", "confirm"):
+        assert not re.search(r"(?<![\w.])" + fn + r"\s*\(", _HOME_JS), fn
+
+
+def test_hub_js_never_builds_markup_from_strings():
+    """Connection labels, provider labels and server error strings all reach the
+    DOM here. One innerHTML on that path turns an upstream string into markup."""
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert sink not in _HOME_JS, sink
+
+
+def test_copy_has_no_execcommand_fallback():
+    """execCommand('copy') reports success in browsers where it did nothing, so
+    the user is told the pairing code is copied when it is not."""
+    assert "execCommand" not in _HOME_JS
+
+
+def test_pairing_code_is_never_logged():
+    """The pairing code binds a chat handle to an account: it must not survive
+    in a console buffer or a log."""
+    assert "console.log" not in _HOME_JS
+    assert "console.debug" not in _HOME_JS
+
+
+def test_typed_delete_stays_double_gated():
+    """Three layers, all load-bearing. Deleting records is irreversible, and a
+    markup tidy-up that drops `disabled` must not silently make it one tap."""
+    # (a) the button ships disabled in the static markup
+    confirm = _HOME_HTML.split('id="delete-confirm"')[1][:120]
+    assert "disabled" in confirm
+    # (b) enabled only on an exact, case-sensitive match
+    assert 'input.value !== "DELETE"' in _HOME_JS
+    # (c) the click handler re-checks the value itself
+    assert 'if (input.value === "DELETE")' in _HOME_JS
+    # and the comparison is never loosened, inside the confirmation helper
+    ask = _HOME_JS.split("function askToDelete(")[1].split("\n  }")[0]
+    for loosener in ("trim()", "toUpperCase()", "toLowerCase()"):
+        assert loosener not in ask, loosener
+
+
+def test_delete_confirmation_is_not_a_form_or_native_dialog():
+    """A <form> would let Enter submit past the JS check; <dialog>/showModal
+    brings a focus trap that breaks VoiceOver on iOS."""
+    assert "<form" not in _HOME_HTML.split('id="delete-modal"')[1].split("</div>\n\n")[0]
+    assert "<dialog" not in _HOME_HTML
+    assert "showModal" not in _HOME_JS
+
+
+def test_hub_dialog_selector_contract():
+    """home.js addresses these by id; a template rename would break the flow at
+    runtime only, with no server-side signal."""
+    for sel in ('id="provider-picker"', 'id="picker-cancel"', 'id="picker-rows"',
+                'id="connect-msg"', 'id="surfaces-msg"', 'id="agents"',
+                'id="code-card"', 'id="pair-code"', 'id="copy-code"',
+                'id="copy-state"', 'id="code-instructions"', 'id="code-done"',
+                'id="tg-state"', 'id="im-state"', 'id="delete-modal"',
+                'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
+                'id="delete-cancel"'):
+        assert sel in _HOME_HTML, sel
+
+
+def test_flash_cue_is_class_keyed_with_a_single_keyframe():
+    assert "#connect-section.flash" not in _CSS   # de-keyed from the one id
+    assert ".hub-section.flash" in _CSS
+    assert _CSS.count("@keyframes flashPulse") == 1
+
+
+def test_connection_action_buttons_are_styled_and_thumb_sized():
+    """44px is the tap target floor; the shared rule is what supplies it."""
+    for sel in (".conn-refresh", ".conn-disconnect", ".conn-delete",
+                ".conn-refresh-msg"):
+        assert sel in _CSS, sel
+    shared = _CSS.split(".conn-refresh, .conn-disconnect, .conn-delete {")[1]
+    assert "min-height: 44px" in shared.split("}")[0]
