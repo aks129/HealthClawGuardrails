@@ -20,13 +20,11 @@
         return;
       }
       let body = {};
+      $("connect-msg").hidden = true;
       if (tile.dataset.providers) {
-        const provs = JSON.parse(tile.dataset.providers);
-        const pick = prompt("Which do you use?\n" +
-          provs.map((p, i) => `${i + 1}. ${p.label}`).join("\n"), "1");
-        const idx = parseInt(pick, 10) - 1;
-        if (isNaN(idx) || !provs[idx]) return;
-        body.provider = provs[idx].id;
+        const provider = await pickProvider(JSON.parse(tile.dataset.providers));
+        if (!provider) return;
+        body.provider = provider;
       }
       // Real-record sources: informed consent before anything happens. The
       // server refuses (428) without it, so this card is UX, not the gate.
@@ -38,7 +36,12 @@
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
-      if (!res.ok) return alert(res.d.error || "Couldn't connect that source.");
+      if (!res.ok) {
+        // Inline, directly under the tile that was tapped: never blocks, never
+        // needs dismissing, and the page stays usable.
+        return say(tile, $("connect-msg"),
+                   res.d.error || "Couldn't connect that source.");
+      }
       if (res.d.soon) { tile.querySelector(".connector-tag").textContent = "we'll let you know"; return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
       location.reload();
@@ -56,6 +59,135 @@
       cancel.onclick = () => done(false);
       modal.hidden = false;
     });
+  }
+
+  // One shared primitive for the dialogs below: unhide a static modal, resolve
+  // once when it closes. ESC and a backdrop tap both abandon it — every one of
+  // these is safe to walk away from. The consent card deliberately does NOT go
+  // through this: its gate is explicit buttons only.
+  function openDialog(modal) {
+    let resolve;
+    const result = new Promise((r) => { resolve = r; });
+    const invoker = document.activeElement;
+    let closed = false;
+    const onKey = (e) => { if (e.key === "Escape") close(null); };
+    const onBackdrop = (e) => { if (e.target === modal) close(null); };
+    function close(value) {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", onKey);
+      modal.removeEventListener("click", onBackdrop);
+      modal.hidden = true;
+      if (invoker && document.contains(invoker)) invoker.focus();
+      resolve(value);
+    }
+    document.addEventListener("keydown", onKey);
+    modal.addEventListener("click", onBackdrop);
+    modal.hidden = false;
+    return { close, result };
+  }
+
+  // Inline message: shown in the page beside what the user touched.
+  //
+  // The element is MOVED next to `anchor` before it is shown. A message that
+  // renders in its template position can land hundreds of pixels below the
+  // fold on a phone — which looks exactly like the dead browser dialog this
+  // replaced, so the position is part of the fix, not decoration. Moving the
+  // one element keeps the id stable for anything addressing it.
+  function say(anchor, el, text) {
+    if (anchor && el.previousElementSibling !== anchor) {
+      anchor.insertAdjacentElement("afterend", el);
+    }
+    el.textContent = text;
+    el.hidden = false;
+    // Only scrolls if it isn't already fully visible, and only as far as it
+    // has to — no jump when the message is already under the user's thumb.
+    el.scrollIntoView({ block: "nearest" });
+  }
+
+  // Scroll a section into view and pulse it — the in-page way to point at the
+  // step that has to happen first. The message rides along to the section
+  // being scrolled to, or the words explaining the flash end up off-screen in
+  // the section the user just left.
+  function flashSection(el, msgEl, text) {
+    if (!el) { if (msgEl) say(null, msgEl, text); return; }
+    if (msgEl) {
+      el.insertAdjacentElement("afterend", msgEl);
+      msgEl.textContent = text;
+      msgEl.hidden = false;
+    }
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1400);
+  }
+
+  // Provider picker: one large row per provider, one tap to choose.
+  function pickProvider(provs) {
+    const rows = $("picker-rows");
+    rows.textContent = "";
+    const dlg = openDialog($("provider-picker"));
+    provs.forEach((p) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "picker-row";
+      row.dataset.providerId = p.id;
+      row.textContent = p.label;   // server-supplied label: text, never markup
+      row.addEventListener("click", () => dlg.close(p.id));
+      rows.appendChild(row);
+    });
+    $("picker-cancel").onclick = () => dlg.close(null);
+    const first = rows.querySelector(".picker-row");
+    if (first) first.focus();
+    return dlg.result;
+  }
+
+  // Pairing-code card. The visible string and the clipboard string are the
+  // same string: if the clipboard is blocked the user copies the selection by
+  // hand, and that must not be a different code.
+  function showCodeCard(codeString, instructions) {
+    const codeEl = $("pair-code");
+    const state = $("copy-state");
+    codeEl.textContent = codeString;
+    $("code-instructions").textContent = instructions;
+    state.textContent = "Copy";
+    let revert = 0;
+    const dlg = openDialog($("code-card"));
+    $("copy-code").onclick = async () => {
+      // navigator.clipboard is missing or blocked in several in-app browsers
+      // (Telegram's among them). Falling back to a selection keeps the flow
+      // alive instead of dead-ending on a silent failure.
+      clearTimeout(revert);
+      try {
+        await navigator.clipboard.writeText(codeString);
+        // Confirmation is transient; the instruction it replaces is not.
+        state.textContent = "Copied ✓";
+        revert = setTimeout(() => { state.textContent = "Copy"; }, 1500);
+      } catch (err) {
+        // This IS the recovery instruction — it stays until the card closes,
+        // or it disappears while the user is still pressing and holding.
+        selectContents(codeEl);
+        state.textContent = "Press and hold to copy";
+      }
+    };
+    $("code-done").onclick = () => dlg.close(null);
+    $("code-done").focus();  // never the code itself — that pops the keyboard
+    // A pairing code is a short-lived credential; don't leave it in the DOM
+    // after the card that needed it is gone. The iMessage instructions quote
+    // the code (and the handle), so they have to go with it.
+    dlg.result.then(() => {
+      clearTimeout(revert);
+      codeEl.textContent = "";
+      $("code-instructions").textContent = "";
+    });
+  }
+
+  function selectContents(el) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 
   // Poll pending connection cards until active.
@@ -77,9 +209,11 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const say = (t) => { msg.textContent = t; msg.hidden = false; };
+      // Named apart from the module-scope say(anchor, el, text): this one is
+      // card-local and takes only the text.
+      const report = (t) => { msg.textContent = t; msg.hidden = false; };
       btn.disabled = true;
-      say("Checking…");
+      report("Checking…");
       let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
       // 428 means this deployment wants consent re-affirmed for the re-pull.
       if (!res.ok && res.d.error === "consent_required") {
@@ -89,11 +223,11 @@
                          { consent: true });
       }
       btn.disabled = false;
-      if (!res.ok) return say(res.d.error || "Couldn't refresh right now.");
-      if (res.d.unsupported) return say(res.d.reason);
+      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
-        say("Finish signing in to your provider — new records appear here.");
+        report("Finish signing in to your provider — new records appear here.");
         watchForNewRecords(card, msg);
       }
     });
@@ -123,13 +257,8 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const label = btn.dataset.label || "these records";
-      const typed = prompt(
-        `This permanently deletes the records in "${label}".\n\n` +
-        "The PHI-free audit trail (who accessed what) is kept as the record " +
-        "of what happened, and this deletion is added to it.\n\n" +
-        'Type DELETE to confirm:');
-      if (typed !== "DELETE") return;
+      const agreed = await askToDelete(btn.dataset.label || "these records");
+      if (!agreed) return;
 
       btn.disabled = true;
       msg.textContent = "Deleting…";
@@ -146,6 +275,26 @@
       location.reload();
     });
   });
+
+  // Resolves true only after the patient types DELETE exactly. Two gates on
+  // purpose: the button ships disabled and is only enabled on an exact match,
+  // and the click handler checks the value again — so a future markup change
+  // that drops `disabled` still can't turn this into a one-tap delete.
+  function askToDelete(label) {
+    const input = $("delete-input");
+    const ok = $("delete-confirm");
+    $("delete-label").textContent = label;
+    input.value = "";
+    ok.disabled = true;
+    const dlg = openDialog($("delete-modal"));
+    input.oninput = () => { ok.disabled = input.value !== "DELETE"; };
+    ok.onclick = () => { if (input.value === "DELETE") dlg.close(true); };
+    // Enter goes through the same check; there is no form here to submit.
+    input.onkeydown = (e) => { if (e.key === "Enter") ok.onclick(); };
+    $("delete-cancel").onclick = () => dlg.close(false);
+    input.focus();
+    return dlg.result;
+  }
 
   // After a re-authorization, poll until the provider delivers, then report
   // the growth the server measured against the pre-refresh baseline.
@@ -171,14 +320,7 @@
 
   // With no records connected there's nothing to build an agent on — send the
   // user to the connect step (highlight it) instead of opening a dead modal.
-  function needConnection() {
-    const sec = $("connect-section");
-    if (sec) {
-      sec.scrollIntoView({ behavior: "smooth", block: "center" });
-      sec.classList.add("flash");
-      setTimeout(() => sec.classList.remove("flash"), 1400);
-    }
-  }
+  function needConnection() { flashSection($("connect-section"), null, ""); }
   function openAgentModal() {
     if (!hasConn()) { needConnection(); return; }
     $("modal-err").hidden = true;
@@ -212,12 +354,17 @@
   const tg = $("tg-surface");
   if (tg) tg.addEventListener("click", async () => {
     const firstAgent = document.querySelector(".agent-card");
-    if (!firstAgent) { alert("Create an agent first, then connect Telegram."); return; }
+    $("surfaces-msg").hidden = true;
+    if (!firstAgent) {
+      return flashSection($("agents"), $("surfaces-msg"),
+        "Create an agent first, then connect Telegram.");
+    }
     const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/telegram", { agent_id: agentId });
-    if (!res.ok) return alert(res.d.error || "Failed");
+    if (!res.ok) return say(tg, $("surfaces-msg"), res.d.error || "Failed");
     if (res.d.deep_link) { $("tg-state").textContent = "opening…"; window.open(res.d.deep_link, "_blank", "noopener"); }
-    else prompt("Send this code to the CareAgents bot with /start:", res.d.code);
+    // Telegram pairs on the bare code, so that is what we show and copy.
+    else showCodeCard(res.d.code, "Send this code to the CareAgents bot with /start:");
     $("tg-state").textContent = "pending — finish in Telegram";
   });
 
@@ -225,11 +372,16 @@
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
     const firstAgent = document.querySelector(".agent-card");
-    if (!firstAgent) { alert("Create an agent first, then connect iMessage."); return; }
+    $("surfaces-msg").hidden = true;
+    if (!firstAgent) {
+      return flashSection($("agents"), $("surfaces-msg"),
+        "Create an agent first, then connect iMessage.");
+    }
     const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
-    if (!res.ok) return alert(res.d.error || "Failed");
+    if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
     $("im-state").textContent = "pending — text to finish";
-    prompt(res.d.instructions || "Text this code to connect:", "care " + res.d.code);
+    // iMessage needs the whole "care <code>" line as the text body.
+    showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
   });
 })();
