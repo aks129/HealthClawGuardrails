@@ -27,7 +27,8 @@ from flask import Blueprint, jsonify, request
 
 from models import db
 from r6.actions import errors
-from r6.actions.confirmations import (APPROVED_VIA_VALUES,
+from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
+                                      APPROVED_VIA_VALUES,
                                       consume_confirmation,
                                       issue_confirmation)
 from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
@@ -38,7 +39,7 @@ from r6.actions.state import transition_action
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.read_auth import authorize_tenant_read
-from r6.stepup import validate_step_up_token
+from r6.stepup import generate_step_up_token, validate_step_up_token
 from r6.telegram_push import notify_tenant
 
 logger = logging.getLogger(__name__)
@@ -428,8 +429,8 @@ def commit_action(action_id):
 @actions_blueprint.route('/<action_id>/confirm', methods=['POST'])
 def confirm_action(action_id):
     """The human's out-of-band Approve — the ONLY place an action executes.
-    Called by the dashboard/Telegram approve handler with the patient's own
-    tenant-bound step-up token. Body optional: {'approved_via': 'dashboard'
+    Called by the dashboard/Telegram approve handler with a single-use token
+    bound to this exact action. Body optional: {'approved_via': 'dashboard'
     | 'telegram'} (default 'dashboard').
 
     Ordering rationale (do not reorder):
@@ -460,12 +461,15 @@ def confirm_action(action_id):
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _error(401, 'Action confirm requires X-Step-Up-Token header')
-    # consume_nonce: the confirm token is a SINGLE-USE execution credential
-    # (spec v3). Commit validates the same token multi-use (submitting is not
-    # an execution); only the human's Approve spends the nonce, so a captured
-    # token can never authorize a second real-world execution.
-    valid, err = validate_step_up_token(step_up_token, tenant_id,
-                                        consume_nonce=True)
+    # consume_nonce: the action-bound confirm token is a SINGLE-USE execution
+    # credential (spec v3). Commit uses a separate generic write token;
+    # only the human's Approve surface can mint this credential, and confirm
+    # spends it so a captured token cannot authorize another execution.
+    valid, err = validate_step_up_token(
+        step_up_token, tenant_id, consume_nonce=True,
+        require_audience=ACTION_APPROVAL_AUDIENCE,
+        require_operation=action_id,
+    )
     if not valid:
         return _error(401, 'Step-up token rejected: %s' % err)
 
@@ -578,6 +582,49 @@ def confirm_action(action_id):
     # mapping lives in ONE place: _resolve_from_executing().
     result = ex.execute(action)
     return _resolve_from_executing(action, result)
+
+
+@actions_blueprint.route('/<action_id>/approval-token', methods=['POST'])
+def issue_action_approval_token(action_id):
+    """Mint the least-privilege credential used by a human approval surface.
+
+    This endpoint is deliberately separate from the public/demo token mint.
+    Even public tenants must present the server-to-server internal secret, so
+    an agent that can obtain a normal tenant write token cannot mint its own
+    approval credential.
+    """
+    tenant_id = _tenant_or_none()
+    if not tenant_id:
+        return _error(400, 'X-Tenant-Id header is required')
+
+    expected = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
+    provided = request.headers.get('X-Internal-Secret', '')
+    if not expected or not hmac.compare_digest(provided, expected):
+        return _error(403, 'Forbidden')
+
+    action = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    if action is None:
+        return _error(404, 'Unknown action')
+    if action.status != 'awaiting_confirmation':
+        return _error(409, 'Action is %s, not awaiting_confirmation'
+                      % action.status)
+    if action.is_expired():
+        return _error(410, 'Approval window lapsed — propose the action again')
+
+    token = generate_step_up_token(
+        tenant_id,
+        agent_id='human-approval',
+        audience=ACTION_APPROVAL_AUDIENCE,
+        operation=action_id,
+    )
+    record_audit_event(
+        'update', resource_type='ProposedAction', resource_id=action.id,
+        agent_id='human-approval', tenant_id=tenant_id,
+        detail='action-bound approval credential issued',
+    )
+    return jsonify({'token': token, 'tenant_id': tenant_id,
+                    'action_id': action_id})
 
 
 @actions_blueprint.route('/<action_id>', methods=['GET'])

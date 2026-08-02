@@ -17,6 +17,7 @@ and a CI/monitor probe.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import requests
@@ -40,6 +41,9 @@ def main() -> int:
     ap.add_argument("--tenant", default="desktop-demo",
                     help="public demo tenant")
     ap.add_argument("--timeout", type=float, default=20.0)
+    ap.add_argument(
+        "--mint-secret", default=os.environ.get("INTERNAL_TOKEN_MINT_SECRET"),
+        help="server-to-server secret required to mint the human approval token")
     args = ap.parse_args()
     base, tenant = args.base.rstrip("/"), args.tenant
     s = requests.Session()
@@ -54,14 +58,15 @@ def main() -> int:
     version = r.json().get("version")
     _ok(f"health: {r.json().get('status')} (version {version})")
 
-    # 1. Mint a tenant-bound step-up credential (the human's approval key).
+    # 1. Mint the tenant-bound write credential used for commit/review. Human
+    #    approval gets a separate, action-bound token at step 7.
     r = s.post(f"{fhir}/internal/step-up-token", json={"tenant_id": tenant},
                headers={"X-Tenant-Id": tenant}, timeout=args.timeout)
     token = (r.json() or {}).get("token") if r.ok else None
     if not token:
         _fail(f"step-up token mint {r.status_code}: {r.text[:120]}")
     h = {"X-Tenant-Id": tenant, "X-Step-Up-Token": token}
-    _ok("minted step-up token")
+    _ok("minted tenant write token")
 
     # 2. The agent PROPOSES filling the intake — it does not submit it.
     body = {"kind": "form-fill", "payload": {
@@ -110,7 +115,21 @@ def main() -> int:
 
     # 7. Out-of-band confirm EXECUTES: reviewed answers → PDF →
     #    DocumentReference → signed link.
-    r = s.post(f"{actions}/{aid}/confirm", headers=h, timeout=args.timeout)
+    if not args.mint_secret:
+        _fail("--mint-secret (or INTERNAL_TOKEN_MINT_SECRET) is required "
+              "for the human approval step")
+    r = s.post(
+        f"{actions}/{aid}/approval-token",
+        headers={"X-Tenant-Id": tenant,
+                 "X-Internal-Secret": args.mint_secret},
+        timeout=args.timeout)
+    approval_token = (r.json() or {}).get("token") if r.ok else None
+    if not approval_token:
+        _fail(f"approval token mint {r.status_code}: {r.text[:120]}")
+    approval_headers = {"X-Tenant-Id": tenant,
+                        "X-Step-Up-Token": approval_token}
+    r = s.post(f"{actions}/{aid}/confirm", headers=approval_headers,
+               timeout=args.timeout)
     data = r.json() if r.ok else {}
     import json as _json
     outcome = _json.loads(data.get("outcome_summary") or "{}")
