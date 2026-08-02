@@ -139,9 +139,29 @@ def _turn(client, agent_id, message, request_id=None, conversation_id=None):
         payload["request_id"] = request_id
     if conversation_id:
         payload["conversation_id"] = conversation_id
-    r = client.post("/api/chat", json=payload)
+    r = client.post("/api/chat", json=payload, buffered=False)
+    runtime = client.application.extensions["careagents_runtime"]
+    from careagents.worker import RunWorker
+    RunWorker(runtime["config"], runtime["client"], runtime["accounts"],
+              "test-worker").run_once()
     r.get_data()
     return r
+
+
+def _enqueue_and_run_imessage(app, client, *, headers, json):
+    """Enqueue from the relay, execute separately, then poll its projection."""
+    from careagents.worker import RunWorker
+
+    runtime = app.extensions["careagents_runtime"]
+    queued = client.post(
+        "/api/surfaces/imessage/inbound", headers=headers, json=json)
+    assert queued.status_code == 202
+    run_id = queued.get_json()["run_id"]
+    RunWorker(runtime["config"], runtime["client"], runtime["accounts"],
+              "test-surface-worker").run_once()
+    return client.get(
+        f"/api/surfaces/imessage/runs/{run_id}", headers=headers,
+        query_string={"handle": json["handle"]})
 
 
 def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
@@ -343,10 +363,233 @@ def test_duplicate_inbound_request_runs_the_model_once(cfg, svc, monkeypatch):
     replay = _turn(c, agent_id, "one delivery", request_id="delivery-1")
 
     assert calls["count"] == 1
-    assert '"type": "duplicate"' in replay.get_data(as_text=True)
+    assert '"type": "accepted"' in replay.get_data(as_text=True)
+    assert '"text": "once"' in replay.get_data(as_text=True)
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [message["role"] for message in stored] == ["user", "assistant"]
     assert first.status_code == replay.status_code == 200
+
+
+def test_browser_disconnect_reconnect_replays_without_duplicate_inference(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch, reply="durable answer")
+    from careagents import agent as agent_mod
+    from careagents.worker import RunWorker
+
+    calls = {"count": 0}
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "durable answer", [], []
+
+    def complete(*args, **kwargs):
+        calls["count"] += 1
+        return _Turn()
+
+    monkeypatch.setattr(agent_mod.llm, "complete", complete)
+    response = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "keep working",
+        "request_id": "disconnect-1"}, buffered=False)
+    assert response.headers["X-CareAgents-Run-ID"] in fake.runs
+    accepted = next(iter(response.response)).decode()
+    run_id = next(iter(fake.runs))
+    assert '"type": "accepted"' in accepted and run_id in accepted
+    response.close()  # disconnect is projection-only; it never cancels.
+
+    RunWorker(cfg, fake, svc, "worker-after-disconnect").run_once()
+    replay = c.get(
+        f"/api/chat/runs/{run_id}/events",
+        query_string={"agent_id": agent_id, "after": 0})
+    body = replay.get_data(as_text=True)
+
+    assert calls["count"] == 1
+    assert '"text": "durable answer"' in body
+    assert '"type": "done"' in body
+
+
+def test_terminal_sse_drains_every_event_page_before_done(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    created, message_id = fake.claim_inbound_message(
+        tenant, "many events", agent_id, fake.conversation_id(agent_id),
+        "web", "many-events")
+    assert created is True
+    run = fake.create_agent_run(tenant, message_id)
+    for index in range(101):
+        fake._append_run_event(
+            run["id"], "agent.text", {"text": f"part-{index}"})
+    fake.runs[run["id"]]["status"] = "completed"
+
+    response = c.get(
+        f"/api/chat/runs/{run['id']}/events",
+        query_string={"agent_id": agent_id, "after": 0})
+    body = response.get_data(as_text=True)
+
+    assert body.count('"type": "text"') == 101
+    assert body.index('"text": "part-100"') < body.index('"type": "done"')
+
+
+def test_worker_enforces_claimed_run_deadline_before_inference(
+        cfg, svc, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from careagents.worker import RunWorker
+
+    app, c, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    response = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "too late",
+        "request_id": "expired-before-inference"}, buffered=False)
+    next(iter(response.response))
+    response.close()
+    run_id = next(iter(fake.runs))
+    fake.runs[run_id]["deadline_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    monkeypatch.setattr(
+        "careagents.worker.llm.complete",
+        lambda *a, **k: pytest.fail("deadline allowed model inference"))
+
+    RunWorker(cfg, fake, svc, "deadline-worker").run_once()
+
+    assert fake.runs[run_id]["status"] == "failed"
+    assert any(event["type"] == "run.failed"
+               for event in fake.events[run_id])
+
+
+def test_worker_pool_creates_only_the_configured_number_of_slots(
+        cfg, monkeypatch):
+    import threading
+    from careagents import worker as worker_mod
+
+    cfg.run_worker_concurrency = 3
+    stop = threading.Event()
+    stop.set()
+    threads = []
+
+    class _Thread:
+        def __init__(self, target, args, daemon, name):
+            self.target, self.args = target, args
+            self.daemon, self.name = daemon, name
+            self.started = self.joined = False
+            threads.append(self)
+
+        def start(self):
+            self.started = True
+            self.target(*self.args)
+
+        def join(self):
+            self.joined = True
+
+    monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
+    monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
+    monkeypatch.setattr(worker_mod, "HealthClawClient",
+                        lambda *_args: object())
+
+    worker_mod.run_worker_pool(cfg, stop)
+
+    assert [thread.name for thread in threads] == [
+        "careagents-worker-0", "careagents-worker-1",
+        "careagents-worker-2"]
+    assert all(thread.started and thread.joined for thread in threads)
+
+
+def test_queued_run_history_stops_at_its_claimed_message(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    from careagents.worker import RunWorker
+
+    seen = []
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "ok", [], []
+
+    def complete(_cfg, _system, history, _tools):
+        seen.append([message.get("content") for message in history])
+        return _Turn()
+
+    monkeypatch.setattr("careagents.worker.llm.complete", complete)
+    first = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "earlier question",
+        "request_id": "queued-earlier"}, buffered=False)
+    next(iter(first.response))
+    first.close()
+    later = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "later private detail",
+        "request_id": "queued-later"}, buffered=False)
+    next(iter(later.response))
+    later.close()
+
+    RunWorker(cfg, fake, svc, "history-worker").run_once()
+
+    assert "earlier question" in seen[0]
+    assert "later private detail" not in seen[0]
+
+
+def test_recovery_reuses_completed_tool_and_fails_closed_on_ambiguous_tool(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    from careagents.worker import RunWorker
+
+    response = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "check my labs",
+        "request_id": "recovery-completed"}, buffered=False)
+    next(iter(response.response))
+    response.close()
+    run_id = next(run_id for run_id, run in fake.runs.items()
+                  if run["status"] == "queued")
+    run = fake.runs[run_id]
+    run["status"], run["worker_id"] = "running", "dead-worker"
+    fake._append_run_event(run_id, "agent.checkpoint", {
+        "checkpoint_id": "round-1", "round": 1, "text": "",
+        "tool_calls": [{"id": "provider-call-1", "name": "get_labs",
+                        "arguments": {}}], "raw_tool_calls": []})
+    fake.tool_calls[(run_id, "provider-call-1")] = {
+        "id": "call-1", "run_id": run_id,
+        "provider_call_id": "provider-call-1", "tool_name": "get_labs",
+        "input": {}, "status": "completed",
+        "result": {"content": '{"already":"done"}', "ui_events": []}}
+    run["status"], run["worker_id"] = "queued", None
+
+    executed = {"count": 0}
+    monkeypatch.setattr("careagents.worker._execute_tool",
+                        lambda *a, **k: executed.__setitem__(
+                            "count", executed["count"] + 1))
+
+    class _Final:
+        text, tool_calls, raw_tool_calls = "reused safely", [], []
+
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: _Final())
+    RunWorker(cfg, fake, svc, "recovery-worker").run_once()
+    assert executed["count"] == 0
+    assert fake.runs[run_id]["status"] == "completed"
+
+    # A call left *running* has an unknown provider outcome. It must not be
+    # executed again; it moves to reconciliation and pauses the run.
+    second_message = fake.claim_inbound_message(
+        tenant, "prepare a form", agent_id, fake.conversation_id(agent_id),
+        "web", "recovery-ambiguous")[1]
+    ambiguous = fake.create_agent_run(tenant, second_message)
+    ambiguous_id = ambiguous["id"]
+    fake._append_run_event(ambiguous_id, "agent.checkpoint", {
+        "checkpoint_id": "round-1", "round": 1, "text": "",
+        "tool_calls": [{"id": "provider-call-2",
+                        "name": "start_intake_form", "arguments": {}}],
+        "raw_tool_calls": []})
+    fake.tool_calls[(ambiguous_id, "provider-call-2")] = {
+        "id": "call-2", "run_id": ambiguous_id,
+        "provider_call_id": "provider-call-2",
+        "tool_name": "start_intake_form", "input": {},
+        "status": "running", "result": None}
+
+    RunWorker(cfg, fake, svc, "reconcile-worker").run_once()
+
+    assert executed["count"] == 0
+    assert fake.tool_calls[(ambiguous_id, "provider-call-2")][
+        "status"] == "needs_reconciliation"
+    assert fake.runs[ambiguous_id]["status"] == "waiting_for_human"
 
 
 def test_web_and_imessage_resume_the_same_explicit_conversation(
@@ -367,13 +610,16 @@ def test_web_and_imessage_resume_the_same_explicit_conversation(
 
     seen = []
 
-    def reply(_cfg, _hc, _tenant, _system, history, text, **kwargs):
-        seen.extend(message["content"] for message in history)
-        return "continued on iMessage"
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "continued on iMessage", [], []
 
-    monkeypatch.setattr("careagents.app.run_turn_to_message", reply)
-    response = relay.post(
-        "/api/surfaces/imessage/inbound",
+    def reply(_cfg, _system, history, _tools):
+        seen.extend(message["content"] for message in history)
+        return _Turn()
+
+    monkeypatch.setattr("careagents.worker.llm.complete", reply)
+    response = _enqueue_and_run_imessage(
+        app, relay,
         headers=headers,
         json={
             "handle": "+15551234567",
@@ -425,8 +671,8 @@ def test_a_storage_outage_does_not_break_the_chat(cfg, svc, monkeypatch):
     monkeypatch.setattr(fake, "claim_inbound_message",
                         lambda *a, **k: (None, None))
     r = _turn(c, agent_id, "still works?")
-    assert r.status_code == 200
-    assert "could not save this message safely" in r.get_data(as_text=True)
+    assert r.status_code == 503
+    assert r.get_json()["error"] == "message store unavailable"
 
 
 def test_history_is_trimmed_but_never_orphans_a_tool_call():
@@ -582,6 +828,11 @@ class FakeClient:
         # Conversation store, keyed by tenant + thread, matching HealthClaw.
         self.logged: dict[tuple[str, str], list] = {}
         self.claimed: dict[tuple[str, str, str], str] = {}
+        self.runs: dict[str, dict] = {}
+        self.run_by_message: dict[str, str] = {}
+        self.events: dict[str, list[dict]] = {}
+        self.tool_calls: dict[tuple[str, str], dict] = {}
+        self._event_id = 0
 
     @staticmethod
     def conversation_id(agent_id):
@@ -605,17 +856,139 @@ class FakeClient:
         return True, message_id
 
     def log_message(self, tenant, role, text, agent_id=None,
-                    conversation_id=None, surface="web", reply_to=None):
+                    conversation_id=None, surface="web", reply_to=None,
+                    request_id=None):
         conversation_id = conversation_id or self.conversation_id(agent_id)
+        if request_id and any(
+                item.get("request_id") == request_id
+                for item in self.logged.setdefault(
+                    (tenant, conversation_id), [])):
+            return True
         self.logged.setdefault((tenant, conversation_id), []).append(
             {"role": role, "content": text, "agent_id": agent_id,
-             "surface": surface, "reply_to": reply_to})
+             "surface": surface, "reply_to": reply_to,
+             "request_id": request_id})
         return True
 
     def recent_messages(self, tenant, limit=20, conversation_id=None,
-                        agent_id=None):
+                        agent_id=None, through_message_id=None):
         conversation_id = conversation_id or self.conversation_id(agent_id)
-        return list(self.logged.get((tenant, conversation_id), []))[-limit:]
+        rows = list(self.logged.get((tenant, conversation_id), []))
+        if through_message_id:
+            anchor = next((index for index, row in enumerate(rows)
+                           if row.get("id") == through_message_id), None)
+            rows = [] if anchor is None else rows[:anchor + 1]
+        return rows[-limit:]
+
+    def _append_run_event(self, run_id, kind, payload=None):
+        self._event_id += 1
+        event = {"id": self._event_id, "run_id": run_id, "type": kind,
+                 "payload": payload or {}}
+        self.events.setdefault(run_id, []).append(event)
+        return event
+
+    def create_agent_run(self, tenant, message_id, deadline_seconds=120):
+        existing = self.run_by_message.get(message_id)
+        if existing:
+            return {**self.runs[existing], "idempotent_replay": True}
+        message = next(
+            item for rows in self.logged.values() for item in rows
+            if item.get("id") == message_id)
+        run_id = f"run-{len(self.runs) + 1}"
+        from datetime import datetime, timedelta, timezone
+        run = {
+            "id": run_id, "tenant_id": tenant,
+            "conversation_id": next(
+                key[1] for key, rows in self.logged.items()
+                if message in rows),
+            "message_id": message_id, "agent_id": message["agent_id"],
+            "surface": message["surface"], "status": "queued",
+            "worker_id": None, "cancel_requested": False,
+            "deadline_at": (datetime.now(timezone.utc) + timedelta(
+                seconds=deadline_seconds)).isoformat(),
+        }
+        self.runs[run_id] = run
+        self.run_by_message[message_id] = run_id
+        self._append_run_event(run_id, "run.queued", {"status": "queued"})
+        return {**run, "idempotent_replay": False}
+
+    def get_agent_run(self, tenant, run_id):
+        run = self.runs.get(run_id)
+        if not run or run["tenant_id"] != tenant:
+            raise HealthClawError("unknown run", 404)
+        return dict(run)
+
+    def agent_run_events(self, tenant, run_id, after=0, limit=100):
+        run = self.get_agent_run(tenant, run_id)
+        events = [event for event in self.events.get(run_id, [])
+                  if event["id"] > after][:limit]
+        return {"run_id": run_id, "status": run["status"],
+                "events": events,
+                "next_cursor": events[-1]["id"] if events else after}
+
+    def claim_agent_run(self, worker_id, lease_seconds=60):
+        run = next((item for item in self.runs.values()
+                    if item["status"] == "queued"), None)
+        if run is None:
+            return None
+        run["status"] = "running"
+        run["worker_id"] = worker_id
+        self._append_run_event(run["id"], "run.started",
+                               {"status": "running"})
+        message = next(
+            item for rows in self.logged.values() for item in rows
+            if item.get("id") == run["message_id"])
+        return {**run, "message": {
+            "id": run["message_id"], "role": "user",
+            "text": message["content"]}}
+
+    def heartbeat_agent_run(self, run_id, worker_id, lease_seconds=60):
+        run = self.runs[run_id]
+        if run["status"] != "running" or run["worker_id"] != worker_id:
+            raise HealthClawError("worker does not own run", 409)
+        return {"ok": True,
+                "cancel_requested": run.get("cancel_requested", False)}
+
+    def transition_agent_run(self, run_id, worker_id, status, **kwargs):
+        run = self.runs[run_id]
+        if run["status"] != "running" or run["worker_id"] != worker_id:
+            raise HealthClawError("worker does not own run", 409)
+        run["status"] = status
+        if status != "running":
+            run["worker_id"] = None
+        self._append_run_event(
+            run_id, kwargs.get("event_type") or f"run.{status}",
+            kwargs.get("payload") or {"status": status})
+        return dict(run)
+
+    def append_agent_run_event(self, run_id, worker_id, event_type,
+                               payload=None):
+        run = self.runs[run_id]
+        if run["status"] != "running" or run["worker_id"] != worker_id:
+            raise HealthClawError("worker does not own run", 409)
+        return self._append_run_event(run_id, event_type, payload)
+
+    def register_agent_tool_call(self, run_id, worker_id, provider_call_id,
+                                 tool_name, arguments):
+        key = (run_id, provider_call_id)
+        existing = self.tool_calls.get(key)
+        if existing:
+            return {**existing, "idempotent_replay": True}
+        call = {"id": f"call-{len(self.tool_calls) + 1}",
+                "run_id": run_id, "provider_call_id": provider_call_id,
+                "tool_name": tool_name, "input": arguments,
+                "status": "pending", "result": None}
+        self.tool_calls[key] = call
+        return {**call, "idempotent_replay": False}
+
+    def transition_agent_tool_call(self, run_id, call_id, worker_id, status,
+                                   **kwargs):
+        call = next(item for item in self.tool_calls.values()
+                    if item["id"] == call_id and item["run_id"] == run_id)
+        call["status"] = status
+        if "result" in kwargs:
+            call["result"] = kwargs["result"]
+        return dict(call)
 
     def new_tenant_id(self):
         self.seeded.append(1)
@@ -1252,8 +1625,6 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
                                         "connection_id": conn}).get_json()["id"]
 
-    monkeypatch.setattr("careagents.app.run_turn",
-                        lambda *a, **k: iter(["ok"]))
     first = c.post("/api/chat", json={"agent_id": agent, "message": "hi"})
     assert first.status_code == 200
 
@@ -1397,14 +1768,20 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
                       json={"code": "bogus", "handle": "+1"}
                       ).status_code == 404
 
-    # inbound: fake the agent turn, assert the reply is relayed back
-    monkeypatch.setattr("careagents.app.run_turn_to_message",
-                        lambda *a, **k: "Your last A1c was 6.1% — in range.")
+    # inbound: fake the worker's model turn, assert the reply is relayed back
+    class _Turn:
+        text = "Your last A1c was 6.1% — in range."
+        tool_calls = []
+        raw_tool_calls = []
+
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: _Turn())
     assert relay.post("/api/surfaces/imessage/inbound",
                       json={"handle": "+15559998888", "text": "how's my a1c?"}
                       ).status_code == 403  # needs mint secret
-    ok = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
-                    json={"handle": "+15559998888", "text": "how's my a1c?"})
+    ok = _enqueue_and_run_imessage(
+        app, relay, headers=hdrs,
+        json={"handle": "+15559998888", "text": "how's my a1c?"})
     assert ok.status_code == 200
     assert "6.1%" in ok.get_json()["reply"]
     # an unbound handle is not routed (don't answer strangers)

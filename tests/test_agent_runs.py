@@ -232,6 +232,61 @@ def test_waiting_run_requeues_without_replaying_completed_tool(
     assert conflict.status_code == 409
 
 
+def test_ambiguous_running_tool_requires_reconciliation_before_resolution(
+        client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    _claim(client, internal_headers)
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "side-effect-1",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()
+    call_id = created["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 200
+
+    ambiguous = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "needs_reconciliation",
+            "error_class": "AmbiguousToolOutcome",
+        },
+    )
+    assert ambiguous.status_code == 200
+    assert ambiguous.get_json()["status"] == "needs_reconciliation"
+
+    # Re-execution is intentionally not a legal transition. An operator or
+    # downstream reconciliation job must resolve the original side effect.
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 409
+    resolved = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "completed",
+            "result": {"appointment_id": "appointment-1"},
+            "outcome_ref": "appointment-1",
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.get_json()["status"] == "completed"
+
+
 def test_expired_worker_lease_is_recovered_for_another_worker(
         app, client, auth_headers, internal_headers):
     message = _message(client, auth_headers)
@@ -357,3 +412,41 @@ def test_postgres_workers_cannot_claim_one_run_twice(
     assert sorted(status for status, _body in results) == [200, 204]
     winner = next(body for status, body in results if status == 200)
     assert winner["id"] == run_id
+
+
+def test_postgres_workers_serialize_distinct_runs_in_one_conversation(
+        app, client, auth_headers, internal_headers):
+    if db.engine.dialect.name != "postgresql":
+        pytest.skip("conversation row-lock contract requires PostgreSQL")
+    from concurrent.futures import ThreadPoolExecutor
+
+    first_message = _message(
+        client, auth_headers, text="first", request_id="request-first")
+    second_message = _message(
+        client, auth_headers, text="second", request_id="request-second")
+    run_ids = {
+        _run(client, auth_headers, first_message["id"]).get_json()["id"],
+        _run(client, auth_headers, second_message["id"]).get_json()["id"],
+    }
+
+    def claim(worker):
+        with app.test_client() as contender:
+            response = _claim(contender, internal_headers, worker=worker)
+            return response.status_code, response.get_json(silent=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(claim, ("worker-a", "worker-b")))
+
+    assert sorted(status for status, _body in results) == [200, 204]
+    winner = next(body for status, body in results if status == 200)
+    assert winner["id"] in run_ids
+
+    completed = client.post(
+        f"/command-center/api/runs/{winner['id']}/transition",
+        headers=internal_headers,
+        json={"worker_id": winner["worker_id"], "status": "completed"},
+    )
+    assert completed.status_code == 200
+    next_run = _claim(client, internal_headers, worker="worker-c")
+    assert next_run.status_code == 200
+    assert next_run.get_json()["id"] == (run_ids - {winner["id"]}).pop()

@@ -77,6 +77,11 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=
 CARE_OPENAI_MODEL=
 CARE_MODEL=claude-sonnet-5
+
+# --- durable worker pool ---
+CARE_RUN_WORKERS=4
+CARE_RUN_DEADLINE_SECONDS=120
+CARE_RUN_LEASE_SECONDS=60
 ENV
   chmod 600 /etc/careagents/careagents.env
   echo "!! populate /etc/careagents/careagents.env before the service will boot"
@@ -87,6 +92,7 @@ REMOTE
 
 echo "→ install unit + nginx"
 scp -q "$REPO_ROOT/deploy/careagents/careagents.service" "$HOST:/etc/systemd/system/careagents.service"
+scp -q "$REPO_ROOT/deploy/careagents/careagents-worker.service" "$HOST:/etc/systemd/system/careagents-worker.service"
 ssh "$HOST" bash -s <<'REMOTE'
 set -euo pipefail
 # Point nginx's `location /` at the app (both :80 and :443 servers), once.
@@ -117,10 +123,11 @@ PY
 fi
 nginx -t
 systemctl daemon-reload
-systemctl enable --now careagents
-systemctl restart careagents nginx
+systemctl enable --now careagents careagents-worker
+systemctl restart careagents careagents-worker nginx
 sleep 2
 systemctl is-active careagents
+systemctl is-active careagents-worker
 curl -sf http://127.0.0.1:8600/healthz && echo
 REMOTE
 

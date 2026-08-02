@@ -1,0 +1,25 @@
+# CareAgents durable-run worker (careagents.cloud VPS)
+# Install: /etc/systemd/system/careagents-worker.service
+[Unit]
+Description=CareAgents durable inference and tool worker
+After=network.target
+
+[Service]
+Type=simple
+User=careagents
+Group=careagents
+WorkingDirectory=/opt/careagents/app
+EnvironmentFile=/etc/careagents/careagents.env
+ExecStart=/opt/careagents/venv/bin/python -m careagents.worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=150
+KillSignal=SIGTERM
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/careagents
+
+[Install]
+WantedBy=multi-user.target

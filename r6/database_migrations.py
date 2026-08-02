@@ -22,7 +22,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 # never re-created — running the baseline migration against it dies with
 # "table ... already exists".
 _BASELINE_REVISION = "0001_v1_8_0"
-_CREATE_ALL_SCHEMA_REVISION = "0005_agent_run_control_plane"
+_CREATE_ALL_SCHEMA_REVISION = "0006_tool_reconciliation_state"
 
 # A table that has existed since long before v1.8.0 — its presence (without
 # alembic_version) is the legacy-database fingerprint.

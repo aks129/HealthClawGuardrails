@@ -4,10 +4,8 @@
 # so deploy with:  railway up  from a staging dir, or set the service's
 # Dockerfile path to deploy/careagents/Dockerfile with root as context.
 #
-# One worker on purpose: chat history is process-local (careagents/wsgi.py),
-# so a second worker would serve half the turns from an empty history.
-# Threads give concurrency without splitting that state. Scaling past one
-# process requires moving history to shared storage first.
+# The image supports two process roles: the default web command below, and
+# ``python -m careagents.worker`` for the durable inference/tool worker.
 
 FROM python:3.11-slim
 
@@ -26,6 +24,7 @@ RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV CARE_ROLE=web
 
 COPY careagents/ ./careagents/
 
@@ -33,13 +32,14 @@ COPY careagents/ ./careagents/
 ENV PORT=8600
 EXPOSE 8600
 
-# Health check hits the app's own readiness endpoint, so a container that
-# boots but can't reach its database is reported unhealthy rather than "up".
+# The web role probes its readiness endpoint. The worker has no HTTP listener;
+# its role-specific health check is process liveness, which the container
+# runtime already enforces by restarting an exited process.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import os,urllib.request,sys; \
-sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8600')+'/healthz', timeout=4).status==200 else 1)"
+sys.exit(0 if os.environ.get('CARE_ROLE')=='worker' else (0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8600')+'/healthz', timeout=4).status==200 else 1))"
 
 CMD ["sh", "-c", "gunicorn careagents.wsgi:app \
-  --bind 0.0.0.0:${PORT:-8600} --workers 1 --threads 8 --timeout 120 \
+  --bind 0.0.0.0:${PORT:-8600} --workers ${CARE_WEB_WORKERS:-2} --threads 4 --timeout 180 \
   --access-logfile - --error-logfile - \
   --access-logformat '%(h)s \"%(r)s\" %(s)s %(M)sms'"]

@@ -21,7 +21,7 @@ from r6.agent_runs.state import (
     require_run_transition,
     require_tool_transition,
 )
-from r6.command_center.models import ConversationMessage
+from r6.command_center.models import Conversation, ConversationMessage
 
 
 def create_run(
@@ -124,13 +124,59 @@ def claim_next(worker_id: str, lease_seconds: int = 60) -> AgentRun | None:
             commit=False,
         )
 
-    run = (
-        AgentRun.query
+    candidate_ids = [row[0] for row in (
+        db.session.query(AgentRun.id)
         .filter(AgentRun.status == "queued")
         .filter(AgentRun.available_at <= now)
         .filter(AgentRun.deadline_at > now)
         .order_by(AgentRun.available_at.asc(), AgentRun.created_at.asc())
-        .with_for_update(skip_locked=True)
+        .limit(50)
+        .all()
+    )]
+    run = None
+    for candidate_id in candidate_ids:
+        candidate = (
+            AgentRun.query
+            .filter(AgentRun.id == candidate_id)
+            .filter(AgentRun.status == "queued")
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if candidate is None:
+            continue
+        # A conversation row is the cross-process mutex. Two workers may see
+        # different queued runs in one thread, but only one can lock this row;
+        # the loser leaves its run queued for the next claim cycle.
+        conversation = (
+            Conversation.query
+            .filter_by(tenant_id=candidate.tenant_id,
+                       id=candidate.conversation_id)
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if conversation is None:
+            continue
+        already_running = (
+            AgentRun.query
+            .filter_by(tenant_id=candidate.tenant_id,
+                       conversation_id=candidate.conversation_id,
+                       status="running")
+            .first()
+        )
+        if already_running is not None:
+            continue
+        run = candidate
+        break
+
+    if run is None:
+        db.session.commit()
+        return None
+
+    # Re-check after the locks above; this is intentionally stricter than the
+    # candidate scan so stale queue snapshots cannot win a claim.
+    run = (
+        AgentRun.query
+        .filter(AgentRun.id == run.id, AgentRun.status == "queued")
         .first()
     )
     if run is None:
@@ -276,7 +322,7 @@ def transition_tool_call(
         call.started_at = now
         call.finished_at = None
         call.result_json = None
-    if target in ("completed", "failed"):
+    if target in ("completed", "failed", "needs_reconciliation"):
         call.finished_at = now
         call.result_json = _dump(result) if result is not None else None
     append_event(run, f"tool.{target}", {

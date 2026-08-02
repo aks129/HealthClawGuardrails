@@ -1,8 +1,8 @@
 # Agent run control plane
 
-The durable run API is the substrate for moving CareAgents work out of Flask
-request threads. This first slice does not switch CareAgents execution yet;
-issue #254 performs that cutover after the queue contract is deployed.
+The durable run API backs CareAgents' dedicated worker and replayable SSE
+projection. Flask web processes enqueue work but never execute inference or
+tools inline.
 
 ## Durable records
 

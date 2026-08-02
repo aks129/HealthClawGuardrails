@@ -86,7 +86,8 @@ class AgentToolCall(db.Model):
         db.UniqueConstraint(
             "run_id", "provider_call_id", name="uq_agent_tool_call_provider"),
         db.CheckConstraint(
-            "status IN ('pending','running','completed','failed')",
+            "status IN ('pending','running','completed','failed',"
+            "'needs_reconciliation')",
             name="ck_agent_tool_call_status",
         ),
     )
