@@ -92,15 +92,43 @@ class Config:
         # public, unauthenticated site).
         self.chat_turns_per_window = int(e.get("CARE_CHAT_TURNS", "20"))
         self.chat_window_seconds = int(e.get("CARE_CHAT_WINDOW", "600"))
-        # Shared serialization for turns in the same durable conversation.
-        # A single development worker can fall back to a local lock; production
-        # deployments should provide Redis before increasing worker count.
+        # Retained for other deployment integrations. Conversation execution
+        # itself is serialized by HealthClaw's database-backed run claims, so
+        # CareAgents no longer depends on Redis for correctness.
         self.redis_url = e.get("REDIS_URL", "")
         # Durable daily ceiling per account. The burst limiter above is
         # in-process, so it resets on restart and multiplies by gunicorn
         # worker count; this one is DB-backed and is what actually bounds
         # what a single account can cost the operator in a day.
         self.chat_turns_per_day = int(e.get("CARE_CHAT_TURNS_PER_DAY", "200"))
+
+        # Durable run execution. Web requests enqueue and replay; this fixed
+        # worker pool performs inference outside Gunicorn request threads.
+        self.run_deadline_seconds = int(e.get("CARE_RUN_DEADLINE_SECONDS", "120"))
+        self.run_lease_seconds = int(e.get("CARE_RUN_LEASE_SECONDS", "60"))
+        self.run_worker_concurrency = int(e.get("CARE_RUN_WORKERS", "4"))
+        self.run_poll_seconds = float(e.get("CARE_RUN_POLL_SECONDS", "0.5"))
+        self.run_worker_stale_seconds = int(e.get(
+            "CARE_RUN_WORKER_STALE_SECONDS", "30"))
+        self.run_sse_poll_seconds = float(e.get(
+            "CARE_RUN_SSE_POLL_SECONDS", "0.25"))
+        self.run_sse_timeout_seconds = int(e.get(
+            "CARE_RUN_SSE_TIMEOUT_SECONDS", "150"))
+        if not 5 <= self.run_deadline_seconds <= 3600:
+            raise ConfigError("CARE_RUN_DEADLINE_SECONDS must be 5-3600")
+        if not 10 <= self.run_lease_seconds <= 600:
+            raise ConfigError("CARE_RUN_LEASE_SECONDS must be 10-600")
+        if not 1 <= self.run_worker_concurrency <= 32:
+            raise ConfigError("CARE_RUN_WORKERS must be 1-32")
+        if not 0.05 <= self.run_poll_seconds <= 30:
+            raise ConfigError("CARE_RUN_POLL_SECONDS must be 0.05-30")
+        if not 5 <= self.run_worker_stale_seconds <= 300:
+            raise ConfigError(
+                "CARE_RUN_WORKER_STALE_SECONDS must be 5-300")
+        if not 0.05 <= self.run_sse_poll_seconds <= 10:
+            raise ConfigError("CARE_RUN_SSE_POLL_SECONDS must be 0.05-10")
+        if not 10 <= self.run_sse_timeout_seconds <= 3600:
+            raise ConfigError("CARE_RUN_SSE_TIMEOUT_SECONDS must be 10-3600")
 
         if prod:
             _require("CARE_SESSION_SECRET", self.session_secret,
@@ -117,8 +145,6 @@ class Config:
                     "ANTHROPIC_OAUTH_TOKEN preferred, OPENAI_API_KEY fallback)")
             _require("RESEND_API_KEY", self.resend_api_key,
                      "email verification codes require a transactional sender")
-            _require("REDIS_URL", self.redis_url,
-                     "conversation turns must serialize across workers")
             # SQLite is single-writer and file-local: it does not survive a
             # host rebuild, cannot be backed up consistently while running,
             # and serialises concurrent users. Fine for one tester, wrong for

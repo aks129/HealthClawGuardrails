@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 
 from models import db
 from r6.models import R6Resource, AuditEventRecord
@@ -649,7 +649,8 @@ def agents_status(tenant_id: str) -> list[dict]:
 def recent_conversations(tenant_id: str, limit: int = 15,
                          full: bool = False,
                          conversation_id: str | None = None,
-                         agent_id: str | None = None) -> list[dict]:
+                         agent_id: str | None = None,
+                         through_message_id: str | None = None) -> list[dict]:
     """Return the most recent chat turns across all agents + channels.
 
     `full` returns untruncated text. The dashboard wants the 500-char preview
@@ -661,6 +662,22 @@ def recent_conversations(tenant_id: str, limit: int = 15,
         query = query.filter_by(conversation_id=conversation_id)
     if agent_id:
         query = query.filter_by(agent_id=agent_id)
+    if through_message_id:
+        anchor = ConversationMessage.query.filter_by(
+            tenant_id=tenant_id, id=through_message_id).first()
+        if anchor is None:
+            return []
+        if conversation_id and anchor.conversation_id != conversation_id:
+            return []
+        if agent_id and anchor.agent_id != agent_id:
+            return []
+        # Strictly earlier timestamps plus the exact anchor. Excluding other
+        # same-timestamp rows is deliberately conservative: a later inbound
+        # message must never leak into an earlier queued run's prompt.
+        query = query.filter(or_(
+            ConversationMessage.created_at < anchor.created_at,
+            ConversationMessage.id == anchor.id,
+        ))
     msgs = query.order_by(
         desc(ConversationMessage.created_at),
         desc(ConversationMessage.id),

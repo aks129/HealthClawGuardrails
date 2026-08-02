@@ -357,6 +357,24 @@ class AccountService:
                 return None
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id}
 
+    def get_worker_agent_context(self, agent_id: str) -> dict | None:
+        """Resolve an agent for the trusted run worker.
+
+        Browser routes must always use :meth:`get_agent_context`, which binds
+        the lookup to the signed-in account. The worker has no browser account
+        session; it instead verifies this result's tenant against the tenant on
+        the claimed HealthClaw run before it handles any data.
+        """
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id).first()
+            if not a:
+                return None
+            conn = s.get(Connection, a.connection_id)
+            if not conn:
+                return None
+            return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
+                    "account_id": a.account_id}
+
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
         with self.session() as s:

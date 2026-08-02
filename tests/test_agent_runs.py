@@ -7,8 +7,15 @@ from datetime import timedelta
 import pytest
 
 from models import db
-from r6.agent_runs.models import AgentRun, AgentRunEvent, utcnow
+from r6.agent_runs.models import (
+    AgentRun,
+    AgentRunEvent,
+    AgentToolCall,
+    AgentWorkerPresence,
+    utcnow,
+)
 from r6.agent_runs.state import RUN_STATES
+from r6.command_center.models import ConversationMessage
 
 
 TENANT = "test-tenant"
@@ -18,6 +25,12 @@ TENANT = "test-tenant"
 def internal_headers(monkeypatch):
     monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", "run-worker-secret")
     return {"X-Internal-Secret": "run-worker-secret"}
+
+
+@pytest.fixture
+def reconcile_headers(monkeypatch):
+    monkeypatch.setenv("AGENT_RUN_RECONCILE_SECRET", "operator-secret")
+    return {"X-Reconciliation-Secret": "operator-secret"}
 
 
 def _message(client, auth_headers, *, text="hello", request_id="request-1"):
@@ -105,6 +118,478 @@ def test_worker_claim_is_secret_gated_and_claims_once(
     assert body["message"] == {
         "id": message["id"], "role": "user", "text": "hello"}
     assert _claim(client, internal_headers, worker="worker-2").status_code == 204
+
+
+def test_worker_readiness_requires_recent_successful_queue_access(
+        app, client, internal_headers):
+    endpoint = "/command-center/api/runs/workers/health"
+    assert client.get(endpoint).status_code == 403
+    unavailable = client.get(endpoint, headers=internal_headers)
+    assert unavailable.status_code == 503
+    assert unavailable.get_json()["active_workers"] == 0
+
+    # A successful empty claim is still a real queue transaction and proves
+    # that an idle worker can reach the control plane.
+    assert _claim(client, internal_headers, worker="idle-worker").status_code == 204
+    healthy = client.get(endpoint, headers=internal_headers)
+    assert healthy.status_code == 200
+    assert healthy.get_json()["active_workers"] == 1
+
+    with app.app_context():
+        presence = db.session.get(AgentWorkerPresence, "idle-worker")
+        presence.last_seen_at = utcnow() - timedelta(seconds=31)
+        db.session.commit()
+    stale = client.get(endpoint, headers=internal_headers)
+    assert stale.status_code == 503
+    assert stale.get_json()["status"] == "unavailable"
+
+    assert _claim(client, internal_headers, worker="idle-worker").status_code == 204
+    assert client.get(endpoint, headers=internal_headers).status_code == 200
+
+
+def test_owned_run_heartbeat_refreshes_presence_but_wrong_worker_cannot(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="active-worker").status_code == 200
+    with app.app_context():
+        presence = db.session.get(AgentWorkerPresence, "active-worker")
+        presence.last_seen_at = utcnow() - timedelta(seconds=31)
+        db.session.commit()
+
+    wrong = client.post(
+        f"/command-center/api/runs/{run_id}/heartbeat",
+        headers=internal_headers,
+        json={"worker_id": "wrong-worker", "lease_seconds": 60},
+    )
+    assert wrong.status_code == 409
+    with app.app_context():
+        assert db.session.get(AgentWorkerPresence, "wrong-worker") is None
+    assert client.get(
+        "/command-center/api/runs/workers/health",
+        headers=internal_headers).status_code == 503
+
+    valid = client.post(
+        f"/command-center/api/runs/{run_id}/heartbeat",
+        headers=internal_headers,
+        json={"worker_id": "active-worker", "lease_seconds": 60},
+    )
+    assert valid.status_code == 200
+    health = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+    assert health.status_code == 200
+    assert health.get_json()["active_workers"] == 1
+
+
+def test_owned_heartbeat_terminalizes_run_at_hard_deadline_once(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="deadline-worker").status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    endpoint = f"/command-center/api/runs/{run_id}/heartbeat"
+    payload = {"worker_id": "deadline-worker", "lease_seconds": 60}
+    assert client.post(
+        endpoint, headers=internal_headers, json=payload).status_code == 409
+    assert client.post(
+        endpoint, headers=internal_headers, json=payload).status_code == 409
+
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        events = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "failed"
+        assert run.error_class == "RunDeadlineExceeded"
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert len(events) == 1
+
+
+def test_worker_readiness_sweeps_expired_runs_without_reading_them(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    # Exercise only independent readiness; neither a worker nor a run-specific
+    # GET is involved in the deadline transition.
+    first = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+    second = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+
+    assert first.status_code == second.status_code == 503
+    assert first.get_json()["expired_runs"] == 1
+    assert second.get_json()["expired_runs"] == 0
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        events = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "failed"
+        assert run.error_class == "RunDeadlineExceeded"
+        assert len(events) == 1
+
+
+def test_worker_readiness_sweeps_running_run_after_worker_crash(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="crashed-worker").status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    # No worker heartbeat, claim, or run-specific read participates. The
+    # independent readiness sweep owns hard-deadline enforcement here.
+    first = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+    second = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+
+    assert first.get_json()["expired_runs"] == 1
+    assert second.get_json()["expired_runs"] == 0
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        events = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "failed"
+        assert run.error_class == "RunDeadlineExceeded"
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert len(events) == 1
+
+
+def test_event_replay_expires_running_run_after_worker_crash(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="crashed-worker").status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    endpoint = f"/command-center/api/runs/{run_id}/events"
+    replay = client.get(endpoint, headers=auth_headers)
+    repeated = client.get(endpoint, headers=auth_headers)
+
+    assert replay.status_code == repeated.status_code == 200
+    assert replay.get_json()["status"] == "failed"
+    assert repeated.get_json()["status"] == "failed"
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        events = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "failed"
+        assert run.error_class == "RunDeadlineExceeded"
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert len(events) == 1
+
+
+def test_deadline_sweep_preserves_running_cancellation_request(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="crashed-worker").status_code == 200
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/cancel",
+        headers=auth_headers,
+    ).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        cancelled = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.cancelled_at_deadline").all()
+        deadline_failures = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "cancelled"
+        assert run.error_class is None
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert len(cancelled) == 1
+        assert deadline_failures == []
+
+
+@pytest.mark.parametrize("trigger", ["worker-health", "event-replay"])
+def test_deadline_preserves_ambiguous_running_tool_for_reconciliation(
+        trigger, app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="lost-worker").status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "lost-worker",
+            "provider_call_id": "possibly-completed-side-effect",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()
+    call_id = created["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "lost-worker", "status": "running"},
+    ).status_code == 200
+    if trigger == "worker-health":
+        # Cancellation cannot assert that an already-started side effect did
+        # not happen; ambiguity must take precedence at the deadline.
+        assert client.post(
+            f"/command-center/api/runs/{run_id}/cancel",
+            headers=auth_headers,
+        ).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    if trigger == "worker-health":
+        endpoint = "/command-center/api/runs/workers/health"
+        first = client.get(endpoint, headers=internal_headers)
+        second = client.get(endpoint, headers=internal_headers)
+        assert first.get_json()["expired_runs"] == 1
+        assert second.get_json()["expired_runs"] == 0
+    else:
+        endpoint = f"/command-center/api/runs/{run_id}/events"
+        first = client.get(endpoint, headers=auth_headers)
+        second = client.get(endpoint, headers=auth_headers)
+        assert first.get_json()["status"] == "waiting_for_human"
+        assert second.get_json()["status"] == "waiting_for_human"
+        cancellation = client.post(
+            f"/command-center/api/runs/{run_id}/cancel",
+            headers=auth_headers,
+        ).get_json()
+        assert cancellation["status"] == "waiting_for_human"
+        assert cancellation["cancel_requested"] is True
+
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/resume",
+        headers=internal_headers,
+    ).status_code == 409
+
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        call = db.session.get(AgentToolCall, call_id)
+        reconciliation = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.needs_reconciliation").all()
+        deadline_failures = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.deadline_exceeded").all()
+        assert run.status == "waiting_for_human"
+        assert run.error_class == "AmbiguousToolOutcome"
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert call.status == "needs_reconciliation"
+        assert call.error_class == "AmbiguousToolOutcome"
+        assert call.attempt == 1
+        assert len(reconciliation) == 1
+        assert deadline_failures == []
+
+    # Recovery claims cannot rerun a call whose outcome is ambiguous.
+    assert _claim(
+        client, internal_headers, worker="replacement-worker").status_code == 204
+
+
+@pytest.mark.parametrize("race", ["cancel-requested", "deadline-passed"])
+def test_claim_recovery_preserves_ambiguous_tool_before_other_transitions(
+        race, app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="lost-worker").status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "lost-worker",
+            "provider_call_id": f"lease-race-{race}",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()
+    call_id = created["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "lost-worker", "status": "running"},
+    ).status_code == 200
+    if race == "cancel-requested":
+        assert client.post(
+            f"/command-center/api/runs/{run_id}/cancel",
+            headers=auth_headers,
+        ).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.lease_expires_at = utcnow() - timedelta(seconds=1)
+        if race == "deadline-passed":
+            run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    assert _claim(
+        client, internal_headers, worker="replacement-worker").status_code == 204
+
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        call = db.session.get(AgentToolCall, call_id)
+        reconciliation = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.needs_reconciliation").all()
+        assert run.status == "waiting_for_human"
+        assert run.error_class == "AmbiguousToolOutcome"
+        assert run.worker_id is None and run.lease_expires_at is None
+        assert call.status == "needs_reconciliation"
+        assert call.attempt == 1
+        assert len(reconciliation) == 1
+        assert not AgentRunEvent.query.filter(
+            AgentRunEvent.run_id == run_id,
+            AgentRunEvent.event_type.in_((
+                "run.failed", "run.deadline_exceeded", "run.cancelled",
+                "run.cancelled_after_lease",
+            )),
+        ).all()
+
+
+@pytest.mark.parametrize("truth", ["completed", "failed"])
+def test_authorized_reconciler_resolves_ambiguous_tool_exactly_once(
+        truth, app, client, auth_headers, internal_headers,
+        reconcile_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(
+        client, internal_headers, worker="lost-worker").status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "lost-worker",
+            "provider_call_id": f"reconcile-{truth}",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()
+    call_id = created["id"]
+    transition_endpoint = (
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition")
+    assert client.post(
+        transition_endpoint,
+        headers=internal_headers,
+        json={"worker_id": "lost-worker", "status": "running"},
+    ).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+    assert client.get(
+        f"/command-center/api/runs/{run_id}/events",
+        headers=auth_headers,
+    ).get_json()["status"] == "waiting_for_human"
+
+    # The former worker cannot supply a late result after losing its lease.
+    assert client.post(
+        transition_endpoint,
+        headers=internal_headers,
+        json={"worker_id": "lost-worker", "status": truth},
+    ).status_code == 409
+
+    reconcile_endpoint = (
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/reconcile")
+    payload = {
+        "status": truth,
+        "evidence_ref": f"provider:truth:{truth}",
+    }
+    if truth == "failed":
+        payload["error_class"] = "ProviderRejected"
+    # Neither an unauthenticated caller nor an authenticated tenant can assert
+    # provider truth. Reconciliation uses a separate operator credential.
+    assert client.post(reconcile_endpoint, json=payload).status_code == 403
+    assert client.post(
+        reconcile_endpoint,
+        headers=auth_headers,
+        json=payload,
+    ).status_code == 403
+    assert client.post(
+        reconcile_endpoint,
+        headers=internal_headers,
+        json=payload,
+    ).status_code == 403
+    assert client.post(
+        reconcile_endpoint,
+        headers=reconcile_headers,
+        json={**payload, "status": "running"},
+    ).status_code == 400
+    assert client.post(
+        reconcile_endpoint,
+        headers=reconcile_headers,
+        json={**payload, "result": {"patient_name": "must-not-enter"}},
+    ).status_code == 400
+
+    resolved = client.post(
+        reconcile_endpoint, headers=reconcile_headers, json=payload)
+    replay = client.post(
+        reconcile_endpoint, headers=reconcile_headers, json=payload)
+    conflict = client.post(
+        reconcile_endpoint,
+        headers=reconcile_headers,
+        json={**payload, "evidence_ref": "provider:different:truth"},
+    )
+
+    assert resolved.status_code == replay.status_code == 200
+    assert resolved.get_json()["idempotent_replay"] is False
+    assert replay.get_json()["idempotent_replay"] is True
+    assert resolved.get_json()["run_status"] == "failed"
+    assert "input" not in resolved.get_json()
+    assert "result" not in resolved.get_json()
+    assert conflict.status_code == 409
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        call = db.session.get(AgentToolCall, call_id)
+        events = AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="tool.reconciled").all()
+        assert run.status == "failed"
+        assert run.error_class == (
+            "ReconciledToolFailure" if truth == "failed"
+            else "ReconciledOutcomeNoAssistant")
+        assert call.status == truth
+        assert call.outcome_ref == f"provider:truth:{truth}"
+        assert call.result_json is None
+        assert len(events) == 1
+
+
+def test_worker_readiness_fails_closed_on_queue_database_error(
+        client, internal_headers, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    def fail_sweep(*, limit):
+        raise SQLAlchemyError("queue unavailable")
+
+    monkeypatch.setattr(
+        "r6.agent_runs.routes.expire_overdue_runs", fail_sweep)
+    response = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "status": "unavailable",
+        "available": False,
+        "active_workers": 0,
+        "queue": "error",
+    }
 
 
 def test_run_transition_and_cancel_state_machine(
@@ -232,6 +717,61 @@ def test_waiting_run_requeues_without_replaying_completed_tool(
     assert conflict.status_code == 409
 
 
+def test_ambiguous_running_tool_requires_reconciliation_before_resolution(
+        client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    _claim(client, internal_headers)
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "side-effect-1",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()
+    call_id = created["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 200
+
+    ambiguous = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "needs_reconciliation",
+            "error_class": "AmbiguousToolOutcome",
+        },
+    )
+    assert ambiguous.status_code == 200
+    assert ambiguous.get_json()["status"] == "needs_reconciliation"
+
+    # Re-execution is intentionally not a legal transition. An operator or
+    # downstream reconciliation job must resolve the original side effect.
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 409
+    resolved = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "completed",
+            "result": {"appointment_id": "appointment-1"},
+            "outcome_ref": "appointment-1",
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.get_json()["status"] == "completed"
+
+
 def test_expired_worker_lease_is_recovered_for_another_worker(
         app, client, auth_headers, internal_headers):
     message = _message(client, auth_headers)
@@ -321,6 +861,298 @@ def test_event_and_tool_payloads_are_bounded(
     ).status_code == 413
 
 
+def test_finalize_atomically_persists_assistant_message_and_completion(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    endpoint = f"/command-center/api/runs/{run_id}/finalize"
+    payload = {
+        "worker_id": "worker-1",
+        "checkpoint_id": "round-1",
+        "text": "Your appointment brief is ready.",
+    }
+
+    direct = client.post(
+        f"/command-center/api/runs/{run_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "completed"},
+    )
+    first = client.post(endpoint, headers=internal_headers, json=payload)
+    replay = client.post(endpoint, headers=internal_headers, json=payload)
+    conflict = client.post(
+        endpoint,
+        headers=internal_headers,
+        json={**payload, "text": "conflicting late answer"},
+    )
+    checkpoint_conflict = client.post(
+        endpoint,
+        headers=internal_headers,
+        json={**payload, "checkpoint_id": "different-final"},
+    )
+
+    assert direct.status_code == 409
+    assert first.status_code == replay.status_code == 200
+    assert first.get_json()["idempotent_replay"] is False
+    assert replay.get_json()["idempotent_replay"] is True
+    assert conflict.status_code == 409
+    assert checkpoint_conflict.status_code == 409
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        assistant = ConversationMessage.query.filter_by(
+            tenant_id=TENANT,
+            conversation_id=run.conversation_id,
+            request_id=f"run:{run_id}:assistant",
+        ).all()
+        assert run.status == "completed"
+        assert len(assistant) == 1
+        assert assistant[0].text == payload["text"]
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="agent.text").count() == 1
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.completed").count() == 1
+
+
+def test_generic_worker_failure_preserves_running_tool_ambiguity(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "exception-side-effect",
+            "tool_name": "book_appointment",
+            "arguments": {},
+        },
+    ).get_json()
+    call_id = created["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 200
+
+    failed = client.post(
+        f"/command-center/api/runs/{run_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "failed",
+            "event_type": "run.failed",
+            "error_class": "UnexpectedWorkerError",
+        },
+    )
+
+    assert failed.status_code == 200
+    assert failed.get_json()["status"] == "waiting_for_human"
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        call = db.session.get(AgentToolCall, call_id)
+        assert run.status == "waiting_for_human"
+        assert run.error_class == "AmbiguousToolOutcome"
+        assert call.status == "needs_reconciliation"
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.failed").count() == 0
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.needs_reconciliation").count() == 1
+
+
+def test_cancellation_prevents_new_tool_registration(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/cancel",
+        headers=auth_headers,
+    ).status_code == 200
+
+    response = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "cancelled-new-tool",
+            "tool_name": "book_appointment",
+            "arguments": {},
+        },
+    )
+
+    assert response.status_code == 409
+    with app.app_context():
+        assert AgentToolCall.query.filter_by(run_id=run_id).count() == 0
+
+
+def test_cancellation_prevents_pending_tool_from_starting(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "cancelled-pending-tool",
+            "tool_name": "book_appointment",
+            "arguments": {},
+        },
+    ).get_json()
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/cancel",
+        headers=auth_headers,
+    ).status_code == 200
+
+    start = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{created['id']}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    )
+
+    assert start.status_code == 409
+    cancelled = client.post(
+        f"/command-center/api/runs/{run_id}/transition",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "failed",
+            "error_class": "ToolStartRejected",
+        },
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.get_json()["status"] == "cancelled"
+    with app.app_context():
+        assert db.session.get(AgentToolCall, created["id"]).status == "pending"
+
+
+def test_cancellation_allows_started_tool_outcome_but_no_next_tool(
+        app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    created = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "already-started-tool",
+            "tool_name": "book_appointment",
+            "arguments": {},
+        },
+    ).get_json()
+    transition_endpoint = (
+        f"/command-center/api/runs/{run_id}/tool-calls/{created['id']}/transition")
+    assert client.post(
+        transition_endpoint,
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 200
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/cancel",
+        headers=auth_headers,
+    ).status_code == 200
+
+    outcome = client.post(
+        transition_endpoint,
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "status": "completed",
+            "outcome_ref": "provider:appointment:confirmed",
+            "result": {"content": "{}", "ui_events": []},
+        },
+    )
+    next_tool = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "must-not-start",
+            "tool_name": "send_message",
+            "arguments": {},
+        },
+    )
+    cancelled = client.post(
+        f"/command-center/api/runs/{run_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "cancelled"},
+    )
+
+    assert outcome.status_code == 200
+    assert outcome.get_json()["status"] == "completed"
+    assert next_tool.status_code == 409
+    assert cancelled.status_code == 200
+    assert cancelled.get_json()["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("mutation", [
+    "completion", "event", "tool-registration", "finalization",
+])
+def test_worker_mutations_fail_after_authoritative_deadline(
+        mutation, app, client, auth_headers, internal_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    if mutation == "completion":
+        response = client.post(
+            f"/command-center/api/runs/{run_id}/transition",
+            headers=internal_headers,
+            json={"worker_id": "worker-1", "status": "completed"},
+        )
+    elif mutation == "event":
+        response = client.post(
+            f"/command-center/api/runs/{run_id}/events",
+            headers=internal_headers,
+            json={"worker_id": "worker-1", "type": "agent.late"},
+        )
+    elif mutation == "tool-registration":
+        response = client.post(
+            f"/command-center/api/runs/{run_id}/tool-calls",
+            headers=internal_headers,
+            json={
+                "worker_id": "worker-1",
+                "provider_call_id": "late-tool",
+                "tool_name": "book_appointment",
+                "arguments": {},
+            },
+        )
+    else:
+        response = client.post(
+            f"/command-center/api/runs/{run_id}/finalize",
+            headers=internal_headers,
+            json={
+                "worker_id": "worker-1",
+                "checkpoint_id": "late-final",
+                "text": "must not persist",
+            },
+        )
+
+    assert response.status_code == 409
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        assert run.status == "failed"
+        assert run.error_class == "RunDeadlineExceeded"
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.completed").count() == 0
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="agent.late").count() == 0
+        assert AgentToolCall.query.filter_by(
+            run_id=run_id, provider_call_id="late-tool").count() == 0
+        assert ConversationMessage.query.filter_by(
+            tenant_id=TENANT,
+            conversation_id=run.conversation_id,
+            request_id=f"run:{run_id}:assistant",
+        ).count() == 0
+
+
 def test_overdue_queued_run_fails_instead_of_starting(
         app, client, auth_headers, internal_headers):
     message = _message(client, auth_headers)
@@ -335,6 +1167,28 @@ def test_overdue_queued_run_fails_instead_of_starting(
         f"/command-center/api/runs/{run_id}", headers=auth_headers).get_json()
     assert detail["status"] == "failed"
     assert detail["error_class"] == "RunDeadlineExceeded"
+
+
+def test_event_replay_expires_queued_run_without_any_worker_claim(
+        app, client, auth_headers):
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    replay = client.get(
+        f"/command-center/api/runs/{run_id}/events", headers=auth_headers)
+
+    assert replay.status_code == 200
+    body = replay.get_json()
+    assert body["status"] == "failed"
+    assert [event["type"] for event in body["events"]] == [
+        "run.queued", "run.deadline_exceeded"]
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        assert run.error_class == "RunDeadlineExceeded"
 
 
 def test_postgres_workers_cannot_claim_one_run_twice(
@@ -357,3 +1211,148 @@ def test_postgres_workers_cannot_claim_one_run_twice(
     assert sorted(status for status, _body in results) == [200, 204]
     winner = next(body for status, body in results if status == 200)
     assert winner["id"] == run_id
+
+
+def test_postgres_workers_serialize_distinct_runs_in_one_conversation(
+        app, client, auth_headers, internal_headers):
+    if db.engine.dialect.name != "postgresql":
+        pytest.skip("conversation row-lock contract requires PostgreSQL")
+    from concurrent.futures import ThreadPoolExecutor
+
+    first_message = _message(
+        client, auth_headers, text="first", request_id="request-first")
+    second_message = _message(
+        client, auth_headers, text="second", request_id="request-second")
+    run_ids = {
+        _run(client, auth_headers, first_message["id"]).get_json()["id"],
+        _run(client, auth_headers, second_message["id"]).get_json()["id"],
+    }
+
+    def claim(worker):
+        with app.test_client() as contender:
+            response = _claim(contender, internal_headers, worker=worker)
+            return response.status_code, response.get_json(silent=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(claim, ("worker-a", "worker-b")))
+
+    assert sorted(status for status, _body in results) == [200, 204]
+    winner = next(body for status, body in results if status == 200)
+    assert winner["id"] in run_ids
+
+    completed = client.post(
+        f"/command-center/api/runs/{winner['id']}/finalize",
+        headers=internal_headers,
+        json={
+            "worker_id": winner["worker_id"],
+            "checkpoint_id": "concurrency-final",
+            "text": "first run complete",
+        },
+    )
+    assert completed.status_code == 200
+    next_run = _claim(client, internal_headers, worker="worker-c")
+    assert next_run.status_code == 200
+    assert next_run.get_json()["id"] == (run_ids - {winner["id"]}).pop()
+
+
+@pytest.mark.parametrize("mutation", [
+    "finalization", "event", "tool-registration",
+])
+def test_postgres_deadline_fences_concurrent_stale_worker_mutation(
+        mutation, app, client, auth_headers, internal_headers, monkeypatch):
+    if db.engine.dialect.name != "postgresql":
+        pytest.skip("row-lock fencing contract requires PostgreSQL")
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import r6.agent_runs.routes as run_routes
+    from r6.agent_runs.service import _terminalize_at_deadline
+
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    winner_locked = threading.Event()
+    release_winner = threading.Event()
+    mutation_started = threading.Event()
+    original_lock = run_routes.lock_owned_run
+    original_finalize = run_routes.finalize_run
+
+    def observed_lock(*args, **kwargs):
+        mutation_started.set()
+        return original_lock(*args, **kwargs)
+
+    def observed_finalize(*args, **kwargs):
+        mutation_started.set()
+        return original_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(run_routes, "lock_owned_run", observed_lock)
+    monkeypatch.setattr(run_routes, "finalize_run", observed_finalize)
+
+    def deadline_winner():
+        with app.app_context():
+            run = (
+                AgentRun.query.filter_by(id=run_id)
+                .with_for_update().one()
+            )
+            _terminalize_at_deadline(run, commit=False)
+            winner_locked.set()
+            assert release_winner.wait(5)
+            db.session.commit()
+
+    def stale_mutation():
+        with app.test_client() as contender:
+            if mutation == "finalization":
+                return contender.post(
+                    f"/command-center/api/runs/{run_id}/finalize",
+                    headers=internal_headers,
+                    json={
+                        "worker_id": "worker-1",
+                        "checkpoint_id": "late-final",
+                        "text": "must not persist",
+                    },
+                ).status_code
+            if mutation == "event":
+                return contender.post(
+                    f"/command-center/api/runs/{run_id}/events",
+                    headers=internal_headers,
+                    json={"worker_id": "worker-1", "type": "agent.late"},
+                ).status_code
+            return contender.post(
+                f"/command-center/api/runs/{run_id}/tool-calls",
+                headers=internal_headers,
+                json={
+                    "worker_id": "worker-1",
+                    "provider_call_id": "late-tool",
+                    "tool_name": "book_appointment",
+                    "arguments": {},
+                },
+            ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        winner = pool.submit(deadline_winner)
+        assert winner_locked.wait(5)
+        stale = pool.submit(stale_mutation)
+        assert mutation_started.wait(5)
+        release_winner.set()
+        winner.result(timeout=5)
+        assert stale.result(timeout=5) == 409
+
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        assert run.status == "failed"
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="run.completed").count() == 0
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="agent.late").count() == 0
+        assert AgentToolCall.query.filter_by(
+            run_id=run_id, provider_call_id="late-tool").count() == 0
+        assert ConversationMessage.query.filter_by(
+            tenant_id=TENANT,
+            conversation_id=run.conversation_id,
+            request_id=f"run:{run_id}:assistant",
+        ).count() == 0

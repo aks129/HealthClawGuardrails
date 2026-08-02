@@ -316,6 +316,7 @@ jobs:
     env:
       STEP_UP_SECRET: ci-compliance-secret
       TENANT_ID: compliance-test
+      INTERNAL_TOKEN_MINT_SECRET: ci-compliance-internal-secret
       # Required compose variable (MCP transports are auth-gated).
       MCP_AUTH_TOKEN: ci-compliance-token
     steps:
@@ -336,10 +337,12 @@ jobs:
           TOKEN=$(curl -sf -X POST http://localhost:5000/r6/fhir/internal/step-up-token \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
+            -H "X-Internal-Secret: $INTERNAL_TOKEN_MINT_SECRET" \
             -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
           curl -sf -X POST http://localhost:5000/r6/fhir/internal/seed \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
+            -H "X-Internal-Secret: $INTERNAL_TOKEN_MINT_SECRET" \
             -H "X-Step-Up-Token: $TOKEN" \
             -d '{"tenant_id":"compliance-test"}' > /dev/null
           # Read something
@@ -416,6 +419,7 @@ jobs:
           TOKEN=$(curl -sf -X POST http://localhost:5000/r6/fhir/internal/step-up-token \
             -H "Content-Type: application/json" \
             -H "X-Tenant-ID: compliance-test" \
+            -H "X-Internal-Secret: $INTERNAL_TOKEN_MINT_SECRET" \
             -d '{}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST http://localhost:5000/r6/fhir/Condition \

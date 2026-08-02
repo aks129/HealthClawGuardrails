@@ -4,12 +4,14 @@ CareAgents.
 
 It is a *transport only*: it carries no PHI logic and holds no credentials
 beyond the shared mint secret. Every inbound text is forwarded to CareAgents,
-which resolves the sender's handle to a bound agent, runs the guardrailed turn
-server-side, and returns the reply for this script to send back.
+which resolves the sender's handle to a bound agent and durably queues the
+turn. This relay polls the run projection; inference never runs in the web
+request that accepted the message.
 
 Flow per inbound message:
   - "care <code>"  → POST /api/surfaces/imessage/bind   {code, handle}
-  - anything else  → POST /api/surfaces/imessage/inbound {handle, text} → reply
+  - anything else  → POST /api/surfaces/imessage/inbound {handle, text}
+                   → GET /api/surfaces/imessage/runs/<id> → reply
 
 Requires macOS **Full Disk Access** for the interpreter (to read
 ~/Library/Messages/chat.db) and Automation permission for Messages.
@@ -32,7 +34,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 BASE = os.environ.get("CAREAGENTS_BASE", "https://careagents.cloud").rstrip("/")
@@ -42,7 +46,8 @@ STATE_FILE = Path(os.environ.get(
     "IMESSAGE_STATE_FILE",
     str(Path.home() / ".careagents-imessage-relay.json")))
 CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
-HTTP_TIMEOUT = 60  # a turn can take a while (LLM + tools)
+HTTP_TIMEOUT = 20
+RUN_TIMEOUT = 180
 
 
 def _post(path: str, payload: dict) -> dict:
@@ -60,6 +65,22 @@ def _post(path: str, payload: dict) -> dict:
     except Exception as exc:  # network, timeout, JSON
         print(f"[relay] {path} failed: {type(exc).__name__}", file=sys.stderr)
     return {}
+
+
+def _get(path: str, params: dict) -> tuple[int, dict]:
+    query = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        f"{BASE}{path}?{query}", method="GET",
+        headers={"X-Internal-Secret": SECRET})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return resp.status, json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")[:200]
+        print(f"[relay] {path} HTTP {exc.code}: {body}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[relay] {path} failed: {type(exc).__name__}", file=sys.stderr)
+    return 0, {}
 
 
 def _send_imessage(handle: str, text: str) -> None:
@@ -133,9 +154,21 @@ def _handle_message(handle: str, text: str) -> None:
         return
     res = _post("/api/surfaces/imessage/inbound",
                 {"handle": handle, "text": stripped})
-    reply = res.get("reply")
-    if reply:
-        _send_imessage(handle, reply)
+    run_id = res.get("run_id")
+    if run_id:
+        deadline = time.monotonic() + RUN_TIMEOUT
+        while time.monotonic() < deadline:
+            status, result = _get(
+                f"/api/surfaces/imessage/runs/{run_id}", {"handle": handle})
+            if status == 200:
+                reply = result.get("reply")
+                if reply:
+                    _send_imessage(handle, reply)
+                return
+            if status not in (0, 202):
+                return
+            time.sleep(1)
+        print(f"[relay] run {run_id} timed out", file=sys.stderr)
     # No reply + no error → handle isn't bound; stay silent (don't spam
     # strangers who text the number).
 

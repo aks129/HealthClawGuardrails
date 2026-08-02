@@ -101,6 +101,46 @@
     }, 4000);
   }
 
+  function pause(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+  async function consumeEvents(resp, state, typing) {
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const lines = frame.split("\n");
+        const idLine = lines.find((line) => line.startsWith("id: "));
+        const dataLine = lines.find((line) => line.startsWith("data: "));
+        if (idLine) state.cursor = Math.max(
+          state.cursor, parseInt(idLine.slice(4), 10) || 0);
+        if (!dataLine) continue;
+        let ev;
+        try { ev = JSON.parse(dataLine.slice(6)); } catch (e) { continue; }
+        if (ev.type === "accepted") {
+          state.runId = ev.run_id;
+          state.cursor = Math.max(state.cursor, ev.next_cursor || 0);
+        } else if (ev.type === "tool") addChip(ev.label);
+        else if (ev.type === "card" && ev.kind === "review")
+          addReviewCard(ev.action_id, ev.review_url);
+        else if (ev.type === "card" && ev.kind === "pdf")
+          addPdfCard(ev.url);
+        else if (ev.type === "text") {
+          typing.remove(); addAgentText(ev.text);
+        } else if (ev.type === "error") {
+          typing.remove(); addAgentText("⚠️ " + ev.text);
+        } else if (ev.type === "done") {
+          state.done = true;
+        }
+      }
+    }
+  }
+
   async function send(text) {
     if (busy || !text.trim()) return;
     busy = true; sendBtn.disabled = true;
@@ -113,45 +153,48 @@
       : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 
     try {
-      const resp = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, agent_id: AGENT,
-                               conversation_id: CONVERSATION,
-                               request_id: requestId }),
-      });
-      if (resp.status === 429) {
-        typing.remove();
-        addAgentText("You’ve hit the pace limit for now — give it a few minutes.");
-        return;
-      }
-      if (!resp.ok || !resp.body) {
-        typing.remove();
-        addAgentText("I couldn’t reach my tools just now. Try again in a moment.");
-        return;
-      }
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
-          if (!frame.startsWith("data: ")) continue;
-          let ev;
-          try { ev = JSON.parse(frame.slice(6)); } catch (e) { continue; }
-          if (ev.type === "tool") addChip(ev.label);
-          else if (ev.type === "card" && ev.kind === "review")
-            addReviewCard(ev.action_id, ev.review_url);
-          else if (ev.type === "card" && ev.kind === "pdf")
-            addPdfCard(ev.url);
-          else if (ev.type === "text") { typing.remove(); addAgentText(ev.text); }
-          else if (ev.type === "duplicate") { typing.remove(); }
-          else if (ev.type === "error") { typing.remove(); addAgentText("⚠️ " + ev.text); }
+      const state = { runId: null, cursor: 0, done: false };
+      let initial = true;
+      let reconnectFailures = 0;
+      while (!state.done) {
+        try {
+          let resp;
+          if (initial || !state.runId) {
+            resp = await fetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: text, agent_id: AGENT,
+                                     conversation_id: CONVERSATION,
+                                     request_id: requestId,
+                                     after: state.cursor }),
+            });
+          } else {
+            const query = new URLSearchParams({
+              agent_id: AGENT, after: String(state.cursor),
+            });
+            resp = await fetch("/api/chat/runs/" +
+              encodeURIComponent(state.runId) + "/events?" + query.toString());
+          }
+          initial = false;
+          if (resp.status === 429) {
+            typing.remove();
+            addAgentText("You’ve hit the pace limit for now — give it a few minutes.");
+            return;
+          }
+          if (!resp.ok || !resp.body) throw new Error("event stream unavailable");
+          const responseRunId = resp.headers.get("X-CareAgents-Run-ID");
+          if (responseRunId) state.runId = responseRunId;
+          await consumeEvents(resp, state, typing);
+          reconnectFailures = 0;
+        } catch (streamError) {
+          reconnectFailures += 1;
+          // If the POST reached the server but its response was lost before
+          // the accepted event/header arrived, retrying with the same durable
+          // request ID retrieves the same message/run instead of inferring
+          // twice. Once the run ID is known, reconnect with GET only.
+          if (reconnectFailures > 5) throw streamError;
         }
+        if (!state.done) await pause(400);
       }
       if (typing.parentNode) typing.remove();
     } catch (e) {

@@ -21,12 +21,16 @@ RUN_TRANSITIONS = {
     "cancelled": frozenset(),
 }
 
-TOOL_STATES = frozenset({"pending", "running", "completed", "failed"})
+TOOL_STATES = frozenset({
+    "pending", "running", "completed", "failed", "needs_reconciliation"})
 TOOL_TRANSITIONS = {
     "pending": frozenset({"running", "failed"}),
-    "running": frozenset({"completed", "failed"}),
+    "running": frozenset({"completed", "failed", "needs_reconciliation"}),
     "completed": frozenset(),
     "failed": frozenset({"running"}),
+    # A human/reconciler must establish provider truth. Blind execution is
+    # intentionally absent: an unknown side effect is never retried.
+    "needs_reconciliation": frozenset({"completed", "failed"}),
 }
 
 

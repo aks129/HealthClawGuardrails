@@ -1,7 +1,7 @@
 """WSGI entry point: gunicorn 'careagents.wsgi:app'.
 
-Conversation turns use a Redis-backed distributed lock when ``REDIS_URL`` is
-configured, with a process-local fallback for single-worker development.
+The WSGI process only authenticates, enqueues, and replays durable run events.
+Inference and tools execute in ``python -m careagents.worker``.
 """
 
 from careagents.app import create_app

@@ -4,10 +4,9 @@ Identity model: a signed cookie holds `account_id` after passkey/email login.
 Everything (connections, agents, surfaces) is account-scoped; a foreign id
 reads as 404.
 
-Chat history is DURABLE and lives in HealthClaw, per conversation (#222/#247).
-What sits in process memory here is only a per-turn working copy refreshed by
-load_history(). Redis serializes turns in one conversation across workers; the database
-idempotency key is the final defense against duplicate inbound delivery.
+Chat history and run state are DURABLE in HealthClaw (#222/#247/#248). Web
+requests enqueue work and replay its event log; inference and tools run only in
+the dedicated ``careagents.worker`` process.
 
 No PHI is stored here — health data lives in HealthClaw tenants behind the
 guardrail layer; careagents holds identity + pointers only.
@@ -21,7 +20,6 @@ import time
 import uuid
 from collections import defaultdict, deque
 from functools import wraps
-from threading import Lock
 
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
@@ -29,11 +27,9 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  new_binding_code)
 from careagents import advisors, connectors
-from careagents.agent import run_turn, run_turn_to_message
 from careagents.config import Config
-from careagents.conversation_locks import ConversationLockError, ConversationTurnLocks
 from careagents.healthclaw import HealthClawClient, HealthClawError
-from careagents.personas import DEFAULT_PERSONA, PERSONAS, system_prompt
+from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +40,6 @@ logger = logging.getLogger(__name__)
 # Disconnect and Delete sat on the same page (#203). Understating our own
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
-
-# In-memory conversation bounds. Each worker caches the chats it serves, so
-# these cap memory and keep a long-running process from degrading (#218).
-MAX_LIVE_CONVERSATIONS = 200
-CONVERSATION_IDLE_SECONDS = 6 * 3600
-
 
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
@@ -63,54 +53,13 @@ def create_app(config: Config | None = None,
                       PERMANENT_SESSION_LIFETIME=90 * 24 * 3600)
     hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret)
     svc = accounts or AccountService(cfg)
+    # Exposed for deterministic integration tests and process diagnostics.
+    # Production Gunicorn never executes this worker object; the systemd/OCI
+    # worker service constructs its own clients and calls careagents.worker.
+    app.extensions["careagents_runtime"] = {
+        "config": cfg, "client": hc, "accounts": svc}
 
-    histories: dict[str, list] = defaultdict(list)
-    hist_lock = Lock()
-    turn_locks = ConversationTurnLocks(
-        cfg.redis_url, production=cfg.app_env == "production")
     turns: dict[str, deque] = defaultdict(deque)
-    # Last time each conversation was touched, so idle ones can be released.
-    # Without this every tenant that ever chatted keeps its full transcript in
-    # memory for the life of the process.
-    hist_seen: dict[str, float] = {}
-
-    def conversation_key(tenant: str, conversation_id: str) -> str:
-        return f"{tenant}:{conversation_id}"
-
-    def load_history(tenant: str, conversation_id: str,
-                     agent_id: str) -> list:
-        """Refresh the per-turn working history from durable HealthClaw state.
-
-        A worker may have served this thread earlier and then gone stale while
-        another worker handled a turn. Reloading after the shared turn lock is
-        acquired prevents that stale cache from dropping cross-worker or
-        cross-surface messages.
-        """
-        key = conversation_key(tenant, conversation_id)
-        loaded = hc.recent_messages(
-            tenant, conversation_id=conversation_id, agent_id=agent_id)
-        with hist_lock:
-            history = histories[key]
-            history[:] = loaded
-        touch_history(key)
-        return history
-
-    def touch_history(key: str) -> None:
-        """Mark a conversation live; release idle ones once we're holding many.
-
-        Deliberately simple: only sweeps when the map is already large, so the
-        common path is a single dict write. Evicting is now safe rather than
-        lossy — a dropped conversation reloads from HealthClaw on next use.
-        """
-        seen_at = time.time()
-        with hist_lock:
-            hist_seen[key] = seen_at
-            if len(histories) <= MAX_LIVE_CONVERSATIONS:
-                return
-            for other, last in list(hist_seen.items()):
-                if other != key and seen_at - last > CONVERSATION_IDLE_SECONDS:
-                    histories.pop(other, None)
-                    hist_seen.pop(other, None)
 
     # --- auth plumbing -------------------------------------------------------
 
@@ -461,6 +410,73 @@ def create_app(config: Config | None = None,
         window.append(now)
         return True
 
+    def _event_for_browser(event: dict) -> dict | None:
+        kind = event.get("type")
+        payload = dict(event.get("payload") or {})
+        if kind == "agent.tool":
+            return {"type": "tool", "name": payload.get("name"),
+                    "label": payload.get("label")}
+        if kind == "agent.card":
+            payload.pop("provider_call_id", None)
+            payload.pop("event_key", None)
+            return payload
+        if kind == "agent.text":
+            return {"type": "text", "text": payload.get("text") or ""}
+        if kind == "agent.error":
+            return {"type": "error", "text": payload.get("text") or (
+                "Something went wrong on our side.")}
+        return None
+
+    def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
+        return run.get("tenant_id") == tenant and run.get("agent_id") == agent_id
+
+    def _workers_available() -> bool:
+        try:
+            status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
+        except HealthClawError:
+            return False
+        return bool(status.get("available"))
+
+    def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
+        """Replay durable UI events. Disconnecting only stops this projection."""
+        cursor = max(0, after)
+        started = time.monotonic()
+        yield "data: " + json.dumps({
+            "type": "accepted", "run_id": run_id,
+            "next_cursor": cursor}) + "\n\n"
+        while time.monotonic() - started < cfg.run_sse_timeout_seconds:
+            page = hc.agent_run_events(tenant, run_id, after=cursor, limit=100)
+            events = page.get("events") or []
+            for event in events:
+                cursor = max(cursor, int(event.get("id") or 0))
+                projected = _event_for_browser(event)
+                if projected is not None:
+                    yield (f"id: {cursor}\n"
+                           f"data: {json.dumps(projected)}\n\n")
+            # A terminal run can have more than one page of durable events.
+            # Drain full pages before emitting done, otherwise reconnecting at
+            # the returned cursor would be the only way to see the tail.
+            if len(events) >= 100:
+                continue
+            status = page.get("status")
+            if status in ("completed", "failed", "cancelled",
+                          "waiting_for_human"):
+                done = {"type": "done", "status": status,
+                        "next_cursor": cursor}
+                yield (f"id: {cursor}\n"
+                       f"data: {json.dumps(done)}\n\n")
+                return
+            time.sleep(cfg.run_sse_poll_seconds)
+        yield "data: " + json.dumps({
+            "type": "reconnect", "run_id": run_id,
+            "next_cursor": cursor}) + "\n\n"
+
+    def _parse_cursor(value) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
     @app.post("/api/chat")
     @login_required
     def api_chat():
@@ -473,6 +489,11 @@ def create_app(config: Config | None = None,
         text = (body.get("message") or "").strip()
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
+        if not _workers_available():
+            return jsonify({
+                "error": "run_workers_unavailable",
+                "message": "Chat is temporarily unavailable. Try again soon.",
+            }), 503
         if not _allow_turn(acct.id):
             return jsonify({"error": "rate_limited"}), 429
         # Durable daily ceiling — survives restarts and is shared across
@@ -496,60 +517,42 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "invalid conversation_id"}), 400
         if not 1 <= len(request_id) <= 128:
             return jsonify({"error": "invalid request_id"}), 400
-        sysprompt = system_prompt(agent["name"], agent["persona"],
-                                  agent.get("advisor"))
+        created, user_message_id = hc.claim_inbound_message(
+            tenant, text, agent["id"], conversation_id, "web", request_id)
+        if created is None or not user_message_id:
+            return jsonify({"error": "message store unavailable"}), 503
+        try:
+            run = hc.create_agent_run(
+                tenant, user_message_id, cfg.run_deadline_seconds)
+        except HealthClawError:
+            return jsonify({"error": "run queue unavailable"}), 503
+        after = _parse_cursor(body.get("after") or
+                              request.headers.get("Last-Event-ID"))
+        return Response(_stream_run(
+            tenant, agent["id"], run["id"], after),
+                        mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no",
+                                 "X-CareAgents-Run-ID": run["id"]})
 
-        def remember(role, message, reply_to=None):
-            """Best-effort persist. Losing the transcript is bad; failing the
-            conversation in front of the person is worse."""
-            try:
-                hc.log_message(
-                    tenant, role, message, agent["id"], conversation_id,
-                    surface="web", reply_to=reply_to)
-            except Exception:  # noqa: BLE001
-                logger.warning("chat turn not persisted for %s", tenant)
-
-        def stream():
-            try:
-                key = conversation_key(tenant, conversation_id)
-                with turn_locks.hold(key):
-                    # Rehydrate BEFORE claiming the inbound row. run_turn()
-                    # appends the current prompt exactly once to this list.
-                    history = load_history(
-                        tenant, conversation_id, agent["id"])
-                    created, user_message_id = hc.claim_inbound_message(
-                        tenant, text, agent["id"], conversation_id,
-                        "web", request_id)
-                    if created is None:
-                        yield ('data: {"type": "error", "text": '
-                               '"I could not save this message safely. '
-                               'Please retry."}\n\n')
-                        yield 'data: {"type": "done"}\n\n'
-                        return
-                    if not created:
-                        yield ('data: {"type": "duplicate", "request_id": '
-                               f'{json.dumps(request_id)}}}\n\n')
-                        yield 'data: {"type": "done"}\n\n'
-                        return
-
-                    reply = []
-                    for event in run_turn(cfg, hc, tenant, sysprompt,
-                                          history, text):
-                        if event.get("type") == "text" and event.get("text"):
-                            reply.append(event["text"])
-                        yield f"data: {json.dumps(event)}\n\n"
-                    if reply:
-                        remember("assistant", "\n\n".join(reply),
-                                 reply_to=user_message_id)
-            except ConversationLockError:
-                yield ('data: {"type": "error", "text": '
-                       '"This conversation is busy. Please retry shortly."}\n\n')
-            except Exception:  # noqa: BLE001
-                yield ('data: {"type": "error", "text": '
-                       '"Something went wrong on our side."}\n\n')
-            yield 'data: {"type": "done"}\n\n'
-
-        return Response(stream(), mimetype="text/event-stream",
+    @app.get("/api/chat/runs/<run_id>/events")
+    @login_required
+    def api_chat_events(run_id):
+        acct = current_account()
+        agent_id = request.args.get("agent_id", "")
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if not ctx:
+            return jsonify({"error": "unknown agent"}), 404
+        try:
+            run = hc.get_agent_run(ctx["tenant"], run_id)
+        except HealthClawError:
+            return jsonify({"error": "unknown run"}), 404
+        if not _run_belongs_to(run, ctx["tenant"], agent_id):
+            return jsonify({"error": "unknown run"}), 404
+        after = _parse_cursor(request.args.get("after") or
+                              request.headers.get("Last-Event-ID"))
+        return Response(_stream_run(ctx["tenant"], agent_id, run_id, after),
+                        mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
 
@@ -726,6 +729,11 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
+        if not _workers_available():
+            return jsonify({
+                "error": "run_workers_unavailable",
+                "message": "Chat is temporarily unavailable. Try again soon.",
+            }), 503
         if not _allow_turn(surface["account_id"]):
             return jsonify({"reply": "One moment — too many messages just now. "
                                      "Try again in a bit."}), 200
@@ -734,31 +742,69 @@ def create_app(config: Config | None = None,
         conversation_id = (body.get("conversation_id")
                            or hc.conversation_id(agent["id"]))
         request_id = str(body.get("request_id") or uuid.uuid4())
-        sysprompt = system_prompt(agent["name"], agent["persona"],
-                                  agent.get("advisor"))
         try:
-            key = conversation_key(tenant, conversation_id)
-            with turn_locks.hold(key):
-                history = load_history(
-                    tenant, conversation_id, agent["id"])
-                created, user_message_id = hc.claim_inbound_message(
-                    tenant, text, agent["id"], conversation_id,
-                    "imessage", request_id)
-                if created is None:
-                    return jsonify({"error": "message store unavailable"}), 503
-                if not created:
-                    return jsonify({"duplicate": True, "reply": ""}), 200
-                reply = run_turn_to_message(
-                    cfg, hc, tenant, sysprompt, history, text,
-                    origin=cfg.origin, agent_id=agent["id"])
-                hc.log_message(
-                    tenant, "assistant", reply, agent["id"], conversation_id,
-                    surface="imessage", reply_to=user_message_id)
-        except ConversationLockError:
-            return jsonify({"error": "conversation busy"}), 409
-        except Exception:  # noqa: BLE001
-            reply = "Something went wrong on our side. Please try again."
-        return jsonify({"reply": reply})
+            created, user_message_id = hc.claim_inbound_message(
+                tenant, text, agent["id"], conversation_id,
+                "imessage", request_id)
+            if created is None or not user_message_id:
+                return jsonify({"error": "message store unavailable"}), 503
+            run = hc.create_agent_run(
+                tenant, user_message_id, cfg.run_deadline_seconds)
+        except HealthClawError:
+            return jsonify({"error": "run queue unavailable"}), 503
+        return jsonify({"run_id": run["id"], "status": run["status"],
+                        "duplicate": not created}), 202
+
+    @app.get("/api/surfaces/imessage/runs/<run_id>")
+    def imessage_run_result(run_id):
+        """Mint-secret-gated projection polled by the Mac relay."""
+        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+            return jsonify({"error": "forbidden"}), 403
+        handle = str(request.args.get("handle") or "").strip()
+        surface = svc.find_surface_by_handle(handle, kind="imessage")
+        if not surface:
+            return jsonify({"error": "unbound handle"}), 404
+        ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
+        if not ctx:
+            return jsonify({"error": "unknown agent"}), 404
+        try:
+            run = hc.get_agent_run(ctx["tenant"], run_id)
+            if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):
+                return jsonify({"error": "unknown run"}), 404
+            page = hc.agent_run_events(
+                ctx["tenant"], run_id, after=0, limit=500)
+        except HealthClawError:
+            return jsonify({"error": "unknown run"}), 404
+        if page.get("status") not in (
+                "completed", "failed", "cancelled", "waiting_for_human"):
+            return jsonify({"run_id": run_id,
+                            "status": page.get("status")}), 202
+
+        parts: list[str] = []
+        extras: list[str] = []
+        for raw in page.get("events") or []:
+            event = _event_for_browser(raw)
+            if not event:
+                continue
+            if event.get("type") == "text" and event.get("text"):
+                parts.append(event["text"])
+            elif event.get("type") == "card" and (
+                    event.get("kind") == "review"):
+                extras.append(
+                    "I've prepared a form for your review — approve each "
+                    f"item here: {cfg.origin}/review/{surface['agent_id']}/"
+                    f"{event.get('action_id', '')}")
+            elif event.get("type") == "card" and (
+                    event.get("kind") == "pdf" and event.get("url")):
+                extras.append(
+                    f"Your signed document is ready: {event['url']}")
+            elif event.get("type") == "error":
+                parts.append(event.get("text") or (
+                    "Something went wrong on our side."))
+        reply = "\n\n".join([*parts, *extras]).strip() or (
+            "Something went wrong on our side. Please try again.")
+        return jsonify({"run_id": run_id, "status": page.get("status"),
+                        "reply": reply})
 
     # --- trust + ops ---------------------------------------------------------
 
@@ -791,9 +837,12 @@ def create_app(config: Config | None = None,
         the status code, which still depends only on the account store.
         """
         accounts_ok = svc.ping()
-        body = {"status": "ok" if accounts_ok else "degraded",
+        workers_ok = _workers_available()
+        ready = accounts_ok and workers_ok
+        body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
+                "run_workers": workers_ok,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
-        return jsonify(body), (200 if accounts_ok else 503)
+        return jsonify(body), (200 if ready else 503)
 
     return app

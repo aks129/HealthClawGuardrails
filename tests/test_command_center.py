@@ -433,6 +433,44 @@ class TestRestEndpoints:
         )
         assert mismatch.status_code == 409
 
+    def test_conversation_replay_can_stop_at_an_exact_claimed_message(
+            self, app, client, step_up_token):
+        """A later queued inbound must not enter an earlier run's prompt."""
+        from datetime import datetime, timezone
+        from models import db
+        from r6.command_center.models import ConversationMessage
+
+        headers = {"X-Step-Up-Token": step_up_token}
+        base = {"tenant_id": TENANT,
+                "conversation_id": "careagents:bounded",
+                "agent_id": "bounded", "surface": "web", "role": "user"}
+        first = client.post(
+            "/command-center/api/conversations",
+            json={**base, "request_id": "bounded-1", "text": "first"},
+            headers=headers).get_json()
+        later = client.post(
+            "/command-center/api/conversations",
+            json={**base, "request_id": "bounded-2", "text": "later"},
+            headers=headers).get_json()
+        # Even a timestamp collision is fail-closed: only the exact anchor and
+        # strictly earlier timestamps are eligible.
+        with app.app_context():
+            same = datetime.now(timezone.utc)
+            db.session.get(ConversationMessage, first["id"]).created_at = same
+            db.session.get(ConversationMessage, later["id"]).created_at = same
+            db.session.commit()
+
+        rows = client.get(
+            "/command-center/api/conversations",
+            query_string={"tenant": TENANT,
+                          "conversation_id": "careagents:bounded",
+                          "agent_id": "bounded",
+                          "through_message_id": first["id"],
+                          "full": "1"},
+            headers=headers).get_json()
+
+        assert [row["text"] for row in rows] == ["first"]
+
     def test_same_external_conversation_id_is_tenant_scoped(self, client):
         from r6.stepup import generate_step_up_token
 
