@@ -226,12 +226,20 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 pass
 
 
-def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
+def _ingest_one(resource: dict, tenant_id: str,
+                agent_id: str = 'fasten-connect',
+                detail: str = 'Ingested via Fasten EHI export'
+                ) -> tuple[str, str | None]:
     """
     Ingest a single FHIR resource into the guardrails store.
 
     Returns ('ok', resource_id) on success, ('skipped', None) for unsupported types.
     Raises on unexpected DB errors.
+
+    `agent_id` and `detail` parameterize the audit event so a caller other
+    than Fasten (e.g. the #227 direct-upload path) records honest provenance
+    rather than borrowing Fasten's. Defaults preserve prior behavior for the
+    Fasten and SHC callers.
     """
     resource_type = resource.get('resourceType', '')
 
@@ -269,10 +277,10 @@ def _ingest_one(resource: dict, tenant_id: str) -> tuple[str, str | None]:
         event_type='create',
         resource_type=resource_type,
         resource_id=resource_id,
-        agent_id='fasten-connect',
+        agent_id=agent_id,
         tenant_id=tenant_id,
         outcome='success',
-        detail='Ingested via Fasten EHI export',
+        detail=detail,
     )
 
     return 'ok', resource_id

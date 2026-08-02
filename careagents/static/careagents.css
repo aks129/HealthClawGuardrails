@@ -135,6 +135,18 @@ h1 em { font-style: italic; color: var(--clay); }
   background: #FBE9E2; color: var(--clay-deep); border-radius: 12px;
   padding: 12px 16px; font-size: 14px; margin-bottom: 18px;
 }
+/* Upload result surface: `form-ok` for a clean success line, `form-warn`
+   for a partial-success or skipped-entry summary. Same box shape as
+   `.form-error` so screen readers announce a consistent structure via
+   `role="status" aria-live="polite"` on the host span. */
+.form-ok {
+  background: #E6F4EA; color: #1E4B2C; border-radius: 12px;
+  padding: 10px 14px; font-size: 14px;
+}
+.form-warn {
+  background: #FFF4CC; color: #6B4B00; border-radius: 12px;
+  padding: 10px 14px; font-size: 14px;
+}
 .field-label { display: block; font-size: 13px; font-weight: 600;
   letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft);
   margin: 20px 0 8px; }

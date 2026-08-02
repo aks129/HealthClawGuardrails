@@ -55,7 +55,11 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">{{ c.provider or c.kind }}</div>
         <span class="status status-{{ c.status }}">{{ c.status }}</span>
-        {% if c.kind != 'sample' %}
+        {% if c.kind == 'direct' and c.status != 'revoked' %}
+        <button type="button" class="conn-upload" data-conn="{{ c.id }}"
+                title="Upload a FHIR bundle from another app or portal"
+                >Upload records</button>
+        {% elif c.kind != 'sample' %}
         <button type="button" class="conn-refresh" data-conn="{{ c.id }}"
                 title="Check your provider for new records">Refresh</button>
         {% endif %}
@@ -67,7 +71,7 @@
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
                 data-label="{{ c.label }}"
                 title="Delete these records permanently">Delete</button>
-        <span class="conn-refresh-msg" hidden></span>
+        <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}
     </div>
@@ -231,6 +235,11 @@
     <button type="button" class="linkish" id="delete-cancel">Cancel</button>
   </div>
 </div>
+
+<!-- Hidden file input reused by every "Upload records" button on `direct`
+     connections. The button's click handler assigns itself as the
+     current owner before triggering the picker. -->
+<input type="file" id="upload-file" accept=".json,application/json,application/fhir+json" hidden>
 
 <script>window.CARE = { telegramBot: {{ (telegram_bot or '')|tojson }} };</script>
 <script src="{{ url_for('static', filename='home.js') }}"></script>

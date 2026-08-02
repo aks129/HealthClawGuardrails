@@ -233,6 +233,141 @@
     });
   });
 
+  // --- upload: paste your own FHIR Bundle into a `direct` connection (#227) ---
+  // Every code the engine or CareAgents can return maps to a short,
+  // patient-facing sentence. We never surface raw exception text or the
+  // internal tenant id — the user only ever sees an actionable message
+  // and (when applicable) a support-quotable correlation id.
+  const UPLOAD_MSG = {
+    payload_too_large:
+      "That file is larger than the 5 MB limit — export a smaller range " +
+      "or split into smaller bundles.",
+    content_type_required:
+      "Please upload a FHIR JSON file — check that the filename ends " +
+      "in .json.",
+    invalid_json:
+      "That file isn't valid JSON. Try re-exporting from your provider.",
+    invalid_body:
+      "We couldn't read the file. Try re-exporting from your provider.",
+    not_a_bundle:
+      "That file doesn't look like a FHIR Bundle. Export a Bundle from " +
+      "your provider or app and try again.",
+    invalid_bundle:
+      "That FHIR Bundle looks incomplete. Try re-exporting a full " +
+      "Bundle from your provider and upload again.",
+    too_many_entries:
+      "That bundle has more than 500 records. Split it into smaller " +
+      "bundles and upload each.",
+    wrong_connector_kind:
+      "This connection doesn't accept file uploads.",
+    unknown_connection:
+      "That connection is no longer available. Refresh and try again.",
+    legacy_body_selector:
+      "Upload was rejected. Please retry — if it repeats, refresh this page.",
+    commit_failed:
+      "Something went wrong saving the records. Quote the code below to " +
+      "support if you need to reach us.",
+    ingest_failed:
+      "The records service couldn't accept this upload. Try again in a " +
+      "moment or contact support with the code below.",
+  };
+  function messageForError(code) {
+    return UPLOAD_MSG[code] || (
+      "The upload didn't go through. If this keeps happening, quote the " +
+      "code below to support.");
+  }
+
+  // Reused file input — the current owner card is tracked here.
+  const fileInput = $("upload-file");
+  let currentUploadCard = null;
+
+  function say(msg, text, cls) {
+    msg.textContent = text;
+    msg.className = "conn-refresh-msg" + (cls ? " " + cls : "");
+    msg.hidden = false;
+  }
+
+  document.querySelectorAll(".conn-upload").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".conn-card");
+      currentUploadCard = { card, btn };
+      fileInput.value = "";
+      fileInput.click();
+    });
+  });
+
+  if (fileInput) {
+    fileInput.addEventListener("change", async () => {
+      const owner = currentUploadCard;
+      currentUploadCard = null;
+      const file = fileInput.files && fileInput.files[0];
+      if (!owner || !file) return;
+      const { card, btn } = owner;
+      const msg = card.querySelector(".conn-refresh-msg");
+      // Front-line size check so we never send a request we already know
+      // will be refused (server enforces the same cap).
+      const MAX = 5 * 1024 * 1024;
+      if (file.size > MAX) {
+        return say(msg, messageForError("payload_too_large"), "form-error");
+      }
+      btn.disabled = true;
+      say(msg, "Uploading " + file.name + "…");
+      let text;
+      try {
+        text = await file.text();
+      } catch (e) {
+        btn.disabled = false;
+        return say(msg, messageForError("invalid_body"), "form-error");
+      }
+      let r, d;
+      try {
+        r = await fetch(`/api/connections/${btn.dataset.conn}/upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/fhir+json" },
+          body: text,
+        });
+        d = await r.json().catch(() => ({}));
+      } catch (e) {
+        btn.disabled = false;
+        return say(msg, messageForError("ingest_failed"), "form-error");
+      }
+      btn.disabled = false;
+      if (!r.ok) {
+        let line = messageForError(d.error);
+        if (d.correlation_id) line += " Support code: " + d.correlation_id + ".";
+        return say(msg, line, "form-error");
+      }
+      // Success or partial success — show a plain-language summary of
+      // what actually landed. When entries failed, surface the unique
+      // opaque correlation ids from `errors[]` (never the raw messages
+      // or objects — they can carry PHI-shaped SQL fragments) so the
+      // user has a support-quotable code per distinct failure.
+      const ing = d.ingested | 0;
+      const skp = d.skipped | 0;
+      const fld = d.failed | 0;
+      const parts = [`${ing} record${ing === 1 ? "" : "s"} added`];
+      if (skp) parts.push(`${skp} not saved (unsupported record types)`);
+      if (fld) parts.push(`${fld} could not be saved`);
+      if (fld > 0) {
+        const codes = Array.from(new Set(
+          (d.errors || [])
+            .map((e) => e && e.correlation_id)
+            .filter(Boolean)));
+        if (codes.length) {
+          parts.push("Support code" + (codes.length === 1 ? "" : "s")
+                     + ": " + codes.join(", "));
+        }
+      }
+      say(msg, parts.join(" · "),
+          (fld || skp) ? "form-warn" : "form-ok");
+      if (ing > 0) {
+        // Reload so the card flips from `empty` to `active` and the
+        // agent picker sees the new record count.
+        setTimeout(() => location.reload(), 1400);
+      }
+    });
+  }
+
   // --- disconnect: stop new records, keep what's already here ---
   document.querySelectorAll(".conn-disconnect").forEach((btn) => {
     btn.addEventListener("click", async () => {
