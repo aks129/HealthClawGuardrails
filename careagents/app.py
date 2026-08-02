@@ -390,13 +390,31 @@ def create_app(config: Config | None = None,
         conversation_id = hc.conversation_id(agent_id)
         # Show the conversation they actually had. Rendering only the canned
         # greeting made every return visit look like a first visit.
+        past = hc.recent_messages(
+            ctx["tenant"], limit=30,
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+        )
+        summary_counts = None
+        if not past:
+            # First visit: show real record counts so the user immediately sees
+            # the product's value rather than a generic prompt.
+            try:
+                conditions = hc.search(ctx["tenant"], "Condition")
+                medications = hc.search(ctx["tenant"], "MedicationRequest")
+                observations = hc.search(ctx["tenant"], "Observation")
+                summary_counts = {
+                    "conditions": len(conditions.get("entry", [])),
+                    "medications": len(medications.get("entry", [])),
+                    "labs": len(observations.get("entry", [])),
+                }
+            except HealthClawError:
+                pass  # fall back to generic greeting on any error
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
-                               past=hc.recent_messages(
-                                   ctx["tenant"], limit=30,
-                                   conversation_id=conversation_id,
-                                   agent_id=agent_id))
+                               past=past,
+                               summary_counts=summary_counts)
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
