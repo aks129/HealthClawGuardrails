@@ -22,7 +22,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 # never re-created — running the baseline migration against it dies with
 # "table ... already exists".
 _BASELINE_REVISION = "0001_v1_8_0"
-_CREATE_ALL_SCHEMA_REVISION = "0004_conversation_identity"
+_CREATE_ALL_SCHEMA_REVISION = "0005_agent_run_control_plane"
 
 # A table that has existed since long before v1.8.0 — its presence (without
 # alembic_version) is the legacy-database fingerprint.
@@ -69,6 +69,9 @@ def _unstamped_adoption_revision(connection) -> str | None:
             {"conversation_id", "request_id", "reply_to"} <= message_columns
             and resource_pk == ["tenant_id", "resource_type", "id"]
             and "outcome_detail_code" in audit_columns
+            and "agent_runs" in tables
+            and "agent_tool_calls" in tables
+            and "agent_run_events" in tables
         ):
             return _CREATE_ALL_SCHEMA_REVISION
     return _BASELINE_REVISION
