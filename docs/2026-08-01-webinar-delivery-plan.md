@@ -94,13 +94,35 @@ tab → come back → the conversation is still there.
 
 The bugs that make a live demo or an unsupervised advocate hit a wall.
 
-- [ ] **Passkey dead loop** — `/auth` redirects logged-in users away; enrollment unreachable after signup.
-- [ ] **Replace `prompt()`/`alert()`** in wearable pick + Telegram/iMessage binding; style the conn-card buttons; differentiate destructive Delete.
-- [ ] **CareAgents Playwright spec** — signup → sample connect → agent create → one chat turn. None exists today; all e2e targets the HealthClaw site.
-- [ ] **Prod synthetic monitor** — 6-hourly cron: smoke script + `$conformance` Grade A + `/healthz` + MCP `tools/list` → pinned issue on failure.
+- [x] **Passkey dead loop** — `/auth` redirects logged-in users away; enrollment unreachable after signup. (#241)
+- [ ] **Replace `prompt()`/`alert()`** in wearable pick + Telegram/iMessage binding; style the conn-card buttons; differentiate destructive Delete. (#224)
+- [ ] **CareAgents Playwright spec** — signup → sample connect → agent create → one chat turn. None exists today; all e2e targets the HealthClaw site. (#233)
+- [x] **Prod synthetic monitor** — 6-hourly cron: smoke script + `$conformance` Grade A + `/healthz` + MCP `tools/list` → pinned issue on failure. (#244)
 - [ ] **Intake-form polish** — the demo centerpiece: review card clarity, PDF quality, error states.
+- [ ] **Ship what we merged** — see the ship gate below. (#258)
 
-**Exit:** a stranger completes the full journey on a phone without help.
+**Exit:** a stranger completes the full journey on a phone without help,
+**against the deployed build** — not against `main`.
+
+### The ship gate (added Aug 2, after we caught ourselves)
+
+Merged is not shipped. The Flask engine auto-deploys on push to `main`;
+**CareAgents and the MCP server do not.** On Aug 2 every CareAgents change
+from Phase 0 and Phase 1 — durable chat history, the passkey fix, the daily
+turn cap — was sitting on `main`, unshipped, while `prod_watch.py` reported
+9/9 green. It was green because liveness, readiness, grade, and readability
+are all satisfied by a months-old build. Nothing we monitor can see version
+drift (#258, and #155 for the same problem on the MCP server).
+
+So each phase now ends with a deploy, not a merge:
+
+- Phase 2 exits only when the journey works on `careagents.cloud`, on a
+  phone, on the build a stranger would actually reach.
+- Phase 3's dry run is meaningless before that deploy lands, and the passkey
+  cannot be exercised at all until DNS points at the deployed service —
+  WebAuthn is bound to `CARE_RP_ID=careagents.cloud`.
+- Any "it's done" claim in this plan means deployed and checked, or it is not
+  a claim.
 
 ---
 
