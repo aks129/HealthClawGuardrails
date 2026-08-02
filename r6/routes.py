@@ -2166,6 +2166,252 @@ def seed_tenant():
     }), 201
 
 
+# Caps for the file-upload / SHL import ingest path (#227). Small on purpose —
+# this is the zero-integration patient-facing path (paste or upload a bundle),
+# not a bulk provider push, and the endpoint runs synchronously so the caller
+# can render honest per-entry results. The 5 MiB / 500-entry ceiling matches
+# the strongest production precedent (Azure FHIR: 500 entries, 28 MB; Bumble
+# `RESEARCH/HEALTHCLAW_207_227_SAFETY_LIMITS_2026_08_02.md`). Overridable via
+# env if a real bundle turns out larger in practice.
+INGEST_BUNDLE_MAX_BYTES_DEFAULT = 5 * 1024 * 1024      # 5 MiB
+INGEST_BUNDLE_MAX_ENTRIES_DEFAULT = 500
+
+# The body of this internal endpoint is `{bundle: {...}}` — an ENVELOPE
+# carrying a Bundle. `application/fhir+json` is the media type for a *raw*
+# FHIR resource; using it for an envelope would mis-label the payload.
+# The patient-facing CareAgents route accepts `application/fhir+json` for
+# the raw Bundle the browser posts; that layer wraps into the envelope and
+# calls this endpoint as `application/json`.
+_INGEST_BUNDLE_MIME_TYPES = frozenset({'application/json'})
+
+
+def _ingest_bundle_limits() -> tuple[int, int]:
+    def _int_env(name: str, default: int) -> int:
+        raw = os.environ.get(name, '').strip()
+        if not raw:
+            return default
+        try:
+            v = int(raw)
+        except ValueError:
+            return default
+        return v if v > 0 else default
+    return (_int_env('INGEST_BUNDLE_MAX_BYTES', INGEST_BUNDLE_MAX_BYTES_DEFAULT),
+            _int_env('INGEST_BUNDLE_MAX_ENTRIES', INGEST_BUNDLE_MAX_ENTRIES_DEFAULT))
+
+
+def _read_body_with_hard_cap(max_bytes: int) -> tuple[bytes | None, tuple[dict, int] | None]:
+    """Read the request body streamed, refusing after `max_bytes`.
+
+    Content-Length alone is not a memory bound — chunked or length-absent
+    requests can still be arbitrarily large. Read one byte past the cap so we
+    can distinguish "exactly at the limit" from "over"; on over, return a
+    413 pair for the caller to jsonify.
+    """
+    clen = request.content_length
+    if clen is not None and clen > max_bytes:
+        return None, ({'error': 'payload_too_large',
+                       'max_bytes': max_bytes,
+                       'received_bytes': clen}, 413)
+    try:
+        raw = request.stream.read(max_bytes + 1)
+    except Exception:
+        return None, ({'error': 'invalid_body'}, 400)
+    if raw is None:
+        raw = b''
+    if len(raw) > max_bytes:
+        return None, ({'error': 'payload_too_large',
+                       'max_bytes': max_bytes}, 413)
+    return raw, None
+
+
+@r6_blueprint.route('/internal/ingest-bundle', methods=['POST'])
+def ingest_bundle():
+    """Synchronous FHIR Bundle ingest for the file-upload / SHL import path (#227).
+
+    The `direct` and `shl` connector tiles previously advertised upload/paste
+    but had no server-side path — this is that path. It reuses `_ingest_one`
+    (the same code path Fasten/SHC take, with parameterized provenance so
+    the audit event honestly records `direct-upload` rather than borrowing
+    Fasten's), is gated exactly like seed/purge (fail-closed via
+    `_internal_mint_authorized`), and is deliberately synchronous so a
+    patient watching an upload sees an honest per-entry result.
+
+    Request contract:
+      - Header `X-Tenant-Id`: required. The tenant to write into. This is
+        the ONLY tenant selector; a `tenant_id` in the JSON body is rejected
+        as a legacy selector rather than silently honored (an attacker who
+        can influence the body could otherwise redirect the write).
+      - Header `X-Internal-Secret`: required for non-public tenants.
+      - Header `Content-Type`: `application/json` (charset optional). The
+        body is an envelope carrying a Bundle, NOT a raw FHIR resource,
+        so `application/fhir+json` is refused here. The patient-facing
+        CareAgents route accepts `fhir+json` for the raw Bundle from the
+        browser and wraps it into the envelope for this internal call.
+      - Body: `{ "bundle": { "resourceType": "Bundle", "entry": [...] } }`.
+        `entry[].resource` is the FHIR entry shape; a bare entry without a
+        `resource` object is rejected per-entry (we do not silently pick a
+        different shape).
+
+    Fail-loud on:
+      - missing/invalid tenant header, missing secret (400/403)
+      - wrong content-type (415), malformed JSON (400)
+      - body larger than INGEST_BUNDLE_MAX_BYTES via streaming cap (413)
+      - not a FHIR Bundle, or entry count over INGEST_BUNDLE_MAX_ENTRIES (400)
+      - legacy `tenant_id` in body (400)
+
+    Per-entry failures are ATOMIC per-entry via SAVEPOINT: a failure rolls
+    back only that row, so a mid-Bundle DB exception can never delete
+    earlier successes while still counting them as ingested. Every failure
+    is surfaced in `errors[]` with a stable code; exception text is NEVER
+    returned to the caller (SQL/driver messages can carry PHI). Instead a
+    correlation id is logged server-side and returned as an opaque handle.
+    """
+    max_bytes, max_entries = _ingest_bundle_limits()
+
+    ct_raw = (request.content_type or '').split(';', 1)[0].strip().lower()
+    if ct_raw not in _INGEST_BUNDLE_MIME_TYPES:
+        return jsonify({'error': 'content_type_required',
+                        'message': 'Content-Type must be one of: '
+                                   + ', '.join(sorted(_INGEST_BUNDLE_MIME_TYPES))}), 415
+
+    raw, err = _read_body_with_hard_cap(max_bytes)
+    if err is not None:
+        body_err, status = err
+        return jsonify(body_err), status
+
+    try:
+        body = json.loads(raw.decode('utf-8')) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        return jsonify({'error': 'invalid_json'}), 400
+    if not isinstance(body, dict):
+        return jsonify({'error': 'invalid_json',
+                        'message': 'body must be a JSON object'}), 400
+
+    # Header is the ONLY tenant selector — any body `tenant_id` is a legacy
+    # client-controlled selector and is refused rather than treated as
+    # authoritative even when it agrees with the header. Anything less lets
+    # a request-shaping bug turn into a cross-tenant write oracle.
+    if 'tenant_id' in body:
+        return jsonify({'error': 'legacy_body_selector',
+                        'message': 'Tenant is derived from X-Tenant-Id only; '
+                                   'remove "tenant_id" from the body.'}), 400
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    if not tenant_id:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
+        return jsonify({'error': 'invalid tenant_id format'}), 400
+
+    if not _internal_mint_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
+
+    bundle = body.get('bundle')
+    if not isinstance(bundle, dict) or bundle.get('resourceType') != 'Bundle':
+        return jsonify({'error': 'not_a_bundle',
+                        'message': 'bundle.resourceType must be "Bundle"'}), 400
+
+    entries_raw = bundle.get('entry') or []
+    if not isinstance(entries_raw, list):
+        return jsonify({'error': 'invalid_bundle',
+                        'message': 'bundle.entry must be an array'}), 400
+    if len(entries_raw) > max_entries:
+        return jsonify({'error': 'too_many_entries',
+                        'max_entries': max_entries,
+                        'received_entries': len(entries_raw)}), 400
+
+    # Reuse the same code path Fasten/SHC take — a change to ingest semantics
+    # cannot silently diverge for the upload path — with honest provenance.
+    from r6.fasten.ingester import _ingest_one
+
+    correlation_id = uuid.uuid4().hex[:12]
+
+    ingested = skipped = failed = 0
+    errors: list[dict] = []
+    for idx, entry in enumerate(entries_raw):
+        # FHIR entries carry the resource under `entry.resource`; nothing
+        # else is a real exporter shape and accepting a "flat" entry would
+        # widen the surface for typo bugs.
+        if not isinstance(entry, dict) or not isinstance(entry.get('resource'), dict):
+            failed += 1
+            errors.append({'index': idx, 'code': 'invalid_entry',
+                           'message': 'entry.resource must be a JSON object'})
+            continue
+        resource = entry['resource']
+        rtype = resource.get('resourceType') or ''
+        # SAVEPOINT per entry — a driver-level failure on this row is
+        # rolled back inside the savepoint, so previous flushed rows in
+        # the outer transaction remain and the reported `ingested` count
+        # matches the rows the caller can actually read back.
+        try:
+            with db.session.begin_nested():
+                result, _rid = _ingest_one(
+                    resource, tenant_id,
+                    agent_id='direct-upload',
+                    detail='Ingested via patient direct upload')
+        except Exception as exc:  # noqa: BLE001
+            # NEVER return `str(exc)` — SQL driver messages can echo
+            # statements and parameters that carry PHI. Log ONLY the
+            # exception class name (never the message or a traceback that
+            # can echo bound values) against a correlation id, and return
+            # an opaque code to the caller.
+            failed += 1
+            logger.warning(
+                'ingest-bundle entry %d failed (tenant=%s correlation=%s '
+                'exc_class=%s)',
+                idx, tenant_id, correlation_id, type(exc).__name__)
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'ingest_error',
+                           'correlation_id': correlation_id,
+                           'message': 'Entry could not be persisted; '
+                                      'see server logs by correlation_id.'})
+            continue
+        if result == 'ok':
+            ingested += 1
+        else:
+            skipped += 1
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'unsupported_resource_type',
+                           'message': f'{rtype!r} is not a supported type'})
+
+    try:
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        # Same PHI rule as per-entry: never log the exception message or
+        # let it back through the response. Class name + correlation id
+        # is enough to reproduce from operator-side logs.
+        db.session.rollback()
+        logger.warning('ingest-bundle commit failed (tenant=%s '
+                       'correlation=%s exc_class=%s)',
+                       tenant_id, correlation_id, type(exc).__name__)
+        return jsonify({'error': 'commit_failed',
+                        'correlation_id': correlation_id,
+                        'ingested': 0, 'skipped': skipped, 'failed': failed,
+                        'errors': errors}), 500
+
+    # Audit outcome is `partial` whenever the bundle wasn't fully successful —
+    # a skipped entry (unsupported resource type) is a signal too, not just
+    # a hard failure, and lumping it under `success` hides the truth.
+    outcome = 'success' if (failed == 0 and skipped == 0) else 'partial'
+    record_audit_event(
+        event_type='ingest_bundle',
+        agent_id='direct-upload',
+        tenant_id=tenant_id,
+        outcome=outcome,
+        detail=(f'entries={len(entries_raw)} ingested={ingested} '
+                f'skipped={skipped} failed={failed} '
+                f'correlation={correlation_id}'),
+    )
+
+    return jsonify({
+        'tenant_id': tenant_id,
+        'entries': len(entries_raw),
+        'ingested': ingested,
+        'skipped': skipped,
+        'failed': failed,
+        'errors': errors,
+        'correlation_id': correlation_id,
+    }), 200
+
+
 # --- SSE Audit Stream ---
 
 @r6_blueprint.route('/AuditEvent/$stream', methods=['GET'])

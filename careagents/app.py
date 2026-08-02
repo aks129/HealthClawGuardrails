@@ -41,6 +41,27 @@ logger = logging.getLogger(__name__)
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
 
+# Local hard cap for the file-upload path (#227). The engine's
+# `internal/ingest-bundle` is the source of truth for the value; this
+# ceiling stops an oversized (or chunked / no-Content-Length) request
+# from ever spending more than max_bytes+1 in our process before we
+# refuse it. 5 MiB matches the engine default so a request either fails
+# here quickly or lands cleanly.
+_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+
+# FHIR R4 §3.2 SHALL support `application/fhir+json`; the two legacy
+# variants ride the same accept-list so a real FHIR client, a plain-JSON
+# hand-crafted body, and older exporters all land.
+_UPLOAD_MIME_TYPES = frozenset({
+    "application/fhir+json",
+    "application/json",
+    "application/json+fhir",
+})
+
+# In-memory conversation bounds. Each worker caches the chats it serves, so
+# these cap memory and keep a long-running process from degrading (#218).
+MAX_LIVE_CONVERSATIONS = 200
+CONVERSATION_IDLE_SECONDS = 6 * 3600
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
                accounts: AccountService | None = None) -> Flask:
@@ -239,6 +260,126 @@ def create_app(config: Config | None = None,
         if plan.get("connect_url"):
             out["connect_url"] = plan["connect_url"]
         return jsonify(out)
+
+    @app.post("/api/connections/<conn_id>/upload")
+    @login_required
+    def upload_connection(conn_id):
+        """File upload for the `direct` connector tile (#227).
+
+        The zero-integration ingest path: a signed-in patient posts a FHIR
+        Bundle they exported from another app or provider portal, and the
+        engine's `internal/ingest-bundle` endpoint runs it through the same
+        code path Fasten/SHC take. Deliberately synchronous so the caller
+        sees an honest per-entry result rather than a fire-and-forget ack.
+
+        Contract:
+          - Ownership: `svc.get_connection(acct.id, conn_id)` — cross-account
+            reads 404, same shape as every other connection route.
+          - Kind gate: only `direct` connections accept uploads today.
+          - Body cap: streamed at max_bytes+1 (Content-Length is untrusted,
+            chunked requests can still exceed a header value).
+          - MIME: `application/fhir+json`, `application/json`, or
+            `application/json+fhir` (charset optional). FHIR R4 §3.2 SHALL.
+          - Error codes from the engine (`too_many_entries`, `not_a_bundle`,
+            `payload_too_large`, `content_type_required`, `ingest_error`,
+            `commit_failed`) are preserved through `HealthClawError.code` so
+            the UI can render an actionable message instead of a generic
+            "sync failed".
+          - Response strips the engine's internal `tenant_id` — the browser
+            never needs it and it is not a fact for the user.
+          - `mark_synced` runs only when at least one entry landed; an
+            all-failed / all-skipped bundle does not fake sync freshness.
+        """
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None:
+            return jsonify({"error": "unknown connection"}), 404
+        # Only the `direct` tile ships this flow today. `shl` (SMART Health
+        # Link) will land on the same endpoint once the encrypted-manifest
+        # decoder is in.
+        if conn["kind"] != "direct":
+            return jsonify({"error": "wrong_connector_kind",
+                            "kind": conn["kind"],
+                            "message": "This connection does not accept file "
+                                       "uploads. Create an 'Upload records' "
+                                       "connection to import a FHIR bundle."}), 400
+
+        # Header short-circuit for callers that DO set Content-Length, but
+        # never trusted alone — the stream read below is the real bound.
+        clen = request.content_length
+        if clen is not None and clen > _UPLOAD_MAX_BYTES:
+            return jsonify({"error": "payload_too_large",
+                            "max_bytes": _UPLOAD_MAX_BYTES}), 413
+        ct = (request.content_type or "").split(";", 1)[0].strip().lower()
+        if ct not in _UPLOAD_MIME_TYPES:
+            return jsonify({"error": "content_type_required",
+                            "message": "Content-Type must be one of: "
+                                       + ", ".join(sorted(_UPLOAD_MIME_TYPES))
+                            }), 415
+
+        # Streaming hard cap: even a chunked or Content-Length-absent request
+        # cannot spend more than max_bytes+1 bytes in our process before we
+        # refuse it.
+        try:
+            raw = request.stream.read(_UPLOAD_MAX_BYTES + 1)
+        except Exception:
+            return jsonify({"error": "invalid_body"}), 400
+        if raw is None:
+            raw = b""
+        if len(raw) > _UPLOAD_MAX_BYTES:
+            return jsonify({"error": "payload_too_large",
+                            "max_bytes": _UPLOAD_MAX_BYTES}), 413
+
+        try:
+            bundle = json.loads(raw.decode("utf-8")) if raw else {}
+        except (ValueError, UnicodeDecodeError):
+            return jsonify({"error": "invalid_json"}), 400
+        if not isinstance(bundle, dict):
+            return jsonify({"error": "invalid_json",
+                            "message": "body must be a JSON object"}), 400
+
+        # Engine validates Bundle shape, entry-count cap, per-entry, etc.
+        # Its stable `error` code is preserved via HealthClawError.code so
+        # the UI can render an actionable message rather than collapsing
+        # every 4xx into "ingest_failed".
+        try:
+            result = hc.ingest_bundle(conn["tenant_id"], bundle)
+        except HealthClawError as exc:
+            status = exc.status if 400 <= exc.status < 500 else 502
+            payload = {
+                "error": exc.code or "ingest_failed",
+                "status": status,
+            }
+            # A correlation id from `commit_failed` / `ingest_error` is
+            # PHI-safe and lets the user quote it to support. Never echo
+            # the raw exception message — it can contain SQL bindings.
+            if exc.correlation_id:
+                payload["correlation_id"] = exc.correlation_id
+            return jsonify(payload), status
+
+        # Empty file / bundle-with-no-entries is not an error — say what
+        # landed and return. `mark_synced` and the connection-active flip
+        # both key on `ingested > 0` so an all-failed / all-skipped bundle
+        # never fakes sync freshness (crista #227 release condition 4).
+        landed = int(result.get("ingested") or 0)
+        if landed > 0:
+            try:
+                svc.set_connection_status(conn["tenant_id"], "active")
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "could not flip connection %s to active", conn_id)
+            try:
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+            except HealthClawError:
+                logger.warning("record_count after upload failed for %s",
+                               conn_id)
+
+        # Strip the engine's internal `tenant_id` before the browser sees
+        # the response — it is not a fact the UI needs and leaking it here
+        # would give the browser a token to try elsewhere.
+        response = {k: v for k, v in result.items() if k != "tenant_id"}
+        response["connection_id"] = conn_id
+        return jsonify(response), 200
 
     @app.post("/api/connections/<conn_id>/disconnect")
     @login_required

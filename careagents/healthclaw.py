@@ -20,9 +20,19 @@ logger = logging.getLogger(__name__)
 
 
 class HealthClawError(RuntimeError):
-    def __init__(self, message: str, status: int = 0):
+    def __init__(self, message: str, status: int = 0, code: str = "",
+                 correlation_id: str = ""):
         super().__init__(message)
         self.status = status
+        # Stable error code from the engine (e.g. `too_many_entries`,
+        # `not_a_bundle`, `payload_too_large`). Preserved through the
+        # CareAgents layer so the UI can render an actionable message
+        # rather than collapsing everything into "sync failed" (#227).
+        self.code = code
+        # Server-side correlation id for engine failures (e.g. `commit_failed`,
+        # per-entry `ingest_error`). PHI-safe: it is an opaque handle a user
+        # can quote to support without exposing exception text.
+        self.correlation_id = correlation_id
 
 
 class HealthClawClient:
@@ -72,6 +82,45 @@ class HealthClawClient:
             raise HealthClawError(f"seed failed ({r.status_code})",
                                   r.status_code)
         return int((r.json() or {}).get("count") or 0)
+
+    def ingest_bundle(self, tenant: str, bundle: dict) -> dict:
+        """Push a FHIR Bundle into a tenant via the engine's internal ingest.
+
+        Used by the `direct` (upload) tile (#227). The engine is the source of
+        truth for size/entry caps and per-entry validity — a failed engine
+        pre-flight (413/415/400) is raised as HealthClawError carrying the
+        engine's stable `error` code (e.g. `too_many_entries`, `not_a_bundle`),
+        so the CareAgents layer can render an actionable message rather than
+        collapsing everything to "sync failed". On 200, returns the engine's
+        per-entry summary as-is.
+
+        Contract: the engine derives tenant SOLELY from the `X-Tenant-Id`
+        header. The JSON body carries ONLY `{"bundle": ...}` — sending a
+        `tenant_id` in the body is rejected engine-side as a legacy selector.
+        """
+        # `application/json` — this is the CareAgents→engine internal
+        # envelope call, NOT a raw FHIR Bundle post. `application/fhir+json`
+        # would mis-label the envelope; the patient-facing route above
+        # accepts fhir+json for the raw Bundle from the browser.
+        r = self.http.post(
+            f"{self.fhir}/internal/ingest-bundle",
+            json={"bundle": bundle},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret,
+                     "Content-Type": "application/json"},
+            timeout=self.timeout)
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if r.status_code != 200:
+            code = (body or {}).get("error") or f"http_{r.status_code}"
+            msg = (body or {}).get("message") \
+                or f"ingest failed ({code})"
+            correlation = (body or {}).get("correlation_id") or ""
+            raise HealthClawError(msg, r.status_code, code=code,
+                                  correlation_id=correlation)
+        return body or {}
 
     def _headers(self, tenant: str) -> dict:
         return {"X-Tenant-Id": tenant,

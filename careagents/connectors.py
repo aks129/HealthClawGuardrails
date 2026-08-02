@@ -42,19 +42,21 @@ _CATALOG = [
      "blurb": "Oura, Whoop, Garmin, Fitbit, Strava, and Apple Health — "
               "through Open Wearables.",
      "providers": WEARABLE_PROVIDERS},
-    # These two are NOT live: start() returns {"soon": True} for both. They
-    # were advertised as an "import" tier whose blurbs told people to paste a
-    # link or drop in a file, neither of which did anything (#225). Presented
-    # as coming-soon until the flow actually exists (#227) — the house rule is
+    # `direct` is the zero-integration ingest path (#227): the signed-in
+    # patient posts a FHIR Bundle they exported from another app or portal,
+    # and the engine's `internal/ingest-bundle` endpoint applies the same
+    # code path Fasten/SHC take. `shl` remains coming-soon until the
+    # encrypted-manifest decoder ships (#225 follow-up) — the house rule is
     # ship the mechanism, then the copy.
     {"id": "shl", "tier": "soon", "icon": "🔗",
      "label": "SMART Health Link",
      "blurb": "Import a record shared with you as a SMART Health Link. "
               "Not open yet — we'll let you know."},
-    {"id": "direct", "tier": "soon", "icon": "📄",
+    {"id": "direct", "tier": "import", "icon": "📄",
      "label": "Upload records",
-     "blurb": "Bring a FHIR bundle or SMART Health Card file yourself. "
-              "Not open yet — we'll let you know."},
+     "blurb": "Bring a FHIR bundle you exported from another app or your "
+              "provider portal — we'll ingest it into a private tenant "
+              "you control."},
     {"id": "healthex", "tier": "soon", "icon": "🧬",
      "label": "HealthEx",
      "blurb": "Connect your HealthEx account."},
@@ -72,8 +74,11 @@ def catalog(cfg) -> list[dict]:
     out = []
     for c in _CATALOG:
         item = {k: c[k] for k in ("id", "label", "blurb", "icon", "tier")}
-        # Every live real-record source gets the consent card; sample doesn't.
-        if c["id"] in ("fasten", "wearable"):
+        # Every live real-record source gets the consent card; sample
+        # doesn't. `direct` (patient-provided FHIR bundle upload) is a
+        # real-record source too — the file is the patient's own PHI, so
+        # it rides the same consent gate as fasten/wearable.
+        if c["id"] in ("fasten", "wearable", "direct"):
             item["requires_consent"] = True
         if c["id"] == "fasten" and not getattr(cfg, "fasten_public_key", ""):
             item["tier"] = "soon"
@@ -138,7 +143,17 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
                 "provider": label, "requires_consent": True,
                 "connect_url": client.wearables_connect_url(tenant, prov)}
 
-    # import + soon tiers: no live flow yet — record intent, never dead-end.
+    if connector_id == "direct":
+        # Patient-provided real records: the tenant exists after connect but
+        # holds nothing until the follow-up upload lands, so status starts as
+        # `empty` (distinct from `pending` for OAuth flows, so the hub can
+        # render "waiting for your file" rather than "waiting for the portal").
+        tenant = client.new_tenant_id()
+        return {"tenant": tenant, "status": "empty",
+                "label": "Uploaded records", "provider": "Direct upload",
+                "requires_consent": True}
+
+    # remaining soon tiers: no live flow yet — record intent, never dead-end.
     return {"soon": True}
 
 
