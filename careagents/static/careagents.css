@@ -419,7 +419,17 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .conn-refresh-msg { margin-top: 10px; font-size: 12.5px; color: var(--ink-soft); }
 
 /* --- inline messages (replace blocking alerts) ---------------------------- */
-.inline-msg { margin-top: 12px; font-size: 13.5px; color: var(--clay-deep); }
+.inline-msg { margin-top: 12px; font-size: 13.5px; color: var(--clay-deep);
+  /* Honoured by the scrollIntoView nudge, so a message pulled into view never
+     sits flush against the edge of the screen. */
+  scroll-margin: 20px; }
+/* The message is moved next to whatever the user touched, so inside these
+   grids it becomes a grid item: span the row, or it sits in one narrow column
+   beside the tile instead of under it. */
+.marketplace > .inline-msg, .surface-row > .inline-msg {
+  grid-column: 1 / -1; margin-top: 2px;
+  background: #FBE9E2; border-radius: 12px; padding: 10px 14px;
+}
 
 /* --- picker / code / delete dialogs --------------------------------------- */
 .modal.sheet { align-items: flex-end; }

@@ -37,9 +37,10 @@
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
       if (!res.ok) {
-        // Inline, next to the tile that was tapped: never blocks, never needs
-        // dismissing, and the page stays usable.
-        return say($("connect-msg"), res.d.error || "Couldn't connect that source.");
+        // Inline, directly under the tile that was tapped: never blocks, never
+        // needs dismissing, and the page stays usable.
+        return say(tile, $("connect-msg"),
+                   res.d.error || "Couldn't connect that source.");
       }
       if (res.d.soon) { tile.querySelector(".connector-tag").textContent = "we'll let you know"; return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
@@ -87,13 +88,34 @@
   }
 
   // Inline message: shown in the page beside what the user touched.
-  function say(el, text) { el.textContent = text; el.hidden = false; }
+  //
+  // The element is MOVED next to `anchor` before it is shown. A message that
+  // renders in its template position can land hundreds of pixels below the
+  // fold on a phone — which looks exactly like the dead browser dialog this
+  // replaced, so the position is part of the fix, not decoration. Moving the
+  // one element keeps the id stable for anything addressing it.
+  function say(anchor, el, text) {
+    if (anchor && el.previousElementSibling !== anchor) {
+      anchor.insertAdjacentElement("afterend", el);
+    }
+    el.textContent = text;
+    el.hidden = false;
+    // Only scrolls if it isn't already fully visible, and only as far as it
+    // has to — no jump when the message is already under the user's thumb.
+    el.scrollIntoView({ block: "nearest" });
+  }
 
   // Scroll a section into view and pulse it — the in-page way to point at the
-  // step that has to happen first.
+  // step that has to happen first. The message rides along to the section
+  // being scrolled to, or the words explaining the flash end up off-screen in
+  // the section the user just left.
   function flashSection(el, msgEl, text) {
-    if (msgEl) say(msgEl, text);
-    if (!el) return;
+    if (!el) { if (msgEl) say(null, msgEl, text); return; }
+    if (msgEl) {
+      el.insertAdjacentElement("afterend", msgEl);
+      msgEl.textContent = text;
+      msgEl.hidden = false;
+    }
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1400);
@@ -134,21 +156,29 @@
       // navigator.clipboard is missing or blocked in several in-app browsers
       // (Telegram's among them). Falling back to a selection keeps the flow
       // alive instead of dead-ending on a silent failure.
+      clearTimeout(revert);
       try {
         await navigator.clipboard.writeText(codeString);
+        // Confirmation is transient; the instruction it replaces is not.
         state.textContent = "Copied ✓";
+        revert = setTimeout(() => { state.textContent = "Copy"; }, 1500);
       } catch (err) {
+        // This IS the recovery instruction — it stays until the card closes,
+        // or it disappears while the user is still pressing and holding.
         selectContents(codeEl);
         state.textContent = "Press and hold to copy";
       }
-      clearTimeout(revert);
-      revert = setTimeout(() => { state.textContent = "Copy"; }, 1500);
     };
     $("code-done").onclick = () => dlg.close(null);
     $("code-done").focus();  // never the code itself — that pops the keyboard
     // A pairing code is a short-lived credential; don't leave it in the DOM
-    // after the card that needed it is gone.
-    dlg.result.then(() => { clearTimeout(revert); codeEl.textContent = ""; });
+    // after the card that needed it is gone. The iMessage instructions quote
+    // the code (and the handle), so they have to go with it.
+    dlg.result.then(() => {
+      clearTimeout(revert);
+      codeEl.textContent = "";
+      $("code-instructions").textContent = "";
+    });
   }
 
   function selectContents(el) {
@@ -179,9 +209,11 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const say = (t) => { msg.textContent = t; msg.hidden = false; };
+      // Named apart from the module-scope say(anchor, el, text): this one is
+      // card-local and takes only the text.
+      const report = (t) => { msg.textContent = t; msg.hidden = false; };
       btn.disabled = true;
-      say("Checking…");
+      report("Checking…");
       let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
       // 428 means this deployment wants consent re-affirmed for the re-pull.
       if (!res.ok && res.d.error === "consent_required") {
@@ -191,11 +223,11 @@
                          { consent: true });
       }
       btn.disabled = false;
-      if (!res.ok) return say(res.d.error || "Couldn't refresh right now.");
-      if (res.d.unsupported) return say(res.d.reason);
+      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
-        say("Finish signing in to your provider — new records appear here.");
+        report("Finish signing in to your provider — new records appear here.");
         watchForNewRecords(card, msg);
       }
     });
@@ -329,7 +361,7 @@
     }
     const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/telegram", { agent_id: agentId });
-    if (!res.ok) return say($("surfaces-msg"), res.d.error || "Failed");
+    if (!res.ok) return say(tg, $("surfaces-msg"), res.d.error || "Failed");
     if (res.d.deep_link) { $("tg-state").textContent = "opening…"; window.open(res.d.deep_link, "_blank", "noopener"); }
     // Telegram pairs on the bare code, so that is what we show and copy.
     else showCodeCard(res.d.code, "Send this code to the CareAgents bot with /start:");
@@ -347,7 +379,7 @@
     }
     const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
-    if (!res.ok) return say($("surfaces-msg"), res.d.error || "Failed");
+    if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
     $("im-state").textContent = "pending — text to finish";
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
