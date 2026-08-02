@@ -99,6 +99,11 @@ def _stamp(ts) -> str:
     # 1970-01-01 states a moment that never happened, on the very line a human
     # reads at 03:00 on the alarm this check exists to raise. Negatives are the
     # same defect one value over: _build passes int() through unbounded.
+    # bool is an int, so True would otherwise survive as 1970-01-01. Nothing we
+    # serve can produce it, which is exactly the argument a monitor is not
+    # allowed to make about the field it is auditing.
+    if isinstance(ts, bool):
+        return ""
     try:
         if not ts or int(ts) <= 0:
             return ""
@@ -296,6 +301,16 @@ def main() -> int:
         return 1
     code = run(args.timeout, expect)
     payload = {"ok": code == 0,
+               # "nothing is wrong" and "nothing an outage alarm speaks for is
+               # wrong" are different questions, and the outage alarm needs the
+               # second. A healthy deployment running a stale build exits 2, so
+               # `ok` is False with zero hard failures — closing the outage
+               # alarm on `ok` would leave it open, saying production is
+               # failing, for the entire window between any merge to main and a
+               # manual CareAgents redeploy. That is the normal state of this
+               # repo, not an edge case, and it is the exact meaning-destruction
+               # the two-alarm split exists to prevent.
+               "hard_ok": code != 1,
                "checks": [{"name": n, "ok": o, "detail": d}
                           for n, o, d in results],
                # Separate from `checks` on purpose: in informational mode the

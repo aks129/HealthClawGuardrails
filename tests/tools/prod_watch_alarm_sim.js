@@ -73,23 +73,27 @@ async function runScript(env) {
 const OUTAGE = 'prod-watch: production checks failing';
 const STALE = 'prod-watch: deployed build is stale';
 
-function statusOf({ ok, asserted, buildOk }) {
-  return JSON.stringify({ ok, checks: [], build: { deployed: 'x', asserted, ok: buildOk } });
+// `hard_ok` defaults to `ok` because they agree everywhere except the case
+// N9 was about: a healthy deployment on a stale build exits 2, so `ok` is
+// false while no hard check failed. Pass it explicitly on those rows.
+function statusOf({ ok, asserted, buildOk, hardOk = ok }) {
+  return JSON.stringify({ ok, hard_ok: hardOk, checks: [],
+                          build: { deployed: 'x', asserted, ok: buildOk } });
 }
 
 const cases = [
   // name, exit, status.json content, pre-open issues
   ['healthy, nothing pinned (informational)', '0', statusOf({ ok: true, asserted: false, buildOk: null }), [OUTAGE, STALE]],
   ['healthy, build current', '0', statusOf({ ok: true, asserted: true, buildOk: true }), [OUTAGE, STALE]],
-  ['healthy, build STALE', '2', statusOf({ ok: false, asserted: true, buildOk: false }), []],
-  ['healthy, build STALE, stale issue already open', '2', statusOf({ ok: false, asserted: true, buildOk: false }), [STALE]],
+  ['healthy, build STALE', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), []],
+  ['healthy, build STALE, stale issue already open', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), [STALE]],
   ['OUTAGE + build stale (the F1 scenario)', '1', statusOf({ ok: false, asserted: true, buildOk: false }), [STALE]],
   ['OUTAGE, healthz unreachable so build unasserted', '1', statusOf({ ok: false, asserted: false, buildOk: null }), [STALE]],
   ['--- RECOVERY: does a live outage issue ever close again? ---'],
   ['recovered, build current, outage issue open', '0', statusOf({ ok: true, asserted: true, buildOk: true }), [OUTAGE]],
   ['recovered, nothing pinned, outage issue open', '0', statusOf({ ok: true, asserted: false, buildOk: null }), [OUTAGE]],
-  ['recovered but build STALE, outage issue open', '2', statusOf({ ok: false, asserted: true, buildOk: false }), [OUTAGE]],
-  ['recovered but build stale, both issues open', '2', statusOf({ ok: false, asserted: true, buildOk: false }), [OUTAGE, STALE]],
+  ['recovered but build STALE, outage issue open', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), [OUTAGE]],
+  ['recovered but build stale, both issues open', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), [OUTAGE, STALE]],
   ['--- status.json MISSING ---'],
   ['missing file, exit 0', '0', undefined, [OUTAGE, STALE]],
   ['missing file, exit 1 (non-hex origin/main guard path)', '1', undefined, [OUTAGE, STALE]],

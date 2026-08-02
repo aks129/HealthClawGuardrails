@@ -96,7 +96,13 @@ jobs:
             // runner OOM (137), a `uv` usage error (2), an unset step output —
             // none of which checked production at all. `status.ok` is written
             // only by a completed run in which every check passed.
-            const allPassed = status?.ok === true;
+            // `hard_ok`, not `ok`: a healthy deployment running a stale build
+            // exits 2, so `ok` is false while nothing this alarm speaks for is
+            // wrong. Closing on `ok` would pin the outage issue open — claiming
+            // production is failing — for the whole window between a merge and
+            // a manual CareAgents redeploy, which is this repo's normal state.
+            // The stale alarm covers the build; this one must not also.
+            const allPassed = status?.hard_ok === true;
             // A stale build detected but unreportable must not go silent: if
             // the verdict file is unreadable we still have the exit code the
             // old logic used, and 2 means exactly one thing. Belt and braces,

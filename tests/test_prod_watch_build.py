@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -233,6 +234,25 @@ def test_the_scheduled_run_still_writes_the_file_its_alarms_read():
     assert "readFileSync('status.json'" in WORKFLOW
 
 
+def _payload_for(code: int) -> dict:
+    """The JSON payload main() would emit for a given run outcome."""
+    import argparse
+    import json as _json
+    ns = argparse.Namespace(timeout=1.0, json=False, json_out=None,
+                            expect_sha=["a" * 40])
+    real_run, real_parse = prod_watch.run, argparse.ArgumentParser.parse_args
+    written = {}
+    try:
+        prod_watch.run = lambda *a, **k: code
+        argparse.ArgumentParser.parse_args = lambda self, *a, **k: ns
+        ns.json_out = str(tmp := Path(tempfile.mkdtemp()) / "s.json")
+        prod_watch.main()
+        written = _json.loads(Path(tmp).read_text())
+    finally:
+        prod_watch.run, argparse.ArgumentParser.parse_args = real_run, real_parse
+    return written
+
+
 def test_the_outage_alarm_is_never_closed_by_an_exit_code_alone():
     # Asserted positively, not as "the old wrong predicate is absent". The
     # negative form passed for `status !== null` and for `status?.ok !== false`
@@ -240,8 +260,24 @@ def test_the_outage_alarm_is_never_closed_by_an_exit_code_alone():
     # on a missing verdict file and puts the whole defect straight back. What
     # matters is that closing requires a positive observation, so pin the
     # observation.
-    assert "const allPassed = status?.ok === true;" in WORKFLOW
+    # `hard_ok`, not `ok`: closing on `ok` was N9 — a healthy deployment on a
+    # stale build exits 2, so `ok` is false with nothing this alarm speaks for
+    # broken, and the outage issue could never close again. Both properties
+    # matter, so pin both: a positive observation, and the right one.
+    assert "const allPassed = status?.hard_ok === true;" in WORKFLOW
     assert "hardFailing, allPassed," in WORKFLOW
+
+
+def test_the_payload_separates_a_hard_failure_from_any_failure():
+    # The distinction the outage alarm rests on. If `hard_ok` ever collapses
+    # back into `ok`, N9 returns silently: the alarm keeps closing on the wrong
+    # question and nothing else in the suite notices.
+    healthy_stale = _payload_for(code=2)
+    assert healthy_stale["ok"] is False and healthy_stale["hard_ok"] is True
+    outage = _payload_for(code=1)
+    assert outage["ok"] is False and outage["hard_ok"] is False
+    green = _payload_for(code=0)
+    assert green["ok"] is True and green["hard_ok"] is True
 
 
 def test_a_stale_build_still_alarms_when_the_verdict_file_is_unusable():
@@ -270,20 +306,6 @@ def test_a_real_timestamp_still_renders():
     assert prod_watch._stamp("1754056800") == "2025-08-01T14:00Z"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT: the outage alarm now closes on `status.ok === true`, but `ok` is "
-    "`code == 0` and a healthy deployment running a stale build exits 2. So a "
-    "live outage issue CANNOT close while the build is stale, even though "
-    "every hard check passed — production is up and the issue keeps saying it "
-    "is down. That is the mirror of N3, and it is the frequent case, not the "
-    "exotic one: CareAgents does not auto-deploy, so the build is stale for "
-    "most of the window between a merge and a manual redeploy, and production "
-    "reports build=unknown right now. scripts/prod_watch.py's own docstring "
-    "states the property being broken: 'a stale build holding the outage "
-    "issue open would destroy the meaning of the outage issue.' The payload "
-    "needs a hard-failure verdict the workflow can close on, separate from "
-    "the all-checks verdict. Repro: node tests/tools/prod_watch_alarm_sim.js, "
-    "row 'recovered but build STALE, outage issue open' -> outage=untouched."))
 def test_a_healthy_deployment_can_always_close_its_outage_alarm(
         monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(prod_watch, "get", _fake_get(build="0bad0bad0bad"))
