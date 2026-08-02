@@ -65,6 +65,230 @@ CareAgents identity store use shared databases. The claim path is PostgreSQL
 safe (`FOR UPDATE SKIP LOCKED`); SQLite remains development-only for multiple
 hosts.
 
+## Railway
+
+Two services built from one image. The only configuration that differs is
+`CARE_ROLE` — and the public domain, which only the web service needs.
+`railway add` has no start-command option, so the role has to travel in the
+environment:
+`deploy/careagents/Dockerfile` dispatches on it at start-up — `web` (the
+default) runs gunicorn, `worker` runs `python -m careagents.worker`, and any
+other value exits non-zero instead of quietly starting a second web server
+(#273).
+
+Two things own the role, and neither is the dashboard: the image, and
+`CARE_ROLE`. Leave `startCommand` unset on both services. A custom start
+command in the console silently overrides the dispatch, and `CARE_ROLE` then
+means nothing — the live web service runs on Railway defaults
+(`startCommand`, `builder`, `rootDirectory`, `restartPolicyType` all unset) for
+exactly that reason.
+
+### Stage the build
+
+**Do not create the service from the GitHub repo.** A repo-connected build
+picks up the repo-root `railway.toml`, which points at the repo-root
+`Dockerfile` — the HealthClaw Flask app, not CareAgents. You would get a
+"worker" serving `gunicorn main:app`, running the Flask migrations and demo
+seeding in `preDeployCommand` against whatever database is bound. Deploy from a
+staging directory instead, the same way the web service is deployed and for the
+same reason `docs/development.md` gives for the MCP server.
+
+From the repo root, on the commit you intend to ship:
+
+```bash
+STAGE="$(mktemp -d)"
+cp pyproject.toml uv.lock "$STAGE/"
+cp -R careagents "$STAGE/"
+cp deploy/careagents/Dockerfile "$STAGE/Dockerfile"
+./deploy/careagents/stamp_build.sh "$STAGE"    # prints e.g. build 4f2a91cbeef1
+```
+
+That is everything the image's build context needs. The Dockerfile goes to the
+stage root under its default name so Railway's builder finds it without a
+`dockerfilePath` — the same reason it must not be a repo-connected build.
+
+Stamp last: `cp -R careagents` may carry a stale `BUILD_SHA` in from your
+checkout, and the stamp overwrites it. Stamp for **both** services — each
+`railway up` is its own upload, so a worker deployed from an unstamped stage
+reports `build: unknown` while the web service reports the commit you meant to
+ship. That is the pair of deployments #258 could not tell apart.
+
+### Create the worker service
+
+The worker runs `Config()` (`careagents/worker.py`), the same unconditional
+constructor the web app runs. In production it `_require`s
+`CARE_SESSION_SECRET` (32 chars or more), `HEALTHCLAW_MINT_SECRET`,
+`RESEND_API_KEY`, and an LLM credential — **including the two the worker never
+uses**. It sends no email and has no sessions; it still refuses to boot without
+them, and a worker service missing either crash-loops on:
+
+```text
+careagents.config.ConfigError: CARE_SESSION_SECRET is required in production
+careagents.config.ConfigError: RESEND_API_KEY is required in production
+```
+
+So do not hand-pick variables. The rule is: **mirror every non-`RAILWAY_*`
+variable from the web service**, as a reference rather than a copied value.
+Enumerate them rather than trusting a list in a document — the set drifts:
+
+Run this from the repo root. Link the **project** first — not the worker
+service, which does not exist yet:
+
+```bash
+railway link --project <project-id> --environment production
+```
+
+The whole block runs in a subshell. It exits on any failure, and `exit` in a
+shell you pasted into is your session — which would also lose `$STAGE`, since
+that is a `mktemp -d` path held only in a shell variable, forcing you to redo
+the staging. The parentheses keep the failure inside.
+
+```bash
+(
+WEB=careagents                      # the existing web service
+
+# Names only: --json keeps every value inside the pipe. Parsing --kv with sed
+# would put a multi-line value's continuation line into the name list, and from
+# there into a `railway add` argv and your shell history.
+#
+# Everything that can go wrong here fails CLOSED, because the service this
+# creates boots GREEN when it is wrong: without CARE_ENV, Config() takes the
+# development path, requires nothing, and the container runs while claiming no
+# work. Railway shows it healthy, /healthz stays 503, and the ConfigError this
+# runbook tells you to look for was never raised.
+NAMES=$(railway variables list --service "$WEB" --json | python3 -c '
+import json, re, sys
+d = json.load(sys.stdin)                       # empty/banner/error output -> dies here
+if not isinstance(d, dict):
+    sys.exit("expected a JSON object of variables")
+
+names = [k for k in d if not re.match(r"RAILWAY_|PORT$|CARE_ROLE$", k)]
+
+# Reject unreferenceable names LOUDLY. Filtering them would be a silent drop,
+# and nothing downstream could tell that from a healthy read. The rule is
+# Railway/POSIX, not Python: str.isidentifier() accepts "CAFÉ_KEY" and the
+# Cyrillic-Е homoglyph "CARE_ЕNV", neither of which ${{web.NAME}} resolves.
+# Checked after the exclusion, so a name we were never going to forward cannot
+# block the run.
+bad = sorted(k for k in names if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k))
+if bad:
+    sys.exit("cannot build a reference for: " + ", ".join(bad))
+
+# What the worker cannot boot without, from careagents/config.py. Named, not
+# counted: a threshold blocks a legitimate cleanup and waves through fifteen
+# names that happen to omit CARE_ENV — the one whose absence turns a broken
+# worker green.
+missing = {"CARE_ENV", "CARE_SESSION_SECRET", "HEALTHCLAW_MINT_SECRET",
+           "RESEND_API_KEY"} - set(names)
+if missing:
+    sys.exit("enumeration is missing " + ", ".join(sorted(missing)))
+if not {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"} & set(names):
+    sys.exit("enumeration has no LLM credential")
+
+print("\n".join(names))
+') || exit 1
+
+args=(--service careagents-worker --variables "CARE_ROLE=worker")
+# `while read`, not `for name in $NAMES`: zsh does not word-split unquoted
+# expansions, so a for-loop runs ONCE over the whole list and collapses all 17
+# names into a single malformed --variables argument. The service then boots
+# without CARE_ENV, takes the development path where nothing is required, and
+# runs green while draining nothing — no ConfigError to find. This loop
+# behaves the same in bash and zsh.
+while IFS= read -r name; do
+  [ -n "$name" ] && args+=(--variables "$name=\${{$WEB.$name}}")
+done <<< "$NAMES"
+
+railway add "${args[@]}"
+)
+```
+
+If it refuses, it names what it found and nothing was created. **`cannot build
+a reference for: MY-VAR`** — Railway holds a name that `${{web.NAME}}` cannot
+express. Either rename it on the web service, or, if the worker does not need
+it, add it to the exclusion pattern beside `PORT` and `CARE_ROLE`.
+**`enumeration is missing CARE_ENV`** — you are reading the wrong service or
+project; check `railway status` before retrying. In both cases `$STAGE` is
+intact and you can re-run the block as-is.
+
+A reference resolves at deploy time, so rotating the web service's secret
+rotates the worker's with it and no secret is ever pasted into a second field.
+At the time of writing the web service carries 17 of them: `CARE_DATABASE_URL`,
+`CARE_EMAIL_FROM`, `CARE_ENV`, `CARE_IMESSAGE_HANDLE`, `CARE_MODEL`,
+`CARE_OPENAI_MODEL`, `CARE_ORIGIN`, `CARE_RP_ID`, `CARE_RP_NAME`,
+`CARE_SESSION_SECRET`, `CARE_TELEGRAM_BOT`, `FASTEN_PUBLIC_KEY`,
+`HEALTHCLAW_BASE`, `HEALTHCLAW_MINT_SECRET`, `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, `RESEND_API_KEY`. Note which LLM credential that is:
+`ANTHROPIC_API_KEY` is **not** set, which is why `/healthz` reports
+`provider: openai`. Referencing a variable the web service does not have gives
+you an empty value — a boot refusal if it was the only credential, or worse, a
+worker that claims runs and fails every one at inference while readiness reports
+green.
+
+Give the worker **no healthcheck path and no public domain**. It serves no
+HTTP, so Railway's default (no path configured, which is what the web service
+also runs with) is correct; a healthcheck path copied across from the web
+service leaves the deploy permanently un-healthy. The `HEALTHCHECK` in the
+Dockerfile is a different thing — Railway ignores it, and it is role-aware
+anyway (`careagents/healthcheck.py` checks queue presence for the worker).
+
+### Deploy and confirm it worked
+
+**`cd` into the stage; do not pass it as an argument.** `railway up <path>`
+roots the archive at the *project directory* rather than at the path unless you
+add `--path-as-root`, and it applies `.gitignore` — which lists
+`careagents/BUILD_SHA`. Run from the repo root and the marker is dropped from
+the upload, leaving a deployment that reports `build: unknown` and alarms as
+stale forever. `cd`-then-`up` is the form that has actually been used to deploy
+this service.
+
+```bash
+cd "$STAGE" && railway up --service careagents-worker --detach
+```
+
+You linked the project before creating the service, and `--service` on each
+`railway up` picks the target, so no second `railway link` is needed.
+
+One stage serves both roles. Upload it twice — once per service — and the two
+report the same `build`:
+
+```bash
+cd "$STAGE"
+railway up --service careagents        --detach   # production web redeploy
+railway up --service careagents-worker --detach
+```
+
+Then confirm from the **web** service, which is where the worker becomes
+visible. Readiness flips only once a worker's presence is fresh:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://careagents.cloud/healthz   # 200
+curl -s https://careagents.cloud/healthz                                    # "run_workers": true
+```
+
+`200` with `"run_workers": true` and a `build` matching the commit you staged is
+the finish line. If it stays 503, the worker is not running: check its deploy
+logs for a `ConfigError`, and check presence directly with the
+`agent_worker_presence` query under [Operations](#operations).
+
+### A deployment with only the web service
+
+It looks healthy in a browser — the landing page and `/auth` render — and fails
+everywhere that matters:
+
+```text
+GET /healthz -> 503
+{"accounts": true, "provider": "openai", "run_workers": false,
+ "status": "degraded"}
+
+POST /api/chat -> run_workers_unavailable
+```
+
+That is readiness failing closed because no durable worker presence is fresh,
+not a regression. The fix is to add the worker service. Never relax the check:
+a green `/healthz` with nothing draining the queue is the state the fail-closed
+design exists to make visible.
+
 ## Compose
 
 Run the optional local profile:
