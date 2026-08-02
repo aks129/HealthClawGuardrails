@@ -4,8 +4,10 @@
 # so deploy with:  railway up  from a staging dir, or set the service's
 # Dockerfile path to deploy/careagents/Dockerfile with root as context.
 #
-# The image supports two process roles: the default web command below, and
-# ``python -m careagents.worker`` for the durable inference/tool worker.
+# The image supports two process roles, selected at start-up by CARE_ROLE:
+# ``web`` (the default) serves the app, and ``worker`` runs the durable
+# inference/tool worker. Railway's `railway add` has no start-command option,
+# so the role has to be reachable through the environment alone (#273).
 
 FROM python:3.11-slim
 
@@ -37,7 +39,19 @@ EXPOSE 8600
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -m careagents.healthcheck
 
-CMD ["sh", "-c", "gunicorn careagents.wsgi:app \
+# One image, two roles. `exec` so the role process replaces the shell and
+# receives the platform's SIGTERM directly: gunicorn drains, and
+# careagents.worker stops its pool through the handler it installs — neither
+# happens if a shell sits between them as PID 1. An unrecognised role exits
+# rather than falling through to web: a typo'd worker service that quietly
+# started a second web server would report itself healthy while nothing ever
+# drained the run queue. `${CARE_ROLE-web}`, not `${CARE_ROLE:-web}`, because
+# only an unset variable means "default" — an empty one is a broken config.
+CMD ["sh", "-c", "case \"${CARE_ROLE-web}\" in \
+  web) exec gunicorn careagents.wsgi:app \
   --bind 0.0.0.0:${PORT:-8600} --workers ${CARE_WEB_WORKERS:-2} --threads 4 --timeout 180 \
   --access-logfile - --error-logfile - \
-  --access-logformat '%(h)s \"%(r)s\" %(s)s %(M)sms'"]
+  --access-logformat '%(h)s \"%(r)s\" %(s)s %(M)sms' ;; \
+  worker) exec python -m careagents.worker ;; \
+  *) echo \"careagents: unknown CARE_ROLE '$CARE_ROLE' (expected web or worker)\" >&2; exit 2 ;; \
+esac"]

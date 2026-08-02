@@ -65,6 +65,65 @@ CareAgents identity store use shared databases. The claim path is PostgreSQL
 safe (`FOR UPDATE SKIP LOCKED`); SQLite remains development-only for multiple
 hosts.
 
+## Railway
+
+Two services, one image, differing only by `CARE_ROLE`. `railway add` has no
+start-command option, so the role has to travel in the environment:
+`deploy/careagents/Dockerfile` dispatches on it at start-up — `web` (the
+default) runs gunicorn, `worker` runs `python -m careagents.worker`, and any
+other value exits non-zero instead of quietly starting a second web server
+(#273).
+
+Create the worker service from the same repo and the same Dockerfile path as
+the web service, then set `CARE_ROLE=worker` on it. It performs the inference
+and the tool calls, so it needs the same configuration the web service has, not
+a subset — a worker pointed at a different HealthClaw, holding a different mint
+secret, or reading a different accounts database claims nothing and its
+presence never reaches the web role's readiness check. Railway variable
+*references* share that configuration without copying secret values anywhere:
+
+| Worker variable | Value |
+| --- | --- |
+| `CARE_ROLE` | `worker` |
+| `HEALTHCLAW_BASE` | `${{careagents.HEALTHCLAW_BASE}}` |
+| `HEALTHCLAW_MINT_SECRET` | `${{careagents.HEALTHCLAW_MINT_SECRET}}` |
+| `CARE_DATABASE_URL` | `${{careagents.CARE_DATABASE_URL}}` |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | `${{careagents.ANTHROPIC_API_KEY}}` |
+| `CARE_ENV` | `${{careagents.CARE_ENV}}` |
+
+Substitute the web service's own name for `careagents`. A reference resolves at
+deploy time, so rotating the web service's secret rotates the worker's with it
+and the value is never pasted into a second dashboard field.
+
+Stamp the build marker for **both** services. Each is its own upload, so run
+
+```bash
+./deploy/careagents/stamp_build.sh "$STAGE"
+```
+
+against the staging directory before every `railway up`, whichever service it
+targets. A worker deployed from an unstamped stage reports `build: unknown`
+while the web service reports the commit you meant to ship, which is precisely
+the pair of deployments #258 could not tell apart.
+
+### A deployment with only the web service
+
+It looks healthy in a browser — the landing page and `/auth` render — and fails
+everywhere that matters:
+
+```text
+GET /healthz -> 503
+{"accounts": true, "provider": "openai", "run_workers": false,
+ "status": "degraded"}
+
+POST /api/chat -> run_workers_unavailable
+```
+
+That is readiness failing closed because no durable worker presence is fresh,
+not a regression. The fix is to add the worker service. Never relax the check:
+a green `/healthz` with nothing draining the queue is the state the fail-closed
+design exists to make visible.
+
 ## Compose
 
 Run the optional local profile:
