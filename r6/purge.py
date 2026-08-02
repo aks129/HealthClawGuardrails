@@ -59,6 +59,7 @@ def purge_tenant(tenant_id):
     for import_path, attr, label in (
             ("r6.actions.models", "ProposedAction", "proposed_actions"),
             ("r6.command_center.models", "ConversationMessage", "messages"),
+            ("r6.command_center.models", "Conversation", "conversations"),
             ("r6.command_center.models", "AgentTask", "agent_tasks"),
             ("r6.fasten.models", "FastenConnection", "fasten_connections"),
             ("r6.fasten.models", "FastenJob", "fasten_jobs"),

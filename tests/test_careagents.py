@@ -28,7 +28,8 @@ def test_production_config_requires_every_secret():
             Config(env={**base, **missing})
     ok = Config(env={**base, "CARE_SESSION_SECRET": "x" * 32,
                      "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
-                     "RESEND_API_KEY": "r"})
+                     "RESEND_API_KEY": "r",
+                     "REDIS_URL": "redis://localhost:6379/1"})
     assert ok.provider == "openai" and ok.rp_id == "careagents.cloud"
 
 
@@ -41,6 +42,7 @@ def test_production_on_sqlite_warns_loudly(caplog):
         Config(env={"CARE_ENV": "production", "CARE_SESSION_SECRET": "x" * 32,
                     "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
                     "RESEND_API_KEY": "r",
+                    "REDIS_URL": "redis://localhost:6379/1",
                     "CARE_DATABASE_URL": "sqlite:///careagents.db"})
     assert any("SQLite" in r.message and "Postgres" in r.message
                for r in caplog.records)
@@ -53,6 +55,7 @@ def test_production_on_postgres_does_not_warn(caplog):
                           "CARE_SESSION_SECRET": "x" * 32,
                           "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
                           "RESEND_API_KEY": "r",
+                          "REDIS_URL": "redis://localhost:6379/1",
                           "CARE_DATABASE_URL":
                               "postgresql://u:p@db:5432/care"})
     assert cfg.database_url.startswith("postgresql")
@@ -125,14 +128,18 @@ def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
 
 # --- chat persistence (#222) --------------------------------------------------
 
-def _turn(client, agent_id, message):
+def _turn(client, agent_id, message, request_id=None, conversation_id=None):
     """Post a chat turn AND drain the SSE stream, as a browser does.
 
     The response body is a generator; without reading it the turn never
     actually runs to completion.
     """
-    r = client.post("/api/chat",
-                    json={"agent_id": agent_id, "message": message})
+    payload = {"agent_id": agent_id, "message": message}
+    if request_id:
+        payload["request_id"] = request_id
+    if conversation_id:
+        payload["conversation_id"] = conversation_id
+    r = client.post("/api/chat", json=payload)
     r.get_data()
     return r
 
@@ -157,29 +164,20 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
         "connection_id": conn["id"]}).get_json()["id"]
-    return app, c, fake, agent_id, fake.tenants[-1]
+    return app, c, fake, agent_id, fake.tenants[-1], conn["id"]
 
 
-def test_log_message_does_not_send_a_careagents_agent_id_upstream():
-    """Caught in Phase 1 acceptance testing against a live stack, not by any
-    unit test.
-
-    HealthClaw's conversation endpoint validates `agent_id` against its own
-    command-center agent registry. CareAgents agent ids are a different
-    namespace, so sending one is rejected with 400 — and because persistence
-    is deliberately best-effort, every chat turn would have silently failed to
-    save in production while the feature looked shipped.
-
-    The other tests here use a FakeClient that accepts any agent_id, so they
-    prove the app CALLS log_message, not that log_message works. This one pins
-    the wire format where a fake cannot paper over it.
-    """
+def test_log_message_sends_explicit_agent_and_conversation_identity():
+    """The wire contract preserves CareAgents identity across surfaces."""
     import careagents.healthclaw as hcmod
 
     sent = {}
 
     class _Resp:
         status_code = 201
+
+        def json(self):
+            return {"id": "message-1"}
 
     class _HTTP:
         def post(self, url, json=None, headers=None, timeout=None):
@@ -190,9 +188,13 @@ def test_log_message_does_not_send_a_careagents_agent_id_upstream():
     client.http = _HTTP()
     client.mint_token = lambda tenant: "tok"
 
-    assert client.log_message("t-1", "user", "hi", "ag_care_123") is True
-    assert "agent_id" not in sent, (
-        "a CareAgents agent id in the endpoint's agent_id field is a 400")
+    assert client.log_message(
+        "t-1", "user", "hi", "ag_care_123",
+        "careagents:ag_care_123", surface="web",
+    ) is True
+    assert sent["agent_id"] == "ag_care_123"
+    assert sent["conversation_id"] == "careagents:ag_care_123"
+    assert sent["surface"] == "web"
     assert sent["metadata"]["careagents_agent_id"] == "ag_care_123"
     assert sent["tenant_id"] == "t-1" and sent["text"] == "hi"
 
@@ -251,10 +253,10 @@ def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
         cfg, svc, monkeypatch):
     # The transcript is PHI-adjacent, so it belongs behind the guardrails in
     # the tenant — never in CareAgents' own tables.
-    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
     _turn(c, agent_id, "hi there")
 
-    stored = fake.logged[tenant]
+    stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[0]["content"] == "hi there"
     assert stored[1]["content"] == "here you go"
@@ -264,7 +266,7 @@ def test_a_returning_person_sees_the_conversation_they_had(cfg, svc,
                                                            monkeypatch):
     # The core of #222: process memory is a cache, not the record. Wiping it
     # (a deploy, a restart, idle eviction) must not make the agent forget.
-    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
     _turn(c, agent_id, "am I due for a flu shot?")
 
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
@@ -274,7 +276,7 @@ def test_a_returning_person_sees_the_conversation_they_had(cfg, svc,
 
 def test_a_cold_process_rehydrates_instead_of_starting_over(cfg, svc,
                                                             monkeypatch):
-    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
     _turn(c, agent_id, "first question")
 
     # Simulate the restart: everything in memory is gone, the store is not.
@@ -298,17 +300,133 @@ def test_a_cold_process_rehydrates_instead_of_starting_over(cfg, svc,
     _turn(c2, agent_id, "second question")
 
     assert "first question" in seen[0], "the new process forgot the conversation"
+    assert seen[0].count("second question") == 1
+
+
+def test_two_agents_on_one_connection_have_isolated_transcripts(
+        cfg, svc, monkeypatch):
+    _app, c, fake, first_agent, tenant, conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    second_agent = c.post("/api/agents", json={
+        "name": "Cedar",
+        "persona": "calm",
+        "connection_id": conn_id,
+    }).get_json()["id"]
+
+    _turn(c, first_agent, "only Juniper should see this")
+    _turn(c, second_agent, "only Cedar should see this")
+
+    first = fake.logged[(tenant, fake.conversation_id(first_agent))]
+    second = fake.logged[(tenant, fake.conversation_id(second_agent))]
+    assert "Cedar" not in " ".join(m["content"] for m in first)
+    assert "Juniper" not in " ".join(m["content"] for m in second)
+    assert first[0]["content"] == "only Juniper should see this"
+    assert second[0]["content"] == "only Cedar should see this"
+
+
+def test_duplicate_inbound_request_runs_the_model_once(cfg, svc, monkeypatch):
+    _app, c, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    from careagents import agent as agent_mod
+
+    calls = {"count": 0}
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "once", [], []
+
+    def _complete(*args, **kwargs):
+        calls["count"] += 1
+        return _Turn()
+
+    monkeypatch.setattr(agent_mod.llm, "complete", _complete)
+    first = _turn(c, agent_id, "one delivery", request_id="delivery-1")
+    replay = _turn(c, agent_id, "one delivery", request_id="delivery-1")
+
+    assert calls["count"] == 1
+    assert '"type": "duplicate"' in replay.get_data(as_text=True)
+    stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
+    assert [message["role"] for message in stored] == ["user", "assistant"]
+    assert first.status_code == replay.status_code == 200
+
+
+def test_web_and_imessage_resume_the_same_explicit_conversation(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    _turn(c, agent_id, "remember this from web", request_id="web-1")
+
+    surface = c.post(
+        "/api/surfaces/imessage", json={"agent_id": agent_id}).get_json()
+    relay = app.test_client()
+    headers = {"X-Internal-Secret": cfg.mint_secret}
+    assert relay.post(
+        "/api/surfaces/imessage/bind",
+        headers=headers,
+        json={"code": surface["code"], "handle": "+15551234567"},
+    ).status_code == 200
+
+    seen = []
+
+    def reply(_cfg, _hc, _tenant, _system, history, text, **kwargs):
+        seen.extend(message["content"] for message in history)
+        return "continued on iMessage"
+
+    monkeypatch.setattr("careagents.app.run_turn_to_message", reply)
+    response = relay.post(
+        "/api/surfaces/imessage/inbound",
+        headers=headers,
+        json={
+            "handle": "+15551234567",
+            "text": "continue here",
+            "request_id": "imessage-1",
+            "conversation_id": fake.conversation_id(agent_id),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "remember this from web" in seen
+    stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
+    assert {message["surface"] for message in stored} == {"web", "imessage"}
+
+
+def test_conversation_lock_serializes_concurrent_turns():
+    import threading
+    import time
+
+    from careagents.conversation_locks import ConversationTurnLocks
+
+    locks = ConversationTurnLocks()
+    state = {"active": 0, "maximum": 0}
+    guard = threading.Lock()
+
+    def work():
+        with locks.hold("tenant:careagents:agent"):
+            with guard:
+                state["active"] += 1
+                state["maximum"] = max(state["maximum"], state["active"])
+            time.sleep(0.02)
+            with guard:
+                state["active"] -= 1
+
+    threads = [threading.Thread(target=work) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert state["maximum"] == 1
+    assert locks._local == {}, "idle conversation locks leaked forever"
 
 
 def test_a_storage_outage_does_not_break_the_chat(cfg, svc, monkeypatch):
-    # Losing the transcript is bad; failing the conversation in front of the
-    # person is worse. Persistence is best-effort by design.
-    app, c, fake, agent_id, tenant = _chat_app(cfg, svc, monkeypatch)
-    monkeypatch.setattr(fake, "log_message",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            HealthClawError("store down", 500)))
+    # A user turn must be durably claimed before inference. Otherwise a retry
+    # can execute the same health action twice.
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(fake, "claim_inbound_message",
+                        lambda *a, **k: (None, None))
     r = _turn(c, agent_id, "still works?")
     assert r.status_code == 200
+    assert "could not save this message safely" in r.get_data(as_text=True)
 
 
 def test_history_is_trimmed_but_never_orphans_a_tool_call():
@@ -420,6 +538,7 @@ def test_anthropic_oauth_token_selects_anthropic_provider():
     prod = Config(env={"CARE_ENV": "production",
                        "CARE_SESSION_SECRET": "x" * 32,
                        "HEALTHCLAW_MINT_SECRET": "m", "RESEND_API_KEY": "r",
+                       "REDIS_URL": "redis://localhost:6379/1",
                        "ANTHROPIC_OAUTH_TOKEN": "oat-abc"})
     assert prod.provider == "anthropic"  # satisfies the prod LLM-cred gate
 
@@ -460,17 +579,43 @@ class FakeClient:
         self.seeded = []
         # Tenants this client minted, so a test can name the one it just made.
         self.tenants: list[str] = []
-        # Conversation store, keyed by tenant — stands in for HealthClaw's
-        # ConversationMessage table.
-        self.logged: dict[str, list] = {}
+        # Conversation store, keyed by tenant + thread, matching HealthClaw.
+        self.logged: dict[tuple[str, str], list] = {}
+        self.claimed: dict[tuple[str, str, str], str] = {}
 
-    def log_message(self, tenant, role, text, agent_id=None):
-        self.logged.setdefault(tenant, []).append(
-            {"role": role, "content": text, "agent_id": agent_id})
+    @staticmethod
+    def conversation_id(agent_id):
+        return f"careagents:{agent_id}"
+
+    def claim_inbound_message(self, tenant, text, agent_id, conversation_id,
+                              surface, request_id):
+        claim = (tenant, conversation_id, request_id)
+        if claim in self.claimed:
+            return False, self.claimed[claim]
+        message_id = f"message-{len(self.claimed) + 1}"
+        self.claimed[claim] = message_id
+        self.logged.setdefault((tenant, conversation_id), []).append({
+            "id": message_id,
+            "role": "user",
+            "content": text,
+            "agent_id": agent_id,
+            "surface": surface,
+            "request_id": request_id,
+        })
+        return True, message_id
+
+    def log_message(self, tenant, role, text, agent_id=None,
+                    conversation_id=None, surface="web", reply_to=None):
+        conversation_id = conversation_id or self.conversation_id(agent_id)
+        self.logged.setdefault((tenant, conversation_id), []).append(
+            {"role": role, "content": text, "agent_id": agent_id,
+             "surface": surface, "reply_to": reply_to})
         return True
 
-    def recent_messages(self, tenant, limit=20):
-        return list(self.logged.get(tenant, []))[-limit:]
+    def recent_messages(self, tenant, limit=20, conversation_id=None,
+                        agent_id=None):
+        conversation_id = conversation_id or self.conversation_id(agent_id)
+        return list(self.logged.get((tenant, conversation_id), []))[-limit:]
 
     def new_tenant_id(self):
         self.seeded.append(1)
