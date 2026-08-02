@@ -131,18 +131,54 @@ So do not hand-pick variables. The rule is: **mirror every non-`RAILWAY_*`
 variable from the web service**, as a reference rather than a copied value.
 Enumerate them rather than trusting a list in a document — the set drifts:
 
-Run this from the repo root, already linked to the project (the web deploy
-leaves you linked; otherwise `railway link` first — see below).
+Run this from the repo root. Link the **project** first — not the worker
+service, which does not exist yet:
+
+```bash
+railway link --project <project-id> --environment production
+```
 
 ```bash
 WEB=careagents                      # the existing web service
 
-# Names only. --json keeps every value inside the pipe: parsing --kv with sed
+# Names only: --json keeps every value inside the pipe. Parsing --kv with sed
 # would put a multi-line value's continuation line into the name list, and from
-# there into an `railway add` argv and your shell history.
-NAMES=$(railway variables list --service "$WEB" --json \
-  | python3 -c 'import json,sys; [print(k) for k in json.load(sys.stdin)]' \
-  | grep -Ev '^(RAILWAY_|PORT$|CARE_ROLE$)')
+# there into a `railway add` argv and your shell history.
+#
+# Everything that can go wrong here fails CLOSED, because the service this
+# creates boots GREEN when it is wrong: without CARE_ENV, Config() takes the
+# development path, requires nothing, and the container runs while claiming no
+# work. Railway shows it healthy, /healthz stays 503, and the ConfigError this
+# runbook tells you to look for was never raised.
+NAMES=$(railway variables list --service "$WEB" --json | python3 -c '
+import json, re, sys
+d = json.load(sys.stdin)                       # empty/banner/error output -> dies here
+if not isinstance(d, dict):
+    sys.exit("expected a JSON object of variables")
+
+# Reject unreferenceable names LOUDLY. Filtering them would be a silent drop,
+# and the count below could not tell that from a healthy read. The rule is
+# Railway/POSIX, not Python: str.isidentifier() accepts "CAFÉ_KEY" and the
+# Cyrillic-Е homoglyph "CARE_ЕNV", neither of which ${{web.NAME}} resolves.
+bad = sorted(k for k in d if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k))
+if bad:
+    sys.exit("cannot build a reference for: " + ", ".join(bad))
+
+names = [k for k in d if not re.match(r"RAILWAY_|PORT$|CARE_ROLE$", k)]
+
+# What the worker cannot boot without, from careagents/config.py. Named, not
+# counted: a threshold blocks a legitimate cleanup and waves through fifteen
+# names that happen to omit CARE_ENV — the one whose absence turns a broken
+# worker green.
+missing = {"CARE_ENV", "CARE_SESSION_SECRET", "HEALTHCLAW_MINT_SECRET",
+           "RESEND_API_KEY"} - set(names)
+if missing:
+    sys.exit("enumeration is missing " + ", ".join(sorted(missing)))
+if not {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"} & set(names):
+    sys.exit("enumeration has no LLM credential")
+
+print("\n".join(names))
+') || exit 1
 
 args=(--service careagents-worker --variables "CARE_ROLE=worker")
 # `while read`, not `for name in $NAMES`: zsh does not word-split unquoted
@@ -190,16 +226,18 @@ stale forever. `cd`-then-`up` is the form that has actually been used to deploy
 this service.
 
 ```bash
-railway link --project <project-id> --service careagents-worker --environment production
 cd "$STAGE" && railway up --service careagents-worker --detach
 ```
+
+You linked the project before creating the service, and `--service` on each
+`railway up` picks the target, so no second `railway link` is needed.
 
 One stage serves both roles. Upload it twice — once per service — and the two
 report the same `build`:
 
 ```bash
 cd "$STAGE"
-railway up --service careagents        --detach
+railway up --service careagents        --detach   # production web redeploy
 railway up --service careagents-worker --detach
 ```
 
