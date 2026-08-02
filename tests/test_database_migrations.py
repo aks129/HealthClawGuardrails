@@ -45,6 +45,9 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         "cc_conversation_messages",
         "cc_conversations",
         "cc_agent_tasks",
+        "agent_runs",
+        "agent_tool_calls",
+        "agent_run_events",
         "wearable_connections",
         "smbp_sessions",
         "telegram_bindings",
@@ -135,6 +138,29 @@ def test_conversation_migration_backfills_legacy_tenant_transcripts(tmp_path):
     engine.dispose()
 
 
+def test_agent_run_control_plane_migration_is_reversible(tmp_path):
+    url = f"sqlite:///{tmp_path / 'agent-runs.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    command.upgrade(config, "head")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    } <= set(inspect(engine).get_table_names())
+
+    command.downgrade(config, "0004_conversation_identity")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    }.isdisjoint(inspect(engine).get_table_names())
+    assert "cc_conversations" in inspect(engine).get_table_names()
+
+    command.upgrade(config, "head")
+    assert {
+        "agent_runs", "agent_tool_calls", "agent_run_events"
+    } <= set(inspect(engine).get_table_names())
+    engine.dispose()
+
+
 def test_migrations_are_explicit_and_never_delegate_to_create_all():
     migration_sources = "\n".join(
         path.read_text()
@@ -167,7 +193,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0004_conversation_identity"
+    assert revision == "0005_agent_run_control_plane"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -320,11 +346,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0004_conversation_identity"
+    assert revision == "0005_agent_run_control_plane"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0004_conversation_identity"
+    assert upgrade_database(engine) == "0005_agent_run_control_plane"
 
 
 def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
@@ -363,7 +389,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0004_conversation_identity"
+    assert revision == "0005_agent_run_control_plane"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -406,9 +432,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0004_conversation_identity"
+        assert revision == "0005_agent_run_control_plane"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0004_conversation_identity"  # idempotent
+        assert upgrade_database(engine) == "0005_agent_run_control_plane"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
