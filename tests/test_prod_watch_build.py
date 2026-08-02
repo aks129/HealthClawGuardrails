@@ -12,6 +12,7 @@ No network: `prod_watch.get` is replaced wholesale.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -292,7 +293,10 @@ def test_a_stale_build_still_alarms_when_the_verdict_file_is_unusable():
 
 
 @pytest.mark.parametrize("ts", [0, -1, -1754056800, "-1", "", None, "abc",
-                                1e30, 10 ** 20])
+                                1e30, 10 ** 20,
+                                # N10: bool is an int, so True walked straight
+                                # through the `<= 0` guard and rendered 1970.
+                                True, False])
 def test_no_timestamp_a_build_cannot_have_had_is_ever_rendered(ts):
     # N8: `if not ts` let a negative through, so an unstamped-then-mangled
     # marker printed "built 1969-12-31T23:59Z" — F4's defect one value over.
@@ -319,3 +323,74 @@ def test_a_healthy_deployment_can_always_close_its_outage_alarm(
     assert status["hard_ok"] is True, (
         "a run with no hard failure must say so, or the outage alarm it "
         "closes on can never close while the build is stale")
+
+
+def test_a_real_hard_failure_is_reported_as_one(monkeypatch, capsys, tmp_path):
+    # The other half of hard_ok, driven through run() rather than through a
+    # stub of it: _payload_for proves the plumbing from a code, this proves the
+    # code. Without it, `hard_ok = code != 1` is only ever checked against a
+    # `code` the test itself chose.
+    monkeypatch.setattr(prod_watch, "get", _fake_get(grade="B"))
+    out = tmp_path / "status.json"
+    assert _payload(["--expect-sha", TIP, "--json-out", str(out)],
+                    monkeypatch, capsys) == 1
+    status = json.loads(out.read_text())
+    hard = [c["name"] for c in status["checks"]
+            if not c["ok"] and c["name"] != prod_watch.BUILD_CHECK]
+    assert hard == ["healthclaw: guardrail grade A"]
+    assert status["hard_ok"] is False and status["ok"] is False
+
+
+def test_the_scheduled_run_still_pins_the_build_it_alarms_about():
+    # Drop `--expect-sha` from the workflow and the stale alarm is dead in both
+    # directions, permanently and silently: informational mode never fires it,
+    # `asserted` is false so nothing can close it, and prod_watch never returns
+    # 2 so the independent trigger never fires either. Everything stays green.
+    # The same class of hole as dropping `--json-out`, which is already pinned.
+    assert 'EXPECT="--expect-sha $TIP"' in WORKFLOW
+    assert 'EXPECT="$EXPECT --expect-sha $sha"' in WORKFLOW
+
+
+def test_the_workflow_only_reads_fields_the_script_actually_writes(
+        monkeypatch, capsys, tmp_path):
+    # A contract test across the two files, because a rename on either side is
+    # invisible: `status?.missing?.field` is undefined, every predicate reading
+    # it goes quietly false, and the alarm stops working with nothing red. This
+    # compares the workflow's actual field accesses against a real payload.
+    out = tmp_path / "status.json"
+    _payload(["--expect-sha", TIP, "--json-out", str(out)], monkeypatch, capsys)
+    status = json.loads(out.read_text())
+    top = set(re.findall(r"status\?\.([a-z_]+)", WORKFLOW))
+    build = set(re.findall(r"status\?\.build\?\.([a-z_]+)", WORKFLOW))
+    assert top - {"build"} <= set(status), (
+        f"workflow reads {sorted(top - {'build'} - set(status))} which the "
+        "payload does not contain")
+    assert build <= set(status["build"]), (
+        f"workflow reads build.{sorted(build - set(status['build']))} which "
+        "the payload does not contain")
+    assert top and build, "the regexes must actually be matching something"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "DEFECT (LOW, self-healing): when /healthz is UNREACHABLE, get() returns "
+    "an exception name, body stays {}, and `deployed` defaults to 'unknown' — "
+    "indistinguishable from a real unmarked build. The build check then "
+    "asserts ok=False and the stale alarm fires 'deployed build is stale ... "
+    "CareAgents does not auto-deploy — redeploy per RELEASING.md §4', "
+    "prescribing a redeploy for what is an outage. It is the branch's own "
+    "principle inverted: this asserts a verdict about a field it never read. "
+    "The outage alarm fires alongside it and the stale issue closes on the "
+    "next healthy run, so it misdirects rather than lies. Fix: only assert "
+    "the build when /healthz was actually read; otherwise report() it. "
+    "Repro: point prod_watch.get at a stub returning 'ConnectionError' for "
+    "/healthz and run with --expect-sha."))
+def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch):
+    def unreachable(url, timeout, **kw):
+        if url.endswith("/healthz"):
+            return "ConnectionError"
+        return _fake_get()(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", unreachable)
+    prod_watch.run(1.0, [TIP])
+    assert prod_watch.build_info["asserted"] is False, (
+        "a build that was never read has not been asserted about")

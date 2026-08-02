@@ -76,6 +76,12 @@ const STALE = 'prod-watch: deployed build is stale';
 // `hard_ok` defaults to `ok` because they agree everywhere except the case
 // N9 was about: a healthy deployment on a stale build exits 2, so `ok` is
 // false while no hard check failed. Pass it explicitly on those rows.
+//
+// This is a HAND-WRITTEN fixture, so it can drift from what prod_watch really
+// writes and quietly make every row pass by construction. The field names are
+// pinned against a real payload by
+// tests/test_prod_watch_build.py::test_the_workflow_only_reads_fields_the_script_actually_writes,
+// which is the assertion CI runs; this file is the semantic walk-through.
 function statusOf({ ok, asserted, buildOk, hardOk = ok }) {
   return JSON.stringify({ ok, hard_ok: hardOk, checks: [],
                           build: { deployed: 'x', asserted, ok: buildOk } });
@@ -94,6 +100,13 @@ const cases = [
   ['recovered, nothing pinned, outage issue open', '0', statusOf({ ok: true, asserted: false, buildOk: null }), [OUTAGE]],
   ['recovered but build STALE, outage issue open', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), [OUTAGE]],
   ['recovered but build stale, both issues open', '2', statusOf({ ok: false, hardOk: true, asserted: true, buildOk: false }), [OUTAGE, STALE]],
+  // Both issues pre-opened, so every row below also answers "and can it ever
+  // close again?". An alarm that fires forever with no path to closing is its
+  // own failure mode — the reader learns to ignore it.
+  ['--- STUCK-OPEN PROBES ---'],
+  ['schema drift: hard_ok renamed', '0', JSON.stringify({ ok: true, hardOk: true, checks: [], build: { asserted: true, ok: true } }), [OUTAGE, STALE]],
+  ['schema drift: build.asserted renamed', '0', JSON.stringify({ ok: true, hard_ok: true, checks: [], build: { assert_: true, ok: true } }), [OUTAGE, STALE]],
+  ['broken invocation: exit 2 with no verdict, forever', '2', undefined, [OUTAGE, STALE]],
   ['--- status.json MISSING ---'],
   ['missing file, exit 0', '0', undefined, [OUTAGE, STALE]],
   ['missing file, exit 1 (non-hex origin/main guard path)', '1', undefined, [OUTAGE, STALE]],
