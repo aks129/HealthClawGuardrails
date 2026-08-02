@@ -15,6 +15,7 @@ Design:
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -29,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 _PROGRESS_BATCH = 10  # commit progress every N resources (observability)
 _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
+
+# FHIR id: [A-Za-z0-9\-\.]{1,64} per the spec. A caller-supplied id outside
+# this shape was previously stored verbatim and copied into
+# AuditEventRecord.resource_id (#267 review) — audit `detail` stays PHI-free
+# by convention, but that convention did nothing for the adjacent column,
+# and health_compliance.py exports resource_id into the auditor-facing
+# compliance bundle. Validated before use, not filtered — an id this fails
+# is refused per-entry rather than silently truncated or replaced.
+_RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,64}$')
 
 
 def _is_fasten_download_host(url: str) -> bool:
@@ -228,25 +238,44 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
 
 def _ingest_one(resource: dict, tenant_id: str,
                 agent_id: str = 'fasten-connect',
-                detail: str = 'Ingested via Fasten EHI export'
+                detail: str = 'Ingested via Fasten EHI export',
+                allowed_types: frozenset | None = None,
                 ) -> tuple[str, str | None]:
     """
     Ingest a single FHIR resource into the guardrails store.
 
-    Returns ('ok', resource_id) on success, ('skipped', None) for unsupported types.
+    Returns ('ok', resource_id) on success, ('skipped', None) for unsupported
+    types, ('forbidden', None) for a type excluded by `allowed_types`, or
+    ('invalid_id', None) for a caller-supplied id outside the FHIR id shape.
     Raises on unexpected DB errors.
 
     `agent_id` and `detail` parameterize the audit event so a caller other
     than Fasten (e.g. the #227 direct-upload path) records honest provenance
     rather than borrowing Fasten's. Defaults preserve prior behavior for the
     Fasten and SHC callers.
+
+    `allowed_types`, when given, is an additional allowlist checked AFTER
+    `is_supported_type` — it narrows, never widens. `None` preserves prior
+    behavior exactly (every supported type is ingestible), which is what the
+    Fasten/SHC callers still want; the direct-upload path (#227) passes an
+    explicit clinical-only set so an unauthenticated-adjacent caller cannot
+    author AuditEvent/Permission/Consent/Provenance/Bundle resources even
+    though the store technically supports storing them.
     """
     resource_type = resource.get('resourceType', '')
 
     if not resource_type or not R6Resource.is_supported_type(resource_type):
         return 'skipped', None
+    if allowed_types is not None and resource_type not in allowed_types:
+        return 'forbidden', None
 
-    resource_id = resource.get('id') or str(uuid.uuid4())
+    resource_id = resource.get('id')
+    if resource_id is not None:
+        resource_id = str(resource_id)
+        if not _RESOURCE_ID_PATTERN.fullmatch(resource_id):
+            return 'invalid_id', None
+    else:
+        resource_id = str(uuid.uuid4())
     resource_json = json.dumps(resource, separators=(',', ':'))
 
     # Identity is (tenant_id, resource_type, id) — composite PK. The same

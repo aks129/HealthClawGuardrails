@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 
 from r6.models import R6Resource, AuditEventRecord
 
@@ -377,7 +378,8 @@ def test_per_entry_exception_never_leaks_str_exc_to_caller(client,
 
     calls = {"n": 0}
 
-    def _boom(resource, tenant_id, agent_id=None, detail=None):
+    def _boom(resource, tenant_id, agent_id=None, detail=None,
+              allowed_types=None):
         calls["n"] += 1
         raise _BadExc("INSERT INTO x VALUES ('SSN=123-45-6789','john@a.com')")
 
@@ -414,10 +416,12 @@ def test_savepoint_isolates_a_mid_bundle_failure(client, app, monkeypatch):
     real = ingester_mod._ingest_one
 
     def _sometimes_boom(resource, tenant_id, agent_id='fasten-connect',
-                        detail='Ingested via Fasten EHI export'):
+                        detail='Ingested via Fasten EHI export',
+                        allowed_types=None):
         if resource.get('id') == 'atom-boom':
             raise RuntimeError('driver blew up on this row')
-        return real(resource, tenant_id, agent_id=agent_id, detail=detail)
+        return real(resource, tenant_id, agent_id=agent_id, detail=detail,
+                    allowed_types=allowed_types)
 
     monkeypatch.setattr('r6.fasten.ingester._ingest_one', _sometimes_boom)
 
@@ -451,3 +455,132 @@ def test_reingest_of_same_id_updates_rather_than_duplicates(client, app):
             tenant_id="test-tenant", resource_type="Patient",
             id="dup-1").all()
         assert len(rows) == 1  # upsert on (tenant, type, id)
+
+
+# --- security (#267 CTO review) -----------------------------------------------
+#
+# 850 lines of tests in this file, written before the review, and NONE of
+# them asserted: that a public tenant is not writable without a secret, that
+# AuditEvent/Permission/Consent/Provenance/Bundle are refused, that a caller-
+# supplied resource id is validated, or that the upstream `display`/`text`
+# a resource carries is stripped on read-back. Every test above runs through
+# `_post`'s default `tenant="test-tenant"`, which is public — the suite's
+# default path *is* what B1 exploited. These close that gap directly.
+
+_MINT_SECRET = "qa-verify-secret-not-a-real-one"
+
+
+# NOT autouse — setting INTERNAL_TOKEN_MINT_SECRET globally would flip every
+# test above (including `test_display_and_text_do_not_survive_to_the_read_back`
+# below, which deliberately does NOT request this fixture) out of the
+# fail-open dev-mode path and break the plain `_post` helper's 850 lines of
+# existing coverage, none of which ever sends X-Internal-Secret.
+@pytest.fixture
+def _mint_secret_env(monkeypatch):
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", _MINT_SECRET)
+
+
+def _post_with_secret(client, body, tenant="test-tenant", secret=None):
+    headers = {"X-Tenant-Id": tenant, "Content-Type": "application/json"}
+    if secret is not None:
+        headers["X-Internal-Secret"] = secret
+    return client.post(_ENDPOINT, data=json.dumps(body), headers=headers)
+
+
+def test_public_tenant_write_requires_the_secret_too(client, _mint_secret_env):
+    # B1: `_internal_mint_authorized`'s public-tenant exemption does NOT
+    # apply to ingestion — authoring content is a different risk than
+    # minting a token. No secret, public tenant -> still 403.
+    r = _post_with_secret(client, {"bundle": _bundle([_patient("attack-1")])},
+                          tenant="test-tenant", secret=None)
+    assert r.status_code == 403, r.get_json()
+
+
+def test_forbidden_types_are_refused_not_ingested(client, _mint_secret_env):
+    body = {"bundle": _bundle([
+        {"resourceType": "AuditEvent", "id": "forged-1"},
+        {"resourceType": "Permission", "id": "forged-2"},
+        {"resourceType": "Consent", "id": "forged-3"},
+        {"resourceType": "Provenance", "id": "forged-4"},
+        {"resourceType": "Bundle", "id": "forged-5"},
+    ])}
+    r = _post_with_secret(client, body, secret=_MINT_SECRET)
+    result = r.get_json()
+    assert result["ingested"] == 0, result
+    codes = sorted(e["code"] for e in result["errors"])
+    assert codes == ["forbidden_type"] * 5, codes
+
+
+def test_deeply_nested_json_is_refused_not_crashed_no_credentials(
+        client, _mint_secret_env):
+    # B2: the body was previously parsed BEFORE the auth check, so this
+    # crashed (RecursionError, uncaught -> 500) with zero credentials
+    # against ANY tenant. 60000-deep nesting, well under the byte cap.
+    huge = "1"
+    for _ in range(60000):
+        huge = "[" + huge + "]"
+    payload = ('{"bundle":' + huge + "}").encode()
+    r = client.post(_ENDPOINT, data=payload,
+                    headers={"X-Tenant-Id": "someone-elses-private-tenant",
+                             "Content-Type": "application/json"})
+    assert r.status_code in (400, 403), r.status_code
+
+
+def test_deeply_nested_json_refused_as_too_deep_with_credentials(
+        client, _mint_secret_env):
+    huge = "1"
+    for _ in range(60000):
+        huge = "[" + huge + "]"
+    payload = ('{"bundle":' + huge + "}").encode()
+    r = client.post(_ENDPOINT, data=payload,
+                    headers={"X-Tenant-Id": "someone-elses-private-tenant",
+                             "Content-Type": "application/json",
+                             "X-Internal-Secret": _MINT_SECRET})
+    assert r.status_code == 400, r.get_json()
+
+
+def test_malformed_resource_ids_are_refused_not_stored_or_audited(
+        client, app, _mint_secret_env):
+    body = {"bundle": _bundle([
+        {"resourceType": "Patient", "id": "Jane Doe 1980-01-01 MRN 12345"},
+        {"resourceType": "Patient", "id": "../../etc/passwd"},
+        {"resourceType": "Patient", "id": "x" * 400},
+    ])}
+    r = _post_with_secret(client, body, tenant="someone-elses-private-tenant",
+                          secret=_MINT_SECRET)
+    result = r.get_json()
+    assert result["ingested"] == 0, result
+    codes = sorted(e["code"] for e in result["errors"])
+    assert codes == ["invalid_resource_id"] * 3, codes
+    with app.app_context():
+        # The rejected ids must never reach the audit trail — CTO review
+        # found an unvalidated id copied into AuditEventRecord.resource_id,
+        # which health_compliance.py later exports to the auditor-facing
+        # compliance bundle.
+        leaked = AuditEventRecord.query.filter_by(
+            tenant_id="someone-elses-private-tenant",
+            resource_id="../../etc/passwd").count()
+        assert leaked == 0
+
+
+def test_a_normal_id_still_ingests_after_the_validation_fix(client, _mint_secret_env):
+    r = _post_with_secret(
+        client, {"bundle": _bundle([_patient("pt-legit-1")])},
+        tenant="someone-elses-private-tenant", secret=_MINT_SECRET)
+    assert r.get_json()["ingested"] == 1
+
+
+def test_display_and_text_do_not_survive_to_the_read_back(client, app,
+                                                          tenant_headers):
+    # The non-negotiable this whole product is named after, and the one
+    # existing happy-path test never actually checked: it asserted only
+    # status_code == 200 despite its own fixture carrying a display and a
+    # family name. Stored raw is fine (matches the Fasten contract); NOT
+    # stripping it on read would be the leak this repo has been bitten by
+    # before.
+    r = _post(client, {"bundle": _bundle([_patient("canary-1",
+                                                    family="Secretname")])})
+    assert r.status_code == 200
+    read = client.get("/r6/fhir/Patient/canary-1", headers=tenant_headers)
+    text = read.get_data(as_text=True)
+    assert "Secretname" not in text
