@@ -9,12 +9,13 @@ ids 404), the chat gate, the review relay, and the Telegram bind handshake.
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
 
 from careagents.config import Config, ConfigError
-from careagents.healthclaw import HealthClawError
+from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
 
 
@@ -1180,6 +1181,11 @@ class FakeClient:
         self._event_id = 0
         self.worker_available = True
         self.worker_health_error = False
+        # Instance state, NOT a class attribute. `purged = []` at class scope
+        # was mutated through `self.purged.append(...)`, so every FakeClient
+        # in the session shared one list and a test's assertion on
+        # `len(fake.purged)` depended on which tests ran before it.
+        self.purged: list[str] = []
 
     @staticmethod
     def conversation_id(agent_id):
@@ -1311,16 +1317,25 @@ class FakeClient:
         return {"ok": True,
                 "cancel_requested": run.get("cancel_requested", False)}
 
-    def transition_agent_run(self, run_id, worker_id, status, **kwargs):
+    # Keyword-only, spelled out, matching the real client. `**kwargs` here
+    # swallowed a misspelled keyword (`event_typ=`, `errorclass=`) that would
+    # TypeError against HealthClawClient.
+    def transition_agent_run(self, run_id, worker_id, status, *,
+                             event_type=None, payload=None,
+                             error_class=None, available_in_seconds=0):
         run = self.runs[run_id]
         if run["status"] != "running" or run["worker_id"] != worker_id:
             raise HealthClawError("worker does not own run", 409)
         run["status"] = status
         if status != "running":
             run["worker_id"] = None
+        # `error_class` / `available_in_seconds` are accepted but not modelled,
+        # exactly as before — the point of naming them is that a misspelling
+        # now raises TypeError here the same way it would in production.
+        del error_class, available_in_seconds
         self._append_run_event(
-            run_id, kwargs.get("event_type") or f"run.{status}",
-            kwargs.get("payload") or {"status": status})
+            run_id, event_type or f"run.{status}",
+            payload or {"status": status})
         return dict(run)
 
     def finalize_agent_run(self, run_id, worker_id, text, checkpoint_id):
@@ -1368,13 +1383,18 @@ class FakeClient:
         self.tool_calls[key] = call
         return {**call, "idempotent_replay": False}
 
-    def transition_agent_tool_call(self, run_id, call_id, worker_id, status,
-                                   **kwargs):
+    def transition_agent_tool_call(self, run_id, call_id, worker_id, status, *,
+                                   result=None, outcome_ref=None,
+                                   error_class=None):
         call = next(item for item in self.tool_calls.values()
                     if item["id"] == call_id and item["run_id"] == run_id)
         call["status"] = status
-        if "result" in kwargs:
-            call["result"] = kwargs["result"]
+        # `is not None`, not `in kwargs`: the real client also drops a None
+        # result from the request body, so an explicit `result=None` must not
+        # look different here than it does over the wire.
+        if result is not None:
+            call["result"] = result
+        del worker_id, outcome_ref, error_class
         return dict(call)
 
     def new_tenant_id(self):
@@ -1383,13 +1403,20 @@ class FakeClient:
         self.tenants.append(tenant)
         return tenant
 
+    def mint_token(self, tenant):
+        # Real client caches a step-up token per tenant and raises on a failed
+        # mint. Nothing in CareAgents calls it directly today — HealthClawClient
+        # uses it to build its own headers — but it is public surface, so the
+        # stand-in carries it rather than 404ing a future caller.
+        return f"step-up-{tenant}"
+
     def seed(self, tenant):
         return 7
 
-    def search(self, tenant, rtype, params=None):
+    def search(self, tenant, resource_type, params=None):
         return {"total": 1, "entry": [{"resource": {
-            "resourceType": rtype, "status": "active",
-            "code": {"text": f"sample {rtype}"}}}]}
+            "resourceType": resource_type, "status": "active",
+            "code": {"text": f"sample {resource_type}"}}}]}
 
     def interpret_labs(self, tenant):
         return {"summary": {}, "consumer": {"headline": "ok"}, "disclaimer": "d"}
@@ -1430,7 +1457,6 @@ class FakeClient:
         return self.counted
 
     purge_fails = False
-    purged = []
 
     def purge_tenant(self, tenant):
         if self.purge_fails:
@@ -1469,6 +1495,138 @@ class FakeClient:
 
     def conformance_badge(self):
         return {"message": "A (7/7)"}
+
+
+# --- FakeClient ↔ HealthClawClient parity -------------------------------------
+#
+# Most of this file drives CareAgents through `FakeClient` rather than
+# `careagents.healthclaw.HealthClawClient`, and until these tests nothing
+# checked that the two agreed. The failure mode is quiet and expensive: the
+# suite is green, `healthclaw.py` sits near 40% line coverage, and the fake
+# teaches every test a call shape production would reject.
+#
+# What these tests DO catch: a method that exists on one side only, a renamed
+# parameter, a parameter that changed kind (positional → keyword-only, or a
+# spelled-out keyword collapsed to `**kwargs`), and a required parameter that
+# quietly grew a default.
+#
+# What they deliberately do NOT catch — stated so nobody mistakes green here
+# for a proven client:
+#   * Behaviour. Signature parity says a call is *accepted*, never that it does
+#     the same thing. `FakeClient.record_count` returns a settable int;
+#     `HealthClawClient.record_count` sums six `_summary=count` searches and
+#     swallows per-type errors. Both signatures are `(tenant)`.
+#   * Wire format. Nothing here talks to a running HealthClaw, so a body or
+#     header the engine rejects still passes.
+#   * Return types and annotations. The fake is unannotated by design; only
+#     parameters are compared.
+#   * Default *values*. Presence of a default is compared, its value is not —
+#     a fake may legitimately shorten a timeout or a page size. A fake that
+#     made a *required* parameter optional would still fail, because that is
+#     the direction that hides a broken caller.
+
+def _public_callables(obj: object) -> dict:
+    """Public callables as a caller sees them on a live instance.
+
+    Reading off an instance (rather than the class) deliberately normalises
+    `staticmethod` vs instance method and drops `self` — `FakeClient` has to
+    make `new_tenant_id` an instance method to record what it handed out,
+    while the real client can keep it static. Callers only ever hold an
+    instance, so that difference is not drift.
+    """
+    out = {}
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        attr = getattr(obj, name)
+        if callable(attr):
+            out[name] = attr
+    return out
+
+
+def _param_shape(fn) -> list[tuple]:
+    return [(p.name, p.kind, p.default is not inspect.Parameter.empty)
+            for p in inspect.signature(fn).parameters.values()]
+
+
+def _render(fn) -> str:
+    return str(inspect.signature(fn))
+
+
+def test_fake_client_implements_every_public_healthclaw_method():
+    """Every public method of the real client exists on the fake, with a
+    compatible signature.
+
+    Parameter NAMES and KINDS must match exactly, in order. Names matter
+    because a caller that switches to a keyword (`search(t, resource_type=x)`)
+    breaks only against the real client — the fake had `rtype`. Kinds matter
+    because `**kwargs` on the fake silently absorbs a misspelled keyword that
+    would `TypeError` in production.
+
+    MUTATION: rename `resource_type` to `rtype` in the signature of
+    `HealthClawClient.search` (careagents/healthclaw.py) and this test fails
+    with `search: real (tenant, rtype, params=None) != fake (tenant,
+    resource_type, params=None)`. Verified by applying and reverting the edit.
+    """
+    real = _public_callables(HealthClawClient("https://healthclaw.test", "s"))
+    fake = _public_callables(FakeClient())
+
+    missing = sorted(set(real) - set(fake))
+    assert not missing, (
+        "FakeClient is missing public HealthClawClient methods, so tests "
+        f"using it cannot exercise them at all: {missing}")
+
+    drift = [f"{name}: real {_render(real[name])} "
+             f"!= fake {_render(fake[name])}"
+             for name in sorted(real)
+             if _param_shape(real[name]) != _param_shape(fake[name])]
+    assert not drift, (
+        "FakeClient signatures have drifted from HealthClawClient. A test "
+        "passing against the fake would not pass against the real client:\n"
+        + "\n".join(drift))
+
+
+def test_fake_client_invents_no_method_the_real_client_lacks():
+    """The fake must not grow surface production does not have.
+
+    An invented method teaches tests to depend on a capability
+    `HealthClawClient` cannot deliver, and the gap only shows up in prod.
+    Test-harness *state* (`purged`, `counted`, `logged`, …) is exempt — only
+    callables are compared.
+    """
+    real = _public_callables(HealthClawClient("https://healthclaw.test", "s"))
+    fake = _public_callables(FakeClient())
+    invented = sorted(set(fake) - set(real))
+    assert not invented, (
+        "FakeClient defines public methods HealthClawClient does not have; "
+        f"tests relying on them prove nothing about production: {invented}")
+
+
+def test_fake_client_keeps_no_mutable_state_at_class_scope():
+    """Regression guard for the `purged = []` bug.
+
+    A mutable class attribute mutated via `self.x.append(...)` is shared by
+    every FakeClient in the session, so an assertion like
+    `len(fake.purged) == 1` passes or fails depending on which tests ran
+    first. Per-instance state belongs in `__init__`.
+    """
+    leaky = sorted(
+        name for name, value in vars(FakeClient).items()
+        if not name.startswith("__")
+        and isinstance(value, (list, dict, set, bytearray))
+    )
+    assert not leaky, (
+        "mutable FakeClient class attributes leak across every test in the "
+        f"session; move them into __init__: {leaky}")
+
+
+def test_two_fake_clients_do_not_share_recorded_state():
+    """The leak, demonstrated rather than asserted structurally."""
+    first, second = FakeClient(), FakeClient()
+    first.purge_tenant("ca-1")
+    assert first.purged == ["ca-1"]
+    assert second.purged == [], (
+        "a second FakeClient saw the first one's purge — shared state")
 
 
 @pytest.fixture
