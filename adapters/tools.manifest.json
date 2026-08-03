@@ -4,6 +4,7 @@
   "tools": [
     {
       "name": "context_get",
+      "title": "Get Health Context",
       "description": "Retrieve a pre-built context envelope with patient-centric FHIR resources. Returns bounded, policy-stamped, time-limited context.",
       "inputSchema": {
         "type": "object",
@@ -21,11 +22,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Get Health Context"
+      }
     },
     {
       "name": "fhir_read",
+      "title": "Read FHIR Resource",
       "description": "Read a specific FHIR resource by type and ID. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Returns redacted resource with PHI protection.",
       "inputSchema": {
         "type": "object",
@@ -85,11 +86,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Read FHIR Resource"
+      }
     },
     {
       "name": "fhir_search",
+      "title": "Search FHIR Resources",
       "description": "Search for FHIR resources. Supports FHIR R4 US Core v9 stable resources and FHIR R6 ballot3 experimental resources. Supports patient, code, status, _lastUpdated, _count, _sort parameters. Returns paginated, redacted Bundle.",
       "inputSchema": {
         "type": "object",
@@ -141,7 +142,7 @@
           },
           "code": {
             "type": "string",
-            "description": "Code filter \u2014 matches code.coding[].code in JSON (e.g., '2339-0' for Glucose)"
+            "description": "Code filter — matches code.coding[].code in JSON (e.g., '2339-0' for Glucose)"
           },
           "status": {
             "type": "string",
@@ -169,11 +170,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Search FHIR Resources"
+      }
     },
     {
       "name": "fhir_validate",
+      "title": "Validate FHIR Resource",
       "description": "Validate a proposed FHIR R6 resource against structural rules. Returns OperationOutcome.",
       "inputSchema": {
         "type": "object",
@@ -191,12 +192,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Validate FHIR Resource"
+      }
     },
     {
       "name": "questionnaire_populate",
-      "description": "SDC $populate \u2014 pre-fill a Questionnaire for a subject. Returns a QuestionnaireResponse. Read tier; mints a tenant token for non-public tenants.",
+      "title": "Pre-fill Health Form",
+      "description": "SDC $populate — pre-fill a Questionnaire for a subject. Returns a QuestionnaireResponse. Read tier; mints a tenant token for non-public tenants.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -221,12 +222,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Pre-fill Health Form"
+      }
     },
     {
       "name": "questionnaire_extract",
-      "description": "SDC $extract \u2014 extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up unless dry_run=true.",
+      "title": "Extract Form Data to FHIR",
+      "description": "SDC $extract — extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up authorization, including for dry_run=true previews.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -252,12 +253,12 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": false
-      },
-      "title": "Extract Form Data to FHIR"
+      }
     },
     {
       "name": "fhir_propose_write",
-      "description": "Propose a write \u2014 validates the resource and returns a preview. Does NOT commit. Safe to call without step-up authorization.",
+      "title": "Propose FHIR Write",
+      "description": "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: requires step-up authorization (call fhir_get_token first; pass as _stepUpToken).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -283,11 +284,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Propose FHIR Write"
+      }
     },
     {
       "name": "fhir_commit_write",
+      "title": "Commit FHIR Write",
       "description": "Commit a previously proposed write. Requires step-up authorization token. This is a destructive operation.",
       "inputSchema": {
         "type": "object",
@@ -313,11 +314,11 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": false
-      },
-      "title": "Commit FHIR Write"
+      }
     },
     {
       "name": "fhir_stats",
+      "title": "Observation Statistics",
       "description": "Compute statistics (count, min, max, mean) over numeric Observation values. Standard FHIR $stats (since R4). Only supports valueQuantity. Filter by patient and/or code.",
       "inputSchema": {
         "type": "object",
@@ -337,11 +338,79 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
+      }
+    },
+    {
+      "name": "fhir_interpret_labs",
+      "title": "Interpret Lab Results",
+      "description": "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "observation": {
+            "type": "object",
+            "description": "A single FHIR Observation to interpret"
+          },
+          "bundle": {
+            "type": "object",
+            "description": "A FHIR Bundle of Observations to interpret"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Patient reference (e.g. 'Patient/pt-1') — interpret the tenant's stored Observations for this subject"
+          }
+        },
+        "required": []
       },
-      "title": "Observation Statistics"
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "care_gaps",
+      "title": "Preventive Care Gaps",
+      "description": "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines — not a diagnosis or directive. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Patient reference (e.g. 'Patient/pt-1')"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "guardrail_conformance",
+      "title": "Guardrail Conformance Scorecard",
+      "description": "Run the guardrail conformance self-test on the connected HealthClaw deployment and return the graded scorecard across seven guardrail properties: PHI redaction, immutable audit, step-up auth, human-in-the-loop, tenant isolation, medical disclaimers, and error fidelity. Uses synthetic data only. Set fresh=true to force a new run instead of the cached result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fresh": {
+            "type": "boolean",
+            "description": "Force a fresh probe run instead of the cached (<=10 min old) result"
+          }
+        },
+        "required": []
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
     },
     {
       "name": "fhir_lastn",
+      "title": "Latest Observations",
       "description": "Get the last N observations per code. Standard FHIR $lastn (since R4). Returns most recent observations by storage order.",
       "inputSchema": {
         "type": "object",
@@ -366,11 +435,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Latest Observations"
+      }
     },
     {
       "name": "fhir_permission_evaluate",
+      "title": "Evaluate Access Permission",
       "description": "Evaluate R6 Permission resources for access control decisions. Returns permit/deny based on stored Permission rules. Separates access control (Permission) from consent records (Consent).",
       "inputSchema": {
         "type": "object",
@@ -401,11 +470,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Evaluate Access Permission"
+      }
     },
     {
       "name": "fhir_subscription_topics",
+      "title": "List Subscription Topics",
       "description": "List available SubscriptionTopics for event-driven subscriptions. R6 moves topic-based subscriptions toward Normative. Agents discover what events they can subscribe to.",
       "inputSchema": {
         "type": "object",
@@ -416,12 +485,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "List Subscription Topics"
+      }
     },
     {
       "name": "wearables_sync_status",
-      "description": "List wearable connections (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman) for a tenant, with last sync time, observation count, and status. Use this to tell a patient what's connected, when data last arrived, and surface a connection-management UI (via _meta.ui.resourceUri) so they can connect more providers. Data flows into HealthClaw as FHIR Observations with LOINC codes \u2014 agents read it via fhir_search like any other Observation.",
+      "title": "Wearables Sync Status",
+      "description": "List wearable connections (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava, Ultrahuman) for a tenant, with last sync time, observation count, and status. Use this to tell a patient what's connected, when data last arrived, and surface a connection-management UI (via _meta.ui.resourceUri) so they can connect more providers. Data flows into HealthClaw as FHIR Observations with LOINC codes — agents read it via fhir_search like any other Observation.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -436,12 +505,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Wearables Sync Status"
+      }
     },
     {
       "name": "sources_check",
-      "description": "Survey ALL connected health data sources (Fasten, HealthEx, Health Bank One, MEDENT, Flexpa, Epic/Health Skillz, wearables) at once \u2014 returns each source's connection status and the patient's record counts by type. Use when the patient asks what's connected or to check for data across services.",
+      "title": "Check Data Sources",
+      "description": "Survey ALL connected health data sources (Fasten, HealthEx, Health Bank One, MEDENT, Flexpa, Epic/Health Skillz, wearables) at once — returns each source's connection status and the patient's record counts by type. Use when the patient asks what's connected or to check for data across services.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -451,12 +520,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Check Data Sources"
+      }
     },
     {
       "name": "fhir_compiled_truth",
-      "description": "Return the current best understanding of a FHIR resource plus the append-only evidence trail (Provenance entries) of how it got there. Use this before presenting resource-specific facts to a patient \u2014 surfaces curation_state and quality_score so the agent can say not just WHAT the record says but WHY it says it. Redacted, audited. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
+      "title": "Compiled Truth Timeline",
+      "description": "Return the current best understanding of a FHIR resource plus the append-only evidence trail (Provenance entries) of how it got there. Use this before presenting resource-specific facts to a patient — surfaces curation_state and quality_score so the agent can say not just WHAT the record says but WHY it says it. Redacted, audited. Response includes _meta.ui.resourceUri pointing to an embeddable review UI.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -478,12 +547,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Compiled Truth Timeline"
+      }
     },
     {
       "name": "curatr_evaluate",
-      "description": "Evaluate a FHIR resource for data quality issues. Checks coding elements against public terminology services (tx.fhir.org for SNOMED/LOINC, NLM for ICD-10-CM, RXNAV for RxNorm) and structural rules. Returns issues in plain language with patient-facing impact descriptions and resolution suggestions. Read-only \u2014 no step-up required.",
+      "title": "Evaluate Data Quality",
+      "description": "Evaluate a FHIR resource for data quality issues. Checks coding elements against public terminology services (tx.fhir.org for SNOMED/LOINC, NLM for ICD-10-CM, RXNAV for RxNorm) and structural rules. Returns issues in plain language with patient-facing impact descriptions and resolution suggestions. Read-only — no step-up required.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -505,12 +574,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": true
-      },
-      "title": "Evaluate Data Quality"
+      }
     },
     {
       "name": "curatr_apply_fix",
-      "description": "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token) and human confirmation (X-Human-Confirmed: true) for clinical resources like Condition.",
+      "title": "Apply Data Quality Fix",
+      "description": "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token); in production the token must be audience- and operation-bound to this fix. This tool never asserts human confirmation on the patient's behalf — approval is proved by the token, not by a header.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -555,12 +624,12 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Apply Data Quality Fix"
+      }
     },
     {
       "name": "fhir_get_token",
-      "description": "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string \u2014 pass it as _stepUpToken in subsequent write tool calls.",
+      "title": "Mint Step-Up Token",
+      "description": "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string — pass it as _stepUpToken in subsequent write tool calls.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -577,11 +646,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Mint Step-Up Token"
+      }
     },
     {
       "name": "fhir_seed",
+      "title": "Seed Demo Data",
       "description": "Seed a tenant with a realistic Patient + Observations + Condition bundle for live testing. Use this at the start of a demo session to populate data. Returns created resource IDs and a ready-to-use step_up_token.",
       "inputSchema": {
         "type": "object",
@@ -597,12 +666,12 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Seed Demo Data"
+      }
     },
     {
       "name": "action_propose",
-      "description": "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before commit. Does not execute anything.",
+      "title": "Propose Real-World Action",
+      "description": "Propose a real-world action (phone call or SMS) on the patient's behalf. Returns a draft (id + script) the patient MUST review before submitting via action_commit. Does not execute anything.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -629,17 +698,54 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": true
-      },
-      "title": "Propose Real-World Action"
+      }
     },
     {
       "name": "rx_transfer_request",
-      "tier": "write",
-      "description": "Draft a prescription-transfer request call to the receiving pharmacy from the patient's active medications (Schedule II refused); commit via action_commit after patient approval."
+      "title": "Request Prescription Transfer",
+      "description": "Draft a prescription-transfer request: assembles the patient's active medications and stages a phone call to the RECEIVING pharmacy asking it to pull the prescriptions from the current pharmacy (how US transfers actually work). Schedule II medications are refused (never transferable — new prescription required). Returns a draft the patient MUST review; submit with action_commit for the patient's own out-of-band confirmation after they explicitly agree — action_commit does not execute the call itself.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "to_pharmacy_name": {
+            "type": "string",
+            "description": "Receiving pharmacy name"
+          },
+          "to_pharmacy_phone": {
+            "type": "string",
+            "description": "Receiving pharmacy phone number"
+          },
+          "from_pharmacy_name": {
+            "type": "string",
+            "description": "Current pharmacy name (optional)"
+          },
+          "from_pharmacy_phone": {
+            "type": "string",
+            "description": "Current pharmacy phone (optional)"
+          },
+          "medication_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Limit to these medication names (default: all active orders)"
+          }
+        },
+        "required": [
+          "to_pharmacy_name",
+          "to_pharmacy_phone"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
     },
     {
       "name": "action_commit",
-      "description": "Execute a previously proposed action AFTER the patient has explicitly approved the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). Only call this after the patient says yes.",
+      "title": "Submit Real-World Action for Confirmation",
+      "description": "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -656,12 +762,12 @@
         "readOnlyHint": false,
         "destructiveHint": true,
         "openWorldHint": true
-      },
-      "title": "Commit Real-World Action"
+      }
     },
     {
       "name": "action_status",
-      "description": "Check the status and outcome of an action (proposed/executing/completed/failed). Use after commit to report the result back to the patient.",
+      "title": "Action Status",
+      "description": "Check the status and outcome of an action (proposed/awaiting_confirmation/executing/completed/failed/needs_review/unknown/expired). needs_review means it ran but the outcome could not be confirmed - show the patient the evidence. unknown means the provider MAY have acted - never re-propose the same action. Use after action_commit to see whether the patient has approved yet, and to report the final result back to them.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -678,12 +784,12 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Action Status"
+      }
     },
     {
       "name": "shl_generate",
-      "description": "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required \u2014 pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
+      "title": "Generate SMART Health Link",
+      "description": "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -714,39 +820,11 @@
         "readOnlyHint": false,
         "destructiveHint": false,
         "openWorldHint": true
-      },
-      "title": "Generate SMART Health Link"
-    },
-    {
-      "name": "fhir_interpret_labs",
-      "description": "Interpret lab Observations against reference ranges \u2014 flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "observation": {
-            "type": "object",
-            "description": "A single FHIR Observation to interpret"
-          },
-          "bundle": {
-            "type": "object",
-            "description": "A FHIR Bundle of Observations to interpret"
-          },
-          "subject": {
-            "type": "string",
-            "description": "Patient reference (e.g. 'Patient/pt-1') \u2014 interpret the tenant's stored Observations for this subject"
-          }
-        },
-        "required": []
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      },
-      "title": "Interpret Lab Results"
+      }
     },
     {
       "name": "search",
+      "title": "Search Health Records",
       "description": "ChatGPT-connector-compatible search over the tenant's FHIR records. Query is a FHIR search string (e.g. 'Observation?code=4548-4' or 'Patient?name=smith'); bare resource type works too. Returns compact results: id, title, url. Reads are PHI-redacted and audit-logged server-side.",
       "inputSchema": {
         "type": "object",
@@ -764,11 +842,11 @@
         "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
-      },
-      "title": "Search Health Records"
+      }
     },
     {
       "name": "fetch",
+      "title": "Fetch Health Record",
       "description": "ChatGPT-connector-compatible fetch of one FHIR resource by id ('ResourceType/id', as returned by search). Returns the full document (PHI-redacted server-side) with metadata.",
       "inputSchema": {
         "type": "object",
@@ -781,47 +859,6 @@
         "required": [
           "id"
         ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      },
-      "title": "Fetch Health Record"
-    },
-    {
-      "name": "care_gaps",
-      "description": "Check which preventive-care screenings/immunizations a patient may be due for (blood pressure, cholesterol, colorectal/cervical/breast cancer screening, flu, diabetes A1c), from their own connected records. Decision support based on USPSTF/ACIP/ADA guidelines \u2014 not a diagnosis or directive.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "subject": {
-            "type": "string",
-            "description": "Patient reference (e.g. 'Patient/pt-1')"
-          }
-        },
-        "required": []
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      },
-      "title": "Preventive Care Gaps"
-    },
-    {
-      "name": "guardrail_conformance",
-      "title": "Guardrail Conformance Scorecard",
-      "description": "Run the guardrail conformance self-test on the connected HealthClaw deployment and return the graded scorecard (A-F across PHI redaction, immutable audit, step-up auth, human-in-the-loop, tenant isolation, medical disclaimers). Uses synthetic data only. Set fresh=true to force a new run instead of the cached result.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "fresh": {
-            "type": "boolean",
-            "description": "Force a fresh probe run instead of the cached (<=10 min old) result"
-          }
-        },
-        "required": []
       },
       "annotations": {
         "readOnlyHint": true,
