@@ -902,11 +902,24 @@ def test_outcome_response_is_the_shipped_shape_with_a_status(app):
 # Structural guards — these ship before the first adoption, on purpose
 # ---------------------------------------------------------------------------
 
-def test_the_kernel_is_not_adopted_yet():
+#: Slice 2 registers the kernel's error handlers from main.py, so main.py is
+#: the one production module allowed to import r6.access. Nothing else may:
+#: a route module importing the kernel means a guard has been migrated, and
+#: that is a later slice with its own PR and its own pin.
+_ADOPTION_ALLOWED = {'main.py'}
+
+
+def test_no_request_handler_has_adopted_the_kernel():
     """MUTATION: import r6.access from r6/routes.py -> red.
 
-    Slice 1's entire risk argument is this assertion. The kernel cannot change
-    any behavior while no production module can reach it.
+    Slice 1's risk argument was 'imported by nothing'. Slice 2 registers the
+    error handlers from main.py, so the property narrows rather than
+    disappears: the kernel is REGISTERED but no request handler USES it. An
+    errorhandler is inert until something raises, and nothing raises yet.
+
+    When a real migration slice lands, it adds its module here deliberately,
+    in the same PR that migrates it — which is the point. Adoption is a
+    reviewable list, not a thing that happens quietly.
     """
     importers = []
     scanned = 0
@@ -929,9 +942,15 @@ def test_the_kernel_is_not_adopted_yet():
     # A scan that walks nothing would pass this test forever. 172 production
     # modules exist today; the floor only has to catch a broken path list.
     assert scanned > 100, f'the adoption scan only walked {scanned} files'
-    assert not importers, (
-        'slice 1 adopts the kernel nowhere, but it is imported by: '
-        + ', '.join(importers))
+    unexpected = [i for i in importers
+                  if i.split(':')[0] not in _ADOPTION_ALLOWED]
+    assert not unexpected, (
+        'only ' + ', '.join(sorted(_ADOPTION_ALLOWED)) + ' may import the '
+        'kernel until a migration slice adopts it deliberately, but it is '
+        'also imported by: ' + ', '.join(unexpected))
+    assert any(i.split(':')[0] == 'main.py' for i in importers), (
+        'main.py no longer imports the kernel — slice 2 registers the error '
+        'handlers there, so losing that import silently un-registers them')
 
 
 def test_the_checked_flag_is_set_in_exactly_one_place():
@@ -1092,3 +1111,144 @@ def test_the_kernel_resolves_its_collaborators_by_module_attribute():
     assert not forbidden, (
         'the kernel binds a collaborator at import time, which silently '
         'unhooks the suite monkeypatches: ' + ', '.join(forbidden))
+
+# --- Slice 2: the handlers are registered, and still inert ----------------
+#
+# Additive infrastructure, not a migration, so adding tests here is correct —
+# the protocol's "a migration PR's diff to tests/ is empty" rule governs
+# slices that MOVE behavior, not slices that add plumbing.
+#
+# The behavioural tests below use a bare Flask app plus register_error_handlers
+# rather than the real factory, on purpose: they test the handler contract, and
+# building the whole app to observe it would drag db/session state into a test
+# about exception rendering.
+
+
+def _handler_app():
+    """A bare app with only the kernel's handlers on it."""
+    app = Flask(__name__)
+    # The renderers must run; PROPAGATE_EXCEPTIONS would re-raise past them and
+    # hide exactly the 500-vs-401 distinction these tests exist to check.
+    app.config['PROPAGATE_EXCEPTIONS'] = False
+    register_error_handlers(app)
+    return app
+
+
+def test_an_unchecked_step_up_denial_becomes_a_500_not_a_401():
+    """The property that makes having the errorhandler safe at all.
+
+    A StepUpDenied raised anywhere other than require_grant carries no checked
+    flag. If the handler rendered it as 401, a bug in a service or model layer
+    would reach the client looking exactly like a guard that worked, and a
+    monitor would read it as ordinary refused traffic. It must stay a 500.
+
+    MUTATION: render the unchecked case as exc.http_status instead of
+    re-raising -> red.
+    """
+    app = _handler_app()
+
+    @app.route('/unchecked')
+    def _unchecked():
+        raise StepUpDenied('synthetic', http_status=401)
+
+    resp = app.test_client().get('/unchecked')
+    assert resp.status_code == 500, (
+        f'an unchecked StepUpDenied rendered as {resp.status_code}; it must '
+        'surface as a server error, not as a working-looking guard')
+
+
+def test_a_real_denial_from_require_grant_renders_its_operation_outcome(app):
+    """The other half, exercised through the REAL path.
+
+    This deliberately does not hand-construct a checked denial: the flag is
+    meant to exist in exactly one place, and a test that copies the literal
+    would both break that pin and prove less. require_grant raising for a
+    missing token is the actual production shape.
+
+    MUTATION: stop setting the checked flag in require_grant -> renders 500.
+    """
+    register_error_handlers(app)
+
+    @app.route('/needs-step-up')
+    def _needs():
+        require_grant(scope=Scope.WRITE,
+                      tenant=Tenant(id='t1', source=TenantSource.HEADER))
+        return 'unreachable'
+
+    resp = app.test_client().get('/needs-step-up')
+    assert resp.status_code == 401
+    body = resp.get_json()
+    assert body['resourceType'] == 'OperationOutcome'
+    assert body['issue'][0]['severity'] == 'error'
+
+
+def test_a_rejected_tenant_renders_its_operation_outcome():
+    """Matches the OperationOutcome r6/routes.py already returns at 400."""
+    app = _handler_app()
+
+    @app.route('/no-tenant')
+    def _no_tenant():
+        raise TenantRejected('absent')
+
+    resp = app.test_client().get('/no-tenant')
+    assert resp.status_code == 400
+    assert resp.get_json()['resourceType'] == 'OperationOutcome'
+
+
+def test_registering_the_handlers_adds_no_request_hooks():
+    """Slice 2 is HANDLERS ONLY.
+
+    A before_request hook registered app-wide would also run for
+    r6/sdc/delivery.py, which sits off r6_blueprint on purpose because the
+    HMAC signature in the URL is the credential and the route must work with
+    no headers. A tenant hook there breaks every signed delivery link.
+
+    MUTATION: add a before_request hook inside register_error_handlers -> red.
+    """
+    app = Flask(__name__)
+    before = (len(app.before_request_funcs), len(app.after_request_funcs))
+    register_error_handlers(app)
+    after = (len(app.before_request_funcs), len(app.after_request_funcs))
+    assert before == after, (
+        f'register_error_handlers changed the request pipeline: {before} -> '
+        f'{after}')
+
+
+def test_the_app_factory_registers_both_kernel_handlers():
+    """Slice 2's actual edit: main.py wires the kernel in.
+
+    MUTATION: delete the register_error_handlers call in main.py -> red.
+    """
+    import main
+    flask_app = main.create_app({
+        'TESTING': True,
+        'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
+        'LEGACY_BOOT_ON_CREATE': False,
+    })
+    registered = flask_app.error_handler_spec[None][None]
+    assert StepUpDenied in registered, 'StepUpDenied handler not registered'
+    assert TenantRejected in registered, 'TenantRejected handler not registered'
+
+
+def test_neither_audit_assertion_is_installed_yet():
+    """Slice 2 registers the error handlers only.
+
+    install_read_audit_assertion goes red on the five unaudited-404 paths
+    (S-9). install_audit_assertions has a demonstrated false-positive class
+    (#321): audit() sets its pending marker unconditionally while only real
+    session activity clears it, so a caller whose writer wrote nothing trips
+    it with no row pending. A control that fires when its property is NOT
+    violated is one someone eventually silences, so neither ships until it
+    holds.
+    """
+    import main
+    flask_app = main.create_app({
+        'TESTING': True,
+        'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
+        'LEGACY_BOOT_ON_CREATE': False,
+    })
+    installed = [f.__name__ for fns in flask_app.teardown_request_funcs.values()
+                 for f in fns]
+    assert not any('read_audit' in n or 'audit_committed' in n
+                   for n in installed), (
+        f'an audit assertion is registered too early: {installed}')

@@ -265,6 +265,23 @@ def _register_blueprints(flask_app: Flask) -> None:
 
 
 def _register_request_hooks(flask_app: Flask) -> None:
+    # Access-kernel slice 2 (docs/2026-08-03-access-kernel-spec.md §2.4).
+    # HANDLERS ONLY — no before_request hook is added to any blueprint, because
+    # r6/sdc/delivery.py runs off r6_blueprint on purpose (the HMAC signature in
+    # the URL is the credential, and the route must work with no headers).
+    # Behaviourally inert today: nothing raises StepUpDenied or calls audit()
+    # yet, since the kernel is still adopted by no production module.
+    # Neither audit assertion is installed here. install_read_audit_assertion
+    # goes red on the five unaudited-404 paths (S-9). install_audit_assertions
+    # has a demonstrated false-positive class (see #321): audit() sets its
+    # pending marker unconditionally, but only real session activity clears
+    # it, so any caller whose writer wrote nothing trips it with no row
+    # pending. Installing a control that fires when its property is NOT
+    # violated is how controls get silenced. Both wait for their own slice.
+    from r6.access import register_error_handlers
+
+    register_error_handlers(flask_app)
+
     @flask_app.context_processor
     def inject_fasten_public_key():
         return {"fasten_public_key": os.environ.get("FASTEN_PUBLIC_KEY", "")}
