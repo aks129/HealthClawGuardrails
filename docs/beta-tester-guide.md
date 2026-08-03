@@ -157,12 +157,20 @@ publicly — see [SECURITY.md](../SECURITY.md).
 
 You can stop at any time and you don't owe us an explanation.
 
-- **Disconnect a source** — stops new data flowing in.
-- **Delete your data** — email support@healthclaw.io and we'll remove your
-  tenant and confirm when it's done.
+- **Disconnect a source** — stops new data flowing in. The records already
+  fetched stay until you delete them.
+- **Delete your records** — do it yourself, from the connection's **Delete**
+  button on your home screen. You type DELETE to confirm, and the app tells
+  you how many records were removed rather than just claiming success. The
+  PHI-free audit trail is kept, because deleting the evidence that a deletion
+  happened would defeat the point.
 - **Just stop using it** — nothing will contact you.
 
 If deleting is ever harder than connecting was, that's a bug. Tell us.
+
+(This page previously said to email support to delete your data. Self-serve
+deletion shipped in #203; asking you to email us for something you can do in
+two clicks was both wrong and worse.)
 
 ---
 
