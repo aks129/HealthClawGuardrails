@@ -460,7 +460,10 @@ def create_resource(resource_type):
     if too_deep:
         return _operation_outcome('error', 'invalid',
                                   'Request body nesting is too deep'), 400
-    if not body:
+    # isinstance, not truthiness: `[1]`, `42` and `"text"` are all truthy and
+    # all lack .get(), so a bare `if not body` lets them through to an
+    # AttributeError and a 500 (#330).
+    if not isinstance(body, dict):
         return _operation_outcome('error', 'invalid', 'Request body must be valid JSON'), 400
 
     if body.get('resourceType') != resource_type:
@@ -1218,7 +1221,7 @@ def ingest_context():
     if too_deep:
         return _operation_outcome('error', 'invalid',
                                   'Request body nesting is too deep'), 400
-    if not body or body.get('resourceType') != 'Bundle':
+    if not isinstance(body, dict) or body.get('resourceType') != 'Bundle':
         return _operation_outcome('error', 'invalid',
                                   'Request body must be a FHIR Bundle'), 400
 
@@ -1460,7 +1463,7 @@ def import_stub():
     R4/R5 import stub: accept Bundle + annotate "needs transform".
     """
     body = request.get_json(silent=True)
-    if not body or body.get('resourceType') != 'Bundle':
+    if not isinstance(body, dict) or body.get('resourceType') != 'Bundle':
         return _operation_outcome('error', 'invalid',
                                   'Request body must be a FHIR Bundle'), 400
 

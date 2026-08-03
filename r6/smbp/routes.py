@@ -48,6 +48,9 @@ def enroll():
         return jsonify(_oo("error", "invalid",
                            "request body nesting is too deep")), 400
     body = body or {}
+    if not isinstance(body, dict):
+        return jsonify(_oo("error", "invalid",
+                           "request body must be a JSON object")), 400
     patient_ref = body.get("patient_ref")
     if not patient_ref:
         return jsonify(_oo("error", "invalid", "patient_ref required")), 400
