@@ -1036,9 +1036,19 @@ def create_app(config: Config | None = None,
         load balancer would route real sign-ins straight into failure. It now
         round-trips a trivial query so the answer reflects reality.
 
+        Readiness has two inputs, and both gate the status code: the account
+        store must answer, and a fresh agent-run worker must be present. A
+        deployment with no worker can serve pages but cannot complete a chat
+        turn, so advertising it as ready would route people into failure the
+        same way the hard-coded accounts=True once did.
+
         It also reports which build is running (#258). That is telemetry, not
         a gate: an absent marker reports "unknown" and changes nothing about
-        the status code, which still depends only on the account store.
+        the status code.
+
+        Callers that only need "is this process up" (a boot gate, a restart
+        probe) must not use this endpoint — it answers for the whole system,
+        including dependencies it does not control.
         """
         accounts_ok = svc.ping()
         workers_ok = _workers_available()
