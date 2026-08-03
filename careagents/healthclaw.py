@@ -102,13 +102,22 @@ class HealthClawClient:
         # envelope call, NOT a raw FHIR Bundle post. `application/fhir+json`
         # would mis-label the envelope; the patient-facing route above
         # accepts fhir+json for the raw Bundle from the browser.
-        r = self.http.post(
-            f"{self.fhir}/internal/ingest-bundle",
-            json={"bundle": bundle},
-            headers={"X-Tenant-Id": tenant,
-                     "X-Internal-Secret": self.mint_secret,
-                     "Content-Type": "application/json"},
-            timeout=self.timeout)
+        try:
+            r = self.http.post(
+                f"{self.fhir}/internal/ingest-bundle",
+                json={"bundle": bundle},
+                headers={"X-Tenant-Id": tenant,
+                        "X-Internal-Secret": self.mint_secret,
+                        "Content-Type": "application/json"},
+                timeout=self.timeout)
+        except requests.RequestException as exc:
+            # A transport-level failure (connection refused, timeout) was
+            # previously unwrapped here, propagating out of
+            # upload_connection as an unhandled Flask 500 and breaking the
+            # JSON error contract the UI depends on (#267 review). Every
+            # other engine call in this file wraps requests.RequestException
+            # into HealthClawError; this one didn't.
+            raise HealthClawError("ingest failed", 0) from exc
         try:
             body = r.json()
         except ValueError:

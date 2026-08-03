@@ -335,6 +335,19 @@ def create_app(config: Config | None = None,
                             "message": "This connection does not accept file "
                                        "uploads. Create an 'Upload records' "
                                        "connection to import a FHIR bundle."}), 400
+        # Revocation was enforced only in the template (home.html hides the
+        # upload button once status == "revoked"), so a revoked connection
+        # still accepted uploads on a direct/crafted request — defeating the
+        # disconnect guarantee ("stop new data flowing", accounts.py). A
+        # `direct` connection's normal lifecycle is "empty" (created, no
+        # file yet) -> "active" (after the first successful upload), so the
+        # check must exclude "revoked" specifically rather than require
+        # "active" — requiring "active" would refuse every first upload.
+        if conn["status"] == "revoked":
+            return jsonify({"error": "connection_not_active",
+                            "status": conn["status"],
+                            "message": "This connection has been disconnected "
+                                       "and no longer accepts uploads."}), 409
 
         # Header short-circuit for callers that DO set Content-Length, but
         # never trusted alone — the stream read below is the real bound.
@@ -364,6 +377,17 @@ def create_app(config: Config | None = None,
 
         try:
             bundle = json.loads(raw.decode("utf-8")) if raw else {}
+        except RecursionError:
+            # Same crash lever as the engine's ingest-bundle endpoint
+            # (#267 review): CPython's JSON scanner recurses per nesting
+            # level, and a payload well under _UPLOAD_MAX_BYTES can nest
+            # deep enough to raise RecursionError, which is not a
+            # ValueError and was previously unhandled -> 500. This route
+            # already sits behind @login_required, so the engine-side fix
+            # (moving auth before parse) doesn't apply here; this is purely
+            # the crash fix.
+            return jsonify({"error": "invalid_json",
+                            "message": "nesting too deep to parse"}), 400
         except (ValueError, UnicodeDecodeError):
             return jsonify({"error": "invalid_json"}), 400
         if not isinstance(bundle, dict):

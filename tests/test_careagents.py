@@ -2130,6 +2130,66 @@ def test_upload_rejects_text_plain_with_415(cfg, svc, monkeypatch):
     assert r.status_code == 415
 
 
+def test_upload_refuses_a_revoked_connection(cfg, svc, monkeypatch):
+    # #267 review: revocation was enforced only in the template (the hub
+    # hides the upload button once status == "revoked"), so a crafted
+    # request straight to the endpoint still accepted uploads after
+    # disconnect — defeating the "stop new data flowing" guarantee.
+    from careagents.app import create_app
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+    r = c.post(f"/api/connections/{conn_id}/disconnect")
+    assert r.status_code == 200 and r.get_json()["status"] == "revoked"
+
+    r = c.post(_DIRECT_UPLOAD_ENDPOINT.format(conn=conn_id),
+               data=json.dumps(_tiny_bundle("post-revoke-1")),
+               headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "connection_not_active"
+
+
+def test_upload_still_works_on_a_fresh_empty_connection(cfg, svc, monkeypatch):
+    # Regression guard for the revoked-connection fix above: a `direct`
+    # connection's normal lifecycle starts at status "empty" (not "active")
+    # until the first upload lands — checking for anything other than
+    # "revoked" specifically would refuse every first upload.
+    from careagents.app import create_app
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+
+    r = c.post(_DIRECT_UPLOAD_ENDPOINT.format(conn=conn_id),
+               data=json.dumps(_tiny_bundle("fresh-empty-1")),
+               headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 200
+    assert r.get_json()["ingested"] == 1
+
+
+def test_upload_deeply_nested_json_does_not_crash(cfg, svc, monkeypatch):
+    # #267 review: json.loads on a deeply-nested payload can raise
+    # RecursionError, which is not a ValueError and was previously
+    # unhandled -> 500. Already behind @login_required here, so this is
+    # purely the crash fix, not an auth-ordering fix.
+    from careagents.app import create_app
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+    huge = "1"
+    for _ in range(60000):
+        huge = "[" + huge + "]"
+    r = c.post(_DIRECT_UPLOAD_ENDPOINT.format(conn=conn_id),
+               data=huge, headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "invalid_json"
+
+
 def test_upload_rejects_wrong_kind_connection(app, svc, monkeypatch):
     # `sample` is not an upload target — only `direct` connections accept
     # patient-provided files. A caller pointing at their own sample

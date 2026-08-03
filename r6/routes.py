@@ -1992,6 +1992,68 @@ def _internal_mint_authorized(tenant_id):
     return resolve_app_env() != 'production'
 
 
+def _internal_ingest_authorized(tenant_id):
+    """Fail-closed authorization for internal FHIR-bundle ingestion (#267).
+
+    Deliberately NOT `_internal_mint_authorized`. That helper exempts public
+    tenants because minting a token for a public tenant grants nothing extra
+    — they already bypass read-auth by design. Ingestion is different: it
+    lets the caller choose what the tenant's records SAY. For `desktop-demo`
+    that means an unauthenticated caller could author content that lands in
+    an LLM context (stored prompt injection) and forge resource types the
+    caller should never be able to write — the reason `_ingest_one` below
+    also gets an explicit type allowlist. So every tenant, public or not,
+    requires a matching `X-Internal-Secret`. Fail-closed: if
+    `INTERNAL_TOKEN_MINT_SECRET` is unset, ingestion is refused in production
+    and allowed only outside production (backward compatible locally).
+    """
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if mint_secret:
+        provided = request.headers.get('X-Internal-Secret', '')
+        return hmac.compare_digest(provided, mint_secret)
+    return resolve_app_env() != 'production'
+
+
+# Resource types the direct-upload path (#227) may never author, regardless
+# of what the caller's bundle claims. AuditEvent is system-managed elsewhere
+# in this file (_SYSTEM_MANAGED_TYPES); the rest are trust/provenance/
+# envelope types whose presence in an uploaded bundle is either meaningless
+# (Bundle-in-Bundle) or actively dangerous (a forged Consent or Provenance
+# record, or a Permission grant) if a caller could author them directly.
+_INGEST_BUNDLE_FORBIDDEN_TYPES = frozenset(
+    {'AuditEvent', 'Permission', 'Consent', 'Provenance', 'Bundle'})
+
+# Computed, not hand-maintained: everything R6Resource supports, minus the
+# forbidden set above. A new SUPPORTED_TYPES entry is allowed by default
+# (matching current ingest semantics for Fasten/SHC) unless it is added to
+# the forbidden set explicitly — the forbidden list is the one that has to
+# stay intentional, not this one.
+_INGEST_BUNDLE_ALLOWED_TYPES = frozenset(
+    set(R6Resource.SUPPORTED_TYPES) - _INGEST_BUNDLE_FORBIDDEN_TYPES)
+
+
+_INGEST_MAX_JSON_DEPTH = 32
+
+
+def _json_depth_within(obj, limit, _depth=0):
+    """Bounded depth check, not a recursion-limit workaround.
+
+    Refuses at `limit` (32) regardless of Python's actual recursion ceiling
+    (typically ~1000), so a hostile payload is rejected long before it can
+    exhaust the stack — this walker itself never recurses past limit+1
+    levels. FHIR resources do not nest anywhere close to 32 levels deep in
+    practice; this is headroom, not a tight bound.
+    """
+    if _depth > limit:
+        return False
+    if isinstance(obj, dict):
+        return all(_json_depth_within(v, limit, _depth + 1)
+                  for v in obj.values())
+    if isinstance(obj, list):
+        return all(_json_depth_within(v, limit, _depth + 1) for v in obj)
+    return True
+
+
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
 def issue_step_up_token():
     """
@@ -2232,8 +2294,10 @@ def ingest_bundle():
     but had no server-side path — this is that path. It reuses `_ingest_one`
     (the same code path Fasten/SHC take, with parameterized provenance so
     the audit event honestly records `direct-upload` rather than borrowing
-    Fasten's), is gated exactly like seed/purge (fail-closed via
-    `_internal_mint_authorized`), and is deliberately synchronous so a
+    Fasten's), is gated fail-closed via `_internal_ingest_authorized` —
+    unlike seed/purge, the public-tenant exemption does NOT apply here,
+    because authoring content is a different risk than minting a token (see
+    that function's docstring) — and is deliberately synchronous so a
     patient watching an upload sees an honest per-entry result.
 
     Request contract:
@@ -2241,7 +2305,8 @@ def ingest_bundle():
         the ONLY tenant selector; a `tenant_id` in the JSON body is rejected
         as a legacy selector rather than silently honored (an attacker who
         can influence the body could otherwise redirect the write).
-      - Header `X-Internal-Secret`: required for non-public tenants.
+      - Header `X-Internal-Secret`: required unconditionally (no
+        public-tenant exemption — see `_internal_ingest_authorized`).
       - Header `Content-Type`: `application/json` (charset optional). The
         body is an envelope carrying a Bundle, NOT a raw FHIR resource,
         so `application/fhir+json` is refused here. The patient-facing
@@ -2268,6 +2333,20 @@ def ingest_bundle():
     """
     max_bytes, max_entries = _ingest_bundle_limits()
 
+    # Auth gate FIRST — before content-type sniffing, before the body is
+    # read, before anything is parsed. #267's review found the body read and
+    # JSON parse both happened before this check, so a deeply-nested payload
+    # could crash the worker (RecursionError, uncaught) with NO credentials
+    # at all, against ANY tenant. Tenant selection needs only the header, so
+    # nothing below this point requires touching the request body.
+    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
+    if not tenant_id:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
+        return jsonify({'error': 'invalid tenant_id format'}), 400
+    if not _internal_ingest_authorized(tenant_id):
+        return jsonify({'error': 'forbidden'}), 403
+
     ct_raw = (request.content_type or '').split(';', 1)[0].strip().lower()
     if ct_raw not in _INGEST_BUNDLE_MIME_TYPES:
         return jsonify({'error': 'content_type_required',
@@ -2281,11 +2360,27 @@ def ingest_bundle():
 
     try:
         body = json.loads(raw.decode('utf-8')) if raw else {}
+    except RecursionError:
+        # CPython's JSON array/object scanner recurses per nesting level.
+        # A 120KB payload nested ~60,000 deep reproduces this with no size
+        # cap anywhere near triggering — the byte cap below is irrelevant to
+        # this crash lever. Caught explicitly because RecursionError is not
+        # a ValueError and was previously unhandled -> 500.
+        return jsonify({'error': 'invalid_json',
+                        'message': 'nesting too deep to parse'}), 400
     except (ValueError, UnicodeDecodeError):
         return jsonify({'error': 'invalid_json'}), 400
     if not isinstance(body, dict):
         return jsonify({'error': 'invalid_json',
                         'message': 'body must be a JSON object'}), 400
+    if not _json_depth_within(body, _INGEST_MAX_JSON_DEPTH):
+        # Defense in depth beyond the RecursionError catch above: a payload
+        # that parses successfully (recursion limit not hit) but is still
+        # absurdly nested can cause problems downstream — audit-event
+        # construction, redaction, re-serialization. Refuse it here rather
+        # than trust every later consumer to be equally careful.
+        return jsonify({'error': 'bundle_too_deep',
+                        'max_depth': _INGEST_MAX_JSON_DEPTH}), 400
 
     # Header is the ONLY tenant selector — any body `tenant_id` is a legacy
     # client-controlled selector and is refused rather than treated as
@@ -2295,14 +2390,6 @@ def ingest_bundle():
         return jsonify({'error': 'legacy_body_selector',
                         'message': 'Tenant is derived from X-Tenant-Id only; '
                                    'remove "tenant_id" from the body.'}), 400
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'tenant_id is required'}), 400
-    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
-        return jsonify({'error': 'invalid tenant_id format'}), 400
-
-    if not _internal_mint_authorized(tenant_id):
-        return jsonify({'error': 'forbidden'}), 403
 
     bundle = body.get('bundle')
     if not isinstance(bundle, dict) or bundle.get('resourceType') != 'Bundle':
@@ -2346,7 +2433,8 @@ def ingest_bundle():
                 result, _rid = _ingest_one(
                     resource, tenant_id,
                     agent_id='direct-upload',
-                    detail='Ingested via patient direct upload')
+                    detail='Ingested via patient direct upload',
+                    allowed_types=_INGEST_BUNDLE_ALLOWED_TYPES)
         except Exception as exc:  # noqa: BLE001
             # NEVER return `str(exc)` — SQL driver messages can echo
             # statements and parameters that carry PHI. Log ONLY the
@@ -2366,6 +2454,18 @@ def ingest_bundle():
             continue
         if result == 'ok':
             ingested += 1
+        elif result == 'forbidden':
+            skipped += 1
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'forbidden_type',
+                           'message': f'{rtype!r} may not be authored via '
+                                      'direct upload'})
+        elif result == 'invalid_id':
+            skipped += 1
+            errors.append({'index': idx, 'resourceType': rtype,
+                           'code': 'invalid_resource_id',
+                           'message': 'entry.resource.id is not a valid '
+                                      'FHIR id and was refused'})
         else:
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,
