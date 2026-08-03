@@ -300,7 +300,16 @@ def propose_action():
     if not tenant_id:
         return _error(400, 'X-Tenant-Id header is required')
 
-    body = request.get_json(silent=True) or {}
+    # propose has no step-up gate at all — the tenant header is the whole
+    # credential — so this parse is reachable by anyone who can name a
+    # tenant. There is no auth gate to move above it; bounding the depth is
+    # the fix (#312). Lazy import, like authenticate_tenant_read below, to
+    # keep the r6.routes <-> r6.actions import graph acyclic.
+    from r6.routes import json_body_within_depth
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return _error(400, 'request body nesting is too deep')
+    body = body or {}
     if not isinstance(body, dict):
         return _error(400, 'request body must be a JSON object')
     kind = body.get('kind')

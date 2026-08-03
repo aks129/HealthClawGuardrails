@@ -109,7 +109,22 @@ def enforce_human_in_loop():
     if '/demo/' in request.path or '/internal/' in request.path:
         return None
 
-    body = request.get_json(silent=True)
+    # #312: this is the FIRST parse on every non-exempt r6 POST/PUT — it runs
+    # in before_request, ahead of every handler's auth gate, with nothing but
+    # a tenant header presented. A depth guard inside create/update alone
+    # would never be reached, because the RecursionError escapes from here.
+    # Lazy import: r6.routes imports this module at load time.
+    from r6.routes import json_body_within_depth
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return jsonify({
+            'resourceType': 'OperationOutcome',
+            'issue': [{
+                'severity': 'error',
+                'code': 'invalid',
+                'diagnostics': 'Request body nesting is too deep',
+            }]
+        }), 400
     if not body:
         return None
 
