@@ -87,6 +87,42 @@ def test_the_connect_modal_scrolls_in_a_wrapper_not_the_iframe():
         're-creates the clip even with overflow-y set')
 
 
+def test_the_iframe_is_taller_than_its_scroll_container():
+    """The declaration that decides whether the scroll container can scroll.
+
+    The first fix for this bug set `height: 100%` on the iframe. That makes it
+    exactly fill .fasten-modal-body, so the wrapper never overflows, its
+    `overflow-y: auto` never engages, and the widget stays clipped — iOS will
+    not scroll an iframe's internals, which is the only reason the wrapper is
+    there. The dialog shipped still broken and the earlier version of this file
+    passed, because it asserted that a scroll container EXISTED rather than
+    that scrolling could ever HAPPEN.
+
+    A scroll container whose only child always fits is not a scroll container.
+
+    MUTATION: set the iframe back to `height: 100%` (or any percentage) -> red.
+    """
+    src = CONNECT.read_text(encoding='utf-8')
+    match = re.search(r'\.fasten-modal-body iframe\s*\{(.*?)\}', src, re.S)
+    assert match, '.fasten-modal-body iframe rule not found'
+    rule = _CSS_COMMENT.sub('', match.group(1))
+
+    height = re.search(r'(?<!min-)(?<!max-)height:\s*([^;]+);', rule)
+    assert height, 'the iframe declares no height, so its size is content-'\
+                   'driven and iOS will clip it'
+    value = height.group(1).strip()
+    assert '%' not in value, (
+        f'the iframe height is {value!r}: a percentage resolves against '
+        '.fasten-modal-body, so the iframe can never exceed it and the wrapper '
+        'can never scroll. Use an absolute height taller than the tallest '
+        'phone/tablet viewport.')
+    px = re.match(r'(\d+)px$', value)
+    assert px and int(px.group(1)) >= 900, (
+        f'the iframe height is {value!r}; it must be an absolute height of at '
+        'least 900px so the wrapper overflows and scrolls on a phone-sized '
+        'viewport, which is where this was reported')
+
+
 def test_the_iframe_is_inside_the_scroll_wrapper():
     """The wrapper only helps if the iframe is actually in it."""
     src = CONNECT.read_text(encoding='utf-8')
