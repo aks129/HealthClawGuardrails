@@ -134,14 +134,26 @@
     z-index: 1000;
     align-items: center;
     justify-content: center;
+    /* Keep the dialog clear of the notch and home indicator, and give it room
+       to breathe on a phone. */
+    padding: 12px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
   .fasten-modal-backdrop.open { display: flex; }
   .fasten-modal {
     background: #161b22;
     border-radius: 14px;
     border: 1px solid rgba(34,211,238,0.2);
-    width: min(680px, 96vw);
-    height: min(640px, 90vh);
+    width: min(680px, 100%);
+    /* Was `height: min(640px, 90vh)`, which clipped the widget's own consent
+       checkbox and Continue button with no way to reach them (reported on
+       iPad). `max-height: 100%` resolves against the backdrop, which is
+       `position: fixed; inset: 0` and therefore already the visible viewport
+       minus its safe-area padding — more reliable here than `90vh`, which iOS
+       measures against the viewport with browser chrome EXPANDED. */
+    height: 640px;
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -149,8 +161,14 @@
   }
   .fasten-modal-close {
     position: absolute;
-    top: 12px;
-    right: 14px;
+    top: 4px;
+    right: 4px;
+    /* 44px minimum tap target (design.md). The glyph stays 22px. */
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
     color: var(--gray-dim);
@@ -159,9 +177,23 @@
     z-index: 10;
     line-height: 1;
   }
-  .fasten-modal iframe {
-    flex: 1;
+  /* iOS and iPadOS expand an iframe to its content height and will not scroll
+     it internally, whatever the iframe's own overflow says. So the WRAPPER is
+     the scroll container — this is what actually makes the bottom of the
+     Fasten widget reachable on an iPad. */
+  .fasten-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;          /* a flex child defaults to min-height:auto and
+                               refuses to shrink, which re-creates the clip */
+    overflow-y: auto;
+  }
+  .fasten-modal-body iframe {
+    display: block;
     width: 100%;
+    height: 100%;
+    /* Tall enough that the widget lays out normally on a roomy screen; the
+       wrapper scrolls when the viewport is shorter than this. */
+    min-height: 560px;
     border: none;
   }
 </style>
@@ -201,12 +233,16 @@
 {% if fasten_public_key %}
 <div class="fasten-modal-backdrop" id="stitch-backdrop">
   <div class="fasten-modal">
-    <button type="button" class="fasten-modal-close" id="close-stitch" title="Close">&times;</button>
-    <iframe
-      id="stitch-iframe"
-      src="https://embed.connect.fastenhealth.com/?public-id={{ fasten_public_key }}{% if tefca_mode %}&tefca-mode=true&search-only=false{% endif %}&external-id={{ tenant_id }}"
-      allow="camera; microphone; clipboard-write"
-    ></iframe>
+    <button type="button" class="fasten-modal-close" id="close-stitch"
+            title="Close" aria-label="Close">&times;</button>
+    <div class="fasten-modal-body">
+      <iframe
+        id="stitch-iframe"
+        title="Fasten Connect"
+        src="https://embed.connect.fastenhealth.com/?public-id={{ fasten_public_key }}{% if tefca_mode %}&tefca-mode=true&search-only=false{% endif %}&external-id={{ tenant_id }}"
+        allow="camera; microphone; clipboard-write"
+      ></iframe>
+    </div>
   </div>
 </div>
 {% endif %}
