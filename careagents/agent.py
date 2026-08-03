@@ -96,9 +96,26 @@ TOOL_LABELS = {
 
 
 def _summarize_bundle(bundle: dict, limit: int = 12) -> list[dict]:
-    """Compact, model-friendly view of a searchset bundle (already redacted)."""
+    """Compact, model-friendly view of a searchset bundle (already redacted).
+
+    Truncates to `limit` and SAYS SO. The list this returns is the model's
+    entire view of the person's records for that resource type, so a silent
+    cut is indistinguishable from "that is all there is" — a person on 30
+    medications would be told about 12, in a confident complete-sounding
+    sentence.
+
+    That is the same mistake as #207, four lines below: dropping an unreadable
+    record's name made the model report the condition as ABSENT. We fixed
+    unreadable-is-not-absent and left truncated-is-not-absent in the same
+    function. It cannot fire on the synthetic demo tenant, which is why
+    nothing caught it; it fires on the first real record with a long list.
+    """
+    entries = bundle.get("entry") or []
+    total = sum(1 for e in entries
+                if (e.get("resource") or {}).get("resourceType")
+                != "OperationOutcome")
     out = []
-    for entry in (bundle.get("entry") or [])[:limit]:
+    for entry in entries[:limit]:
         res = entry.get("resource") or {}
         rt = res.get("resourceType")
         if rt == "OperationOutcome":
@@ -127,6 +144,20 @@ def _summarize_bundle(bundle: dict, limit: int = 12) -> list[dict]:
         if res.get("effectiveDateTime"):
             item["date"] = str(res["effectiveDateTime"])[:10]
         out.append(item)
+
+    if total > len(out):
+        # Deliberately shaped so it cannot be mistaken for a record: no
+        # "type", no "name". The instruction is carried in the payload rather
+        # than left to the system prompt alone, because this is the one place
+        # the model can tell complete from partial.
+        out.append({
+            "truncated": True,
+            "shown": len(out),
+            "total": total,
+            "note": (f"Only {len(out)} of {total} records are shown. Do not "
+                     f"describe this list as complete or as all the person "
+                     f"has; say more exist and offer to narrow the search."),
+        })
     return out
 
 

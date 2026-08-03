@@ -1100,6 +1100,56 @@ def test_unreadable_record_is_never_summarized_as_nothing():
     assert "250.00" in items[0]["name"]
 
 
+def test_a_truncated_list_says_so_rather_than_looking_complete():
+    # The sibling of #207. The summarizer caps at 12 and the list it returns
+    # IS the model's whole view, so a silent cut reads as "that is all there
+    # is". A person on 30 medications would be told about 12, confidently.
+    from careagents.agent import _summarize_bundle
+    bundle = {"entry": [
+        {"resource": {"resourceType": "MedicationRequest",
+                      "medicationCodeableConcept": {"text": f"Drug {i}"}}}
+        for i in range(30)
+    ]}
+    items = _summarize_bundle(bundle)
+
+    marker = [i for i in items if i.get("truncated")]
+    assert marker, "a truncated list must carry a truncation marker"
+    assert marker[0]["total"] == 30
+    assert marker[0]["shown"] == 12
+    # Must not be mistakable for a record.
+    assert "name" not in marker[0] and "type" not in marker[0]
+    assert "complete" in marker[0]["note"].lower()
+
+
+def test_an_untruncated_list_carries_no_marker():
+    # Otherwise every answer hedges and the signal stops meaning anything.
+    from careagents.agent import _summarize_bundle
+    bundle = {"entry": [
+        {"resource": {"resourceType": "Condition",
+                      "code": {"text": f"Thing {i}"}}}
+        for i in range(3)
+    ]}
+    items = _summarize_bundle(bundle)
+    assert len(items) == 3
+    assert not any(i.get("truncated") for i in items)
+
+
+def test_truncation_total_ignores_operation_outcomes():
+    # OperationOutcome entries are skipped as records, so counting them would
+    # promise records that do not exist.
+    from careagents.agent import _summarize_bundle
+    entries = [{"resource": {"resourceType": "Condition",
+                             "code": {"text": f"C{i}"}}} for i in range(13)]
+    entries.append({"resource": {"resourceType": "OperationOutcome"}})
+    items = _summarize_bundle({"entry": entries})
+    marker = [i for i in items if i.get("truncated")][0]
+    assert marker["total"] == 13
+
+
+def test_safety_core_forbids_presenting_a_truncated_list_as_complete():
+    assert "truncated" in SAFETY_CORE.lower()
+
+
 def test_safety_core_forbids_answering_absence_with_a_bare_no():
     # The model must not convert "I couldn't read it" into "you don't have it".
     assert "bare \"no\"" in SAFETY_CORE or "bare 'no'" in SAFETY_CORE
