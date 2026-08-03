@@ -265,25 +265,33 @@ def green_fatal_env(monkeypatch):
 
 
 class TestPreflightEndpoint:
-    def test_requires_tenant_header(self, client):
-        resp = client.get('/r6/ops/preflight')
-        assert resp.status_code == 400
+    # #304: preflight shares the ops gate — infrastructure (internal secret),
+    # not tenant step-up. A tenant token (even a public tenant's) is rejected.
+    OPS_SECRET = 'ops-internal-secret-value-304'
 
-    def test_requires_step_up_token(self, client, tenant_headers):
-        resp = client.get('/r6/ops/preflight', headers=tenant_headers)
-        assert resp.status_code == 401
-
-    def test_rejects_bad_token(self, client, tenant_id):
-        resp = client.get('/r6/ops/preflight', headers={
-            'X-Tenant-Id': tenant_id, 'X-Step-Up-Token': 'garbage.token'})
-        assert resp.status_code == 401
-
-    def test_rejects_foreign_tenant_token(self, client, tenant_id):
+    def test_public_tenant_stepup_token_is_rejected(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', self.OPS_SECRET)
         from r6.stepup import generate_step_up_token
         resp = client.get('/r6/ops/preflight', headers={
-            'X-Tenant-Id': tenant_id,
-            'X-Step-Up-Token': generate_step_up_token('other-tenant')})
-        assert resp.status_code == 401
+            'X-Tenant-Id': 'desktop-demo',
+            'X-Step-Up-Token': generate_step_up_token('desktop-demo')})
+        assert resp.status_code == 403
+
+    def test_missing_internal_secret_is_rejected(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', self.OPS_SECRET)
+        assert client.get('/r6/ops/preflight').status_code == 403
+
+    def test_wrong_internal_secret_is_rejected(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', self.OPS_SECRET)
+        resp = client.get('/r6/ops/preflight',
+                          headers={'X-Internal-Secret': 'wrong'})
+        assert resp.status_code == 403
+
+    def test_correct_internal_secret_succeeds(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', self.OPS_SECRET)
+        resp = client.get('/r6/ops/preflight',
+                          headers={'X-Internal-Secret': self.OPS_SECRET})
+        assert resp.status_code == 200
 
     def test_response_shape_and_always_200(self, client, auth_headers,
                                            monkeypatch):

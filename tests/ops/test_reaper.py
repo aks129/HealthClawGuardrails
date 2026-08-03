@@ -103,18 +103,83 @@ def reap(client, auth_headers):
 
 # ------------------------------------------------------------------ auth
 
+OPS_SECRET = 'ops-internal-secret-value-304'
+
+
 class TestReapAuth:
-    def test_requires_tenant_header(self, client):
-        assert client.post('/r6/ops/reap').status_code == 400
+    """#304: /r6/ops/* authenticates as *infrastructure* via the internal
+    secret (X-Internal-Secret, no public-tenant exemption), NOT as a tenant.
+    A tenant-bound step-up token grants nothing here; no X-Tenant-Id is
+    consulted for auth."""
 
-    def test_requires_step_up_token(self, client, tenant_headers):
-        resp = client.post('/r6/ops/reap', headers=tenant_headers)
-        assert resp.status_code == 401
-
-    def test_rejects_bad_token(self, client, tenant_id):
+    def test_public_tenant_stepup_token_is_rejected(self, client, monkeypatch):
+        # This is the vulnerability (finding S-1): desktop-demo is a public
+        # tenant, so a full-capability step-up token mints with no credential.
+        # It used to drive the global sweep. With an internal secret required
+        # and none supplied, the request must be refused.
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        from r6.stepup import generate_step_up_token
         resp = client.post('/r6/ops/reap', headers={
-            'X-Tenant-Id': tenant_id, 'X-Step-Up-Token': 'garbage.token'})
-        assert resp.status_code == 401
+            'X-Tenant-Id': 'desktop-demo',
+            'X-Step-Up-Token': generate_step_up_token('desktop-demo')})
+        assert resp.status_code == 403
+
+    def test_correct_internal_secret_succeeds(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        resp = client.post('/r6/ops/reap',
+                           headers={'X-Internal-Secret': OPS_SECRET})
+        assert resp.status_code == 200
+
+    def test_wrong_internal_secret_is_rejected(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        resp = client.post('/r6/ops/reap',
+                           headers={'X-Internal-Secret': 'wrong'})
+        assert resp.status_code == 403
+
+    def test_missing_internal_secret_is_rejected(self, client, monkeypatch):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        assert client.post('/r6/ops/reap').status_code == 403
+
+
+class TestOpsIsInfraNotTenantScoped:
+    """#304 regression: the sweep is global by design, but the X-Tenant-Id
+    header must not scope it (the retro's "looks scoped, acts global"
+    defect). With the internal secret present, an unrelated tenant header is
+    inert — every tenant's lapsed rows are still swept, and each tenant is
+    notified about its OWN row only."""
+
+    def test_tenant_header_does_not_scope_or_leak(
+            self, app, client, monkeypatch, notifications):
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        a_id = make_action(status='awaiting_confirmation', tenant_id='tenant-a',
+                           expires_at=_utcnow() - timedelta(minutes=1))
+        b_id = make_action(status='awaiting_confirmation', tenant_id='tenant-b',
+                           expires_at=_utcnow() - timedelta(minutes=1))
+        resp = client.post('/r6/ops/reap', headers={
+            'X-Internal-Secret': OPS_SECRET,
+            'X-Tenant-Id': 'tenant-a'})   # present but must be ignored
+        assert resp.status_code == 200
+        body = resp.get_json()
+        moved = {t['id'] for t in body['transitions']}
+        assert moved == {a_id, b_id}   # global sweep — header did NOT scope
+        assert get_action(a_id).status == 'expired'
+        assert get_action(b_id).status == 'expired'
+        # each tenant is nudged about its own row, not tenant-a's for both
+        assert {n['tenant_id'] for n in notifications} == {'tenant-a', 'tenant-b'}
+
+    def test_sweep_end_to_end_under_internal_secret(
+            self, app, client, monkeypatch, patch_executor):
+        # (c) the reaper still reconciles rows under the new auth scheme.
+        monkeypatch.setenv('INTERNAL_TOKEN_MINT_SECRET', OPS_SECRET)
+        patch_executor(ExecutionResult(status='completed',
+                                       outcome={'ok': True}))
+        action_id = make_action(external_ref='call-42')
+        resp = client.post('/r6/ops/reap',
+                           headers={'X-Internal-Secret': OPS_SECRET})
+        assert resp.status_code == 200
+        assert resp.get_json()['transitions'] == [
+            {'id': action_id, 'from': 'executing', 'to': 'completed'}]
+        assert get_action(action_id).status == 'completed'
 
 
 # ------------------------------------------- executing + ref -> reconcile

@@ -12,26 +12,27 @@ POST /r6/ops/reap — the external-tick reaper (5-minute external cron; no
      auto-retried); 'unknown' rows with a ref are reconciled; lapsed
      approval windows expire with a summary-only nudge to re-propose.
 
-Auth: the same step-up gate as action commit (X-Tenant-Id + a valid
-tenant-bound X-Step-Up-Token). The sweeps themselves are global — the tenant
-binding just keeps this surface consistent with every other guarded endpoint
-rather than inventing an infra-only credential.
+Auth (#304): the internal-secret scheme (`X-Internal-Secret`, fail-closed in
+production, NO public-tenant exemption) — the same gate as `/internal/*`
+ingestion. `/r6/ops/*` is an OPERATOR surface: the sweeps are global by design,
+so authenticating it as a tenant let any tenant's step-up token drive every
+tenant's rows. It takes NO `X-Tenant-Id`; a tenant header, if present, is
+ignored. See `r6.internal_auth.internal_secret_authorized`.
 """
 import json
 import logging
-import re
 from datetime import timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 
 from models import db
 from r6.actions.models import ProposedAction, _utcnow
 from r6.actions.registry import get_executor
 from r6.actions.state import transition_action
 from r6.audit import record_audit_event
+from r6.internal_auth import internal_secret_authorized
 from r6.ops import checks as preflight_checks
 from r6.rate_limit import rate_limit_middleware
-from r6.stepup import validate_step_up_token
 from r6.telegram_push import notify_tenant
 
 logger = logging.getLogger(__name__)
@@ -40,26 +41,18 @@ ops_blueprint = Blueprint('ops', __name__, url_prefix='/r6/ops')
 
 rate_limit_middleware(ops_blueprint)
 
-_TENANT_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
-
 
 def _error(status, message):
     return jsonify({'error': message}), status
 
 
 def _auth_error_or_none():
-    """Gate 1, same as action commit: tenant header + valid tenant-bound
-    step-up token (multi-use validation; ops calls are not executions, so
-    no nonce is consumed). Returns an error response or None."""
-    tenant_id = request.headers.get('X-Tenant-Id', '')
-    if not tenant_id or not _TENANT_PATTERN.match(tenant_id):
-        return _error(400, 'X-Tenant-Id header is required')
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _error(401, 'Ops endpoints require X-Step-Up-Token header')
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _error(401, 'Step-up token rejected: %s' % err)
+    """Infrastructure gate (#304): a valid `X-Internal-Secret`, tenant-blind.
+    /r6/ops/* acts globally, so it authenticates as an operator, never as a
+    tenant — a tenant-bound step-up token grants nothing here. Returns an
+    error response or None."""
+    if not internal_secret_authorized():
+        return _error(403, 'Ops endpoints require a valid X-Internal-Secret')
     return None
 
 
