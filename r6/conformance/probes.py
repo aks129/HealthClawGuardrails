@@ -417,6 +417,23 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
         Check("phone number stripped", _PHONE not in blob),
         Check("street address stripped", _STREET not in blob),
     ]
+
+    # Search, not only read-by-id. This probe issued a single GET by id, so the
+    # grade it produces said nothing about the search path — and search is what
+    # builds an agent's context (`careagents/healthclaw.py` search()). Removing
+    # redaction from the search route left the whole suite green and the grade
+    # at A, which made the badge honest about the wrong path.
+    status, body, text = client.request(
+        "GET", f"/Patient?_id={pid}", ctx.read_headers())
+    sblob = text or json.dumps(body or {})
+    r.checks += [
+        Check("search succeeds", status == 200, f"status {status}"),
+        Check("family name not returned in full (search)", _FAMILY not in sblob),
+        Check("given name not returned in full (search)", _GIVEN not in sblob),
+        Check("SSN-class identifier masked (search)", _SSN not in sblob),
+        Check("phone number stripped (search)", _PHONE not in sblob),
+        Check("street address stripped (search)", _STREET not in sblob),
+    ]
     r.note = f"Patient/{pid}"
     return r
 
@@ -433,11 +450,29 @@ def probe_audit_trail(client, ctx) -> ProbeResult:
     st, body, text = client.request("GET", "/AuditEvent?_count=100", ctx.read_headers())
     blob = text or json.dumps(body or {})
     readable = isinstance(body, dict) and body.get("resourceType") == "Bundle"
+
+    # Look for a READ specifically. Matching only `Patient/{pid}` in the blob
+    # could not fail: the create above already emits an event whose
+    # `entity.what.reference` is exactly that string, so the check passed with
+    # read auditing deleted entirely. A check that the setup satisfies is not
+    # a check.
+    read_audited = False
+    if isinstance(body, dict):
+        for entry in body.get("entry") or []:
+            res = entry.get("resource") or {}
+            if res.get("resourceType") != "AuditEvent":
+                continue
+            action = res.get("action")
+            refs = json.dumps(res.get("entity") or [])
+            if action == "R" and pid and f"Patient/{pid}" in refs:
+                read_audited = True
+                break
+
     r.checks += [
         Check("AuditEvent endpoint readable", readable, f"status {st}"),
-        Check("resource access is recorded in the audit trail",
-              bool(pid) and f"Patient/{pid}" in blob,
-              "no AuditEvent references the accessed resource"),
+        Check("resource READ is recorded in the audit trail", read_audited,
+              "no AuditEvent with action=R references the resource that was "
+              "read (a create event alone does not demonstrate read auditing)"),
         Check("no raw SSN in the audit trail", _SSN not in blob,
               "PHI leaked into audit"),
     ]

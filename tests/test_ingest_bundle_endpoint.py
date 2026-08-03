@@ -523,7 +523,82 @@ def test_deeply_nested_json_is_refused_not_crashed_no_credentials(
     r = client.post(_ENDPOINT, data=payload,
                     headers={"X-Tenant-Id": "someone-elses-private-tenant",
                              "Content-Type": "application/json"})
-    assert r.status_code in (400, 403), r.status_code
+    # 403, not "400 or 403". Accepting 400 here accepted the bug: the
+    # RecursionError catch also answers 400, so the loose assertion passed
+    # whether auth ran before the parse or after it. Mutation-checked —
+    # moving the auth gate back below json.loads leaves this test green if
+    # 400 is allowed.
+    assert r.status_code == 403, r.status_code
+
+
+@pytest.mark.parametrize("label,body,headers", [
+    # Each of these fails a DIFFERENT check further down the handler. If auth
+    # runs first, every one of them is 403 and none of the later codes can
+    # appear. That is the property, stated as a property rather than inferred
+    # from one input.
+    ("unparseable body", b"not-json{", {"Content-Type": "application/json"}),
+    ("wrong content type", b'{"bundle":{}}', {"Content-Type": "text/plain"}),
+    ("missing content type", b'{"bundle":{}}', {}),
+    ("legacy body selector", b'{"tenant_id":"x","bundle":{}}',
+     {"Content-Type": "application/json"}),
+    ("not even a JSON object", b'"a string"',
+     {"Content-Type": "application/json"}),
+])
+def test_auth_is_the_first_gate_whatever_else_is_wrong_with_the_request(
+        client, _mint_secret_env, label, body, headers):
+    """B2's real defect was ORDER, not any single input.
+
+    The endpoint used to sniff the content type, read the body and parse it
+    before asking whether the caller was allowed to be here at all. Every
+    check below the auth gate is therefore reachable by an anonymous caller,
+    and each one is a different way to spend our CPU and memory for free.
+
+    So this asserts the ordering itself: a request that is wrong in some
+    *other* way, sent with no credentials, must still be refused as
+    unauthorized — never with the downstream code that describes what else
+    was wrong with it.
+    """
+    r = client.post(_ENDPOINT, data=body,
+                    headers={"X-Tenant-Id": "someone-elses-private-tenant",
+                             **headers})
+    assert r.status_code == 403, (
+        f"{label}: got {r.status_code} — a downstream check ran before the "
+        f"auth gate: {r.get_data(as_text=True)[:120]}")
+
+
+def test_the_depth_guard_refuses_nesting_python_can_still_parse(
+        client, _mint_secret_env):
+    """Covers `_json_depth_within`, which nothing else reaches.
+
+    The 60000-deep case below trips `RecursionError` inside `json.loads`
+    first, so it exercises the except-clause and never the depth walk —
+    `_INGEST_MAX_JSON_DEPTH` could be raised to ten million and the suite
+    stayed green. This nests deep enough to break the limit but shallow
+    enough that CPython parses it happily, so the constant is load-bearing.
+    """
+    from r6.routes import _INGEST_MAX_JSON_DEPTH
+
+    depth = _INGEST_MAX_JSON_DEPTH + 20
+    payload = ('{"bundle":' + "[" * depth + "1" + "]" * depth + "}").encode()
+
+    r = client.post(_ENDPOINT, data=payload,
+                    headers={"X-Tenant-Id": "someone-elses-private-tenant",
+                             "Content-Type": "application/json",
+                             "X-Internal-Secret": _MINT_SECRET})
+    assert r.status_code == 400, r.get_json()
+
+    # And a bundle just inside the limit must still be accepted, or the guard
+    # is a blanket refusal wearing a depth check's name.
+    ok_depth = max(1, _INGEST_MAX_JSON_DEPTH - 4)
+    nested = "[" * ok_depth + "1" + "]" * ok_depth
+    r = client.post(
+        _ENDPOINT,
+        data=('{"bundle":{"resourceType":"Bundle","type":"collection",'
+              '"entry":[],"_probe":' + nested + "}}").encode(),
+        headers={"X-Tenant-Id": "someone-elses-private-tenant",
+                 "Content-Type": "application/json",
+                 "X-Internal-Secret": _MINT_SECRET})
+    assert r.status_code == 200, r.get_json()
 
 
 def test_deeply_nested_json_refused_as_too_deep_with_credentials(
