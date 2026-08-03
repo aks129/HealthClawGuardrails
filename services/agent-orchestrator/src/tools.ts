@@ -10,12 +10,12 @@
  * - Adding clinical context to statistical results
  * - Explaining access control decisions
  *
- * Two tiers:
- * - Read-only (no step-up): context.get, fhir.read, fhir.search, fhir.validate,
- *   fhir.stats, fhir.lastn, fhir.permission_evaluate, fhir.subscription_topics,
- *   fhir.compiled_truth, curatr.evaluate
- * - Write (require step-up): fhir.propose_write, fhir.commit_write,
- *   curatr.apply_fix
+ * Two tiers, and the tier is the gate — `executeToolInner` demands an
+ * X-Step-Up-Token for every tool declared `tier: "write"`, with no second list
+ * of names anywhere. Read-tier tools (context.get, fhir.read, fhir.search,
+ * fhir.validate, fhir.stats, fhir.lastn, fhir.permission_evaluate,
+ * fhir.subscription_topics, fhir.compiled_truth, curatr.evaluate, …) are never
+ * gated. A new tool inherits its protection from the one word it declares.
  *
  * All tools include MCP annotations (readOnlyHint, destructiveHint, openWorldHint).
  */
@@ -447,7 +447,7 @@ export class FHIRTools {
         name: "questionnaire_extract",
         title: "Extract Form Data to FHIR",
         description:
-          "SDC $extract — extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up unless dry_run=true.",
+          "SDC $extract — extract FHIR resources from a completed QuestionnaireResponse into a transaction Bundle. Write tier; requires step-up authorization, including for dry_run=true previews.",
         tier: "write",
         handler: ({ input, headers }) =>
           this.extractQuestionnaire(
@@ -471,7 +471,7 @@ export class FHIRTools {
         name: "fhir_propose_write",
         title: "Propose FHIR Write",
         description:
-          "Propose a write — validates the resource and returns a preview. Does NOT commit. Safe to call without step-up authorization.",
+          "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: requires step-up authorization (call fhir_get_token first; pass as _stepUpToken).",
         tier: "write",
         handler: ({ input, headers }) =>
           this.proposeWrite(
@@ -797,7 +797,7 @@ export class FHIRTools {
         name: "curatr_apply_fix",
         title: "Apply Data Quality Fix",
         description:
-          "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token) and human confirmation (X-Human-Confirmed: true) for clinical resources like Condition.",
+          "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token); in production the token must be audience- and operation-bound to this fix. This tool never asserts human confirmation on the patient's behalf — approval is proved by the token, not by a header.",
         tier: "write",
         handler: ({ input, headers }) =>
           this.curatrApplyFix(
@@ -1151,8 +1151,12 @@ export class FHIRTools {
       };
     }
 
-    // Enforce step-up for commit_write, action_commit, and shl_generate (releases full record)
-    if (tool.tier === "write" && (toolName === "fhir_commit_write" || toolName === "action_commit" || toolName === "shl_generate")) {
+    // The declared tier IS the gate. This used to be `tier === "write" && (name
+    // is one of three)`, which read like a tier check but was really a name
+    // list — five write-tier tools inherited no central protection, and a tool
+    // added with tier: "write" got none at all. Anything that must not be
+    // gated declares tier: "read"; there is no second, invisible list.
+    if (tool.tier === "write") {
       const stepUpToken = headers?.["x-step-up-token"];
       if (!stepUpToken) {
         return {
@@ -1190,6 +1194,12 @@ export class FHIRTools {
 
     // questionnaire_extract dry-run is read-shaped (Flask gates it with read-auth
     // but no step-up); mint a read token so non-public tenants can preview.
+    //
+    // INERT since the step-up gate became tier-driven: questionnaire_extract is
+    // write tier, so reaching this line means the caller already supplied a
+    // token, and ensureReadToken returns immediately when one is present. Kept
+    // because it is the hook that comes back to life if the dry-run preview is
+    // re-exempted from the gate — see the PR note on that trade-off.
     if (toolName === "questionnaire_extract" && effectiveInput.dry_run === true) {
       await this.ensureReadToken(fwdHeaders);
     }
@@ -1861,15 +1871,16 @@ export class FHIRTools {
     patientIntent: string,
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
-    const stepUpToken = headers["X-Step-Up-Token"] || headers["x-step-up-token"];
-    if (!stepUpToken) {
-      return {
-        error: "Step-up authorization required for curatr.apply_fix",
-        requires_step_up: true,
-        message:
-          "Applying fixes to clinical resources requires X-Step-Up-Token and X-Human-Confirmed: true headers.",
-      };
-    }
+    // No local step-up check: executeToolInner gates every write-tier tool,
+    // and curatr_apply_fix is write tier. The check that used to live here
+    // read a differently-cased header than the central gate, which is how two
+    // controls that look like one drift apart.
+    //
+    // Nor does this call mint X-Human-Confirmed. The MCP client cannot know
+    // whether a human confirmed a clinical write; asserting it upstream on the
+    // human's behalf is the guardrail inverted. Flask ignores the header here
+    // and requires an audience-bound, operation-bound, single-use token
+    // instead, so removing it costs nothing and removes a standing lie.
 
     // 30s budget: after applying, Flask re-evaluates the fixed resource via
     // the same external terminology services as $curatr-evaluate
@@ -1879,7 +1890,7 @@ export class FHIRTools {
       `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-apply-fix`,
       {
         method: "POST",
-        headers: { ...headers, "X-Human-Confirmed": "true" },
+        headers: { ...headers },
         body: JSON.stringify({ fixes, patient_intent: patientIntent }),
       },
       30_000

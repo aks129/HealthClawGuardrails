@@ -975,7 +975,7 @@ describe("Tool Execution Tests", () => {
       to_pharmacy_phone: "+15551230000",
       from_pharmacy_name: "CVS Oak Ave",
       medication_names: ["Metformin 500 mg"],
-    }, { "x-tenant-id": "t1" });
+    }, { "x-tenant-id": "t1", "x-step-up-token": "tok-1" });
 
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toContain("/r6/actions/rx-transfer/propose");
@@ -994,7 +994,7 @@ describe("Tool Execution Tests", () => {
 
     const result = await tools.executeTool("rx_transfer_request", {
       to_pharmacy_name: "Walgreens", to_pharmacy_phone: "+15551230000",
-    }, {}) as Record<string, unknown>;
+    }, { "x-step-up-token": "tok-1" }) as Record<string, unknown>;
 
     expect(String(result.error)).toContain("422");
   });
@@ -1260,9 +1260,29 @@ describe("Tool Execution Tests", () => {
     }
   });
 
-  // -- propose_write does NOT require step-up --
+  // -- propose_write is write tier, so it IS gated --
+  //
+  // It used to be exempt: the central gate named three tools, and
+  // propose_write was not one of them, even though it declares tier: "write".
+  // Now the declared tier is the gate (see step-up-gate.test.ts), so this
+  // preview call needs a token like every other write-tier tool.
 
-  it("fhir.propose_write does NOT require step-up token", async () => {
+  it("fhir.propose_write requires a step-up token like every write-tier tool", async () => {
+    const result = await tools.executeTool(
+      "fhir_propose_write",
+      {
+        resource: { resourceType: "Observation", status: "final" },
+        operation: "create",
+      },
+      {} // no step-up token
+    );
+
+    expect(result).toHaveProperty("error", "Step-up authorization required");
+    expect(result).toHaveProperty("requires_step_up", true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("fhir.propose_write returns the preview once a step-up token is supplied", async () => {
     const validationResponse = {
       resourceType: "OperationOutcome",
       issue: [],
@@ -1275,7 +1295,7 @@ describe("Tool Execution Tests", () => {
         resource: { resourceType: "Observation", status: "final" },
         operation: "create",
       },
-      {} // no step-up token -- should still work
+      { "x-step-up-token": "tok-1" }
     );
 
     expect(result.error).toBeUndefined();
@@ -1291,7 +1311,7 @@ describe("Tool Execution Tests", () => {
     const result = await tools.executeTool(
       "action_propose",
       { kind: "phone-call", payload: { to: "Dr. Smith", phone: "+15551234567", body: "Requesting referral." } },
-      { "x-tenant-id": "tenant-xyz" }
+      { "x-tenant-id": "tenant-xyz", "x-step-up-token": "tok-1" }
     );
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
