@@ -2006,12 +2006,14 @@ def _internal_ingest_authorized(tenant_id):
     requires a matching `X-Internal-Secret`. Fail-closed: if
     `INTERNAL_TOKEN_MINT_SECRET` is unset, ingestion is refused in production
     and allowed only outside production (backward compatible locally).
+
+    The internal-secret check lives in `r6.internal_auth` so this gate and the
+    `/r6/ops/*` operator gate (#304) share one implementation; `tenant_id` is
+    accepted for call-site symmetry but intentionally unused (the secret is
+    tenant-independent).
     """
-    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
-    if mint_secret:
-        provided = request.headers.get('X-Internal-Secret', '')
-        return hmac.compare_digest(provided, mint_secret)
-    return resolve_app_env() != 'production'
+    from r6.internal_auth import internal_secret_authorized
+    return internal_secret_authorized()
 
 
 # Resource types the direct-upload path (#227) may never author, regardless
