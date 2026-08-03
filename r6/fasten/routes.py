@@ -513,7 +513,6 @@ def run_demo():
     Returns a structured result with each step's outcome.
     """
     import uuid as _uuid
-    from r6.models import R6Resource
     from r6.redaction import apply_redaction as redact_resource
 
     demo_tenant = 'fasten-demo-tenant'
@@ -523,14 +522,11 @@ def run_demo():
     steps = []
 
     # ── Step 1: Register connection ──────────────────────────────────────────
-    conn = FastenConnection(
-        org_connection_id=org_connection_id,
-        tenant_id=demo_tenant,
-        platform_type='demo',
-        connection_status='authorized',
-    )
-    db.session.add(conn)
-    db.session.flush()
+    # SECURITY (#305, S-2): this endpoint is unauthenticated and fires on every
+    # real Stitch connection. It persists NOTHING — no FastenConnection,
+    # FastenJob, or R6Resource rows. The `steps` response is built in memory and
+    # is byte-identical to the persisted version. The three audit events below
+    # stay real (they are append-only, PHI-free) so step 5's count is honest.
     record_audit_event(
         event_type='fasten_connection_registered',
         agent_id='fasten-demo',
@@ -547,14 +543,6 @@ def run_demo():
     })
 
     # ── Step 2: Simulate webhook receipt ─────────────────────────────────────
-    job = FastenJob(
-        task_id=task_id,
-        org_connection_id=org_connection_id,
-        tenant_id=demo_tenant,
-    )
-    db.session.add(job)
-    conn.last_export_at = datetime.now(timezone.utc)
-    db.session.flush()
     record_audit_event(
         event_type='fasten_import_start',
         agent_id='fasten-demo',
@@ -612,27 +600,13 @@ def run_demo():
         },
     ]
 
-    ingested = []
-    for resource in sample_resources:
-        r_type = resource['resourceType']
-        r_id = resource['id']
-        existing = R6Resource.query.filter_by(
-            resource_type=r_type, id=r_id, tenant_id=demo_tenant
-        ).first()
-        if not existing:
-            row = R6Resource(
-                resource_type=r_type,
-                resource_id=r_id,
-                tenant_id=demo_tenant,
-                resource_json=json.dumps(resource),
-            )
-            db.session.add(row)
-            ingested.append(f'{r_type}/{r_id}')
-
-    job.ingested_resources = len(ingested)
-    job.status = 'completed'
-    job.completed_at = datetime.now(timezone.utc)
-    db.session.commit()
+    # Built in memory — nothing is written (see Step 1 security note). The ids
+    # are freshly minted per request, so every sample counts as "ingested",
+    # matching the prior persisted behaviour.
+    ingested = [
+        f'{resource["resourceType"]}/{resource["id"]}'
+        for resource in sample_resources
+    ]
 
     record_audit_event(
         event_type='fasten_import_complete',
@@ -650,10 +624,10 @@ def run_demo():
     })
 
     # ── Step 4: Read back Patient with PHI redaction ─────────────────────────
-    pt_row = R6Resource.query.filter_by(
-        resource_type='Patient', id=patient_id, tenant_id=demo_tenant
-    ).first()
-    raw_patient = json.loads(pt_row.resource_json) if pt_row else {}
+    # In-memory instead of a DB round-trip. json.loads(json.dumps(...)) mirrors
+    # the exact copy the persisted path produced (resource_json → json.loads),
+    # so `original_fields` and `redacted` are byte-identical to before.
+    raw_patient = json.loads(json.dumps(sample_resources[0]))
     redacted = redact_resource(raw_patient)
     steps.append({
         'step': 4,
