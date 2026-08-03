@@ -4,7 +4,7 @@ Requires: `pip install openai` and OPENAI_API_KEY. This is a reference example
 (not run in CI). The guardrails are enforced by HealthClaw server-side.
 
     python adapters/examples/openai_agent.py \
-        --mcp-base https://mcp-server-production-5112.up.railway.app \
+        --mcp-base https://mcp-demo-production-ee2c.up.railway.app \
         --tenant desktop-demo --prompt "Summarize the patient's recent vitals"
 """
 import argparse

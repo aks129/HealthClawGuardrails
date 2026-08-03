@@ -9,7 +9,7 @@ Time: about 3 minutes. Custom connectors require a paid Perplexity plan.
 2. Choose **Add connector** → **Custom / Remote MCP**.
 3. Fill in:
    - **Name:** `HealthClaw`
-   - **Server URL:** `https://mcp-server-production-5112.up.railway.app/mcp`
+   - **Server URL:** `https://mcp-demo-production-ee2c.up.railway.app/mcp`
    - **Authentication:** none
 4. Save, and enable the connector for your searches/threads.
 

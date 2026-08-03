@@ -14,7 +14,7 @@ Plus/Pro user add a remote MCP server by URL** — HealthClaw works there today.
 1. Settings → **Apps & Connectors** → **Create** (or **Add connector**).
 2. Fill in:
    - **Name:** `HealthClaw`
-   - **MCP server URL:** `https://mcp-server-production-5112.up.railway.app/mcp`
+   - **MCP server URL:** `https://mcp-demo-production-ee2c.up.railway.app/mcp`
    - **Authentication:** No authentication
 3. Accept the unverified-connector notice and save.
 

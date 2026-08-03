@@ -3,11 +3,8 @@
   "mcp_servers": {
     "healthclaw-hosted": {
       "transport": "streamable_http",
-      "url": "https://mcp-server-production-5112.up.railway.app/mcp",
-      "headers": {
-        "X-Tenant-Id": "desktop-demo"
-      },
-      "description": "Public hosted HealthClaw MCP server seeded with synthetic Grover Keeling sample data. Good for trying everything out without standing up the stack locally."
+      "url": "https://mcp-demo-production-ee2c.up.railway.app/mcp",
+      "description": "Public keyless HealthClaw demo server seeded with synthetic Grover Keeling sample data. Good for trying everything out without standing up the stack locally. Hard-pinned to the synthetic 'desktop-demo' tenant — it ignores any X-Tenant-Id you send, so there is no header to set here."
     },
     "_healthclaw-local": {
       "transport": "streamable_http",
@@ -21,11 +18,12 @@
       "transport": "streamable_http",
       "url": "https://mcp-server-production-5112.up.railway.app/mcp",
       "headers": {
+        "Authorization": "Bearer YOUR_HEALTHCLAW_MCP_TOKEN",
         "X-FHIR-Server-URL": "https://hapi.fhir.org/baseR4",
         "X-FHIR-Access-Token": "Bearer YOUR_SMART_ON_FHIR_TOKEN",
         "X-Patient-ID": "YOUR_PATIENT_ID"
       },
-      "description": "SHARP-on-MCP mode. Hermes forwards a SMART-on-FHIR access token from the agent host to HealthClaw, which proxies the call to any FHIR endpoint (Epic, Cerner, MEDITECH, athenahealth, eClinicalWorks, HAPI, SMART Health IT) while applying the full guardrail stack on the response. Rename to 'healthclaw-sharp' once your agent host wiring forwards real tokens."
+      "description": "SHARP-on-MCP mode. Hermes forwards a SMART-on-FHIR access token from the agent host to HealthClaw, which proxies the call to any FHIR endpoint (Epic, Cerner, MEDITECH, athenahealth, eClinicalWorks, HAPI, SMART Health IT) while applying the full guardrail stack on the response. This runs against the token-locked production server, NOT the keyless demo — the demo ignores bring-your-own-FHIR headers and would silently answer from synthetic data. Set Authorization to the deployment-scoped token from your operator, then rename to 'healthclaw-sharp'."
     }
   }
 }

@@ -51,7 +51,7 @@ The hosted server is seeded with the synthetic Grover Keeling sample so you can 
 
 ### Hosted demo (default)
 
-Uses `https://mcp-server-production-5112.up.railway.app/mcp` with tenant `desktop-demo`. Synthetic data only. No setup beyond the installer. This is what the installer turns on by default.
+Uses `https://mcp-demo-production-ee2c.up.railway.app/mcp` with tenant `desktop-demo`. Synthetic data only. No setup beyond the installer. This is what the installer turns on by default.
 
 ### Local mode
 
@@ -100,7 +100,7 @@ Hermes has built-in OpenClaw migration support: skills imported from an existing
 
 | Symptom | Probable cause | Fix |
 |---|---|---|
-| `/mcp list` shows healthclaw-hosted as disconnected | Outbound HTTPS blocked, or Railway cold start in flight | `curl https://mcp-server-production-5112.up.railway.app/health` from the same shell. If that times out, network. If 200 quickly, retry in 30s. |
+| `/mcp list` shows healthclaw-hosted as disconnected | Outbound HTTPS blocked, or Railway cold start in flight | `curl https://mcp-demo-production-ee2c.up.railway.app/health` from the same shell. If that times out, network. If 200 quickly, retry in 30s. |
 | Tool calls return `{"error": "X-Tenant-Id header is required"}` | Tenant header not forwarded | Confirm `headers.X-Tenant-Id` is set in `~/.hermes/config.json` for the active server. Hosted mode defaults to `desktop-demo`. |
 | Write tools 401 with `requires_step_up: true` | No step-up token in the request | Have Hermes call `fhir_get_token` first; pass the returned token as `_stepUpToken` in the next tool call. The SOUL persona handles this for you. |
 | Write tools 428 | Human-in-the-loop gate didn't see `X-Human-Confirmed: true` | The SOUL persona asks you to confirm before commit; say *"yes confirm"* and retry. |

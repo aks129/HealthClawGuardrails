@@ -31,13 +31,19 @@ a human approves, and only then does anything change.
    ```bash
    TELEGRAM_BOT_TOKEN=<your token> \
    TENANT_ID=desktop-demo \
-   MCP_BASE_URL=https://mcp-server-production-5112.up.railway.app \
+   MCP_BASE_URL=https://mcp-demo-production-ee2c.up.railway.app \
    FHIR_BASE_URL=https://app.healthclaw.io/r6/fhir \
    uv run --with "python-telegram-bot==21.*" --with requests python openclaw/bot.py
    ```
 
-3. Message your bot `/start`. That's it — it talks to the production
-   guardrail stack against the synthetic demo tenant.
+3. Message your bot `/start`. That's it — it talks to the public demo server
+   against the synthetic demo tenant.
+
+`TENANT_ID` above is set to the demo tenant deliberately. The demo server is
+pinned to that tenant and ignores the value, so pointing this at a real tenant
+would not fail — it would quietly keep answering with synthetic data. Real
+tenants need the production endpoint and its bearer token; see
+[mcp-generic.md](mcp-generic.md#tenancy-and-auth).
 
 Docker alternative: `docker-compose --profile openclaw up -d` with the same
 env vars.

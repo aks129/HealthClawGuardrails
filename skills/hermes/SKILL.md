@@ -17,7 +17,7 @@ references:
   healthclaw_repo: https://github.com/aks129/HealthClawGuardrails
   openclaw_integration: https://github.com/aks129/HealthClawGuardrails/tree/main/openclaw
   hermes_integration: https://github.com/aks129/HealthClawGuardrails/tree/main/hermes
-  mcp_endpoint: https://mcp-server-production-5112.up.railway.app/mcp
+  mcp_endpoint: https://mcp-demo-production-ee2c.up.railway.app/mcp
 ---
 
 # Hermes — self-improving HealthClaw gateway
@@ -131,7 +131,7 @@ Mirrors the OpenClaw troubleshooting matrix. The most common Hermes-specific iss
 
 | Symptom | Fix |
 |---|---|
-| `/mcp list` shows healthclaw-hosted as disconnected | Outbound HTTPS blocked, or Railway cold start. `curl https://mcp-server-production-5112.up.railway.app/health` — if 200, retry. |
+| `/mcp list` shows healthclaw-hosted as disconnected | Outbound HTTPS blocked, or Railway cold start. `curl https://mcp-demo-production-ee2c.up.railway.app/health` — if 200, retry. |
 | Hermes refuses to load `SOUL.md` | Check `~/.hermes/personas/healthclaw.md` exists and is readable. Re-run `./hermes/install.sh`. |
 | Skills changed unexpectedly | `./hermes/install.sh --skills-only` restores the repo copy. |
 

@@ -123,6 +123,13 @@ def get(url: str, timeout: float, **kw):
         return type(exc).__name__
 
 
+def post(url: str, timeout: float, **kw):
+    try:
+        return requests.post(url, timeout=timeout, **kw)
+    except requests.RequestException as exc:
+        return type(exc).__name__
+
+
 def run(timeout: float, expect_sha: list[str]) -> int:
     # Reset, because this is module state and a stale verdict is worse than no
     # verdict: a second run in informational mode would otherwise inherit the
@@ -249,10 +256,37 @@ def run(timeout: float, expect_sha: list[str]) -> int:
           f"unauthenticated /mcp -> {code}")
 
     # The public demo is meant to answer without a token; it is pinned to a
-    # synthetic tenant server-side. Alive is all we assert here.
+    # synthetic tenant server-side.
     r = get(f"{MCP_DEMO}/health", timeout)
     check("mcp (public demo): alive", getattr(r, "status_code", None) == 200,
           str(getattr(r, "status_code", r)))
+
+    # ...but "alive" was all this asserted for a while, and that is the gap a
+    # design partner found for us: every quickstart, the Gemini extension, the
+    # registry entry and the homepage now send strangers here, and what they
+    # actually do is an unauthenticated MCP handshake — not a /health GET. A
+    # token accidentally set on this deployment would flip it to 401 and leave
+    # this script fully green, because /health stays public on both servers.
+    # So assert the thing users depend on: a keyless `initialize` succeeds.
+    r = post(
+        f"{MCP_DEMO}/mcp", timeout,
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                         "clientInfo": {"name": "prod-watch",
+                                        "version": "1"}}},
+    )
+    code = getattr(r, "status_code", None)
+    served = False
+    if code == 200:
+        try:
+            served = "result" in (r.json() or {})
+        except ValueError:
+            served = False
+    check("mcp (public demo): serves an unauthenticated handshake", served,
+          f"keyless initialize -> {code}"
+          + ("" if served else " (no JSON-RPC result)"))
 
     failed = [n for n, ok, _ in results if not ok]
     hard = [n for n in failed if n != BUILD_CHECK]
