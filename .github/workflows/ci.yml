@@ -77,6 +77,12 @@ jobs:
   # tests/actions/test_state_transitions.py docstrings). Run just the
   # DB-shape-sensitive subset against real Postgres to close that gap
   # without doubling total CI time.
+  #
+  # test_write_guard_matrix.py and test_audit_transactions.py are in the
+  # subset because the access-kernel migration moves audit from an ambient
+  # commit to a caller-owned flush at 41 call sites, and SQLite and Postgres
+  # differ on savepoint and flush visibility. Measuring that migration on
+  # SQLite alone would be measuring the wrong lane.
   # ─────────────────────────────────────────────
   postgres-tests:
     runs-on: ubuntu-latest
@@ -128,6 +134,8 @@ jobs:
             tests/test_fasten_job_recovery.py \
             tests/test_database_migrations.py \
             tests/test_agent_runs.py \
+            tests/test_write_guard_matrix.py \
+            tests/test_audit_transactions.py \
             -v --tb=short
 
   node-tests:
