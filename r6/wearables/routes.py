@@ -260,7 +260,11 @@ def sync_now():
     if not valid:
         return jsonify({'error': f'token rejected: {err}'}), 403
 
-    summary = run_once(current_app)
+    # Scope the sweep to the authenticated tenant. run_once() defaults to a
+    # global sweep (the background poller relies on it); passing tenant_id
+    # here keeps this patient-triggered endpoint from touching other tenants
+    # (issue #311).
+    summary = run_once(current_app, tenant_id=tenant_id)
     record_audit_event(
         'update', 'WearableConnection', None,
         agent_id=request.headers.get('X-Agent-Id', 'wearable-manual-sync'),

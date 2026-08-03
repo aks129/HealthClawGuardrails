@@ -59,9 +59,19 @@ def _ingest_base_url() -> str:
     ).rstrip('/')
 
 
-def run_once(app, client: WearablesClient | None = None) -> dict:
+def run_once(
+    app,
+    client: WearablesClient | None = None,
+    tenant_id: str | None = None,
+) -> dict:
     """
-    One sync pass across all WearableConnection rows.
+    One sync pass across WearableConnection rows.
+
+    When tenant_id is None (the background poller's call) every tenant's
+    connections are swept — the global pass the daemon relies on. When
+    tenant_id is given (the patient-triggered /wearables/sync-now) the sweep
+    is scoped to that one tenant, so a step-up token for tenant A can never
+    ingest into tenant B (issue #311).
 
     Returns a summary dict {connections_checked, observations_ingested,
     errors}. Safe to call manually (e.g. from /wearables/sync-now).
@@ -81,7 +91,10 @@ def run_once(app, client: WearablesClient | None = None) -> dict:
 
     with app.app_context():
         from models import db
-        connections = WearableConnection.query.all()
+        query = WearableConnection.query
+        if tenant_id is not None:
+            query = query.filter_by(tenant_id=tenant_id)
+        connections = query.all()
         for conn in connections:
             checked += 1
             try:

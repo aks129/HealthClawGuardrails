@@ -420,3 +420,93 @@ class TestPollerSyncOnce:
             os.environ.pop('OPEN_WEARABLES_URL', None)
             result = run_once(app)
             assert result.get('skipped_reason')
+
+
+# ─────────────────────────────────────────────
+# Tenant-scoping of run_once + /wearables/sync-now (issue #311)
+# ─────────────────────────────────────────────
+
+class _RecordingClient:
+    """Fake WearablesClient that records which ow_user_ids were polled.
+
+    Always enabled; fetch_deltas returns no samples so _sync_one never issues
+    the httpx ingest POST — the test only cares which connections got swept.
+    """
+
+    def __init__(self):
+        self.fetched: list[str] = []
+
+    def enabled(self) -> bool:
+        return True
+
+    def fetch_deltas(self, ow_user_id, provider, since, limit):
+        self.fetched.append(ow_user_id)
+        return []
+
+
+def _seed_two_tenant_connections(app):
+    """One WearableConnection each for two distinct tenants."""
+    from models import db
+    with app.app_context():
+        db.session.add(WearableConnection(
+            tenant_id='tenant-a', provider='oura', ow_user_id='hc-tenant-a',
+            connected_at=datetime.now(timezone.utc)))
+        db.session.add(WearableConnection(
+            tenant_id='tenant-b', provider='oura', ow_user_id='hc-tenant-b',
+            connected_at=datetime.now(timezone.utc)))
+        db.session.commit()
+
+
+class TestRunOnceTenantScope:
+    def test_run_once_with_tenant_id_scopes_to_that_tenant(self, app):
+        """MUTATION: drop the tenant_id filter in run_once (keep .all()) ->
+        tenant B's connection gets swept and this assertion reddens."""
+        from r6.wearables.poller import run_once
+        _seed_two_tenant_connections(app)
+        fake = _RecordingClient()
+
+        summary = run_once(app, client=fake, tenant_id='tenant-a')
+
+        assert fake.fetched == ['hc-tenant-a']  # ONLY tenant A polled
+        assert 'hc-tenant-b' not in fake.fetched
+        assert summary['connections_checked'] == 1
+
+    def test_run_once_without_tenant_id_sweeps_all_tenants(self, app):
+        """The poller's global pass (tenant_id=None) must still sweep every
+        tenant — the scoping fix must not neuter the background poller."""
+        from r6.wearables.poller import run_once
+        _seed_two_tenant_connections(app)
+        fake = _RecordingClient()
+
+        summary = run_once(app, client=fake)  # tenant_id defaults to None
+
+        assert set(fake.fetched) == {'hc-tenant-a', 'hc-tenant-b'}
+        assert summary['connections_checked'] == 2
+
+
+class TestSyncNowTenantScope:
+    def test_sync_now_polls_only_the_authenticated_tenant(self, app, client):
+        """A step-up token for tenant A must sync ONLY tenant A's wearables.
+
+        MUTATION: drop the tenant_id filter in run_once (keep .all()) ->
+        tenant B's connection is swept via this endpoint and the assertion
+        that 'hc-tenant-b' was never fetched reddens.
+
+        Against the pre-fix code the endpoint calls run_once(current_app)
+        with no tenant scope, so B is swept — this test fails.
+        """
+        from r6.stepup import generate_step_up_token
+        _seed_two_tenant_connections(app)
+        fake = _RecordingClient()
+
+        with patch('r6.wearables.poller.WearablesClient', return_value=fake):
+            resp = client.post('/wearables/sync-now', headers={
+                'X-Tenant-Id': 'tenant-a',
+                'X-Step-Up-Token': generate_step_up_token('tenant-a'),
+            })
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['connections_checked'] == 1
+        assert fake.fetched == ['hc-tenant-a']
+        assert 'hc-tenant-b' not in fake.fetched
