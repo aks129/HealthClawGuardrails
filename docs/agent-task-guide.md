@@ -4,8 +4,13 @@ If you (human or coding agent) are starting work on an issue in this repo, read
 this first. It exists so you don't begin from scratch: it tells you where things
 live, what you may not break, and what "done" means here.
 
-**Read order:** this file → [docs/development.md](development.md)
+**Read order:** this file → [docs/constitution.md](constitution.md) (how we
+build — architecture, writing, working with agents) → [docs/development.md](development.md)
 (build/test/deploy detail) → the issue.
+
+If the task touches any interface, read [design.md](../design.md) too. It
+documents the tokens and type that actually ship, and the constraints — CSP,
+in-app webviews, reduced motion — that outrank visual preference.
 
 > Maintainers may also have a local `CLAUDE.md` with the same invariants. It is
 > deliberately not published, so everything you need is here or in
@@ -188,6 +193,9 @@ auditor.
 
 ## Related
 
+- [docs/constitution.md](constitution.md) — how we build: deep modules, seams,
+  one-control-one-property, the writing rules, working with agents
+- [design.md](../design.md) — the design system both surfaces actually ship
 - [docs/development.md](development.md) — full contributor guide
 - [docs/healthcare-ai-advisors-roadmap.md](healthcare-ai-advisors-roadmap.md) — where this is all going
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — ground rules, DCO
