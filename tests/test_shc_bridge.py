@@ -6,6 +6,7 @@ untested-live-path class as the Fasten webhook envelope bug. Pins:
 """
 
 import json
+import logging
 from unittest.mock import patch
 
 
@@ -79,6 +80,42 @@ class TestShcIngest:
             resp = _ingest(client, body)
         assert resp.status_code == 200
         assert resp.get_json()["entries"] == 1
+
+    def test_ingest_error_logs_exception_class_not_phi(self, app, caplog):
+        """A failing entry must log the exception CLASS name, never the
+        exception object. str() on a SQLAlchemy DBAPIError serialises the
+        failing statement and its bound parameters — i.e. the FHIR record
+        being ingested — so `%s` on the exception leaks PHI into logs. Issue
+        #306 (S-4); .github/REVIEW_STANDARDS.md rule 1; docs/2026-08-02-retro.md.
+
+        MUTATION: reverting the fix at r6/shc/routes.py:257 to
+        `logger.warning('SHC ingest error (job=%s): %s', job_id, exc)` (logging
+        `exc` instead of `type(exc).__name__`) turns this test red.
+        """
+        from r6.shc import routes as shc_routes
+
+        phi = "Rosa PHI-LEAK Kowalski dob=1971-03-02 ssn=123-45-6789"
+
+        class PoisonedStatementError(Exception):
+            pass
+
+        def _boom(resource, tenant_id):
+            # Mimic a DBAPIError whose str() echoes the bound parameters.
+            raise PoisonedStatementError(
+                "(psycopg2.errors.StringDataRightTruncation) INSERT INTO "
+                "fhir_resource (...) VALUES (...) -- parameters: "
+                f"{{'patient': '{phi}'}}"
+            )
+
+        entries = [{"resourceType": "Observation", "status": "final"}]
+        with caplog.at_level(logging.WARNING, logger="r6.shc.routes"):
+            with patch("r6.fasten.ingester._ingest_one", _boom):
+                shc_routes._ingest_bundle(
+                    app, entries, "shc-tenant", "flexpa", "job-306-test")
+
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert phi not in logged, f"PHI leaked into logs: {logged!r}"
+        assert "PoisonedStatementError" in logged
 
 
 class TestOAuthBrokers:
