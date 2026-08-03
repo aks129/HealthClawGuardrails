@@ -250,8 +250,14 @@ def _read_text(tmp_path, text):
 
 # --- the monitor: open defects ----------------------------------------------
 
-def _prod_watch_with(payload, expect):
-    """Run prod_watch against a fully-healthy fake, varying only /healthz."""
+def _prod_watch_with(payload, expect, demo_handshake=None):
+    """Run prod_watch against a fully-healthy fake, varying only /healthz.
+
+    `demo_handshake` overrides the public demo's keyless `initialize` reply.
+    Both `get` and `post` are stubbed: leaving `post` real let the demo
+    handshake check reach the live server from inside a unit test, which is
+    exactly the kind of green-for-the-wrong-reason this file exists to stop.
+    """
     import prod_watch
 
     class _Resp:
@@ -277,15 +283,23 @@ def _prod_watch_with(payload, expect):
             return _Resp(401)
         return _Resp(200, text='<a href="/auth">start</a>')
 
+    def post(url, timeout, **kw):
+        if demo_handshake is not None:
+            return demo_handshake
+        return _Resp(200, {"jsonrpc": "2.0", "id": 1,
+                           "result": {"protocolVersion": "2025-06-18"}})
+
     prod_watch.results.clear()
-    real, prod_watch.get = prod_watch.get, get
+    real_get, prod_watch.get = prod_watch.get, get
+    real_post, prod_watch.post = prod_watch.post, post
     try:
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = prod_watch.run(1.0, expect)
         return code, buf.getvalue()
     finally:
-        prod_watch.get = real
+        prod_watch.get = real_get
+        prod_watch.post = real_post
         prod_watch.results.clear()
 
 
@@ -296,15 +310,40 @@ TIP = "4f2a91cbeef1a9d3c05e7b21fd8460ac9e13d7f5"
 def test_a_current_build_is_counted_as_a_real_check():
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [TIP])
-    assert code == 0 and "all 10 checks passing" in out
+    assert code == 0 and "all 11 checks passing" in out
 
 
 def test_an_unasserted_build_never_inflates_the_count():
-    # The script's honesty property. "all 9 checks passing" must stay literally
-    # true when nothing pinned the build.
+    # The script's honesty property. "all 10 checks passing" must stay
+    # literally true when nothing pinned the build.
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [])
-    assert code == 0 and "all 9 checks passing" in out
+    assert code == 0 and "all 10 checks passing" in out
+
+
+class _Refused:
+    """A demo server that has stopped answering keyless callers."""
+    status_code = 401
+    text = ""
+
+    def json(self):
+        return {"error": "Unauthorized"}
+
+
+def test_a_demo_server_that_stops_serving_keyless_callers_is_an_outage():
+    """The failure a design partner reported before the monitor did.
+
+    A credential accidentally set on the public demo deployment flips it to
+    401. `/health` stays public on both servers, so the old "alive" check
+    could not see it — every quickstart, the Gemini extension and the registry
+    entry would be broken while the monitor read fully green.
+    """
+    code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
+                                  "built_at": 1754056800}, [TIP],
+                                 demo_handshake=_Refused())
+    assert code == 1, "a demo server refusing keyless callers must be an outage"
+    assert "serves an unauthenticated handshake" in out
+    assert "all 11 checks passing" not in out
 
 
 @pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])

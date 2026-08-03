@@ -10,7 +10,7 @@ are not available on the free tier).
 3. Click **Add custom connector**.
 4. Fill in:
    - **Name:** `HealthClaw`
-   - **URL:** `https://mcp-server-production-5112.up.railway.app/mcp`
+   - **URL:** `https://mcp-demo-production-ee2c.up.railway.app/mcp`
 5. Click **Add**. No login screen appears — anonymous access lands in the
    synthetic `desktop-demo` tenant (safe, fake data).
 
@@ -45,7 +45,7 @@ If you use Claude Desktop and prefer a config file, add to
       "command": "npx",
       "args": [
         "-y", "mcp-remote",
-        "https://mcp-server-production-5112.up.railway.app/mcp"
+        "https://mcp-demo-production-ee2c.up.railway.app/mcp"
       ]
     }
   }
@@ -55,6 +55,16 @@ If you use Claude Desktop and prefer a config file, add to
 Restart Claude Desktop; the tools appear under the tools icon.
 
 ## Pointing at your own records (optional)
+
+> **Not available through a claude.ai connector today.** The demo URL above is
+> hard-pinned to the synthetic tenant: it *ignores* the tenant and token that
+> the setup message passes, and answers from demo data anyway — so it will look
+> like it worked while showing you fake records. Real tenants require the
+> production endpoint, which needs a bearer header that hosted connectors
+> cannot attach ([#290](https://github.com/aks129/HealthClawGuardrails/issues/290)).
+> Until that lands, use your own records through
+> [CareAgents](https://careagents.cloud) or a local MCP client that can set
+> headers. The rest of this section describes the intended flow.
 
 Connect your providers at `https://app.healthclaw.io/connect/<your-tenant-id>`
 (identity-verified via CLEAR/ID.me). When the connection completes, the page
@@ -67,6 +77,16 @@ Do not do this while screen-recording.
 
 ## Troubleshooting
 
+- **"Couldn't register with HealthClaw's sign-in service" / Claude asks for an
+  OAuth Client ID:** you are pointed at the production endpoint
+  (`mcp-server-production-5112...`), not the demo one. That server requires a
+  bearer token, so it answers `401`, and Claude tries to start an OAuth
+  sign-in — but the server publishes no OAuth metadata, so registration fails
+  and Claude falls back to asking you for a Client ID. **There is no Client ID
+  to enter.** Remove the connector and re-add it with the demo URL in step 4
+  above. (Hosted connectors cannot attach a static bearer header, so the
+  production endpoint is not usable from claude.ai —
+  [#290](https://github.com/aks129/HealthClawGuardrails/issues/290).)
 - **Connector added but no tools show:** toggle it off/on in the tools menu,
   or start a fresh chat.
 - **"Tool call failed":** the server may be cold-starting; retry once.

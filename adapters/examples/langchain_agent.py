@@ -5,7 +5,7 @@ JSON-Schema dict as args_schema directly) and OPENAI_API_KEY. Reference
 example (not run in CI). Guardrails enforced by HealthClaw server-side.
 
     python adapters/examples/langchain_agent.py \
-        --mcp-base https://mcp-server-production-5112.up.railway.app \
+        --mcp-base https://mcp-demo-production-ee2c.up.railway.app \
         --tenant desktop-demo --prompt "List the patient's active conditions"
 """
 import argparse

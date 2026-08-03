@@ -31,7 +31,7 @@ a human approves, and only then does anything change.
    ```bash
    TELEGRAM_BOT_TOKEN=<your token> \
    TENANT_ID=desktop-demo \
-   MCP_BASE_URL=https://mcp-server-production-5112.up.railway.app \
+   MCP_BASE_URL=https://mcp-demo-production-ee2c.up.railway.app \
    FHIR_BASE_URL=https://app.healthclaw.io/r6/fhir \
    uv run --with "python-telegram-bot==21.*" --with requests python openclaw/bot.py
    ```

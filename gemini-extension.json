@@ -4,7 +4,7 @@
   "description": "Guardrailed FHIR access for AI agents: PHI redaction, immutable audit, step-up auth, tenant isolation over a remote MCP server.",
   "mcpServers": {
     "healthclaw": {
-      "httpUrl": "https://mcp-server-production-5112.up.railway.app/mcp",
+      "httpUrl": "https://mcp-demo-production-ee2c.up.railway.app/mcp",
       "headers": {
         "X-Tenant-Id": "desktop-demo"
       }

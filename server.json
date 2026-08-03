@@ -11,10 +11,21 @@
   "remotes": [
     {
       "type": "streamable-http",
+      "url": "https://mcp-demo-production-ee2c.up.railway.app/mcp",
+      "headers": []
+    },
+    {
+      "type": "streamable-http",
       "url": "https://mcp-server-production-5112.up.railway.app/mcp",
       "headers": [
         {
-          "description": "Tenant identifier — the public demo tenant 'desktop-demo' works without credentials",
+          "description": "Deployment-scoped bearer credential, required on every request — this endpoint returns 401 without it. Issued by the operator; not self-serve. For a keyless trial use the demo remote listed first, which is hard-pinned to a synthetic tenant.",
+          "isRequired": true,
+          "isSecret": true,
+          "name": "Authorization"
+        },
+        {
+          "description": "Tenant identifier",
           "isRequired": false,
           "name": "X-Tenant-Id"
         },
