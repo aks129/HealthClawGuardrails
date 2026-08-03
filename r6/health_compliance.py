@@ -79,6 +79,13 @@ def require_human_confirmation(resource):
     Returns True for high-risk clinical writes that require a
     separate confirmation header (X-Human-Confirmed: true).
     """
+    # A body that is not a JSON object cannot name a resourceType, so it is
+    # not a clinical write this gate can identify. Say so instead of crashing:
+    # this runs in a before_request hook ahead of EVERY handler, so an
+    # AttributeError here is a 500 on any malformed body (#330). The request is
+    # still rejected — by the handler, which owns what a valid body looks like.
+    if not isinstance(resource, dict):
+        return False
     rt = resource.get('resourceType', '')
     if rt in CLINICAL_RESOURCE_TYPES:
         return True
