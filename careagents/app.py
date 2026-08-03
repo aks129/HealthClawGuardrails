@@ -62,6 +62,38 @@ _UPLOAD_MIME_TYPES = frozenset({
 # these cap memory and keep a long-running process from degrading (#218).
 MAX_LIVE_CONVERSATIONS = 200
 CONVERSATION_IDLE_SECONDS = 6 * 3600
+
+_BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+
+
+def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
+    """Deserialize a FHIR Basic AppointmentBrief into section→field lists.
+
+    Each section is a list of dicts with keys: label, value, sourceType, sourceId.
+    Returns {} on any parse error so the template always gets a plain dict —
+    empty sections render as 'not available from connected records'.
+    """
+    out: dict[str, list[dict]] = {}
+    try:
+        for ext in resource.get("extension", []):
+            url = ext.get("url", "")
+            if not url.startswith(_BRIEF_SECTION_PREFIX):
+                continue
+            name = url[len(_BRIEF_SECTION_PREFIX):]
+            fields = []
+            for fe in ext.get("extension", []):
+                raw = fe.get("valueString")
+                if raw:
+                    try:
+                        fields.append(json.loads(raw))
+                    except (ValueError, TypeError):
+                        pass
+            out[name] = fields
+    except (AttributeError, TypeError):
+        pass
+    return out
+
+
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
                accounts: AccountService | None = None) -> Flask:
@@ -556,6 +588,19 @@ def create_app(config: Config | None = None,
                                conversation_id=conversation_id,
                                past=past,
                                summary_counts=summary_counts)
+
+    @app.get("/brief")
+    @login_required
+    def brief():
+        acct = current_account()
+        agent_id = request.args.get("agent", "")
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if not ctx:
+            return redirect(url_for("home"))
+        raw = hc.fetch_appointment_brief(ctx["tenant"])
+        sections = _parse_brief_sections(raw) if raw else {}
+        return render_template("brief.html", me=ctx["agent"],
+                               agent_id=agent_id, sections=sections)
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
