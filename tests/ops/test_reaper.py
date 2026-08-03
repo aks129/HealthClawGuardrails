@@ -182,6 +182,32 @@ class TestOpsIsInfraNotTenantScoped:
         assert get_action(action_id).status == 'completed'
 
 
+class TestInternalSecretUnsetFailClosed:
+    """#304 fail-closed pin for the no-secret branch of
+    internal_secret_authorized() (r6/internal_auth.py:33): when
+    INTERNAL_TOKEN_MINT_SECRET is unset, /r6/ops/* is open outside production
+    (dev/test convenience) but REFUSED in production. Fail-closed is exactly
+    the property that regresses silently, so it gets an explicit pin.
+
+    MUTATION: flip `!=` to `==` in r6/internal_auth.py:33
+    (`return resolve_app_env() == 'production'`) — test_production_unset_refuses
+    turns red (403 -> 200; the operator surface would open to anyone).
+    """
+
+    def test_production_unset_refuses(self, client, monkeypatch):
+        # No secret configured + APP_ENV=production -> fail closed.
+        monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+        monkeypatch.setenv('APP_ENV', 'production')
+        assert client.post('/r6/ops/reap').status_code == 403
+
+    def test_nonproduction_unset_allows(self, client, monkeypatch):
+        # No secret + default test env (TESTING=1, no APP_ENV) -> 'testing',
+        # so the surface stays open locally without a secret.
+        monkeypatch.delenv('INTERNAL_TOKEN_MINT_SECRET', raising=False)
+        monkeypatch.delenv('APP_ENV', raising=False)
+        assert client.post('/r6/ops/reap').status_code == 200
+
+
 # ------------------------------------------- executing + ref -> reconcile
 
 class TestReconcileExecutingWithRef:
