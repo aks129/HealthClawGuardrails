@@ -174,11 +174,24 @@ test.describe('CareAgents auth', () => {
 });
 
 test.describe('CareAgents health', () => {
+  // What this can honestly assert here is the account store, which is what
+  // the test was always named for. Overall readiness additionally requires a
+  // live agent-run worker, and this harness points HEALTHCLAW_BASE at a dead
+  // port on purpose so a stray call cannot reach the real records service.
+  // So `status` is legitimately "degraded" in e2e, and asserting "ok" was
+  // asserting that our own isolation had failed.
   test('healthz reports the account store reachable', async ({ request }) => {
     const res = await request.get('/healthz');
-    expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.status).toBe('ok');
+
     expect(body.accounts).toBe(true);
+
+    // Degradation must be attributable. If the account store ever goes
+    // unreachable, that has to fail here rather than hide behind the
+    // worker's absence.
+    if (res.status() !== 200) {
+      expect(body.status).toBe('degraded');
+      expect(body.run_workers).toBe(false);
+    }
   });
 });

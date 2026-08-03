@@ -68,7 +68,15 @@ export default defineConfig({
       command:
         `rm -f ${CARE_DB} ${CARE_LOG} && cd .. && ` +
         `uv run flask --app careagents.wsgi run --port ${CARE_PORT} 2>> ${CARE_LOG}`,
-      url: `${CARE_BASE_URL}/healthz`,
+      // Liveness, NOT /healthz. `/healthz` is readiness, and since the durable
+      // agent-run control plane landed it also requires a live worker, which
+      // it learns by asking HealthClaw — which this harness deliberately pins
+      // to a dead port two entries below. So /healthz correctly answers 503
+      // here forever, Playwright waited the full 60s for a 200 that could
+      // never come, and every e2e run failed at boot with "Timed out waiting
+      // 60000ms from config.webServer" — no spec ever executed. The landing
+      // page is the honest "the server is up" signal for a boot gate.
+      url: `${CARE_BASE_URL}/`,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
       env: {
