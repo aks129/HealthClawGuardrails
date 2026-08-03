@@ -531,13 +531,17 @@ MATRIX: tuple = (
     Row(
         id="ops-reap",
         method="POST", path="/r6/ops/reap", endpoint="ops.reap",
-        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP, AUDIT}),
-        anon_refusal=(400,), step_up_missing_status=401,
-        defect_issue="#304",
-        note="S-1/#304: authenticated per tenant, sweeps globally. Note the "
-             "ABSENCE of TENANT_FILTER in this guard set — that is the "
-             "defect, stated in the table rather than left in a reviewer's "
-             "head.",
+        guards=frozenset({INTERNAL_SECRET, AUDIT}),
+        anon_refusal=(403,), internal_secret_status=403,
+        note="FIXED by #308 (was S-1/#304). Was: tenant header + tenant-bound "
+             "step-up, then swept every tenant — and because a public tenant "
+             "mints a step-up token with no credential, that chain was "
+             "unauthenticated. Now infrastructure auth: X-Internal-Secret, "
+             "tenant-blind, NO public-tenant exemption, and X-Tenant-Id is "
+             "not read at all. The sweep is still global, which is now "
+             "honest rather than a lie the guard set told. TENANT_FILTER is "
+             "correctly absent: this endpoint is operator-scoped by design, "
+             "not tenant-scoped.",
     ),
     Row(
         id="wearables-sync-now",
@@ -1221,12 +1225,6 @@ def test_ops_reap_only_touches_the_authenticated_tenant(client, app, secrets):
             f"{FOREIGN_TENANT}'s action to {after.status}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#304, second and unlisted site: /wearables/sync-now validates a "
-           "step-up token for one tenant and then calls run_once(), which "
-           "iterates WearableConnection.query.all() across every tenant. The "
-           "audit's S-1 names only r6/ops/routes.py.")
 def test_wearables_sync_only_touches_the_authenticated_tenant(client, app,
                                                               monkeypatch):
     """A manual sync authenticated for tenant A must not touch tenant B's rows.
@@ -1262,12 +1260,6 @@ def test_wearables_sync_only_touches_the_authenticated_tenant(client, app,
 # 7. Named defects
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#306: r6/shc/routes.py _ingest_bundle logs the raw exception "
-           "('%s', job_id, exc). A driver error echoes the statement and its "
-           "bound parameters, which carry PHI. Every other ingest path logs "
-           "type(exc).__name__ against a correlation id.")
 def test_shc_ingest_never_logs_a_raw_exception(app, caplog, monkeypatch):
     """The SHC ingest failure path must not put exception text in the log.
 
