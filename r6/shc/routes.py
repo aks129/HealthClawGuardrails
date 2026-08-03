@@ -254,7 +254,11 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
                     skipped += 1
             except Exception as exc:
                 failed += 1
-                logger.warning('SHC ingest error (job=%s): %s', job_id, exc)
+                # Log the exception CLASS only — str(exc) on a DBAPIError
+                # serialises the failing statement and bound parameters (the
+                # FHIR record), leaking PHI into logs (#306, S-4).
+                logger.warning('SHC ingest error (job=%s): %s',
+                               job_id, type(exc).__name__)
 
         record_audit_event(
             event_type='shc_import_complete',
@@ -277,7 +281,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
                 from r6.fasten.ingester import _run_curatr_scan
                 curatr_issues = _run_curatr_scan(curatr_eligible_ids, tenant_id, job_id) or 0
             except Exception as exc:
-                logger.warning('SHC curatr scan failed: %s', exc)
+                logger.warning('SHC curatr scan failed: %s', type(exc).__name__)
 
         try:
             from r6.telegram_push import notify_tenant
@@ -299,4 +303,4 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
             msg_lines += ['', 'Try `/summary`, `/conditions`, or `/dashboard`.']
             notify_tenant(tenant_id, '\n'.join(msg_lines))
         except Exception as exc:
-            logger.warning('SHC notify push failed: %s', exc)
+            logger.warning('SHC notify push failed: %s', type(exc).__name__)
