@@ -451,7 +451,15 @@ def create_resource(resource_type):
         return _operation_outcome('error', 'security',
                                   f'{resource_type} is system-managed and cannot be created via API'), 403
 
-    body = request.get_json(silent=True)
+    # This parse runs BEFORE the step-up gate below — a tenant header is all
+    # it takes to reach it (#312). Bounding the depth is what stops that from
+    # being an unauthenticated crash lever; the ordering itself is pinned by
+    # test_the_step_up_gate_runs_before_the_body_is_parsed and is not changed
+    # here.
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return _operation_outcome('error', 'invalid',
+                                  'Request body nesting is too deep'), 400
     if not body:
         return _operation_outcome('error', 'invalid', 'Request body must be valid JSON'), 400
 
@@ -636,7 +644,14 @@ def update_resource(resource_type, resource_id):
         return _operation_outcome('error', 'security',
                                   f'Step-up token rejected: {err}'), 401
 
-    body = request.get_json(silent=True)
+    # Unlike create, update gates before it parses, so only a token holder
+    # reaches this line. That is a smaller blast radius, not a closed one: a
+    # public tenant mints a step-up token with no credential, so the same
+    # payload still reaches the same parser (#312).
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return _operation_outcome('error', 'invalid',
+                                  'Request body nesting is too deep'), 400
     if not body:
         return _operation_outcome('error', 'invalid', 'Request body must be valid JSON'), 400
 
@@ -1196,7 +1211,13 @@ def ingest_context():
     """
     Accept a small Bundle, store resources, and build a context envelope.
     """
-    body = request.get_json(silent=True)
+    # Parsed before the step-up gate below, and that gate is conditional on
+    # READ_AUTH_ENABLED — so no reordering could close this one. The depth
+    # bound is the only guard that holds in both branches (#312).
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return _operation_outcome('error', 'invalid',
+                                  'Request body nesting is too deep'), 400
     if not body or body.get('resourceType') != 'Bundle':
         return _operation_outcome('error', 'invalid',
                                   'Request body must be a FHIR Bundle'), 400
@@ -2054,6 +2075,39 @@ def _json_depth_within(obj, limit, _depth=0):
     if isinstance(obj, list):
         return all(_json_depth_within(v, limit, _depth + 1) for v in obj)
     return True
+
+
+def json_body_within_depth(limit=_INGEST_MAX_JSON_DEPTH):
+    """Parse this request's JSON body, refusing one nested too deep to be safe.
+
+    The write paths' shared entry point to the guard #267 put on
+    /internal/ingest-bundle. `request.get_json(silent=True)` suppresses decode
+    errors but NOT `RecursionError`, which json.loads raises on a ~1000-deep
+    payload — so every handler that parsed before its auth gate turned a few
+    kilobytes of `[[[[...` into a 500 with no credential presented (#312).
+
+    Returns `(body, too_deep)`. `body` is whatever `get_json(silent=True)`
+    returned (None on any decode failure) and `too_deep` is True when the
+    payload must be refused outright. The caller formats its own error, so no
+    handler's wire format changes: the FHIR routes answer an
+    OperationOutcome, actions answer `{"error": ...}`, smbp answers its own
+    OperationOutcome, all with the 400 they already use for a bad body.
+
+    Two layers, as on ingest-bundle: catching RecursionError handles the
+    payload that cannot be parsed, and _json_depth_within handles the one that
+    parses but is still absurd enough to hurt a downstream consumer.
+
+    Imported lazily by r6/actions and r6/smbp (`from r6.routes import
+    json_body_within_depth`), matching how those modules already borrow
+    authenticate_tenant_read, so the import graph stays acyclic.
+    """
+    try:
+        body = request.get_json(silent=True)
+    except RecursionError:
+        return None, True
+    if not _json_depth_within(body, limit):
+        return None, True
+    return body, False
 
 
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])

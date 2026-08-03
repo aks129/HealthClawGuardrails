@@ -1352,22 +1352,22 @@ def test_ingest_context_step_up_is_flag_conditional(client, monkeypatch,
         "write-scoped tenant-bound token")
 
 
-def test_deep_nesting_is_refused_only_on_the_path_that_was_patched(client):
-    """The #267 depth guard exists on ONE write path. Pinned as the gap it is.
+def test_deep_nesting_is_refused_on_every_write_path(client):
+    """The #267 depth guard now covers every write path, not just one.
 
-    MUTATION: add the depth/RecursionError guard to r6.create_resource. The
-    second assertion goes red and this docstring must be updated.
+    MUTATION: delete the `except RecursionError` from
+    r6.routes.json_body_within_depth, or drop the `_json_depth_within` call
+    from it. Both halves of this test go red.
 
-    UNTICKETED DEFECT, recorded rather than xfailed because no issue number
-    exists yet. #267 fixed an unhandled RecursionError on
-    /internal/ingest-bundle, where a ~120KB deeply nested body crashed the
-    handler before any credential was checked. The identical lever is still
-    live on POST /r6/fhir/<type>, PUT /r6/fhir/<type>/<id>,
-    /r6/fhir/Bundle/$ingest-context, /r6/actions/propose and /r6/smbp/enroll,
-    each of which parses the body before its auth gate and needs nothing but
-    a tenant header to reach. The fix was applied at one site because the
-    guard is a per-route convention — which is the refactor plan's whole
-    thesis, here as a reproducible probe. Worth an issue.
+    #267 fixed an unhandled RecursionError on /internal/ingest-bundle, where
+    a deeply nested body crashed the handler before any credential was
+    checked. #312 recorded that the identical lever was still live on POST
+    /r6/fhir/<type>, PUT /r6/fhir/<type>/<id>, /r6/fhir/Bundle/$ingest-context,
+    /r6/actions/propose and /r6/smbp/enroll — one guard, applied per route,
+    which is the refactor plan's thesis as a reproducible probe. Those five
+    are parametrized in test_a_deeply_nested_body_is_refused_not_crashed;
+    this test keeps the original ingest-bundle probe so the site #267 patched
+    cannot regress while the shared helper is edited.
     """
     deep = b"[" * 60000 + b"]" * 60000
 
@@ -1377,10 +1377,73 @@ def test_deep_nesting_is_refused_only_on_the_path_that_was_patched(client):
     assert patched.status_code == 400, (
         "the #267 depth guard on /internal/ingest-bundle is gone")
 
-    with pytest.raises(RecursionError):
-        client.post("/r6/fhir/Patient", data=deep,
-                    content_type="application/json",
-                    headers={"X-Tenant-Id": TENANT})
+    create = client.post("/r6/fhir/Patient", data=deep,
+                         content_type="application/json",
+                         headers={"X-Tenant-Id": TENANT})
+    assert create.status_code == 400, (
+        "POST /r6/fhir/<type> answered %s to a 60,000-deep anonymous body; "
+        "#312's crash lever is back" % create.status_code)
+
+
+#: The five write paths #312 named, each probed at the depth where CPython's
+#: JSON scanner blows the stack. `needs_token` records what it takes to REACH
+#: the parser: four of the five need nothing but a tenant header, which is
+#: what made this an unauthenticated crash lever rather than a nuisance.
+DEEP_BODY_PATHS = (
+    pytest.param("POST", "/r6/fhir/Patient", False, id="fhir-create"),
+    pytest.param("PUT", "/r6/fhir/Patient/guard-matrix-pt", True,
+                 id="fhir-update"),
+    pytest.param("POST", "/r6/fhir/Bundle/$ingest-context", False,
+                 id="ingest-context"),
+    pytest.param("POST", "/r6/actions/propose", False, id="actions-propose"),
+    pytest.param("POST", "/r6/smbp/enroll", False, id="smbp-enroll"),
+)
+
+
+@pytest.mark.parametrize("method,path,needs_token", DEEP_BODY_PATHS)
+def test_a_deeply_nested_body_is_refused_not_crashed(client, method, path,
+                                                     needs_token):
+    """#312: a ~1500-deep body answers 4xx on every write path, never crashes.
+
+    MUTATION: delete the `except RecursionError` from
+    r6.routes.json_body_within_depth. All five rows go red at once — that one
+    clause is the whole fix. Per row, the edit that reddens it alone is:
+    removing the `json_body_within_depth` call from the handler
+    (ingest-context, actions-propose, smbp-enroll), or from
+    r6.health_compliance.enforce_human_in_loop (fhir-create, fhir-update).
+
+    That last split is worth stating plainly rather than leaving for the next
+    reader to rediscover: on the r6 blueprint the FIRST parse of a POST/PUT
+    body happens in the human-in-the-loop before_request hook, ahead of every
+    handler. So create's and update's own depth guards are defense in depth —
+    real, but not independently observable here, because the hook answers
+    first. A mutation naming only the handler would look "covered" while
+    proving nothing, which is the shape this file exists to catch.
+
+    The depth is ~1500, just past CPython's default recursion limit, because
+    that is the cheapest payload that reaches the defect: `silent=True`
+    suppresses decode errors but NOT RecursionError, so before the fix each
+    of these raised out of the handler and 500'd the worker. A few kilobytes,
+    no credential.
+
+    `needs_token` is the honest part of this probe. Only PUT gates before it
+    parses, so only PUT needs a token to reach its parser at all — without
+    one it answers 401 and this test would pass for the wrong reason (the
+    retro's "what else could make this green?"). The token is not much of a
+    barrier either: test-tenant is public, and a public tenant mints a
+    step-up token with no credential.
+    """
+    deep = b"[" * 1500 + b"]" * 1500
+    headers = {"X-Tenant-Id": TENANT}
+    if needs_token:
+        headers["X-Step-Up-Token"] = token_for(TENANT)
+
+    resp = client.open(path, method=method, data=deep,
+                       content_type="application/json", headers=headers)
+
+    assert 400 <= resp.status_code < 500, (
+        f"{method} {path} answered {resp.status_code} to a 1500-deep body; "
+        f"a hostile payload must be refused, not turned into a 5xx")
 
 
 # ---------------------------------------------------------------------------

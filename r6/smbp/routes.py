@@ -38,7 +38,16 @@ def enroll():
     tenant_id = _tenant()
     if not tenant_id:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
-    body = request.get_json(silent=True) or {}
+    # enroll is a WRITE guarded by the tenant header alone (see the matrix
+    # row), so this parse is reachable with no credential. No gate to move
+    # above it; the depth bound is the fix (#312). Lazy import to keep the
+    # r6.routes <-> r6.smbp import graph acyclic, as the report handler does.
+    from r6.routes import json_body_within_depth
+    body, too_deep = json_body_within_depth()
+    if too_deep:
+        return jsonify(_oo("error", "invalid",
+                           "request body nesting is too deep")), 400
+    body = body or {}
     patient_ref = body.get("patient_ref")
     if not patient_ref:
         return jsonify(_oo("error", "invalid", "patient_ref required")), 400
