@@ -281,7 +281,7 @@
   const fileInput = $("upload-file");
   let currentUploadCard = null;
 
-  function say(msg, text, cls) {
+  function sayUpload(msg, text, cls) {
     msg.textContent = text;
     msg.className = "conn-refresh-msg" + (cls ? " " + cls : "");
     msg.hidden = false;
@@ -308,16 +308,16 @@
       // will be refused (server enforces the same cap).
       const MAX = 5 * 1024 * 1024;
       if (file.size > MAX) {
-        return say(msg, messageForError("payload_too_large"), "form-error");
+        return sayUpload(msg, messageForError("payload_too_large"), "form-error");
       }
       btn.disabled = true;
-      say(msg, "Uploading " + file.name + "…");
+      sayUpload(msg, "Uploading " + file.name + "…");
       let text;
       try {
         text = await file.text();
       } catch (e) {
         btn.disabled = false;
-        return say(msg, messageForError("invalid_body"), "form-error");
+        return sayUpload(msg, messageForError("invalid_body"), "form-error");
       }
       let r, d;
       try {
@@ -329,13 +329,13 @@
         d = await r.json().catch(() => ({}));
       } catch (e) {
         btn.disabled = false;
-        return say(msg, messageForError("ingest_failed"), "form-error");
+        return sayUpload(msg, messageForError("ingest_failed"), "form-error");
       }
       btn.disabled = false;
       if (!r.ok) {
         let line = messageForError(d.error);
         if (d.correlation_id) line += " Support code: " + d.correlation_id + ".";
-        return say(msg, line, "form-error");
+        return sayUpload(msg, line, "form-error");
       }
       // Success or partial success — show a plain-language summary of
       // what actually landed. When entries failed, surface the unique
@@ -358,7 +358,7 @@
                      + ": " + codes.join(", "));
         }
       }
-      say(msg, parts.join(" · "),
+      sayUpload(msg, parts.join(" · "),
           (fld || skp) ? "form-warn" : "form-ok");
       if (ing > 0) {
         // Reload so the card flips from `empty` to `active` and the
