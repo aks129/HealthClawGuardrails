@@ -12,8 +12,8 @@ import logging
 from flask import Blueprint, request, jsonify, Response
 
 from r6.models import R6Resource, db
+from r6.access import Scope, Tenant, TenantSource, require_grant
 from r6.audit import record_audit_event
-from r6.stepup import validate_step_up_token
 from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
@@ -79,13 +79,16 @@ def reading():
     if not tenant_id:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
 
-    step_up = request.headers.get("X-Step-Up-Token")
-    if not step_up:
-        return jsonify(_oo("error", "security",
-                           "reading requires X-Step-Up-Token")), 401
-    valid, _err = validate_step_up_token(step_up, tenant_id)
-    if not valid:
-        return jsonify(_oo("error", "security", "Invalid step-up token")), 401
+    # Access kernel, slice 3 (docs/2026-08-03-access-kernel-spec.md §2.5). The
+    # 401/401 dialect below is the one this route already answered; normalizing
+    # 401 vs 403 across the seven gates is a separate, deliberate decision.
+    # Tenant reading stays as it is — `_tenant()` migrates in slice 9.
+    grant = require_grant(
+        scope=Scope.WRITE,
+        tenant=Tenant(id=tenant_id, source=TenantSource.HEADER),
+        absent_status=401,
+        rejected_status=401,
+    )
 
     body = request.get_json(silent=True) or {}
     try:
@@ -99,13 +102,15 @@ def reading():
 
     triage = classify(systolic, diastolic, body.get("symptoms"))
     obs = build_bp_observation(patient_ref, systolic, diastolic, effective)
+    # grant.tenant_id, not the header: the handler must not be able to write to
+    # a tenant the grant did not authorize (spec §3(e)).
     row = R6Resource(resource_type="Observation",
-                     resource_json=json.dumps(obs), tenant_id=tenant_id)
+                     resource_json=json.dumps(obs), tenant_id=grant.tenant_id)
     db.session.add(row)
     db.session.commit()
     record_audit_event("create", "Observation", row.id,
                        agent_id=request.headers.get("X-Agent-Id"),
-                       tenant_id=tenant_id,
+                       tenant_id=grant.tenant_id,
                        detail="smbp reading band=%s" % triage["band"])
     return jsonify({"observation_id": row.id, "triage": triage}), 201
 
