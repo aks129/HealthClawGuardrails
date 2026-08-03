@@ -467,3 +467,35 @@
 
 
 .footer-legal { font-size: 0.78rem; }
+
+/* ---------------------------------------------------------------------------
+   Fasten Connect (Stitch) widget container.
+
+   The container used to carry `overflow: hidden` (for the rounded corner).
+   <fasten-stitch-element> renders its own consent dialog INSIDE this element,
+   so that one declaration clipped the dialog's bottom — the policy-agreement
+   checkbox and the Continue button — with no way to scroll to them. Reported
+   from an iPad, where the viewport is short enough for the dialog to exceed
+   the container.
+
+   A rounded corner is not worth a dead end in the connect flow, so the clip
+   is gone. The widget's own dialog positions itself against the viewport.
+   --------------------------------------------------------------------------- */
+.stitch-container {
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--r6-info);
+  border-radius: 8px;
+  overflow: visible;
+}
+
+/* The vendor bundle sizes its dialog for a desktop window. Give it the short-
+   viewport behaviour the rest of the product has: fit the visible area, and
+   scroll inside itself rather than off the bottom of the screen. iPad in
+   landscape and any phone in landscape both land here. */
+@media (max-height: 820px) {
+  .stitch-container [class*="modal"],
+  .stitch-container [class*="dialog"] {
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+}

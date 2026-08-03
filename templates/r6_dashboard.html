@@ -492,7 +492,7 @@
 
         {% if fasten_public_key %}
         <!-- Stitch widget — shown inline when Connect is clicked -->
-        <div id="stitch-container" style="display:none;margin-bottom:1.25rem;border:1px solid var(--r6-info);border-radius:8px;overflow:hidden;">
+        <div id="stitch-container" class="stitch-container" style="display:none;">
           <fasten-stitch-element id="stitch-widget" public-id="{{ fasten_public_key }}"></fasten-stitch-element>
         </div>
         {% endif %}
