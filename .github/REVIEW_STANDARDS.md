@@ -66,6 +66,47 @@ review bot reads THIS file, so keep it current.)
     `.health-context.yaml`, `templates/base.html`, README badges,
     `gemini-extension.json`, `server.json`. Don't update one without the rest.
 
+## Table stakes (docs/constitution.md + design.md)
+
+The deterministic parts of these are enforced by `scripts/check_table_stakes.py`
+in CI, on added lines only. The items below need judgment, so they are yours.
+
+19. **One control, one property.** For every check, guard, assertion or
+    conditional the PR adds: name the single property it protects, then ask
+    what *else* could make it pass. If the broken behaviour also passes, the
+    check is decoration — REQUEST_CHANGES with the specific input that would
+    slip through. This project has shipped six of these; the pattern is a
+    control that quietly does two things (a charset check carrying a length
+    cap, `assert status in (400, 403)` accepting both fix and bug, a monitor
+    counting how many checks ran rather than which).
+20. **Load-bearing tests are mutation-tested.** A PR fixing a bug should show
+    that reverting the fix turns a test red. Ask for it when a security or
+    correctness property is claimed and the test would pass either way.
+21. **Feature and hardening ship together.** If a PR adds a capability whose
+    review raised security findings, both land in the same merge or neither
+    does. Splitting them has put live vulnerabilities into production here.
+22. **Deep modules.** A new interface should hide more than it exposes. Flag
+    wide interfaces over thin wrappers, and any function whose correct use
+    requires knowing its internals.
+23. **Seams and fakes.** Anything crossing a boundary (HealthClaw client, LLM
+    provider, FHIR server, mail, clock) goes through an adapter and is stated
+    to have been verified against the real system. A fake proves a call is
+    *made*, not *accepted*.
+24. **Docs change with behaviour.** If the PR changes what the system does and
+    a doc still describes the old behaviour, that is a defect in this PR — not
+    a follow-up. Where a claim can drift, ask for a guard.
+25. **Writing.** Applies to prose, PR text, comments, error messages and
+    interface copy: one name per thing (a tenant is never also a workspace),
+    active verbs, no marketing adjectives, no stacked hedges, and limits
+    stated in the same breath as claims. Semicolons are fine in engineering
+    prose; in patient-facing copy and error messages, prefer two sentences.
+26. **Interface changes follow design.md.** Tokens, type and radius come from
+    the file rather than being invented per component. The constraints that
+    outrank taste: CSP `default-src 'self'` (no CDN assets), in-app webviews
+    are a first-class target, 44px tap targets, 16px minimum on inputs,
+    `prefers-reduced-motion` honoured, WCAG AA. If a change needs a new token,
+    it changes `design.md` in the same PR.
+
 ## Style & scope
 
 15. Match surrounding code: module pattern is pure engine + report builders +

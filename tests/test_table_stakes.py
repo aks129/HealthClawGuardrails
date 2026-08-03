@@ -1,0 +1,150 @@
+"""The table-stakes checker has to catch what it claims and stay quiet otherwise.
+
+Two failure modes, and the second is the one that kills linters: a check that
+never fires is decoration, and a check that fires on ordinary writing gets
+switched off within a week. Both are tested here.
+
+Constitution §1: one control, one property — say which property, then ask what
+else could make it pass.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from check_table_stakes import (  # noqa: E402
+    check_prose, check_style,
+)
+
+
+def _prose(text: str):
+    return check_prose("docs/x.md", [(1, text)])
+
+
+def _style(text: str, whole: str = ""):
+    return check_style("a.css", [(1, text)], whole or text)
+
+
+def _rules(findings):
+    return {f.rule for f in findings}
+
+
+# --- writing: must fire ----------------------------------------------------
+
+@pytest.mark.parametrize("text,rule", [
+    ("This provides a seamless experience.", "no-marketing-adjectives"),
+    ("A robust pipeline handles it.", "no-marketing-adjectives"),
+    ("Our cutting-edge engine is fast.", "no-marketing-adjectives"),
+    ("This may potentially help you.", "one-helper-verb"),
+    ("It could potentially fail here.", "one-helper-verb"),
+    ("Please reach out if it breaks.", "no-chatty-phrasal-verbs"),
+    ("Let us circle back on that.", "no-chatty-phrasal-verbs"),
+])
+def test_prose_rules_fire(text, rule):
+    assert rule in _rules(_prose(text)), f"{rule} missed: {text}"
+
+
+def test_a_long_sentence_is_flagged():
+    text = ("The system will " + "process every single record carefully "
+            * 6 + "today.")
+    assert "sentence-length" in _rules(_prose(text))
+
+
+# --- writing: must NOT fire ------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "Redact the record before the model sees it.",
+    "The tenant comes from the header, never the body.",
+    "Writes need a step-up token.",
+    "",
+    "# A heading that happens to be quite long but is still just a heading",
+    "> Quoted text from somewhere else; not our prose.",
+    "| col | col |",
+    "```",
+    "    indented_code(); with_semicolon();",
+    "Run `init(); serve()` before the first request.",
+    "Use the [guide](https://example.com/a;b) for detail.",
+    "The tenant is resolved; the record is then read.",
+])
+def test_ordinary_writing_is_left_alone(text):
+    assert not _prose(text), f"false positive on: {text!r}"
+
+
+def test_a_sentence_at_the_cap_passes():
+    assert not _rules(_prose(" ".join(["word"] * 25) + "."))
+
+
+def test_code_spans_do_not_trigger_marketing_words():
+    # A variable genuinely named `robust_mode` is not marketing copy.
+    assert not _prose("Set `robust_mode` to true.")
+
+
+# --- design: must fire -----------------------------------------------------
+
+def test_banned_primary_font_is_flagged():
+    assert "banned-primary-font" in _rules(
+        _style('  font-family: "Inter", sans-serif;'))
+
+
+def test_cdn_asset_is_flagged_because_the_csp_blocks_it():
+    assert "csp-external-asset" in _rules(
+        _style('<script src="https://cdn.example.com/x.js"></script>'))
+
+
+def test_small_input_font_is_flagged_for_ios_zoom():
+    assert "ios-zoom-font-size" in _rules(_style("  font-size: 14px;"))
+
+
+def test_motion_without_the_media_query_is_flagged():
+    assert "reduced-motion" in _rules(
+        _style("  transition: opacity 150ms ease-out;"))
+
+
+# --- design: must NOT fire -------------------------------------------------
+
+def test_apple_system_in_a_fallback_chain_is_fine():
+    # design.md is explicit: -apple-system in the FALLBACK is a performance
+    # decision, and our primary faces are distinctive.
+    assert not _rules(_style('  font-family: "Public Sans", '
+                             '-apple-system, sans-serif;'))
+
+
+def test_google_fonts_is_allowed_because_the_csp_allows_it():
+    assert not _rules(_style(
+        '<link href="https://fonts.googleapis.com/css2?family=Fraunces" '
+        'rel="stylesheet">'))
+
+
+def test_sixteen_px_is_the_floor_not_a_violation():
+    assert not _rules(_style("  font-size: 16px;"))
+
+
+def test_motion_with_the_media_query_present_is_fine():
+    css = ("  transition: opacity 150ms ease-out;\n"
+           "@media (prefers-reduced-motion: reduce) { * { transition: none } }")
+    assert not _rules(check_style("a.css", [(1, "  transition: opacity 150ms"
+                                             " ease-out;")], css))
+
+
+# --- the rules the docs promise actually exist -----------------------------
+
+def test_every_documented_rule_is_implemented():
+    """`--explain` output is a promise; keep it true."""
+    from check_table_stakes import RULES
+    implemented = {
+        "no-marketing-adjectives", "one-helper-verb",
+        "no-chatty-phrasal-verbs", "sentence-length",
+        "banned-primary-font", "csp-external-asset", "ios-zoom-font-size",
+        "reduced-motion",
+    }
+    for rule in implemented:
+        assert rule in RULES, f"{rule} is enforced but undocumented"
+    for line in RULES.splitlines():
+        head = line.strip().split(" ")[0]
+        if head and head[0].islower() and "-" in head:
+            assert head in implemented, f"{head} is documented but not enforced"

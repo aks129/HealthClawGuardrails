@@ -15,7 +15,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      # Full history: the table-stakes check diffs against the merge base, so
+      # a shallow clone would silently find no added lines and pass.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v7
@@ -30,6 +34,15 @@ jobs:
 
       - name: Mypy (gradual typed security core)
         run: uv run mypy
+
+      # Table stakes from docs/constitution.md and design.md. Deterministic
+      # rules only, and only on lines this PR ADDS — see the script docstring
+      # for why it is scoped that way.
+      - name: Table stakes (constitution + design)
+        run: |
+          git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
+          uv run python scripts/check_table_stakes.py \
+            --base "origin/${GITHUB_BASE_REF:-main}"
 
   python-tests:
     runs-on: ubuntu-latest
