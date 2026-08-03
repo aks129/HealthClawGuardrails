@@ -26,10 +26,22 @@ a tool-schema shim.
   - `HealthClawClient(mcp_base_url, tenant_id, step_up_token).call(name, args)` →
     relays to `/mcp/rpc`, carrying `X-Tenant-Id` / `X-Step-Up-Token`.
 
-Read-tier tools need only `X-Tenant-Id` (public tenants) or a tenant-bound token;
-write-tier tools (`fhir_commit_write`, `action_commit`, `shl_generate`, `questionnaire_extract`)
-require `X-Step-Up-Token`. Mint one with `fhir_get_token` or
-`POST /r6/fhir/internal/step-up-token`.
+Read-tier tools need only `X-Tenant-Id` (public tenants) or a tenant-bound
+token. **Every** write-tier tool requires `X-Step-Up-Token` — the gate reads the
+tool's declared `tier`, so the list below is the tier, not a second list that
+can drift out of step with it:
+
+`action_commit`, `action_propose`, `curatr_apply_fix`, `fhir_commit_write`,
+`fhir_propose_write`, `questionnaire_extract`, `rx_transfer_request`,
+`shl_generate`.
+
+Mint a token with `fhir_get_token` or `POST /r6/fhir/internal/step-up-token`.
+
+Two of these will surprise you if you used an older build. `questionnaire_extract`
+needs a token **even with `dry_run=true`**, and the `*_propose` tools need one
+even though they only draft — the client gates on tier rather than on what the
+server happens to require per argument, so there is one rule to reason about
+instead of a per-tool exception list.
 
 ## OpenAI (Agents SDK / Chat Completions)
 
