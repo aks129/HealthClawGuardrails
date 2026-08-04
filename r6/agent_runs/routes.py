@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 
@@ -40,6 +41,8 @@ agent_runs_blueprint = Blueprint(
     url_prefix="/command-center/api/runs",
 )
 
+logger = logging.getLogger(__name__)
+
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _EVENT_TYPE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
@@ -50,7 +53,18 @@ def _tenant_authorized(tenant_id: str) -> bool:
     if session.get(TENANT_SESSION_KEY) == tenant_id:
         return True
     token = request.headers.get("X-Step-Up-Token", "")
-    return bool(token and validate_step_up_token(token, tenant_id)[0])
+    if not token:
+        return False
+    # Destructure both halves (#307). `[0]` returned the correct boolean, but
+    # it sits one keystroke from `if validate_step_up_token(...)`, which is a
+    # silent auth bypass because a 2-tuple is always truthy — including
+    # `(False, 'expired')`. The reason is the other half of the fix: a refusal
+    # nobody can name is a refusal nobody can diagnose.
+    valid, error = validate_step_up_token(token, tenant_id)
+    if not valid:
+        logger.info("agent-runs step-up refused: tenant=%s reason=%s",
+                    tenant_id, error)
+    return valid
 
 
 def _internal_authorized() -> bool:

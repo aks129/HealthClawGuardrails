@@ -263,9 +263,15 @@ def _require_session_or_stepup():
             or request.headers.get("X-Tenant-Id")
             or DEFAULT_TENANT
         )
-        valid, _ = validate_step_up_token(step_up, tenant)
+        # Both halves used, not just destructured (#307). Throwing the reason
+        # away made every refusal here indistinguishable — a misconfigured
+        # STEP_UP_SECRET, an expired token and a token for someone else's
+        # tenant all produced the same silent 401.
+        valid, error = validate_step_up_token(step_up, tenant)
         if valid:
             return None
+        logger.info("command-center step-up refused: tenant=%s reason=%s",
+                    tenant, error)
     return jsonify({"error": "authentication required"}), 401
 
 
