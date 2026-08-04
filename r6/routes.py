@@ -3345,6 +3345,37 @@ def mcp_app_care_gaps():
     return resp
 
 
+@r6_blueprint.route('/mcp-apps/lab-trends/', methods=['GET'])
+@r6_blueprint.route('/mcp-apps/lab-trends', methods=['GET'])
+def mcp_app_lab_trends():
+    """
+    MCP App: Lab Trends.
+
+    A timeline of one analyte over time — the shape "give me a timeline of my
+    cholesterol results" actually asks for, and which prose answers badly.
+    Linked from the `fhir_interpret_labs` MCP tool via `_meta.ui.resourceUri`.
+
+    Data path is the engine's own Observation/$interpret with an empty body,
+    so redaction, audit and tenant scoping apply by construction AND the
+    normal/high flags drawn here are the engine's verdict rather than a
+    threshold re-implemented in a browser. Reference ranges live in exactly
+    one place (r6/labs/interpret.py) and this view is not a second one.
+    """
+    tenant_id = (
+        request.headers.get('X-Tenant-Id')
+        or request.args.get('tenant_id')
+        or ''
+    )
+    html = render_template(
+        'mcp_apps/lab_trends.html',
+        tenant_id=tenant_id,
+    )
+    resp = Response(html, mimetype='text/html')
+    resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
+    resp.headers['X-MCP-App'] = 'lab-trends'
+    return resp
+
+
 @r6_blueprint.route('/mcp-apps/wearables/', methods=['GET'])
 @r6_blueprint.route('/mcp-apps/wearables', methods=['GET'])
 def mcp_app_wearables():

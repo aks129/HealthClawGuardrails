@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lab Trends · HealthClaw</title>
+<meta name="mcp-app" content="lab-trends">
+<!-- MCP App: Lab Trends — a timeline of one analyte over time.
+
+     Reported live 2026-08-04: "give me a timeline of my cholesterol results"
+     produced eight tool calls and then an error. Prose is the wrong shape for
+     that question; four numbers across four dates is a picture.
+
+     Layout idiom ported from SmartHealthConnect's trend view (archived),
+     rebuilt on the engine's own Observation/$interpret so redaction, audit
+     and tenant scoping apply by construction. $interpret with an empty body
+     returns the tenant's own stored Observations ALREADY interpreted against
+     LOINC reference ranges, so the flag colouring here is the engine's
+     verdict, not a threshold re-implemented in the browser. There is exactly
+     one place reference ranges live (r6/labs/interpret.py) and this is not
+     it. -->
+<style>
+  :root{
+    --bg:#0b0f14;--panel:#0f141b;--ink:#dbe3ef;--dim:#7b8496;
+    --border:#1c242f;--cyan:#22d3ee;--green:#34d399;--amber:#fbbf24;
+    --red:#f87171;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px}
+  header{display:flex;align-items:center;justify-content:space-between;
+    padding-bottom:16px;border-bottom:1px solid var(--border);
+    margin-bottom:20px;flex-wrap:wrap;gap:12px}
+  .title{font-size:18px;font-weight:600}
+  .title small{display:block;color:var(--dim);font-size:12px;margin-top:2px;
+    font-family:var(--mono)}
+  .panel{background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:16px;margin-bottom:14px}
+  .panel h3{margin:0 0 2px;font-size:15px;font-weight:600}
+  .panel .sub{color:var(--dim);font-size:12px;font-family:var(--mono);
+    margin-bottom:12px}
+  .chart{width:100%;height:180px;display:block;overflow:visible}
+  .chart .grid{stroke:var(--border);stroke-width:1}
+  .chart .band{fill:rgba(52,211,153,.07)}
+  .chart .line{fill:none;stroke:var(--cyan);stroke-width:2;
+    stroke-linejoin:round;stroke-linecap:round}
+  .chart .axis{fill:var(--dim);font-size:10px;font-family:var(--mono)}
+  .chart .pt{stroke:var(--bg);stroke-width:2}
+  .chart .pt.N{fill:var(--green)}
+  .chart .pt.H,.chart .pt.L{fill:var(--amber)}
+  .chart .pt.HH,.chart .pt.LL{fill:var(--red)}
+  .chart .pt.IND{fill:var(--dim)}
+  .readings{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  .readings th{text-align:left;color:var(--dim);font-weight:500;
+    font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;
+    padding:4px 8px 4px 0}
+  .readings td{padding:4px 8px 4px 0;font-family:var(--mono)}
+  .flag{display:inline-block;padding:1px 8px;border-radius:999px;
+    font-size:11px;border:1px solid var(--border)}
+  .flag.N{color:var(--green);border-color:rgba(52,211,153,.35)}
+  .flag.H,.flag.L{color:var(--amber);border-color:rgba(251,191,36,.35)}
+  .flag.HH,.flag.LL{color:var(--red);border-color:rgba(248,113,113,.35)}
+  .flag.IND{color:var(--dim)}
+  .one-point{color:var(--dim);font-size:12.5px;padding:8px 0}
+  .empty{color:var(--dim);padding:24px;text-align:center}
+  .err-box{color:var(--red);padding:12px;background:rgba(248,113,113,.06);
+    border:1px solid rgba(248,113,113,.2);border-radius:6px;margin:0 0 16px}
+  .disclaimer{color:var(--dim);font-size:12px;margin-top:18px;
+    padding-top:14px;border-top:1px solid var(--border)}
+  .tenant-input{background:var(--panel);color:var(--ink);
+    border:1px solid var(--border);padding:6px 10px;border-radius:6px;
+    font-family:var(--mono);font-size:12px;min-width:180px}
+  button{background:transparent;color:var(--ink);border:1px solid
+    var(--border);padding:6px 12px;border-radius:6px;cursor:pointer;
+    font-size:12px}
+  button:hover{border-color:var(--cyan)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="title">Lab trends
+      <small id="scope">loading…</small>
+    </div>
+    <div>
+      <input id="tenant" class="tenant-input" placeholder="tenant id"
+             value="{{ tenant_id }}">
+      <button id="reload">Reload</button>
+    </div>
+  </header>
+  <div id="err" class="err-box" hidden></div>
+  <div id="panels"></div>
+  <div id="disclaimer" class="disclaimer" hidden></div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  // Analyte grouping. A concept is a SET of codes — the same test arrives as
+  // different LOINCs from different labs, and plotting only one of them draws
+  // a confident line through a third of the data. Order here is display order.
+  var PANELS = [
+    {name: "Total cholesterol", codes: ["2093-3"]},
+    {name: "LDL cholesterol",   codes: ["13457-7", "18262-6"]},
+    {name: "HDL cholesterol",   codes: ["2085-9"]},
+    {name: "Triglycerides",     codes: ["2571-8"]},
+    {name: "Hemoglobin A1c",    codes: ["4548-4", "17856-6"]},
+    {name: "Glucose",           codes: ["2345-7"]}
+  ];
+
+  var el = function (id) { return document.getElementById(id); };
+
+  function fail(msg) {
+    var box = el("err");
+    box.textContent = msg;
+    box.hidden = false;
+  }
+
+  function loincOf(res) {
+    var coding = ((res || {}).code || {}).coding || [];
+    for (var i = 0; i < coding.length; i++) {
+      if (coding[i] && coding[i].system === "http://loinc.org" && coding[i].code) {
+        return coding[i].code;
+      }
+    }
+    return null;
+  }
+
+  // The engine's own interpretation flag, never a threshold recomputed here.
+  function flagOf(res) {
+    var interp = (res || {}).interpretation || [];
+    for (var i = 0; i < interp.length; i++) {
+      var coding = (interp[i] || {}).coding || [];
+      for (var j = 0; j < coding.length; j++) {
+        if (coding[j] && coding[j].code) return coding[j].code;
+      }
+    }
+    return "IND";
+  }
+
+  function dateOf(res) {
+    var raw = (res || {}).effectiveDateTime || (res || {}).issued || "";
+    return String(raw).slice(0, 10);
+  }
+
+  function readingsFor(entries, codes) {
+    var out = [];
+    entries.forEach(function (entry) {
+      var res = (entry || {}).resource || {};
+      if (codes.indexOf(loincOf(res)) < 0) return;
+      var vq = res.valueQuantity || {};
+      if (typeof vq.value !== "number") return;   // no number, no point
+      out.push({
+        date: dateOf(res), value: vq.value,
+        unit: vq.unit || "", flag: flagOf(res)
+      });
+    });
+    // Oldest first: a timeline reads left to right. Undated readings are
+    // dropped from the CHART (they cannot be placed) but still listed below,
+    // because a reading we cannot position is not a reading that did not
+    // happen.
+    out.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    return out;
+  }
+
+  function svgChart(points) {
+    var W = 640, H = 180, padL = 46, padR = 12, padT = 14, padB = 24;
+    var dated = points.filter(function (p) { return p.date; });
+    if (dated.length < 2) return null;
+
+    var values = dated.map(function (p) { return p.value; });
+    var lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
+    if (hi === lo) { hi = lo + 1; lo = lo - 1; }
+    var pad = (hi - lo) * 0.15;
+    lo -= pad; hi += pad;
+
+    var times = dated.map(function (p) { return new Date(p.date + "T00:00:00Z").getTime(); });
+    var t0 = Math.min.apply(null, times), t1 = Math.max.apply(null, times);
+    if (t1 === t0) { t1 = t0 + 1; }
+
+    var x = function (t) { return padL + (t - t0) / (t1 - t0) * (W - padL - padR); };
+    var y = function (v) { return padT + (hi - v) / (hi - lo) * (H - padT - padB); };
+
+    var ns = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("class", "chart");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("role", "img");
+
+    [0, 0.5, 1].forEach(function (frac) {
+      var gy = padT + frac * (H - padT - padB);
+      var line = document.createElementNS(ns, "line");
+      line.setAttribute("class", "grid");
+      line.setAttribute("x1", padL); line.setAttribute("x2", W - padR);
+      line.setAttribute("y1", gy); line.setAttribute("y2", gy);
+      svg.appendChild(line);
+      var label = document.createElementNS(ns, "text");
+      label.setAttribute("class", "axis");
+      label.setAttribute("x", 4); label.setAttribute("y", gy + 3);
+      label.textContent = (hi - frac * (hi - lo)).toFixed(0);
+      svg.appendChild(label);
+    });
+
+    var d = dated.map(function (p, i) {
+      return (i ? "L" : "M") + x(times[i]).toFixed(1) + " " + y(p.value).toFixed(1);
+    }).join(" ");
+    var path = document.createElementNS(ns, "path");
+    path.setAttribute("class", "line");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+
+    dated.forEach(function (p, i) {
+      var c = document.createElementNS(ns, "circle");
+      c.setAttribute("class", "pt " + p.flag);
+      c.setAttribute("cx", x(times[i]).toFixed(1));
+      c.setAttribute("cy", y(p.value).toFixed(1));
+      c.setAttribute("r", 4);
+      var t = document.createElementNS(ns, "title");
+      t.textContent = p.date + ": " + p.value + " " + p.unit + " (" + p.flag + ")";
+      c.appendChild(t);
+      svg.appendChild(c);
+    });
+
+    [[t0, "start"], [t1, "end"]].forEach(function (pair) {
+      var label = document.createElementNS(ns, "text");
+      label.setAttribute("class", "axis");
+      label.setAttribute("x", x(pair[0]));
+      label.setAttribute("text-anchor", pair[1] === "end" ? "end" : "start");
+      label.setAttribute("y", H - 6);
+      label.textContent = new Date(pair[0]).toISOString().slice(0, 10);
+      svg.appendChild(label);
+    });
+    return svg;
+  }
+
+  function renderPanel(spec, readings) {
+    var panel = document.createElement("div");
+    panel.className = "panel";
+
+    var h = document.createElement("h3");
+    h.textContent = spec.name;
+    panel.appendChild(h);
+
+    var sub = document.createElement("div");
+    sub.className = "sub";
+    sub.textContent = readings.length + " reading" +
+      (readings.length === 1 ? "" : "s") +
+      " · LOINC " + spec.codes.join(", ");
+    panel.appendChild(sub);
+
+    var chart = svgChart(readings);
+    if (chart) {
+      panel.appendChild(chart);
+    } else {
+      // One point is not a trend, and drawing it as one would invent a
+      // direction the record does not support.
+      var note = document.createElement("div");
+      note.className = "one-point";
+      note.textContent = readings.length === 1
+        ? "Only one reading on file — not enough for a trend line."
+        : "No dated readings to plot.";
+      panel.appendChild(note);
+    }
+
+    var table = document.createElement("table");
+    table.className = "readings";
+    var head = document.createElement("tr");
+    ["Date", "Value", "Flag"].forEach(function (label) {
+      var th = document.createElement("th");
+      th.textContent = label;
+      head.appendChild(th);
+    });
+    table.appendChild(head);
+    readings.slice().reverse().forEach(function (r) {
+      var tr = document.createElement("tr");
+      var td1 = document.createElement("td");
+      td1.textContent = r.date || "undated";
+      var td2 = document.createElement("td");
+      td2.textContent = r.value + (r.unit ? " " + r.unit : "");
+      var td3 = document.createElement("td");
+      var span = document.createElement("span");
+      span.className = "flag " + r.flag;
+      span.textContent = r.flag;
+      td3.appendChild(span);
+      tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+      table.appendChild(tr);
+    });
+    panel.appendChild(table);
+    return panel;
+  }
+
+  async function load() {
+    var tenant = el("tenant").value.trim();
+    el("panels").textContent = "";
+    el("err").hidden = true;
+    el("disclaimer").hidden = true;
+    if (!tenant) { fail("A tenant id is required."); return; }
+
+    var res;
+    try {
+      res = await fetch("/r6/fhir/Observation/$interpret", {
+        method: "POST",
+        headers: {"X-Tenant-Id": tenant, "Content-Type": "application/json"},
+        body: "{}"
+      });
+    } catch (e) {
+      fail("Could not reach the records service.");
+      return;
+    }
+    if (!res.ok) {
+      fail(res.status === 401
+        ? "Not authorised to read this tenant's records."
+        : "Could not load lab results (HTTP " + res.status + ").");
+      return;
+    }
+    var body = await res.json();
+    var params = (body || {}).parameter || [];
+    var bundle = {}, disclaimer = "";
+    params.forEach(function (p) {
+      if (p.name === "return") bundle = p.resource || {};
+      if (p.name === "disclaimer") disclaimer = p.valueString || "";
+    });
+    var entries = bundle.entry || [];
+    el("scope").textContent = tenant + " · " + entries.length + " observations read";
+
+    var rendered = 0;
+    PANELS.forEach(function (spec) {
+      var readings = readingsFor(entries, spec.codes);
+      if (!readings.length) return;          // absent analyte: show nothing
+      el("panels").appendChild(renderPanel(spec, readings));
+      rendered++;
+    });
+
+    if (!rendered) {
+      var empty = document.createElement("div");
+      empty.className = "empty";
+      // Deliberately not "you have no cholesterol results" — this view reads
+      // the CONNECTED record, which is not the same as the person's history.
+      empty.textContent =
+        "No lipid, A1c or glucose readings with numeric values were found in " +
+        "the connected records. That is not the same as never having had one.";
+      el("panels").appendChild(empty);
+    }
+    if (disclaimer) {
+      el("disclaimer").textContent = disclaimer;
+      el("disclaimer").hidden = false;
+    }
+  }
+
+  el("reload").addEventListener("click", load);
+  load();
+})();
+</script>
+</body>
+</html>

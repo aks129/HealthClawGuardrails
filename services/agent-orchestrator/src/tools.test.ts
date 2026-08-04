@@ -1123,6 +1123,37 @@ describe("Tool Execution Tests", () => {
     expect(result._meta).toBeUndefined();
   });
 
+  it("fhir_interpret_labs attaches the lab-trends resourceUri", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ resourceType: "Parameters", parameter: [] })
+    );
+
+    const result = (await tools.executeTool(
+      "fhir_interpret_labs",
+      {},
+      { "x-tenant-id": "t-app" }
+    )) as Record<string, unknown>;
+
+    const meta = result._meta as { ui?: { resourceUri?: string; profile?: string } };
+    expect(meta?.ui?.profile).toBe("mcp-app");
+    expect(meta?.ui?.resourceUri).toBe(
+      `${BASE}/mcp-apps/lab-trends/?tenant_id=t-app`
+    );
+  });
+
+  it("fhir_interpret_labs failure carries no resourceUri (no UI over an error)", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({}, 503));
+
+    const result = (await tools.executeTool(
+      "fhir_interpret_labs",
+      {},
+      { "x-tenant-id": "t1" }
+    )) as Record<string, unknown>;
+
+    expect(result._meta).toBeUndefined();
+    expect(String(result.error)).toContain("503");
+  });
+
   // -- fhir.permission_evaluate --
 
   it("fhir.permission_evaluate posts to Permission/$evaluate", async () => {
