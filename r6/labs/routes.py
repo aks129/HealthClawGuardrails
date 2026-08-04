@@ -19,6 +19,10 @@ from r6.labs.report import (
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on the no-input fallback below. Matches the search route's
+# _count ceiling so one surface cannot quietly read more than the other.
+STORED_OBSERVATION_CAP = 200
+
 _DISCLAIMER = ("Advisory decision support, not a diagnosis. Reference ranges are "
                "adult population defaults and vary by lab, age, sex, and clinical "
                "context. The performing lab's own reference range takes precedence.")
@@ -31,11 +35,37 @@ def register_labs_routes(blueprint, deps):
     def _tenant():
         return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
+    def _stored_observations(tenant_id):
+        """The tenant's own Observations, newest first, capped."""
+        rows = (R6Resource.query
+                .filter_by(resource_type="Observation", tenant_id=tenant_id)
+                .order_by(R6Resource.last_updated.desc())
+                .limit(STORED_OBSERVATION_CAP)
+                .all())
+        return [row.to_fhir_json() for row in rows]
+
     def _observations_from_request(tenant_id):
-        """Return (observations, ignored_count). Tolerates malformed input."""
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
-            body = {}
+        """Return (observations, ignored_count). Tolerates malformed input.
+
+        Four inputs, in precedence order: an explicit ?subject (or Parameters
+        subject), a Bundle, a single Observation, or NOTHING — in which case
+        the tenant's own stored Observations are interpreted.
+
+        That last branch is the one CareAgents uses: get_labs posts an empty
+        body and no subject (careagents/healthclaw.py:interpret_labs). It
+        previously matched no branch at all, so the agent interpreted zero
+        observations and told patients their labs were not in their records
+        while the tenant held hundreds.
+
+        "Nothing supplied" is deliberately NOT the same as "something
+        unusable". A junk body (a bare array, a Parameters with an
+        unparseable subject) still counts as ignored input rather than
+        falling through to the whole record set — a malformed request must
+        not silently widen into a full read.
+        """
+        raw = request.get_json(silent=True)
+        body = raw if isinstance(raw, dict) else {}
+        supplied = raw is not None and raw != {}
         subject = request.args.get("subject")
         if body.get("resourceType") == "Parameters":
             for p in body.get("parameter", []):
@@ -60,8 +90,10 @@ def register_labs_routes(blueprint, deps):
                     ignored += 1
         elif body.get("resourceType") == "Observation":
             observations.append(body)
-        elif body:
+        elif supplied:
             ignored += 1
+        else:
+            observations = _stored_observations(tenant_id)
         return observations, ignored
 
     def _patient_for(obs, tenant_id, cache):
