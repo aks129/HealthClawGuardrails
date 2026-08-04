@@ -219,6 +219,15 @@ h1 em { font-style: italic; color: var(--clay); }
 .chat-resumed { align-self: center; font-size: 12px; color: var(--muted, #5E5240);
   letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
 
+/* An import still in flight is a fact about a background job, not about the
+   patient — so it reads as a notice from the app and never as the agent
+   speaking about their health (#336). Deliberately NOT .chat-resumed, whose
+   uppercase micro-label styling is for two words, not two sentences. */
+.chat-notice { align-self: stretch; font-size: 13.5px; line-height: 1.5;
+  color: var(--ink); background: var(--card);
+  border: 1px solid var(--hairline); border-left: 3px solid var(--clay);
+  border-radius: 10px; padding: 10px 13px; }
+
 .chips { display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;

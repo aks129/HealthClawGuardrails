@@ -18,6 +18,25 @@
   </div>
 
   <div class="chat-log" id="log">
+    {# An outstanding import is news on every visit, not only the first. The
+       greeting is where a patient looks for "did my records land?", and it
+       used to be computed only for a first visit — so the one person actually
+       watching for arrival was the one person never shown it (#336). #}
+    {% if intake and intake.state in ("arriving", "overdue") %}
+    <div class="chat-notice">
+      {% if intake.state == "arriving" %}
+      Your records{% if intake.provider %} from {{ intake.provider }}{% endif %}
+      haven't arrived yet — imports take 5–45 minutes. Nothing below reflects
+      them.
+      {% else %}
+      Nothing has arrived from your
+      {%- if intake.provider %} {{ intake.provider }}{% endif %} connection
+      {%- if intake.minutes_waiting %} in {{ intake.minutes_waiting }} minutes
+      {%- endif %}. That's longer than an import usually takes. You can retry
+      the connection from your home page.
+      {% endif %}
+    </div>
+    {% endif %}
     {% if past %}
     {# Returning: replay what was actually said rather than greeting them as a
        stranger. The starters are for someone who hasn't asked anything yet. #}

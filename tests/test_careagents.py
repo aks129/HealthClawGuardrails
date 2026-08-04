@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import time
 
 import pytest
 
@@ -3159,6 +3160,112 @@ def test_a_broken_count_falls_back_to_the_generic_greeting(
     r = c.get(f"/chat?agent={agent_id}")
     assert r.status_code == 200
     assert b"in your records" not in r.data
+
+
+# ---------------------------------------------------------------------------
+# #336: an import in flight is not an empty chart. Reported live — a patient
+# finished a MEDENT connect, opened their agent, and was told "I found 0
+# conditions, 0 medications, and 0 lab results in your records" while the
+# import the connect page had just promised was still running.
+# ---------------------------------------------------------------------------
+def _counting(totals):
+    def search(tenant_id, resource_type, params=None):
+        return {"total": totals.get(resource_type, 0)}
+    return search
+
+
+def _account_id(svc, email="gene@example.com"):
+    from careagents.models import Account
+    with svc.session() as s:
+        return s.query(Account).filter_by(email=email).one().id
+
+
+def test_a_count_is_never_stated_while_an_import_is_in_flight(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+    svc.set_connection_status(tenant, "pending")
+    fake.search = _counting({})
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "0 condition" not in page, (
+        "stated a count as a finding about the person while the import that "
+        "would produce it was still running")
+    assert "in your records" not in page
+    assert "haven't arrived yet" in page
+
+
+def test_records_that_landed_while_nobody_polled_are_reported(
+        cfg, svc, monkeypatch):
+    """`status` flips to active only while /connect is open polling. A patient
+    who closed that tab keeps a stale `pending` over a full chart, and must
+    not be told their records are still on the way."""
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+    svc.set_connection_status(tenant, "pending")
+    fake.search = _counting({"Condition": 52, "MedicationRequest": 4,
+                             "Observation": 186})
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "52 conditions" in page
+    assert "haven't arrived yet" not in page
+    # and the status settles, so the next visit costs no counts
+    conns = svc.list_home(_account_id(svc))["connections"]
+    assert [x["status"] for x in conns if x["tenant_id"] == tenant] == \
+        ["active"]
+
+
+def test_a_returning_patient_is_told_the_records_still_have_not_landed(
+        cfg, svc, monkeypatch):
+    """The second trap in the same code: counts were computed only when the
+    conversation was empty, so the one person actually watching for arrival —
+    someone who asked a question and came back to check — was the one person
+    never shown the answer."""
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+    svc.set_connection_status(tenant, "pending")
+    fake.log_message(tenant, "user", "did my records land?", agent_id=agent_id)
+    fake.search = _counting({})
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "Picking up where you left off" in page   # still a return visit
+    assert "haven't arrived yet" in page
+
+
+def test_past_the_promised_window_we_stop_saying_they_are_coming(
+        cfg, svc, monkeypatch):
+    """"Still arriving" is a claim about a job this app cannot see. Past the
+    window /connect promises, all it knows is that nothing has landed."""
+    from careagents.intake_state import ARRIVAL_WINDOW_SECONDS
+    from careagents.models import Connection
+
+    app, c, fake, agent_id, tenant, conn_id = _chat_app(cfg, svc, monkeypatch)
+    svc.set_connection_status(tenant, "pending")
+    with svc.session() as s:
+        row = s.get(Connection, conn_id)
+        row.connected_at = time.time() - ARRIVAL_WINDOW_SECONDS - 60
+    fake.search = _counting({})
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "longer than an import usually takes" in page
+    assert "haven't arrived yet" not in page
+    assert "0 condition" not in page
+
+
+def test_an_unreachable_count_during_an_import_does_not_become_zero(
+        cfg, svc, monkeypatch):
+    """A failed count is not an empty chart — the engine being down must not
+    be reported as the patient having no records."""
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+    svc.set_connection_status(tenant, "pending")
+
+    def search(tenant_id, resource_type, params=None):
+        raise HealthClawError("search failed (503)", 503)
+
+    fake.search = search
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "0 condition" not in page
+    assert "in your records" not in page
+    # An unreadable count is also not proof the import finished, so the
+    # outstanding-import notice stands rather than quietly disappearing.
+    assert "haven't arrived yet" in page
 
 
 # ---------------------------------------------------------------------------
