@@ -184,12 +184,35 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         else:
             # A record exists but carries no readable label. Say so explicitly
             # and pass the raw code through: dropping the name key entirely
-            # made the record look like nothing, and the model then reported
-            # the condition as ABSENT (#207). Unreadable is not absent.
-            coding = (code.get("coding") or [{}])[0]
-            raw = coding.get("code")
-            item["name"] = (f"unlabeled record, code {raw}" if raw
-                            else "unlabeled record")
+            # made the model report the condition as ABSENT (#207).
+            # Unreadable is not absent.
+            #
+            # Two distinct situations hide here, and they deserve different
+            # sentences because they have different remedies:
+            #
+            # - A code is present but our label table doesn't know it. That is
+            #   OUR gap; "unlabeled record, code X" is accurate and the code
+            #   gives the person something to look up or ask about.
+            # - Nothing codeable ever existed. Live example (MEDENT,
+            #   2026-08-04): an AllergyIntolerance whose only coding carried
+            #   free text — which redaction rightly strips, because real
+            #   feeds put patient names there. No table can ever fix that
+            #   row. Calling it "unreadable to me" sounds like our failure
+            #   and tells the person nothing; "recorded but not coded at the
+            #   source" is what actually happened and points at the fix
+            #   (ask the clinic to code it / confirm details at the visit).
+            raw = next((c.get("code") for c in (code.get("coding") or [])
+                        if isinstance(c, dict) and c.get("code")), None)
+            if raw:
+                item["name"] = f"unlabeled record, code {raw}"
+            else:
+                item["name"] = "recorded but not coded at the source"
+                item["uncoded"] = True
+                item["note"] = (
+                    "The source system sent this record as free text with no "
+                    "standard code, and free text is removed for privacy. It "
+                    "is still a real record — never treat it as absent; "
+                    "suggest confirming the details with the clinician.")
             item["unreadable"] = True
         if res.get("status"):
             item["status"] = res["status"]
