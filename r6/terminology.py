@@ -20,14 +20,27 @@ label up here — rather than trusting the string the upstream sent — restores
 readability without reopening the leak, because nothing patient-specific can
 enter through a table keyed by code.
 
-Deliberately a plain dict
--------------------------
-Not a terminology service, not a network call, not a cache. A dict lookup cannot
-time out, cannot fail in production, and can be read and corrected by anyone.
-Unknown codes are LEFT UNLABELLED on purpose: the honest "a record is here that
-I could not read" fallback in the agent is far better than a confident guess,
-and `unlabelled_codes()` reports what is missing so the map can grow from
-evidence rather than speculation.
+A plain dict, consulted first
+-----------------------------
+The table below is still a plain dict, and it still answers without a network
+call, a timeout, or a cache. Every read hits it first.
+
+It used to be the ONLY source, on the reasoning that a dict cannot fail in
+production. That reasoning was right and is unchanged; what changed is the
+evidence about coverage. Measured against a live MEDENT import on 2026-08-04:
+**1 of 15 distinct ICD-10-CM codes and 0 of 11 SNOMED codes carried a label**,
+so the agent named one condition and called the other 25 unreadable. A
+121-entry hand-curated map cannot cover a real EHR export.
+
+So a MISS — and only a miss — may now consult `r6/terminology_resolver.py`,
+which is opt-in per deployment, budgeted so it cannot slow a read, and returns
+None on every failure. Read its module docstring before changing it; the three
+properties it must not lose are written down there.
+
+Unknown codes are still LEFT UNLABELLED rather than guessed: the honest "a
+record is here that I could not read" fallback in the agent is far better than
+a confident invention, and `unlabelled_codes()` reports what is missing so the
+static map can still grow from evidence.
 
 Coverage is primary-care-weighted (the records consumers actually connect):
 common chemistry and hematology panels, vitals, the widespread chronic
@@ -37,6 +50,8 @@ conditions, and high-frequency maintenance medications.
 from __future__ import annotations
 
 import collections
+
+from r6 import terminology_resolver as _resolver_mod
 
 # System URIs, canonical form.
 LOINC = "http://loinc.org"
@@ -216,15 +231,30 @@ def canonical_system(system: str | None) -> str:
 def lookup(system: str | None, code: str | None) -> str | None:
     """The server's label for a code, or None if we don't know it.
 
-    None is a valid, useful answer: the caller says "a record is here I could
+    Static table first, then the opt-in runtime resolver on a miss. None is
+    still a valid, useful answer: the caller says "a record is here I could
     not read" rather than inventing a name.
+
+    The resolver is reached through the MODULE attribute, not a bound import,
+    so a test can replace `r6.terminology_resolver.resolve` by path and have
+    this see it.
     """
     if not code:
         return None
-    label = _LABELS.get((canonical_system(system), str(code).strip()))
-    if label is None:
-        _MISSES[(canonical_system(system), str(code).strip())] += 1
-    return label
+    key = (canonical_system(system), str(code).strip())
+    label = _LABELS.get(key)
+    if label is not None:
+        return label
+
+    try:
+        label = _resolver_mod.resolve(*key)
+    except Exception:  # noqa: BLE001 — a label is never worth failing a read
+        label = None
+    if label is not None:
+        return label
+
+    _MISSES[key] += 1
+    return None
 
 
 def unlabelled_codes(limit: int = 50) -> list[tuple[tuple[str, str], int]]:
