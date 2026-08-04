@@ -96,8 +96,45 @@ def test_cdn_asset_is_flagged_because_the_csp_blocks_it():
         _style('<script src="https://cdn.example.com/x.js"></script>'))
 
 
-def test_small_input_font_is_flagged_for_ios_zoom():
-    assert "ios-zoom-font-size" in _rules(_style("  font-size: 14px;"))
+def test_small_font_on_a_form_control_is_flagged_for_ios_zoom():
+    """Updated with the rule. This previously asserted that ANY font-size
+    under 16px was flagged, which is not what iOS does and not what the rule
+    or its message claimed: Safari zooms when a FORM CONTROL under 16px is
+    focused. Flagging every declaration banned each new caption and axis
+    label, while the existing stylesheet is full of 13-14px body copy.
+    """
+    css = "input.tenant {\n  font-size: 14px;\n}"
+    assert "ios-zoom-font-size" in _rules(
+        check_style("a.css", [(2, "  font-size: 14px;")], css))
+
+
+def test_the_selector_is_found_across_a_multi_line_selector_list():
+    css = "textarea,\nselect {\n  font-size: 13px;\n}"
+    assert "ios-zoom-font-size" in _rules(
+        check_style("a.css", [(3, "  font-size: 13px;")], css))
+
+
+def test_an_inline_style_on_an_input_is_flagged():
+    line = '<input class="x" style="font-size:13px">'
+    assert "ios-zoom-font-size" in _rules(_style(line))
+
+
+def test_small_font_on_static_text_is_not_flagged():
+    """MUTATION: drop the selector check -> red.
+
+    iOS does not zoom for static text. A rule that says otherwise makes every
+    caption, axis label and helper line a CI failure — which is how a guard
+    stops being read as signal.
+    """
+    css = ".spark-axis {\n  font-size: 10px;\n}"
+    assert "ios-zoom-font-size" not in _rules(
+        check_style("a.css", [(2, "  font-size: 10px;")], css))
+
+
+def test_a_16px_control_is_fine():
+    css = "input {\n  font-size: 16px;\n}"
+    assert "ios-zoom-font-size" not in _rules(
+        check_style("a.css", [(2, "  font-size: 16px;")], css))
 
 
 def test_motion_without_the_media_query_is_flagged():
