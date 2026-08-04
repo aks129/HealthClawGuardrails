@@ -131,8 +131,6 @@ def test_the_manual_rows_state_what_the_script_cannot_see():
 # this executes them; on SQLite it still catches a wrong column or table name,
 # which is the class of defect that shipped.
 
-import pytest  # noqa: E402
-
 from models import db  # noqa: E402
 
 
