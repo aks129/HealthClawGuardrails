@@ -36,6 +36,7 @@ from r6 import fhir_proxy as _fhir_proxy_mod
 from r6 import health_compliance as _compliance_mod
 from r6 import redaction as _redaction_mod
 from r6 import stepup as _stepup_mod
+from r6.models import AuditEventRecord
 from r6.read_auth import TENANT_SESSION_KEY
 
 logger = logging.getLogger(__name__)
@@ -411,17 +412,17 @@ def _render_tenant_rejected(exc: TenantRejected):
 # §1.3 Audit
 # ---------------------------------------------------------------------------
 
-#: flask.g attribute set by audit() and CLEARED when the session commits or
-#: rolls back. Set means "an audit row is flushed into a transaction nobody has
-#: resolved yet" — the state install_audit_assertions refuses to let a request
-#: end in.
+#: flask.g attribute set when an AuditEventRecord goes through a flush, and
+#: CLEARED when the session commits or rolls back that transaction. Set means
+#: "an audit row is flushed into a transaction nobody has resolved yet" — the
+#: state install_audit_assertions refuses to let a request end in.
 #:
 #: The spec words this condition as "db.session.new or db.session.dirty is
 #: non-empty at teardown". Measured, that condition can never fire: flush()
 #: moves the AuditEvent out of session.new into the persistent identity map,
 #: so both sets are empty for exactly the request this control exists to
-#: catch. A marker cleared by the commit/rollback events is the same property
-#: with a signal that actually observes it. See the PR body.
+#: catch. Reading session.new from inside after_flush is the same property
+#: with a signal that actually observes it. See _install_marker_listeners.
 _AUDIT_PENDING = '_hc_access_audit_pending'
 
 #: flask.g attribute recording that audit() ran at least once in this request,
@@ -473,7 +474,10 @@ def audit(
     sanitizer that silently drops PHI is worse than a reviewer who sees the
     string. Composition of the detail line stays where the facts are.
 
-    Records the flush on ``g`` for install_audit_assertions.
+    Records that an audit was emitted on ``g`` for
+    install_read_audit_assertion. The PENDING marker install_audit_assertions
+    reads is not set here — it is set by the flush that carries the row, so a
+    call that wrote nothing leaves nothing pending (#321).
     """
     tenant_id = tenant.id if isinstance(tenant, Tenant) else tenant
     _install_marker_listeners()
@@ -489,8 +493,15 @@ def audit(
         outcome_detail_code=outcome_detail_code,
     )
     if has_app_context():
-        setattr(g, _AUDIT_PENDING, True)
         setattr(g, _AUDIT_EMITTED, True)
+
+
+def _set_pending_marker(session_, _flush_context, *_args) -> None:
+    """An AuditEventRecord is going to the database in an open transaction."""
+    if not has_app_context():
+        return
+    if any(isinstance(obj, AuditEventRecord) for obj in session_.new):
+        setattr(g, _AUDIT_PENDING, True)
 
 
 def _clear_pending_marker(*_args) -> None:
@@ -499,8 +510,35 @@ def _clear_pending_marker(*_args) -> None:
         g.pop(_AUDIT_PENDING, None)
 
 
+def _clear_on_soft_rollback(_session, previous_transaction=None) -> None:
+    """after_soft_rollback also fires for a SAVEPOINT, which resolves nothing.
+
+    A nested rollback leaves the audit row pending in the OUTER transaction, so
+    clearing on it is a false negative — and it is the exact path
+    record_audit_event takes when the audit write fails (r6/audit.py:105), the
+    function slices 12 and 13 migrate away from.
+
+    Do NOT write this as session.in_transaction(): inside after_commit the
+    session still reports a transaction, so that variant breaks the commit
+    cases. previous_transaction.nested is the discriminator.
+    """
+    if previous_transaction is not None and previous_transaction.nested:
+        return
+    _clear_pending_marker()
+
+
 def _install_marker_listeners() -> None:
-    """Attach the commit/rollback listeners that clear the pending marker.
+    """Attach the session listeners that set and clear the pending marker.
+
+    Set and clear run on the same mechanism on purpose. The marker follows the
+    ROW — an AuditEventRecord in a flush — not the call to audit(). Keying it
+    to the call makes a faked writer that wrote nothing fail its request, with
+    the assertion firing when its property was never violated (#321).
+
+    session.new is read inside after_flush, where SQLAlchemy still holds it in
+    its pre-flush state. At teardown it is empty for exactly the request this
+    control exists to catch, which is why the spec's original condition could
+    never fire.
 
     Idempotent and once per process: SQLAlchemy session events are global, so
     installing per app would stack one listener per Flask app the suite makes.
@@ -509,8 +547,9 @@ def _install_marker_listeners() -> None:
     if _marker_listeners_installed:
         return
     from sqlalchemy import event
+    event.listen(db.session, 'after_flush', _set_pending_marker)
     event.listen(db.session, 'after_commit', _clear_pending_marker)
-    event.listen(db.session, 'after_soft_rollback', _clear_pending_marker)
+    event.listen(db.session, 'after_soft_rollback', _clear_on_soft_rollback)
     _marker_listeners_installed = True
 
 
@@ -548,13 +587,20 @@ def install_audit_assertions(app) -> None:
 
     Installed as a teardown_request, active only when app.config['TESTING']
     or HC_ASSERT_AUDIT_COMMITTED is set. It fires when g still carries the
-    pending marker at teardown — the signature of a handler that called
-    audit() and then returned without commit() or rollback(). A rollback path
+    pending marker at teardown — the signature of a handler that flushed an
+    AuditEvent and returned without commit() or rollback(). An outer rollback
     clears the marker and passes, correctly: a refused write should carry no
-    audit row.
+    audit row. A SAVEPOINT rollback does not clear it, because it resolves
+    nothing.
 
     Without this, moving 41 sites from an ambient commit to a caller-owned
     commit is 41 chances to drop an audit row behind a 201.
+
+    WHAT IT DOES NOT CATCH (see docs/2026-08-03-audit-assertion-ruling.md for
+    the full list of seven): a handler that flushes an audit row, rolls the
+    transaction back, and still answers 2xx. The marker clears and this passes,
+    though the audit row is gone from behind a success. That needs a second
+    control, not a change to this one.
     """
     _install_marker_cleanup(app)
     _install_marker_listeners()
