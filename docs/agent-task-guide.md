@@ -175,6 +175,21 @@ auditor.
 - **A stale branch can silently drop work.** If your branch predates a squash
   merge of the same feature, merging can revert files. Rebase onto current
   `origin/main` and confirm the files you expect are present before pushing.
+- **A request body is parsed before your handler runs.** `enforce_human_in_loop`
+  (`r6/health_compliance.py`) is a `before_request` hook on `r6_blueprint`, and
+  it parses every non-exempt POST/PUT body ahead of every handler. A guard you
+  add *inside* a handler is therefore unreachable for anything the parse itself
+  raises. This produced two unauthenticated 500 levers — a deep-nesting
+  `RecursionError` and a non-object body `AttributeError` — and both times the
+  handler-level fix looked correct, passed review, and changed nothing. If you
+  are hardening a write path against a malformed body, check what runs *above*
+  the handler first.
+- **A strict-xfail row in `tests/test_write_guard_matrix.py` goes red when you
+  FIX the defect it pins.** That is deliberate: a fix must not land while the
+  table still describes the route as broken. The consequence is that a fix PR
+  updates its own matrix row in the *same* PR. Three security PRs skipped that
+  and left `main` red for a day, each of them individually green. The matrix
+  must report **0 failed and 0 xpassed** — an XPASS is a failure, not a pass.
 
 ---
 
