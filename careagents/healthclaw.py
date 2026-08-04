@@ -153,6 +153,18 @@ class HealthClawClient:
                 r.status_code)
         return r.json()
 
+    def read(self, tenant: str, resource_type: str, resource_id: str) -> dict:
+        """Read one resource by id, through the same redact+audit gate as
+        search. Exists for reference-chasing (MedicationRequest → Medication);
+        every call is a separately audited access, which is the point."""
+        r = self.http.get(f"{self.fhir}/{resource_type}/{resource_id}",
+                          headers=self._headers(tenant), timeout=self.timeout)
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"read {resource_type} failed ({r.status_code})",
+                r.status_code)
+        return r.json()
+
     def interpret_labs(self, tenant: str) -> dict:
         """POST $interpret; returns {'summary','consumer','disclaimer'}."""
         r = self.http.post(f"{self.fhir}/Observation/$interpret", json={},
