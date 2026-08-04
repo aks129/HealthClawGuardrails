@@ -51,6 +51,30 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.
 # truncated or replaced.
 _RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,255}$')
 
+# `_ingest_one` outcomes that mean WE REFUSED DATA, as opposed to `skipped`,
+# which means "a resource type this store does not keep" — routine, expected,
+# and not news. Both call sites used to collapse the two, so a real export
+# carrying an id outside the charset would be dropped, counted as a skip, and
+# reported as a successful import with nothing to page on (#293).
+REFUSED_OUTCOMES = frozenset({'invalid_id', 'forbidden'})
+
+
+def log_refusal(log, where: str, tenant_id: str, resource: dict,
+                result: str) -> None:
+    """Record that a resource was refused — never WHICH resource.
+
+    The refused id is the one field that must not appear. It is refused
+    precisely because it fell outside `[A-Za-z0-9-.]`, and the shapes that
+    fail that test in the wild are names, dates and MRNs. Logging it to
+    explain the refusal would publish the thing the refusal exists to stop.
+
+    One function rather than two call sites, because that invariant is what
+    diverges: three callers of `_ingest_one` already handle failure three
+    different ways (#306).
+    """
+    log.warning('%s refused a resource: tenant=%s type=%s reason=%s',
+                where, tenant_id, resource.get('resourceType', '?'), result)
+
 
 def _is_fasten_download_host(url: str) -> bool:
     """True only when *url* is an https link whose host is fastenhealth.com or
@@ -98,6 +122,7 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
 
         ingested = 0
         skipped = 0
+        refused = 0
         failed = 0
         curatr_eligible_ids: list[tuple[str, str]] = []  # (resource_type, resource_id)
 
@@ -133,6 +158,10 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                                 rt = resource.get('resourceType', '')
                                 if rt in _CURATR_ELIGIBLE and rid:
                                     curatr_eligible_ids.append((rt, rid))
+                            elif result in REFUSED_OUTCOMES:
+                                refused += 1
+                                log_refusal(logger, f'Fasten job {job.task_id}',
+                                            tenant_id, resource, result)
                             else:
                                 skipped += 1
                         except json.JSONDecodeError:
@@ -176,12 +205,14 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                 outcome='success',
                 detail=(
                     f'job={job.task_id} '
-                    f'ingested={ingested} skipped={skipped} failed={failed}'
+                    f'ingested={ingested} skipped={skipped} '
+                    f'refused={refused} failed={failed}'
                 ),
             )
             logger.info(
-                'Fasten job %s complete: ingested=%d skipped=%d failed=%d',
-                job.task_id, ingested, skipped, failed,
+                'Fasten job %s complete: ingested=%d skipped=%d '
+                'refused=%d failed=%d',
+                job.task_id, ingested, skipped, refused, failed,
             )
 
             # Optional: run Curatr quality scan on clinical resources. Best

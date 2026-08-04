@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 from markupsafe import escape
 
+from models import db
 from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import record_audit_event
 
@@ -245,31 +246,55 @@ def ingest():
 
 # ── Background ingest ─────────────────────────────────────────────────────────
 
-def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str) -> None:
-    from r6.fasten.ingester import _ingest_one  # reuse existing ingest logic
+def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
+                   job_id: str) -> dict:
+    """Ingest a bundle in the background. Returns the outcome counts.
+
+    Returned rather than only logged so the counts are assertable — the
+    silence around a refusal was the defect (#293), and a count no test can
+    read is the next version of it.
+    """
+    import r6.fasten.ingester as ingester
 
     with app.app_context():
-        ingested = skipped = failed = 0
+        ingested = skipped = refused = failed = 0
         curatr_eligible_ids: list[tuple[str, str]] = []
 
         for resource in entries:
             try:
-                result, rid = _ingest_one(resource, tenant_id)
+                result, rid = ingester._ingest_one(resource, tenant_id)
                 if result == 'ok':
                     ingested += 1
                     rt = resource.get('resourceType', '')
                     if rt in _CURATR_ELIGIBLE and rid:
                         curatr_eligible_ids.append((rt, rid))
+                elif result in ingester.REFUSED_OUTCOMES:
+                    refused += 1
+                    ingester.log_refusal(logger, f'SHC job {job_id}',
+                                         tenant_id, resource, result)
                 else:
                     skipped += 1
             except Exception as exc:
                 failed += 1
+                # CRITICAL: roll back the failed flush so the session isn't
+                # poisoned. Without this, one bad resource makes every
+                # SUBSEQUENT resource fail with "transaction has been rolled
+                # back", wedging the rest of the batch — found live on the
+                # Fasten path 2026-07-08, where a single over-length id cost
+                # all 250 resources. This path is the one that never got the
+                # fix (#306, S-4).
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
                 # Log the exception CLASS only — str(exc) on a DBAPIError
                 # serialises the failing statement and bound parameters (the
                 # FHIR record), leaking PHI into logs (#306, S-4).
                 logger.warning('SHC ingest error (job=%s): %s',
                                job_id, type(exc).__name__)
 
+        counts = {'ingested': ingested, 'skipped': skipped,
+                  'refused': refused, 'failed': failed}
         record_audit_event(
             event_type='shc_import_complete',
             agent_id=f'shc-{source}',
@@ -277,12 +302,14 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
             outcome='success',
             detail=(
                 f'job={job_id} source={source} '
-                f'ingested={ingested} skipped={skipped} failed={failed}'
+                f'ingested={ingested} skipped={skipped} '
+                f'refused={refused} failed={failed}'
             ),
         )
         logger.info(
-            'SHC job %s complete: source=%s ingested=%d skipped=%d failed=%d',
-            job_id, source, ingested, skipped, failed,
+            'SHC job %s complete: source=%s ingested=%d skipped=%d '
+            'refused=%d failed=%d',
+            job_id, source, ingested, skipped, refused, failed,
         )
 
         curatr_issues = 0
@@ -306,6 +333,11 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
             ]
             if skipped:
                 msg_lines.append(f'• {skipped} skipped')
+            # A refusal is data the person did NOT get. Folding it into
+            # "skipped" told them a record they are missing was a record we
+            # were never going to store.
+            if refused:
+                msg_lines.append(f'• {refused} refused (unreadable id)')
             if failed:
                 msg_lines.append(f'• {failed} failed')
             if curatr_issues:
@@ -314,3 +346,5 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str, job_id: str)
             notify_tenant(tenant_id, '\n'.join(msg_lines))
         except Exception as exc:
             logger.warning('SHC notify push failed: %s', type(exc).__name__)
+
+        return counts
