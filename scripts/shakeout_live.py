@@ -54,6 +54,13 @@ G, R, Y, D, X = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[0m"
 # truthfully-reported non-defect after PR #345.
 DEFECT_ERROR_CLASSES = ("LLMError",)
 
+# S5 looks at a WINDOW, not all history. Scored over all time, a single
+# already-fixed failure fails the card forever, and a card that cannot return
+# to green stops being read — which is how a real regression gets missed. The
+# first live run hit exactly this: one pre-#345 LLMError from a provider 429,
+# fixed hours earlier, still failing the row.
+RUN_HEALTH_WINDOW_HOURS = 24
+
 
 def _connect(uri: str):
     import psycopg2  # deferred: the container has it; a laptop may not
@@ -73,9 +80,9 @@ def _one(cur, sql: str, params: tuple):
 def check_s1_labs_interpreted(cur, tenant: str) -> tuple[str, str]:
     """S1: the most recent labs $interpret actually interpreted something."""
     row = _one(cur, """
-        SELECT detail, recorded_at FROM audit_events
+        SELECT detail, recorded FROM audit_events
         WHERE tenant_id = %s AND detail LIKE 'labs $interpret;%%'
-        ORDER BY recorded_at DESC LIMIT 1
+        ORDER BY recorded DESC LIMIT 1
     """, (tenant,))
     if row is None:
         return "SKIP", "no $interpret call recorded yet — ask 'what do my labs say?' first"
@@ -114,12 +121,14 @@ def check_s5_run_health(cur, tenant: str) -> tuple[str, str]:
     """
     cur.execute("""
         SELECT status, coalesce(error_class, ''), count(*)
-        FROM agent_runs WHERE tenant_id = %s
+        FROM agent_runs
+        WHERE tenant_id = %s AND created_at > now() - make_interval(hours => %s)
         GROUP BY status, error_class
-    """, (tenant,))
+    """, (tenant, RUN_HEALTH_WINDOW_HOURS))
     rows = cur.fetchall()
     if not rows:
-        return "SKIP", "no agent runs for this tenant yet"
+        return "SKIP", (f"no agent runs in the last {RUN_HEALTH_WINDOW_HOURS}h "
+                        "— ask the agent something first")
     total = sum(r[2] for r in rows)
     defects = {r[1]: r[2] for r in rows if r[1] in DEFECT_ERROR_CLASSES}
     completed = sum(r[2] for r in rows if r[0] == "completed")
@@ -133,8 +142,8 @@ def check_s5_run_health(cur, tenant: str) -> tuple[str, str]:
         return "FAIL", (f"{sum(defects.values())}/{total} runs failed with a "
                         f"defect-class error: {defects} — read the worker log "
                         f"before assuming a provider blip{note}")
-    return "PASS", (f"{completed}/{total} runs completed; no defect-class "
-                    f"failures{note}")
+    return "PASS", (f"{completed}/{total} runs in {RUN_HEALTH_WINDOW_HOURS}h "
+                    f"completed; no defect-class failures{note}")
 
 
 def check_s8_tool_rounds(cur, tenant: str) -> tuple[str, str]:
