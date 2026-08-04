@@ -28,6 +28,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
                                  new_binding_code)
 from careagents import advisors, connectors
 from careagents import labs_timeline as labs_timeline_mod
+from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
@@ -662,8 +663,8 @@ def create_app(config: Config | None = None,
         if kind == "agent.text":
             return {"type": "text", "text": payload.get("text") or ""}
         if kind == "agent.error":
-            return {"type": "error", "text": payload.get("text") or (
-                "Something went wrong on our side.")}
+            return {"type": "error",
+                    "text": payload.get("text") or GENERIC_FAILURE_TEXT}
         return None
 
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
@@ -1066,10 +1067,9 @@ def create_app(config: Config | None = None,
                 extras.append(
                     f"Your signed document is ready: {event['url']}")
             elif event.get("type") == "error":
-                parts.append(event.get("text") or (
-                    "Something went wrong on our side."))
+                parts.append(event.get("text") or GENERIC_FAILURE_TEXT)
         reply = "\n\n".join([*parts, *extras]).strip() or (
-            "Something went wrong on our side. Please try again.")
+            GENERIC_FAILURE_TEXT + " Please try again.")
         return jsonify({"run_id": run_id, "status": page.get("status"),
                         "reply": reply})
 

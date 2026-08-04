@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 
 from careagents import llm
 from careagents.accounts import AccountService
-from careagents.agent import (MAX_TOOL_ROUNDS, TOOL_LABELS, TOOLS,
+from careagents.agent import (MAX_TOOL_ROUNDS,
+                              TOOL_LABELS, TOOLS,
+                              failure_text as agent_failure_text,
                               _execute_tool, _trim_history)
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
@@ -56,25 +58,11 @@ def _error_class(exc: Exception) -> str:
     return name if name and name[0].isalpha() else "WorkerError"
 
 
-GENERIC_FAILURE_TEXT = "Something went wrong on our side."
-RATE_LIMITED_TEXT = (
-    "I'm getting more requests than I can answer right now. Nothing is wrong "
-    "with your records — try asking again in a moment.")
-
-
-def _failure_text(exc: Exception) -> str:
-    """What the person reads when a run fails.
-
-    A rate limit is not a defect, and saying "something went wrong on our
-    side" for one is two failures at once: it invites a bug report for a bug
-    that does not exist, and it leaves a patient wondering whether their
-    health records are broken. Reported live on 2026-08-04 — a "give me a
-    timeline of my cholesterol results" run died on a provider HTTP 429 and
-    the patient saw only the generic message.
-    """
-    if isinstance(exc, llm.LLMRateLimited):
-        return RATE_LIMITED_TEXT
-    return GENERIC_FAILURE_TEXT
+# One source of truth for patient-facing failure text — careagents/agent.py
+# owns it so the worker, the streamed chat, and the SMS collapse cannot
+# drift apart again. Re-exported here because this module's callers and
+# tests reach it by this path.
+_failure_text = agent_failure_text
 
 
 class LeaseHeartbeat:

@@ -29,6 +29,30 @@ MAX_TOOL_ROUNDS = 6
 # that person failed until the process restarted.
 MAX_HISTORY_MESSAGES = 40
 
+# The one place patient-facing failure text is decided. Every surface —
+# durable worker, streamed browser chat, SMS/iMessage collapse, the app's
+# empty-event fallbacks — imports these rather than carrying its own copy;
+# four sites had diverging literals, and one of them was yielding str(exc),
+# which showed a patient "model call failed (HTTP 429)" verbatim.
+GENERIC_FAILURE_TEXT = "Something went wrong on our side."
+RATE_LIMITED_TEXT = (
+    "I'm getting more requests than I can answer right now. Nothing is wrong "
+    "with your records — try asking again in a moment.")
+
+
+def failure_text(exc: Exception) -> str:
+    """What the person reads when a turn fails.
+
+    A rate limit is not a defect, and saying "something went wrong on our
+    side" for one is two failures at once: it invites a bug report for a bug
+    that does not exist, and it leaves a patient wondering whether their
+    health records are broken. Everything else stays generic on purpose —
+    exception internals are never patient-facing text.
+    """
+    if isinstance(exc, llm.LLMRateLimited):
+        return RATE_LIMITED_TEXT
+    return GENERIC_FAILURE_TEXT
+
 
 def _trim_history(history: list) -> None:
     """Drop the oldest turns in place, cutting only at a safe boundary.
@@ -342,7 +366,7 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
         try:
             turn = llm.complete(cfg, system, history, TOOLS)
         except llm.LLMError as exc:
-            yield {"type": "error", "text": str(exc)}
+            yield {"type": "error", "text": failure_text(exc)}
             return
 
         if not turn.tool_calls:
@@ -384,7 +408,7 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             try:
                 final = llm.complete(cfg, system, history, [])
             except llm.LLMError as exc:
-                yield {"type": "error", "text": str(exc)}
+                yield {"type": "error", "text": failure_text(exc)}
                 return
             history.append({"role": "assistant", "content": final.text})
             yield {"type": "text", "text": final.text}
@@ -408,7 +432,7 @@ def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
         if kind == "text" and ev.get("text"):
             parts.append(ev["text"])
         elif kind == "error":
-            return ev.get("text") or "Something went wrong on our side."
+            return ev.get("text") or GENERIC_FAILURE_TEXT
         elif kind == "card" and ev.get("kind") == "review":
             aid = ev.get("action_id", "")
             link = (f"{base}/review/{agent_id}/{aid}"
