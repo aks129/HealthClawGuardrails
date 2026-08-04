@@ -34,7 +34,10 @@
       <p>Hi — I'm {{ me.name }}. I found
       <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>,
       <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>,
-      and <strong>{{ summary_counts.labs }} lab result{{ 's' if summary_counts.labs != 1 else '' }}</strong>
+      {# "test results & measurements", not "lab results": this counts every
+         Observation — vitals and wearable readings included — and the number
+         is now a true total, so the label has to be true too. #}
+      and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong>
       in your records. Want me to walk through what they show?</p>
     </div>
     <div class="starters" id="starters">

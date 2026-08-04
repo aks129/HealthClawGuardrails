@@ -3102,3 +3102,56 @@ def test_connection_action_buttons_are_styled_and_thumb_sized():
         assert sel in _CSS, sel
     shared = _CSS.split(".conn-refresh, .conn-disconnect, .conn-delete {")[1]
     assert "min-height: 44px" in shared.split("}")[0]
+
+
+def test_the_first_visit_greeting_counts_totals_not_the_first_page(
+        cfg, svc, monkeypatch):
+    """MUTATION: count len(entry) again -> red.
+
+    A searchset's `entry` is one PAGE (the server caps it at 50), so
+    len(entry) reported the page size as the person's total. A real import
+    greeted its patient with "50 conditions ... 50 lab results" when the true
+    numbers were 52 and 186 — both wrong, both capped at exactly the page
+    limit, which is why it read as plausible on demo-sized data for six
+    weeks. The greeting must ask for `_summary=count` and use `total`,
+    the same contract as HealthClawClient.record_count.
+    """
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+
+    seen = []
+    real_totals = {"Condition": 52, "MedicationRequest": 4, "Observation": 186}
+
+    def search(tenant_id, resource_type, params=None):
+        seen.append((resource_type, dict(params or {})))
+        if (params or {}).get("_summary") == "count":
+            return {"total": real_totals.get(resource_type, 0)}
+        # A full page of 50 — what len(entry) used to mistake for the total.
+        return {"total": real_totals.get(resource_type, 0),
+                "entry": [{"resource": {"resourceType": resource_type}}] * 50}
+
+    fake.search = search
+
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert "52 conditions" in page
+    assert "4 medications" in page
+    assert "186 test results" in page
+    assert "50 condition" not in page
+    for _rt, params in seen:
+        assert params.get("_summary") == "count", (
+            "the greeting pulled a full page just to count it — resources "
+            "crossed the boundary where only totals should")
+
+
+def test_a_broken_count_falls_back_to_the_generic_greeting(
+        cfg, svc, monkeypatch):
+    """A counting failure must degrade to the generic greeting, not 500
+    the first page a new user ever sees."""
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+
+    def search(tenant_id, resource_type, params=None):
+        raise HealthClawError("search failed (503)", 503)
+
+    fake.search = search
+    r = c.get(f"/chat?agent={agent_id}")
+    assert r.status_code == 200
+    assert b"in your records" not in r.data
