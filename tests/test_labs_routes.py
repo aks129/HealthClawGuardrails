@@ -1,6 +1,8 @@
 # tests/test_labs_routes.py
 import json
 
+from r6.labs.routes import STORED_OBSERVATION_CAP as _STORED_CAP
+
 
 def _obs(loinc, value, unit):
     return {"resourceType": "Observation", "status": "final",
@@ -72,3 +74,101 @@ def test_interpret_parameters_subject_string_is_graceful(client, tenant_headers)
               "parameter": [{"name": "subject", "valueReference": "Patient/x"}]}
     r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers, json=params)
     assert r.status_code == 200
+
+
+# --- the CareAgents call shape -------------------------------------------
+#
+# careagents/healthclaw.py:interpret_labs posts an EMPTY body and no ?subject:
+#
+#     self.http.post(f"{self.fhir}/Observation/$interpret", json={}, ...)
+#
+# Reported live: an agent greeted the user with "I found ... 50 lab results"
+# and then answered "What do my labs say?" with "I don't see any recent blood
+# work results". Both statements came from the same tenant in the same minute.
+# The greeting counts a Observation search; get_labs posts this empty body,
+# which matched no branch of _observations_from_request and interpreted
+# nothing. The tenant held 186 Observations, 179 with a valueQuantity and 4
+# carrying LOINC 2093-3 (total cholesterol) — a code the interpreter knows.
+
+def _stored_obs(app, tenant_id, rid, loinc, value, unit):
+    from r6.models import R6Resource, db
+    with app.app_context():
+        db.session.add(R6Resource(
+            resource_type="Observation",
+            resource_json=json.dumps({
+                "resourceType": "Observation", "id": rid, "status": "final",
+                "code": {"coding": [{"system": "http://loinc.org",
+                                     "code": loinc}]},
+                "subject": {"reference": "Patient/p1"},
+                "valueQuantity": {"value": value, "unit": unit}}),
+            resource_id=rid, tenant_id=tenant_id))
+        db.session.commit()
+
+
+def test_empty_body_interprets_the_tenants_stored_observations(
+        app, client, tenant_headers, tenant_id):
+    """MUTATION: drop the no-input fallback -> total 0 -> red.
+
+    This is the exact call CareAgents makes. Before the fix it returned
+    total=0 with records sitting in the tenant, and the agent told the
+    patient their cholesterol results were not there.
+    """
+    _stored_obs(app, tenant_id, "chol-1", "2093-3", 244, "mg/dL")
+    _stored_obs(app, tenant_id, "k-1", "2823-3", 4.2, "mmol/L")
+
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json={})
+
+    assert r.status_code == 200
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 2, (
+        "an empty $interpret body interpreted nothing while the tenant held "
+        "stored Observations — this is the live get_labs bug")
+    assert "2093-3" not in json.dumps(summary), "summary must not echo raw codes"
+
+
+def test_no_body_at_all_interprets_the_tenants_stored_observations(
+        app, client, tenant_headers, tenant_id):
+    """A POST with no JSON body at all must behave like an empty one."""
+    _stored_obs(app, tenant_id, "chol-2", "2093-3", 244, "mg/dL")
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers)
+    assert r.status_code == 200
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 1
+
+
+def test_the_stored_fallback_is_bounded(app, client, tenant_headers, tenant_id):
+    """MUTATION: remove the cap -> red.
+
+    The fallback reads every Observation the tenant owns. Unbounded, one chat
+    message would load a full import into memory; the live tenant already
+    holds 186 and an Epic tenant holds far more.
+    """
+    for i in range(_STORED_CAP + 5):
+        _stored_obs(app, tenant_id, f"cap-{i}", "2823-3", 4.2, "mmol/L")
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json={})
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == _STORED_CAP
+
+
+def test_an_explicit_body_still_wins_over_the_stored_fallback(
+        app, client, tenant_headers, tenant_id):
+    """The fallback must not silently widen an explicit request."""
+    _stored_obs(app, tenant_id, "stored-1", "2823-3", 4.2, "mmol/L")
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers,
+                    json={"resourceType": "Bundle", "type": "collection",
+                          "entry": [{"resource": _obs("2345-7", 520, "mg/dL")}]})
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 1 and summary["critical"] == 1
+
+
+def test_the_stored_fallback_is_tenant_scoped(
+        app, client, tenant_headers, tenant_id):
+    """The fallback selects by tenant; another tenant's rows must not appear."""
+    _stored_obs(app, "someone-elses-tenant", "theirs-1", "2093-3", 244, "mg/dL")
+    _stored_obs(app, tenant_id, "mine-1", "2823-3", 4.2, "mmol/L")
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json={})
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 1
