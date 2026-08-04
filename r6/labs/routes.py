@@ -57,6 +57,16 @@ def register_labs_routes(blueprint, deps):
         observations and told patients their labs were not in their records
         while the tenant held hundreds.
 
+        COMMITTED BEHAVIOUR, not an accident of that fix (ruling Q1,
+        docs/2026-08-04-shakeout-rulings.md). The empty form means "interpret
+        everything I am allowed to see", and it is safe to leave implicit
+        only because the caller already passed tenant read-auth and this
+        selects WHERE tenant_id = ? — there is no wider set it could reach.
+        Do not make the same argument for a write path or a cross-tenant
+        search. Three obligations come with the ruling and are enforced
+        below and in tests: junk input is ignored rather than widened, the
+        fallback is capped, and the response reports how much it interpreted.
+
         "Nothing supplied" is deliberately NOT the same as "something
         unusable". A junk body (a bare array, a Parameters with an
         unparseable subject) still counts as ignored input rather than

@@ -103,7 +103,15 @@ def check_s3_medication_reads(cur, tenant: str) -> tuple[str, str]:
 
 
 def check_s5_run_health(cur, tenant: str) -> tuple[str, str]:
-    """S5: recent runs complete, and failures carry an honest class."""
+    """S5: recent runs complete, and failures carry an honest class.
+
+    Throttling is reported but does not fail the row (ruling Q3,
+    docs/2026-08-04-shakeout-rulings.md). Fail-fast-and-honest was chosen
+    over parking a run, and the price of that choice is that throttling must
+    stay VISIBLE — otherwise "the provider throttles us occasionally" and
+    "the provider is throttling us constantly" look identical from here, and
+    the ruling's revisit condition could never be observed.
+    """
     cur.execute("""
         SELECT status, coalesce(error_class, ''), count(*)
         FROM agent_runs WHERE tenant_id = %s
@@ -115,11 +123,18 @@ def check_s5_run_health(cur, tenant: str) -> tuple[str, str]:
     total = sum(r[2] for r in rows)
     defects = {r[1]: r[2] for r in rows if r[1] in DEFECT_ERROR_CLASSES}
     completed = sum(r[2] for r in rows if r[0] == "completed")
+    throttled = sum(r[2] for r in rows if r[1] == "LLMRateLimited")
+    note = ""
+    if throttled:
+        share = throttled * 100 // max(total, 1)
+        note = (f"; {throttled}/{total} ({share}%) rate-limited — reported, "
+                "not a defect. Revisit Q3 if this share is material")
     if defects:
         return "FAIL", (f"{sum(defects.values())}/{total} runs failed with a "
                         f"defect-class error: {defects} — read the worker log "
-                        "before assuming a provider blip")
-    return "PASS", f"{completed}/{total} runs completed; no defect-class failures"
+                        f"before assuming a provider blip{note}")
+    return "PASS", (f"{completed}/{total} runs completed; no defect-class "
+                    f"failures{note}")
 
 
 def check_s8_tool_rounds(cur, tenant: str) -> tuple[str, str]:
