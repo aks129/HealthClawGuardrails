@@ -27,6 +27,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  new_binding_code)
 from careagents import advisors, connectors
+from careagents import labs_timeline as labs_timeline_mod
 from careagents.config import Config
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
@@ -813,6 +814,34 @@ def create_app(config: Config | None = None,
             pass
         return jsonify({"status": status.get("status"),
                         "delivery_link": outcome.get("delivery_link")})
+
+    @app.get("/api/labs/timeline")
+    @login_required
+    def labs_timeline():
+        """Per-analyte lab series for the chat's timeline card.
+
+        Same-origin and session-authenticated on purpose. The equivalent MCP
+        App is served by HealthClaw, and embedding it here would mean either
+        a cross-origin iframe with no credentials (a guaranteed 401) or a
+        step-up token in a URL. Neither is worth it: this process already
+        holds the credentials, so it fetches server-side and the browser
+        never sees one.
+        """
+        acct = current_account()
+        agent_id = request.args.get("agent", "")
+        ctx = svc.get_agent_context(acct.id, agent_id)
+        if not ctx:
+            return jsonify({"error": "unknown agent"}), 404
+        try:
+            labs = hc.interpret_labs(ctx["tenant"])
+        except HealthClawError:
+            return jsonify({"error": "labs unavailable"}), 502
+        keys = labs_timeline_mod.keys_for_topic(request.args.get("topic"))
+        return jsonify({
+            "series": labs_timeline_mod.build_series(labs.get("bundle") or {},
+                                                     keys),
+            "disclaimer": labs.get("disclaimer") or "",
+        })
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 

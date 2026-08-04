@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 
-from careagents import llm
+from careagents import labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 
 MAX_TOOL_ROUNDS = 6
@@ -59,6 +59,19 @@ TOOLS = [
      "description": ("Recent lab results with plain-language reference-range "
                      "interpretation (what's normal, what's flagged)."),
      "parameters": {"type": "object", "properties": {}, "required": []}},
+    {"name": "show_lab_timeline",
+     "description": ("Show a CHART of how a lab value has changed over time. "
+                     "Use for any 'timeline', 'trend', 'over time', 'history' "
+                     "or 'has it improved' question about a lab (cholesterol, "
+                     "LDL, HDL, triglycerides, A1c, glucose). The chart "
+                     "appears in the conversation, so describe what it shows "
+                     "rather than listing every number."),
+     "parameters": {"type": "object", "properties": {
+         "topic": {"type": "string",
+                   "description": ("What the person asked about, e.g. "
+                                   "'cholesterol' or 'a1c'. Omit to show "
+                                   "every lab series on file.")},
+     }, "required": []}},
     {"name": "get_care_gaps",
      "description": ("Preventive screenings and immunizations that are due "
                      "or coming due (USPSTF/ACIP/ADA guidance)."),
@@ -88,6 +101,7 @@ TOOLS = [
 TOOL_LABELS = {
     "get_health_summary": "Reading your records — redacted view",
     "get_labs": "Interpreting your labs",
+    "show_lab_timeline": "Charting your results over time",
     "get_care_gaps": "Checking preventive care gaps",
     "search_records": "Searching your records",
     "start_intake_form": "Preparing your intake form",
@@ -255,6 +269,33 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         labs = hc.interpret_labs(tenant)
         return json.dumps({"consumer_summary": labs["consumer"],
                            "disclaimer": labs["disclaimer"][:200]})
+    if name == "show_lab_timeline":
+        topic = str(args.get("topic") or "")
+        labs = hc.interpret_labs(tenant)
+        keys = labs_timeline.keys_for_topic(topic)
+        series = labs_timeline.build_series(labs.get("bundle") or {}, keys)
+        if series:
+            events.append({"type": "card", "kind": "lab-timeline",
+                           "topic": topic})
+        # The model gets SHAPE, not the readings: how many series, how many
+        # points, whether a trend is even plottable. The chart carries the
+        # numbers. Handing them over too would invite the model to restate
+        # every value and, worse, to narrate a direction from a single point.
+        return json.dumps({
+            "chart_shown": bool(series),
+            "series": [{"name": s["name"], "readings": len(s["readings"]),
+                        "trend_plottable": s["trend_plottable"]}
+                       for s in series],
+            "note": ("A chart is now visible to the person. Describe what it "
+                     "shows in one or two sentences and invite a question; do "
+                     "not list every value. A series with trend_plottable "
+                     "false has a single reading — say so, and never describe "
+                     "it as rising or falling."
+                     if series else
+                     "No lab series matched in the CONNECTED records. That is "
+                     "not the same as the person never having had this test — "
+                     "say so, and do not report it as absent."),
+        })
     if name == "get_care_gaps":
         gaps = hc.care_gaps(tenant)
         return json.dumps({"consumer_summary": gaps["consumer"]})
