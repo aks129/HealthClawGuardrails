@@ -6,13 +6,16 @@ Production deployments should use Redis-backed rate limiting.
 """
 
 import hashlib
+import hmac
 import logging
 import os
 import threading
 import time
 from typing import Any
-from flask import g, request, jsonify
+from flask import g, request, jsonify, session
+from r6.read_auth import TENANT_SESSION_KEY
 from r6.runtime_config import resolve_app_env
+from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
 
@@ -86,20 +89,72 @@ def _client_ip():
     return request.remote_addr or 'unknown'
 
 
+def _tenant_claim_is_authenticated(tenant_id):
+    """True iff this request PROVED the tenant it claims.
+
+    Deliberately narrow, and deliberately not `authorize_tenant_read`: that
+    helper returns the tenant unchanged when READ_AUTH_ENABLED is unset, which
+    would hand the bucket key straight back to an unauthenticated header on
+    any deployment that has not flipped the flag. A rate limiter must not
+    inherit a rollout switch.
+
+    Any failure to verify answers False — an unverifiable claim is treated
+    exactly like no claim at all.
+
+    The internal check here is STRICTER than `internal_secret_authorized()`,
+    which answers True outside production when no secret is configured. That
+    dev-open default is right for operator surfaces (it keeps local work and
+    the test harness usable) and wrong here: it would silently restore
+    header-keying on every non-production deployment, and — worse — make this
+    guard untestable, since the suite runs with no secret set. A limiter that
+    is only armed in production is a limiter nobody can prove works.
+    """
+    mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
+    if mint_secret and hmac.compare_digest(
+            request.headers.get('X-Internal-Secret', ''), mint_secret):
+        return True
+    if session.get(TENANT_SESSION_KEY) == tenant_id:
+        return True
+    auth = (request.headers.get('Authorization') or '').strip()
+    bearer = auth[7:].strip() if auth.lower().startswith('bearer ') else ''
+    token = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
+    if not token:
+        return False
+    try:
+        # Destructure BOTH values — a truthiness test on this tuple is always
+        # True and is a documented auth-bypass shape in this codebase.
+        valid, _error = validate_step_up_token(token, tenant_id,
+                                               require_scope=None)
+    except Exception:  # noqa: BLE001 — never fail a request from the limiter
+        return False
+    return bool(valid)
+
+
 def rate_limit_key():
     """
     Resolve the bucket key for the current request.
 
-    Prefers the X-Tenant-Id header so authenticated traffic is throttled per
-    tenant. When no tenant header is present (e.g. provider webhook callbacks
-    at /r6/actions/callback/<provider>, which carry no tenant), key by client
-    IP instead of dumping every untenanted request into one shared 'anonymous'
-    bucket — that shared bucket would let one source exhaust the limit for all
-    untenanted callers. The IP key is prefixed so it can never collide with a
-    real tenant id.
+    Per tenant ONLY when the request proved that tenant; otherwise per client
+    IP. X-Tenant-Id is caller-chosen, so keying on it unconditionally meant
+    the limit was opt-out: measured on a live deployment (#339), 150 requests
+    with a constant tenant header got 30 throttled, and the same 150 with a
+    varying header got ZERO throttled while opening 150 buckets. The limiter
+    both failed to limit and became its own memory-growth vector.
+
+    Authenticated per-tenant keying is kept because it is the useful case and
+    is now safe: a caller that proved the tenant cannot forge a different one.
+    It also protects the legitimate high-volume caller — CareAgents reads
+    /r6/fhir for many tenants from a single egress IP, and collapsing that to
+    one IP bucket would throttle real users to fix an attacker.
+
+    Untenanted traffic (provider webhook callbacks at
+    /r6/actions/callback/<provider>) keys by IP for the original reason: a
+    shared 'anonymous' bucket would let one source exhaust the limit for
+    every other untenanted caller. The IP key stays prefixed so it can never
+    collide with a real tenant id.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
-    if tenant_id:
+    tenant_id = (request.headers.get('X-Tenant-Id') or '').strip()
+    if tenant_id and _tenant_claim_is_authenticated(tenant_id):
         return tenant_id
     return f'ip:{_client_ip()}'
 

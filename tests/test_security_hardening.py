@@ -117,10 +117,29 @@ def test_payload_cap_configured_at_least_5mb(client):
 # ---------------------------------------------------------------------------
 # 4. Rate-limit keying: IP fallback when no tenant header
 # ---------------------------------------------------------------------------
-def test_rate_limit_key_uses_tenant_when_present(app):
+def test_rate_limit_key_uses_tenant_when_the_claim_is_PROVEN(app):
+    """Updated by #339. This test previously asserted that a bare
+    X-Tenant-Id header selected the bucket — which was the vulnerability,
+    not the feature: the header is caller-chosen, so the limit was opt-out.
+
+    Per-tenant keying survives, but only for a caller that proved the tenant.
+    """
     from r6.rate_limit import rate_limit_key
-    with app.test_request_context('/r6/actions/x', headers={'X-Tenant-Id': 'acme'}):
+    from r6.stepup import generate_step_up_token
+
+    token = generate_step_up_token('acme')
+    with app.test_request_context('/r6/actions/x', headers={
+            'X-Tenant-Id': 'acme', 'X-Step-Up-Token': token}):
         assert rate_limit_key() == 'acme'
+
+
+def test_an_unproven_tenant_header_does_not_select_the_bucket(app):
+    """MUTATION: key on the header again -> red. This is #339 itself."""
+    from r6.rate_limit import rate_limit_key
+    with app.test_request_context(
+            '/r6/actions/x', headers={'X-Tenant-Id': 'acme'},
+            environ_base={'REMOTE_ADDR': '203.0.113.9'}):
+        assert rate_limit_key() == 'ip:203.0.113.9'
 
 
 def test_rate_limit_key_falls_back_to_ip(app):
@@ -207,3 +226,86 @@ def test_all_model_tables_registered_in_metadata():
                      "wearable_connections" if "wearable_connections" in tables else "wearable_connection"):
         assert any(expected.rstrip('s') in t for t in tables), (expected, tables)
     assert "fasten_connections" in tables
+
+
+# ---------------------------------------------------------------------------
+# 4b. #339 — the limiter must not be opt-out via a caller-chosen header
+# ---------------------------------------------------------------------------
+def _flood(app, headers_for, n=150, ip='198.51.100.4'):
+    """Send n requests through the keying+counting path; return throttled count."""
+    from r6 import rate_limit
+
+    rate_limit._rate_limits.clear()
+    throttled = 0
+    for i in range(n):
+        with app.test_request_context('/r6/fhir/Patient',
+                                      headers=headers_for(i),
+                                      environ_base={'REMOTE_ADDR': ip}):
+            allowed, _remaining, _reset = rate_limit.check_rate_limit(
+                rate_limit.rate_limit_key(), max_requests=30, window_seconds=60)
+            if not allowed:
+                throttled += 1
+    return throttled
+
+
+def test_varying_the_tenant_header_no_longer_evades_the_limit(app):
+    """MUTATION: revert rate_limit_key to the header -> red.
+
+    MEASURED on the live deployment before this fix (#339): 150 requests with
+    a constant tenant header -> 30 throttled; the same 150 with a VARYING
+    header -> 0 throttled, and 150 buckets opened. The limiter both failed to
+    limit and became its own memory-growth vector. Both halves are asserted
+    here so neither can regress silently.
+    """
+    from r6 import rate_limit
+
+    constant = _flood(app, lambda i: {'X-Tenant-Id': 'acme'})
+    assert constant > 0, "the limiter did not fire at all — check the fixture"
+
+    varying = _flood(app, lambda i: {'X-Tenant-Id': f'acme-{i}'})
+    assert varying > 0, (
+        "varying a caller-chosen header still evades the rate limit (#339)")
+    assert len(rate_limit._rate_limits) == 1, (
+        "each forged tenant id still opened its own bucket — the limiter is "
+        "a memory-growth vector as well as ineffective")
+
+
+def test_a_proven_tenant_still_gets_its_own_bucket(app):
+    """The fix must not collapse legitimate multi-tenant traffic from one
+    egress IP (CareAgents reads /r6/fhir for every tenant from one host)."""
+    from r6 import rate_limit
+    from r6.stepup import generate_step_up_token
+
+    rate_limit._rate_limits.clear()
+    for tenant in ('t-one', 't-two', 't-three'):
+        token = generate_step_up_token(tenant)
+        with app.test_request_context('/r6/fhir/Patient', headers={
+                'X-Tenant-Id': tenant, 'X-Step-Up-Token': token},
+                environ_base={'REMOTE_ADDR': '198.51.100.9'}):
+            rate_limit.check_rate_limit(rate_limit.rate_limit_key(),
+                                        max_requests=30)
+    assert set(rate_limit._rate_limits) == {'t-one', 't-two', 't-three'}
+
+
+def test_a_token_for_a_DIFFERENT_tenant_does_not_prove_this_one(app):
+    """MUTATION: validate the token without binding it to the claimed tenant
+    -> red. Holding one valid token would otherwise re-open the evasion."""
+    from r6.rate_limit import rate_limit_key
+    from r6.stepup import generate_step_up_token
+
+    token = generate_step_up_token('tenant-i-own')
+    with app.test_request_context('/r6/fhir/Patient', headers={
+            'X-Tenant-Id': 'someone-elses-tenant', 'X-Step-Up-Token': token},
+            environ_base={'REMOTE_ADDR': '198.51.100.7'}):
+        assert rate_limit_key() == 'ip:198.51.100.7'
+
+
+def test_a_garbage_token_degrades_to_ip_and_never_raises(app):
+    """The limiter runs as a before_request hook: a malformed token must
+    key by IP, not 500 the request."""
+    from r6.rate_limit import rate_limit_key
+    for bad in ('', 'not-a-token', 'a.b.c', 'x' * 5000):
+        with app.test_request_context('/r6/fhir/Patient', headers={
+                'X-Tenant-Id': 'acme', 'X-Step-Up-Token': bad},
+                environ_base={'REMOTE_ADDR': '198.51.100.8'}):
+            assert rate_limit_key() == 'ip:198.51.100.8'
