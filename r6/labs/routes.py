@@ -5,6 +5,7 @@ Registered on r6_blueprint (under /r6/fhir). Read-shaped: tenant-read-
 authenticated + AuditEvent (PHI-free detail). Interprets a single Observation,
 a Bundle, or the tenant's stored Observations for ?subject=Patient/<id>.
 """
+import copy
 import json
 import logging
 
@@ -13,6 +14,7 @@ from flask import request, jsonify
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.labs.interpret import interpret_observation
+from r6.redaction import apply_redaction
 from r6.labs.report import (
     annotate_observation, build_interpretation_summary, build_consumer_summary,
 )
@@ -134,7 +136,22 @@ def register_labs_routes(blueprint, deps):
             patient = _patient_for(obs, tenant_id, cache)
             res = interpret_observation(obs, patient)
             results.append(res)
-            annotated.append({"resource": annotate_observation(obs, res)})
+            # Interpret from the stored resource, return a REDACTED copy.
+            # Interpretation needs the performing lab's own referenceRange,
+            # which redaction is free to touch; the caller needs a resource
+            # with no upstream free text in it. Those are different objects,
+            # so this echoed one is a deep copy — apply_redaction rewrites in
+            # place, and mutating `obs` would corrupt the analysis behind it.
+            #
+            # This path had no redaction at all (#282). CareAgents' get_labs
+            # drives it for "what do my labs say?", so an upstream `display`
+            # or `CodeableConcept.text` went straight into a patient's chat —
+            # the two fields CLAUDE.md singles out because real feeds put
+            # names in them. apply_redaction strips them and re-labels from
+            # r6/terminology.py keyed by code, so the result stays readable
+            # without any of it coming from the feed.
+            safe = apply_redaction(copy.deepcopy(obs))
+            annotated.append({"resource": annotate_observation(safe, res)})
 
         summary = build_interpretation_summary(results)
         summary["ignored"] = ignored
