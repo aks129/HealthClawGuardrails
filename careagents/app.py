@@ -27,6 +27,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  new_binding_code)
 from careagents import advisors, connectors
+from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
@@ -594,11 +595,15 @@ def create_app(config: Config | None = None,
             conversation_id=conversation_id,
             agent_id=agent_id,
         )
-        summary_counts = None
-        if not past:
-            # First visit: show real record counts so the user immediately sees
-            # the product's value rather than a generic prompt.
-            #
+        conn = ctx.get("connection") or {}
+        pending = conn.get("status") == "pending"
+        totals = None
+        # Count when the greeting will use it, and whenever an import is
+        # outstanding — a `pending` row is the one case where the stored status
+        # may be behind the records, and a returning patient checking whether
+        # anything landed is exactly who must not be told "still arriving"
+        # about a chart that is already here.
+        if not past or pending:
             # _summary=count, NOT len(entry): entry is one page (the server
             # caps it), so len() reported the page size as the total. A real
             # import showed "50 conditions ... 50 lab results" to a person
@@ -612,18 +617,29 @@ def create_app(config: Config | None = None,
                     bundle = hc.search(ctx["tenant"], rt,
                                        {"_summary": "count"})
                     return int(bundle.get("total") or 0)
-                summary_counts = {
+                totals = {
                     "conditions": _total("Condition"),
                     "medications": _total("MedicationRequest"),
                     "labs": _total("Observation"),
                 }
             except (HealthClawError, TypeError, ValueError):
-                pass  # fall back to generic greeting on any error
+                totals = None   # unknown, which is never the same as zero
+        intake = intake_state.classify(
+            totals=totals,
+            connection_status=conn.get("status"),
+            connected_at=conn.get("connected_at"),
+            now=time.time(),
+            provider=conn.get("provider") or conn.get("label"))
+        if pending and intake.state == intake_state.READY:
+            # Records landed while nobody was polling /connect. Settle the
+            # stored status here so the next visit costs no counts.
+            svc.set_connection_status(ctx["tenant"], "active")
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
                                past=past,
-                               summary_counts=summary_counts)
+                               intake=intake,
+                               summary_counts=intake.counts)
 
     @app.get("/brief")
     @login_required

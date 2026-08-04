@@ -346,7 +346,13 @@ class AccountService:
             return a.id
 
     def get_agent_context(self, account_id: str, agent_id: str) -> dict | None:
-        """Return {agent, tenant} for an agent the account owns, else None."""
+        """Return {agent, tenant, connection} for an agent the account owns.
+
+        The Connection row is already loaded here to resolve the tenant. It
+        used to be discarded, which left the chat greeting with a record count
+        and no way to tell an empty chart from an import still in flight
+        (#336) — so it is returned rather than fetched a second time.
+        """
         with self.session() as s:
             a = s.query(Agent).filter_by(
                 id=agent_id, account_id=account_id).first()
@@ -355,7 +361,8 @@ class AccountService:
             conn = s.get(Connection, a.connection_id)
             if not conn:
                 return None
-            return {"agent": _agent_dict(a), "tenant": conn.tenant_id}
+            return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
+                    "connection": _conn_dict(conn)}
 
     def get_worker_agent_context(self, agent_id: str) -> dict | None:
         """Resolve an agent for the trusted run worker.
@@ -430,6 +437,7 @@ def _detach(acct: Account) -> _Row:
 def _conn_dict(c: Connection) -> dict:
     return {"id": c.id, "kind": c.kind, "tenant_id": c.tenant_id,
             "label": c.label, "status": c.status, "provider": c.provider,
+            "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count}
 
 
