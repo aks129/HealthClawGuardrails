@@ -1418,6 +1418,10 @@ class FakeClient:
             "resourceType": resource_type, "status": "active",
             "code": {"text": f"sample {resource_type}"}}}]}
 
+    def read(self, tenant, resource_type, resource_id):
+        return {"resourceType": resource_type, "id": resource_id,
+                "code": {"text": f"sample {resource_type} {resource_id}"}}
+
     def interpret_labs(self, tenant):
         return {"summary": {}, "consumer": {"headline": "ok"}, "disclaimer": "d"}
 

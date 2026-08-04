@@ -95,7 +95,57 @@ TOOL_LABELS = {
 }
 
 
-def _summarize_bundle(bundle: dict, limit: int = 12) -> list[dict]:
+# How many DISTINCT Medication references one tool call may chase. Each is a
+# separately audited read; a pathological bundle must not turn one chat
+# message into an unbounded fan-out.
+MAX_MEDICATION_DEREFS = 10
+
+
+def _medication_resolver(hc: HealthClawClient, tenant: str):
+    """A ref -> label function for medicationReference chasing.
+
+    Real feeds (MEDENT, live 2026-08-04) send MedicationRequest with no
+    inline code at all — the name lives on a referenced Medication resource,
+    which DOES carry a proper coding. Without following that reference the
+    agent told a patient "I can't read the names of these medications" while
+    four correctly-coded Medication rows sat in their record.
+
+    Every read goes through hc.read — the same redact-then-relabel gate as
+    every other access, each with its own AuditEvent. The label that comes
+    back is therefore server-derived, never upstream text. Failures return
+    None and the item stays unreadable-not-absent; per-call memo so one ref
+    costs one read; capped so a junk bundle cannot fan out.
+    """
+    memo: dict[str, str | None] = {}
+
+    def resolve(ref) -> str | None:
+        if not isinstance(ref, str) or not ref.startswith("Medication/"):
+            return None
+        if ref in memo:
+            return memo[ref]
+        if len(memo) >= MAX_MEDICATION_DEREFS:
+            return None
+        label = None
+        try:
+            med = hc.read(tenant, "Medication", ref.split("/", 1)[1])
+            code = med.get("code") or {}
+            label = code.get("text") or next(
+                (c.get("display") for c in (code.get("coding") or [])
+                 if isinstance(c, dict) and c.get("display")), None)
+            if isinstance(label, str):
+                label = label.strip() or None
+            else:
+                label = None
+        except HealthClawError:
+            pass
+        memo[ref] = label
+        return label
+
+    return resolve
+
+
+def _summarize_bundle(bundle: dict, limit: int = 12,
+                      resolve_ref=None) -> list[dict]:
     """Compact, model-friendly view of a searchset bundle (already redacted).
 
     Truncates to `limit` and SAYS SO. The list this returns is the model's
@@ -124,6 +174,11 @@ def _summarize_bundle(bundle: dict, limit: int = 12) -> list[dict]:
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
+        if not text and resolve_ref is not None:
+            # No inline code — the name may live behind medicationReference.
+            ref = (res.get("medicationReference") or {}).get("reference")
+            if ref:
+                text = resolve_ref(ref) or ""
         if text:
             item["name"] = text.strip()
         else:
@@ -165,10 +220,13 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                   args: dict, events: list) -> str:
     if name == "get_health_summary":
         parts = {}
+        med_resolver = _medication_resolver(hc, tenant)
         for rt, key in (("Condition", "conditions"),
                         ("MedicationRequest", "medications"),
                         ("AllergyIntolerance", "allergies")):
-            parts[key] = _summarize_bundle(hc.search(tenant, rt))
+            parts[key] = _summarize_bundle(
+                hc.search(tenant, rt),
+                resolve_ref=med_resolver if rt == "MedicationRequest" else None)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
@@ -179,7 +237,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps({"consumer_summary": gaps["consumer"]})
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
-        return json.dumps(_summarize_bundle(hc.search(tenant, rt)))
+        return json.dumps(_summarize_bundle(
+            hc.search(tenant, rt),
+            resolve_ref=(_medication_resolver(hc, tenant)
+                         if rt == "MedicationRequest" else None)))
     if name == "start_intake_form":
         action_id = hc.start_form_action(tenant)
         events.append({"type": "card", "kind": "review",
