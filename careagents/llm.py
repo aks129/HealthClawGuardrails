@@ -19,6 +19,7 @@ Tools use a neutral shape: {"name", "description", "parameters": JSONSchema}.
 from __future__ import annotations
 
 import json
+import time as _time_mod
 from dataclasses import dataclass, field
 
 import requests
@@ -43,6 +44,45 @@ class LLMTurn:
 
 class LLMError(RuntimeError):
     pass
+
+
+class LLMRateLimited(LLMError):
+    """The provider asked us to slow down, and backing off did not clear it.
+
+    Separate from LLMError because the honest thing to tell a patient differs.
+    A bug on our side is "something went wrong"; being rate limited is "we are
+    busy, ask again in a moment" — which is true, actionable, and does not
+    invite them to report a defect that does not exist.
+    """
+
+
+# Transient by definition: the same request may succeed unchanged. 400/401/403
+# are deliberately absent — retrying a malformed or unauthorised call just
+# spends the run's deadline before failing identically.
+RETRYABLE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+# Bounded on purpose. The run holds a lease and a hard deadline while this
+# sleeps, so an unbounded retry loop would trade a visible error for an
+# invisible timeout.
+MAX_ATTEMPTS = 3
+BACKOFF_BASE_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 8.0
+
+
+def _retry_delay(attempt: int, retry_after: str | None) -> float:
+    """Seconds to wait before attempt N+1. Honours Retry-After when sane."""
+    if retry_after:
+        try:
+            supplied = float(retry_after)
+        except (TypeError, ValueError):
+            supplied = -1.0
+        if 0 <= supplied <= MAX_BACKOFF_SECONDS:
+            return supplied
+        if supplied > MAX_BACKOFF_SECONDS:
+            # The provider wants longer than we can hold the lease for. Give
+            # up now rather than sleep past the deadline and fail anyway.
+            return -1.0
+    return min(BACKOFF_BASE_SECONDS * (2 ** attempt), MAX_BACKOFF_SECONDS)
 
 
 def complete(cfg, system: str, messages: list[dict], tools: list[dict]) -> LLMTurn:
@@ -73,6 +113,13 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
             model=cfg.anthropic_model, max_tokens=1200, system=system,
             messages=a_messages, tools=a_tools)
     except anthropic.APIError as exc:  # surface a category, not internals
+        # No retry loop here on purpose: the Anthropic SDK already retries
+        # 429 and 5xx internally (max_retries), so wrapping it in another
+        # would multiply the delay while the run holds its lease. What was
+        # missing is the CLASSIFICATION — a rate limit reaching here has
+        # already been retried and deserves its own honest message.
+        if getattr(exc, "status_code", None) == 429:
+            raise LLMRateLimited("model call rate limited (HTTP 429)") from exc
         raise LLMError(f"model call failed ({type(exc).__name__})") from exc
 
     turn = LLMTurn()
@@ -132,17 +179,42 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
         else:
             o_messages.append({"role": m["role"], "content": m["content"]})
 
-    r = requests.post(
-        f"{cfg.openai_base}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg.openai_api_key}"},
-        # Generous budget: some OpenAI-compatible backends (e.g. Gemini's
-        # compat endpoint) spend completion tokens on internal reasoning
-        # before the visible answer.
-        json={"model": cfg.openai_model, "messages": o_messages,
-              "tools": o_tools, "max_tokens": 4000},
-        timeout=90)
-    if r.status_code != 200:
-        raise LLMError(f"model call failed (HTTP {r.status_code})")
+    r = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            r = requests.post(
+                f"{cfg.openai_base}/chat/completions",
+                headers={"Authorization": f"Bearer {cfg.openai_api_key}"},
+                # Generous budget: some OpenAI-compatible backends (e.g.
+                # Gemini's compat endpoint) spend completion tokens on
+                # internal reasoning before the visible answer.
+                json={"model": cfg.openai_model, "messages": o_messages,
+                      "tools": o_tools, "max_tokens": 4000},
+                timeout=90)
+        except requests.RequestException as exc:
+            # Previously uncaught: a connection reset or read timeout escaped
+            # as a raw requests exception rather than an LLMError, so the
+            # worker recorded an unhelpful error class.
+            if attempt + 1 >= MAX_ATTEMPTS:
+                raise LLMError(
+                    f"model call failed ({type(exc).__name__})") from exc
+            _time_mod.sleep(_retry_delay(attempt, None))
+            continue
+
+        if r.status_code == 200:
+            break
+        if r.status_code not in RETRYABLE_STATUSES:
+            raise LLMError(f"model call failed (HTTP {r.status_code})")
+        delay = _retry_delay(attempt, r.headers.get("Retry-After"))
+        if delay < 0 or attempt + 1 >= MAX_ATTEMPTS:
+            break
+        _time_mod.sleep(delay)
+
+    if r is None or r.status_code != 200:
+        status = r.status_code if r is not None else None
+        if status == 429:
+            raise LLMRateLimited("model call rate limited (HTTP 429)")
+        raise LLMError(f"model call failed (HTTP {status})")
     msg = r.json()["choices"][0]["message"]
 
     turn = LLMTurn(text=msg.get("content") or "",
