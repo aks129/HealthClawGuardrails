@@ -148,6 +148,38 @@ CDN_ASSET = re.compile(
 SMALL_INPUT_FONT = re.compile(
     r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
 
+# iOS zooms the page when a FORM CONTROL is focused whose font-size is under
+# 16px. It does not zoom for static text, so the rule only fires inside a rule
+# whose selector reaches a control. Matching every font-size (which is what it
+# used to do, despite the name and the message both saying "inputs") banned
+# every new caption, axis label and helper line in the product — 13px body
+# copy has always been fine and is used throughout the existing stylesheet.
+INPUTISH_SELECTOR = re.compile(
+    r"\b(input|select|textarea|button|\[contenteditable)|"
+    r"[.#][\w-]*(input|field|search|combo|entry|form-control)[\w-]*",
+    re.I)
+
+
+def _enclosing_selector(whole_file: str, line_number: int) -> str:
+    """The selector of the CSS rule containing this line, best effort.
+
+    Walks back to the nearest `{` and returns the text before it, including a
+    preceding line so multi-line selector lists still resolve. Returns "" when
+    the line is not inside a rule (an inline `style=` attribute, say), which
+    the caller handles by looking at the line itself.
+    """
+    lines = whole_file.splitlines()
+    for idx in range(min(line_number, len(lines)) - 1, -1, -1):
+        line = lines[idx]
+        if "{" in line:
+            selector = line.split("{", 1)[0]
+            if idx and not selector.strip():
+                selector = lines[idx - 1]
+            return selector
+        if "}" in line:
+            return ""          # left the rule without finding its opening
+    return ""
+
 MOTION = re.compile(r"\b(transition|animation)\s*:", re.I)
 
 
@@ -171,10 +203,13 @@ def check_style(path: str, lines: list[tuple[int, str]],
 
         m = SMALL_INPUT_FONT.search(raw)
         if m and float(m.group(1)) < 16:
-            out.append(Finding(
-                path, num, "ios-zoom-font-size",
-                f"{m.group(1)}px — iOS zooms the page below 16px on inputs",
-                raw.strip()[:100]))
+            context = raw + " " + _enclosing_selector(whole_file, num)
+            if INPUTISH_SELECTOR.search(context):
+                out.append(Finding(
+                    path, num, "ios-zoom-font-size",
+                    f"{m.group(1)}px on a form control — iOS zooms the page "
+                    "when one under 16px is focused",
+                    raw.strip()[:100]))
 
     if any(MOTION.search(raw) for _, raw in lines):
         if "prefers-reduced-motion" not in whole_file:
