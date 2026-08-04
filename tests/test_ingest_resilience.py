@@ -167,3 +167,183 @@ def test_resource_id_pattern_is_a_charset_control_not_a_length_control():
     width = R6Resource.__table__.c.id.type.length
     assert pat.fullmatch("a" * width)
     assert not pat.fullmatch("a" * (width + 1))
+
+
+# ---------------------------------------------------------------------------
+# #293 / #306: a record we REFUSED is not a record we chose to skip, and the
+# SHC path never got the rollback the Fasten path was patched for on
+# 2026-07-08. Both call sites collapsed every non-'ok' outcome into `skipped`
+# with no log line, so a real export carrying an id outside the FHIR charset
+# would be dropped and the import would report success.
+# ---------------------------------------------------------------------------
+def _bundle(*resources):
+    return {"resourceType": "Bundle",
+            "entry": [{"resource": r} for r in resources]}
+
+
+def test_shc_ingest_rolls_back_so_one_bad_entry_does_not_wedge_the_batch(
+        app, tenant_id, monkeypatch):
+    """The 2026-07-08 incident, on the path that never got the fix: a failed
+    flush poisons the session, so every LATER entry fails too — one bad
+    resource silently costs the rest of the import.
+
+    Two assertions, deliberately. The surviving-row assertion is the real
+    one, and it is only meaningful on the Postgres lane — SQLite does not
+    poison a session the way Postgres does, which is the same reason this
+    whole file exists and why CI runs it against real Postgres. The
+    rollback-was-called assertion is the one that holds everywhere, so a
+    future edit that deletes the line fails on both lanes rather than
+    quietly only on the one nobody runs locally.
+    """
+    from models import db
+    from r6.shc import routes as shc
+
+    calls = {"n": 0}
+    rollbacks = {"n": 0}
+    real = __import__(
+        "r6.fasten.ingester", fromlist=["_ingest_one"])._ingest_one
+    real_rollback = db.session.rollback
+
+    def flaky(resource, tid, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("flush failed on entry 1")
+        return real(resource, tid, **kw)
+
+    def counting_rollback():
+        rollbacks["n"] += 1
+        return real_rollback()
+
+    monkeypatch.setattr("r6.fasten.ingester._ingest_one", flaky)
+    monkeypatch.setattr(db.session, "rollback", counting_rollback)
+
+    obs = {"resourceType": "Observation", "id": "shc-good-1",
+           "status": "final", "code": {"coding": [{"code": "x"}]}}
+    shc._ingest_bundle(app, [dict(obs), dict(obs, id="shc-good-2")],
+                       tenant_id, "flexpa", "job1")
+
+    assert calls["n"] == 2, "the batch stopped after the failure"
+    assert rollbacks["n"] >= 1, (
+        "the failed entry left the session un-rolled-back — the exact "
+        "failure r6/fasten/ingester.py was patched for on 2026-07-08")
+    survived = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation",
+        id="shc-good-2").first()
+    assert survived is not None, "entry 2 was lost to a poisoned session"
+
+
+def test_a_refused_resource_is_counted_and_logged_apart_from_a_skip(
+        app, tenant_id, caplog):
+    """`skipped` means 'a type we do not store' — routine. `invalid_id` and
+    `forbidden` mean 'data we refused'. Collapsing them hid the only signal
+    that a real export had been silently truncated."""
+    import logging
+
+    from r6.shc import routes as shc
+
+    good = {"resourceType": "Observation", "id": "shc-ok-1",
+            "status": "final", "code": {"coding": [{"code": "x"}]}}
+    unsupported = {"resourceType": "NotAResourceWeStore", "id": "x1"}
+    refused = {"resourceType": "Observation", "id": "has spaces/and-slash"}
+
+    with caplog.at_level(logging.WARNING):
+        counts = shc._ingest_bundle(
+            app, [good, unsupported, refused], tenant_id, "flexpa", "job2")
+
+    assert counts["ingested"] == 1
+    assert counts["skipped"] == 1, "an unsupported type is a routine skip"
+    assert counts["refused"] == 1, "refusing data is its own outcome"
+
+    refusal_logs = [r.getMessage() for r in caplog.records
+                    if "refused" in r.getMessage()]
+    assert refusal_logs, "a refusal has to be findable without a DB dive"
+    joined = " ".join(refusal_logs)
+    assert "invalid_id" in joined and "Observation" in joined
+    assert "has spaces" not in joined, (
+        "the refused id was logged — that field carries names and MRNs in "
+        "the wild, which is why it is the one thing that must not appear")
+
+
+def test_the_import_summary_reports_refusals(app, tenant_id):
+    """A count nobody can see is not a signal. The audit detail carries it,
+    PHI-free, so a silent truncation shows up without a log dive."""
+    from r6.shc import routes as shc
+
+    seen = {}
+
+    def capture(**kw):
+        seen.update(kw)
+
+    import r6.shc.routes as shcmod
+    original = shcmod.record_audit_event
+    shcmod.record_audit_event = capture
+    try:
+        shc._ingest_bundle(
+            app, [{"resourceType": "Observation", "id": "bad id!"}],
+            tenant_id, "flexpa", "job3")
+    finally:
+        shcmod.record_audit_event = original
+
+    assert "refused=1" in seen.get("detail", "")
+    assert "bad id" not in seen.get("detail", "")
+
+
+def test_the_fasten_path_refuses_the_same_way_the_shc_path_does(app, caplog):
+    """Three callers of `_ingest_one` already handle failure three different
+    ways (#306). Both ingest paths are pinned to one refusal vocabulary here
+    so a fix applied to one does not quietly skip the other — which is how
+    the SHC path went two years without the rollback the Fasten path got."""
+    import json as _json
+    import logging
+    from unittest.mock import patch
+
+    from models import db
+    from r6.fasten.ingester import stream_ingest
+    from r6.fasten.models import FastenJob
+
+    lines = [
+        _json.dumps({"resourceType": "Observation", "id": "fasten-ok-1",
+                     "status": "final", "code": {"coding": [{"code": "x"}]}}),
+        _json.dumps({"resourceType": "NotAResourceWeStore", "id": "nope"}),
+        _json.dumps({"resourceType": "Observation",
+                     "id": "Jane Doe 1980-01-01 MRN 12345"}),
+    ]
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with app.app_context():
+        job = FastenJob(task_id="refusal-job", org_connection_id="c1",
+                        tenant_id="test-tenant", status="pending")
+        db.session.add(job)
+        db.session.commit()
+        job_id = job.id
+
+        with patch("r6.fasten.ingester.httpx.stream",
+                   return_value=_Resp()), caplog.at_level(logging.WARNING):
+            stream_ingest(app, job_id,
+                          ["https://download.example.invalid/e.ndjson"],
+                          "test-tenant")
+
+        db.session.expire_all()
+        done = db.session.get(FastenJob, job_id)
+        assert done.ingested_resources == 1
+        assert done.skipped_resources == 1, (
+            "2 means the refused resource was folded back into the routine "
+            "skips — the collapse this fixes")
+
+    joined = caplog.text
+    assert "refused a resource" in joined and "invalid_id" in joined
+    assert "Jane Doe" not in joined and "MRN" not in joined, (
+        "the refused id reached the log — it is refused precisely because "
+        "it looks like this")
