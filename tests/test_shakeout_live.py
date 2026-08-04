@@ -115,3 +115,102 @@ def test_the_manual_rows_state_what_the_script_cannot_see():
     for probe in ("labs", "conditions", "medications", "allergies",
                   "cholesterol", "another tenant"):
         assert probe in shakeout.MANUAL_ROWS
+
+
+# ---------------------------------------------------------------------------
+# The SQL itself
+# ---------------------------------------------------------------------------
+# Everything above stubs the cursor and ignores the SQL, which is right for
+# verdict logic and blind to the thing that actually broke: the first live run
+# of this script crashed with UndefinedColumn, because audit_events has
+# `recorded`, not `recorded_at`. Every unit test passed while the query could
+# not execute at all — the repo's standing trap (a fake proves the call is
+# MADE, not that it is ACCEPTED) in its purest form.
+#
+# So: run the real statements against a real database. On the Postgres CI lane
+# this executes them; on SQLite it still catches a wrong column or table name,
+# which is the class of defect that shipped.
+
+import pytest  # noqa: E402
+
+from models import db  # noqa: E402
+
+
+def _sqlite_params(sql: str) -> str:
+    """psycopg2 %s -> sqlite ?, and %% -> % for LIKE patterns."""
+    return sql.replace("%%", "\x00").replace("%s", "?").replace("\x00", "%")
+
+
+def test_every_check_query_actually_executes(app):
+    """MUTATION: rename any queried column (e.g. `recorded` -> `recorded_at`)
+    -> red. This is the defect that reached production.
+
+    Each check is called with a cursor wired to the real test database, so a
+    column or table that does not exist raises here instead of at 3am against
+    the live record.
+    """
+    import sqlite3
+
+    executed = []
+
+    class _RealCur:
+        """Adapts psycopg2-style SQL onto the test database session."""
+
+        def __init__(self):
+            self._rows = []
+
+        def execute(self, sql, params=None):
+            executed.append(sql)
+            bind = db.engine
+            is_sqlite = bind.dialect.name == "sqlite"
+            statement = _sqlite_params(sql) if is_sqlite else sql
+            if is_sqlite:
+                # now() / make_interval are Postgres-only; the point of this
+                # test on SQLite is name resolution, so neutralise the clause
+                # while leaving every identifier intact.
+                statement = statement.replace(
+                    "created_at > now() - make_interval(hours => ?)",
+                    "created_at IS NOT NULL AND ? IS NOT NULL")
+            raw = bind.raw_connection()
+            try:
+                cur = raw.cursor()
+                cur.execute(statement, tuple(params or ()))
+                self._rows = cur.fetchall()
+                cur.close()
+            except sqlite3.OperationalError as exc:
+                raise AssertionError(
+                    f"shakeout query does not match the schema: {exc}\n{sql}"
+                ) from exc
+            finally:
+                raw.close()
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return self._rows
+
+    with app.app_context():
+        for name, check in shakeout.CHECKS:
+            verdict, detail = check(_RealCur(), "some-tenant")
+            assert verdict in ("PASS", "FAIL", "SKIP"), (name, verdict)
+
+    assert len(executed) >= len(shakeout.CHECKS), (
+        "a check returned without running its query — it cannot have "
+        "measured anything")
+
+
+def test_run_health_is_windowed_not_all_time():
+    """MUTATION: drop the window -> red.
+
+    Scored over all history, one already-fixed failure fails the card
+    forever, and a card that cannot return to green stops being read. The
+    first live run hit exactly this: a single pre-#345 LLMError from a
+    provider 429, fixed hours earlier, still failing the row.
+    """
+    assert shakeout.RUN_HEALTH_WINDOW_HOURS > 0
+    cur = _Cur(all_=[("completed", "", 2)])
+    _verdict, detail = shakeout.check_s5_run_health(cur, "t")
+    assert str(shakeout.RUN_HEALTH_WINDOW_HOURS) in detail, (
+        "the card must say the score is windowed, or a reader will take it "
+        "as all-time")
