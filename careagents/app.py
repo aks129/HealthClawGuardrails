@@ -596,16 +596,26 @@ def create_app(config: Config | None = None,
         if not past:
             # First visit: show real record counts so the user immediately sees
             # the product's value rather than a generic prompt.
+            #
+            # _summary=count, NOT len(entry): entry is one page (the server
+            # caps it), so len() reported the page size as the total. A real
+            # import showed "50 conditions ... 50 lab results" to a person
+            # with 52 and 186 — two different numbers both wrong, and both
+            # capped at exactly the page limit, which is how it read as
+            # plausible for six weeks on demo-sized data. Same pattern as
+            # HealthClawClient.record_count, and PHI-free for the same
+            # reason: only totals cross, never resources.
             try:
-                conditions = hc.search(ctx["tenant"], "Condition")
-                medications = hc.search(ctx["tenant"], "MedicationRequest")
-                observations = hc.search(ctx["tenant"], "Observation")
+                def _total(rt: str) -> int:
+                    bundle = hc.search(ctx["tenant"], rt,
+                                       {"_summary": "count"})
+                    return int(bundle.get("total") or 0)
                 summary_counts = {
-                    "conditions": len(conditions.get("entry", [])),
-                    "medications": len(medications.get("entry", [])),
-                    "labs": len(observations.get("entry", [])),
+                    "conditions": _total("Condition"),
+                    "medications": _total("MedicationRequest"),
+                    "labs": _total("Observation"),
                 }
-            except HealthClawError:
+            except (HealthClawError, TypeError, ValueError):
                 pass  # fall back to generic greeting on any error
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
