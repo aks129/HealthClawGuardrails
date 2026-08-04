@@ -172,7 +172,12 @@ class HealthClawClient:
         if r.status_code != 200:
             raise HealthClawError(f"$interpret failed ({r.status_code})",
                                   r.status_code)
-        out = {"summary": {}, "consumer": {}, "disclaimer": ""}
+        # `bundle` carries the ANNOTATED Observations — each already redacted,
+        # audited and flagged by the engine. The timeline card builds its
+        # series from these rather than issuing a second, differently-shaped
+        # read, so the chart and the agent's prose can never disagree about a
+        # value or a flag.
+        out = {"summary": {}, "consumer": {}, "disclaimer": "", "bundle": {}}
         for p in (r.json() or {}).get("parameter", []):
             if p.get("name") == "summary":
                 out["summary"] = json.loads(p.get("valueString") or "{}")
@@ -180,6 +185,8 @@ class HealthClawClient:
                 out["consumer"] = json.loads(p.get("valueString") or "{}")
             elif p.get("name") == "disclaimer":
                 out["disclaimer"] = p.get("valueString") or ""
+            elif p.get("name") == "return":
+                out["bundle"] = p.get("resource") or {}
         return out
 
     def care_gaps(self, tenant: str) -> dict:

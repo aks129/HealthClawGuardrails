@@ -3159,3 +3159,110 @@ def test_a_broken_count_falls_back_to_the_generic_greeting(
     r = c.get(f"/chat?agent={agent_id}")
     assert r.status_code == 200
     assert b"in your records" not in r.data
+
+
+# ---------------------------------------------------------------------------
+# Lab timeline card (#357 follow-up): the chat answers a "timeline" question
+# with a chart, fetched same-origin with credentials this process already has.
+# ---------------------------------------------------------------------------
+def _interpret_payload():
+    def _obs(code, value, date, flag="N"):
+        return {"resource": {
+            "resourceType": "Observation",
+            "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
+            "effectiveDateTime": date,
+            "valueQuantity": {"value": value, "unit": "mg/dL"},
+            "interpretation": [{"coding": [{"code": flag}]}]}}
+    return {"summary": {}, "consumer": {}, "disclaimer": "Decision support.",
+            "bundle": {"entry": [_obs("2093-3", 244, "2026-03-01", "H"),
+                                 _obs("2093-3", 210, "2025-01-01"),
+                                 _obs("4548-4", 6.1, "2026-02-01")]}}
+
+
+def test_the_timeline_endpoint_returns_series_for_the_signed_in_agent(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    fake.interpret_labs = lambda t: _interpret_payload()
+
+    body = c.get(f"/api/labs/timeline?agent={agent_id}").get_json()
+    names = [s["name"] for s in body["series"]]
+    assert "Total cholesterol" in names and "Hemoglobin A1c" in names
+    assert body["disclaimer"] == "Decision support."
+
+
+def test_the_timeline_endpoint_narrows_to_the_topic_asked_about(
+        cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    fake.interpret_labs = lambda t: _interpret_payload()
+
+    body = c.get(
+        f"/api/labs/timeline?agent={agent_id}&topic=cholesterol").get_json()
+    assert [s["name"] for s in body["series"]] == ["Total cholesterol"]
+
+
+def test_the_timeline_endpoint_refuses_an_agent_you_do_not_own(
+        cfg, svc, monkeypatch):
+    """MUTATION: drop the get_agent_context check -> red. The agent id comes
+    from the query string; it selects the TENANT whose labs are returned."""
+    app, c, fake, agent_id, tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    assert c.get("/api/labs/timeline?agent=someone-elses").status_code == 404
+
+
+def test_the_timeline_endpoint_requires_a_session(cfg, svc, monkeypatch):
+    app, c, fake, agent_id, tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    anon = app.test_client()
+    assert anon.get(f"/api/labs/timeline?agent={agent_id}").status_code in (302, 401)
+
+
+def test_the_timeline_endpoint_degrades_rather_than_500ing(
+        cfg, svc, monkeypatch):
+    def _boom(_t):
+        raise HealthClawError("interpret failed (503)", 503)
+    app, c, fake, agent_id, tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    fake.interpret_labs = _boom
+    assert c.get(f"/api/labs/timeline?agent={agent_id}").status_code == 502
+
+
+def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
+        cfg, svc, monkeypatch):
+    """The chart carries the values. Handing them to the model too invites it
+    to restate every number and to narrate a direction from a single point.
+
+    MUTATION: return the readings in the tool result -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return _interpret_payload()
+
+    events = []
+    out = _json.loads(_execute_tool(_HC(), "t", "show_lab_timeline",
+                                    {"topic": "cholesterol"}, events))
+    assert events == [{"type": "card", "kind": "lab-timeline",
+                       "topic": "cholesterol"}]
+    assert out["chart_shown"] is True
+    assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
+                              "trend_plottable": True}]
+    assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+
+
+def test_show_lab_timeline_with_no_match_emits_no_card_and_forbids_absence(
+        cfg, svc, monkeypatch):
+    """MUTATION: emit a card over an empty series -> red (an empty chart reads
+    as 'nothing there'), and the note must forbid reporting absence."""
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return {"bundle": {"entry": []}, "disclaimer": ""}
+
+    events = []
+    out = _json.loads(_execute_tool(_HC(), "t", "show_lab_timeline", {}, events))
+    assert events == []
+    assert out["chart_shown"] is False
+    assert "not the same as" in out["note"]

@@ -495,3 +495,29 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
   padding: 14px 0; margin: 0; }
 .brief-disclaimer { font-size: 12.5px; color: var(--ink-soft);
   border-top: 1px solid var(--hairline); padding-top: 16px; }
+
+/* --- lab timeline card ---------------------------------------------------
+   Rendered inline in the conversation, not in an iframe: an iframe of the
+   engine's MCP App would carry no credentials, and iOS will not scroll an
+   iframe's internals anyway (the Fasten dialog taught that one twice). */
+.card.timeline { max-width: 100%; border-color: var(--sage);
+  box-shadow: 0 4px 20px rgba(95,125,98,.16); }
+.card.timeline p { margin-bottom: 0; }
+.timeline-series { margin-top: 14px; }
+.timeline-series:first-child { margin-top: 4px; }
+.timeline-name { font-size: 13px; color: var(--ink-soft); margin-bottom: 4px;
+  font-weight: 600; }
+.spark { width: 100%; height: 150px; display: block; overflow: visible; }
+.spark-grid { stroke: var(--hairline); stroke-width: 1; }
+.spark-line { fill: none; stroke: var(--sage); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; }
+.spark-axis { fill: var(--ink-soft); font-size: 10px; }
+.spark-pt { stroke: var(--card); stroke-width: 2; fill: var(--sage); }
+/* Flag colours follow the ENGINE's interpretation code — never recomputed
+   here. H/L is worth a look; HH/LL is critical; IND means the engine did not
+   assign one, which must not read as "normal". */
+.spark-pt.H, .spark-pt.L { fill: #C98A1E; }
+.spark-pt.HH, .spark-pt.LL { fill: var(--clay-deep); }
+.spark-pt.IND { fill: #9A8F7D; }
+.muted { color: var(--ink-soft); }
+.muted.small { font-size: 12px; margin-top: 10px; }
