@@ -176,19 +176,20 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/<id>/review             |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
-# POST /fasten/connections                 |  x  |   |    |    |    |      |  x   |  x
-# POST /fasten/jobs/<id>/retry             |  x  |   |    |    |    |      |  x   |     <- S-14
+# POST /fasten/connections                 |  x  | x |    |    |    |      |  x   |  x
+# POST /fasten/jobs/<id>/retry             |  x  | x |    |    |    |      |  x   |     <- S-14
 # POST /fasten/demo                        |     |   |    |    |    |      |      |  x  <- #305
-# POST /r6/smbp/enroll                     |  x  |   |    |    |    |      |  x   |  x
-# POST /r6/smbp/reading                    |  x  |   |    | x  |    |      |  x   |  x
+# POST /r6/smbp/enroll                     |  x  | x |    |    |    |      |  x   |  x
+# POST /r6/smbp/reading                    |  x  | x |    | x  |    |      |  x   |  x
 # GET  /r6/smbp/report/<id>?format=pdf     |  x  | x | x  |    |    |      |  x   |  x
-# POST /shc/ingest                         |  x  |   |    |    |    |  x   |  x   |  x
+# POST /shc/ingest                         |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/ops/reap                        |  x  | x |    | x  |    |      |      |  x  <- #304
 # POST /wearables/sync-now                 |  x  | x |    | x  |    |      |      |  x  <- #304
 #
 # x* = the guard exempts public/synthetic tenants by design.
-# Four rows carry TENANT_HEADER without TENANT_FORMAT — see
-# test_tenant_row_validates_the_tenant_id_format for why that matters.
+# Every TENANT_HEADER row now also carries TENANT_FORMAT. Access-kernel slice
+# 9 closed the five that did not — see
+# test_tenant_row_validates_the_tenant_id_format.
 # ---------------------------------------------------------------------------
 
 MATRIX: tuple = (
@@ -450,24 +451,28 @@ MATRIX: tuple = (
         id="fasten-register-connection",
         method="POST", path="/fasten/connections",
         endpoint="fasten.register_connection",
-        guards=frozenset({TENANT_HEADER, TENANT_FILTER, AUDIT}),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER, AUDIT}),
         anon_refusal=(400,), setup=_setup_fasten_connection,
         body={"org_connection_id": "guard-matrix-conn"},
         note="The tenant header alone binds an EHR connection to a tenant: "
-             "no read-auth, no step-up, and no tenant-format validation. The "
-             "only protection against claiming someone else's connection is "
-             "the 409 on an already-registered id.",
+             "no read-auth and no step-up. The only protection against "
+             "claiming someone else's connection is the 409 on an "
+             "already-registered id. TENANT_FORMAT arrived with access-kernel "
+             "slice 9; before it this route answered 201 to "
+             "'../../etc/passwd' and bound the connection to that string.",
     ),
     Row(
         id="fasten-retry-job",
         method="POST", path="/fasten/jobs/guard-matrix-task/retry",
         endpoint="fasten.retry_job",
-        guards=frozenset({TENANT_HEADER, TENANT_FILTER}),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER}),
         anon_refusal=(400,),
         note="S-14: re-runs a full ingest and emits NO AuditEvent — the only "
              "ingest trigger in the matrix without one. The absence is "
              "pinned by test_audit_absent_where_the_matrix_says_absent so "
-             "restoring it forces this row to be updated in the same PR.",
+             "restoring it forces this row to be updated in the same PR. "
+             "TENANT_FORMAT arrived with access-kernel slice 9; before it a "
+             "malformed id reached the job lookup as the partition key.",
     ),
     Row(
         id="fasten-demo",
@@ -483,19 +488,22 @@ MATRIX: tuple = (
     Row(
         id="smbp-enroll",
         method="POST", path="/r6/smbp/enroll", endpoint="smbp.enroll",
-        guards=frozenset({TENANT_HEADER, TENANT_FILTER, AUDIT}),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER, AUDIT}),
         anon_refusal=(400,),
         body={"patient_ref": "Patient/guard-matrix-pt"},
         note="DISAGREEMENT with the module docstring, which says "
              "'read-shaped endpoints are tenant-authenticated'. enroll is a "
-             "WRITE and takes the tenant header only — no read-auth, no "
-             "step-up, no format validation — while its sibling /reading "
-             "requires step-up.",
+             "WRITE and takes the tenant header only — no read-auth and no "
+             "step-up — while its sibling /reading requires step-up. "
+             "TENANT_FORMAT arrived with access-kernel slice 9; before it "
+             "this route answered 201 to '../../etc/passwd' and persisted an "
+             "SMBPSession partitioned by that string.",
     ),
     Row(
         id="smbp-reading",
         method="POST", path="/r6/smbp/reading", endpoint="smbp.reading",
-        guards=frozenset({TENANT_HEADER, STEP_UP, TENANT_FILTER, AUDIT}),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP,
+                          TENANT_FILTER, AUDIT}),
         anon_refusal=(400,), step_up_missing_status=401,
         body={"patient_ref": "Patient/guard-matrix-pt", "systolic": 128,
               "diastolic": 78, "effective": "2026-08-02T10:00:00Z"},
@@ -503,7 +511,10 @@ MATRIX: tuple = (
              "X-Human-Confirmed hook: that hook is registered on "
              "r6_blueprint only and this is the smbp blueprint. The plan's "
              "'eight other blueprints get no before_request hooks' gap, made "
-             "concrete on a clinical write.",
+             "concrete on a clinical write. TENANT_FORMAT arrived with "
+             "access-kernel slice 9; the 401 measured here before it came "
+             "from the step-up gate below the tenant read, so a caller "
+             "holding a token carried a malformed id through.",
     ),
     Row(
         id="smbp-report-pdf",
@@ -519,14 +530,18 @@ MATRIX: tuple = (
     Row(
         id="shc-ingest",
         method="POST", path="/shc/ingest", endpoint="shc.ingest",
-        guards=frozenset({TENANT_HEADER, INTERNAL_SECRET, TENANT_FILTER,
-                          AUDIT}),
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, INTERNAL_SECRET,
+                          TENANT_FILTER, AUDIT}),
         anon_refusal=(401,), internal_secret_status=401,
         body={"resourceType": "Bundle", "entry": []},
         note="Bearer shared secret, fail-closed when unset. The ingest runs "
              "on a background thread, so the HTTP response proves the gate, "
              "not the write. S-4/#306 (no per-entry rollback, raw exception "
-             "logged) is pinned separately below.",
+             "logged) is pinned separately below. TENANT_FORMAT arrived with "
+             "access-kernel slice 9; before it a malformed id was handed to "
+             "the ingest thread as the tenant every resource was written "
+             "under. The secret is still checked first, so the format check "
+             "cannot answer an unauthenticated caller.",
     ),
     Row(
         id="ops-reap",
@@ -1021,17 +1036,20 @@ def test_tenant_row_validates_the_tenant_id_format(client, app, row, secrets):
     """A tenant id is refused or accepted by format exactly as the matrix says.
 
     MUTATION: delete `_TENANT_ID_PATTERN.fullmatch` from enforce_tenant_id
-    (or `_TENANT_PATTERN.match` from actions/_tenant_or_none). Those rows go
-    red. Adding validation to one of the four rows WITHOUT it also goes red,
-    which is the point: the matrix must be updated in the same PR.
+    (or `_TENANT_PATTERN.match` from actions/_tenant_or_none, or the
+    `tenant_from_request` call from any slice-9 blueprint). Those rows go red.
+    Adding validation to a row WITHOUT it also goes red, which is the point:
+    the matrix must be updated in the same PR.
 
-    UNTICKETED DEFECT, recorded here rather than xfailed because no issue
-    number exists yet: four write routes accept ANY string as a tenant id —
-    /fasten/connections, /fasten/jobs/<id>/retry, /r6/smbp/enroll and
-    /shc/ingest. The r6, actions and ops blueprints all validate; these four
-    do not, so an id like '../../etc/passwd' becomes a partition key and
-    lands in audit detail. This is the plan's "before_request hooks cover
-    r6_blueprint only" gap with a concrete blast radius. Worth an issue.
+    CLOSED by access-kernel slice 9. This docstring used to record an
+    unticketed defect: /fasten/connections, /fasten/jobs/<id>/retry,
+    /r6/smbp/enroll and /shc/ingest accepted ANY string as a tenant id, so
+    '../../etc/passwd' became a partition key and landed in audit detail.
+    /r6/smbp/reading was a fifth site the probe could not see, because its
+    step-up gate answered 401 below the unvalidated tenant read. All five now
+    resolve the header through `tenant_from_request`, and their rows carry
+    TENANT_FORMAT. Per-route refusals are pinned in
+    tests/test_tenant_format_blueprints.py.
     """
     resp = call(client, row,
                 headers={"X-Tenant-Id": "../../etc/passwd",

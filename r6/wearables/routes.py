@@ -20,6 +20,7 @@ from flask import Blueprint, Response, current_app, jsonify, redirect, request
 from markupsafe import escape
 
 from models import db
+from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import record_audit_event
 from r6.read_auth import authorize_tenant_read
 from r6.stepup import validate_step_up_token
@@ -250,8 +251,17 @@ def sync_status():
 
 @wearables_blueprint.route('/sync-now', methods=['POST'])
 def sync_now():
-    tenant_id = request.headers.get('X-Tenant-Id')
-    if not tenant_id:
+    # Access kernel, slice 9 (docs/2026-08-03-access-kernel-spec.md §1.1). The
+    # matrix row already claimed TENANT_FORMAT for this route, but the 403 it
+    # measured came from the missing step-up token below, not from a format
+    # check: a caller holding a token reached run_once() with the raw string.
+    # The absent-header 400 is unchanged; a MALFORMED id now raises out to the
+    # app-wide handler instead of being carried into the sweep and the audit.
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.MALFORMED:
+            raise
         return jsonify({'error': 'X-Tenant-Id required'}), 400
     token = request.headers.get('X-Step-Up-Token')
     if not token:

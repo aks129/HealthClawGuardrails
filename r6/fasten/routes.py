@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 
 from models import db
+from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import add_audit_event, record_audit_event
 from r6.fasten.enrollment import (
     clear_enrollment_session,
@@ -38,6 +39,27 @@ from r6.fasten.api import trigger_ehi_export
 logger = logging.getLogger(__name__)
 
 fasten_blueprint = Blueprint('fasten', __name__, url_prefix='/fasten')
+
+
+def _tenant_header_or_error():
+    """Resolve X-Tenant-Id through the access kernel (spec §1.1, slice 9).
+
+    Returns ``(tenant_id, None)`` or ``(None, response)``. Used by the two
+    write routes whose only guard is the tenant header, so the id it returns
+    is the partition key an EHR connection or an ingest job is bound to.
+
+    The absent-header answer is the 400 these routes always gave. A MALFORMED
+    id raises out to the app-wide TenantRejected handler — before this slice
+    both routes accepted any string, so no caller can depend on the shape of a
+    refusal that never happened. `_tenant_for_read` keeps its own dialect;
+    see there.
+    """
+    try:
+        return tenant_from_request(sources=(TenantSource.HEADER,)).id, None
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.MALFORMED:
+            raise
+        return None, (jsonify({'error': 'X-Tenant-Id header required'}), 400)
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +199,9 @@ def retry_job(task_id):
     ones. Tenant-scoped; refuses completed jobs (409) and jobs without stored
     links (409, cannot recover without the signed URLs).
     """
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, tenant_error = _tenant_header_or_error()
+    if tenant_error is not None:
+        return tenant_error
     job = FastenJob.query.filter_by(task_id=task_id, tenant_id=tenant_id).first()
     if not job:
         return jsonify({'error': 'not found'}), 404
@@ -295,10 +317,23 @@ def _handle_connection_success(payload: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _tenant_for_read():
-    """Resolve a tenant claim only after the shared read-auth gate."""
-    candidate = request.headers.get('X-Tenant-Id', '').strip()
-    if not candidate:
-        return None, (jsonify({'error': 'X-Tenant-Id header required'}), 400)
+    """Resolve a tenant claim only after the shared read-auth gate.
+
+    Kernel-backed since slice 9, but its refusals are unchanged: a malformed
+    id was already refused here, because authorize_tenant_read validates the
+    pattern before it consults any credential, and it answers 401 rather than
+    400. Turning that into a 400 would be a status-dialect change, which is
+    a separate deliberate PR — so the reason is mapped back onto the answer
+    this helper already gave.
+    """
+    try:
+        candidate = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.ABSENT:
+            return None, (jsonify({'error': 'X-Tenant-Id header required'}), 400)
+        return None, (jsonify({
+            'error': 'authentication required for this tenant',
+        }), 401)
     tenant_id = authorize_tenant_read(candidate)
     if tenant_id is None:
         return None, (jsonify({
@@ -347,9 +382,9 @@ def register_connection():
     Optional body:   endpoint_id, brand_id, portal_id, tefca_directory_id,
                      platform_type, connection_status, consent_expires_at
     """
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
-        return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    tenant_id, tenant_error = _tenant_header_or_error()
+    if tenant_error is not None:
+        return tenant_error
 
     data = request.get_json(silent=True) or {}
     org_connection_id = data.get('org_connection_id', '').strip()
