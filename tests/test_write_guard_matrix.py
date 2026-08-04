@@ -1307,17 +1307,17 @@ def test_shc_ingest_never_logs_a_raw_exception(app, caplog, monkeypatch):
         "the SHC ingest failure path logged the raw exception text")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#307: r6/agent_runs/routes.py:53 indexes the "
-           "validate_step_up_token tuple ([0]) instead of destructuring it, "
-           "and r6/command_center/routes.py:266 discards the reason. "
-           "CLAUDE.md names destructuring a non-negotiable because a "
-           "truthiness test on the tuple is a silent auth bypass.")
 def test_no_write_path_indexes_the_step_up_tuple():
     """validate_step_up_token is always destructured, never indexed.
 
-    MUTATION (once fixed): rewrite any destructured call site as
+    Was a strict xfail for #307 and is now enforced: both offenders are
+    fixed (`r6/agent_runs/routes.py` indexed `[0]`, `r6/command_center/
+    routes.py` destructured and dropped the reason). The pin flips in the
+    same PR as the fix — a strict xfail left in place after its defect is
+    gone fails as "unexpectedly passing", which reads as a broken test
+    rather than a closed finding.
+
+    MUTATION: rewrite any destructured call site as
     `validate_step_up_token(token, tenant)[0]`. This goes red.
 
     Observed at the source, deliberately: `[0]` returns the correct boolean

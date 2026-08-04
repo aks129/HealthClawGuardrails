@@ -1356,3 +1356,33 @@ def test_postgres_deadline_fences_concurrent_stale_worker_mutation(
             conversation_id=run.conversation_id,
             request_id=f"run:{run_id}:assistant",
         ).count() == 0
+
+
+def test_a_refused_step_up_names_its_reason(client, caplog):
+    """#307's second half. Destructuring `valid, _` satisfies the letter of
+    the rule and still throws away the only thing that distinguishes a
+    misconfigured secret from an expired token from a token minted for
+    someone else's tenant — all three used to produce the same silent 401.
+
+    MUTATION: change the call site back to `valid, _ = ...` and drop the log
+    line. This goes red; the source-level `[0]` guard in
+    tests/test_write_guard_matrix.py cannot see that regression.
+    """
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/command-center/api/runs",
+            headers={"X-Tenant-Id": TENANT,
+                     "X-Step-Up-Token": "not-even-a-token"},
+            json={"tenant_id": TENANT, "message_id": "m-refused-1"},
+        )
+
+    assert response.status_code == 401
+    blob = " ".join(record.getMessage() for record in caplog.records)
+    assert "step-up refused" in blob, "the refusal was not recorded at all"
+    assert "Malformed step-up token" in blob, (
+        "the refusal was recorded without the reason — which is the half of "
+        "#307 that destructuring alone does not fix")
+    assert "not-even-a-token" not in blob, (
+        "the rejected token itself was logged")
