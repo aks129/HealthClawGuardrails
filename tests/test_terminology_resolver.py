@@ -102,6 +102,73 @@ def test_a_malformed_response_reads_as_unlabelled(monkeypatch):
         assert terminology_resolver.resolve(ICD10, "L40.9") is None, bad
 
 
+def test_a_transient_failure_is_not_cached_but_a_verdict_is(monkeypatch):
+    """MUTATION: cache every non-exception result -> red.
+
+    curatr answers None for "the server did not answer" and a dict for an
+    authoritative verdict. Caching the None would let a five-minute NLM
+    outage permanently blank every code tried during it — for the life of
+    the process, on the exact flaky public endpoints this will meet.
+    """
+    # Outage: not cached, so recovery is possible.
+    rec = _Recorder(None)
+    _install(monkeypatch, rec)
+    assert terminology_resolver.resolve(ICD10, "L40.9") is None
+    assert terminology_resolver.cache_size() == 0
+
+    # Recovery on the next request: same code now resolves.
+    _install(monkeypatch, _Recorder(
+        {"valid": True, "display": "Psoriasis, unspecified"}))
+    assert terminology_resolver.resolve(ICD10, "L40.9") == "Psoriasis, unspecified"
+
+    # An authoritative "no such code" IS cached — that is a fact, not a
+    # failure, and re-asking it every message is the round trip negative
+    # caching exists to avoid.
+    terminology_resolver.reset_cache()
+    rec = _Recorder({"valid": False, "display": None})
+    _install(monkeypatch, rec)
+    terminology_resolver.resolve(ICD10, "ZZ.9")
+    terminology_resolver.resolve(ICD10, "ZZ.9")
+    assert rec.calls == [(ICD10, "ZZ.9")]
+    assert terminology_resolver.cache_size() == 1
+
+
+def test_an_exception_is_not_cached_either(monkeypatch):
+    """A raised failure is as transient as a returned None."""
+    _install(monkeypatch, _Recorder(raises=RuntimeError("tx down")))
+    terminology_resolver.resolve(ICD10, "L40.9")
+    assert terminology_resolver.cache_size() == 0
+
+
+def test_the_resolver_engine_uses_the_short_timeout(monkeypatch):
+    """MUTATION: build CuratrEngine() with the 5s default -> red.
+
+    The wall-clock budget stops the NEXT lookup, not the one in flight, so
+    the engine timeout is the true per-call bound on a patient read.
+    """
+    captured = {}
+
+    class _Engine:
+        def __init__(self, timeout=None):
+            captured["timeout"] = timeout
+
+    monkeypatch.setattr(terminology_resolver, "_ENGINE", None)
+    monkeypatch.setattr(terminology_resolver._curatr_mod, "CuratrEngine", _Engine)
+    terminology_resolver._engine()
+    assert captured["timeout"] == terminology_resolver.RESOLVER_TIMEOUT_SECONDS
+    assert terminology_resolver.RESOLVER_TIMEOUT_SECONDS <= 1.0
+    monkeypatch.setattr(terminology_resolver, "_ENGINE", None)
+
+
+def test_the_cache_cannot_grow_without_bound(monkeypatch):
+    """MUTATION: remove the overflow clear -> red. The #339 shape."""
+    monkeypatch.setattr(terminology_resolver, "CACHE_MAX_ENTRIES", 5)
+    _install(monkeypatch, _Recorder({"valid": False, "display": None}))
+    for i in range(12):
+        terminology_resolver.resolve(ICD10, f"J{i}.0")
+    assert terminology_resolver.cache_size() <= 5
+
+
 def test_an_unroutable_system_is_never_sent(monkeypatch):
     """curatr can only route five systems; the rest are an immediate miss."""
     _install(monkeypatch, _never_called)

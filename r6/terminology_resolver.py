@@ -34,6 +34,13 @@ Three properties this must never lose
    resolved on a later request. A partially-labelled answer now beats a
    complete one after a timeout.
 
+   Stated honestly: the wall-clock budget stops the NEXT lookup, not the one
+   already in flight, so the true worst case per request is the budget plus
+   one full engine timeout. That is why the engine here is built with
+   ``RESOLVER_TIMEOUT_SECONDS`` (1s) rather than curatr's validation-path
+   default of 5s — validation is a batch job that prefers completeness;
+   this is a patient waiting on a message.
+
 3. **It cannot leak PHI.** Only ``(system, code)`` is sent. No tenant, no
    patient, no agent id, no free text. A code's meaning is a property of the
    code, not of the patient — the same argument that justifies the static
@@ -79,6 +86,18 @@ _TRUE_VALUES = frozenset({"1", "true", "yes"})
 PER_REQUEST_MAX_LOOKUPS = 8
 PER_REQUEST_BUDGET_SECONDS = 0.4
 
+# Socket timeout for the engine THIS module builds. The budget cannot stop a
+# call already in flight, so this is the real per-call bound (see docstring).
+RESOLVER_TIMEOUT_SECONDS = 1.0
+
+# Upper bound on cached entries — the #339 lesson: any structure keyed by
+# arbitrary input grows without limit unless something says otherwise. Real
+# vocabularies are finite (ICD-10-CM is ~74k) but a garbage feed is not.
+# On overflow the cache is cleared rather than LRU-evicted: overflow means
+# something is generating junk codes, and forgetting real labels is cheap
+# (they re-resolve) while an eviction policy is complexity this must not grow.
+CACHE_MAX_ENTRIES = 100_000
+
 # Systems r6/curatr.py knows how to route. Anything else is an immediate miss
 # rather than a wasted round trip.
 RESOLVABLE_SYSTEMS = frozenset({
@@ -109,7 +128,8 @@ def _engine():
     if _ENGINE is None:
         with _ENGINE_LOCK:
             if _ENGINE is None:
-                _ENGINE = _curatr_mod.CuratrEngine()
+                _ENGINE = _curatr_mod.CuratrEngine(
+                    timeout=RESOLVER_TIMEOUT_SECONDS)
     return _ENGINE
 
 
@@ -179,19 +199,35 @@ def resolve(system: str, code: str) -> str | None:
         return None
 
     _budget_spend()
-    label = None
     try:
         result = _engine()._lookup_code(system, code)
-        if isinstance(result, dict) and result.get("valid"):
-            display = result.get("display")
-            if isinstance(display, str) and display.strip():
-                label = display.strip()[:512]
     except Exception:  # noqa: BLE001 — a label is never worth failing a read
         logger.debug("terminology lookup failed for %s (system %s)",
                      code, system, exc_info=True)
         return None
 
+    # curatr's validators answer None for a TRANSIENT failure (non-200,
+    # unreachable, malformed response) and a dict for an authoritative
+    # verdict. The distinction decides cacheability: "the server said this
+    # code does not exist" is a fact worth remembering; "the server did not
+    # answer" is not. Caching a transient failure would let a five-minute
+    # NLM outage permanently blank every code tried during it — the labels
+    # would never appear until the process restarted.
+    if not isinstance(result, dict):
+        return None
+
+    label = None
+    if result.get("valid"):
+        display = result.get("display")
+        if isinstance(display, str) and display.strip():
+            label = display.strip()[:512]
+
     with _CACHE_LOCK:
+        if len(_CACHE) >= CACHE_MAX_ENTRIES:
+            logger.warning(
+                "terminology cache hit %d entries — clearing; something is "
+                "feeding junk codes", len(_CACHE))
+            _CACHE.clear()
         _CACHE[key] = label
     return label
 
