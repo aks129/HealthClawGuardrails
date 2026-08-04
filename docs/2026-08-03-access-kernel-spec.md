@@ -553,7 +553,7 @@ After 11k, and only then: add the grep guard that fails if
 
 | # | Content | Notes |
 |---|---|---|
-| 12 | `audit()` adopted per blueprint, `record_audit_event` kept as a shim | `install_audit_assertions` is already registered (slice 2) and is inert for unmigrated sites, because only `audit()` writes the `g` marker. So the guard arrives with the first migrated site automatically. |
+| 12 | `audit()` adopted per blueprint, `record_audit_event` kept as a shim | `install_audit_assertions` is already registered (the #321 fix) and is inert for unmigrated sites — but NOT because only `audit()` writes the `g` marker: since #321 any `AuditEventRecord` flush writes it. It is inert because `record_audit_event` commits, and a commit clears the marker. So the guard arrives with the first migrated site automatically. |
 | 12x | `install_read_audit_assertion` | Its own PR. Goes red on the five S-9 paths on arrival. That redness is the pin, and the fix is a separate PR after it. |
 | 13 | Retire `record_audit_event`'s ambient commit (`r6/audit.py:92`) | Last of the audit work, after every writer owns its commit. Postgres lane matters most here. |
 | 14 | `fhir_response` / `outcome_response` / `unredacted_response` | Read paths first, per blueprint. S-11 (`r6/routes.py:719-723`) is a behavior FIX, so it ships alone with its own pin, not inside a shaping migration. |

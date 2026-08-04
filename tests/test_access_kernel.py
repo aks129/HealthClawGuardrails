@@ -675,6 +675,117 @@ def test_the_assertion_is_off_when_neither_testing_nor_the_env_var_is_set(
     db.session.rollback()
 
 
+def test_a_faked_writer_that_wrote_nothing_does_not_trip_the_assertion(
+        app, tenant_id, monkeypatch):
+    """#321: the marker follows the ROW, not the call to audit().
+
+    Faking r6.audit.add_audit_event is how the migration's own tests are
+    written. Under the old design audit() set the marker unconditionally and
+    nothing cleared it, so a writer that wrote nothing failed the request with
+    no row pending — a control firing when its property is NOT violated.
+
+    MUTATION: set _AUDIT_PENDING in audit() again -> red.
+    """
+    monkeypatch.setattr('r6.audit.add_audit_event',
+                        lambda event_type, **kwargs: None)
+    _audit_routes(app, tenant_id)
+    install_audit_assertions(app)
+    assert app.test_client().post('/kernel/flush-only').status_code == 201
+
+
+def test_a_faked_writer_after_a_real_query_does_not_trip_the_assertion(
+        app, tenant_id, monkeypatch):
+    """The regression for the rejected in_transaction() gate.
+
+    Every production handler reads the database before it audits, so a gate on
+    transaction state fires on a faked writer in every one of them. The row is
+    the discriminator; an open transaction is not.
+    """
+    from r6.models import AuditEventRecord
+
+    monkeypatch.setattr('r6.audit.add_audit_event',
+                        lambda event_type, **kwargs: None)
+
+    @app.route('/kernel/read-then-audit', methods=['POST'])
+    def read_then_audit():
+        AuditEventRecord.query.filter_by(tenant_id=tenant_id).count()
+        audit(tenant=tenant_id, event_type='create', detail='faked writer')
+        return '', 201
+
+    install_audit_assertions(app)
+    assert app.test_client().post('/kernel/read-then-audit').status_code == 201
+
+
+def test_a_row_flushed_without_going_through_audit_still_fails_the_request(
+        app, tenant_id):
+    """The marker is set by the flush, so it covers the shipped writer too.
+
+    MUTATION: gate _set_pending_marker on audit() having run -> red.
+    """
+    from r6.audit import add_audit_event
+
+    @app.route('/kernel/raw-writer', methods=['POST'])
+    def raw_writer():
+        add_audit_event('create', tenant_id=tenant_id, detail='raw')
+        return '', 201
+
+    install_audit_assertions(app)
+    with pytest.raises(AuditAssertionError):
+        app.test_client().post('/kernel/raw-writer')
+    db.session.rollback()
+
+
+def test_a_pending_row_that_is_not_an_audit_row_is_none_of_its_business(
+        app, tenant_id):
+    """The marker follows an AuditEventRecord, not any flush.
+
+    Without this the guard quietly widens into "no request leaves ANY pending
+    write", which is a property it was never asked to assert and which fires
+    on every unmigrated write handler. That widening is how a control stops
+    meaning what its name says (docs/2026-08-02-retro.md).
+
+    MUTATION: set the marker for every flush in _set_pending_marker -> red.
+    """
+    from r6.models import R6Resource
+
+    @app.route('/kernel/flush-a-plain-row', methods=['POST'])
+    def flush_a_plain_row():
+        db.session.add(R6Resource(
+            'Observation', '{"resourceType": "Observation"}',
+            resource_id='kernel-1', tenant_id=tenant_id))
+        db.session.flush()
+        return '', 201
+
+    install_audit_assertions(app)
+    assert app.test_client().post('/kernel/flush-a-plain-row').status_code == 201
+    db.session.rollback()
+
+
+def test_rolling_back_a_savepoint_does_not_satisfy_the_assertion(
+        app, tenant_id):
+    """A SAVEPOINT rollback leaves the audit row pending in the OUTER
+    transaction, so it must not clear the marker.
+
+    This is not hypothetical: record_audit_event's failure path
+    (r6/audit.py:105) rolls back exactly this savepoint, and that is the
+    function slices 12 and 13 migrate away from. A guard with a masking path
+    through the code being migrated is not a guard.
+
+    MUTATION: drop the `previous_transaction.nested` check in
+    _clear_on_soft_rollback -> red.
+    """
+    @app.route('/kernel/flush-then-savepoint-rollback', methods=['POST'])
+    def flush_then_savepoint_rollback():
+        audit(tenant=tenant_id, event_type='create', detail='pending')
+        db.session.begin_nested().rollback()
+        return '', 201
+
+    install_audit_assertions(app)
+    with pytest.raises(AuditAssertionError):
+        app.test_client().post('/kernel/flush-then-savepoint-rollback')
+    db.session.rollback()
+
+
 # ---------------------------------------------------------------------------
 # §1.3.1 install_read_audit_assertion
 # ---------------------------------------------------------------------------
@@ -1234,16 +1345,16 @@ def test_the_app_factory_registers_both_kernel_handlers():
     assert TenantRejected in registered, 'TenantRejected handler not registered'
 
 
-def test_neither_audit_assertion_is_installed_yet():
-    """Slice 2 registers the error handlers only.
+def test_the_audit_assertion_is_installed_and_the_read_one_is_not():
+    """#321 is fixed, so install_audit_assertions ships BEFORE the first
+    audit() adoption — a guard that arrives with the migration it guards is a
+    guard nobody was protected by.
 
-    install_read_audit_assertion goes red on the five unaudited-404 paths
-    (S-9). install_audit_assertions has a demonstrated false-positive class
-    (#321): audit() sets its pending marker unconditionally while only real
-    session activity clears it, so a caller whose writer wrote nothing trips
-    it with no row pending. A control that fires when its property is NOT
-    violated is one someone eventually silences, so neither ships until it
-    holds.
+    install_read_audit_assertion still ships nowhere. It goes red on the five
+    unaudited-404 paths (S-9) on arrival, and that redness is its own slice
+    (spec §2.7, 12x).
+
+    MUTATION: delete the install_audit_assertions call in main.py -> red.
     """
     import main
     flask_app = main.create_app({
@@ -1251,8 +1362,11 @@ def test_neither_audit_assertion_is_installed_yet():
         'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
         'LEGACY_BOOT_ON_CREATE': False,
     })
-    installed = [f.__name__ for fns in flask_app.teardown_request_funcs.values()
+    teardowns = [f.__name__ for fns in flask_app.teardown_request_funcs.values()
                  for f in fns]
-    assert not any('read_audit' in n or 'audit_committed' in n
-                   for n in installed), (
-        f'an audit assertion is registered too early: {installed}')
+    assert any('audit_committed' in n for n in teardowns), (
+        f'install_audit_assertions is not registered: {teardowns}')
+    after = [f.__name__ for fns in flask_app.after_request_funcs.values()
+             for f in fns]
+    assert not any('read_audited' in n for n in teardowns + after), (
+        f'install_read_audit_assertion is registered too early: {after}')
