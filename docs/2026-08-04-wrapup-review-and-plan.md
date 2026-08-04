@@ -175,3 +175,105 @@ defects found on Aug 18 get an audience.
 4. CareAgents deploy authorization for #362 (standing rule: gated).
 5. Dr. Magan's review of the condition-grounding design (#355) — clinical
    content does not ship on engineering judgment.
+
+## 7. Team execution orders
+
+Roles and decision rights are `.claude/team.md`; this section is the work
+queue in its terms. Every task below follows the standard loop (brief →
+design pass where required → Dev on a worktree branch → QA verify → founder
+opens the PR → **Eugene merges**). Nothing here changes the human gates.
+
+### 7.1 Gate grammar
+
+A confirmation gate is a command plus its expected output, or it is not a
+gate. Three rules apply to every gate in this queue:
+
+- **Real data.** Gates run against the live tenants (`gene-1ff1ecf2` with
+  the MEDENT import, `ev-personal`), not fixtures. The audit trail is the
+  scorecard: evidence is PHI-free by construction.
+- **UI evidence stays out of the repo.** Chat transcripts are PHI-adjacent
+  and live in HealthClaw per tenant. The repo records pass/fail per
+  question, never the answer text.
+- **A gate that cannot fail is not run.** Each gate names what a failure
+  looks like. "Ran it and it seemed fine" does not close a task.
+
+### 7.2 Task queue
+
+**E1 — Deploy CareAgents (#362).** Dev, after Eugene's authorization.
+Stage per `docs/runbooks/careagents-durable-worker.md`; `railway link
+--project 835e92df-ebaa-4aa1-bfb5-cb1b346d385e --environment production`
+**before** any `railway up`; deploy web and worker from the same stage.
+Gate: both services report the same build sha via `railway ssh`, the worker
+imports `careagents.intake_state`, and `prod_watch.py` shows 10/10.
+Failure looks like: sha mismatch, ImportError, or a new stray project.
+
+**E2 — The five questions, live.** Eugene asks; QA measures. The questions,
+verbatim: "What do my labs say?", "What conditions do I have?", "What
+medications am I on?", "Do I have any allergies?", "Give me a timeline of
+my cholesterol results". Then QA runs `railway ssh --service
+HealthClawGuardrails "python scripts/shakeout_live.py --tenant
+gene-1ff1ecf2"`. Gate: exit 0; rows S1, S3, S5, S8 all PASS and none SKIP.
+Per-question pass criteria: labs cite values; conditions named with no raw
+ICD-10; meds named; allergy wording is "recorded but not coded at the
+source"; the timeline renders a chart. Failure looks like: any SKIP, any
+raw code, any absence claim. Each failure becomes an issue the same day.
+
+**E3 — Reconcile the observation counts.** QA. The audit trail says one
+tenant interpreted 56 observations on 2026-07-12; a prior report said 186.
+Gate: after E2, the newest `labs $interpret` audit row's `interpreted=` for
+`gene-1ff1ecf2` matches `_summary=count` for Observation on that tenant.
+Failure looks like: the two numbers disagree, which is a real defect.
+
+**E4 — #157 identity brief.** Product drafts; Eugene decides. The brief
+states the three-tenant split, the caregiver case, and three options: unify,
+selector, or scope the demo to one tenant. Gate: a decision doc merged to
+`docs/` naming the demo tenant. No code moves on identity before this gate.
+
+**E5 — Kernel slices 4–8.** CTO rules on #334 first; Dev executes one slice
+per PR under `docs/2026-08-03-refactor-working-protocol.md`. Gate per
+slice: write-guard matrix green on the Postgres CI lane, audit assertions
+hold, conformance stays Grade A. Failure looks like: any matrix row
+changing without its pin changing in the same PR.
+
+**E6 — Close #305.** CTO chooses gate-or-delete for `/fasten/demo`; Dev
+implements. Gate: `curl -s -o /dev/null -w "%{http_code}" -X POST
+https://app.healthclaw.io/fasten/demo` returns 401 or 404 in production,
+and the write-guard matrix row updates in the same PR.
+
+**E7 — #310 dashboard honesty.** Product answers "is `/r6-dashboard` in the
+Aug 18 demo?" first. If yes: Dev rebuilds the animation on real job status
+and the tenant's own audit feed; QA replays a real Stitch connection and
+confirms no "imported" claim precedes the import. If no: the page is
+removed from the demo script and the issue is re-dated. Gate: one of those
+two artifacts exists.
+
+**E8 — Remaining #282 probes.** QA extends
+`tests/test_redaction_coverage_inventory.py` to the four multi-step sites
+(`form_fill`, `sdc/documents`, `smbp`, `curatr`) with marker-seeded flows.
+Gate: markers measured on all four; each probe carries a mutation check;
+any leak found gets a same-day fix PR, as `$interpret` did.
+
+**E9 — #341 worker long-poll.** Dev, with CTO design pass (it touches the
+claim endpoint). Gate: worker poll lines in Railway logs drop by an order
+of magnitude over a one-hour window, measured before and after.
+
+**E10 — Aug 8 dress rehearsal.** Everyone; Eugene drives the UI. The full
+webinar path on live data with `prod_watch` and the scorecard running
+**during** it. Product reviews every on-screen sentence against the
+honesty rules (#310's family). Gate: G1–G5 each show their named evidence;
+anything red gets the remaining ten days.
+
+### 7.3 Sequencing
+
+```mermaid
+flowchart LR
+    E1 --> E2 --> E3
+    E2 --> E4
+    E4 --> E5
+    E6 & E7 & E8 & E9 --> E10
+    E5 --> E10
+```
+
+E1 and E2 block everything: no task downstream is worth doing against an
+unexercised deploy. E4 gates E5 by decision, not by code. E10 consumes all
+of it.
