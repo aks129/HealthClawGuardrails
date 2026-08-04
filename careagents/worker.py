@@ -56,6 +56,27 @@ def _error_class(exc: Exception) -> str:
     return name if name and name[0].isalpha() else "WorkerError"
 
 
+GENERIC_FAILURE_TEXT = "Something went wrong on our side."
+RATE_LIMITED_TEXT = (
+    "I'm getting more requests than I can answer right now. Nothing is wrong "
+    "with your records — try asking again in a moment.")
+
+
+def _failure_text(exc: Exception) -> str:
+    """What the person reads when a run fails.
+
+    A rate limit is not a defect, and saying "something went wrong on our
+    side" for one is two failures at once: it invites a bug report for a bug
+    that does not exist, and it leaves a patient wondering whether their
+    health records are broken. Reported live on 2026-08-04 — a "give me a
+    timeline of my cholesterol results" run died on a provider HTTP 429 and
+    the patient saw only the generic message.
+    """
+    if isinstance(exc, llm.LLMRateLimited):
+        return RATE_LIMITED_TEXT
+    return GENERIC_FAILURE_TEXT
+
+
 class LeaseHeartbeat:
     """Refresh one run lease independently of blocking provider calls."""
 
@@ -157,7 +178,7 @@ class RunWorker:
             try:
                 self.hc.append_agent_run_event(
                     run_id, self.worker_id, "agent.error",
-                    {"text": "Something went wrong on our side."})
+                    {"text": _failure_text(exc)})
                 self.hc.transition_agent_run(
                     run_id, self.worker_id, "failed",
                     event_type="run.failed",
