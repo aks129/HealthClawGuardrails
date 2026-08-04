@@ -62,10 +62,17 @@ def register_labs_routes(blueprint, deps):
         unparseable subject) still counts as ignored input rather than
         falling through to the whole record set — a malformed request must
         not silently widen into a full read.
+
+        That distinction needs one subtlety: ``get_json(silent=True)``
+        answers None for BOTH "no body" and "a body that would not parse".
+        Only the raw bytes tell them apart, so unparseable-but-present is
+        detected via ``request.get_data`` and lands in the ignored bucket
+        with the other junk, never in the fallback.
         """
         raw = request.get_json(silent=True)
         body = raw if isinstance(raw, dict) else {}
-        supplied = raw is not None and raw != {}
+        unparseable = raw is None and bool(request.get_data(cache=True))
+        supplied = unparseable or (raw is not None and raw != {})
         subject = request.args.get("subject")
         if body.get("resourceType") == "Parameters":
             for p in body.get("parameter", []):

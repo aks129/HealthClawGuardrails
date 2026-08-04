@@ -172,3 +172,34 @@ def test_the_stored_fallback_is_tenant_scoped(
                     headers=tenant_headers, json={})
     summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
     assert summary["total"] == 1
+
+
+def test_an_unparseable_body_does_not_widen_into_the_stored_fallback(
+        app, client, tenant_headers, tenant_id):
+    """MUTATION: treat get_json(silent=True) is None as "nothing sent" -> red.
+
+    get_json answers None for BOTH an absent body and one that would not
+    parse. Conflating them means a caller error (broken JSON) silently
+    becomes the widest possible read. The caller is already read-authorized
+    for these rows, so this is an honesty invariant, not an auth boundary —
+    but the docstring promises it, so the code must hold it.
+    """
+    _stored_obs(app, tenant_id, "chol-3", "2093-3", 244, "mg/dL")
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers,
+                    data="{not json", content_type="application/json")
+    assert r.status_code == 200
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 0, (
+        "a body that failed to parse fell through to the whole record set")
+    assert summary["ignored"] == 1
+
+
+def test_a_non_json_content_type_with_a_body_is_ignored_not_widened(
+        app, client, tenant_headers, tenant_id):
+    _stored_obs(app, tenant_id, "chol-4", "2093-3", 244, "mg/dL")
+    r = client.post("/r6/fhir/Observation/$interpret", headers=tenant_headers,
+                    data="subject=me", content_type="text/plain")
+    assert r.status_code == 200
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 0
+    assert summary["ignored"] == 1
