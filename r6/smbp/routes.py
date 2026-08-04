@@ -12,7 +12,8 @@ import logging
 from flask import Blueprint, request, jsonify, Response
 
 from r6.models import R6Resource, db
-from r6.access import Scope, Tenant, TenantSource, require_grant
+from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
+                       tenant_from_request)
 from r6.audit import record_audit_event
 from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
@@ -25,7 +26,20 @@ smbp_blueprint = Blueprint("smbp", __name__, url_prefix="/r6/smbp")
 
 
 def _tenant():
-    return (request.headers.get("X-Tenant-Id") or "").strip() or None
+    """Resolve X-Tenant-Id through the access kernel (spec §1.1, slice 9).
+
+    Returns a validated `Tenant`, or None when the header is absent so each
+    handler keeps answering the 400 + OperationOutcome it always answered. A
+    MALFORMED id raises out to the app-wide TenantRejected handler: this
+    blueprint accepted any string until now, so nothing can depend on the
+    shape of a refusal that never happened.
+    """
+    try:
+        return tenant_from_request(sources=(TenantSource.HEADER,))
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.MALFORMED:
+            raise
+        return None
 
 
 def _oo(severity, code, diagnostics):
@@ -35,9 +49,10 @@ def _oo(severity, code, diagnostics):
 
 @smbp_blueprint.route("/enroll", methods=["POST"])
 def enroll():
-    tenant_id = _tenant()
-    if not tenant_id:
+    tenant = _tenant()
+    if tenant is None:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
+    tenant_id = tenant.id
     # enroll is a WRITE guarded by the tenant header alone (see the matrix
     # row), so this parse is reachable with no credential. No gate to move
     # above it; the depth bound is the fix (#312). Lazy import to keep the
@@ -75,17 +90,16 @@ def enroll():
 
 @smbp_blueprint.route("/reading", methods=["POST"])
 def reading():
-    tenant_id = _tenant()
-    if not tenant_id:
+    tenant = _tenant()
+    if tenant is None:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
 
     # Access kernel, slice 3 (docs/2026-08-03-access-kernel-spec.md §2.5). The
     # 401/401 dialect below is the one this route already answered; normalizing
     # 401 vs 403 across the seven gates is a separate, deliberate decision.
-    # Tenant reading stays as it is — `_tenant()` migrates in slice 9.
     grant = require_grant(
         scope=Scope.WRITE,
-        tenant=Tenant(id=tenant_id, source=TenantSource.HEADER),
+        tenant=tenant,
         absent_status=401,
         rejected_status=401,
     )
@@ -117,9 +131,10 @@ def reading():
 
 @smbp_blueprint.route("/report/<session_id>", methods=["GET"])
 def report(session_id):
-    tenant_id = _tenant()
-    if not tenant_id:
+    tenant = _tenant()
+    if tenant is None:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
+    tenant_id = tenant.id
     from r6.routes import authenticate_tenant_read
     auth_err = authenticate_tenant_read(tenant_id)
     if auth_err is not None:

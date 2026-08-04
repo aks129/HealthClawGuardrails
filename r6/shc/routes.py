@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 from markupsafe import escape
 
+from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import record_audit_event
 
 logger = logging.getLogger(__name__)
@@ -198,8 +199,17 @@ def ingest():
     if not _verify_secret():
         return jsonify({'error': 'Unauthorized'}), 401
 
-    tenant_id = request.headers.get('X-Tenant-Id', '').strip()
-    if not tenant_id:
+    # Access kernel, slice 9 (docs/2026-08-03-access-kernel-spec.md §1.1). The
+    # id below is the tenant every resource in the bundle is written under and
+    # the id that lands in audit detail; until this slice it was whatever
+    # string the header carried. The absent-header answer is unchanged; a
+    # MALFORMED id raises out to the app-wide handler, which is the refusal
+    # this route did not make before.
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.MALFORMED:
+            raise
         return jsonify({'error': 'X-Tenant-Id header required'}), 400
 
     source = request.headers.get('X-Source', 'shc').strip()

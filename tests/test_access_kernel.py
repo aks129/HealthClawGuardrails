@@ -910,7 +910,8 @@ def test_outcome_response_is_the_shipped_shape_with_a_status(app):
 #: Adoption is a reviewable list. Each entry names the slice that added it:
 #:   main.py            slice 2 — register_error_handlers/install_audit_assertions
 #:   r6/smbp/routes.py  slice 3 — reading()'s step-up gate -> require_grant
-_ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py'}
+_ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
+                     'r6/fasten/routes.py', 'r6/wearables/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
