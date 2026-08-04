@@ -68,6 +68,28 @@ def test_s5_fails_on_a_defect_class_and_ignores_honest_throttling():
     assert shakeout.check_s5_run_health(throttled, "t")[0] == "PASS"
 
 
+def test_throttling_is_reported_even_though_it_passes():
+    """MUTATION: drop the rate-limited note -> red.
+
+    Ruling Q3 chose fail-fast over parking a run; the price is that
+    throttling must stay visible. Without the count, 'throttled twice ever'
+    and 'throttled constantly' read identically, and the ruling's own
+    revisit condition could never be observed.
+    """
+    cur = _Cur(all_=[("completed", "", 3), ("failed", "LLMRateLimited", 2)])
+    verdict, detail = shakeout.check_s5_run_health(cur, "t")
+    assert verdict == "PASS"
+    assert "2/5" in detail and "40%" in detail
+    assert "not a defect" in detail
+
+
+def test_a_clean_card_says_nothing_about_throttling():
+    """No rate limits means no noise — the note must be conditional."""
+    cur = _Cur(all_=[("completed", "", 4)])
+    _verdict, detail = shakeout.check_s5_run_health(cur, "t")
+    assert "rate-limited" not in detail
+
+
 def test_s8_fails_on_the_loop_shape_that_preceded_the_429():
     assert shakeout.check_s8_tool_rounds(_Cur(one=(8,)), "t")[0] == "FAIL"
     assert shakeout.check_s8_tool_rounds(_Cur(one=(4,)), "t")[0] == "PASS"
