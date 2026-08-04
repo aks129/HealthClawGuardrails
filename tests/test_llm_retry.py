@@ -18,7 +18,7 @@ import types
 import pytest
 import requests
 
-from careagents import llm, worker
+from careagents import agent, llm, worker
 
 
 class _Cfg:
@@ -169,14 +169,14 @@ def test_backoff_grows_and_is_capped():
 def test_the_patient_is_not_told_a_rate_limit_is_our_defect():
     """MUTATION: return the generic text for every exception -> red."""
     text = worker._failure_text(llm.LLMRateLimited("429"))
-    assert text == worker.RATE_LIMITED_TEXT
+    assert text == agent.RATE_LIMITED_TEXT
     assert "went wrong" not in text.lower()
     assert "your records" in text.lower()
 
 
 def test_a_real_defect_still_reads_as_a_defect():
-    assert worker._failure_text(ValueError("boom")) == worker.GENERIC_FAILURE_TEXT
-    assert worker._failure_text(llm.LLMError("HTTP 500")) == worker.GENERIC_FAILURE_TEXT
+    assert worker._failure_text(ValueError("boom")) == agent.GENERIC_FAILURE_TEXT
+    assert worker._failure_text(llm.LLMError("HTTP 500")) == agent.GENERIC_FAILURE_TEXT
 
 
 def test_rate_limited_is_an_llm_error_so_existing_handlers_still_catch_it():
@@ -214,3 +214,48 @@ def test_anthropic_429_is_classified_without_a_second_retry_layer(monkeypatch):
         anthropic_oauth_token="")
     with pytest.raises(llm.LLMRateLimited):
         llm.complete(cfg, "sys", [{"role": "user", "content": "hi"}], [])
+
+
+# --- the synchronous path (run_turn) --------------------------------------
+#
+# The durable worker was fixed first, but the streamed browser chat and the
+# SMS/iMessage collapse go through agent.run_turn — which yielded str(exc)
+# as the error event's text. A patient on those surfaces saw the literal
+# "model call failed (HTTP 429)".
+
+def _turn_events(monkeypatch, exc):
+    from careagents import agent
+
+    def _boom(*_a, **_k):
+        raise exc
+    monkeypatch.setattr(llm, "complete", _boom)
+    return list(agent.run_turn(
+        types.SimpleNamespace(), None, "t", "sys", [], "hi"))
+
+
+def test_the_sync_path_does_not_leak_exception_internals(monkeypatch):
+    """MUTATION: yield str(exc) again -> red."""
+    events = _turn_events(monkeypatch, llm.LLMError("model call failed (HTTP 500)"))
+    assert events == [{"type": "error", "text": agent.GENERIC_FAILURE_TEXT}]
+    assert "HTTP" not in events[0]["text"]
+
+
+def test_the_sync_path_tells_the_truth_about_a_rate_limit(monkeypatch):
+    events = _turn_events(monkeypatch, llm.LLMRateLimited("HTTP 429"))
+    assert events == [{"type": "error", "text": agent.RATE_LIMITED_TEXT}]
+
+
+def test_the_failure_text_has_exactly_one_home():
+    """MUTATION: re-add a local copy anywhere -> red.
+
+    Four sites carried diverging literals of this string; one showed raw
+    exception text. The constant lives in careagents/agent.py and everything
+    else imports it.
+    """
+    import pathlib
+    root = pathlib.Path(worker.__file__).parent
+    owners = [p.name for p in root.glob("*.py")
+              if "Something went wrong" in p.read_text(encoding="utf-8")]
+    assert owners == ["agent.py"], (
+        f"patient-facing failure text is defined in {owners}; only agent.py "
+        "may own it — import GENERIC_FAILURE_TEXT instead")
