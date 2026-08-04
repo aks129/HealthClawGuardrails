@@ -557,14 +557,15 @@ export class FHIRTools {
         name: "fhir_interpret_labs",
         title: "Interpret Lab Results",
         description:
-          "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier.",
+          "Interpret lab Observations against reference ranges — flags each value low/normal/high/critical (HL7 v3 ObservationInterpretation) and returns clinician + consumer summaries. Decision support, not diagnosis. Read-tier. Response includes _meta.ui.resourceUri pointing to an embeddable trend timeline.",
         tier: "read",
-        handler: ({ input, headers }) =>
+        handler: ({ input, headers, tenantId }) =>
           this.interpretLabs(
             input.observation as Record<string, unknown> | undefined,
             input.bundle as Record<string, unknown> | undefined,
             input.subject as string | undefined,
-            headers
+            headers,
+            tenantId
           ),
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
@@ -1741,7 +1742,8 @@ export class FHIRTools {
     observation: Record<string, unknown> | undefined,
     bundle: Record<string, unknown> | undefined,
     subject: string | undefined,
-    headers: Record<string, string>
+    headers: Record<string, string>,
+    tenantId = ""
   ): Promise<Record<string, unknown>> {
     const params = new URLSearchParams();
     if (subject) params.set("subject", subject);
@@ -1758,7 +1760,20 @@ export class FHIRTools {
     if (!resp.ok) {
       return { error: `$interpret failed with status ${resp.status}` };
     }
-    return (await resp.json()) as Record<string, unknown>;
+    const result = (await resp.json()) as Record<string, unknown>;
+    // Embeddable trend UI (same pattern as care-gaps / wearables). A timeline
+    // question ("how has my cholesterol changed?") is answered badly in prose
+    // and well in a chart; MCP clients that understand `_meta.ui.resourceUri`
+    // render it inline. Attached only on success — never a UI over an error.
+    result._meta = {
+      ui: {
+        resourceUri:
+          `${this.baseUrl}/mcp-apps/lab-trends/` +
+          `?tenant_id=${encodeURIComponent(tenantId)}`,
+        profile: "mcp-app",
+      },
+    };
+    return result;
   }
 
   private async careGaps(
