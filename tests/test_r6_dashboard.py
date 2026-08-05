@@ -380,7 +380,12 @@ class TestBundleEdgeCases:
         assert resp.status_code == 400
 
     def test_bundle_with_unsupported_resources_skips_them(self, client, tenant_headers):
-        """Unsupported resource types in a Bundle should be silently skipped."""
+        """Unsupported resource types in a Bundle are skipped, not stored.
+
+        The skip is reported rather than silent — see
+        tests/test_ingest_resilience.py::test_ingest_context_tells_its_caller_what_it_dropped
+        for the `skipped_count` / `skipped_types` half (#377).
+        """
         bundle = {
             'resourceType': 'Bundle', 'type': 'collection',
             'entry': [

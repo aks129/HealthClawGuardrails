@@ -111,26 +111,34 @@ test.describe('R6 Dashboard', () => {
     }
   });
 
-  test('Fasten Connect panel is visible with Run Demo button', async ({ page }) => {
+  test('Fasten Connect panel offers a real action, or says why it cannot', async ({ page }) => {
     await expect(page.locator('#fasten-panel')).toBeVisible();
-    await expect(page.locator('#btn-fasten-demo')).toBeVisible();
-    // Step tracker hidden until demo runs
-    await expect(page.locator('#fasten-steps')).not.toBeVisible();
+    // Exactly one branch renders: the Stitch launch button when the deployment
+    // has a public key, otherwise the notice naming what is missing. Both are
+    // honest; a panel showing neither would be a dead control.
+    const launch = page.locator('#btn-stitch-launch');
+    const notice = page.locator('#fasten-panel').getByText('FASTEN_PUBLIC_KEY is not set');
+    await expect(launch.or(notice).first()).toBeVisible();
+    // The five-step tracker is markup only until a real connection fills it in.
     await expect(page.locator('.demo-step[data-step="f1"]')).toBeAttached();
     await expect(page.locator('.demo-step[data-step="f5"]')).toBeAttached();
+    await expect(page.locator('#fasten-steps')).not.toBeVisible();
   });
 
-  test('Fasten demo runs all 5 steps successfully', async ({ page }) => {
-    await page.locator('#btn-fasten-demo').click();
-    // Step tracker should appear
-    await expect(page.locator('#fasten-steps')).toBeVisible({ timeout: 3000 });
-    // All 5 steps complete — button re-enables when done (allow up to 20s for full flow + animation)
-    await expect(page.locator('#btn-fasten-demo')).toBeEnabled({ timeout: 20000 });
-    // All steps should be marked done
-    const doneSteps = page.locator('#fasten-steps .demo-step.done');
-    await expect(doneSteps).toHaveCount(5, { timeout: 20000 });
-    // Step detail JSON visible
-    await expect(page.locator('#fasten-step-detail')).toBeVisible();
+  test('no control fabricates an import that did not happen (#310a)', async ({ page }) => {
+    // #394 deleted the simulated-demo button, its /fasten/demo route, and the
+    // step-detail pane. This test is the pin: the page must not ship a control
+    // that marks steps 2-5 done without a webhook having arrived.
+    //
+    // MUTATION: restore #btn-fasten-demo (or any client-side call that adds
+    // .done to a step) and this reddens on the first two assertions.
+    await expect(page.locator('#btn-fasten-demo')).toHaveCount(0);
+    await expect(page.locator('#fasten-step-detail')).toHaveCount(0);
+    // Nothing is marked done on a page that has ingested nothing. Steps 2-5
+    // run asynchronously over 5-45 minutes; the copy says so rather than
+    // animating them.
+    await expect(page.locator('#fasten-panel')).toContainText('run asynchronously');
+    await expect(page.locator('#fasten-steps .demo-step.done')).toHaveCount(0);
   });
 
   test('Discovery endpoint links are present', async ({ page }) => {

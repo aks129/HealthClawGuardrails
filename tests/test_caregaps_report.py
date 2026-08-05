@@ -82,3 +82,43 @@ def test_consumer_summary_note_text():
         "guidelines — not personalized medical advice. Your connected "
         "records may be incomplete, so confirm anything here with your "
         "clinician.")
+
+
+# ─────────────────────────────────────────────
+# Why the list is empty (#389)
+# ─────────────────────────────────────────────
+
+def test_unresolved_subject_travels_with_the_empty_list():
+    """An unresolvable subject is carried, not swallowed. The caller cannot
+    otherwise tell it apart from a clean sheet."""
+    consumer = build_consumer_summary([], unresolved="no-patient")
+    assert consumer["lines"] == []
+    assert consumer["unevaluated"] == "no-patient"
+    assert "not a finding" in consumer["unevaluated_note"]
+
+
+def test_all_indeterminate_rules_are_not_reported_as_nothing_due():
+    """Every rule filtered out for want of age or sex. The list is empty
+    because nothing was decided, which is not the same as nothing being due.
+
+    MUTATION: return the plain {"lines": [], "note": ...} -> red.
+    """
+    consumer = build_consumer_summary(
+        [_result(status="indeterminate", applicable=None),
+         _result(rule_id="mammography", status="not_applicable",
+                 applicable=False)])
+    assert consumer["unevaluated"] == "demographics-unavailable"
+
+
+def test_no_lines_and_no_indeterminate_rules_claims_no_reason():
+    """All rules decided and none outstanding: the emptiness is a finding,
+    so it carries no excuse for itself."""
+    consumer = build_consumer_summary(
+        [_result(status="not_applicable", applicable=False)])
+    assert "unevaluated" not in consumer
+
+
+def test_unevaluated_notes_have_no_banned_words():
+    for reason in ("no-patient", "ambiguous-patient", "demographics-unavailable"):
+        consumer = build_consumer_summary([], unresolved=reason)
+        assert not _BANNED.search(consumer["unevaluated_note"])

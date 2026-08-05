@@ -314,11 +314,45 @@ jobs:
       - name: Install uv
         run: pip install uv
 
+      - name: Install the locked dependency set
+        # Explicit for readability: `uv run` below syncs the project
+        # environment itself, so this step is not what makes the audit see
+        # the project. Do not delete it expecting a behaviour change, and do
+        # not add `--no-dev` here expecting a narrower audit — measured, a
+        # following `uv run` re-syncs and reinstates the dev group.
+        run: uv sync --frozen
+
       - name: Python dependency audit (pip-audit)
+        # pip-audit audits the interpreter it runs under, and THAT is the
+        # whole fix. This gate previously ran pip-audit under `uvx`, which
+        # builds an ephemeral environment holding pip-audit and its own
+        # dependencies — measured at 27 packages, none of them this
+        # project's. It reported "No known vulnerabilities found" and exited
+        # 0 on every PR while examining nothing it was meant to examine, and
+        # two real advisories sat on the default branch underneath it.
+        # `uv run` puts the PROJECT interpreter under the audit; `--with`
+        # keeps pip-audit itself out of the locked set.
+        #
         # pip-audit does not publish reliable severity metadata for every
         # advisory. Fail on every known vulnerability rather than silently
         # misclassifying one; exceptions require a reviewed, expiring policy.
-        run: uvx --from pip-audit==2.9.0 pip-audit --strict
+        #
+        # SCOPE, decided deliberately: this audits the runtime dependencies
+        # AND the dev group, which is a SUPERSET of the shipped image
+        # (Dockerfile runs `uv sync --frozen --no-dev`). A CVE in mypy or
+        # pytest is not in the deployed artifact, but it does run in CI with
+        # repository access, so it gates too. If that ever becomes noisy,
+        # narrow it on purpose and write the reason here — do not let it
+        # narrow by accident.
+        run: uv run --with pip-audit==2.9.0 pip-audit --strict --format json --output audit.json
+
+      - name: The audit examined the project, not an empty interpreter
+        # The positive half, and the reason this gate is trustworthy now:
+        # "no vulnerabilities" is satisfied hardest by an environment
+        # containing nothing. Runs even when the step above failed, so a red
+        # gate still says whether it was red for a real finding.
+        if: always()
+        run: uv run python scripts/check_audit_coverage.py audit.json
 
       - name: Node.js dependency audit
         working-directory: services/agent-orchestrator

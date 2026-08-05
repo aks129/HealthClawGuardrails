@@ -70,6 +70,98 @@ def test_care_gaps_unknown_patient_is_ok_but_indeterminate(client, tenant_header
 
 
 # ─────────────────────────────────────────────
+# The production call shape: no subject at all
+# ─────────────────────────────────────────────
+
+def test_care_gaps_with_no_subject_uses_the_tenants_own_patient(
+        client, app, tenant_id, tenant_headers):
+    """The shape both production callers actually send (#389).
+
+    CareAgents' get_care_gaps and the care-gaps MCP App page post an empty
+    body with no ?subject=. Every other test in this file passes one, which
+    is why this survived: with subject None the resource filter compares
+    every subject.reference against None, nothing matches, and the evaluator
+    is handed an empty record.
+
+    MUTATION: delete the fallback branch in _resolve_subject (return the
+    supplied subject unconditionally) -> both asserts red.
+    """
+    _seed_patient(app, tenant_id, pid="p-solo")
+    _store(app, {"resourceType": "Condition", "id": "c-dm",
+                 "subject": {"reference": "Patient/p-solo"},
+                 "code": {"coding": [{"system": "http://snomed.info/sct",
+                                      "code": "44054006"}]}}, tenant_id)
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    body = r.get_json()
+    resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
+    assert resolution == {"state": "tenant-default", "subject": "Patient/p-solo"}
+
+    # The tenant's own Condition reached the evaluator: the diabetes rule is
+    # no longer dismissed as "applies to patients with a diabetes diagnosis".
+    # Against subject None it was, because the Condition never matched.
+    detail = json.loads(_resp_param(body, "detail")["valueString"])
+    a1c = next(d for d in detail if d["rule_id"] == "diabetes-a1c")
+    assert a1c["status"] != "not_applicable", (
+        "the tenant's stored Condition did not reach the evaluator")
+
+
+def test_care_gaps_with_no_patient_row_says_so_rather_than_no_gaps(
+        client, tenant_headers):
+    """"Could not look" must not arrive as "looked and found none".
+
+    Third instance of this shape in a week (#379 medications, #381 the
+    brief's care gaps, #390 the intake form), and the one on the highest
+    traffic entry point.
+
+    MUTATION: collapse the unresolved reason (return a bare empty consumer
+    summary) -> red.
+    """
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    body = r.get_json()
+    resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
+    assert resolution == {"state": "no-patient", "subject": None}
+    consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
+    assert consumer["lines"] == []
+    assert consumer["unevaluated"] == "no-patient"
+    assert "no screenings outstanding" in consumer["unevaluated_note"]
+
+
+def test_care_gaps_with_two_patient_rows_is_ambiguous_not_empty(
+        client, app, tenant_id, tenant_headers):
+    """Two Patient rows and no subject: the fallback cannot pick one. That is
+    its own outcome, not a clean sheet.
+
+    MUTATION: take rows[0] instead of reporting ambiguity -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-one")
+    _seed_patient(app, tenant_id, pid="p-two")
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    body = r.get_json()
+    resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
+    assert resolution == {"state": "ambiguous-patient", "subject": None}
+    consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
+    assert consumer["unevaluated"] == "ambiguous-patient"
+
+
+def test_care_gaps_with_a_supplied_subject_reports_that_state(
+        client, app, tenant_id, tenant_headers):
+    """A caller-supplied subject is not the fallback, and says so."""
+    _seed_patient(app, tenant_id, pid="p-named")
+    r = client.get("/r6/fhir/Patient/$care-gaps?subject=Patient/p-named",
+                   headers=tenant_headers)
+    resolution = json.loads(
+        _resp_param(r.get_json(), "subjectResolution")["valueString"])
+    assert resolution == {"state": "supplied", "subject": "Patient/p-named"}
+
+
+# ─────────────────────────────────────────────
 # MCP App page (embedded HTML surface)
 # ─────────────────────────────────────────────
 

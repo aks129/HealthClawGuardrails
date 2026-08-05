@@ -1255,12 +1255,21 @@ def ingest_context():
             ), 401
 
     try:
+        from r6.fasten.ingester import skipped_type_summary
+
         result = context_builder.ingest_bundle(body, tenant_id=tenant_id)
+        # The types are code-owned names, never the feed's own string — see
+        # `safe_skipped_type`. A discard the audit trail cannot name is the
+        # #377 silence with a 201 on it.
+        types_summary = skipped_type_summary(result['skipped_types'])
         record_audit_event('create', 'Bundle', None,
                            agent_id=request.headers.get('X-Agent-Id'),
                            context_id=result['context_id'],
                            tenant_id=tenant_id,
-                           detail=f'ingested {result["resource_count"]} resources')
+                           detail=(f'ingested {result["resource_count"]} resources'
+                                   + (f'; skipped {result["skipped_count"]}: '
+                                      f'{types_summary}'
+                                      if types_summary else '')))
         return jsonify(result), 201
     except ValueError as e:
         return _operation_outcome('error', 'invalid', str(e)), 400

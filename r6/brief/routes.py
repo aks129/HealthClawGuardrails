@@ -16,7 +16,13 @@ from flask import request, jsonify
 
 from r6.models import R6Resource
 from r6.audit import record_audit_event
-from r6.brief.engine import generate_brief, BriefResult, BriefField
+from r6.brief.engine import (
+    generate_brief,
+    BriefResult,
+    BriefField,
+    CARE_GAPS_UNAVAILABLE,
+    CARE_GAPS_REASON_ENGINE_ERROR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,26 +54,43 @@ def _field_to_dict(f: BriefField) -> dict:
 
 
 def _brief_to_extension(result: BriefResult) -> list[dict]:
-    def _section(name: str, fields: list[BriefField]) -> dict:
+    def _section(name: str, fields: list[BriefField],
+                 extra: list[dict] | None = None) -> dict:
         return {
             "url": f"https://healthclaw.io/fhir/StructureDefinition/brief-section-{name}",
             "extension": [
                 {"url": "field", "valueString": json.dumps(_field_to_dict(f))}
                 for f in fields
-            ],
+            ] + (extra or []),
         }
+
+    # Care gaps ship their state alongside their fields. Without it a client
+    # sees an empty list and has no way to tell "nothing due" from "the
+    # screening review never ran" (#381).
+    care_gap_state = [{"url": "status", "valueString": result.care_gaps_status}]
+    if result.care_gaps_reason:
+        care_gap_state.append(
+            {"url": "reason", "valueString": result.care_gaps_reason})
 
     return [
         _section("problems", result.problems),
         _section("medications", result.medications),
         _section("labs", result.labs),
-        _section("care-gaps", result.care_gaps),
+        _section("care-gaps", result.care_gaps, care_gap_state),
         _section("visits", result.visits),
     ]
 
 
 def _care_gap_result(conditions: list[dict], observations: list[dict]) -> dict:
-    """Run care-gaps evaluation; return empty result on any failure."""
+    """Run care-gaps evaluation; on failure say so rather than returning {}.
+
+    The brief must not 500 when the screening rules break, but the old empty
+    dict was worse than the crash: it reached the patient's page as an empty
+    "preventive care due" section, which reads as a clean bill of health from
+    a component that never ran (#381). The marker keeps the failure named all
+    the way through. The reason is a fixed string — exception text can carry
+    record content, and audit/log detail stays PHI-free.
+    """
     try:
         from r6.caregaps.evaluate import evaluate_care_gaps
         from r6.caregaps.report import build_consumer_summary
@@ -79,8 +102,11 @@ def _care_gap_result(conditions: list[dict], observations: list[dict]) -> dict:
         )
         consumer = build_consumer_summary(results)
         return {"consumer": consumer}
-    except Exception:
-        return {}
+    except Exception as exc:
+        logger.warning("appointment brief: care-gaps evaluation failed (%s)",
+                       type(exc).__name__)
+        return {"status": CARE_GAPS_UNAVAILABLE,
+                "reason": CARE_GAPS_REASON_ENGINE_ERROR}
 
 
 def register_brief_routes(blueprint, deps):

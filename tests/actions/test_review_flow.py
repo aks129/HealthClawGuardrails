@@ -57,6 +57,30 @@ FORM_FILL_BODY = {
                 'body': 'new patient intake form'},
 }
 
+# A transaction Bundle references its own entries by fullUrl, so a patient
+# arrives as `urn:uuid:<id>` rather than `Patient/<id>` (#390).
+URN_ALLERGY = {
+    'resourceType': 'AllergyIntolerance', 'id': 'allergy-urn',
+    'code': {'text': 'Penicillin'},
+    'reaction': [{'manifestation': [{'text': 'Hives'}]}],
+    'patient': {'reference': 'urn:uuid:test-patient-1'},
+}
+# Same shape, but the urn is one no Patient row in the tenant carries — the
+# ingester minted a fresh id for a Bundle entry that had none, so the
+# reference can no longer be tied to anybody.
+ORPHANED_ALLERGY = {
+    'resourceType': 'AllergyIntolerance', 'id': 'allergy-orphan',
+    'code': {'text': 'Penicillin'},
+    'reaction': [{'manifestation': [{'text': 'Hives'}]}],
+    'patient': {'reference': 'urn:uuid:9d2c8f16-not-a-stored-id'},
+}
+
+# Copy the page must (or must not) render. Asserted as literals so a reworded
+# absence claim cannot slip back in silently.
+ABSENCE_LINE = 'No allergies found in your records'
+UNREADABLE_LINE = 'We could not read your records'
+ATTESTATION_CAVEAT = 'confirms nothing about what is on file'
+
 
 def _seed(app, tenant, resources):
     with app.app_context():
@@ -72,9 +96,14 @@ def R6(resource, tenant):
                       resource_id=resource['id'], tenant_id=tenant)
 
 
-def _staged_form_fill(client, tenant_headers, auth_headers):
+def _staged_form_fill(client, tenant_headers, auth_headers, subject_ref=None):
     """propose + commit a form-fill action -> awaiting_confirmation."""
-    r = client.post('/r6/actions/propose', json=FORM_FILL_BODY,
+    body = FORM_FILL_BODY
+    if subject_ref is not None:
+        payload = dict(FORM_FILL_BODY['payload'])
+        payload['subject'] = {'reference': subject_ref}
+        body = dict(FORM_FILL_BODY, payload=payload)
+    r = client.post('/r6/actions/propose', json=body,
                     headers=tenant_headers)
     assert r.status_code == 201, r.get_data(as_text=True)
     action_id = r.get_json()['id']
@@ -136,6 +165,105 @@ def test_get_review_no_allergies_never_prechecks_nka(
     tag = html[html.rfind('<input', 0, input_idx):
                html.find('>', input_idx) + 1]
     assert 'checked' not in tag.lower()
+
+
+# ---------------------------------------------------------------------------
+# "Looked, found none" vs "could not resolve the patient" (#390)
+#
+# The absence line sits directly above the no-known-allergies attestation, so
+# rendering it from a lookup that never resolved a patient walks a skimming
+# patient into attesting to a sentence nothing checked. Both states must stay
+# distinguishable in BOTH directions: swapping the false claim for silence
+# would trade a wrong answer for no answer.
+# ---------------------------------------------------------------------------
+
+def test_get_review_no_patient_row_does_not_claim_no_allergies(
+        client, app, tenant_headers, auth_headers):
+    """A tenant whose source sent clinical resources before demographics."""
+    _seed(app, tenant_headers['X-Tenant-Id'], [MED_A])   # no Patient row
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    resp = _get(client, auth_headers, action_id)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert ABSENCE_LINE not in html
+    assert UNREADABLE_LINE in html
+    # The attestation is still offered — it is the patient's own statement —
+    # but it is not framed as agreeing with anything we read.
+    assert 'name="nka"' in html
+    assert ATTESTATION_CAVEAT in html
+
+
+def test_get_review_urn_uuid_subject_resolves_the_patient(
+        client, app, tenant_headers, auth_headers):
+    """`urn:uuid:` is valid FHIR, so resolve it rather than give up on it."""
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, URN_ALLERGY])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers,
+                                  subject_ref='urn:uuid:test-patient-1')
+
+    resp = _get(client, auth_headers, action_id)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    # Resolved both ways: the action's urn subject AND the allergy's urn
+    # patient reference. The allergy renders, so there is no absence claim.
+    assert 'Penicillin' in html
+    assert 'Smith' in html
+    assert ABSENCE_LINE not in html
+    assert UNREADABLE_LINE not in html
+    assert ATTESTATION_CAVEAT not in html
+
+
+def test_get_review_unresolvable_urn_does_not_claim_no_allergies(
+        client, app, tenant_headers, auth_headers):
+    """The half of the urn case that cannot be resolved: allergy records are
+    held, but their reference names no patient we hold. That is an unread
+    record, not an empty one."""
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, ORPHANED_ALLERGY])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    resp = _get(client, auth_headers, action_id)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert ABSENCE_LINE not in html
+    assert UNREADABLE_LINE in html
+    assert ATTESTATION_CAVEAT in html
+
+
+def test_get_review_resolved_empty_record_still_says_none_found(
+        client, app, tenant_headers, auth_headers):
+    """The other direction. A patient we DID resolve, whose record genuinely
+    holds no allergies, still gets the honest absence line — otherwise this
+    fix trades a false claim for no information at all."""
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    resp = _get(client, auth_headers, action_id)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert ABSENCE_LINE in html
+    assert UNREADABLE_LINE not in html
+    assert ATTESTATION_CAVEAT not in html
+
+
+def test_gather_content_states_are_distinguishable(app, tenant_id):
+    """The two states at the source, not just in the rendered page."""
+    from r6.actions.review import (CONTENT_OK, CONTENT_UNRESOLVED,
+                                   _gather_content)
+    with app.app_context():
+        for resource in (PATIENT, ALLERGY_A):
+            db.session.add(R6(resource, tenant_id))
+        db.session.commit()
+
+        resolved = _gather_content(tenant_id, dict(PATIENT))
+        assert resolved.status == CONTENT_OK
+        assert resolved.reason == ''
+        assert any(r['resourceType'] == 'AllergyIntolerance'
+                   for r in resolved.resources)
+
+        unresolved = _gather_content(tenant_id, None)
+        assert unresolved.status == CONTENT_UNRESOLVED
+        assert unresolved.reason           # names WHY, never a bare empty list
+        assert unresolved.resources == []
 
 
 def test_get_review_requires_step_up(client, app, tenant_headers, auth_headers):

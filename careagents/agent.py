@@ -258,11 +258,17 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                         if isinstance(c, dict) and c.get("code")), None)
             if raw:
                 item["name"] = f"unlabeled record, code {raw}"
-            elif lookup_reason in ("unavailable", "not-attempted"):
+            elif lookup_reason in ("unavailable", "not-attempted",
+                                  "not-a-ref"):
                 # We did not learn anything about this record's coding, so we
                 # say nothing about it. "The source sent free text" below is a
                 # finding; asserting it here would be inventing one — the
                 # defect PR #376 fixed, reached by a different route.
+                #
+                # "not-a-ref" belongs here too: a #contained or urn:uuid:
+                # target is ordinary FHIR that we decline to chase, so we
+                # learn nothing about its coding either. Routing it to the
+                # sentence below was the fourth way into the same falsehood.
                 item["name"] = "a medication I could not look up just now"
                 item["note"] = (
                     "The name is stored behind a reference this turn could "
@@ -349,7 +355,20 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         })
     if name == "get_care_gaps":
         gaps = hc.care_gaps(tenant)
-        return json.dumps({"consumer_summary": gaps["consumer"]})
+        consumer = gaps.get("consumer") or {}
+        out = {"consumer_summary": consumer}
+        if consumer.get("unevaluated"):
+            # The check produced no lines because it could not run, not
+            # because nothing is outstanding. Those two arrive here looking
+            # identical, and the second was being read out to people as the
+            # first on the busiest button in the product (#389).
+            out["note"] = (
+                "The preventive-care check did not reach a verdict — reason: "
+                f"{consumer['unevaluated']}. Say that plainly, using "
+                "unevaluated_note. Do NOT tell the person they have no "
+                "screenings due, and do not name or infer any screening from "
+                "this result.")
+        return json.dumps(out)
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
         return json.dumps(_summarize_bundle(

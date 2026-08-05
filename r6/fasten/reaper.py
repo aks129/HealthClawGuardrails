@@ -31,8 +31,10 @@ from r6.fasten.models import FastenJob
 logger = logging.getLogger(__name__)
 
 # Lifecycle: pending -> downloading -> ingesting -> complete | failed.
-# 'completed' is also written by the /fasten/demo flow — treat it as
-# terminal too so demo rows are never "recovered".
+# 'completed' was written by the /fasten/demo flow, deleted in #305. Nothing
+# writes it any more, but rows from before that stop existing in deployed
+# databases, so it stays terminal — dropping it would let the reaper
+# "recover" them.
 TERMINAL_STATUSES = ('complete', 'completed', 'failed')
 
 # Rolling-deploy guard: a job younger than this may still be running in the

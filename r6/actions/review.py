@@ -8,6 +8,10 @@ Two routes on the actions blueprint:
        row with a confirm/remove decision PLUS the explicit, UNCHECKED
        "No known allergies (patient confirmed)" checkbox; each condition
        confirmable. Provenance ("from your records") on populated items.
+       A patient we could NOT resolve renders as an unread record, never as
+       an empty one — the absence line sits directly above the attestation,
+       so claiming it from a lookup that never ran walks the patient into
+       affirming it (#390). See IntakeContent.
 
   POST /r6/actions/<id>/review  — the SERVER-SIDE SAFETY GATE. It RE-POPULATES
        the questionnaire from the tenant's FHIR (never trusting the client
@@ -28,6 +32,7 @@ per-item + allergy-attestation check, not single-use.
 """
 import json
 import logging
+from dataclasses import dataclass, field
 
 from flask import render_template, request
 
@@ -54,6 +59,68 @@ _CONTENT_TYPES = (
     ('AllergyIntolerance', 'patient'),
     ('Condition', 'subject'),
 )
+
+# The intake content has three states, not two: rows we found, a record we
+# read that holds none, and a patient we could not resolve at all. The third
+# exists because the first two are both ANSWERS, and the empty list that used
+# to stand in for a failure renders as "No allergies found in your records"
+# directly above the no-known-allergies attestation (#390) — walking a
+# skimming patient into agreeing with a sentence a lookup emptied. "No known
+# allergies" is never inferred; neither is the context the patient reads
+# before affirming it.
+#
+# Modelled on r6/labs/interpret.py's _indeterminate(): a result we could not
+# produce carries a REASON and is never dressed up as a clean one.
+CONTENT_OK = 'ok'
+CONTENT_UNRESOLVED = 'unresolved'
+
+CONTENT_REASON_NO_PATIENT = 'no patient record has reached this account yet'
+CONTENT_REASON_UNKNOWN_SUBJECT = (
+    'the form names a patient record this account does not hold')
+CONTENT_REASON_UNANCHORED = (
+    'part of the record refers to a patient we could not identify')
+
+
+@dataclass
+class IntakeContent:
+    """The FHIR content behind the review page, plus whether we resolved the
+    patient it is supposed to belong to.
+
+    Deliberately not a bare list. An empty list carries two meanings and the
+    difference between them is the whole point, so callers reach through
+    `.resources` and cannot mistake "could not resolve" for "nothing on
+    file". `status` defaults to unresolved — ok is earned, never assumed.
+    """
+    resources: list = field(default_factory=list)
+    status: str = CONTENT_UNRESOLVED
+    reason: str = CONTENT_REASON_NO_PATIENT
+
+    @property
+    def resolved(self):
+        return self.status == CONTENT_OK
+
+
+_URN_UUID_PREFIX = 'urn:uuid:'
+
+
+def _referenced_patient_id(reference):
+    """The Patient id a subject/patient reference points at, or None.
+
+    Two shapes resolve. The relative `Patient/<id>` form, and the
+    `urn:uuid:<id>` form a transaction Bundle uses for entries that reference
+    each other by fullUrl — which is how bundles arrive, and which the literal
+    string compare this replaced could never match (#390). Anything else (an
+    absolute URL, another resource type) resolves to None: the caller then
+    treats the record as unread rather than guessing whose it is.
+    """
+    if not isinstance(reference, str):
+        return None
+    ref = reference.strip()
+    if ref.startswith(_URN_UUID_PREFIX):
+        return ref[len(_URN_UUID_PREFIX):] or None
+    if ref.startswith('Patient/'):
+        return ref.split('/', 1)[1] or None
+    return None
 
 
 def _require_step_up(tenant_id):
@@ -100,7 +167,10 @@ def _resolve_questionnaire(action, tenant_id):
 
 def _load_patient(tenant_id, subject_ref=None):
     if subject_ref:
-        ident = subject_ref.split('/')[-1]
+        # `urn:uuid:<id>` first (a Bundle's own fullUrl reference), then the
+        # last path segment, which covers `Patient/<id>` and an absolute URL.
+        ident = (_referenced_patient_id(subject_ref)
+                 or subject_ref.split('/')[-1])
         row = R6Resource.query.filter_by(
             resource_type='Patient', id=ident, tenant_id=tenant_id).first()
         return row.to_fhir_json() if row else None
@@ -109,33 +179,65 @@ def _load_patient(tenant_id, subject_ref=None):
     return row.to_fhir_json() if row else None
 
 
-def _gather_content(tenant_id, patient):
-    content = []
-    if patient:
-        content.append(patient)
+def _gather_content(tenant_id, patient, subject_ref=None):
+    """The patient's FHIR content, and whether we resolved the patient at all.
+
+    An unresolved patient is NOT an empty record, and the difference is the
+    whole return type (see IntakeContent). Only a resolved, genuinely empty
+    record may be rendered as an absence (#390).
+    """
     if not (patient and patient.get('id')):
-        return content
-    ref = 'Patient/%s' % patient['id']
+        return IntakeContent(
+            reason=(CONTENT_REASON_UNKNOWN_SUBJECT if subject_ref
+                    else CONTENT_REASON_NO_PATIENT))
+
+    patient_id = patient['id']
+    ref = 'Patient/%s' % patient_id
+    content = [patient]
+    unanchored = False
     for resource_type, subject_field in _CONTENT_TYPES:
         for row in R6Resource.query.filter_by(
                 resource_type=resource_type, tenant_id=tenant_id).all():
             resource = row.to_fhir_json()
-            if (resource.get(subject_field) or {}).get('reference') == ref:
+            reference = (resource.get(subject_field) or {}).get('reference')
+            if _referenced_patient_id(reference) == patient_id:
+                # Canonicalize a resolved urn onto the relative form so the
+                # populate engine, which matches `Patient/<id>` alone, sees
+                # it. to_fhir_json() hands back a fresh dict each call, so
+                # this rewrites the copy the page renders — never the store.
+                resource[subject_field] = dict(resource[subject_field],
+                                               reference=ref)
                 content.append(resource)
-    return content
+            elif isinstance(reference, str) \
+                    and reference.startswith(_URN_UUID_PREFIX):
+                # A Bundle entry whose fullUrl reference names no id we hold:
+                # the ingester minted a fresh id for a patient that arrived
+                # without one, so this record can no longer be tied to
+                # anybody. We are holding clinical data we cannot read, which
+                # is the one thing the page must not report as "none found".
+                unanchored = True
+
+    if unanchored:
+        return IntakeContent(resources=content,
+                             reason=CONTENT_REASON_UNANCHORED)
+    return IntakeContent(resources=content, status=CONTENT_OK, reason='')
 
 
 def _draft_qr(action, tenant_id):
     """Populate the action's questionnaire from the tenant's FHIR -> draft QR.
     Deterministic: population order fixes the med/allergy/condition row indices
-    used by both the rendered page and the POST gate."""
+    used by both the rendered page and the POST gate.
+
+    Returns the content marker alongside the QR — an empty QR alone cannot say
+    whether the record is empty or unread, and the page has to say which."""
     questionnaire = _resolve_questionnaire(action, tenant_id)
     subject_ref = (action.payload.get('subject') or {}).get('reference') \
         if isinstance(action.payload.get('subject'), dict) else None
     patient = _load_patient(tenant_id, subject_ref)
-    content = _gather_content(tenant_id, patient)
-    qr, _issues = populate_questionnaire(questionnaire, patient, content)
-    return questionnaire, patient, qr
+    content = _gather_content(tenant_id, patient, subject_ref)
+    qr, _issues = populate_questionnaire(questionnaire, patient,
+                                         content.resources)
+    return questionnaire, patient, qr, content
 
 
 def _section_repeats(draft_qr, section_link_id, item_link_id):
@@ -224,18 +326,23 @@ def review_form(action_id):
     if action is None:
         return _error(404, 'Unknown action')
 
-    _questionnaire, _patient, draft_qr = _draft_qr(action, tenant_id)
+    _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
     demographics = _demographics(draft_qr)
     meds, allergies, conditions = _view_rows(draft_qr)
 
     record_audit_event(
         'read', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        detail='review page rendered',
+        # The reasons are fixed strings from this module, never record text,
+        # so the detail stays PHI-free. Without this, the state that renders
+        # the unreadable notice is invisible in production.
+        detail=('review page rendered' if content.resolved else
+                'review page rendered; record unreadable: %s' % content.reason),
     )
     html = render_template(
         'action_review.html', action_id=action_id, demographics=demographics,
         meds=meds, allergies=allergies, conditions=conditions,
+        record_readable=content.resolved, record_reason=content.reason,
         step_up_token=request.headers.get('X-Step-Up-Token', ''),
         tenant_id=tenant_id)
     return html, 200
@@ -268,7 +375,7 @@ def review_submit(action_id):
 
     # RE-POPULATE from FHIR: the server, not the client, decides which rows
     # exist and must be acted on. This is what makes the gate un-craftable.
-    _questionnaire, patient, draft_qr = _draft_qr(action, tenant_id)
+    _questionnaire, patient, draft_qr, _content = _draft_qr(action, tenant_id)
     med_rows = _section_repeats(draft_qr, 'medications', 'medications.item')
     allergy_rows = _section_repeats(draft_qr, 'allergies', 'allergies.item')
     condition_rows = _section_repeats(draft_qr, 'conditions',

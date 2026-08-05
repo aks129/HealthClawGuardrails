@@ -35,6 +35,17 @@ class HealthClawError(RuntimeError):
         self.correlation_id = correlation_id
 
 
+class HealthClawUnconfirmed(HealthClawError):
+    """The request went out and the engine never answered.
+
+    Not the same as a refusal (#220). A refusal is an observed response saying
+    no; this is silence, and the engine may have done the thing. Any caller
+    that only knows about HealthClawError still catches it and degrades to
+    "failed" — which is why callers that can act on the difference must catch
+    this FIRST.
+    """
+
+
 class HealthClawClient:
     def __init__(self, base: str, mint_secret: str, timeout: float = 25.0):
         self.base = base.rstrip("/")
@@ -58,20 +69,28 @@ class HealthClawClient:
     # caller and reaches Flask as an unhandled 500 — the defect #267 fixed for
     # `ingest_bundle` alone rather than for the boundary.
 
-    def _send(self, method: str, url: str, *, what: str, **kwargs):
-        """Issue one request; a transport failure becomes HealthClawError.
+    def _send(self, method: str, url: str, *, what: str,
+              error: type[HealthClawError] = HealthClawError, **kwargs):
+        """Issue one request; a transport failure becomes `error`.
 
         Dispatches to `Session.get`/`Session.post` rather than
         `Session.request` so the call surface is exactly what every method
         here used before, and the relay doubles the cross-layer tests
         substitute for a Session keep working. Resolved lazily for the same
         reason: some of those doubles define only the verb they relay.
+
+        `error` exists for one caller and one reason (#220). Losing the answer
+        to a *retryable* call means it did not happen, which is an ordinary
+        HealthClawError. Losing the answer to a call that can EXECUTE a
+        clinical action means we do not know whether it happened, which is
+        HealthClawUnconfirmed. Collapsing the two tells a person nothing was
+        confirmed when it may already have run, and they confirm twice.
         """
         send = self.http.get if method == "GET" else self.http.post
         try:
             return send(url, timeout=self.timeout, **kwargs)
         except requests.RequestException as exc:
-            raise HealthClawError(f"{what} failed", 0) from exc
+            raise error(f"{what} failed", 0) from exc
 
     @staticmethod
     def _json_object(r, what: str) -> dict:
@@ -279,6 +298,16 @@ class HealthClawClient:
         return self._json_object(r, "action status")
 
     def confirm_action(self, tenant: str, action_id: str) -> dict:
+        """Confirm a reviewed action. Raises on refusal, HealthClawUnconfirmed
+        on silence.
+
+        Three outcomes, and the caller must be able to tell them apart (#220).
+        The mint is safely retryable, so a transport failure there means the
+        confirm never went out — a refusal. The confirm POST is the one that
+        can execute a clinical action, so losing its answer is NOT evidence
+        that nothing happened.
+        """
+        # Nothing was confirmed if this fails: we never reached the confirm.
         mint = self._send(
             "POST", f"{self.actions}/{action_id}/approval-token",
             headers={"X-Tenant-Id": tenant,
@@ -290,12 +319,16 @@ class HealthClawClient:
             raise HealthClawError(
                 f"approval token mint failed ({mint.status_code})",
                 mint.status_code)
+        # A lost answer HERE means the confirm may already have run, so it is
+        # HealthClawUnconfirmed and not an ordinary failure. This is the one
+        # call in the client that gets a different error type, and the reason
+        # `_send` takes one.
         r = self._send("POST", f"{self.actions}/{action_id}/confirm",
                        headers={"X-Tenant-Id": tenant,
                                 "X-Step-Up-Token": token,
                                 "X-Agent-Id": "careagents"},
                        json={"approved_via": "review-page"},
-                       what="confirm")
+                       what="confirm", error=HealthClawUnconfirmed)
         if not r.ok:
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)
