@@ -3115,6 +3115,27 @@ def curatr_apply_fix(resource_type, resource_id):
             type(exc).__name__,
         )
 
+    # Evaluate the real resource, return a REDACTED copy — in that order.
+    #
+    # This path had no redaction at all (#282), so every free-text field the
+    # approved fix did NOT touch came back exactly as the upstream feed wrote
+    # it: `code.text`, `code.coding[].display`, and `note[].text`. Free-text
+    # notes are where real feeds put names, and the realistic caller here is
+    # the `curatr_apply_fix` MCP tool, so that text went into a model's
+    # context. apply_redaction strips those fields and re-labels from
+    # r6/terminology.py keyed by code, so the answer stays readable without
+    # any of it coming from the feed.
+    #
+    # It has to come AFTER the promotion block above: `evaluate` scores the
+    # resource's completeness, so scoring a redacted copy would compute the
+    # quality score on stripped fields and promote curation_state on it. That
+    # regression is silent. apply_redaction returns a new dict rather than
+    # rewriting its argument, so rebinding here cannot reach back into the
+    # object `evaluate` already consumed.
+    if result.get('updated_resource'):
+        result['updated_resource'] = apply_redaction(
+            result['updated_resource'])
+
     return jsonify(result)
 
 
