@@ -73,6 +73,10 @@ def _isolate(monkeypatch):
     # than papering over it here.
     prod_watch.results.clear()
     prod_watch.build_info.update(_FRESH_BUILD_INFO)
+    # Same reason, for the stream --json redirects (#270): main() assigns it
+    # unconditionally, but a test that calls run() directly after one would
+    # otherwise find its human output on stderr.
+    monkeypatch.setattr(prod_watch, "_human_to_stderr", False)
     monkeypatch.setattr(prod_watch, "get", _fake_get())
     yield
     prod_watch.results.clear()
@@ -186,18 +190,25 @@ def test_json_and_json_out_cannot_disagree(monkeypatch, capsys, tmp_path):
         json.loads(out.read_text())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT (pre-existing, and the one F5 leaned on): --json is documented as "
-    "'machine-readable' and --json-out as the flag that leaves 'stdout "
-    "human-readable', but --json prints the JSON *after* the ANSI-coloured "
-    "human lines on the same stream, so the documented machine-readable mode "
-    "cannot be parsed. Repro: "
-    "python scripts/prod_watch.py --json | python -m json.tool"))
 def test_the_documented_machine_readable_mode_is_machine_readable(monkeypatch,
                                                                   capsys):
+    """#270: --json printed the payload after the ANSI-coloured human lines on
+    the same stream, so the mode documented as 'machine-readable' died on
+    `prod_watch.py --json | python -m json.tool`.
+
+    Closed by sending the human report to stderr under --json. stdout is then
+    the payload and nothing else — parsed here as a WHOLE stream, not from the
+    first `{`, because slicing to a brace is what let the defect hide.
+    """
     monkeypatch.setattr(sys, "argv", ["prod_watch.py", "--json"])
     prod_watch.main()
-    json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["checks"], "the payload is the real one, not an empty stub"
+    # Option 2 of #270, not option 1: the human report moves, it does not
+    # disappear. Someone watching a terminal still sees every check.
+    assert prod_watch.BUILD_CHECK in captured.err
+    assert "mcp (locked): alive" in captured.err
 
 
 def test_a_refused_run_writes_no_status_file_at_all(monkeypatch, capsys,
@@ -371,26 +382,32 @@ def test_the_workflow_only_reads_fields_the_script_actually_writes(
     assert top and build, "the regexes must actually be matching something"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT (LOW, self-healing): when /healthz is UNREACHABLE, get() returns "
-    "an exception name, body stays {}, and `deployed` defaults to 'unknown' — "
-    "indistinguishable from a real unmarked build. The build check then "
-    "asserts ok=False and the stale alarm fires 'deployed build is stale ... "
-    "CareAgents does not auto-deploy — redeploy per RELEASING.md §4', "
-    "prescribing a redeploy for what is an outage. It is the branch's own "
-    "principle inverted: this asserts a verdict about a field it never read. "
-    "The outage alarm fires alongside it and the stale issue closes on the "
-    "next healthy run, so it misdirects rather than lies. Fix: only assert "
-    "the build when /healthz was actually read; otherwise report() it. "
-    "Repro: point prod_watch.get at a stub returning 'ConnectionError' for "
-    "/healthz and run with --expect-sha."))
-def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch):
+def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch,
+                                                                  capsys):
+    """#272: an unreachable /healthz made get() return an exception name, left
+    `body` empty, and let `deployed` default to 'unknown' — indistinguishable
+    from a genuinely unmarked build. The build check then asserted ok=False and
+    the stale alarm told whoever read it at 03:00 to 'redeploy per RELEASING.md
+    §4' while CareAgents was DOWN: a verdict about a field the run never read.
+
+    Closed by gating the assertion on /healthz having actually been read, and
+    report()-ing the build otherwise — the same not-asserted path a run with no
+    --expect-sha already takes.
+    """
     def unreachable(url, timeout, **kw):
         if url.endswith("/healthz"):
             return "ConnectionError"
         return _fake_get()(url, timeout, **kw)
 
     monkeypatch.setattr(prod_watch, "get", unreachable)
-    prod_watch.run(1.0, [TIP])
+    # 1, not 2: this is an outage, and the outage alarm is the one whose remedy
+    # is right. Exit 2 would have routed it to the stale-build alarm.
+    assert prod_watch.run(1.0, [TIP]) == 1
     assert prod_watch.build_info["asserted"] is False, (
         "a build that was never read has not been asserted about")
+    assert _named(prod_watch.BUILD_CHECK) == [], "must not count as a check"
+    assert prod_watch.build_info["deployed"] is None, (
+        "'unknown' here is this script's own default, not the deployment's")
+    # The misdirection itself: no redeploy prescribed for an outage.
+    out = capsys.readouterr().out
+    assert "RELEASING.md" not in out and "auto-deploy" not in out
