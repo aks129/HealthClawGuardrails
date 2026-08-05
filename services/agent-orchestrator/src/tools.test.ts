@@ -193,6 +193,63 @@ describe("Tool Schema Tests", () => {
     expect(names).not.toContain("fhir_seed");
   });
 
+  // #296: four tool DESCRIPTIONS instructed a mechanism that does not exist on
+  // a hosted deployment — "call fhir_get_token first; pass as _stepUpToken".
+  // fhir_get_token is withheld from network transports, and no write schema
+  // accepts _stepUpToken; the gate reads the X-Step-Up-Token header. An agent
+  // following that text calls a tool that is not there, then passes an argument
+  // that is dropped. On the write and action rail, a model that "helpfully"
+  // works around a missing tool is improvising on the one surface whose whole
+  // purpose is that it cannot be improvised on.
+  //
+  // These two guards are general, not a string check on the four known lines:
+  // they would have failed on the commit that introduced the defect, and they
+  // fail on the next one written the same way.
+  it("no tool description tells the model to call a withheld tool", () => {
+    const withheld = ["fhir_get_token", "fhir_seed"];
+    const offenders = schemas
+      .filter((tool) => !withheld.includes(tool.name))
+      .flatMap((tool) =>
+        withheld
+          .filter((name) => (tool.description ?? "").includes(name))
+          .map((name) => `${tool.name} names ${name}`),
+      );
+
+    // A withheld tool may still describe ITSELF — an operator reading the
+    // stdio registry needs to know what it is for.
+    expect(offenders).toEqual([]);
+  });
+
+  it("no tool description names an argument its own schema does not accept", () => {
+    // Underscore-prefixed identifiers are the shape a model reads as a
+    // parameter name. Two kinds appear in these descriptions and only one is
+    // a defect, so the allowlist is explicit rather than a looser regex:
+    // `_meta` is a RESPONSE envelope (the MCP Apps `_meta.ui.resourceUri`
+    // pattern), documented on four read tools and correct there. `_stepUpToken`
+    // was an INPUT the model was told to pass, and no schema accepted it.
+    //
+    // Allowlisting by name rather than by phrasing keeps this failing closed:
+    // a newly invented `_whatever` in a description fails here until someone
+    // either declares it in the schema or justifies it on this list.
+    const RESPONSE_ONLY = new Set(["_meta"]);
+    const CANDIDATE = /\b_[A-Za-z][A-Za-z0-9_]*\b/g;
+
+    const offenders = schemas.flatMap((tool) => {
+      const declared = new Set(
+        Object.keys(
+          (tool.inputSchema as { properties?: Record<string, unknown> })
+            ?.properties ?? {},
+        ),
+      );
+      const named = (tool.description ?? "").match(CANDIDATE) ?? [];
+      return named
+        .filter((token) => !declared.has(token) && !RESPONSE_ONLY.has(token))
+        .map((token) => `${tool.name} names ${token}, not in its inputSchema`);
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
   it("exposes questionnaire_populate (read) and questionnaire_extract (write)", () => {
     const defs = tools.getToolSchemas();
     const pop = defs.find((t) => t.name === "questionnaire_populate");
