@@ -28,9 +28,12 @@
 
     <!-- Step: code -->
     <div id="step-code" hidden>
-      <p class="setup-sub"><span id="code-lead">We sent an 8-digit code
-          to</span> <b id="code-email"></b>.</p>
-      <p class="auth-fine" id="code-note" hidden></p>
+      <!-- The lede is set from JS. Three answers, not two: the code was sent
+           (#262 cooldown means nothing was sent just now), or we never saw it
+           leave and must not claim we did (#220). -->
+      <p class="setup-sub"><span id="code-lede">We sent an 8-digit code to</span>
+        <b id="code-email"></b>.</p>
+      <p class="setup-sub" id="code-note" hidden></p>
       <label class="field-label" for="code">Code</label>
       <input class="field code-input" id="code" inputmode="numeric"
              maxlength="8" placeholder="••••••••" autocomplete="one-time-code">

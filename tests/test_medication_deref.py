@@ -231,3 +231,34 @@ def test_a_medication_with_no_label_still_earns_the_source_sentence():
 
     assert items[0]["uncoded"] is True
     assert items[0]["name"] == "recorded but not coded at the source"
+
+
+def test_a_contained_or_uuid_reference_never_claims_the_source_sent_free_text():
+    """The fourth route to the false sentence, missed by #379.
+
+    `resolve` returns "not-a-ref" for any reference that is not
+    `Medication/<id>` — which includes `#contained` and `urn:uuid:` targets.
+    Both are ordinary FHIR: a contained Medication and a bundle-local one.
+
+    We decline to chase those, so we learn nothing about how the source coded
+    them — exactly the state "unavailable" and "not-attempted" describe. They
+    were routed to the source-blame wording instead, which asserts a finding
+    about the upstream feed from a branch that never looked.
+
+    A MedicationRequest with an INLINE uncoded concept and no reference at all
+    is different: there `lookup_reason` is None, we did see the concept, and
+    it genuinely had no code. That case keeps the source sentence, and
+    test_a_medication_with_no_label_still_earns_the_source_sentence guards it.
+    """
+    hc = _StubHC({})
+    resolver = _medication_resolver(hc, "t1")
+
+    for ref in ("#med-1", "urn:uuid:1e2d3c4b-0000-0000-0000-000000000001"):
+        items = _summarize_bundle(
+            {"entry": [_med_request("mr1", ref=ref)]},
+            limit=10, resolve_ref=resolver)
+        assert items[0]["unreadable"] is True, ref
+        assert not items[0].get("uncoded"), (
+            f"{ref} was reported as uncoded at the source, but we never "
+            "looked at it")
+    assert hc.reads == [], "a non-Medication reference was fetched"

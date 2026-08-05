@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import math
 import secrets
 import time
 from contextlib import contextmanager
@@ -85,7 +86,14 @@ class AccountService:
     def _hash(code: str) -> str:
         return hashlib.sha256(code.encode()).hexdigest()
 
-    def start_email_code(self, email: str, purpose: str = "verify") -> None:
+    def start_email_code(self, email: str, purpose: str = "verify") -> int:
+        """Mint and send a one-time code.
+
+        Returns 0 when a code was actually sent, otherwise the whole seconds
+        until another may be requested. The cooldown branch is not a failure —
+        the person still holds a live code — but it is not a send either, and
+        the caller must not report one it never observed (#262).
+        """
         email = email.strip().lower()
         if "@" not in email or len(email) > 255:
             raise AuthError("Enter a valid email address.")
@@ -98,9 +106,14 @@ class AccountService:
                       .filter_by(email=email, used=False)
                       .filter(EmailToken.exp >= now())
                       .order_by(EmailToken.exp.desc()).first())
-            if recent is not None and (recent.exp - now()) > (
-                    CODE_TTL - RESEND_COOLDOWN):
-                return
+            if recent is not None:
+                # exp is mint-time + CODE_TTL, so whatever the code has left
+                # beyond its post-cooldown life is the cooldown that remains.
+                remaining = ((recent.exp - now())
+                             - (CODE_TTL - RESEND_COOLDOWN))
+                if remaining > 0:
+                    # Round up: never tell someone to retry a moment early.
+                    return max(1, math.ceil(remaining))
             # One live code at a time: retire any prior unused codes so an
             # attacker can't accumulate many simultaneously-valid guesses.
             s.query(EmailToken).filter_by(
@@ -131,6 +144,9 @@ class AccountService:
             raise MailUnconfirmed(
                 "We couldn't confirm your code was sent. Check your inbox — "
                 "if nothing arrives, ask for another code in 30 seconds.")
+        # SENT: no cooldown to report. The early return above is the only path
+        # that reports one (#262).
+        return 0
 
     def verify_email_code(self, email: str, code: str) -> Account:
         email = email.strip().lower()

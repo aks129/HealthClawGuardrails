@@ -3,8 +3,10 @@
 
 Registered on r6_blueprint (under /r6/fhir). Read-shaped: tenant-read-
 authenticated + AuditEvent (PHI-free detail). Evaluates preventive-care gaps
-for ?subject=Patient/<id> against the tenant's stored Conditions,
-Observations, Immunizations, and Procedures.
+for ?subject=Patient/<id>, or for the tenant's own Patient when no subject is
+supplied, against the tenant's stored Conditions, Observations, Immunizations,
+and Procedures. The `subjectResolution` parameter reports which of those
+happened, and names the failure when neither could.
 """
 import json
 import logging
@@ -46,6 +48,35 @@ def register_caregaps_routes(blueprint, deps):
                         subject = ref.get("reference") or subject
         return subject
 
+    def _resolve_subject(supplied, tenant_id):
+        """Return (subject_reference, state).
+
+        Both production callers — CareAgents' get_care_gaps and the care-gaps
+        MCP App page — post an empty body with no subject, so `supplied` was
+        None and `_resources_for` compared every stored subject.reference
+        against None. Nothing matched, the evaluator saw an empty record, and
+        the patient was told nothing was due (#389). The tenant already scopes
+        the read, so the tenant's own Patient is the default here as it is
+        elsewhere (r6/actions/review.py `_load_patient`).
+
+        A fallback that cannot land is its OWN outcome and never an empty
+        list. No Patient row and more than one Patient row each return a
+        state, which travels to the caller in the consumer summary — the
+        engine itself cannot tell the difference afterwards, because an
+        unidentifiable patient produces exactly the rule results a healthy
+        one does.
+        """
+        if supplied:
+            return supplied, "supplied"
+        # Two rows is all it takes to know the match is ambiguous.
+        rows = R6Resource.query.filter_by(
+            resource_type="Patient", tenant_id=tenant_id).limit(2).all()
+        if not rows:
+            return None, "no-patient"
+        if len(rows) > 1:
+            return None, "ambiguous-patient"
+        return f"Patient/{rows[0].id}", "tenant-default"
+
     def _patient_for(subject, tenant_id):
         if not subject or not subject.startswith("Patient/"):
             return None
@@ -74,25 +105,39 @@ def register_caregaps_routes(blueprint, deps):
         if auth_err is not None:
             return auth_err[0], auth_err[1]
 
-        subject = _subject_from_request()
-        patient = _patient_for(subject, tenant_id)
-        conditions = _resources_for("Condition", subject, tenant_id)
-        observations = _resources_for("Observation", subject, tenant_id)
-        immunizations = _resources_for("Immunization", subject, tenant_id)
-        procedures = _resources_for("Procedure", subject, tenant_id)
-        as_of = date.today().isoformat()
+        supplied = _subject_from_request()
+        subject, state = _resolve_subject(supplied, tenant_id)
+        unresolved = state if state in ("no-patient", "ambiguous-patient") else None
 
+        # `supplied`, NOT `subject`. Feeding the evaluator the Patient the
+        # fallback just resolved makes every age-gated rule resolve, which
+        # changes WHICH screenings a person is told they are due for. That is
+        # clinical output and it is the second half of #389, gated on CTO
+        # sign-off and Dr. Magan's review — deliberately not this change.
+        # Until then age stays unknown on the fallback path, those rules stay
+        # `indeterminate`, and the consumer summary says why it is empty
+        # instead of reading as "nothing due".
+        patient = _patient_for(supplied, tenant_id)
+
+        # No subject means nothing to compare against, so we do not pretend to
+        # have read anything.
+        def _for(resource_type):
+            return _resources_for(resource_type, subject, tenant_id) if subject else []
+
+        as_of = date.today().isoformat()
         results = evaluate_care_gaps(
-            patient, conditions=conditions, observations=observations,
-            immunizations=immunizations, procedures=procedures, as_of=as_of)
+            patient, conditions=_for("Condition"),
+            observations=_for("Observation"),
+            immunizations=_for("Immunization"), procedures=_for("Procedure"),
+            as_of=as_of)
 
         summary = build_caregaps_summary(results)
-        consumer = build_consumer_summary(results)
+        consumer = build_consumer_summary(results, unresolved=unresolved)
 
         record_audit_event(
             "read", resource_type="Patient", resource_id=None,
             agent_id=request.headers.get("X-Agent-Id"), tenant_id=tenant_id,
-            detail=(f"care-gaps; evaluated={summary['total']} "
+            detail=(f"care-gaps; subject={state} evaluated={summary['total']} "
                     f"due={summary['due']}"))
 
         return jsonify({
@@ -100,6 +145,8 @@ def register_caregaps_routes(blueprint, deps):
             "parameter": [
                 {"name": "summary", "valueString": json.dumps(summary)},
                 {"name": "consumerSummary", "valueString": json.dumps(consumer)},
+                {"name": "subjectResolution",
+                 "valueString": json.dumps({"state": state, "subject": subject})},
                 {"name": "detail", "valueString": json.dumps(results)},
                 {"name": "disclaimer", "valueString": _DISCLAIMER},
             ],

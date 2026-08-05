@@ -7,6 +7,9 @@ exact record that produced the claim.
 Design rules (enforced by tests):
 1. Unknown is never absent. Empty input lists produce empty section lists,
    not "none" strings. The template decides how to render an empty section.
+   Care gaps go further and carry their own state (see CareGapsSection): for
+   that section an empty list is itself a clinical claim, so it is only made
+   when the screening review actually produced one.
 2. No inference. Every output field projects a literal value from the record.
    The engine never derives a clinical conclusion the record doesn't state.
 3. Read-only. The engine has no write path. It never modifies the input dicts.
@@ -25,6 +28,34 @@ class BriefField:
     source_id: str    # FHIR resource.id — used to build the "View source" link
 
 
+# The care-gaps section has three states, not two: gaps found, no gaps found,
+# and could-not-evaluate. The third one exists because the first two are both
+# answers and the empty list that used to stand in for a failure reads to a
+# patient as "you are up to date on your cancer screenings" (#381). Modelled
+# on r6/labs/interpret.py's _indeterminate(): a result we could not judge
+# carries a reason and is never dressed up as a clean one.
+CARE_GAPS_OK = "ok"
+CARE_GAPS_UNAVAILABLE = "unavailable"
+
+CARE_GAPS_REASON_NO_RESULT = "the screening review did not run"
+CARE_GAPS_REASON_ENGINE_ERROR = "the screening review could not be completed"
+CARE_GAPS_REASON_UNREADABLE = "the screening review returned an unreadable result"
+
+
+@dataclass
+class CareGapsSection:
+    """The care-gaps fields plus whether the screening review ran.
+
+    Deliberately not a bare list. A list carries two states and the third one
+    is the whole point, so callers have to reach through `.fields` — which
+    makes "could not evaluate" impossible to mistake for "nothing is due".
+    `status` defaults to unavailable: the ok state is earned, never assumed.
+    """
+    fields: list[BriefField] = field(default_factory=list)
+    status: str = CARE_GAPS_UNAVAILABLE
+    reason: str = CARE_GAPS_REASON_NO_RESULT
+
+
 @dataclass
 class BriefResult:
     problems: list[BriefField] = field(default_factory=list)
@@ -32,6 +63,10 @@ class BriefResult:
     labs: list[BriefField] = field(default_factory=list)
     care_gaps: list[BriefField] = field(default_factory=list)
     visits: list[BriefField] = field(default_factory=list)
+    # care_gaps alone cannot say whether it is empty because nothing is due or
+    # because nothing ran. These two say which.
+    care_gaps_status: str = CARE_GAPS_UNAVAILABLE
+    care_gaps_reason: str = CARE_GAPS_REASON_NO_RESULT
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +244,26 @@ def build_labs(observations: list[dict]) -> list[BriefField]:
     return out
 
 
-def build_care_gaps(care_gap_result: dict) -> list[BriefField]:
-    """Open preventive-care gaps from the $care-gaps output."""
-    consumer = care_gap_result.get("consumer") or {}
+def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
+    """Open preventive-care gaps from the $care-gaps output.
+
+    `care_gap_result` is one of two things: a successful evaluation, which is
+    a "consumer" payload carrying a "due" list, or a caller's explicit
+    {"status": "unavailable", "reason": ...} marker. Anything else — {}, a
+    payload with no due list, a non-dict — is unavailable. "Nothing is due"
+    is a clinical claim about cancer screening, and it is only ever repeated
+    from a result that made it.
+    """
+    if not isinstance(care_gap_result, dict) or not care_gap_result:
+        return CareGapsSection(reason=CARE_GAPS_REASON_NO_RESULT)
+    if care_gap_result.get("status") == CARE_GAPS_UNAVAILABLE:
+        return CareGapsSection(
+            reason=care_gap_result.get("reason") or CARE_GAPS_REASON_NO_RESULT)
+
+    consumer = care_gap_result.get("consumer")
+    if not isinstance(consumer, dict) or "due" not in consumer:
+        return CareGapsSection(reason=CARE_GAPS_REASON_UNREADABLE)
+
     due_items = consumer.get("due") or []
     out = []
     for item in due_items:
@@ -223,7 +275,7 @@ def build_care_gaps(care_gap_result: dict) -> list[BriefField]:
             source_type="MeasureReport",
             source_id=item.get("id") or item.get("measure_id", ""),
         ))
-    return out
+    return CareGapsSection(fields=out, status=CARE_GAPS_OK, reason="")
 
 
 def build_visits(encounters: list[dict]) -> list[BriefField]:
@@ -261,13 +313,18 @@ def generate_brief(
     """Generate a structured appointment brief from FHIR resource lists.
 
     All inputs may be empty lists / empty dicts. Empty inputs produce empty
-    section lists — never error strings. The unknown-never-absent rule is
-    enforced: this function never returns a string like 'none' or 'no records'.
+    section lists — never error strings. The unknown-never-absent rule holds
+    for the wording *and* for the shape: no section says 'none' or 'no
+    records', and the care-gaps section reports whether it ran at all, so an
+    empty list there is never read back as reassurance (#381).
     """
+    gaps = build_care_gaps(care_gap_result)
     return BriefResult(
         problems=build_problems(conditions),
         medications=build_medications(medication_requests),
         labs=build_labs(observations),
-        care_gaps=build_care_gaps(care_gap_result),
+        care_gaps=gaps.fields,
         visits=build_visits(encounters),
+        care_gaps_status=gaps.status,
+        care_gaps_reason=gaps.reason,
     )

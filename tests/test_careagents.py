@@ -356,6 +356,60 @@ def test_send_code_calls_a_lost_answer_unconfirmed_not_failed(monkeypatch):
     assert sending(status=429) == mailmod.NOT_SENT
     assert sending(status=200) == mailmod.SENT
 
+# --- engine pool settings (#221) ---------------------------------------------
+# Honest scope: these assert what make_engine hands to create_engine. They do
+# NOT prove that a dropped connection is recovered — that needs a real server
+# whose connection you can kill mid-pool, which this suite has no way to do.
+# What they buy is a fence around settings that are invisible in review and
+# whose absence only shows up as intermittent 500s after an idle period.
+
+def _engine_kwargs(url, monkeypatch):
+    """Capture the kwargs make_engine passes to create_engine for `url`.
+
+    The spy returns a real in-memory SQLite engine so create_all() and
+    _ensure_columns() still run — a Postgres URL must be assertable without a
+    Postgres server.
+    """
+    import careagents.models as models
+    seen = {}
+    real = models.create_engine
+
+    def _spy(engine_url, **kwargs):
+        seen.update(kwargs)
+        return real("sqlite:///:memory:",
+                    connect_args={"check_same_thread": False}, future=True)
+
+    monkeypatch.setattr(models, "create_engine", _spy)
+    models.make_engine(url)
+    return seen
+
+
+def test_postgres_engine_is_built_with_pre_ping_and_recycle(monkeypatch):
+    """MUTATION: drop either key from make_engine's pool_kwargs and this fails.
+
+    Managed Postgres closes idle connections; a pooled one handed out after a
+    quiet period fails on first use. pool_recycle must stay under the pooler's
+    idle timeout (see the comment in models.py for why 300).
+    """
+    kwargs = _engine_kwargs("postgresql://u:p@db:5432/care", monkeypatch)
+    assert kwargs.get("pool_pre_ping") is True
+    assert kwargs.get("pool_recycle") == 300
+    assert kwargs["pool_recycle"] < 600, "must retire before the pooler does"
+
+
+def test_sqlite_engine_is_given_no_pool_options(monkeypatch):
+    """The gate is the URL scheme. This suite runs on sqlite:///:memory:, where
+    a pre-ping is meaningless — there is no server to have closed anything."""
+    kwargs = _engine_kwargs("sqlite:///:memory:", monkeypatch)
+    assert "pool_pre_ping" not in kwargs
+    assert "pool_recycle" not in kwargs
+
+
+def test_a_real_sqlite_engine_has_pre_ping_off(monkeypatch):
+    """Guards the guard: the spy above could pass while the real engine differs."""
+    from careagents.models import make_engine
+    assert make_engine("sqlite:///:memory:").pool._pre_ping is False
+
 
 # --- chat persistence (#222) --------------------------------------------------
 
@@ -1952,6 +2006,79 @@ def test_email_resend_cooldown_suppresses_duplicate_send(svc, monkeypatch):
     assert len(codes) == 1
 
 
+def test_start_email_code_reports_the_seconds_left_on_the_cooldown(
+        svc, monkeypatch):
+    """MUTATION: `return` (rather than the seconds left) on the cooldown branch
+    and this fails — that bare return is what left the route with nothing to
+    distinguish a send from a suppression (#262)."""
+    from careagents.accounts import RESEND_COOLDOWN
+    import careagents.mail as mailmod
+    codes = []
+    monkeypatch.setattr(mailmod, "send_code", _sink_code(codes))
+    assert svc.start_email_code("secs@example.com") == 0, "a real send waits 0"
+    retry_after = svc.start_email_code("secs@example.com")
+    assert isinstance(retry_after, int)
+    assert 0 < retry_after <= RESEND_COOLDOWN
+    assert len(codes) == 1, "the cooldown must still suppress the send"
+
+
+def test_auth_email_does_not_claim_a_send_the_cooldown_suppressed(
+        app, monkeypatch):
+    """The front door: taps resend, is told it sent, waits for an email nobody
+    sent (#262). The cooldown stays — only the claim goes."""
+    import careagents.mail as mailmod
+    codes = []
+    monkeypatch.setattr(mailmod, "send_code", _sink_code(codes))
+    c = app.test_client()
+
+    first = c.post("/api/auth/email", json={"email": "honest@example.com"})
+    assert first.status_code == 200
+    assert first.get_json() == {"sent": True}
+
+    second = c.post("/api/auth/email", json={"email": "honest@example.com"})
+    # 200, not 4xx: nothing went wrong and the code they hold is still live,
+    # so the UI still advances to code entry.
+    assert second.status_code == 200
+    body = second.get_json()
+    assert body["sent"] is False
+    assert body["reason"] == "cooldown"
+    assert isinstance(body["retry_after"], int) and body["retry_after"] > 0
+    assert len(codes) == 1, "the cooldown must still suppress the send"
+
+
+def test_email_code_response_never_reveals_whether_an_account_exists(
+        app, svc, monkeypatch):
+    """The flow deliberately answers the same for a stranger and a member; a
+    truthful cooldown state must not become an enumeration oracle.
+
+    Both branches turn only on ca_email_tokens — a state the requester just
+    created — so an attacker learns nothing about ca_accounts either way.
+    """
+    import careagents.mail as mailmod
+    monkeypatch.setattr(mailmod, "send_code", _sink_code([]))
+    _make_account(svc, monkeypatch, "member@example.com")
+    monkeypatch.setattr(mailmod, "send_code", _sink_code([]))
+    c = app.test_client()
+
+    def _probe(email):
+        # The member's own code was consumed by verify, so both addresses
+        # start from the same place: no live token.
+        first = c.post("/api/auth/email", json={"email": email})
+        second = c.post("/api/auth/email", json={"email": email})
+        return ((first.status_code, first.get_json()),
+                (second.status_code, second.get_json()))
+
+    member_send, member_cooldown = _probe("member@example.com")
+    stranger_send, stranger_cooldown = _probe("stranger@example.com")
+
+    assert member_send == stranger_send
+    # retry_after is a clock reading, not an account fact — compare the rest.
+    assert member_cooldown[0] == stranger_cooldown[0]
+    assert (member_cooldown[1].keys() == stranger_cooldown[1].keys())
+    assert member_cooldown[1]["sent"] == stranger_cooldown[1]["sent"] is False
+    assert member_cooldown[1]["reason"] == stranger_cooldown[1]["reason"]
+
+
 def test_gated_pages_redirect_or_401_without_session(app):
     c = app.test_client()
     assert c.get("/home").status_code == 302
@@ -2193,6 +2320,100 @@ def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     assert c.get("/brief?agent=nope").status_code == 302
+
+
+# --- care gaps: the third state (#381) ------------------------------------
+#
+# "The screening review did not run" and "you have no screenings due" are
+# different sentences, and the second one is a clinical claim. The page must
+# never make it on the first one's behalf.
+
+_CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
+                      "brief-section-care-gaps")
+_UNAVAILABLE_COPY = b"Screening review unavailable"
+_NO_GAPS_COPY = b"no preventive care items"
+
+
+def _brief_with_care_gaps(status, fields=()):
+    return {
+        "resourceType": "Basic",
+        "extension": [{
+            "url": _CARE_GAPS_SECTION,
+            "extension": (
+                [{"url": "field", "valueString": f} for f in fields]
+                + [{"url": "status", "valueString": status}]
+            ),
+        }],
+    }
+
+
+def _agent_for_brief(c, svc, monkeypatch):
+    _login(c, svc, monkeypatch)
+    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                       "connection_id": conn_id}
+                  ).get_json()["id"]
+
+
+def test_brief_care_gaps_unavailable_is_not_rendered_as_no_gaps(app, svc,
+                                                                monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: _brief_with_care_gaps("unavailable"))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert _UNAVAILABLE_COPY in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+
+
+def test_brief_care_gaps_evaluated_and_empty_says_no_items(app, svc, monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: _brief_with_care_gaps("ok"))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert _NO_GAPS_COPY in resp.data
+    assert _UNAVAILABLE_COPY not in resp.data
+
+
+def test_brief_care_gaps_evaluated_with_gaps_lists_them(app, svc, monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    field = ('{"label":"Colorectal cancer screening","value":"May be due",'
+             '"sourceType":"MeasureReport","sourceId":"gap-1"}')
+    monkeypatch.setattr(
+        FakeClient, "fetch_appointment_brief",
+        lambda self, tenant: _brief_with_care_gaps("ok", fields=[field]))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert b"Colorectal cancer screening" in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+    assert _UNAVAILABLE_COPY not in resp.data
+
+
+def test_brief_missing_care_gaps_marker_is_not_reassurance(app, svc, monkeypatch):
+    """An unmarked brief — an older engine, a truncated payload, no brief at
+    all — is not an evaluation, so it cannot say "nothing due"."""
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: None)
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert _UNAVAILABLE_COPY in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+
+
+def test_parse_care_gaps_status_defaults_to_not_ok():
+    from careagents.app import _parse_care_gaps_status
+    assert _parse_care_gaps_status(_brief_with_care_gaps("ok")) == "ok"
+    assert _parse_care_gaps_status(_brief_with_care_gaps("unavailable")) != "ok"
+    assert _parse_care_gaps_status({}) != "ok"
+    assert _parse_care_gaps_status(None) != "ok"
 
 
 def test_parse_brief_sections_extracts_fields():
@@ -3227,6 +3448,40 @@ _CA = _pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_CA / "static" / "home.js").read_text()
 _HOME_HTML = (_CA / "templates" / "home.html").read_text()
 _CSS = (_CA / "static" / "careagents.css").read_text()
+_AUTH_JS = (_CA / "static" / "auth.js").read_text()
+_AUTH_HTML = (_CA / "templates" / "auth.html").read_text()
+
+
+def test_auth_js_reads_the_sent_flag_before_saying_a_code_was_sent():
+    """MUTATION: delete the `res.d.sent === false` branch -> red.
+
+    Same honest scope as the guards below: source-level, executes no JS. The
+    server can answer truthfully and the screen still say "We sent a code" —
+    the lie #262 is about lives in the copy, so the copy is what needs a
+    fence.
+    """
+    assert "res.d.sent === false" in _AUTH_JS, "cooldown state never read"
+    assert "res.d.retry_after" in _AUTH_JS, "the wait is never shown"
+    # Both ledes must exist, and the cooldown one must not claim a fresh send.
+    assert '"We sent an 8-digit code to"' in _AUTH_JS
+    assert '"We sent a code moments ago to"' in _AUTH_JS
+
+
+def test_auth_js_never_builds_markup_from_strings():
+    """The email address and a server-supplied number reach the DOM here."""
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert sink not in _AUTH_JS, sink
+
+
+def test_auth_dialog_selector_contract():
+    """auth.js addresses these by id; a template rename would break the copy at
+    runtime only, with no server-side signal."""
+    for sel in ('id="code-lede"', 'id="code-note"', 'id="code-email"',
+                'id="step-code"', 'id="email-btn"', 'id="verify-btn"'):
+        assert sel in _AUTH_HTML, sel
+    # The lede ships as the truthful default and is overwritten per response;
+    # a hardcoded "We sent" outside the span would survive the JS.
+    assert "We sent an 8-digit code to</span>" in _AUTH_HTML
 
 
 def test_hub_js_uses_no_blocking_browser_dialogs():
@@ -3580,6 +3835,44 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert out["series"] == [{"name": "Total cholesterol", "readings": 2,
                               "trend_plottable": True}]
     assert "244" not in _json.dumps(out), "the tool handed the model raw values"
+
+
+def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
+        cfg, svc, monkeypatch):
+    """The unresolved state has to survive the last hop to the model, or the
+    engine's honesty is thrown away one call short of the person (#389).
+
+    MUTATION: drop the note branch in _execute_tool -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def care_gaps(self, _tenant):
+            return {"summary": {}, "consumer": {
+                "lines": [], "unevaluated": "no-patient",
+                "unevaluated_note": "nothing was examined"}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
+    assert "no-patient" in out["note"]
+    assert "Do NOT tell the person they have no screenings due" in out["note"]
+
+
+def test_care_gaps_with_real_findings_carries_no_could_not_run_note(cfg, svc):
+    """The note is earned, not boilerplate — a check that ran says nothing
+    about having failed."""
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def care_gaps(self, _tenant):
+            return {"summary": {}, "consumer": {
+                "lines": [{"rule_id": "bp-screening", "message": "due"}]}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
+    assert "note" not in out
 
 
 def test_show_lab_timeline_with_no_match_emits_no_card_and_forbids_absence(
