@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 import pytest
 
@@ -792,6 +792,204 @@ def test_expired_worker_lease_is_recovered_for_another_worker(
             run_id=run_id).order_by(AgentRunEvent.id.asc()).all()]
     assert kinds == [
         "run.queued", "run.started", "run.lease_expired", "run.started"]
+
+
+def test_lost_claim_response_is_redelivered_within_the_lease(
+        app, client, auth_headers, internal_headers):
+    """A claim that commits and never reaches its worker is handed back (#374).
+
+    The transport failure lands *after* `claim_next` commits — a 502, a deploy
+    window, a dropped connection — so the run sits `running` with a live lease
+    and nobody executing it. The worker's next poll has to answer with that
+    run. Answering 204 is what makes the patient's chat hang for the whole
+    lease with nothing on the SSE stream, and then resume as a second attempt.
+
+    MUTATION: delete the `_redeliver_own_claim` call in `claim_next`
+    (r6/agent_runs/service.py). The second claim answers 204 again.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+
+    # Nothing the worker can observe separates this from "no work available":
+    # the response it would have read never arrived.
+    assert _claim(client, internal_headers).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.lease_expires_at = utcnow() + timedelta(seconds=2)
+        db.session.commit()
+
+    redelivered = _claim(client, internal_headers)
+
+    assert redelivered.status_code == 200
+    body = redelivered.get_json()
+    assert body["id"] == run_id
+    assert body["worker_id"] == "worker-1"
+    assert body["message"] == {
+        "id": message["id"], "role": "user", "text": "hello"}
+    # A response nobody read is not an execution. Counting it as one produces
+    # the false `attempt > 1` this defect is measured by.
+    assert body["attempt"] == 1
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        lease = run.lease_expires_at
+        if lease.tzinfo is None:
+            lease = lease.replace(tzinfo=timezone.utc)
+        # The lease is re-armed for the worker that is only now starting.
+        assert lease > utcnow() + timedelta(seconds=30)
+        kinds = [event.event_type for event in AgentRunEvent.query.filter_by(
+            run_id=run_id).order_by(AgentRunEvent.id.asc()).all()]
+    # The redelivery is named rather than silent: a recovery nobody can count
+    # is the same blind spot as the hang it replaces.
+    assert kinds == ["run.queued", "run.started", "run.claim_redelivered"]
+
+
+def test_repeated_lost_responses_are_each_redelivered(
+        client, auth_headers, internal_headers):
+    """One deploy window loses several responses in a row, not just the first.
+
+    MUTATION: drop the `run.claim_redelivered` exclusion from
+    `_worker_never_received` (r6/agent_runs/service.py). The engine then reads
+    its own marker as worker activity and the second redelivery answers 204.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+
+    assert _claim(client, internal_headers).status_code == 200
+    again = _claim(client, internal_headers)
+
+    assert again.status_code == 200
+    assert again.get_json()["id"] == run_id
+    assert again.get_json()["attempt"] == 1
+
+
+def test_a_run_with_a_side_effect_in_flight_is_never_redelivered(
+        app, client, auth_headers, internal_headers):
+    """Redelivery must never become a second way to run one tool.
+
+    A registered tool call proves the worker read its claim response, so a
+    lost response no longer explains the silence. That ambiguity belongs to
+    lease recovery, which routes a running tool to `needs_reconciliation`
+    instead of handing the side effect to anyone.
+
+    `_worker_never_received` reads this off the event log rather than the tool
+    table, so this test also asserts the coupling it depends on: a tool call
+    that left no event would make the guard blind to exactly this case.
+
+    MUTATION: drop the event clause from `_worker_never_received`. The claim
+    hands back a run whose side effect may already have happened.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    call_id = client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls",
+        headers=internal_headers,
+        json={
+            "worker_id": "worker-1",
+            "provider_call_id": "possibly-completed-side-effect",
+            "tool_name": "book_appointment",
+            "arguments": {"slot": "slot-1"},
+        },
+    ).get_json()["id"]
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "running"},
+    ).status_code == 200
+
+    assert _claim(client, internal_headers).status_code == 204
+
+    with app.app_context():
+        # The coupling the guard leans on: a side effect always leaves a
+        # durable trace, so reading the event log sees the tool table.
+        assert AgentRunEvent.query.filter_by(
+            run_id=run_id, event_type="tool.registered").count() == 1
+        run = db.session.get(AgentRun, run_id)
+        run.lease_expires_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+    assert _claim(
+        client, internal_headers, worker="worker-2").status_code == 204
+    with app.app_context():
+        assert db.session.get(AgentRun, run_id).status == "waiting_for_human"
+        assert db.session.get(AgentToolCall, call_id).status == (
+            "needs_reconciliation")
+
+
+def test_a_run_that_reported_progress_is_never_redelivered(
+        client, auth_headers, internal_headers):
+    """A durable event is the worker saying it read the claim response.
+
+    Without this the claim loop could hand a run to a second reader while the
+    first is still mid-inference — two executions of one patient turn.
+
+    MUTATION: drop the event clause from `_worker_never_received`. The claim
+    answers 200 for a run whose worker is already working on it.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/events",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "type": "agent.tool",
+              "payload": {"name": "search_records"}},
+    ).status_code == 201
+
+    assert _claim(client, internal_headers).status_code == 204
+
+
+def test_an_expired_lease_is_recovered_rather_than_redelivered(
+        app, client, auth_headers, internal_headers):
+    """Redelivery covers a live lease only. A dead one is still a real retry.
+
+    MUTATION: drop the `lease_expires_at > now` clause from
+    `_redeliver_own_claim`. The expired lease is then handed back as attempt 1
+    and `run.lease_expired` stops being emitted — the count this defect is
+    measured by would fall for the wrong reason.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.lease_expires_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    recovered = _claim(client, internal_headers)
+
+    assert recovered.status_code == 200
+    assert recovered.get_json()["attempt"] == 2
+    with app.app_context():
+        kinds = [event.event_type for event in AgentRunEvent.query.filter_by(
+            run_id=run_id).order_by(AgentRunEvent.id.asc()).all()]
+    assert kinds == [
+        "run.queued", "run.started", "run.lease_expired", "run.started"]
+
+
+def test_a_run_past_its_deadline_is_never_redelivered(
+        app, client, auth_headers, internal_headers):
+    """A claim never hands out a run whose deadline has already passed.
+
+    MUTATION: drop the `deadline_at > now` clause from
+    `_redeliver_own_claim`. The claim answers 200 with a run that can only
+    fail, instead of leaving it to the deadline sweep.
+    """
+    message = _message(client, auth_headers)
+    run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
+    assert _claim(client, internal_headers).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+
+    assert _claim(client, internal_headers).status_code == 204
+
+    swept = client.get(
+        "/command-center/api/runs/workers/health", headers=internal_headers)
+    assert swept.get_json()["expired_runs"] == 1
+    with app.app_context():
+        assert db.session.get(AgentRun, run_id).status == "failed"
 
 
 def test_run_detail_redacts_tool_payloads_from_operator_projection(

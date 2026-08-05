@@ -303,6 +303,91 @@ def _as_utc(value):
     return value.astimezone(timezone.utc)
 
 
+def _worker_never_received(run: AgentRun) -> bool:
+    """True when the queue holds no evidence the worker read its claim.
+
+    Every write a worker makes to a run appends a durable event in the same
+    transaction: `register_tool_call` commits `tool.registered` alongside the
+    call row, tool transitions append `tool.<status>`, progress arrives as
+    `agent.*`. So "nothing since `run.started`" is the whole question, and it
+    covers a side effect in flight — the case that must never be handed to a
+    second reader. A run that went quiet after doing something is ambiguous,
+    and ambiguity belongs to lease recovery, which routes a running tool to
+    `needs_reconciliation` (`_preserve_ambiguous_tools`). Only a run that did
+    nothing at all is explained by a response its worker never received.
+
+    Tool calls are therefore not queried separately: a check that cannot fail
+    while `register_tool_call` holds is decoration, and the test for a tool in
+    flight asserts that coupling rather than trusting it.
+
+    This engine's own redelivery marker is not worker activity, so a second
+    lost response is recoverable too.
+    """
+    started = (
+        AgentRunEvent.query
+        .filter_by(tenant_id=run.tenant_id, run_id=run.id,
+                   event_type="run.started")
+        .order_by(AgentRunEvent.id.desc())
+        .first()
+    )
+    if started is None:
+        return False
+    reported = (
+        AgentRunEvent.query
+        .filter_by(tenant_id=run.tenant_id, run_id=run.id)
+        .filter(AgentRunEvent.id > started.id)
+        .filter(AgentRunEvent.event_type != "run.claim_redelivered")
+        .first()
+    )
+    return reported is None
+
+
+def _redeliver_own_claim(
+    worker_id: str,
+    now,
+    lease_seconds: int,
+) -> AgentRun | None:
+    """Hand a live claim back to the worker that never received its response.
+
+    A 502 after `claim_next` commits leaves the run `running` with `worker_id`
+    set and nobody executing it (#374). The worker cannot tell that from "no
+    work available", so it polls again — and until this path existed the run
+    stayed stranded for the whole lease, which is a patient watching an empty
+    chat stream for up to 60 seconds before the turn silently restarts as a
+    second attempt.
+
+    The claiming worker is the only safe recipient: `run_worker_pool` blocks
+    its slot inside `process()`, so a claim arriving under a worker id that
+    already owns a running run is proof that slot is not executing it.
+    """
+    owned = (
+        AgentRun.query
+        .filter(AgentRun.status == "running")
+        .filter(AgentRun.worker_id == worker_id)
+        .filter(AgentRun.lease_expires_at > now)
+        .filter(AgentRun.deadline_at > now)
+        .order_by(AgentRun.started_at.asc())
+        .with_for_update(skip_locked=True)
+        .first()
+    )
+    if owned is None or not _worker_never_received(owned):
+        return None
+
+    # `attempt` is not incremented: the run has not been executed once. The
+    # redelivery gets its own event instead, so a lost response stays as
+    # countable as the lease expiry it replaces.
+    owned.heartbeat_at = now
+    owned.lease_expires_at = min(
+        now + timedelta(seconds=lease_seconds),
+        _as_utc(owned.deadline_at),
+    )
+    append_event(owned, "run.claim_redelivered", {
+        "status": "running",
+        "attempt": owned.attempt,
+    })
+    return owned
+
+
 def claim_next(worker_id: str, lease_seconds: int = 60) -> AgentRun | None:
     """Recover expired leases and atomically claim the oldest queued run."""
     now = utcnow()
@@ -311,6 +396,16 @@ def claim_next(worker_id: str, lease_seconds: int = 60) -> AgentRun | None:
     # A live process that cannot reach or transact with the queue therefore
     # cannot keep readiness green merely by existing.
     _record_worker_presence(worker_id, now)
+
+    # Asked before the sweeps below, so the lease and deadline clauses in
+    # `_redeliver_own_claim` are the boundary rather than a restatement of one
+    # the recovery pass has already applied. A caller holding a stranded claim
+    # has work to do; the sweeps run on every other claim and on the readiness
+    # poll, which the runbook makes independent of any worker.
+    redelivered = _redeliver_own_claim(worker_id, now, lease_seconds)
+    if redelivered is not None:
+        db.session.commit()
+        return redelivered
 
     expired = (
         AgentRun.query

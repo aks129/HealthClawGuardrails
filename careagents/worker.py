@@ -14,6 +14,7 @@ import os
 import signal
 import socket
 import threading
+import uuid
 from datetime import datetime, timezone
 
 from careagents import llm
@@ -411,6 +412,19 @@ class RunWorker:
             raise RunDeadlineExceeded("run deadline exceeded")
 
 
+def _worker_base_id() -> str:
+    """Name this process instance, not just this host and PID.
+
+    HealthClaw hands a running run back to the worker id that claimed it when
+    the claim response was lost (#374), which is only safe while one id means
+    one live claim loop. A container restart can reuse both the hostname and
+    the PID — PID 1 under Docker is the ordinary case — so the instance suffix
+    is what keeps a restarted process from being handed the dead one's run.
+    """
+    host = socket.gethostname().split(".")[0][:48]
+    return f"careagents-{host}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
 class _IdleBackoff:
     """Per-slot idle poll interval for one worker pool.
 
@@ -448,8 +462,7 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
-    host = socket.gethostname().split(".")[0]
-    base_id = f"careagents-{host}-{os.getpid()}"
+    base_id = _worker_base_id()
     backoff = _IdleBackoff(cfg.run_worker_concurrency, cfg.run_poll_seconds,
                            cfg.run_poll_max_seconds)
 

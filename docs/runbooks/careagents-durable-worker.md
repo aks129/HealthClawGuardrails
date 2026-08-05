@@ -23,6 +23,18 @@ GET /api/chat/runs/<run_id>/events?agent_id=<agent_id>&after=<cursor>
 - Each model result is checkpointed before tools execute.
 - Tool identity is `(run_id, provider_call_id)`. Completed results are replayed
   after recovery without calling the tool again.
+- A claim whose response never reaches its worker — a 502, a dropped
+  connection, the seconds of a rolling redeploy — is redelivered on that
+  worker's next poll, with `attempt` unchanged and a `run.claim_redelivered`
+  event. Redelivery goes only to the worker id that claimed the run, and only
+  while the queue shows nothing since `run.started`: a run that registered a
+  tool or reported a step was received, so its silence is ambiguous and stays
+  with lease recovery. Without this the run sat `running` with a live lease
+  and no executor for the whole lease period, which the patient experiences as
+  a chat that hangs with nothing on the stream (#374).
+- A worker id therefore has to name one live claim loop, not one host and PID.
+  `careagents/worker.py` gives each process instance a random suffix, because
+  a restarted container can be handed both of the others back.
 - A tool left `running` after lease expiry has an unknown provider outcome. It
   moves to `needs_reconciliation`, and its run pauses in
   `waiting_for_human`. Workers never retry that side effect blindly.
@@ -328,6 +340,14 @@ ORDER BY last_seen_at DESC;
 SELECT id, run_id, tool_name, error_class
 FROM agent_tool_calls
 WHERE status = 'needs_reconciliation';
+
+-- Lost claim responses, recovered and unrecovered. The first counts claims
+-- the edge dropped after they committed; a rise tracks redeploys. The next
+-- two are what that used to cost before redelivery existed, so they should
+-- now move only on a real worker crash.
+SELECT count(*) FROM agent_run_events WHERE event_type = 'run.claim_redelivered';
+SELECT count(*) FROM agent_run_events WHERE event_type = 'run.lease_expired';
+SELECT count(*) FROM agent_runs WHERE attempt > 1;
 ```
 
 An increasing `needs_reconciliation` count requires provider-specific truth
