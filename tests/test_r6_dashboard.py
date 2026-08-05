@@ -817,3 +817,53 @@ class TestDemoAgentLoop:
             for name_entry in patient['name']:
                 for given in name_entry.get('given', []):
                     assert given.endswith('.'), f"Given name not redacted: {given}"
+
+    def test_demo_loop_is_idempotent(self, client, tenant_id, tenant_headers):
+        """Two presses of the demo button leave ONE of each resource.
+
+        The loop minted `demo-loop-{pt,obs,perm}-<uuid8>` per call, so every
+        press added a Patient — and the dashboard button plus `dashboard.spec.ts`
+        press it on every CI run. The demo tenant reached 19 Patients, at which
+        point $care-gaps correctly refused to guess whose preventive care to
+        evaluate and two steps of our own demo script stopped working (#415).
+        The guardrail showcase was what broke the guardrail showcase.
+
+        MUTATION: put the uuid8 suffix back on the ids -> red (2, not 1).
+        """
+        for _ in range(2):
+            resp = client.post('/r6/fhir/demo/agent-loop',
+                               content_type='application/json',
+                               headers={'X-Tenant-Id': tenant_id})
+            assert resp.status_code == 200
+
+        # Driven through the real search route, not the ORM: the accumulation
+        # was found by searching Patient on the live tenant.
+        for resource_type in ('Patient', 'Observation', 'Permission'):
+            search = client.get(f'/r6/fhir/{resource_type}',
+                                headers=tenant_headers)
+            assert search.status_code == 200
+            assert search.get_json()['total'] == 1, (
+                f'two demo runs left more than one {resource_type}')
+
+    def test_demo_loop_leaves_care_gaps_answerable(
+            self, client, tenant_id, tenant_headers):
+        """Step 4 of the 10-minute demo script, after two demo-button presses.
+
+        The ambiguity guard (#393) is untouched and must stay that way — it
+        resolves here because the tenant holds one patient again, not because
+        anything now guesses among several.
+        """
+        for _ in range(2):
+            client.post('/r6/fhir/demo/agent-loop',
+                        content_type='application/json',
+                        headers={'X-Tenant-Id': tenant_id})
+
+        resp = client.post('/r6/fhir/Patient/$care-gaps',
+                           headers=tenant_headers, json={})
+        assert resp.status_code == 200
+        params = resp.get_json()['parameter']
+        resolution = json.loads(
+            next(p for p in params
+                 if p['name'] == 'subjectResolution')['valueString'])
+        assert resolution == {'state': 'tenant-default',
+                              'subject': 'Patient/demo-loop-pt'}
