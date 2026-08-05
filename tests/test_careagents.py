@@ -1805,6 +1805,51 @@ def test_gated_pages_redirect_or_401_without_session(app):
     assert c.post("/api/connections/sample").status_code == 401
 
 
+def test_a_session_whose_account_is_gone_is_treated_as_signed_out(
+        app, svc, monkeypatch):
+    """MUTATION: check `session.get("account_id")` again in login_required
+    instead of resolving the account -> red.
+
+    A session outlives the row it points at every time someone uses the
+    self-serve delete (#203): the cookie stays in the browser, Back or an
+    older tab replays it, and the gate waved it through on the id alone.
+    current_account() then returned None and the handler dereferenced it —
+    `AttributeError: 'NoneType' object has no attribute 'id'` — a 500 at the
+    exact moment the person is checking whether the deletion worked (#265).
+    """
+    from careagents.models import Account
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    assert c.get("/home").status_code == 200          # the session is real
+    with svc.session() as s:
+        s.delete(s.query(Account).filter_by(email="gene@example.com").one())
+
+    # Pages: signed out, exactly like an expired session — never a 5xx.
+    for path in ("/home", "/chat?agent=x", "/brief"):
+        r = c.get(path)
+        assert r.status_code == 302, (path, r.status_code)
+        assert r.headers["Location"].endswith("/auth"), path
+
+    # API and WebAuthn paths keep their JSON 401 shape: a 302 to an HTML page
+    # is something fetch() follows and then fails to parse.
+    # The SSE route is in here deliberately: the gate has to answer before the
+    # generator exists, or the failure is a stream that never yields.
+    for path in ("/api/connections/catalog", "/api/labs/timeline?agent=x",
+                 "/api/chat/runs/r1/events"):
+        r = c.get(path)
+        assert r.status_code == 401, path
+        assert r.get_json() == {"error": "sign in"}, path
+    for path in ("/api/agents", "/api/connections/sample",
+                 "/webauthn/register/options"):
+        r = c.post(path, json={})
+        assert r.status_code == 401, path
+        assert r.get_json() == {"error": "sign in"}, path
+
+    # And the dead cookie is dropped, so nothing keeps replaying it.
+    with c.session_transaction() as sess:
+        assert "account_id" not in sess
+
+
 def test_webauthn_options_are_issued_when_authed(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
@@ -3092,6 +3137,32 @@ def test_hub_dialog_selector_contract():
                 'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
                 'id="delete-cancel"'):
         assert sel in _HOME_HTML, sel
+
+
+def test_a_background_message_does_not_scroll_the_page_under_an_open_modal():
+    """MUTATION: drop the open-modal condition from say() -> red.
+
+    say() scrolled unconditionally, including while a dialog covered the page:
+    with the wearables picker open, scrollY jumped 1284 -> 628, so dismissing
+    it left the user ~656px from where they were, beside an error about a
+    different tile (#269). Open state here IS the absence of `hidden` —
+    openDialog() and the consent card toggle that attribute and nothing else,
+    which is why `[hidden] { display: none !important; }` has to outrank
+    `.modal { display: flex }`.
+    """
+    import re
+    body = _HOME_JS.split("function say(")[1].split("\n  }")[0]
+    # Comments are stripped first: a selector quoted in prose is not a guard.
+    body = re.sub(r"//[^\n]*", "", body)
+    assert "scrollIntoView" in body
+    assert ".modal:not([hidden])" in body[:body.index("scrollIntoView")]
+    # The three facts that selector rests on, pinned where they live.
+    opens = re.findall(r'<div class="modal(?: [\w-]+)*"[^>]*>', _HOME_HTML)
+    assert opens
+    for tag in opens:
+        assert " hidden" in tag, tag
+    assert "[hidden] { display: none !important; }" in _CSS
+    assert re.search(r"modal\.hidden = false", _HOME_JS)
 
 
 def test_flash_cue_is_class_keyed_with_a_single_keyframe():

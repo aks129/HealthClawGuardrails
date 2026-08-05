@@ -126,7 +126,17 @@ def create_app(config: Config | None = None,
     def login_required(fn):
         @wraps(fn)
         def wrapper(*a, **k):
-            if not session.get("account_id"):
+            # Resolve the account, not just its id. A session outlives the row
+            # it points at whenever someone uses the self-serve delete (#203):
+            # the cookie stays in the browser, Back or an older tab replays it,
+            # and every handler behind this gate dereferences
+            # current_account(). Checking the id alone turned that into a 500
+            # at the moment the person is trying to confirm their records are
+            # gone (#265). A vanished account is an ended session, and this is
+            # the one place all protected routes pass through.
+            if current_account() is None:
+                if session.get("account_id"):
+                    session.clear()
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401

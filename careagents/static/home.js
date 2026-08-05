@@ -102,7 +102,13 @@
     el.hidden = false;
     // Only scrolls if it isn't already fully visible, and only as far as it
     // has to — no jump when the message is already under the user's thumb.
-    el.scrollIntoView({ block: "nearest" });
+    // Never while a dialog is up: the message is behind the overlay, so the
+    // scroll moves nothing the user can see and everything they come back to
+    // (#269). Open state is the absence of `hidden` — that attribute is what
+    // openDialog() and the consent card toggle.
+    if (!document.querySelector(".modal:not([hidden])")) {
+      el.scrollIntoView({ block: "nearest" });
+    }
   }
 
   // Scroll a section into view and pulse it — the in-page way to point at the
