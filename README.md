@@ -62,8 +62,9 @@ curl "https://app.healthclaw.io/r6/fhir/\$conformance?format=text"
 Point any MCP client at the **public demo server** — URL `https://mcp-demo-production-ee2c.up.railway.app/mcp`,
 no key required — then ask: *"Search my health records for lab results and explain them in plain
 language."* The demo server is unauthenticated but hard-pinned to a synthetic demo tenant, so it can
-only ever serve fake data. The **production endpoint** (`https://mcp-server-production-5112.up.railway.app/mcp`)
-requires a deployment-scoped `Authorization: Bearer <token>` — real records stay behind auth, always.
+only ever serve fake data. A separate **production endpoint** (`mcp-server-production-5112`) requires a
+deployment-scoped `Authorization: Bearer <token>` — real records stay behind auth, always. Hosted
+connectors cannot attach that header, so the demo URL above is the one to paste.
 One-command installs:
 `gemini extensions install https://github.com/aks129/HealthClawGuardrails` ·
 `claude plugin marketplace add aks129/HealthClawGuardrails` ·

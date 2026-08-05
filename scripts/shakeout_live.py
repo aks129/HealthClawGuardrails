@@ -2,6 +2,8 @@
 """Live-data shakeout scorecard — is the agent actually using the record?
 
     railway ssh --service HealthClawGuardrails \
+        "python scripts/shakeout_live.py --list-tenants"
+    railway ssh --service HealthClawGuardrails \
         "python scripts/shakeout_live.py --tenant <tenant-id>"
 
 or locally against any database:
@@ -12,7 +14,8 @@ Exit codes, matching scripts/prod_watch.py:
 
     0  every automatable row passes
     1  a row regressed
-    2  cannot evaluate (no database, empty tenant)
+    2  cannot evaluate (no database, or no behavioural row was scored —
+       an empty tenant, or the wrong one)
 
 Why this exists
 ---------------
@@ -38,6 +41,20 @@ enforced by the kernel and pinned by isolation tests; the residual check is
 reading an answer). Those are the owner's five minutes in the UI, with the
 exact questions listed in the plan doc. A scorecard that quietly checked
 less than it appears to would be worse than a narrow, stated one.
+
+Finding the tenant (#378)
+-------------------------
+`--list-tenants` exists because the first live run scored two tenants that
+reported every behavioural row as SKIP, which reads as "the deploy is
+unexercised" — while the agent was running on a third tenant found only by
+hand-querying `AgentRun`. A SKIP is supposed to mean "nothing has exercised
+this yet"; pointed at the wrong tenant it means "you are looking in the wrong
+place", and the scorecard could not tell those two apart. Distinguishing
+states honestly is the whole product, so a state it cannot name is a defect.
+
+The discovery listing carries tenant ids, counts and timestamps and nothing
+else — the same class of data the audit trail already holds, PHI-free by
+construction rather than by filtering.
 """
 from __future__ import annotations
 
@@ -75,6 +92,104 @@ def _one(cur, sql: str, params: tuple):
     cur.execute(sql, params)
     row = cur.fetchone()
     return row
+
+
+# --- tenant discovery (#378) ------------------------------------------------
+#
+# Three sources, because a tenant can be interesting for three different
+# reasons and any one of them alone would hide the tenant this script was
+# pointed at by hand: agent runs (someone asked something), stored resources
+# (records landed), audit events (anything touched the record at all).
+#
+# Every column here is an id, a count or a timestamp. No resource content, no
+# audit `detail`, no free text of any kind reaches this query — the listing is
+# PHI-free by construction, not by redaction.
+
+DISCOVER_TENANTS_SQL = """
+    SELECT tenant_id,
+           sum(runs) AS runs,
+           sum(resources) AS resources,
+           sum(audits) AS audits,
+           max(last_seen) AS last_seen
+    FROM (
+        SELECT tenant_id, count(*) AS runs, 0 AS resources, 0 AS audits,
+               max(created_at) AS last_seen
+          FROM agent_runs GROUP BY tenant_id
+        UNION ALL
+        SELECT tenant_id, 0, count(*), 0, max(last_updated)
+          FROM r6_resources
+         WHERE coalesce(is_deleted, FALSE) = FALSE
+         GROUP BY tenant_id
+        UNION ALL
+        SELECT tenant_id, 0, 0, count(*), max(recorded)
+          FROM audit_events
+         WHERE tenant_id IS NOT NULL
+         GROUP BY tenant_id
+    ) activity
+    GROUP BY tenant_id
+    ORDER BY max(last_seen) DESC
+"""
+
+
+def discover_tenants(cur) -> list[tuple]:
+    """(tenant, runs, resources, audits, last_seen), newest activity first."""
+    cur.execute(DISCOVER_TENANTS_SQL, ())
+    return [(r[0], int(r[1] or 0), int(r[2] or 0), int(r[3] or 0), r[4])
+            for r in cur.fetchall()]
+
+
+def tenant_record_count(cur, tenant: str) -> int:
+    """How many live resources this tenant holds. Separates "nobody has asked
+    yet" from "there is nothing here to ask about"."""
+    row = _one(cur, """
+        SELECT count(*) FROM r6_resources
+        WHERE tenant_id = %s AND coalesce(is_deleted, FALSE) = FALSE
+    """, (tenant,))
+    return int(row[0] or 0) if row else 0
+
+
+def format_tenant_table(rows: list[tuple]) -> str:
+    """Fixed-width listing. Counts, never content."""
+    if not rows:
+        return ("no tenant has any agent run, stored resource or audit event "
+                "on this database")
+    head = (f"  {'tenant':<32}{'runs':>7}{'records':>10}{'audits':>9}"
+            f"   last activity")
+    out = [head]
+    for tenant, runs, resources, audits, last_seen in rows:
+        seen = str(last_seen or "")[:19] or "-"
+        out.append(f"  {str(tenant)[:32]:<32}{runs:>7}{resources:>10}"
+                   f"{audits:>9}   {seen}")
+    return "\n".join(out)
+
+
+def recent_activity_hint(rows: list[tuple], limit: int = 5) -> str:
+    """One line naming where the activity actually is.
+
+    A fruitless run has to end by pointing somewhere. Without this the reader
+    is left choosing between "the deploy is unexercised" and "wrong tenant" —
+    the two states #378 was filed about.
+    """
+    if not rows:
+        return ("tenants with recent activity: none — this database has no "
+                "agent runs, stored resources or audit events at all")
+    names = ", ".join(str(r[0]) for r in rows[:limit])
+    more = f" (+{len(rows) - limit} more)" if len(rows) > limit else ""
+    return f"tenants with recent activity: {names}{more}"
+
+
+EMPTY_TENANT_SKIP = ("this tenant holds no records — asking the agent will "
+                     "not move this row; the records are somewhere else")
+
+
+def explain_skip(detail: str, record_count: int) -> str:
+    """Re-word a SKIP on a tenant that holds nothing.
+
+    "ask the agent something first" is the right next step on a stocked
+    tenant and the wrong one on an empty tenant, where no amount of asking
+    changes the row. Different problems, different fixes.
+    """
+    return EMPTY_TENANT_SKIP if record_count == 0 else detail
 
 
 def check_s1_labs_interpreted(cur, tenant: str) -> tuple[str, str]:
@@ -184,6 +299,20 @@ CHECKS = [
     ("ingest not stranded", check_ingest_not_stranded),
 ]
 
+# The rows that can only go green because the agent DID something. `ingest not
+# stranded` is not one of them: it returns PASS on a tenant with nothing in it
+# at all, because "no stranded jobs" is trivially true of no jobs.
+#
+# That distinction is load-bearing for #378. The report was "every behavioural
+# row was SKIP", and counting the vacuous PASS as an evaluated row would make
+# a run on the wrong tenant exit 0 with "all evaluable rows pass (1 checked)" —
+# i.e. the scorecard would report success for a run that measured nothing about
+# the agent, and the "look over here instead" hint would be unreachable code.
+BEHAVIOURAL_CHECKS = frozenset({
+    "check_s1_labs_interpreted", "check_s3_medication_reads",
+    "check_s5_run_health", "check_s8_tool_rounds",
+})
+
 MANUAL_ROWS = """\
 Owner's five minutes in the UI (this script cannot read prose):
   S1  "What do my labs say?"          -> cites actual values, incl. cholesterol
@@ -197,9 +326,14 @@ Owner's five minutes in the UI (this script cannot read prose):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--tenant", required=True,
+    ap.add_argument("--tenant",
                     help="tenant id to score (an opaque id, never PHI)")
+    ap.add_argument("--list-tenants", action="store_true",
+                    help="list tenants with any activity, newest first, "
+                         "then exit (ids and counts only)")
     args = ap.parse_args()
+    if not args.list_tenants and not args.tenant:
+        ap.error("--tenant is required (or --list-tenants to find one)")
 
     uri = os.environ.get("SQLALCHEMY_DATABASE_URI", "")
     if not uri:
@@ -208,35 +342,73 @@ def main() -> int:
         return 2
     host = urllib.parse.urlsplit(
         uri.replace("postgresql+psycopg2://", "postgresql://", 1)).hostname
-    print(f"{D}scoring tenant {args.tenant} against {host}{X}\n")
 
     conn = _connect(uri)
     cur = conn.cursor()
 
-    failed = evaluated = 0
+    if args.list_tenants:
+        rows = discover_tenants(cur)
+        cur.close()
+        conn.close()
+        print(f"{D}tenants on {host} — ids, counts and timestamps only{X}\n")
+        print(format_tenant_table(rows))
+        print()
+        if not rows:
+            print(f"{Y}{recent_activity_hint(rows)}{X}")
+            return 2
+        print(f"{D}score one with: --tenant <id>{X}")
+        return 0
+
+    print(f"{D}scoring tenant {args.tenant} against {host}{X}\n")
+
+    # Counted up front: it is what tells a SKIP meaning "nobody has asked yet"
+    # apart from a SKIP meaning "there is nothing here to ask about".
+    try:
+        records = tenant_record_count(cur, args.tenant)
+    except Exception:  # noqa: BLE001 — never let discovery break the card
+        records = -1
+
+    failed = evaluated = behavioural = 0
     for name, check in CHECKS:
         try:
             verdict, detail = check(cur, args.tenant)
         except Exception as exc:  # noqa: BLE001 — report, don't crash the card
             verdict, detail = "FAIL", f"check crashed: {type(exc).__name__}"
+        if verdict == "SKIP" and records >= 0:
+            detail = explain_skip(detail, records)
         color = {"PASS": G, "FAIL": R, "SKIP": Y}[verdict]
         print(f"  {color}{verdict:4}{X}  {name}: {detail}")
         if verdict != "SKIP":
             evaluated += 1
+            if check.__name__ in BEHAVIOURAL_CHECKS:
+                behavioural += 1
         if verdict == "FAIL":
             failed += 1
+
+    hint = ""
+    if behavioural == 0:
+        # Say where the activity IS. Leaving the reader to guess between
+        # "unexercised deploy" and "wrong tenant" is the #378 defect.
+        try:
+            hint = recent_activity_hint(discover_tenants(cur))
+        except Exception:  # noqa: BLE001
+            hint = "tenants with recent activity: could not query"
 
     cur.close()
     conn.close()
 
     print()
     print(MANUAL_ROWS)
-    if evaluated == 0:
-        print(f"{Y}nothing was evaluable — is this the right tenant?{X}")
-        return 2
     if failed:
         print(f"{R}{failed} row(s) regressed{X}")
         return 1
+    if behavioural == 0:
+        held = records if records >= 0 else "?"
+        print(f"{Y}no behavioural row was evaluable on tenant {args.tenant} "
+              f"({held} stored record(s)) — this run measured nothing about "
+              f"the agent{X}")
+        print(f"{Y}{hint}{X}")
+        return 2
     print(f"{G}all evaluable rows pass ({evaluated} checked){X}")
     return 0
 

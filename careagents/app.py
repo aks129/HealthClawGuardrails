@@ -25,13 +25,14 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, MailError,
-                                 new_binding_code)
+                                 MailUnconfirmed, new_binding_code)
 from careagents import advisors, connectors
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
-from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.healthclaw import (HealthClawClient, HealthClawError,
+                                   HealthClawUnconfirmed)
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,32 @@ def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
     except (AttributeError, TypeError):
         pass
     return out
+
+
+# Mirrors r6.brief.engine.CARE_GAPS_OK. CareAgents talks to HealthClaw over
+# HTTP and imports nothing from it, so the string is repeated rather than
+# shared.
+_CARE_GAPS_OK = "ok"
+
+
+def _parse_care_gaps_status(resource: dict | None) -> str:
+    """Whether the screening review ran, from the brief's care-gaps section.
+
+    Anything short of an explicit "ok" — no brief, no care-gaps section, no
+    marker, an unparseable payload — is not an evaluation, and the page must
+    not render it as "nothing due" (#381). Callers get "" for all of those.
+    """
+    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
+    try:
+        for ext in (resource or {}).get("extension", []):
+            if ext.get("url") != care_gaps_url:
+                continue
+            for sub in ext.get("extension", []):
+                if sub.get("url") == "status":
+                    return sub.get("valueString") or ""
+    except (AttributeError, TypeError):
+        pass
+    return ""
 
 
 def create_app(config: Config | None = None,
@@ -197,14 +224,37 @@ def create_app(config: Config | None = None,
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
         try:
-            svc.start_email_code(email, purpose)
+            retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        except MailUnconfirmed as exc:
+            # The third answer (#220). `sent` is null, not false: saying "we
+            # didn't send it" would be as unobserved as saying we did, and the
+            # code is still live, so the person carries on to the code step
+            # rather than being sent back to the start. 202 — accepted, outcome
+            # unknown. Ordered before MailError: MailUnconfirmed subclasses it.
+            return jsonify({"sent": None, "notice": str(exc)}), 202
         except MailError as exc:
             # Never report "sent" when nothing was sent — this is the front
             # door, and a silent failure leaves the person watching an empty
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
+        if retry_after:
+            # The cooldown suppressed the send (#262). 200, not 4xx: the
+            # request was handled correctly and the person still holds a live
+            # code, so the UI still advances to code entry. But claiming
+            # "sent" here is the lie — it strands whoever's first email never
+            # arrived, telling them to wait for something nobody sent.
+            #
+            # Not an enumeration oracle: this branch turns only on whether a
+            # code was requested for this address moments ago — a state the
+            # requester just created themselves — never on whether an account
+            # exists. start_email_code touches ca_email_tokens alone; accounts
+            # are created at verify. The genuine-send and cooldown responses
+            # are byte-identical for an address with an account and one
+            # without.
+            return jsonify({"sent": False, "reason": "cooldown",
+                            "retry_after": retry_after})
         return jsonify({"sent": True})
 
     @app.post("/api/auth/verify")
@@ -662,7 +712,9 @@ def create_app(config: Config | None = None,
         raw = hc.fetch_appointment_brief(ctx["tenant"])
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
-                               agent_id=agent_id, sections=sections)
+                               agent_id=agent_id, sections=sections,
+                               care_gaps_ok=(_parse_care_gaps_status(raw)
+                                             == _CARE_GAPS_OK))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
@@ -910,6 +962,24 @@ def create_app(config: Config | None = None,
         if status == 200:
             try:
                 hc.confirm_action(tenant, action_id)
+            except HealthClawUnconfirmed:
+                # The third answer (#220). The engine never replied, so the
+                # action may already be running. "Nothing has been sent — try
+                # again" would be a claim we did not observe, and acting on it
+                # is how a prescription request gets sent twice. `confirmed` is
+                # null: not true, not false, not knowable from here.
+                logger.exception("confirm unanswered after review for %s",
+                                 action_id)
+                body = dict(body) if isinstance(body, dict) else {}
+                body.update({
+                    "confirmed": None,
+                    "message": ("Your review was saved, but we couldn't "
+                                "confirm whether the approval went through. "
+                                "Don't approve again yet — check the request's "
+                                "status first, because approving twice could "
+                                "send it twice."),
+                })
+                return jsonify(body), 502
             except HealthClawError:
                 # The review was recorded but the confirmation didn't land, so
                 # the action is still sitting unexecuted. Swallowing this told

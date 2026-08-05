@@ -4,23 +4,29 @@ HealthClaw Guardrails is a remote MCP server. Any agent that speaks MCP can
 connect to it and work with health records behind enforced guardrails (PHI
 redaction, audit trail, human-in-the-loop, disclaimers).
 
-**Connector URL (public demo server):**
+## The connector URL
+
+There is exactly one URL to paste. This is it:
 
 ```text
 https://mcp-demo-production-ee2c.up.railway.app/mcp
 ```
 
-No API key needed: this server is hard-pinned to the `desktop-demo` tenant — a
-synthetic demo patient panel with realistic conditions, labs, immunizations,
-and medications. **Nothing in it is real patient data, which makes it safe to
-demo on camera.**
+No API key. No Client ID. If your agent asks for either one, you have the wrong
+URL: see [Troubleshooting](claude.md#troubleshooting).
 
-Real records live on a separate production endpoint
-(`https://mcp-server-production-5112.up.railway.app/mcp`) that requires a
-deployment-scoped `Authorization: Bearer <token>` and returns 401 without one.
-Don't paste that URL into a hosted connector — it cannot attach the header, and
-the sign-in step will fail. See
-[mcp-generic.md](mcp-generic.md#tenancy-and-auth).
+The server is hard-pinned to the `desktop-demo` tenant, a synthetic patient
+panel with conditions, labs, immunizations, and medications. **None of it is
+real patient data, so it is safe to record.**
+
+### There is a second server, and you do not want it
+
+Real records live on a separate production endpoint, `mcp-server-production-5112`.
+It requires a deployment-scoped bearer token and answers 401 without one. Hosted
+connectors cannot attach that header, so pasting it produces a sign-in loop that
+cannot succeed. The full URL is deliberately not printed here, because the only
+reason to copy it from this page would be by mistake. See
+[mcp-generic.md](mcp-generic.md#tenancy-and-auth) for the tenancy model.
 
 ## Pick your agent
 

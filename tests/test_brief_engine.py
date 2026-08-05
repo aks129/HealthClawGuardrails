@@ -20,6 +20,9 @@ from r6.brief.engine import (
     build_visits,
     BriefResult,
     BriefField,
+    CARE_GAPS_OK,
+    CARE_GAPS_UNAVAILABLE,
+    CARE_GAPS_REASON_ENGINE_ERROR,
 )
 
 
@@ -158,8 +161,9 @@ class TestFullRecords:
 
     def test_care_gaps_populated(self):
         gaps = build_care_gaps(self.CARE_GAPS)
-        assert len(gaps) == 1
-        assert "Colorectal" in gaps[0].label
+        assert gaps.status == CARE_GAPS_OK
+        assert len(gaps.fields) == 1
+        assert "Colorectal" in gaps.fields[0].label
 
     def test_visits_populated(self):
         visits = build_visits(self.ENCOUNTERS)
@@ -264,3 +268,53 @@ class TestPartialRecords:
         assert result.problems[0].source_id == "cond-abc"
         assert result.medications[0].source_id == "med-xyz"
         assert result.labs[0].source_id == "obs-123"
+
+
+# ---------------------------------------------------------------------------
+# Case 4: care gaps — the third state (#381)
+# ---------------------------------------------------------------------------
+
+class TestCareGapsThirdState:
+    """"The screening review raised" and "you have no open screening gaps"
+    must not produce the same section. An empty list reads to a patient as
+    "you are up to date on your cancer screenings", so the ok state has to be
+    earned by a result that actually says it."""
+
+    def test_caller_reported_failure_is_unavailable(self):
+        section = build_care_gaps({"status": CARE_GAPS_UNAVAILABLE,
+                                   "reason": CARE_GAPS_REASON_ENGINE_ERROR})
+        assert section.status == CARE_GAPS_UNAVAILABLE
+        assert section.reason == CARE_GAPS_REASON_ENGINE_ERROR
+        assert section.fields == []
+
+    def test_missing_result_is_unavailable_not_no_gaps(self):
+        assert build_care_gaps({}).status == CARE_GAPS_UNAVAILABLE
+        assert build_care_gaps(None).status == CARE_GAPS_UNAVAILABLE  # type: ignore[arg-type]
+
+    def test_consumer_payload_without_a_due_list_is_unavailable(self):
+        # A payload we cannot read is not an answer. Reporting "nothing due"
+        # off a shape that never carried the due items is the #381 defect.
+        section = build_care_gaps({"consumer": {"note": "some disclaimer"}})
+        assert section.status == CARE_GAPS_UNAVAILABLE
+        assert section.fields == []
+
+    def test_successful_empty_evaluation_is_ok(self):
+        section = build_care_gaps({"consumer": {"due": []}})
+        assert section.status == CARE_GAPS_OK
+        assert section.fields == []
+        assert section.reason == ""
+
+    def test_unavailable_and_no_gaps_are_distinguishable(self):
+        failed = generate_brief([], [], [], [], {})
+        evaluated = generate_brief([], [], [], [], {"consumer": {"due": []}})
+        assert failed.care_gaps == evaluated.care_gaps == []
+        assert failed.care_gaps_status != evaluated.care_gaps_status
+        assert failed.care_gaps_status == CARE_GAPS_UNAVAILABLE
+        assert evaluated.care_gaps_status == CARE_GAPS_OK
+
+    def test_reason_is_carried_to_the_brief(self):
+        result = generate_brief([], [], [], [], {
+            "status": CARE_GAPS_UNAVAILABLE,
+            "reason": CARE_GAPS_REASON_ENGINE_ERROR,
+        })
+        assert result.care_gaps_reason == CARE_GAPS_REASON_ENGINE_ERROR

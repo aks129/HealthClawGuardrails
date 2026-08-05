@@ -61,6 +61,28 @@
     if (!res.ok) return fail(res.d.error || "Couldn't send a code.");
     pendingEmail = email;
     $("code-email").textContent = email;
+    // Three answers, and only `true` earns "We sent". Compared by identity,
+    // never truthiness: `false` and `null` are different facts and collapsing
+    // them is how one of these two defects gets reintroduced.
+    //
+    //   true  — the mail left. Say so.
+    //   false — the resend cooldown held it (#262). The code from a moment ago
+    //           is still live, so we still ask for it, but we do not claim a
+    //           send that did not happen.
+    //   null  — the code is live and we never saw the mail leave (#220). We do
+    //           not know, so we say we do not know.
+    let lede = "We sent an 8-digit code to";
+    let note = "";
+    if (res.d.sent === false) {
+      lede = "We sent a code moments ago to";
+      note = `Check your inbox and spam folder. You can request a new one in ${res.d.retry_after} seconds.`;
+    } else if (res.d.sent !== true) {
+      lede = "We couldn't confirm the code reached";
+      note = res.d.notice || "";
+    }
+    $("code-lede").textContent = lede;
+    $("code-note").textContent = note;
+    $("code-note").hidden = !note;
     show("step-code"); $("code").focus();
   });
   $("back-btn").addEventListener("click", () => { clear(); show("step-start"); });

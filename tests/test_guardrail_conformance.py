@@ -25,6 +25,22 @@ def test_our_deployment_records_full_conformance(
     assert [r.key for r in report.results if not r.passed] == []
 
 
+def test_the_scorecard_states_what_a_hitl_pass_does_not_prove(
+        client, tenant_id, step_up_token):
+    """The probe supplies X-Human-Confirmed itself (#213).
+
+    A PASS on human-in-the-loop means the gate discriminates, not that a human
+    attested to anything — the action rail's approval endpoint is the real
+    mechanism and the header is a known gap (#214). That limit has to be on
+    the rendered scorecard, not only in the JSON.
+    """
+    report = run_conformance(FlaskProbeClient(client),
+                             _ctx(None, tenant_id, step_up_token))
+    rendered = report.render()
+    assert "the confirmation header is supplied by the probe" in rendered
+    assert "#214" in rendered
+
+
 def test_report_is_json_serializable(client, tenant_id, step_up_token):
     report = run_conformance(FlaskProbeClient(client), _ctx(None, tenant_id, step_up_token))
     d = report.to_dict()
@@ -1019,3 +1035,165 @@ def test_injected_mock_proxy_profile_passes_the_full_error_contract(
     ]
     assert all(hostile_name not in detail for detail in details)
     assert all(hostile_url not in detail for detail in details)
+
+
+# --- #213: a guardrail that is OFF must not be able to score A ---------------
+#
+# Every check in this harness except two was an ABSENCE assertion, and a broken
+# guardrail passes those HARDER — it shrinks the response. The RxNorm lookup
+# returned None for its entire life (#376) while the grade held A. The tests
+# below turn one guardrail off at a time and show the grade follow.
+#
+# Mutations are applied at the HTTP boundary because that is the only surface
+# the harness grades: whatever a deployment does internally, this is what a
+# partner running the harness against it can see.
+
+
+class _MutatedDeployment:
+    """The real app with one response rewritten."""
+
+    def __init__(self, inner, mutate):
+        self._inner = inner
+        self._mutate = mutate
+        self.base = getattr(inner, "base", "")
+
+    def request(self, method, path, headers=None, json_body=None):
+        return self._mutate(
+            method, path, headers,
+            self._inner.request(method, path, headers, json_body))
+
+
+def _failed(report, key):
+    result = next(r for r in report.results if r.key == key)
+    return [c.name for c in result.checks if not c.passed]
+
+
+def test_a_search_that_returns_nothing_no_longer_scores_a(
+        client, tenant_id, step_up_token):
+    """Search stops returning records; every PHI absence check passes harder.
+
+    This is #376's shape exactly — a lookup silently answering with nothing —
+    on the path that builds an agent's context.
+    """
+    empty = {"resourceType": "Bundle", "type": "searchset", "total": 0,
+             "entry": []}
+
+    def mutate(method, path, headers, out):
+        if method == "GET" and path.startswith("/Patient?"):
+            return 200, empty, ""
+        return out
+
+    report = run_conformance(
+        _MutatedDeployment(FlaskProbeClient(client), mutate),
+        _ctx(None, tenant_id, step_up_token))
+
+    assert report.grade != "A", "an empty search path still scored A"
+    assert _failed(report, "phi_redaction") == [
+        "the search returns the resource it was asked for"]
+
+
+def test_step_up_validation_turned_off_no_longer_scores_a(
+        client, tenant_id, step_up_token, monkeypatch):
+    """The guardrail itself, switched off in the app.
+
+    With signature validation stubbed out, any string in X-Step-Up-Token
+    authorizes a write. The missing-header 401 still fires, so the old harness
+    saw nothing wrong.
+    """
+    import r6.routes
+    monkeypatch.setattr(r6.routes, "validate_step_up_token",
+                        lambda *a, **k: (True, ""))
+
+    report = run_conformance(FlaskProbeClient(client),
+                             _ctx(None, tenant_id, step_up_token))
+
+    assert report.grade != "A", "forged tokens were accepted and the grade held"
+    assert _failed(report, "step_up_enforcement") == [
+        "write with a forged step-up token is rejected (401)"]
+
+
+def test_a_deployment_that_refuses_everyone_no_longer_isolates(
+        tenant_id, step_up_token):
+    """Blanket 404 isolates perfectly and serves nobody."""
+    from r6.conformance.probes import probe_tenant_isolation
+
+    class _RefusesEveryRead:
+        base = "scripted-blanket-404"
+
+        def request(self, method, path, headers=None, json_body=None):
+            if method == "POST":
+                return 201, {"resourceType": "Patient", "id": "p1"}, ""
+            return 404, {"resourceType": "OperationOutcome"}, ""
+
+    result = probe_tenant_isolation(_RefusesEveryRead(),
+                                    ProbeContext(tenant_id, step_up_token))
+    assert result.passed is False
+    assert [c.name for c in result.checks if not c.passed] == [
+        "resource IS readable from its own tenant"]
+
+
+def test_a_gate_that_blocks_confirmed_writes_too_is_not_a_gate(
+        tenant_id, step_up_token):
+    """Blanket 428 on every clinical write gates nothing."""
+    from r6.conformance.probes import probe_human_in_the_loop
+
+    class _Blocks:
+        base = "scripted-blanket-428"
+
+        def request(self, method, path, headers=None, json_body=None):
+            return 428, {"resourceType": "OperationOutcome"}, ""
+
+    result = probe_human_in_the_loop(_Blocks(),
+                                     ProbeContext(tenant_id, step_up_token))
+    assert result.passed is False
+    assert [c.name for c in result.checks if not c.passed] == [
+        "confirmed clinical write is accepted"]
+    assert "#214" in result.note, "the report must say what this does not grade"
+
+
+def test_the_word_disclaimer_in_an_error_is_not_a_disclaimer(
+        tenant_id, step_up_token):
+    """The disclaimer has to be attached to the data it disclaims."""
+    from r6.conformance.probes import probe_medical_disclaimer
+
+    class _ErrorsWithTheWord:
+        base = "scripted-disclaimer-in-error"
+
+        def request(self, method, path, headers=None, json_body=None):
+            if method == "POST":
+                return 201, {"resourceType": "Observation", "id": "o1"}, ""
+            return 500, {"resourceType": "OperationOutcome", "issue": [
+                {"severity": "error", "code": "exception",
+                 "details": {"text": "disclaimer service unavailable"}}]}, ""
+
+    result = probe_medical_disclaimer(_ErrorsWithTheWord(),
+                                      ProbeContext(tenant_id, step_up_token))
+    assert result.passed is False
+    assert [c.name for c in result.checks if not c.passed] == [
+        "the disclaimer accompanies the clinical record, not an error"]
+
+
+def test_a_deployment_that_answers_nothing_scores_f(tenant_id, step_up_token):
+    """Refuse or empty everything and the two gate properties still passed.
+
+    Measured against the previous harness this deployment scored 2/7, and the
+    two it passed were step_up_enforcement and human_in_the_loop — the guardrail
+    properties, certified by a deployment that does nothing. Now it passes none.
+    """
+    class _AnswersNothing:
+        base = "scripted-guardrails-off"
+
+        def request(self, method, path, headers=None, json_body=None):
+            if method == "POST" and path.startswith("/Observation"):
+                return 428, {"resourceType": "OperationOutcome"}, ""
+            if method == "POST":
+                return 401, {"resourceType": "OperationOutcome"}, ""
+            if "?" in path:
+                return 200, {"resourceType": "Bundle", "type": "searchset",
+                             "total": 0, "entry": []}, ""
+            return 404, {"resourceType": "OperationOutcome"}, ""
+
+    report = run_conformance(_AnswersNothing(),
+                             _ctx(None, tenant_id, step_up_token))
+    assert report.grade == "F"
+    assert [r.key for r in report.results if r.passed] == []

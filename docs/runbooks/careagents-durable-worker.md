@@ -68,7 +68,8 @@ The worker pool is bounded by `CARE_RUN_WORKERS` (default 4). Important knobs:
 | `CARE_RUN_WORKERS` | 4 | Concurrent worker slots per process |
 | `CARE_RUN_DEADLINE_SECONDS` | 120 | End-to-end run deadline |
 | `CARE_RUN_LEASE_SECONDS` | 60 | Claim lease, heartbeated every third |
-| `CARE_RUN_POLL_SECONDS` | 0.5 | Empty-queue polling delay |
+| `CARE_RUN_POLL_SECONDS` | 0.5 | Empty-queue polling delay, and the floor idle backoff returns to |
+| `CARE_RUN_POLL_MAX_SECONDS` | 6.0 | Idle backoff cap; doubles from the floor, any claim resets every slot. Set to the floor to pin the interval flat — the rollback, no redeploy |
 | `CARE_RUN_WORKER_STALE_SECONDS` | 30 | Maximum age of successful queue access |
 | `CARE_RUN_SSE_TIMEOUT_SECONDS` | 150 | One browser projection window |
 
