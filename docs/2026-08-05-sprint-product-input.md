@@ -74,7 +74,12 @@ is the only beat a read-only competitor cannot copy.
   #213 says Grade A is earnable by a deployment with the guardrails off. The
   grade is not wrong here, but a claim whose own issue is open is not a claim
   to make from a stage.
-- **The pre-appointment brief is not in the demo.** See §5.3.
+- **The pre-appointment brief is not in the demo.** See §5.3. It does not
+  currently work at all (§4.2), which makes the cut easy.
+- **The "Any screenings I'm due for?" starter is visible during beats 3-6**,
+  and today it always answers that nothing is due (§4.3). Nobody needs to tap
+  it on stage, but a stranger testing the product will. Hide the starter or
+  fix the subject before the 18th.
 
 ## 2. Ruling on #310: no
 
@@ -206,10 +211,10 @@ This is on beat 4. **Severity: the same as #376.** Adding `"not-a-ref"` to
 that tuple is the whole fix, and the mutation that proves it is removing it
 again.
 
-### 4.2 The brief's care-gaps section is the only one that claims a finding
+### 4.2 The Appointment Brief has never run — measured
 
-`careagents/templates/brief.html` renders five sections. Four of them use
-this empty state:
+`careagents/templates/brief.html` renders five sections. Four use this empty
+state:
 
 > Not available from your connected records.
 
@@ -217,21 +222,103 @@ The care-gaps section, at line 89, uses this one:
 
 > We found no preventive care items based on your current records.
 
-That is an affirmative clinical finding, and #381 is the path that produces
-it from an engine that crashed. The most consequential section on the page
-carries the least honest empty state, and the four cheaper sections already
-show the wording to copy. Whatever shape #381's fix takes in `r6/brief/`,
-this line changes with it.
+That is an affirmative clinical finding. It renders today, for every patient,
+and the cause is not #381.
 
-### 4.3 Where the same shape can still occur
+The route is registered at the wrong URL. `r6_blueprint` already carries
+`url_prefix='/r6/fhir'` (`r6/routes.py:74`), and `r6/brief/routes.py:90` adds
+`@blueprint.get("/fhir/AppointmentBrief")` on top of it. Inspecting the built
+URL map:
 
+| Step | Value |
+|---|---|
+| Rule actually registered | `/r6/fhir/fhir/AppointmentBrief` |
+| URL CareAgents requests (`careagents/healthclaw.py:334`) | `/r6/fhir/AppointmentBrief` |
+| Rule that matches it | the generic `search_resources`, `resource_type='AppointmentBrief'` |
+| Response | `400`, "Resource type is not supported" |
+
+`fetch_appointment_brief` returns `None` on any non-200
+(`careagents/healthclaw.py:338-341`), `careagents/app.py:663` turns that into
+`sections = {}`, and all five sections render empty — including line 89.
+
+Three consequences, and the third is the one that matters for sequencing:
+
+1. **The whole feature has never worked.** Not degraded — never reached.
+2. **#382's leak cannot currently occur**, because the handler does not run.
+   The `r.resource` attribute it describes does not exist on `R6Resource`
+   either, so the handler would raise before returning anything.
+3. **Fixing the URL activates #381 and #382 at once.** A one-line route
+   correction turns on an unredacted read path and a crash-renders-as-good-news
+   path in the same deploy. These three must land together, with #382's
+   marker probe first, or the repair is the incident.
+
+### 4.3 `$care-gaps` answers every patient with silence
+
+`careagents/healthclaw.py:193` calls `Patient/$care-gaps` with no `subject`.
+`_subject_from_request` (`r6/caregaps/routes.py:38`) reads only `?subject=`
+or a `Parameters` body, with no fallback to the tenant's own Patient, so
+`subject` is `None`. Then `_resources_for` filters with
+`res.get("subject", {}).get("reference") == subject`, and every real resource
+fails that comparison against `None`. Conditions, observations, immunizations
+and procedures all come back empty, and `build_consumer_summary` yields
+`{"lines": []}`.
+
+`careagents/agent.py:351` hands the model that and nothing else. Compare
+`show_lab_timeline` twelve lines above, which carries an explicit note that
+an empty series "is not the same as the person never having had this test".
+`get_care_gaps` has no such note, and it discards the summary block holding
+the indeterminate count.
+
+**What a patient sees:** they tap the "Any screenings I'm due for?" starter
+and are told nothing is due. On every tenant, every time. Every test in
+`tests/test_caregaps_routes.py` passes `?subject=Patient/p1`; the only caller
+in production never does.
+
+### 4.4 The intake form can assert no medications and no allergies
+
+This one is on beat 7, and it is the most consequential per occurrence.
+
+`r6/actions/review.py:112-118` returns early from `_gather_content` when the
+tenant has no `Patient` row, or when the Patient has no `id`. It also matches
+clinical resources only on an exact `Patient/<id>` reference, so a feed using
+`urn:uuid:` or an absolute URL contributes nothing. The result is an empty
+content list, zero questionnaire repeats, and a review page that reads:
+
+> No medications found in your records.
+>
+> No allergies found in your records — add them or affirmatively confirm none
+> below.
+
+A form for a new clinician, asserting no medications and no allergies, and
+then pointing the patient at the "No known allergies (patient confirmed)"
+checkbox. The server-side attestation gate itself is sound — it re-derives
+the list from FHIR and returns 422, and nothing here defeats it. The problem
+is that the gate is protecting a list emptied by a lookup, not by the record.
+
+That is the demo's own money shot, arriving pre-emptied.
+
+### 4.5 Lower severity, same shape
+
+- **The truncation denominator is the page size, not the total.**
+  `_summarize_bundle` counts `bundle["entry"]`, which the engine clamps to 50,
+  and ignores `bundle["total"]`. The model is told "12 of 50" for a patient
+  with far more. `careagents/app.py:617-624` documents this exact lesson and
+  fixes it for the greeting; the tool payload did not get the fix.
+- **The `"empty"` connection status is unhandled.** `classify` compares
+  against `"pending"`, and the Upload-records connector creates connections
+  with `status="empty"` (`careagents/connectors.py:152`). The result is the
+  zero-greeting that `intake_state.py` exists to prevent, reachable by
+  connecting Upload records and opening chat before uploading.
+- **The care-gaps MCP app renders `[object Object]`.** `consumer.lines`
+  entries are dicts, and the template escapes them as strings.
 - **The greeting's "in your records"** — §3.3. One slice presented as the
   whole record.
-- **Truncation is handled and should stay that way.** `_summarize_bundle`
-  appends an explicit `truncated: True` marker rather than trimming silently.
-  That is the correct pattern and the model for §4.1's fix.
 
-### 4.4 The rule for the dress rehearsal
+Two things are right and should be left alone: `_summarize_bundle`'s
+`truncated: True` marker, and `r6/labs/interpret.py`, which refuses to guess
+a normal. Both are the pattern the fixes above should copy.
+
+### 4.6 The rule for the dress rehearsal
 
 Every on-screen sentence gets one question: **did the code that produced this
 sentence observe the thing the sentence asserts?** "No results" and "we could
@@ -248,9 +335,11 @@ completed intake form built from their own records, with a server-side
 refusal to fabricate an allergy attestation. Every read-only competitor stops
 before this. It is the reason the talk is worth giving.
 
-The condition is in §6. If the walkthrough does not pass, the demo loses beat
-7 and becomes a read-only story. Nothing else in the backlog is worth more
-than closing that question.
+Two conditions, both in §6. The rail has never been run through the phone
+relay against a live engine, and §4.4 found that its content lookup can hand
+the patient a form asserting no medications and no allergies. The gate is
+sound; what feeds it is not. Nothing else in the backlog is worth more than
+closing those two questions.
 
 ### 5.2 SHL sharing — DROP
 
@@ -267,13 +356,18 @@ Three separate calls, and they point different ways.
 - **As a capability: defer.** It tells a patient to get a screening and
   cannot book one. Booking is #163 and is not in this window. Nothing new is
   accomplished this month.
-- **As shipped code: fix now.** It already renders to patients at `/brief`,
-  and it renders a crash as good news. #381 and #382 stay P0 on their own
-  merits, independent of the demo.
-- **As a demo beat: cut.** `/brief` comes off the demo path. Beat 7 already
-  carries "produces a document for your clinician", and it does so with the
-  human gate, which the brief does not have. Cutting it also removes two open
-  P0s from the demo's blast radius without slowing their fixes.
+- **As shipped code: fix now, and fix it as one change.** §4.2 and §4.3 found
+  two separate live paths that both tell a patient nothing is due. The brief
+  is unreachable at its own URL, and `$care-gaps` is called without a
+  subject. #381 and #382 stay P0, but neither describes what is actually
+  happening, and #382's leak cannot occur until the route is fixed. The route
+  correction, the redact-then-relabel pair, the care-gaps third state, and
+  the missing subject belong in one sequenced piece of work with the marker
+  probe first. Fixing the route alone would turn on an unredacted read path.
+- **As a demo beat: cut.** `/brief` comes off the demo path, and the "Any
+  screenings I'm due for?" starter should be hidden until §4.3 is fixed.
+  Beat 7 already carries "produces a document for your clinician", with the
+  human gate the brief does not have.
 
 ### 5.4 Lab-trends timeline — SHIP, already shipped
 
@@ -317,10 +411,16 @@ unstyled if a venue network blocks a CDN. And the relay rewrites the form
 action URL by string replacement against page HTML it has never parsed in a
 test.
 
+And §4.4 gives that unexercised path a known defect aimed at the one control
+the beat exists to show. If the tenant has no `Patient` row, or references
+its patient by `urn:uuid:`, the form arrives asserting no medications and no
+allergies. The demo would then show the attestation gate defending a list
+that a lookup emptied.
+
 **The ask:** walk beat 7 end-to-end on a phone, on a tenant holding real
 records, against the running engine, before anything else in §1 is
 rehearsed. Everything else in this document is a decision. This is the one
-thing only a walkthrough can answer.
+thing only a walkthrough can answer, and §4.4 says what to look at first.
 
 ## 7. Open questions only the founder can answer
 
@@ -336,3 +436,8 @@ thing only a walkthrough can answer.
 4. **ICP versus HIMSS.** This document plans one demo. If the second talk has
    a different audience, the medications-first ordering in §1.3 is the beat
    most worth reconsidering.
+5. **Does the brief work get re-scoped?** §4.2 shows the feature has never
+   run, so #381 and #382 describe code that has never executed. That is
+   either a reason to fix all of it properly after the webinar, or a reason
+   to do it now while the patient-visible symptom is live. It is a priority
+   call, not a technical one, and the answer changes what Sprint 1 contains.
