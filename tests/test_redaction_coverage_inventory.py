@@ -24,6 +24,8 @@ Sites not covered here (`r6/actions/rails/form_fill.py`, `r6/sdc/documents.py`,
 `r6/smbp/routes.py`, `r6/curatr.py`) are reached through multi-step flows —
 an approval, a questionnaire, an enrolment — rather than one request, so they
 need their own probes and are NOT silently claimed as clean by this file.
+They are measured in `tests/test_redaction_probes_multistep.py`, which names
+its own uncovered sites in turn.
 """
 
 from __future__ import annotations
