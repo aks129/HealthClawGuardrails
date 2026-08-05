@@ -28,7 +28,11 @@
 
     <!-- Step: code -->
     <div id="step-code" hidden>
-      <p class="setup-sub">We sent an 8-digit code to <b id="code-email"></b>.</p>
+      <!-- The lede is set from JS: within the resend cooldown nothing was
+           sent just now, and saying otherwise is #262. -->
+      <p class="setup-sub"><span id="code-lede">We sent an 8-digit code to</span>
+        <b id="code-email"></b>.</p>
+      <p class="setup-sub" id="code-note" hidden></p>
       <label class="field-label" for="code">Code</label>
       <input class="field code-input" id="code" inputmode="numeric"
              maxlength="8" placeholder="••••••••" autocomplete="one-time-code">

@@ -61,6 +61,18 @@
     if (!res.ok) return fail(res.d.error || "Couldn't send a code.");
     pendingEmail = email;
     $("code-email").textContent = email;
+    // Within the resend cooldown the server sends nothing (#262). The code
+    // from a moment ago is still live, so we still ask for it — we just don't
+    // claim a send we didn't get, which is what strands someone whose first
+    // email never arrived.
+    const held = res.d.sent === false;
+    $("code-lede").textContent = held
+      ? "We sent a code moments ago to"
+      : "We sent an 8-digit code to";
+    $("code-note").textContent = held
+      ? `Check your inbox and spam folder. You can request a new one in ${res.d.retry_after} seconds.`
+      : "";
+    $("code-note").hidden = !held;
     show("step-code"); $("code").focus();
   });
   $("back-btn").addEventListener("click", () => { clear(); show("step-start"); });

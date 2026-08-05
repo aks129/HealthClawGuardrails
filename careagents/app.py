@@ -197,7 +197,7 @@ def create_app(config: Config | None = None,
         email = (request.get_json(silent=True) or {}).get("email", "")
         purpose = "verify"
         try:
-            svc.start_email_code(email, purpose)
+            retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         except MailError as exc:
@@ -205,6 +205,22 @@ def create_app(config: Config | None = None,
             # door, and a silent failure leaves the person watching an empty
             # inbox with no idea whether to wait or retry.
             return jsonify({"error": str(exc), "sent": False}), 502
+        if retry_after:
+            # The cooldown suppressed the send (#262). 200, not 4xx: the
+            # request was handled correctly and the person still holds a live
+            # code, so the UI still advances to code entry. But claiming
+            # "sent" here is the lie — it strands whoever's first email never
+            # arrived, telling them to wait for something nobody sent.
+            #
+            # Not an enumeration oracle: this branch turns only on whether a
+            # code was requested for this address moments ago — a state the
+            # requester just created themselves — never on whether an account
+            # exists. start_email_code touches ca_email_tokens alone; accounts
+            # are created at verify. The genuine-send and cooldown responses
+            # are byte-identical for an address with an account and one
+            # without.
+            return jsonify({"sent": False, "reason": "cooldown",
+                            "retry_after": retry_after})
         return jsonify({"sent": True})
 
     @app.post("/api/auth/verify")
