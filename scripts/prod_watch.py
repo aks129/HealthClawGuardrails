@@ -2,8 +2,12 @@
 """Production watch — is the live product actually working right now?
 
     python scripts/prod_watch.py                  # all deployments
-    python scripts/prod_watch.py --json           # machine-readable
+    python scripts/prod_watch.py --json           # machine-readable on stdout
     python scripts/prod_watch.py --expect-sha a1b2c3d,4f5e6d7   # pin the build
+
+Under `--json` the human report moves to stderr and stdout carries the payload
+alone, so `--json | jq` works (#270). Without it, the human report keeps stdout
+to itself.
 
 Exit codes, so a scheduled job can open the right issue:
 
@@ -67,6 +71,17 @@ _SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 
 results: list[tuple[str, bool, str]] = []
 
+# Where the human report goes. `--json` moves it to stderr so stdout carries
+# the payload and nothing else — the flag was documented as machine-readable
+# while printing JSON after the ANSI-coloured lines on the same stream, so
+# piping it into a parser failed (#270). Resolved at print time rather than
+# captured at import, so redirecting stdout around a call still works.
+_human_to_stderr = False
+
+
+def _human():
+    return sys.stderr if _human_to_stderr else sys.stdout
+
 # The build check's verdict, kept separately from `results`, because an exit
 # code is one scalar and the two alarms it drives are not. Without this the
 # workflow had to infer "is the build stale?" from a code an unrelated outage
@@ -81,7 +96,8 @@ build_info: dict = {"deployed": None, "built_at": None, "built": None,
 def check(name: str, ok: bool, detail: str = "") -> bool:
     results.append((name, ok, detail))
     mark = f"{G} OK {X}" if ok else f"{R}FAIL{X}"
-    print(f"{mark} {name}" + (f" {D}— {detail}{X}" if detail else ""))
+    print(f"{mark} {name}" + (f" {D}— {detail}{X}" if detail else ""),
+          file=_human())
     return ok
 
 
@@ -91,7 +107,7 @@ def report(name: str, detail: str) -> None:
     Deliberately NOT recorded as a passing check: this script's whole claim is
     that every line it prints was actually verified.
     """
-    print(f"{Y}INFO{X} {name} {D}— {detail}{X}")
+    print(f"{Y}INFO{X} {name} {D}— {detail}{X}", file=_human())
 
 
 def _stamp(ts) -> str:
@@ -182,9 +198,14 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # --- the consumer app ----------------------------------------------------
     r = get(f"{CAREAGENTS}/healthz", timeout)
     body = {}
+    # Whether the deployment actually told us anything, as opposed to us
+    # defaulting on its behalf. The build check below reads its one field from
+    # this body and may only speak when this is True — see #272.
+    healthz_read = False
     if getattr(r, "status_code", None) in (200, 503):
         try:
             body = r.json() or {}
+            healthz_read = True
         except ValueError:
             pass
     # /healthz round-trips the database, so this catches an app that booted but
@@ -198,34 +219,49 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # deployments were running code older than PR #241 while this script
     # reported 9/9 green. This asks the one question the others cannot.
     stale = False
-    deployed = str(body.get("build") or "unknown").lower()
-    built = _stamp(body.get("built_at"))
-    marker = deployed + (f" built {built}" if built else "")
-    build_info.update(deployed=deployed, built_at=body.get("built_at"),
-                      built=built or None)
-    if not expect_sha:
-        # No expected set means no honest assertion to make, so make none.
-        report(BUILD_CHECK, f"{marker} (informational — no --expect-sha given)")
+    if not healthz_read:
+        # Nothing was read, so there is no marker to have a verdict about, and
+        # `deployed` below would be this script's own "unknown" default —
+        # indistinguishable from a genuinely unmarked build. Asserting on it
+        # told whoever read the alarm at 03:00 to redeploy when the deployment
+        # was simply DOWN (#272): a verdict about a field the run never read,
+        # which is the exact thing #258 exists to prevent. The readiness check
+        # above already reports the outage, and its remedy is the right one.
+        report(BUILD_CHECK,
+               f"not asserted — /healthz was not readable "
+               f"({getattr(r, 'status_code', r)}), so no build marker was read")
     else:
-        # Deployed sha is short; the expected set is full sha. A build still
-        # rolling out matches an hours-old commit and passes; "unknown" and
-        # anything "-dirty" match nothing, which is the intent.
-        #
-        # Shape-check first. `startswith` alone means a build reporting "4"
-        # prefix-matches every expected sha and passes. _build.py gates the
-        # marker on its way out; this gates it on the way in, because the one
-        # thing a monitor must not do is accept the field it is auditing.
-        ok = (bool(_SHA_RE.fullmatch(deployed))
-              and any(full.startswith(deployed) for full in expect_sha))
-        stale = not check(
-            BUILD_CHECK, ok,
-            marker if ok else
-            f"deployed build {deployed}"
-            + (f" (built {built})" if built else "")
-            + f" is not one of the {len(expect_sha)} commit(s) this run "
-            f"accepts (tip {expect_sha[0][:7]}). CareAgents does not "
-            "auto-deploy — redeploy per RELEASING.md §4.")
-        build_info.update(asserted=True, ok=ok)
+        deployed = str(body.get("build") or "unknown").lower()
+        built = _stamp(body.get("built_at"))
+        marker = deployed + (f" built {built}" if built else "")
+        build_info.update(deployed=deployed, built_at=body.get("built_at"),
+                          built=built or None)
+        if not expect_sha:
+            # No expected set means no honest assertion to make, so make none.
+            report(BUILD_CHECK,
+                   f"{marker} (informational — no --expect-sha given)")
+        else:
+            # Deployed sha is short; the expected set is full sha. A build
+            # still rolling out matches an hours-old commit and passes;
+            # "unknown" and anything "-dirty" match nothing, which is the
+            # intent.
+            #
+            # Shape-check first. `startswith` alone means a build reporting "4"
+            # prefix-matches every expected sha and passes. _build.py gates the
+            # marker on its way out; this gates it on the way in, because the
+            # one thing a monitor must not do is accept the field it is
+            # auditing.
+            ok = (bool(_SHA_RE.fullmatch(deployed))
+                  and any(full.startswith(deployed) for full in expect_sha))
+            stale = not check(
+                BUILD_CHECK, ok,
+                marker if ok else
+                f"deployed build {deployed}"
+                + (f" (built {built})" if built else "")
+                + f" is not one of the {len(expect_sha)} commit(s) this run "
+                f"accepts (tip {expect_sha[0][:7]}). CareAgents does not "
+                "auto-deploy — redeploy per RELEASING.md §4.")
+            build_info.update(asserted=True, ok=ok)
 
     r = get(f"{CAREAGENTS}/", timeout)
     html = getattr(r, "text", "") or ""
@@ -290,16 +326,17 @@ def run(timeout: float, expect_sha: list[str]) -> int:
 
     failed = [n for n, ok, _ in results if not ok]
     hard = [n for n in failed if n != BUILD_CHECK]
-    print()
+    print(file=_human())
     if failed:
-        print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed))
+        print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed),
+              file=_human())
     # A stale build is not an outage. Reporting it as one would train the
     # reader to ignore the outage alarm.
     if hard:
         return 1
     if stale:
         return 2
-    print(f"{G}all {len(results)} checks passing{X}")
+    print(f"{G}all {len(results)} checks passing{X}", file=_human())
     return 0
 
 
@@ -307,12 +344,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--timeout", type=float, default=20.0)
     ap.add_argument("--json", action="store_true",
-                    help="emit machine-readable results")
+                    help="emit machine-readable results on stdout, and send "
+                         "the human report to stderr so stdout can be piped "
+                         "into a parser")
     ap.add_argument("--json-out", metavar="PATH",
-                    help="write the same machine-readable results to PATH, "
-                         "leaving stdout human-readable. The scheduled run "
-                         "uses this to drive its two alarms from the checks "
-                         "themselves rather than from one exit code.")
+                    help="write the same machine-readable results to PATH. "
+                         "stdout keeps the human report unless --json is also "
+                         "given. The scheduled run uses this to drive its two "
+                         "alarms from the checks themselves rather than from "
+                         "one exit code.")
     ap.add_argument("--expect-sha", action="append", default=[], metavar="SHA",
                     help="full commit sha the CareAgents build may have been "
                          "built from; repeatable or comma-separated. The "
@@ -321,6 +361,12 @@ def main() -> int:
                          "still accepted. Omit it and the deployed build is "
                          "reported but not asserted.")
     args = ap.parse_args()
+
+    # Assigned unconditionally, not only under --json: this is module state,
+    # and a second main() in one process must not inherit the first one's
+    # stream.
+    global _human_to_stderr
+    _human_to_stderr = args.json
 
     # Order matters: the first sha is reported as the tip. De-duplicated so a
     # tip that also appears in the last-24h list is not counted twice.
