@@ -8,10 +8,12 @@ Design:
 - Streams downloads (httpx streaming) to handle 30MB–3GB files without OOM
 - Runs in a daemon thread so the webhook handler returns 200 immediately
 - Commits progress every _PROGRESS_BATCH resources (avoids long DB locks)
-- Skips unsupported resource types gracefully (no crash, logged as skipped)
+- Skips unsupported resource types gracefully (no crash, counted per type
+  in the import summary so a dropped type is nameable — #377)
 - Runs Curatr evaluation post-ingestion for clinical resource types when
   FASTEN_CURATR_SCAN=true is set
 """
+import collections
 import json
 import logging
 import os
@@ -57,6 +59,81 @@ _RESOURCE_ID_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]{1,255}$')
 # carrying an id outside the charset would be dropped, counted as a skip, and
 # reported as a successful import with nothing to page on (#293).
 REFUSED_OUTCOMES = frozenset({'invalid_id', 'forbidden'})
+
+# FHIR resource type names this code is willing to REPEAT.
+#
+# #363 gave a refusal a reason. A `skipped` stayed one integer covering every
+# type the store does not keep, so "which type did we drop?" had no answer in
+# the audit trail or the log. That is the #377 case: an EHR sending the
+# medication list as MedicationStatement looks exactly like an export that
+# carried a few hundred billing rows, and the issue's own precondition —
+# check the counters before building anything — could not be met.
+#
+# `resourceType` is caller-supplied on every line of an NDJSON export, and
+# audit `detail` is exported into the auditor-facing compliance bundle, so
+# the name is CONSTRUCTED from this set rather than filtered out of the feed
+# (docs/agent-task-guide.md §2, same rule as `_safe_unsupported_key`).
+# Anything not listed counts under UNNAMED_SKIPPED_TYPE — still counted,
+# never quoted. A type that later joins R6Resource.SUPPORTED_TYPES simply
+# stops reaching the skip branch, so an entry here going stale is harmless.
+UNNAMED_SKIPPED_TYPE = 'other'
+
+_NAMEABLE_SKIPPED_TYPES = frozenset({
+    # Medication semantics we do not store (#377)
+    'MedicationStatement', 'MedicationAdministration', 'MedicationKnowledge',
+    # Imaging, documents, raw attachments
+    'ImagingStudy', 'ImagingSelection', 'Media', 'Binary', 'Composition',
+    'DocumentManifest',
+    # Financial — usually the bulk of an EHI export by row count
+    'Claim', 'ClaimResponse', 'ExplanationOfBenefit', 'Account', 'Invoice',
+    'ChargeItem', 'PaymentNotice', 'PaymentReconciliation', 'Contract',
+    'EnrollmentRequest', 'EnrollmentResponse', 'InsurancePlan',
+    'CoverageEligibilityRequest', 'CoverageEligibilityResponse',
+    # Workflow, scheduling, orders
+    'Appointment', 'AppointmentResponse', 'Schedule', 'Slot', 'Task',
+    'Communication', 'CommunicationRequest', 'DeviceRequest',
+    'SupplyRequest', 'SupplyDelivery', 'VisionPrescription', 'NutritionOrder',
+    # Clinical types outside the stored set
+    'ClinicalImpression', 'DetectedIssue', 'RiskAssessment', 'AdverseEvent',
+    'BodyStructure', 'EpisodeOfCare', 'EncounterHistory', 'Flag', 'Device',
+    'DeviceUsage', 'DeviceUseStatement', 'Substance', 'MolecularSequence',
+    'GuidanceResponse', 'List', 'Group', 'Basic', 'Linkage',
+    # Directory, terminology, conformance
+    'Person', 'HealthcareService', 'Endpoint', 'Measure', 'MeasureReport',
+    'Library', 'ValueSet', 'CodeSystem', 'ConceptMap', 'NamingSystem',
+    'StructureDefinition', 'SearchParameter', 'OperationDefinition',
+    'CapabilityStatement', 'ImplementationGuide', 'Parameters',
+    'ResearchStudy', 'ResearchSubject', 'VerificationResult',
+})
+
+# How many distinct type names one summary may carry. An export can present
+# arbitrarily many. The summary is a signal, not an inventory, and audit
+# detail is read by humans.
+_SKIPPED_TYPES_IN_SUMMARY = 6
+
+
+def safe_skipped_type(resource: dict) -> str:
+    """The name we are willing to record for a resource we did not store."""
+    name = resource.get('resourceType')
+    if isinstance(name, str) and name in _NAMEABLE_SKIPPED_TYPES:
+        return name
+    return UNNAMED_SKIPPED_TYPE
+
+
+def skipped_type_summary(counts) -> str:
+    """Render `Type:n` pairs, most-skipped first, bounded.
+
+    Empty string when nothing was skipped, so a caller can append it
+    conditionally and a clean import's summary stays unchanged.
+    """
+    if not counts:
+        return ''
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown = ordered[:_SKIPPED_TYPES_IN_SUMMARY]
+    rendered = ','.join(f'{name}:{n}' for name, n in shown)
+    if len(ordered) > len(shown):
+        rendered += f',+{len(ordered) - len(shown)}'
+    return rendered
 
 
 def log_refusal(log, where: str, tenant_id: str, resource: dict,
@@ -124,6 +201,7 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
         skipped = 0
         refused = 0
         failed = 0
+        skipped_types: collections.Counter = collections.Counter()
         curatr_eligible_ids: list[tuple[str, str]] = []  # (resource_type, resource_id)
 
         try:
@@ -164,6 +242,7 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                                             tenant_id, resource, result)
                             else:
                                 skipped += 1
+                                skipped_types[safe_skipped_type(resource)] += 1
                         except json.JSONDecodeError:
                             failed += 1
                         except Exception as exc:
@@ -198,6 +277,11 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
             job.completed_at = datetime.now(timezone.utc)
             db.session.commit()
 
+            # WHICH types were dropped, not just how many. A bare count
+            # cannot tell an export full of billing rows apart from a feed
+            # whose entire medication list is a type we do not keep (#377).
+            types_summary = skipped_type_summary(skipped_types)
+
             record_audit_event(
                 event_type='fasten_import_complete',
                 agent_id='fasten-connect',
@@ -207,12 +291,15 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                     f'job={job.task_id} '
                     f'ingested={ingested} skipped={skipped} '
                     f'refused={refused} failed={failed}'
+                    + (f' skipped_types={types_summary}'
+                       if types_summary else '')
                 ),
             )
             logger.info(
                 'Fasten job %s complete: ingested=%d skipped=%d '
-                'refused=%d failed=%d',
+                'refused=%d failed=%d skipped_types=%s',
                 job.task_id, ingested, skipped, refused, failed,
+                types_summary or '-',
             )
 
             # Optional: run Curatr quality scan on clinical resources. Best

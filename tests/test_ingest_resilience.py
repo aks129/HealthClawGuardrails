@@ -347,3 +347,202 @@ def test_the_fasten_path_refuses_the_same_way_the_shc_path_does(app, caplog):
     assert "Jane Doe" not in joined and "MRN" not in joined, (
         "the refused id reached the log — it is refused precisely because "
         "it looks like this")
+
+
+# ---------------------------------------------------------------------------
+# #377: the other half of #293. A refusal is now named. A SKIP is not.
+# `skipped` is one integer covering every type this store does not keep, so
+# "which type did we drop?" has no answer anywhere — not in the audit trail,
+# not in the log. #377's own precondition is "check the ingest counters
+# before building anything", and the counters cannot be checked: an EHR that
+# sends the medication list as MedicationStatement is indistinguishable from
+# one whose export carried a few hundred ExplanationOfBenefit rows.
+#
+# The type name is the one caller-supplied field these tests care about, so
+# it goes through an allowlist that CONSTRUCTS (docs/agent-task-guide.md §2)
+# rather than being repeated verbatim — a real NDJSON line can put a name
+# there as readily as it can put one in an id.
+# ---------------------------------------------------------------------------
+def _ndjson_stream(lines):
+    """The httpx.stream context manager `stream_ingest` consumes."""
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    return _Resp()
+
+
+def _run_fasten_ingest(app, task_id, resources, caplog):
+    """Drive the REAL Fasten path over an NDJSON export of `resources`.
+
+    A unit test over `_ingest_one` proves an outcome code. It cannot prove
+    the import summary carries it, which is the whole defect. Returns
+    (job, summary_audit_detail).
+    """
+    import json as _json
+    import logging
+    from unittest.mock import patch
+
+    from models import db
+    import r6.fasten.ingester as ingester_mod
+    from r6.fasten.models import FastenJob
+
+    lines = [_json.dumps(r) for r in resources]
+    seen: dict = {}
+
+    def capture(**kw):
+        if kw.get("event_type") == "fasten_import_complete":
+            seen.update(kw)
+
+    original = ingester_mod.record_audit_event
+    ingester_mod.record_audit_event = capture
+    try:
+        with app.app_context():
+            job = FastenJob(task_id=task_id, org_connection_id="c1",
+                            tenant_id="test-tenant", status="pending")
+            db.session.add(job)
+            db.session.commit()
+            job_id = job.id
+
+            with patch("r6.fasten.ingester.httpx.stream",
+                       return_value=_ndjson_stream(lines)), \
+                    caplog.at_level(logging.INFO):
+                ingester_mod.stream_ingest(
+                    app, job_id,
+                    ["https://download.example.invalid/e.ndjson"],
+                    "test-tenant")
+
+            db.session.expire_all()
+            return db.session.get(FastenJob, job_id), seen.get("detail", "")
+    finally:
+        ingester_mod.record_audit_event = original
+
+
+def test_a_skipped_medication_statement_is_named_in_the_import_summary(
+        app, caplog):
+    """#377. An EHR that records "what the patient is actually taking" as
+    MedicationStatement — many do, because a statement of current use is not
+    a prescription — has every one of those resources dropped at ingest.
+
+    The drop itself is a policy question. The SILENCE is not: the patient
+    asks their agent what they are taking and gets a confident answer over a
+    hole, and nobody operating the system can tell that the hole is there.
+    One integer cannot distinguish a feed sending medications we discard
+    from an export carrying a few hundred billing rows we never wanted.
+    """
+    job, detail = _run_fasten_ingest(app, "skip-named-job", [
+        {"resourceType": "Observation", "id": "skipnamed-ok-1",
+         "status": "final", "code": {"coding": [{"code": "x"}]}},
+        {"resourceType": "MedicationStatement", "id": "skipnamed-ms-1",
+         "status": "recorded"},
+        {"resourceType": "ExplanationOfBenefit", "id": "skipnamed-eob-1"},
+        {"resourceType": "ExplanationOfBenefit", "id": "skipnamed-eob-2"},
+    ], caplog)
+
+    assert job.ingested_resources == 1
+    assert job.skipped_resources == 3
+
+    assert "MedicationStatement:1" in detail, (
+        "the import summary counted three skips and named none of them — "
+        "#377's own precondition ('check the ingest counters') cannot be "
+        f"answered from {detail!r}")
+    assert "ExplanationOfBenefit:2" in detail, (
+        "a per-type count is what separates 'this feed sends medications we "
+        "drop' from 'this export was mostly billing'")
+    assert "MedicationStatement" in caplog.text, (
+        "an operator reading the job's completion log still cannot see it")
+
+
+def test_the_skipped_type_summary_cannot_carry_a_name_from_the_feed(
+        app, caplog):
+    """The allowlist half. `resourceType` is caller-supplied on every line of
+    a real export, so naming it back into audit detail is the reflection rule
+    (docs/agent-task-guide.md §2) with a different field — audit `detail` is
+    exported into the auditor-facing compliance bundle.
+
+    Unknown types still have to COUNT, or this trades one silence for
+    another.
+    """
+    job, detail = _run_fasten_ingest(app, "skip-unnamed-job", [
+        {"resourceType": "Jane Doe 1980-01-01 MRN 12345", "id": "un-1"},
+        {"resourceType": "MedicationStatement", "id": "un-ms-1"},
+    ], caplog)
+
+    assert job.skipped_resources == 2, "an unnameable type still gets counted"
+    assert "other:1" in detail, (
+        "the unknown type vanished from the summary instead of being "
+        "counted under a code-owned name")
+    for leak in ("Jane Doe", "MRN", "1980-01-01"):
+        assert leak not in detail, (
+            f"{leak!r} reached the audit detail — the type name was repeated "
+            "verbatim rather than constructed from the allowlist")
+        assert leak not in caplog.text, f"{leak!r} reached the log"
+
+
+def test_the_shc_path_names_skipped_types_the_same_way(app, tenant_id):
+    """Both ingest paths, one vocabulary — the #306 lesson. The SHC path is
+    the one that historically went years without a fix the Fasten path got.
+    """
+    from r6.shc import routes as shc
+
+    seen: dict = {}
+
+    def capture(**kw):
+        seen.update(kw)
+
+    import r6.shc.routes as shcmod
+    original = shcmod.record_audit_event
+    shcmod.record_audit_event = capture
+    try:
+        counts = shc._ingest_bundle(
+            app,
+            [{"resourceType": "Observation", "id": "shc-skipnamed-1",
+              "status": "final", "code": {"coding": [{"code": "x"}]}},
+             {"resourceType": "MedicationStatement", "id": "shc-ms-1"}],
+            tenant_id, "flexpa", "job377")
+    finally:
+        shcmod.record_audit_event = original
+
+    assert counts["ingested"] == 1 and counts["skipped"] == 1
+    assert counts["skipped_types"] == {"MedicationStatement": 1}, (
+        "the returned counts are the assertable surface (#293); a per-type "
+        "breakdown no test can read is the next version of the same defect")
+    assert "MedicationStatement:1" in seen.get("detail", "")
+
+
+def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers):
+    """The third ingest path, and the only SYNCHRONOUS one — the caller is
+    holding the response. It answered `resource_count: 1` for a two-entry
+    bundle and said nothing about the other entry, which is the same silence
+    with a 201 on it.
+    """
+    import json as _json
+
+    resp = client.post(
+        '/r6/fhir/Bundle/$ingest-context',
+        data=_json.dumps({
+            'resourceType': 'Bundle', 'type': 'collection',
+            'entry': [
+                {'resource': {'resourceType': 'Patient', 'id': 'ctx-pt-377'}},
+                {'resource': {'resourceType': 'MedicationStatement',
+                              'id': 'ctx-ms-377'}},
+            ],
+        }),
+        content_type='application/json', headers=tenant_headers)
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body['resource_count'] == 1
+    assert body['skipped_count'] == 1, (
+        "one of two entries was discarded and the response reported only "
+        "what it kept")
+    assert body['skipped_types'] == {'MedicationStatement': 1}

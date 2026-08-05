@@ -34,6 +34,7 @@ Environment variables:
   SHC_BASE_URL          Where SmartHealthConnect is deployed (for Telegram links)
 """
 
+import collections
 import hmac
 import logging
 import os
@@ -258,6 +259,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
 
     with app.app_context():
         ingested = skipped = refused = failed = 0
+        skipped_types: collections.Counter = collections.Counter()
         curatr_eligible_ids: list[tuple[str, str]] = []
 
         for resource in entries:
@@ -274,6 +276,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
                                          tenant_id, resource, result)
                 else:
                     skipped += 1
+                    skipped_types[ingester.safe_skipped_type(resource)] += 1
             except Exception as exc:
                 failed += 1
                 # CRITICAL: roll back the failed flush so the session isn't
@@ -293,8 +296,12 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
                 logger.warning('SHC ingest error (job=%s): %s',
                                job_id, type(exc).__name__)
 
+        # `dict(...)` so a caller reading the counts cannot mutate the
+        # Counter, and so the returned shape is plain JSON-able data.
         counts = {'ingested': ingested, 'skipped': skipped,
-                  'refused': refused, 'failed': failed}
+                  'refused': refused, 'failed': failed,
+                  'skipped_types': dict(skipped_types)}
+        types_summary = ingester.skipped_type_summary(skipped_types)
         record_audit_event(
             event_type='shc_import_complete',
             agent_id=f'shc-{source}',
@@ -304,12 +311,14 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
                 f'job={job_id} source={source} '
                 f'ingested={ingested} skipped={skipped} '
                 f'refused={refused} failed={failed}'
+                + (f' skipped_types={types_summary}' if types_summary else '')
             ),
         )
         logger.info(
             'SHC job %s complete: source=%s ingested=%d skipped=%d '
-            'refused=%d failed=%d',
+            'refused=%d failed=%d skipped_types=%s',
             job_id, source, ingested, skipped, refused, failed,
+            types_summary or '-',
         )
 
         curatr_issues = 0

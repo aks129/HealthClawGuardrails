@@ -5,6 +5,7 @@ Ingests patient-centric Bundles and constructs bounded "context envelopes"
 with retention, redaction, and caching support.
 """
 
+import collections
 import json
 import logging
 import uuid
@@ -55,6 +56,15 @@ class ContextBuilder:
         # Store resources and collect items
         stored_resources = []
         context_items = []
+        # WHICH types we dropped, not just how many we kept. This is the one
+        # synchronous ingest path — the caller is holding the response — and
+        # it reported `resource_count` alone, so a bundle whose medications
+        # arrived as MedicationStatement looked identical to one that had no
+        # medications in it (#377). Imported here rather than at module level
+        # because `r6.fasten` pulls in its blueprint, which imports this
+        # module back.
+        from r6.fasten.ingester import safe_skipped_type
+        skipped_types: collections.Counter = collections.Counter()
 
         try:
             for entry in entries:
@@ -64,6 +74,7 @@ class ContextBuilder:
 
                 resource_type = resource.get('resourceType')
                 if not resource_type or not R6Resource.is_supported_type(resource_type):
+                    skipped_types[safe_skipped_type(resource)] += 1
                     logger.debug(f'Skipping unsupported resource type: {resource_type}')
                     continue
 
@@ -133,6 +144,8 @@ class ContextBuilder:
                 'patient_ref': patient_ref,
                 'encounter_ref': encounter_ref,
                 'resource_count': len(stored_resources),
+                'skipped_count': sum(skipped_types.values()),
+                'skipped_types': dict(skipped_types),
                 'expires_at': envelope.expires_at.isoformat(),
                 'items': context_items
             }
