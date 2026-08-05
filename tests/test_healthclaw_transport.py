@@ -39,7 +39,8 @@ import time
 import pytest
 import requests
 
-from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.healthclaw import (HealthClawClient, HealthClawError,
+                                   HealthClawUnconfirmed)
 
 # The discard port: nothing listens, so connect() fails immediately.
 DEAD_BASE = "http://127.0.0.1:9"
@@ -56,22 +57,35 @@ class _Mode:
         self.body = b'{"ok": 1}'
         self.ctype = "application/json"
         self.delay = 0.0
+        # `confirm_action` mints an approval token before it confirms. With
+        # this set the mint is answered normally whatever the rest of the mode
+        # says, so the mode describes the confirm POST itself — otherwise
+        # every confirm case below would fail in the mint and never reach the
+        # call it names.
+        self.mint_ok = False
 
 
 MODE = _Mode()
+
+MINTED = b'{"token": "approval-token"}'
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _serve(self):
+        if MODE.mint_ok and self.path.endswith("/approval-token"):
+            return self._write(200, MINTED, "application/json")
         if MODE.delay:
             time.sleep(MODE.delay)
-        self.send_response(MODE.status)
-        self.send_header("Content-Type", MODE.ctype)
-        self.send_header("Content-Length", str(len(MODE.body)))
+        self._write(MODE.status, MODE.body, MODE.ctype)
+
+    def _write(self, status, body, ctype):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(MODE.body)
+        self.wfile.write(body)
 
     do_GET = do_POST = _serve
 
@@ -120,8 +134,10 @@ def _client(base):
     return c
 
 
-def _set(status=200, body=b'{"ok": 1}', ctype="application/json", delay=0.0):
+def _set(status=200, body=b'{"ok": 1}', ctype="application/json", delay=0.0,
+         mint_ok=False):
     MODE.status, MODE.body, MODE.ctype, MODE.delay = status, body, ctype, delay
+    MODE.mint_ok = mint_ok
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +373,106 @@ def test_worker_health_type_checks_its_200_body(stub_base, reset_mode):
     _set(status=200, body=b'"just-a-string"')
     with pytest.raises(HealthClawError):
         _client(stub_base).agent_worker_health()
+
+
+# --------------------------------------------------------------------------
+# A confirm that was never answered — with a status code on it
+# --------------------------------------------------------------------------
+# `confirm_action` is the one call on this seam that can EXECUTE a clinical
+# action, so what it raises decides what a patient is told after they approve.
+# #220 typed the case where no response arrives at all. #416 is the case a
+# gateway answers instead: an edge 502/503/504 IS a response, so `_send`
+# returns it and `if not r.ok` filed it as a refusal — "Nothing has been sent,
+# please try approving again", for an action the engine had already run. QA
+# drove that against a live engine and watched the action move
+# awaiting_confirmation -> failed while the patient was told to approve again.
+#
+# So the question is never "was it 2xx". It is what the status says about the
+# UPSTREAM: only an engine that answered and declined is a refusal.
+
+GATEWAY_BODY = b"<html><body>gateway</body></html>"
+
+
+def test_a_confirmed_action_returns_the_engines_answer(stub_base, reset_mode):
+    """Positive control. Without it every case below could be passing because
+    the confirm never reaches the stub at all."""
+    _set(status=200, body=b'{"status": "confirmed"}', mint_ok=True)
+    assert _client(stub_base).confirm_action("t", "a1") == {
+        "status": "confirmed"}
+
+
+@pytest.mark.parametrize("status", (408, 429, 500, 502, 503, 504))
+def test_a_confirm_a_gateway_answered_is_not_a_refusal(status, stub_base,
+                                                       reset_mode):
+    """A 504 is the production shape of "we do not know", not of "no".
+
+    The edge answers on the upstream's behalf after the request was already
+    delivered, so the confirm may have executed. Reporting it as a refusal
+    tells the patient nothing was sent and invites a second approval, which on
+    the human-approval path is an instruction to double-execute.
+
+    MUTATION: raise `HealthClawError` for 5xx in `confirm_action` -> red here
+    for 500/502/503/504. Ran it with PYTHONDONTWRITEBYTECODE=1, saw red.
+    """
+    _set(status=status, body=GATEWAY_BODY, ctype="text/html", mint_ok=True)
+    with pytest.raises(HealthClawUnconfirmed):
+        _client(stub_base).confirm_action("t", "a1")
+
+
+@pytest.mark.parametrize("status", (400, 401, 403, 404, 409, 410, 422))
+def test_a_confirm_the_engine_declined_stays_a_refusal(status, stub_base,
+                                                       reset_mode):
+    """The other half, and the half that made the old bug invisible: a 4xx is
+    an answer. Either the engine declined or an edge rejected the request
+    before delivering it — nothing ran either way, so "nothing has been sent,
+    try approving again" is true and must keep being said.
+    """
+    _set(status=status, body=b'{"error": "not awaiting confirmation"}',
+         mint_ok=True)
+    err = pytest.raises(HealthClawError,
+                        _client(stub_base).confirm_action, "t", "a1")
+    assert not isinstance(err.value, HealthClawUnconfirmed)
+
+
+def test_a_confirm_answered_200_but_unreadable_is_not_a_refusal(stub_base,
+                                                                reset_mode):
+    """The narrower sibling. A 200 carrying a proxy's HTML interstitial is not
+    a decline either, and `_json_object` raising plain `HealthClawError`
+    produced the same "Nothing has been sent" message.
+
+    MUTATION: decode with a bare `self._json_object(r, "confirm")` -> red.
+    Ran it with PYTHONDONTWRITEBYTECODE=1, saw red.
+    """
+    _set(status=200, body=NON_JSON_BODY, ctype="text/html", mint_ok=True)
+    with pytest.raises(HealthClawUnconfirmed):
+        _client(stub_base).confirm_action("t", "a1")
+
+
+def test_a_confirm_answered_by_nobody_stays_unconfirmed(stub_base,
+                                                        reset_mode):
+    """#220's own case, kept green here rather than only in the route test.
+
+    The POST is on the wire and the read times out. This is the path
+    `_send(error=HealthClawUnconfirmed)` already covers; regressing it
+    reintroduces the defect the rest of this section generalizes.
+    """
+    _set(delay=SLOW_ENOUGH_TO_TIME_OUT, mint_ok=True)
+    with pytest.raises(HealthClawUnconfirmed):
+        _client(stub_base).confirm_action("t", "a1")
+
+
+def test_a_lost_approval_mint_is_a_refusal_and_not_silence(stub_base,
+                                                           reset_mode):
+    """The mint runs BEFORE the confirm and has no side effect on the action
+    (`issue_action_approval_token` reads it and signs a token), so losing its
+    answer means the confirm never went out. Nothing executed, "try approving
+    again" is the correct instruction, and the classification must not flatten
+    that in the other direction to make the 504 case pass.
+    """
+    _set(status=504, body=GATEWAY_BODY, ctype="text/html")
+    err = pytest.raises(HealthClawError,
+                        _client(stub_base).confirm_action, "t", "a1")
+    assert not isinstance(err.value, HealthClawUnconfirmed)
 
 
 # --------------------------------------------------------------------------

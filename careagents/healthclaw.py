@@ -43,6 +43,10 @@ class HealthClawUnconfirmed(HealthClawError):
     that only knows about HealthClawError still catches it and degrades to
     "failed" — which is why callers that can act on the difference must catch
     this FIRST.
+
+    Silence is not only an absent response. A gateway 502/503/504 is a
+    response, and a 200 carrying an interstitial is a response, but neither is
+    the ENGINE's answer (#416).
     """
 
 
@@ -110,6 +114,22 @@ class HealthClawClient:
             raise HealthClawError(f"{what} returned invalid data",
                                   r.status_code)
         return body
+
+    @staticmethod
+    def _upstream_answered(status: int) -> bool:
+        """Whether `status` is the ENGINE's own decision about the request.
+
+        A 4xx other than 408/429 is an answer: either the engine declined, or
+        an edge rejected the request before delivering it. Nothing ran either
+        way, so a caller may say so.
+
+        Everything else — 5xx, 408, 429 — is a gateway speaking on the
+        upstream's behalf, quite possibly after the request was already
+        delivered and executed. It is silence with a status code on it. For a
+        call with no side effect that distinction does not matter; for one
+        that can execute a clinical action it is the whole of #416.
+        """
+        return 400 <= status < 500 and status not in (408, 429)
 
     # --- tenant lifecycle ---------------------------------------------------
 
@@ -306,6 +326,11 @@ class HealthClawClient:
         confirm never went out — a refusal. The confirm POST is the one that
         can execute a clinical action, so losing its answer is NOT evidence
         that nothing happened.
+
+        "Losing the answer" is wider than a dropped socket, which is the gap
+        #416 closed: a gateway status (5xx, 408, 429) and a 200 whose body
+        will not decode are both responses that say nothing about what the
+        engine did. Only `_upstream_answered` is a refusal.
         """
         # Nothing was confirmed if this fails: we never reached the confirm.
         mint = self._send(
@@ -330,9 +355,24 @@ class HealthClawClient:
                        json={"approved_via": "review-page"},
                        what="confirm", error=HealthClawUnconfirmed)
         if not r.ok:
+            if not self._upstream_answered(r.status_code):
+                # An edge 502/503/504 IS a response, so `_send` handed it
+                # back — but it is not the engine's, and the confirm may
+                # already have run. Filing it as a refusal is what told a
+                # patient "nothing has been sent, please try approving again"
+                # for an action the engine had executed (#416).
+                raise HealthClawUnconfirmed(
+                    f"confirm unanswered ({r.status_code})", r.status_code)
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)
-        return self._json_object(r, "confirm")
+        try:
+            return self._json_object(r, "confirm")
+        except HealthClawError as exc:
+            # Same rule on the success side: something answered 200, and a
+            # body we cannot read says nothing about whether the engine
+            # executed. Only a decodable answer is a confirmation.
+            raise HealthClawUnconfirmed("confirm returned invalid data",
+                                        r.status_code) from exc
 
     # --- review-page relay (credential-injecting proxy) ----------------------
 
