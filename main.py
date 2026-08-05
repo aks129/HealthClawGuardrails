@@ -308,7 +308,18 @@ def _register_request_hooks(flask_app: Flask) -> None:
         duration_ms = round(
             (time.time() - getattr(g, "request_start", time.time())) * 1000, 1
         )
-        request_logger.info(
+        # This is a debug access log, not an audit trail — AuditEvent is that,
+        # and it is durable and PHI-free. Logged at INFO for every request it
+        # made retention a line budget: the idle run-claim poll alone was
+        # ~100% of the engine's volume and evicted the reaper warnings and
+        # ingest errors an operator needs. Successes go to DEBUG; anything
+        # that did not succeed stays at INFO, correlation id and all.
+        level = (
+            logging.DEBUG if 200 <= response.status_code < 300
+            else logging.INFO
+        )
+        request_logger.log(
+            level,
             json.dumps(
                 {
                     "request_id": getattr(g, "request_id", "-"),
