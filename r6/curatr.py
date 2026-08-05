@@ -30,7 +30,12 @@ TX_FHIR_ORG = "https://tx.fhir.org/r4"
 NLM_ICD10_API = (
     "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search"
 )
-RXNAV_API = "https://rxnav.nlm.nih.gov/REST/rxcui.json"
+# /REST/rxcui.json searches BY NAME (?name=). Passing ?rxcui= to it is a
+# parameter error and RXNav answers HTTP 400 — which this code did from the
+# day it was written, so every RxNorm lookup returned None ("could not check")
+# and nothing ever looked broken. The per-concept properties endpoint below is
+# the one that takes an rxcui, and it returns the drug NAME.
+RXNAV_PROPERTIES_API = "https://rxnav.nlm.nih.gov/REST/rxcui/{rxcui}/properties.json"
 TERMINOLOGY_TIMEOUT = 5  # seconds
 
 # Code systems that are deprecated / retired
@@ -687,21 +692,42 @@ class CuratrEngine:
 
     def _validate_rxnorm(self, code: str) -> Optional[dict]:
         """
-        Validate an RxNorm RXCUI via RXNAV REST API.
-        Returns {'valid': bool, 'display': None, 'message': str|None}.
+        Look up an RxNorm RXCUI via the RXNav properties endpoint.
+        Returns {'valid': bool, 'display': str|None, 'message': str|None}.
+
+        `display` is the drug name, and returning it is the point. This method
+        used to hardcode it to None because it was written as a validity check
+        for the quality scan, where "is this a real code?" is the only
+        question. `terminology_resolver.resolve` reuses it to LABEL a code, so
+        a patient asking "what medications am I on?" was told their record
+        could not be read while four correctly-coded rows sat in it — the
+        upstream display having been stripped by redaction, as designed, with
+        nothing to put back.
+
+        RXNav answers 200 with `{}` for a code that is not a concept. That is
+        an authoritative "no" and is reported as valid=False. A non-200 or a
+        transport error stays None — "could not check" — because
+        terminology_resolver caches an authoritative verdict and must never
+        cache a blip (#344 D2).
         """
         try:
+            # Override the session's Accept. It is set once to
+            # application/fhir+json for tx.fhir.org, and RXNav answers a FHIR
+            # Accept with HTTP 406 Not Acceptable — a third way this lookup
+            # returned None that no unit test could see, because a mocked
+            # session has no opinion about headers.
             resp = self._session.get(
-                RXNAV_API,
-                params={"rxcui": code},
+                RXNAV_PROPERTIES_API.format(rxcui=code),
+                headers={"Accept": "application/json"},
                 timeout=self.timeout,
             )
             if resp.status_code != 200:
                 return None
-            data = resp.json()
-            rxcuis = data.get("idGroup", {}).get("rxnormId", [])
-            if rxcuis:
-                return {"valid": True, "display": None, "message": None}
+            properties = (resp.json() or {}).get("properties") or {}
+            name = properties.get("name")
+            if isinstance(name, str) and name.strip():
+                return {"valid": True, "display": name.strip(),
+                        "message": None}
             return {
                 "valid": False,
                 "display": None,
