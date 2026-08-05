@@ -167,7 +167,7 @@ def test_auth_email_reports_failure_instead_of_claiming_it_sent(app, svc,
     # watching an empty inbox with no idea whether to wait or retry.
     import careagents.mail as mailmod
     monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: False)
+                        lambda cfg, e, code, purpose: mailmod.NOT_SENT)
     r = app.test_client().post("/api/auth/email",
                                json={"email": "gene@example.com"})
     assert r.status_code == 502
@@ -180,15 +180,16 @@ def test_a_failed_send_does_not_block_the_retry(app, svc, monkeypatch):
     # without sending anything.
     import careagents.mail as mailmod
     monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: False)
+                        lambda cfg, e, code, purpose: mailmod.NOT_SENT)
     c = app.test_client()
     assert c.post("/api/auth/email",
                   json={"email": "retry@example.com"}).status_code == 502
 
     sent = {}
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: sent.setdefault("c", code)
-                        is not None)
+    monkeypatch.setattr(
+        mailmod, "send_code",
+        lambda cfg, e, code, purpose: (sent.setdefault("c", code)
+                                       and mailmod.SENT))
     r = c.post("/api/auth/email", json={"email": "retry@example.com"})
     assert r.status_code == 200 and sent.get("c"), "retry never sent a code"
 
@@ -223,6 +224,153 @@ def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
     assert body["confirmed"] is False
     assert "not" in body["message"].lower() or "couldn't" in body["message"]
 
+
+def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
+        cfg, svc, monkeypatch):
+    """The third state (#220): the confirm went out and was never answered.
+
+    Answering "Nothing has been sent — please try approving again" is as
+    unobserved as the old "confirmed". The engine may already be executing the
+    action, and a person who follows that instruction sends it twice.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    class _Fake(FakeClient):
+        def submit_review(self, tenant, action_id, decisions):
+            return 200, {"ok": True}
+
+        def confirm_action(self, tenant, action_id):
+            raise HealthClawUnconfirmed("confirm unanswered", 0)
+
+    fake = _Fake()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/sample").get_json()
+    agent_id = c.post("/api/agents", json={
+        "name": "A", "persona": "calm",
+        "connection_id": created["id"]}).get_json()["id"]
+
+    monkeypatch.setattr(fake, "action_status",
+                        lambda t, a: {"status": "awaiting_confirmation"})
+    r = c.post(f"/review/{agent_id}/act-1/submit", json={"approved": []})
+    assert r.status_code == 502
+    body = r.get_json()
+    assert body["confirmed"] is None, "unknown is not false"
+    msg = body["message"].lower()
+    assert "nothing has been sent" not in msg
+    assert "couldn't confirm" in msg and "twice" in msg
+
+
+def test_confirm_action_separates_a_refusal_from_an_unanswered_confirm():
+    """The client must not report silence as a refusal.
+
+    A lost answer on /confirm used to escape as a bare requests exception —
+    nothing in this client wraps it — so the relay's `except HealthClawError`
+    never saw it and the person got a 500.
+    """
+    import requests
+    from careagents.healthclaw import (HealthClawClient, HealthClawError,
+                                       HealthClawUnconfirmed)
+
+    class _Minted:
+        ok, status_code = True, 200
+
+        def json(self):
+            return {"token": "tok"}
+
+    def client_with(confirm_result):
+        hc = HealthClawClient("http://engine.invalid", "secret")
+
+        def _post(url, **kw):
+            if url.endswith("/approval-token"):
+                return _Minted()
+            if isinstance(confirm_result, Exception):
+                raise confirm_result
+            return confirm_result
+
+        hc.http.post = _post
+        return hc
+
+    # No answer at all — we cannot tell whether the action ran.
+    with pytest.raises(HealthClawUnconfirmed):
+        client_with(requests.ReadTimeout("read timed out")).confirm_action(
+            "t", "a1")
+
+    # An observed rejection stays an ordinary failure.
+    class _Refused:
+        ok, status_code = False, 409
+
+    err = pytest.raises(HealthClawError,
+                        client_with(_Refused()).confirm_action, "t", "a1")
+    assert not isinstance(err.value, HealthClawUnconfirmed)
+
+    # A transport failure minting the approval token is a refusal, not
+    # silence: the confirm call never went out.
+    hc = HealthClawClient("http://engine.invalid", "secret")
+
+    def _mint_dies(url, **kw):
+        raise requests.ConnectionError("refused")
+
+    hc.http.post = _mint_dies
+    err = pytest.raises(HealthClawError, hc.confirm_action, "t", "a1")
+    assert not isinstance(err.value, HealthClawUnconfirmed)
+
+
+def test_an_unconfirmed_send_keeps_the_code_live_and_says_so(app, svc,
+                                                             monkeypatch):
+    """The third state on the front door (#220).
+
+    A read timeout to Resend is not a refusal: the mail may already be in the
+    inbox. Reporting "we couldn't send it" AND burning the code is worse than
+    doing nothing — the person types a code we just killed.
+    """
+    import careagents.mail as mailmod
+    captured = {}
+    monkeypatch.setattr(
+        mailmod, "send_code",
+        lambda cfg, e, code, purpose: (captured.setdefault("c", code)
+                                       and mailmod.UNCONFIRMED))
+    c = app.test_client()
+    r = c.post("/api/auth/email", json={"email": "unsure@example.com"})
+
+    assert r.status_code == 202
+    body = r.get_json()
+    assert body["sent"] is None, "unknown is neither sent nor not-sent"
+    assert "couldn't confirm" in body["notice"].lower()
+
+    # The code the provider may have delivered still works.
+    r = c.post("/api/auth/verify",
+               json={"email": "unsure@example.com", "code": captured["c"]})
+    assert r.status_code == 200, "an unconfirmed send burned a live code"
+
+
+def test_send_code_calls_a_lost_answer_unconfirmed_not_failed(monkeypatch):
+    """A response is the only evidence of an outcome."""
+    import requests
+    import careagents.mail as mailmod
+
+    class _Cfg:
+        resend_api_key = "key"
+        resend_from = "codes@example.com"
+
+    def sending(raises=None, status=None):
+        def _post(*a, **kw):
+            if raises is not None:
+                raise raises
+            return type("R", (), {"status_code": status})()
+        monkeypatch.setattr(mailmod.requests, "post", _post)
+        return mailmod.send_code(_Cfg(), "x@example.com", "12345678", "verify")
+
+    # Written, never answered — the mail may have gone out.
+    assert sending(raises=requests.ReadTimeout("slow")) == mailmod.UNCONFIRMED
+    # Never delivered to the provider at all.
+    assert sending(raises=requests.ConnectionError("refused")) == mailmod.NOT_SENT
+    # The provider answered and did not accept it.
+    assert sending(status=429) == mailmod.NOT_SENT
+    assert sending(status=200) == mailmod.SENT
 
 # --- engine pool settings (#221) ---------------------------------------------
 # Honest scope: these assert what make_engine hands to create_engine. They do
@@ -1944,8 +2092,10 @@ def _make_account(svc, monkeypatch, email):
     """
     import careagents.mail as mailmod
     captured = {}
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: captured.setdefault("c", code))
+    monkeypatch.setattr(
+        mailmod, "send_code",
+        lambda cfg, e, code, purpose: (captured.setdefault("c", code)
+                                       and mailmod.SENT))
     svc.start_email_code(email)
     return svc.verify_email_code(email, captured["c"])
 
@@ -1953,13 +2103,15 @@ def _make_account(svc, monkeypatch, email):
 def _sink_code(sink):
     """Stand-in for mail.send_code that records the code and reports success.
 
-    Returning True is load-bearing: a falsy return now means "the send failed"
-    and raises MailError (#220), so a fake that returns None — as bare
-    list.append and dict.__setitem__ do — reads as an outage.
+    Returning mail.SENT is load-bearing: send_code answers with one of three
+    named states (#220), and anything else — True, None, a bare list.append —
+    reads as "we could not tell", which raises MailUnconfirmed.
     """
+    import careagents.mail as mailmod
+
     def _send(cfg, email, code, purpose):
         sink.append(code)
-        return True
+        return mailmod.SENT
     return _send
 
 
@@ -1967,8 +2119,10 @@ def _login(client, svc, monkeypatch, email="gene@example.com"):
     """Log a client in via the real email-code path (code captured from mail)."""
     captured = {}
     import careagents.mail as mailmod
-    monkeypatch.setattr(mailmod, "send_code",
-                        lambda cfg, e, code, purpose: captured.setdefault("c", code))
+    monkeypatch.setattr(
+        mailmod, "send_code",
+        lambda cfg, e, code, purpose: (captured.setdefault("c", code)
+                                       and mailmod.SENT))
     r = client.post("/api/auth/email", json={"email": email})
     assert r.status_code == 200
     r = client.post("/api/auth/verify", json={"email": email, "code": captured["c"]})
@@ -2004,7 +2158,7 @@ def test_fresh_home_gates_agent_modal_and_shows_onboarding(app, svc, monkeypatch
 def test_wrong_email_code_rejected(app, svc, monkeypatch):
     c = app.test_client()
     import careagents.mail as mailmod
-    monkeypatch.setattr(mailmod, "send_code", lambda *a: True)
+    monkeypatch.setattr(mailmod, "send_code", lambda *a: mailmod.SENT)
     c.post("/api/auth/email", json={"email": "x@y.com"})
     r = c.post("/api/auth/verify", json={"email": "x@y.com", "code": "000000"})
     assert r.status_code == 400

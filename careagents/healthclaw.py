@@ -35,6 +35,17 @@ class HealthClawError(RuntimeError):
         self.correlation_id = correlation_id
 
 
+class HealthClawUnconfirmed(HealthClawError):
+    """The request went out and the engine never answered.
+
+    Not the same as a refusal (#220). A refusal is an observed response saying
+    no; this is silence, and the engine may have done the thing. Any caller
+    that only knows about HealthClawError still catches it and degrades to
+    "failed" — which is why callers that can act on the difference must catch
+    this FIRST.
+    """
+
+
 class HealthClawClient:
     def __init__(self, base: str, mint_secret: str, timeout: float = 25.0):
         self.base = base.rstrip("/")
@@ -233,22 +244,42 @@ class HealthClawClient:
         return r.json()
 
     def confirm_action(self, tenant: str, action_id: str) -> dict:
-        mint = self.http.post(
-            f"{self.actions}/{action_id}/approval-token",
-            headers={"X-Tenant-Id": tenant,
-                     "X-Internal-Secret": self.mint_secret},
-            timeout=self.timeout)
+        """Confirm a reviewed action. Raises on refusal, HealthClawUnconfirmed
+        on silence.
+
+        Three outcomes, and the caller must be able to tell them apart (#220).
+        The mint is safely retryable, so a transport failure there means the
+        confirm never went out — a refusal. The confirm POST is the one that
+        can execute a clinical action, so losing its answer is NOT evidence
+        that nothing happened.
+        """
+        try:
+            mint = self.http.post(
+                f"{self.actions}/{action_id}/approval-token",
+                headers={"X-Tenant-Id": tenant,
+                         "X-Internal-Secret": self.mint_secret},
+                timeout=self.timeout)
+        except requests.RequestException as exc:
+            # Nothing was confirmed: we never got as far as the confirm call.
+            raise HealthClawError("approval token mint failed", 0) from exc
         token = (mint.json() or {}).get("token") if mint.ok else None
         if not token:
             raise HealthClawError(
                 f"approval token mint failed ({mint.status_code})",
                 mint.status_code)
-        r = self.http.post(f"{self.actions}/{action_id}/confirm",
-                           headers={"X-Tenant-Id": tenant,
-                                    "X-Step-Up-Token": token,
-                                    "X-Agent-Id": "careagents"},
-                           json={"approved_via": "review-page"},
-                           timeout=self.timeout)
+        try:
+            r = self.http.post(f"{self.actions}/{action_id}/confirm",
+                               headers={"X-Tenant-Id": tenant,
+                                        "X-Step-Up-Token": token,
+                                        "X-Agent-Id": "careagents"},
+                               json={"approved_via": "review-page"},
+                               timeout=self.timeout)
+        except requests.RequestException as exc:
+            # A read timeout here means the confirm may already have run. This
+            # used to escape the client entirely (nothing wraps it into
+            # HealthClawError), so the relay's `except HealthClawError` missed
+            # it and the person got a 500 instead of an answer.
+            raise HealthClawUnconfirmed("confirm unanswered", 0) from exc
         if not r.ok:
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)

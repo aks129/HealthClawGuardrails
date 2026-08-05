@@ -25,13 +25,14 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, MailError,
-                                 new_binding_code)
+                                 MailUnconfirmed, new_binding_code)
 from careagents import advisors, connectors
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
-from careagents.healthclaw import HealthClawClient, HealthClawError
+from careagents.healthclaw import (HealthClawClient, HealthClawError,
+                                   HealthClawUnconfirmed)
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,13 @@ def create_app(config: Config | None = None,
             retry_after = svc.start_email_code(email, purpose)
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
+        except MailUnconfirmed as exc:
+            # The third answer (#220). `sent` is null, not false: saying "we
+            # didn't send it" would be as unobserved as saying we did, and the
+            # code is still live, so the person carries on to the code step
+            # rather than being sent back to the start. 202 — accepted, outcome
+            # unknown. Ordered before MailError: MailUnconfirmed subclasses it.
+            return jsonify({"sent": None, "notice": str(exc)}), 202
         except MailError as exc:
             # Never report "sent" when nothing was sent — this is the front
             # door, and a silent failure leaves the person watching an empty
@@ -954,6 +962,24 @@ def create_app(config: Config | None = None,
         if status == 200:
             try:
                 hc.confirm_action(tenant, action_id)
+            except HealthClawUnconfirmed:
+                # The third answer (#220). The engine never replied, so the
+                # action may already be running. "Nothing has been sent — try
+                # again" would be a claim we did not observe, and acting on it
+                # is how a prescription request gets sent twice. `confirmed` is
+                # null: not true, not false, not knowable from here.
+                logger.exception("confirm unanswered after review for %s",
+                                 action_id)
+                body = dict(body) if isinstance(body, dict) else {}
+                body.update({
+                    "confirmed": None,
+                    "message": ("Your review was saved, but we couldn't "
+                                "confirm whether the approval went through. "
+                                "Don't approve again yet — check the request's "
+                                "status first, because approving twice could "
+                                "send it twice."),
+                })
+                return jsonify(body), 502
             except HealthClawError:
                 # The review was recorded but the confirmation didn't land, so
                 # the action is still sitting unexecuted. Swallowing this told
