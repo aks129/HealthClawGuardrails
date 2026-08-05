@@ -195,6 +195,20 @@ def make_engine(url: str):
         # quiet period is followed by intermittent "server closed the
         # connection" 500s on the next request — check the connection before
         # handing it out, and retire it well before the server would.
+        #
+        # The numbers: 300s is half of the 600s that PgBouncer's
+        # server_idle_timeout defaults to (Railway does not document its own
+        # idle window, so we sit well under the common default rather than
+        # guess at it). A connection is therefore retired on our side before
+        # either the pooler or the server can drop it.
+        #
+        # Note what pool_recycle does NOT buy: pre_ping pings on *every*
+        # checkout, not only stale ones, so recycling does not reduce the
+        # per-checkout round trip. What it buys is that the ping almost always
+        # succeeds — the expensive discard-and-reconnect path stays rare — and
+        # it covers the one race pre_ping cannot, a connection that dies in the
+        # gap between a successful ping and the query. One round trip per
+        # checkout is the cost; the alternative is a 500 nobody can retry into.
         pool_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
     engine = create_engine(url, connect_args=connect_args, future=True,
                            **pool_kwargs)

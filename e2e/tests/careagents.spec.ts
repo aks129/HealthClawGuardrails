@@ -50,9 +50,9 @@ test.beforeEach(async ({ page }) => {
 
 /**
  * Unique per test. Reusing an address breaks reruns: within RESEND_COOLDOWN
- * (30s, careagents/accounts.py:35) start_email_code returns early and mints
- * nothing, while /api/auth/email still answers {"sent": true} — so no new
- * code would ever reach the log.
+ * (30s, careagents/accounts.py:35) start_email_code mints nothing and
+ * /api/auth/email answers {"sent": false, "reason": "cooldown"} (#262) — so
+ * no new code would ever reach the log.
  */
 const uniqueEmail = () =>
   `e2e-${Date.now()}-${Math.floor(Math.random() * 1e4)}@example.test`;
