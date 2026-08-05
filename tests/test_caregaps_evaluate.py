@@ -68,6 +68,29 @@ def test_unknown_age_is_indeterminate_not_a_false_alarm():
     assert res["mammography"]["status"] == "indeterminate"
 
 
+def test_indeterminate_results_name_which_demographic_was_missing():
+    """report.py turns this into the words the patient reads, and it must not
+    have to guess: one reason covering both demographics is how a person whose
+    birthDate was on file got told it was not (#417).
+
+    An indeterminate result with no cause recorded falls back to claiming BOTH
+    are missing, so the cause is load-bearing rather than decorative.
+    """
+    no_dob = {r["rule_id"]: r for r in evaluate_care_gaps(
+        {"resourceType": "Patient", "gender": "female"}, as_of="2026-07-01")}
+    assert no_dob["mammography"]["indeterminate_reason"] == "birth-date-unknown"
+
+    no_sex = {r["rule_id"]: r for r in evaluate_care_gaps(
+        {"resourceType": "Patient", "birthDate": "1968-05-01"}, as_of="2026-07-01")}
+    assert no_sex["mammography"]["indeterminate_reason"] == "sex-unknown"
+    assert no_sex["bp-screening"]["status"] != "indeterminate"
+
+    for res in (no_dob, no_sex):
+        for r in res.values():
+            if r["status"] == "indeterminate":
+                assert r.get("indeterminate_reason"), r["rule_id"]
+
+
 def test_colorectal_satisfied_by_recent_procedure():
     proc = {"resourceType": "Procedure", "status": "completed",
             "code": {"coding": [{"system": "http://www.ama-assn.org/go/cpt",

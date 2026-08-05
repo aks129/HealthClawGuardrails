@@ -107,7 +107,8 @@ def register_caregaps_routes(blueprint, deps):
 
         supplied = _subject_from_request()
         subject, state = _resolve_subject(supplied, tenant_id)
-        unresolved = state if state in ("no-patient", "ambiguous-patient") else None
+        not_evaluated = (state if state in ("no-patient", "ambiguous-patient")
+                         else None)
 
         # `supplied`, NOT `subject`. Feeding the evaluator the Patient the
         # fallback just resolved makes every age-gated rule resolve, which
@@ -118,6 +119,16 @@ def register_caregaps_routes(blueprint, deps):
         # `indeterminate`, and the consumer summary says why it is empty
         # instead of reading as "nothing due".
         patient = _patient_for(supplied, tenant_id)
+
+        # No Patient reached the evaluator, so every rule comes back
+        # indeterminate for a reason that has nothing to do with this person's
+        # record — the engine reports the date of birth as unknown because it
+        # was never given one. Passed through, that became "Your date of birth
+        # and sex were not available to this check" for a record holding both
+        # (#417). While we are not looking at someone's demographics, the only
+        # honest reason is our own limitation.
+        if not_evaluated is None and patient is None:
+            not_evaluated = "check-incomplete"
 
         # No subject means nothing to compare against, so we do not pretend to
         # have read anything.
@@ -132,7 +143,7 @@ def register_caregaps_routes(blueprint, deps):
             as_of=as_of)
 
         summary = build_caregaps_summary(results)
-        consumer = build_consumer_summary(results, unresolved=unresolved)
+        consumer = build_consumer_summary(results, not_evaluated=not_evaluated)
 
         record_audit_event(
             "read", resource_type="Patient", resource_id=None,

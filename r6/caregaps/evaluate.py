@@ -11,7 +11,13 @@ Honesty posture (matches the lab interpreter):
   abnormal results, pregnancy) legitimately changes cadence — noted in output.
 - "Due" means no satisfying record was found in the CONNECTED data. It is NOT a
   claim the screening wasn't done elsewhere — the consumer wording says so.
-- Missing age/sex → `indeterminate`, never a false "due".
+- Missing age/sex → `indeterminate`, never a false "due". Each such result also
+  carries `indeterminate_reason` naming WHICH demographic was missing, because
+  the consumer summary quotes it back to the person and a reason covering both
+  is a false claim about the one that was on file (#417). It says what THIS
+  CALL was given, not what the record holds: a caller that passes no patient
+  gets `birth-date-unknown` on every rule, and report.py is careful not to
+  read that as a statement about the person's data.
 """
 
 from __future__ import annotations
@@ -233,6 +239,7 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
         # Age gate — unknown age on an age-gated rule is indeterminate, never a false due
         if age is None:
             results.append({**base, "applicable": None, "status": "indeterminate",
+                            "indeterminate_reason": "birth-date-unknown",
                             "note": "date of birth unknown — cannot determine eligibility"})
             continue
         if not (applies["min_age"] <= age <= applies["max_age"]):
@@ -241,6 +248,7 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
             continue
         if applies["sex"] and not gender:
             results.append({**base, "applicable": None, "status": "indeterminate",
+                            "indeterminate_reason": "sex-unknown",
                             "note": "sex not recorded — cannot determine eligibility"})
             continue
 
