@@ -2629,6 +2629,51 @@ def audit_stream():
 
 # --- Agent Demo Loop ---
 
+# The demo loop writes at FIXED ids, one set per tenant. It used to mint a
+# uuid8 suffix per call, so every press of "Run 6-Step Guardrail Demo" — and
+# every e2e run, since dashboard.spec.ts drives that button — left another
+# Patient behind. The demo tenant reached 19, and $care-gaps then correctly
+# refused to guess whose preventive care to evaluate, so two steps of our own
+# 10-minute demo script stopped working (#415). None of the six steps needs a
+# distinct patient per run: they demonstrate create, read, redaction, audit and
+# permission enforcement, all of which a repeated run shows identically. A
+# showcase a viewer can re-run and see the same thing is the point.
+_DEMO_LOOP_PATIENT_ID = 'demo-loop-pt'
+_DEMO_LOOP_OBSERVATION_ID = 'demo-loop-obs'
+_DEMO_LOOP_PERMISSION_ID = 'demo-loop-perm'
+
+
+def _demo_loop_upsert(resource, tenant_id):
+    """Write one demo resource at its fixed id, reviving a tombstone.
+
+    Identity is (tenant_id, resource_type, id) — the composite PK — so a
+    plain insert on the second run collides. Same upsert shape as the Fasten
+    ingester (r6/fasten/ingester.py), including the deliberate absence of an
+    `is_deleted` filter: step 3 soft-deletes every Permission for the tenant,
+    so on run two the Permission written in step 4 is revived from a tombstone
+    this endpoint laid down itself moments earlier.
+    """
+    resource_json = json.dumps(resource, separators=(',', ':'), sort_keys=True)
+    existing = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type=resource['resourceType'],
+        id=resource['id'],
+    ).first()
+    if existing:
+        existing.update_resource(resource_json)
+        existing.is_deleted = False
+        row = existing
+    else:
+        row = R6Resource(
+            resource_type=resource['resourceType'],
+            resource_json=resource_json,
+            resource_id=resource['id'],
+            tenant_id=tenant_id,
+        )
+        db.session.add(row)
+    db.session.commit()
+    return row
+
+
 @r6_blueprint.route('/demo/agent-loop', methods=['POST'])
 def demo_agent_loop():
     """
@@ -2670,13 +2715,12 @@ def demo_agent_loop():
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
 
-    demo_id = str(uuid.uuid4())[:8]
     steps = []
 
     # --- Step 1: Create + Read Patient (redacted) ---
     patient = {
         'resourceType': 'Patient',
-        'id': f'demo-loop-pt-{demo_id}',
+        'id': _DEMO_LOOP_PATIENT_ID,
         'name': [{'family': 'Rivera', 'given': ['Maria', 'Elena']}],
         'gender': 'female',
         'birthDate': '1990-03-15',
@@ -2685,15 +2729,7 @@ def demo_agent_loop():
         'telecom': [{'system': 'phone', 'value': '617-555-0198', 'use': 'mobile'}],
     }
 
-    resource_json = json.dumps(patient, separators=(',', ':'), sort_keys=True)
-    pt_resource = R6Resource(
-        resource_type='Patient',
-        resource_json=resource_json,
-        resource_id=patient['id'],
-        tenant_id=tenant_id,
-    )
-    db.session.add(pt_resource)
-    db.session.commit()
+    _demo_loop_upsert(patient, tenant_id)
     record_audit_event('create', 'Patient', patient['id'],
                        agent_id='demo-agent', tenant_id=tenant_id,
                        detail='Agent demo: created patient for guardrail walkthrough')
@@ -2721,7 +2757,7 @@ def demo_agent_loop():
     # --- Step 2: Agent proposes MedicationRequest ---
     med_request = {
         'resourceType': 'Observation',
-        'id': f'demo-loop-obs-{demo_id}',
+        'id': _DEMO_LOOP_OBSERVATION_ID,
         'status': 'preliminary',
         'code': {
             'coding': [{'system': 'http://loinc.org', 'code': '2339-0', 'display': 'Glucose [Mass/volume] in Blood'}],
@@ -2798,7 +2834,7 @@ def demo_agent_loop():
     # --- Step 4: Create permit rule + re-evaluate → PERMIT ---
     permission = {
         'resourceType': 'Permission',
-        'id': f'demo-loop-perm-{demo_id}',
+        'id': _DEMO_LOOP_PERMISSION_ID,
         'status': 'active',
         'combining': 'permit-overrides',
         'asserter': {'reference': 'Organization/hospital-1'},
@@ -2814,15 +2850,7 @@ def demo_agent_loop():
         }],
     }
 
-    perm_json = json.dumps(permission, separators=(',', ':'), sort_keys=True)
-    perm_resource = R6Resource(
-        resource_type='Permission',
-        resource_json=perm_json,
-        resource_id=permission['id'],
-        tenant_id=tenant_id,
-    )
-    db.session.add(perm_resource)
-    db.session.commit()
+    _demo_loop_upsert(permission, tenant_id)
     record_audit_event('create', 'Permission', permission['id'],
                        agent_id='demo-agent', tenant_id=tenant_id,
                        detail='Agent demo: created permit rule for treatment-purpose writes')
@@ -2894,15 +2922,7 @@ def demo_agent_loop():
     })
 
     # --- Step 6: Commit write with full audit trail ---
-    obs_json = json.dumps(med_request, separators=(',', ':'), sort_keys=True)
-    obs_resource = R6Resource(
-        resource_type='Observation',
-        resource_json=obs_json,
-        resource_id=med_request['id'],
-        tenant_id=tenant_id,
-    )
-    db.session.add(obs_resource)
-    db.session.commit()
+    obs_resource = _demo_loop_upsert(med_request, tenant_id)
     record_audit_event('create', 'Observation', med_request['id'],
                        agent_id='demo-agent', tenant_id=tenant_id,
                        detail='Agent demo: committed Observation after full guardrail sequence')
@@ -2929,7 +2949,10 @@ def demo_agent_loop():
     })
 
     return jsonify({
-        'demo_id': demo_id,
+        # Constant, like the ids it names: a run is no longer distinguishable
+        # from the run before it, which is the fix. Kept in the response
+        # because it is part of the published shape.
+        'demo_id': 'demo-loop',
         'title': 'MCP Guardrail Pattern Sequence',
         'description': 'Complete 6-step walkthrough showing how security patterns protect clinical data when an AI agent accesses FHIR resources via MCP.',
         'guardrails_demonstrated': [
