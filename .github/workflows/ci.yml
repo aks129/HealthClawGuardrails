@@ -314,11 +314,30 @@ jobs:
       - name: Install uv
         run: pip install uv
 
+      - name: Install the locked dependency set
+        # pip-audit audits the interpreter it runs under. Under `uvx` that
+        # was an ephemeral env holding pip-audit and nothing else, so this
+        # gate reported "No known vulnerabilities found" while examining
+        # zero project packages. Put the real dependency set in front of it.
+        run: uv sync --frozen
+
       - name: Python dependency audit (pip-audit)
         # pip-audit does not publish reliable severity metadata for every
         # advisory. Fail on every known vulnerability rather than silently
         # misclassifying one; exceptions require a reviewed, expiring policy.
-        run: uvx --from pip-audit==2.9.0 pip-audit --strict
+        #
+        # `uv run --with` runs pip-audit under the PROJECT interpreter without
+        # adding it to the locked set — the interpreter it audits is the one
+        # this service ships.
+        run: uv run --with pip-audit==2.9.0 pip-audit --strict --format json --output audit.json
+
+      - name: The audit examined the project, not an empty interpreter
+        # The positive half, and the reason this gate is trustworthy now:
+        # "no vulnerabilities" is satisfied hardest by an environment
+        # containing nothing. Runs even when the step above failed, so a red
+        # gate still says whether it was red for a real finding.
+        if: always()
+        run: uv run python scripts/check_audit_coverage.py audit.json
 
       - name: Node.js dependency audit
         working-directory: services/agent-orchestrator
