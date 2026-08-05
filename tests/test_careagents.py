@@ -1520,7 +1520,8 @@ class FakeClient:
 #   * Behaviour. Signature parity says a call is *accepted*, never that it does
 #     the same thing. `FakeClient.record_count` returns a settable int;
 #     `HealthClawClient.record_count` sums six `_summary=count` searches and
-#     swallows per-type errors. Both signatures are `(tenant)`.
+#     raises if any of them could not be asked. Both signatures are
+#     `(tenant)`.
 #   * Wire format. Nothing here talks to a running HealthClaw, so a body or
 #     header the engine rejects still passes.
 #   * Return types and annotations. The fake is unannotated by design; only
@@ -2202,6 +2203,69 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["status"] == "active"
     assert d["record_count"] == 112
     assert d["new_records"] == 12
+
+
+def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
+        cfg, svc, monkeypatch):
+    """The patient-visible half of #403.
+
+    `tenant_has_records` now raises when it could not look, instead of
+    answering False. This endpoint is what that reaches: it used to render
+    False as `{"status": "pending"}`, so an engine incident showed "still
+    fetching your records" forever on the connect screen, on a phone, at the
+    moment someone is deciding whether the product works.
+
+    The reply must carry neither a count nor "pending" — an outage is not an
+    answer about how many records a person has.
+
+    MUTATION: drop the `except HealthClawError` arm in `poll_connection` ->
+    red with an unhandled 500 rather than the honest 503. Ran it, saw red.
+    """
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    def down(_tenant):
+        raise HealthClawError("search Patient failed (503)", 503)
+
+    fake.tenant_has_records = down
+
+    r = c.get(f"/api/connections/{tenant}/poll")
+    assert r.status_code == 503
+    d = r.get_json()
+    assert d["status"] == "unavailable"
+    assert d["error"] == "records_unavailable"
+    assert "couldn't reach your records" in d["message"]
+    assert "record_count" not in d and "new_records" not in d
+
+
+def test_the_trust_badge_is_unavailable_rather_than_a_500(cfg, svc,
+                                                          monkeypatch):
+    """`conformance_badge` raises on a transport failure now that the seam is
+    typed (#403). The trust panel must keep answering "unavailable" — the
+    same thing it already says for a non-200 — instead of turning an engine
+    outage into a 500 on the page that exists to state what we guarantee."""
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+
+    def down():
+        raise HealthClawError("conformance badge failed", 0)
+
+    fake.conformance_badge = down
+
+    r = app.test_client().get("/api/trust")
+    assert r.status_code == 200
+    assert r.get_json()["badge"] == "unavailable"
 
 
 def test_first_sync_reports_no_phantom_new_records(svc, monkeypatch):

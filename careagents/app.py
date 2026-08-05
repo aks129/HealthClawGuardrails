@@ -541,7 +541,21 @@ def create_app(config: Config | None = None,
                  for c in svc.list_home(acct.id)["connections"]}
         if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
-        if hc.tenant_has_records(conn_tenant):
+        try:
+            landed = hc.tenant_has_records(conn_tenant)
+        except HealthClawError:
+            # Not "pending". We did not fail to find records, we failed to
+            # look, and the two are different answers. Rendering this as
+            # pending left the patient watching "still fetching your records"
+            # on a condition nothing would ever re-evaluate, with nothing
+            # anywhere saying the record store was down (#403).
+            return jsonify({
+                "status": "unavailable",
+                "error": "records_unavailable",
+                "message": "We couldn't reach your records right now. That's "
+                           "a problem on our side — we'll keep checking.",
+            }), 503
+        if landed:
             svc.set_connection_status(conn_tenant, "active")
             out = {"status": "active"}
             # After a refresh, report growth against the baseline that refresh
@@ -1103,7 +1117,13 @@ def create_app(config: Config | None = None,
 
     @app.get("/api/trust")
     def trust():
-        badge = hc.conformance_badge()
+        try:
+            badge = hc.conformance_badge()
+        except HealthClawError:
+            # The badge is a claim about the engine. Unreachable means we do
+            # not have one — the same honest answer a non-200 already gives,
+            # rather than a 500 on the trust panel (#403).
+            badge = {}
         return jsonify({"badge": badge.get("message", "unavailable")})
 
     @app.get("/manifest.webmanifest")
