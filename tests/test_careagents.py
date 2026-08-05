@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import time
 
 import pytest
@@ -704,6 +705,28 @@ def test_worker_pool_creates_only_the_configured_number_of_slots(
         "careagents-worker-0", "careagents-worker-1",
         "careagents-worker-2"]
     assert all(thread.started and thread.joined for thread in threads)
+
+
+def test_worker_ids_are_unique_per_process_instance():
+    """#374's redelivery hands a running run back to its own worker id, so a
+    worker id must name exactly one live claim loop. Hostname and PID do not:
+    a restarted container can be handed both back (PID 1 is the common case),
+    and two processes sharing an id would each be handed the other's run.
+
+    Both calls here share this process's hostname and PID, so the only thing
+    that can distinguish them is the per-instance suffix.
+
+    MUTATION: drop the random suffix from `_worker_base_id`
+    (careagents/worker.py). The two ids become equal.
+    """
+    from careagents import worker as worker_mod
+
+    first, second = worker_mod._worker_base_id(), worker_mod._worker_base_id()
+
+    assert first != second
+    # The engine rejects a worker_id outside this shape (r6/agent_runs/routes
+    # `_ID`), and its column is String(128).
+    assert re.fullmatch(r"[A-Za-z0-9._:-]{1,110}", first), first
 
 
 def test_queued_run_history_stops_at_its_claimed_message(
