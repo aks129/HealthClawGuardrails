@@ -467,13 +467,14 @@
       <div class="r6-panel-header" style="background: linear-gradient(135deg, #0c2a3a 0%, #0f3d52 100%); border-bottom-color: var(--r6-info);">
         <i class="fas fa-plug" style="color: var(--r6-info);"></i>
         <h3 style="color: var(--r6-info);">Fasten Connect — Health Data Import</h3>
-        <span class="r6-tag r6-tag-read" style="margin-left:auto;background:rgba(6,182,212,0.15);color:var(--r6-info);border-color:var(--r6-info);">E2E DEMO</span>
+        <span class="r6-tag r6-tag-read" style="margin-left:auto;background:rgba(6,182,212,0.15);color:var(--r6-info);border-color:var(--r6-info);">LIVE DEMO</span>
       </div>
       <div class="r6-panel-body">
         <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
-          Patient authorizes EHR access via the <strong>Fasten Stitch widget</strong>.
-          An EHI export webhook fires, 4 FHIR resources are ingested (Patient, Observation, Condition,
-          MedicationRequest), PHI is redacted on read-back, and every step is recorded in the audit trail.
+          Patient authorizes EHR access via the <strong>Fasten Stitch widget</strong>. Step 1
+          finishes here. Steps 2-5 — EHI export webhook, ingestion, PHI redaction on read-back,
+          audit — run asynchronously over the next 5–45 minutes, so this page does not wait for
+          them and does not mark them done.
         </p>
 
         <div class="d-flex gap-2 flex-wrap mb-3">
@@ -482,12 +483,12 @@
                   style="background:var(--r6-info);color:#000;border-color:var(--r6-info);font-size:0.9rem;padding:0.55rem 1.4rem;">
             <i class="fas fa-hospital"></i> Connect Health Records
           </button>
+          {% else %}
+          <p style="color:var(--r6-text-muted);font-size:0.85rem;margin:0">
+            <strong>FASTEN_PUBLIC_KEY is not set on this deployment.</strong><br>
+            Set it on the Railway service so the Stitch widget can render.
+          </p>
           {% endif %}
-          <button class="r6-btn r6-btn-sm {% if not fasten_public_key %}r6-btn-primary{% else %}r6-btn-outline{% endif %}"
-                  id="btn-fasten-demo" onclick="runFastenDemo()"
-                  style="font-size:0.85rem;padding:0.5rem 1.2rem;{% if not fasten_public_key %}background:var(--r6-info);color:#000;border-color:var(--r6-info);{% else %}border-color:var(--r6-info);color:var(--r6-info);{% endif %}">
-            <i class="fas fa-flask"></i> {% if fasten_public_key %}Run Simulated Demo{% else %}Run Fasten Demo{% endif %}
-          </button>
         </div>
 
         {% if fasten_public_key %}
@@ -497,7 +498,7 @@
         </div>
         {% endif %}
 
-        <!-- 5-step tracker (shared between live and demo flows) -->
+        <!-- 5-step tracker: step 1 fills in live, 2-5 stay unmarked (#310a) -->
         <div id="fasten-steps" style="margin-top:1rem;display:none">
           <div class="demo-step" data-step="f1">
             <div class="demo-step-indicator"></div>
@@ -535,9 +536,6 @@
             </div>
           </div>
         </div>
-
-        <!-- Step detail output -->
-        <div id="fasten-step-detail" class="r6-json-output mt-3" style="display:none;max-height:400px"></div>
       </div>
     </div>
 

@@ -178,7 +178,6 @@ def _setup_fasten_connection(app):
 # POST /fasten/webhook                     |     |   |    |    |    |  x   |  x   |  x
 # POST /fasten/connections                 |  x  | x |    |    |    |      |  x   |  x
 # POST /fasten/jobs/<id>/retry             |  x  | x |    |    |    |      |  x   |     <- S-14
-# POST /fasten/demo                        |     |   |    |    |    |      |      |  x  <- #305
 # POST /r6/smbp/enroll                     |  x  | x |    |    |    |      |  x   |  x
 # POST /r6/smbp/reading                    |  x  | x |    | x  |    |      |  x   |  x
 # GET  /r6/smbp/report/<id>?format=pdf     |  x  | x | x  |    |    |      |  x   |  x
@@ -475,17 +474,6 @@ MATRIX: tuple = (
              "malformed id reached the job lookup as the partition key.",
     ),
     Row(
-        id="fasten-demo",
-        method="POST", path="/fasten/demo", endpoint="fasten.run_demo",
-        guards=frozenset({AUDIT}),
-        anon_refusal=(401, 403), defect_issue="#305",
-        note="S-2/#305: zero authentication. Writes a connection, a job and "
-             "four R6Resource rows. Mitigation the audit does not mention: "
-             "the tenant is HARD-CODED to 'fasten-demo-tenant', so this is "
-             "an unauthenticated storage-growth primitive, not a "
-             "cross-tenant write primitive.",
-    ),
-    Row(
         id="smbp-enroll",
         method="POST", path="/r6/smbp/enroll", endpoint="smbp.enroll",
         guards=frozenset({TENANT_HEADER, TENANT_FORMAT, TENANT_FILTER, AUDIT}),
@@ -701,16 +689,15 @@ def _params(rows, defect_marks=None):
         yield pytest.param(row, id=row.id, marks=marks)
 
 
-_FASTEN_DEMO_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="#305: /fasten/demo writes a connection, a job and four "
-           "R6Resource rows with no credential of any kind. Its siblings "
-           "(/demo/agent-loop, /internal/seed, /internal/purge-tenant) all "
-           "require the mint secret.")
+# The strict xfail that lived here pinned #305 (/fasten/demo answering an
+# anonymous caller). The route is deleted, so the defect it named cannot
+# occur; a strict xfail kept past its defect fails as XPASS(strict) and reads
+# as a broken test. That the route stays gone is pinned in
+# tests/test_fasten_import_not_fabricated.py, and a re-added one would be
+# caught by test_every_mutating_route_is_classified below.
 
 
-@pytest.mark.parametrize(
-    "row", list(_params(MATRIX, {"fasten-demo": (_FASTEN_DEMO_XFAIL,)})))
+@pytest.mark.parametrize("row", list(_params(MATRIX)))
 def test_a_mutating_route_refuses_an_anonymous_caller(client, app, row,
                                                       secrets):
     """Every mutating route refuses a caller carrying no credential at all.
@@ -731,8 +718,7 @@ def test_a_mutating_route_refuses_an_anonymous_caller(client, app, row,
         f"this row: {sorted(row.guards)}")
 
 
-@pytest.mark.parametrize(
-    "row", list(_params(MATRIX, {"fasten-demo": (_FASTEN_DEMO_XFAIL,)})))
+@pytest.mark.parametrize("row", list(_params(MATRIX)))
 def test_authorization_is_decided_before_the_body_is_parsed(client, app, row,
                                                             secrets):
     """An unparseable body from an anonymous caller still gets the auth refusal.
