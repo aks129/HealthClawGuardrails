@@ -66,6 +66,22 @@ def test_production_on_postgres_does_not_warn(caplog):
     assert not any("SQLite" in r.message for r in caplog.records)
 
 
+def test_idle_poll_cap_defaults_to_six_and_never_sits_below_the_floor():
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    assert Config(env=base).run_poll_max_seconds == 6.0
+
+    # The rollback contract: the cap set to the floor pins the interval flat,
+    # and a cap below the floor clamps up rather than inverting the doubling.
+    for value, expected in (("0.5", 0.5), ("0.1", 0.5)):
+        cfg = Config(env={**base, "CARE_RUN_POLL_MAX_SECONDS": value})
+        assert cfg.run_poll_max_seconds == cfg.run_poll_seconds == expected
+
+    for bad in ("0.04", "31"):
+        with pytest.raises(ConfigError):
+            Config(env={**base, "CARE_RUN_POLL_MAX_SECONDS": bad})
+
+
 # --- build provenance (#258) --------------------------------------------------
 # Both deployments were once found serving code months older than main while
 # every production check was green. The marker is what makes that visible — so
@@ -704,6 +720,193 @@ def test_worker_pool_creates_only_the_configured_number_of_slots(
         "careagents-worker-0", "careagents-worker-1",
         "careagents-worker-2"]
     assert all(thread.started and thread.joined for thread in threads)
+
+
+# --- idle poll backoff (#341) -------------------------------------------------
+
+class _RecordingStop:
+    """Stop event that records each wait and advances a simulated clock.
+
+    The clock is what makes presence freshness assertable: a slot commits
+    presence by calling claim, so the interval it waits between claims *is*
+    the age its presence row reaches.
+    """
+
+    def __init__(self):
+        self.waits: list[float] = []
+        self.claims: list[float] = []
+        self.clock = 0.0
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def wait(self, timeout=None) -> bool:
+        self.waits.append(timeout)
+        self.clock += timeout or 0.0
+        return self._set
+
+
+def _drive_pool(cfg, monkeypatch, outcomes):
+    """Run one worker slot against a scripted sequence of claim outcomes.
+
+    `outcomes` is one bool per poll: True means the slot claimed a run. The
+    pool runs synchronously on fake threads and stops once the script is
+    exhausted. Driving the real `run_worker_pool` rather than the backoff
+    object alone is deliberate — it pins that the backoff is wired to the
+    empty branch and the reset to the claimed one.
+    """
+    from careagents import worker as worker_mod
+
+    cfg.run_worker_concurrency = 1
+    stop = _RecordingStop()
+    pending = list(outcomes)
+
+    class _ScriptedWorker:
+        def __init__(self, *_args):
+            pass
+
+        def run_once(self):
+            stop.claims.append(stop.clock)
+            worked = pending.pop(0)
+            if not pending:
+                stop.set()
+            return worked
+
+    class _Thread:
+        def __init__(self, target, args, daemon, name):
+            self.target, self.args = target, args
+
+        def start(self):
+            self.target(*self.args)
+
+        def join(self):
+            pass
+
+    monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
+    monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
+    monkeypatch.setattr(worker_mod, "HealthClawClient",
+                        lambda *_args: object())
+    monkeypatch.setattr(worker_mod, "RunWorker", _ScriptedWorker)
+    worker_mod.run_worker_pool(cfg, stop)
+    return stop
+
+
+def test_idle_poll_doubles_to_the_cap_and_stays_there(cfg, monkeypatch):
+    cfg.run_poll_seconds = 0.5
+    cfg.run_poll_max_seconds = 6.0
+
+    stop = _drive_pool(cfg, monkeypatch, [False] * 7)
+
+    assert stop.waits == [0.5, 1.0, 2.0, 4.0, 6.0, 6.0, 6.0]
+
+
+def test_a_claim_returns_the_claiming_slot_to_the_floor(cfg, monkeypatch):
+    cfg.run_poll_seconds = 0.5
+    cfg.run_poll_max_seconds = 6.0
+
+    # Ramp to the cap, claim one run, then go idle again. The cap must only
+    # ever bite on the first message after silence.
+    stop = _drive_pool(cfg, monkeypatch, [False] * 5 + [True] + [False] * 3)
+
+    assert stop.waits == [0.5, 1.0, 2.0, 4.0, 6.0, 0.5, 1.0, 2.0]
+
+
+def test_a_claim_in_one_slot_returns_the_other_slots_to_the_floor():
+    from careagents.worker import _IdleBackoff
+
+    backoff = _IdleBackoff(slots=2, floor=0.5, cap=6.0)
+    # Slot 1 ramps to the cap while slot 0 is busy.
+    assert [backoff.on_empty(1) for _ in range(5)] == [0.5, 1.0, 2.0, 4.0, 6.0]
+
+    # Slot 0 claims a run. Slot 1 claimed nothing, but a live conversation
+    # means work is arriving, so it must poll at the floor too.
+    backoff.on_claim()
+
+    assert backoff.on_empty(1) == 0.5
+
+
+def test_poll_cap_equal_to_poll_floor_reproduces_todays_flat_interval(
+        cfg, monkeypatch):
+    # The rollback path: CARE_RUN_POLL_MAX_SECONDS=0.5 restores today's
+    # behaviour with a variable change and no redeploy.
+    cfg.run_poll_seconds = 0.5
+    cfg.run_poll_max_seconds = 0.5
+
+    stop = _drive_pool(cfg, monkeypatch, [False] * 6)
+
+    assert stop.waits == [0.5] * 6
+
+
+def test_idle_backoff_keeps_worker_presence_inside_the_readiness_window(
+        cfg, monkeypatch):
+    """The cap must never open a presence gap the readiness check fails on.
+
+    `claim_next` commits presence on every claim including the empty ones,
+    so an idle slot's poll interval is exactly how stale its presence row
+    gets. Web readiness fails closed at CARE_RUN_WORKER_STALE_SECONDS, so a
+    cap at or above that threshold would take /healthz to 503 on an idle
+    queue — the outage the fail-closed design exists to make visible.
+    """
+    cfg.run_poll_seconds = 0.5
+    cfg.run_poll_max_seconds = 6.0
+
+    # Long enough to ramp to the cap and then sit at it across several
+    # readiness windows, not merely long enough to touch it once.
+    stop = _drive_pool(cfg, monkeypatch, [False] * 40)
+
+    gaps = [later - earlier
+            for earlier, later in zip(stop.claims, stop.claims[1:])]
+    assert stop.claims[-1] > 3 * cfg.run_worker_stale_seconds, (
+        "ramp too short to say anything about a 30s readiness window")
+    assert max(gaps) == pytest.approx(cfg.run_poll_max_seconds)
+    assert max(gaps) < cfg.run_worker_stale_seconds
+
+
+def test_idle_backoff_sleep_stays_interruptible_so_shutdown_drains(
+        cfg, monkeypatch):
+    """The wait must stay `stop.wait`, never `time.sleep`.
+
+    A `time.sleep(cap)` adds the full cap to every SIGTERM drain and every
+    deploy. Floor and cap are pinned to 30s so the difference is
+    unmistakable: milliseconds against `stop.wait`, half a minute against
+    `time.sleep`.
+    """
+    import threading
+    from careagents import worker as worker_mod
+
+    cfg.run_worker_concurrency = 1
+    cfg.run_poll_seconds = 30.0
+    cfg.run_poll_max_seconds = 30.0
+    polled = threading.Event()
+
+    class _IdleWorker:
+        def __init__(self, *_args):
+            pass
+
+        def run_once(self):
+            polled.set()
+            return False
+
+    monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
+    monkeypatch.setattr(worker_mod, "HealthClawClient",
+                        lambda *_args: object())
+    monkeypatch.setattr(worker_mod, "RunWorker", _IdleWorker)
+
+    stop = threading.Event()
+    pool = threading.Thread(target=worker_mod.run_worker_pool,
+                            args=(cfg, stop), daemon=True)
+    started = time.monotonic()
+    pool.start()
+    assert polled.wait(10), "worker slot never polled"
+    stop.set()
+    pool.join(timeout=10)
+
+    assert not pool.is_alive(), "pool did not drain: the sleep is not a wait"
+    assert time.monotonic() - started < 10
 
 
 def test_queued_run_history_stops_at_its_claimed_message(
