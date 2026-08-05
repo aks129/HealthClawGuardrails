@@ -1053,15 +1053,28 @@ def test_chat_recovers_after_worker_queue_access_returns(
 
 def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
         cfg, svc, monkeypatch):
+    """Both states still fail closed. The code says which one happened.
+
+    Readiness and admission must refuse whether the workers reported
+    themselves absent or we could not reach the health endpoint at all — the
+    turn cannot be promised either way, and that half is unchanged. What
+    changed with #410 is the claim: this used to answer
+    `run_workers_unavailable`, filing "we could not ask" as "the workers are
+    down". The two are different incidents.
+    """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_health_error = True
 
     assert client.get("/healthz").status_code == 503
+    assert client.get("/healthz").get_json()["run_workers"] is False
     response = client.post("/api/chat", json={
         "agent_id": agent_id, "message": "upstream is unreachable"})
     assert response.status_code == 503
-    assert response.get_json()["error"] == "run_workers_unavailable"
+    assert response.get_json()["error"] == "run_workers_unknown"
+    # The sentence the patient reads is true in both states, so it does not
+    # change with the code.
+    assert "temporarily unavailable" in response.get_json()["message"]
 
 
 def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
@@ -1661,7 +1674,7 @@ def cfg():
                        "HEALTHCLAW_MINT_SECRET": "mint-secret",
                        "FASTEN_PUBLIC_KEY": "pub123",
                        "CARE_TELEGRAM_BOT": "carebot",
-                       "CARE_IMESSAGE_HANDLE": "+15550001111"})
+                       "CARE_IMESSAGE_HANDLE": "im-test-handle"})
 
 
 @pytest.fixture
@@ -2921,6 +2934,125 @@ def test_review_relay_is_agent_scoped_and_holds_the_gate(app, svc, monkeypatch):
     assert other.get(f"/review/{agent}/act-1").status_code == 404
 
 
+def _unreachable(*_args, **_kwargs):
+    """What HealthClawClient._send raises on a dead socket: status 0."""
+    raise HealthClawError("action status failed", 0)
+
+
+def test_a_review_we_could_not_check_is_never_reported_as_not_yours(
+        cfg, svc, monkeypatch):
+    """#410 — the regression PR #409 introduced, on the approval path.
+
+    Before the seam fix, `action_status` let a refused connection escape as a
+    raw requests exception and Flask answered 500: ugly, but honest. Typing
+    it as HealthClawError landed it in this route's `except`, which denies
+    ownership — so an outage told the patient their own form was not theirs,
+    on the human-approval gate this product exists to guarantee.
+
+    A 404 must still mean "not yours" (pinned by the test above). An outage
+    must not, and nothing may read as approved.
+
+    MUTATION: restore the flat `except HealthClawError: return None` in
+    `_agent_owns_action` -> red, 404 with "That form isn't yours." Ran it,
+    saw red.
+    """
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}
+                   ).get_json()["id"]
+    fake.action_status = _unreachable
+
+    page = c.get(f"/review/{agent}/act-1")
+    assert page.status_code == 503
+    # Jinja escapes the apostrophes, so match on fragments without them.
+    body = page.get_data(as_text=True)
+    assert "That form" not in body, "denied ownership it never checked"
+    assert "check this form right now" in body
+    assert "Nothing has been approved" in body
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 503
+    assert posted.get_json()["error"] == "review_unavailable"
+    # nothing may read as approved on the way out
+    assert posted.get_json().get("confirmed") is not True
+
+
+def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
+        cfg, svc, monkeypatch):
+    """"Unknown run" and "unknown form" are claims about what exists (#410).
+
+    During an incident none of them is true — the run exists, we just could
+    not look it up. A 404 also retires the run for the callers that poll it,
+    so the patient's answer is dropped rather than delivered late.
+
+    The engine's own 404 still passes through as 404: its run and action
+    lookups are tenant-scoped `filter_by(...).first()`, so 404 genuinely
+    means "no such id, or not this tenant's".
+
+    MUTATION: collapse each arm back to a bare
+    `except HealthClawError: return jsonify({"error": "unknown run"}), 404`
+    -> red, one site at a time. Ran it, saw red.
+    """
+    app, c, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+
+    # A real not-found still reads as not-found.
+    assert c.get("/api/chat/runs/no-such-run/events",
+                 query_string={"agent_id": agent_id}).status_code == 404
+    assert c.get("/api/form/no-such-action",
+                 query_string={"agent": agent_id}).status_code == 404
+
+    fake.get_agent_run = _unreachable
+    fake.action_status = _unreachable
+
+    events = c.get("/api/chat/runs/run-1/events",
+                   query_string={"agent_id": agent_id})
+    assert events.status_code == 503
+    assert events.get_json()["error"] == "run service unavailable"
+
+    form = c.get("/api/form/act-1", query_string={"agent": agent_id})
+    assert form.status_code == 503
+    assert form.get_json()["status"] == "unavailable"
+
+
+def test_the_imessage_relay_is_told_to_retry_not_that_the_run_vanished(
+        cfg, svc, monkeypatch):
+    """The Mac relay polls this endpoint for the agent's reply and stops on a
+    404. Answering "unknown run" during an outage silently drops the reply to
+    a text message the patient already sent (#410)."""
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent_id = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                           "connection_id": conn}
+                      ).get_json()["id"]
+    code = c.post("/api/surfaces/imessage",
+                  json={"agent_id": agent_id}).get_json()["code"]
+    headers = {"X-Internal-Secret": cfg.mint_secret}
+    assert c.post("/api/surfaces/imessage/bind", headers=headers,
+                  json={"code": code, "handle": "im-test-handle"}
+                  ).status_code == 200
+
+    fake.get_agent_run = _unreachable
+    r = c.get("/api/surfaces/imessage/runs/run-1", headers=headers,
+              query_string={"handle": "im-test-handle"})
+    assert r.status_code == 503
+    assert r.get_json()["error"] == "run service unavailable"
+
+
 # --- telegram surface --------------------------------------------------------
 
 def test_telegram_connect_and_bind_handshake(app, svc, monkeypatch, cfg):
@@ -2962,7 +3094,7 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
     assert r.status_code == 200
     body = r.get_json()
     code = body["code"]
-    assert body["handle"] == "+15550001111" and code in body["instructions"]
+    assert body["handle"] == "im-test-handle" and code in body["instructions"]
 
     relay = app.test_client()
     hdrs = {"X-Internal-Secret": cfg.mint_secret}
