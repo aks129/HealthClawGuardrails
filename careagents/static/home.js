@@ -200,10 +200,25 @@
   document.querySelectorAll('.conn-card .status-pending').forEach((el) => {
     const card = el.closest(".conn-card");
     const tenant = card.dataset.tenant;
+    const msg = card.querySelector(".conn-refresh-msg");
+    let saidUnavailable = false;
     const iv = setInterval(async () => {
       const r = await fetch(`/api/connections/${tenant}/poll`);
+      const d = await r.json().catch(() => ({}));
+      // 503 here means the server could not look, which is not the same as
+      // "not here yet". Say so rather than leaving the card spinning on
+      // "pending" forever, and keep polling so it clears itself when the
+      // record store comes back.
+      if (r.status === 503 && d.error === "records_unavailable") {
+        msg.textContent = d.message;
+        msg.hidden = false;
+        saidUnavailable = true;
+        return;
+      }
       if (!r.ok) return;
-      const d = await r.json();
+      // Only clear what this poller wrote — the refresh flow shares this
+      // element and its message must survive.
+      if (saidUnavailable) { msg.hidden = true; saidUnavailable = false; }
       if (d.status === "active") { clearInterval(iv); location.reload(); }
     }, 5000);
   });
@@ -445,8 +460,14 @@
     const iv = setInterval(async () => {
       if (++ticks > 60) return clearInterval(iv);  // ~5 min, then stop quietly
       const r = await fetch(`/api/connections/${tenant}/poll`);
+      const d = await r.json().catch(() => ({}));
+      // Same distinction as the pending poller: an unreachable record store
+      // is reported, never rendered as "nothing new yet".
+      if (r.status === 503 && d.error === "records_unavailable") {
+        msg.textContent = d.message;
+        return;
+      }
       if (!r.ok) return;
-      const d = await r.json();
       if (typeof d.new_records === "number" && d.new_records > 0) {
         clearInterval(iv);
         msg.textContent = `${d.new_records} new record` +

@@ -59,6 +59,58 @@ class HealthClawClient:
         self._tokens: dict[str, tuple[str, float]] = {}
         self._token_ttl = 240.0
 
+    # --- transport ------------------------------------------------------------
+    #
+    # The one place a HealthClaw call becomes either a value or a
+    # HealthClawError. `agent_worker_health` has always done both halves;
+    # #403 applies the same shape to the rest of the seam, because a caller
+    # must be able to tell "we looked and there is nothing" from "we could
+    # not look". Anything else escaping this module is caught by no CareAgents
+    # caller and reaches Flask as an unhandled 500 — the defect #267 fixed for
+    # `ingest_bundle` alone rather than for the boundary.
+
+    def _send(self, method: str, url: str, *, what: str,
+              error: type[HealthClawError] = HealthClawError, **kwargs):
+        """Issue one request; a transport failure becomes `error`.
+
+        Dispatches to `Session.get`/`Session.post` rather than
+        `Session.request` so the call surface is exactly what every method
+        here used before, and the relay doubles the cross-layer tests
+        substitute for a Session keep working. Resolved lazily for the same
+        reason: some of those doubles define only the verb they relay.
+
+        `error` exists for one caller and one reason (#220). Losing the answer
+        to a *retryable* call means it did not happen, which is an ordinary
+        HealthClawError. Losing the answer to a call that can EXECUTE a
+        clinical action means we do not know whether it happened, which is
+        HealthClawUnconfirmed. Collapsing the two tells a person nothing was
+        confirmed when it may already have run, and they confirm twice.
+        """
+        send = self.http.get if method == "GET" else self.http.post
+        try:
+            return send(url, timeout=self.timeout, **kwargs)
+        except requests.RequestException as exc:
+            raise error(f"{what} failed", 0) from exc
+
+    @staticmethod
+    def _json_object(r, what: str) -> dict:
+        """Decode a success body the caller will treat as a JSON object.
+
+        A 200 carrying a proxy's HTML interstitial, or valid JSON of the
+        wrong type, is a failed call and not data. Returning it moves the
+        failure into whatever consumes it — an AttributeError in caller code,
+        one layer away from the boundary that accepted it.
+        """
+        try:
+            body = r.json()
+        except ValueError as exc:
+            raise HealthClawError(f"{what} returned invalid data",
+                                  r.status_code) from exc
+        if not isinstance(body, dict):
+            raise HealthClawError(f"{what} returned invalid data",
+                                  r.status_code)
+        return body
+
     # --- tenant lifecycle ---------------------------------------------------
 
     @staticmethod
@@ -69,13 +121,14 @@ class HealthClawClient:
         cached = self._tokens.get(tenant)
         if cached and (time.time() - cached[1]) < self._token_ttl:
             return cached[0]
-        r = self.http.post(
-            f"{self.fhir}/internal/step-up-token",
+        r = self._send(
+            "POST", f"{self.fhir}/internal/step-up-token",
             json={"tenant_id": tenant},
             headers={"X-Tenant-Id": tenant,
                      "X-Internal-Secret": self.mint_secret},
-            timeout=self.timeout)
-        token = (r.json() or {}).get("token") if r.ok else None
+            what="token mint")
+        token = (self._json_object(r, "token mint").get("token")
+                 if r.ok else None)
         if not token:
             raise HealthClawError(
                 f"token mint failed ({r.status_code})", r.status_code)
@@ -83,16 +136,16 @@ class HealthClawClient:
         return token
 
     def seed(self, tenant: str) -> int:
-        r = self.http.post(
-            f"{self.fhir}/internal/seed",
+        r = self._send(
+            "POST", f"{self.fhir}/internal/seed",
             json={"tenant_id": tenant},
             headers={"X-Tenant-Id": tenant,
                      "X-Internal-Secret": self.mint_secret},
-            timeout=self.timeout)
+            what="seed")
         if not r.ok:
             raise HealthClawError(f"seed failed ({r.status_code})",
                                   r.status_code)
-        return int((r.json() or {}).get("count") or 0)
+        return int(self._json_object(r, "seed").get("count") or 0)
 
     def ingest_bundle(self, tenant: str, bundle: dict) -> dict:
         """Push a FHIR Bundle into a tenant via the engine's internal ingest.
@@ -113,34 +166,34 @@ class HealthClawClient:
         # envelope call, NOT a raw FHIR Bundle post. `application/fhir+json`
         # would mis-label the envelope; the patient-facing route above
         # accepts fhir+json for the raw Bundle from the browser.
-        try:
-            r = self.http.post(
-                f"{self.fhir}/internal/ingest-bundle",
-                json={"bundle": bundle},
-                headers={"X-Tenant-Id": tenant,
-                        "X-Internal-Secret": self.mint_secret,
-                        "Content-Type": "application/json"},
-                timeout=self.timeout)
-        except requests.RequestException as exc:
-            # A transport-level failure (connection refused, timeout) was
-            # previously unwrapped here, propagating out of
-            # upload_connection as an unhandled Flask 500 and breaking the
-            # JSON error contract the UI depends on (#267 review). Every
-            # other engine call in this file wraps requests.RequestException
-            # into HealthClawError; this one didn't.
-            raise HealthClawError("ingest failed", 0) from exc
-        try:
-            body = r.json()
-        except ValueError:
-            body = None
+        r = self._send(
+            "POST", f"{self.fhir}/internal/ingest-bundle",
+            json={"bundle": bundle},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret,
+                     "Content-Type": "application/json"},
+            what="ingest")
         if r.status_code != 200:
+            # On the error path an unparseable body is expected — an edge or
+            # proxy may answer instead of the engine — so fall back to a
+            # synthetic code rather than losing the status.
+            try:
+                body = r.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict):
+                body = None
             code = (body or {}).get("error") or f"http_{r.status_code}"
             msg = (body or {}).get("message") \
                 or f"ingest failed ({code})"
             correlation = (body or {}).get("correlation_id") or ""
             raise HealthClawError(msg, r.status_code, code=code,
                                   correlation_id=correlation)
-        return body or {}
+        # A 200 that will not decode is not "ingested nothing". It used to
+        # become `{}`, which careagents/app.py reports to the upload tile as
+        # a completed upload of zero records while the file never landed
+        # (#403).
+        return self._json_object(r, "ingest")
 
     def _headers(self, tenant: str) -> dict:
         return {"X-Tenant-Id": tenant,
@@ -155,31 +208,32 @@ class HealthClawClient:
 
     def search(self, tenant: str, resource_type: str,
                params: dict | None = None) -> dict:
-        r = self.http.get(f"{self.fhir}/{resource_type}",
-                          params=params or {}, headers=self._headers(tenant),
-                          timeout=self.timeout)
+        r = self._send("GET", f"{self.fhir}/{resource_type}",
+                       params=params or {}, headers=self._headers(tenant),
+                       what=f"search {resource_type}")
         if r.status_code != 200:
             raise HealthClawError(
                 f"search {resource_type} failed ({r.status_code})",
                 r.status_code)
-        return r.json()
+        return self._json_object(r, f"search {resource_type}")
 
     def read(self, tenant: str, resource_type: str, resource_id: str) -> dict:
         """Read one resource by id, through the same redact+audit gate as
         search. Exists for reference-chasing (MedicationRequest → Medication);
         every call is a separately audited access, which is the point."""
-        r = self.http.get(f"{self.fhir}/{resource_type}/{resource_id}",
-                          headers=self._headers(tenant), timeout=self.timeout)
+        r = self._send("GET", f"{self.fhir}/{resource_type}/{resource_id}",
+                       headers=self._headers(tenant),
+                       what=f"read {resource_type}")
         if r.status_code != 200:
             raise HealthClawError(
                 f"read {resource_type} failed ({r.status_code})",
                 r.status_code)
-        return r.json()
+        return self._json_object(r, f"read {resource_type}")
 
     def interpret_labs(self, tenant: str) -> dict:
         """POST $interpret; returns {'summary','consumer','disclaimer'}."""
-        r = self.http.post(f"{self.fhir}/Observation/$interpret", json={},
-                           headers=self._headers(tenant), timeout=self.timeout)
+        r = self._send("POST", f"{self.fhir}/Observation/$interpret", json={},
+                       headers=self._headers(tenant), what="$interpret")
         if r.status_code != 200:
             raise HealthClawError(f"$interpret failed ({r.status_code})",
                                   r.status_code)
@@ -189,7 +243,7 @@ class HealthClawClient:
         # read, so the chart and the agent's prose can never disagree about a
         # value or a flag.
         out = {"summary": {}, "consumer": {}, "disclaimer": "", "bundle": {}}
-        for p in (r.json() or {}).get("parameter", []):
+        for p in self._json_object(r, "$interpret").get("parameter") or []:
             if p.get("name") == "summary":
                 out["summary"] = json.loads(p.get("valueString") or "{}")
             elif p.get("name") == "consumerSummary":
@@ -201,13 +255,13 @@ class HealthClawClient:
         return out
 
     def care_gaps(self, tenant: str) -> dict:
-        r = self.http.get(f"{self.fhir}/Patient/$care-gaps",
-                          headers=self._headers(tenant), timeout=self.timeout)
+        r = self._send("GET", f"{self.fhir}/Patient/$care-gaps",
+                       headers=self._headers(tenant), what="$care-gaps")
         if r.status_code != 200:
             raise HealthClawError(f"$care-gaps failed ({r.status_code})",
                                   r.status_code)
         out = {"summary": {}, "consumer": {}}
-        for p in (r.json() or {}).get("parameter", []):
+        for p in self._json_object(r, "$care-gaps").get("parameter") or []:
             if p.get("name") == "summary":
                 out["summary"] = json.loads(p.get("valueString") or "{}")
             elif p.get("name") == "consumerSummary":
@@ -218,30 +272,30 @@ class HealthClawClient:
 
     def start_form_action(self, tenant: str) -> str:
         h = self._headers(tenant)
-        r = self.http.post(f"{self.actions}/propose", json={
+        r = self._send("POST", f"{self.actions}/propose", json={
             "kind": "form-fill",
             "payload": {"to": "Intake portal",
                         "questionnaire": "healthclaw-intake",
                         "body": "new patient intake"}},
-            headers=h, timeout=self.timeout)
-        aid = (r.json() or {}).get("id") if r.ok else None
+            headers=h, what="propose")
+        aid = self._json_object(r, "propose").get("id") if r.ok else None
         if not aid:
             raise HealthClawError(f"propose failed ({r.status_code})",
                                   r.status_code)
-        r = self.http.post(f"{self.actions}/{aid}/commit", headers=h,
-                           timeout=self.timeout)
+        r = self._send("POST", f"{self.actions}/{aid}/commit", headers=h,
+                       what="commit")
         if r.status_code != 202:
             raise HealthClawError(f"commit failed ({r.status_code})",
                                   r.status_code)
         return aid
 
     def action_status(self, tenant: str, action_id: str) -> dict:
-        r = self.http.get(f"{self.actions}/{action_id}",
-                          headers=self._headers(tenant), timeout=self.timeout)
+        r = self._send("GET", f"{self.actions}/{action_id}",
+                       headers=self._headers(tenant), what="action status")
         if r.status_code != 200:
             raise HealthClawError(f"action status failed ({r.status_code})",
                                   r.status_code)
-        return r.json()
+        return self._json_object(r, "action status")
 
     def confirm_action(self, tenant: str, action_id: str) -> dict:
         """Confirm a reviewed action. Raises on refusal, HealthClawUnconfirmed
@@ -253,53 +307,52 @@ class HealthClawClient:
         can execute a clinical action, so losing its answer is NOT evidence
         that nothing happened.
         """
-        try:
-            mint = self.http.post(
-                f"{self.actions}/{action_id}/approval-token",
-                headers={"X-Tenant-Id": tenant,
-                         "X-Internal-Secret": self.mint_secret},
-                timeout=self.timeout)
-        except requests.RequestException as exc:
-            # Nothing was confirmed: we never got as far as the confirm call.
-            raise HealthClawError("approval token mint failed", 0) from exc
-        token = (mint.json() or {}).get("token") if mint.ok else None
+        # Nothing was confirmed if this fails: we never reached the confirm.
+        mint = self._send(
+            "POST", f"{self.actions}/{action_id}/approval-token",
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="approval token mint")
+        token = (self._json_object(mint, "approval token mint").get("token")
+                 if mint.ok else None)
         if not token:
             raise HealthClawError(
                 f"approval token mint failed ({mint.status_code})",
                 mint.status_code)
-        try:
-            r = self.http.post(f"{self.actions}/{action_id}/confirm",
-                               headers={"X-Tenant-Id": tenant,
-                                        "X-Step-Up-Token": token,
-                                        "X-Agent-Id": "careagents"},
-                               json={"approved_via": "review-page"},
-                               timeout=self.timeout)
-        except requests.RequestException as exc:
-            # A read timeout here means the confirm may already have run. This
-            # used to escape the client entirely (nothing wraps it into
-            # HealthClawError), so the relay's `except HealthClawError` missed
-            # it and the person got a 500 instead of an answer.
-            raise HealthClawUnconfirmed("confirm unanswered", 0) from exc
+        # A lost answer HERE means the confirm may already have run, so it is
+        # HealthClawUnconfirmed and not an ordinary failure. This is the one
+        # call in the client that gets a different error type, and the reason
+        # `_send` takes one.
+        r = self._send("POST", f"{self.actions}/{action_id}/confirm",
+                       headers={"X-Tenant-Id": tenant,
+                                "X-Step-Up-Token": token,
+                                "X-Agent-Id": "careagents"},
+                       json={"approved_via": "review-page"},
+                       what="confirm", error=HealthClawUnconfirmed)
         if not r.ok:
             raise HealthClawError(f"confirm failed ({r.status_code})",
                                   r.status_code)
-        return r.json()
+        return self._json_object(r, "confirm")
 
     # --- review-page relay (credential-injecting proxy) ----------------------
 
     def fetch_review_page(self, tenant: str, action_id: str) -> tuple[int, str]:
-        r = self.http.get(f"{self.actions}/{action_id}/review",
-                          headers=self._headers(tenant), timeout=self.timeout)
+        r = self._send("GET", f"{self.actions}/{action_id}/review",
+                       headers=self._headers(tenant), what="review fetch")
         return r.status_code, r.text
 
     def submit_review(self, tenant: str, action_id: str,
                       decisions: dict) -> tuple[int, dict]:
-        r = self.http.post(f"{self.actions}/{action_id}/review",
-                           json=decisions, headers=self._headers(tenant),
-                           timeout=self.timeout)
+        r = self._send("POST", f"{self.actions}/{action_id}/review",
+                       json=decisions, headers=self._headers(tenant),
+                       what="review submit")
         try:
             body = r.json()
         except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            # The contract is (status, dict); a non-object body is a failed
+            # call, and handing it back would break the caller's `.get`.
             body = {"error": "unexpected response"}
         return r.status_code, body
 
@@ -326,12 +379,16 @@ class HealthClawClient:
         return f"{self.base}/wearables/oauth/start?{q}"
 
     def tenant_has_records(self, tenant: str) -> bool:
-        """Poll for whether real records have landed (pending → active)."""
-        try:
-            bundle = self.search(tenant, "Patient", {"_summary": "count"})
-            return int(bundle.get("total") or 0) > 0
-        except HealthClawError:
-            return False
+        """Whether real records have landed (pending → active).
+
+        Raises HealthClawError when the engine could not be asked. This used
+        to answer False, which the poll endpoint renders as "pending" — so an
+        outage left the patient watching "still fetching your records" on a
+        condition that would never be re-evaluated, with nothing anywhere
+        saying the record store was down (#403).
+        """
+        bundle = self.search(tenant, "Patient", {"_summary": "count"})
+        return int(bundle.get("total") or 0) > 0
 
     # Counted on refresh to report growth. Deliberately a fixed, clinically
     # meaningful set rather than every supported type — this is a progress
@@ -340,18 +397,21 @@ class HealthClawClient:
                      "AllergyIntolerance", "Immunization", "DocumentReference")
 
     def record_count(self, tenant: str) -> int:
-        """Total records across the counted resource types (0 on failure).
+        """Total records across the counted resource types.
 
         Uses `_summary=count`, so this stays cheap and never pulls PHI into
         this app — only totals cross the boundary.
+
+        Raises HealthClawError when any type could not be counted, rather
+        than skipping it. A partial sum is indistinguishable from a genuinely
+        smaller record set, and a total outage used to return 0 — which
+        careagents/app.py reports to the patient, as fact, as the number of
+        records they have (#403).
         """
         total = 0
         for rt in self.COUNTED_TYPES:
-            try:
-                bundle = self.search(tenant, rt, {"_summary": "count"})
-                total += int(bundle.get("total") or 0)
-            except HealthClawError:
-                continue
+            bundle = self.search(tenant, rt, {"_summary": "count"})
+            total += int(bundle.get("total") or 0)
         return total
 
     def fetch_appointment_brief(self, tenant: str) -> dict | None:
@@ -361,12 +421,16 @@ class HealthClawClient:
         Callers treat None as "brief unavailable" — never raise to the UI.
         """
         try:
-            r = self.http.get(
-                f"{self.fhir}/AppointmentBrief",
+            r = self._send(
+                "GET", f"{self.fhir}/AppointmentBrief",
                 headers=self._headers(tenant),
-                timeout=self.timeout)
+                what="appointment brief")
             if r.status_code == 200:
-                return r.json()
+                # dict-or-None is what the brief renderer is written against.
+                # A wrongly-shaped 200 used to be handed straight through as
+                # though it were the FHIR Basic resource, moving the failure
+                # one layer past the boundary that accepted it (#403).
+                return self._json_object(r, "appointment brief")
         except (requests.RequestException, HealthClawError, ValueError):
             pass
         return None
@@ -377,17 +441,17 @@ class HealthClawClient:
         Deliberately not best-effort: "deleted" is only reported to the
         patient when the engine confirms it, never fire-and-forget.
         """
-        r = self.http.post(
-            f"{self.fhir}/internal/purge-tenant",
+        r = self._send(
+            "POST", f"{self.fhir}/internal/purge-tenant",
             json={"tenant_id": tenant},
             headers={"X-Tenant-Id": tenant,
                      "X-Step-Up-Token": self.mint_token(tenant),
                      "X-Internal-Secret": self.mint_secret},
-            timeout=self.timeout)
+            what="purge")
         if r.status_code != 200:
             raise HealthClawError(f"purge failed ({r.status_code})",
                                   r.status_code)
-        return r.json()
+        return self._json_object(r, "purge")
 
     # --- conversation history -------------------------------------------------
     #
@@ -505,83 +569,60 @@ class HealthClawClient:
     def create_agent_run(self, tenant: str, message_id: str,
                          deadline_seconds: int = 120) -> dict:
         """Create (or retrieve) the one durable run for an inbound message."""
-        try:
-            r = self.http.post(
-                f"{self.base}/command-center/api/runs",
-                json={"tenant_id": tenant, "message_id": message_id,
-                      "deadline_seconds": deadline_seconds},
-                headers=self._headers(tenant), timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run enqueue failed", 0) from exc
+        r = self._send(
+            "POST", f"{self.base}/command-center/api/runs",
+            json={"tenant_id": tenant, "message_id": message_id,
+                  "deadline_seconds": deadline_seconds},
+            headers=self._headers(tenant), what="run enqueue")
         if r.status_code not in (200, 201):
             raise HealthClawError(
                 f"run enqueue failed ({r.status_code})", r.status_code)
-        return r.json()
+        return self._json_object(r, "run enqueue")
 
     def get_agent_run(self, tenant: str, run_id: str) -> dict:
-        try:
-            r = self.http.get(
-                f"{self.base}/command-center/api/runs/{run_id}",
-                headers=self._headers(tenant), timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run lookup failed", 0) from exc
+        r = self._send(
+            "GET", f"{self.base}/command-center/api/runs/{run_id}",
+            headers=self._headers(tenant), what="run lookup")
         if r.status_code != 200:
             raise HealthClawError(
                 f"run lookup failed ({r.status_code})", r.status_code)
-        return r.json()
+        return self._json_object(r, "run lookup")
 
     def agent_run_events(self, tenant: str, run_id: str, after: int = 0,
                          limit: int = 100) -> dict:
-        try:
-            r = self.http.get(
-                f"{self.base}/command-center/api/runs/{run_id}/events",
-                params={"after": max(0, int(after)), "limit": limit},
-                headers=self._headers(tenant), timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run event replay failed", 0) from exc
+        r = self._send(
+            "GET", f"{self.base}/command-center/api/runs/{run_id}/events",
+            params={"after": max(0, int(after)), "limit": limit},
+            headers=self._headers(tenant), what="run event replay")
         if r.status_code != 200:
             raise HealthClawError(
                 f"run event replay failed ({r.status_code})", r.status_code)
-        return r.json()
+        return self._json_object(r, "run event replay")
 
     def claim_agent_run(self, worker_id: str,
                         lease_seconds: int = 60) -> dict | None:
-        try:
-            r = self.http.post(
-                f"{self.base}/command-center/api/runs/claim",
-                json={"worker_id": worker_id,
-                      "lease_seconds": lease_seconds},
-                headers=self._internal_headers(), timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run claim failed", 0) from exc
+        r = self._send(
+            "POST", f"{self.base}/command-center/api/runs/claim",
+            json={"worker_id": worker_id,
+                  "lease_seconds": lease_seconds},
+            headers=self._internal_headers(), what="run claim")
         if r.status_code == 204:
             return None
         if r.status_code != 200:
             raise HealthClawError(
                 f"run claim failed ({r.status_code})", r.status_code)
-        return r.json()
+        return self._json_object(r, "run claim")
 
     def agent_worker_health(self, max_age_seconds: int = 30) -> dict:
         """Return queue-backed worker readiness, including unavailable/503."""
-        try:
-            r = self.http.get(
-                f"{self.base}/command-center/api/runs/workers/health",
-                params={"max_age_seconds": max_age_seconds},
-                headers=self._internal_headers(), timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run worker health failed", 0) from exc
+        r = self._send(
+            "GET", f"{self.base}/command-center/api/runs/workers/health",
+            params={"max_age_seconds": max_age_seconds},
+            headers=self._internal_headers(), what="run worker health")
         if r.status_code not in (200, 503):
             raise HealthClawError(
                 f"run worker health failed ({r.status_code})", r.status_code)
-        try:
-            result = r.json()
-        except ValueError as exc:
-            raise HealthClawError(
-                "run worker health returned invalid data", r.status_code
-            ) from exc
-        if not isinstance(result, dict):
-            raise HealthClawError(
-                "run worker health returned invalid data", r.status_code)
+        result = self._json_object(r, "run worker health")
         result["available"] = r.status_code == 200 and bool(
             result.get("available"))
         return result
@@ -651,33 +692,33 @@ class HealthClawClient:
 
     def _run_internal_post(self, path: str, body: dict,
                            expected: tuple[int, ...] = (200,)) -> dict:
-        try:
-            r = self.http.post(
-                f"{self.base}/command-center/api/runs{path}",
-                json=body, headers=self._internal_headers(),
-                timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise HealthClawError("run worker request failed", 0) from exc
+        r = self._send(
+            "POST", f"{self.base}/command-center/api/runs{path}",
+            json=body, headers=self._internal_headers(),
+            what="run worker request")
         if r.status_code not in expected:
             raise HealthClawError(
                 f"run worker request failed ({r.status_code})", r.status_code)
-        return r.json()
+        return self._json_object(r, "run worker request")
 
     # --- surfaces: Telegram binding ------------------------------------------
 
     def bind_telegram(self, tenant: str, chat_id: int) -> bool:
-        r = self.http.post(
-            f"{self.fhir}/internal/bind-telegram",
+        r = self._send(
+            "POST", f"{self.fhir}/internal/bind-telegram",
             json={"tenant_id": tenant, "chat_id": chat_id},
             headers={"X-Tenant-Id": tenant,
                      "X-Step-Up-Token": self.mint_token(tenant),
                      "X-Internal-Secret": self.mint_secret},
-            timeout=self.timeout)
+            what="telegram bind")
         return r.ok
 
     # --- trust panel ----------------------------------------------------------
 
     def conformance_badge(self) -> dict:
-        r = self.http.get(f"{self.fhir}/$conformance", params={
-            "format": "shields"}, timeout=self.timeout)
-        return r.json() if r.ok else {"message": "unavailable"}
+        r = self._send("GET", f"{self.fhir}/$conformance",
+                       params={"format": "shields"},
+                       what="conformance badge")
+        if not r.ok:
+            return {"message": "unavailable"}
+        return self._json_object(r, "conformance badge")

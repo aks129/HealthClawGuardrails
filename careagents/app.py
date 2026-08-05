@@ -70,6 +70,33 @@ CONVERSATION_IDLE_SECONDS = 6 * 3600
 _BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
 
 
+def _engine_said_absent(exc: HealthClawError) -> bool:
+    """Whether the engine answered "there is no such thing".
+
+    `HealthClawError.status` is 0 for a transport failure and carries the
+    engine's status otherwise. Only 404 is an answer about existence: the
+    engine's action and run lookups are tenant-scoped
+    `filter_by(id=..., tenant_id=...).first()` and answer 404 for both "no
+    such id" and "not this tenant's" (r6/actions/routes.py:652-655). A
+    refused connection, a timeout, a 5xx, or a rejected credential all mean
+    we could not ask — and reporting any of those as "unknown run" or "not
+    yours" states something we do not know (#410).
+    """
+    return exc.status == 404
+
+
+class OwnershipUnknown(Exception):
+    """We could not determine whether an action belongs to this agent.
+
+    Deliberately an exception rather than a third return value. Both callers
+    of `_agent_owns_action` guard with `if not tenant`, and any sentinel that
+    guard could see would be truthy — silently upgrading "we could not check"
+    into "checked, and it's yours". That is the same shape as truthiness-
+    testing the `validate_step_up_token` tuple, which is a standing
+    non-negotiable in this repo. An exception cannot be mis-read that way.
+    """
+
+
 def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
     """Deserialize a FHIR Basic AppointmentBrief into section→field lists.
 
@@ -591,7 +618,21 @@ def create_app(config: Config | None = None,
                  for c in svc.list_home(acct.id)["connections"]}
         if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
-        if hc.tenant_has_records(conn_tenant):
+        try:
+            landed = hc.tenant_has_records(conn_tenant)
+        except HealthClawError:
+            # Not "pending". We did not fail to find records, we failed to
+            # look, and the two are different answers. Rendering this as
+            # pending left the patient watching "still fetching your records"
+            # on a condition nothing would ever re-evaluate, with nothing
+            # anywhere saying the record store was down (#403).
+            return jsonify({
+                "status": "unavailable",
+                "error": "records_unavailable",
+                "message": "We couldn't reach your records right now. That's "
+                           "a problem on our side — we'll keep checking.",
+            }), 503
+        if landed:
             svc.set_connection_status(conn_tenant, "active")
             out = {"status": "active"}
             # After a refresh, report growth against the baseline that refresh
@@ -748,12 +789,33 @@ def create_app(config: Config | None = None,
     def _run_belongs_to(run: dict, tenant: str, agent_id: str) -> bool:
         return run.get("tenant_id") == tenant and run.get("agent_id") == agent_id
 
-    def _workers_available() -> bool:
+    # Worker readiness has three states, not two: the health endpoint said
+    # ready, it said not ready, or we could not ask it. All three still fail
+    # closed — a turn we cannot promise is refused either way — so the gate
+    # below is unchanged. What changes is the claim: an incident used to be
+    # filed as "the workers are down" when the workers were never reached
+    # (#410).
+    WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN = (
+        "ready", "not_ready", "unknown")
+
+    def _worker_state() -> str:
         try:
             status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
         except HealthClawError:
-            return False
-        return bool(status.get("available"))
+            return WORKERS_UNKNOWN
+        return WORKERS_READY if status.get("available") else WORKERS_NOT_READY
+
+    def _refuse_turn_without_workers(state: str):
+        """The 503 body for a chat turn no worker can be promised to run.
+
+        The patient-facing sentence is the same in both failure states,
+        because it is true in both. Only the machine-readable code differs.
+        """
+        return jsonify({
+            "error": ("run_workers_unknown" if state == WORKERS_UNKNOWN
+                      else "run_workers_unavailable"),
+            "message": "Chat is temporarily unavailable. Try again soon.",
+        }), 503
 
     def _stream_run(tenant: str, agent_id: str, run_id: str, after: int = 0):
         """Replay durable UI events. Disconnecting only stops this projection."""
@@ -807,11 +869,9 @@ def create_app(config: Config | None = None,
         text = (body.get("message") or "").strip()
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        if not _workers_available():
-            return jsonify({
-                "error": "run_workers_unavailable",
-                "message": "Chat is temporarily unavailable. Try again soon.",
-            }), 503
+        workers = _worker_state()
+        if workers != WORKERS_READY:
+            return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             return jsonify({"error": "rate_limited"}), 429
         # Durable daily ceiling — survives restarts and is shared across
@@ -863,8 +923,12 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
-        except HealthClawError:
-            return jsonify({"error": "unknown run"}), 404
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return jsonify({"error": "unknown run"}), 404
+            # "Unknown run" is a claim about what exists. During an incident
+            # it is not true — we just could not look it up (#410).
+            return jsonify({"error": "run service unavailable"}), 503
         if not _run_belongs_to(run, ctx["tenant"], agent_id):
             return jsonify({"error": "unknown run"}), 404
         after = _parse_cursor(request.args.get("after") or
@@ -884,8 +948,11 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         try:
             status = hc.action_status(ctx["tenant"], action_id)
-        except HealthClawError:
-            return jsonify({"status": "unknown"}), 404
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return jsonify({"status": "unknown"}), 404
+            return jsonify({"status": "unavailable",
+                            "error": "form status unavailable"}), 503
         outcome = {}
         try:
             outcome = json.loads(status.get("outcome_summary") or "{}")
@@ -925,20 +992,41 @@ def create_app(config: Config | None = None,
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
     def _agent_owns_action(agent_id, action_id):
+        """The tenant that owns this action, or None if it is not this
+        agent's.
+
+        Raises OwnershipUnknown when the engine could not be asked. An
+        outage is not evidence about ownership, and this is the
+        human-approval path — the guardrail the product exists to
+        guarantee (#410).
+        """
         acct = current_account()
         ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
         if not ctx:
             return None
         try:
             hc.action_status(ctx["tenant"], action_id)
-            return ctx["tenant"]
-        except HealthClawError:
-            return None
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return None
+            raise OwnershipUnknown from exc
+        return ctx["tenant"]
+
+    # Both review routes deny with 404 and stall with 503. Saying "that form
+    # isn't yours" because we could not reach the engine is a confident false
+    # statement about ownership; saying nothing was approved is true in every
+    # failure mode here, because nothing was.
+    _REVIEW_UNCHECKABLE = ("We couldn't check this form right now. Nothing "
+                           "has been approved — please try again in a moment.")
 
     @app.get("/review/<agent_id>/<action_id>")
     @login_required
     def review(agent_id, action_id):
-        tenant = _agent_owns_action(agent_id, action_id)
+        try:
+            tenant = _agent_owns_action(agent_id, action_id)
+        except OwnershipUnknown:
+            return render_template("chat_error.html",
+                                   message=_REVIEW_UNCHECKABLE), 503
         if not tenant:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
@@ -954,7 +1042,11 @@ def create_app(config: Config | None = None,
     @app.post("/review/<agent_id>/<action_id>/submit")
     @login_required
     def review_submit(agent_id, action_id):
-        tenant = _agent_owns_action(agent_id, action_id)
+        try:
+            tenant = _agent_owns_action(agent_id, action_id)
+        except OwnershipUnknown:
+            return jsonify({"error": "review_unavailable",
+                            "message": _REVIEW_UNCHECKABLE}), 503
         if not tenant:
             return jsonify({"error": "not yours"}), 404
         decisions = request.get_json(silent=True) or dict(request.form)
@@ -1093,11 +1185,9 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        if not _workers_available():
-            return jsonify({
-                "error": "run_workers_unavailable",
-                "message": "Chat is temporarily unavailable. Try again soon.",
-            }), 503
+        workers = _worker_state()
+        if workers != WORKERS_READY:
+            return _refuse_turn_without_workers(workers)
         if not _allow_turn(surface["account_id"]):
             return jsonify({"reply": "One moment — too many messages just now. "
                                      "Try again in a bit."}), 200
@@ -1137,8 +1227,12 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "unknown run"}), 404
             page = hc.agent_run_events(
                 ctx["tenant"], run_id, after=0, limit=500)
-        except HealthClawError:
-            return jsonify({"error": "unknown run"}), 404
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return jsonify({"error": "unknown run"}), 404
+            # The relay retries on 503. Answering 404 retired the run as
+            # non-existent and dropped the patient's reply (#410).
+            return jsonify({"error": "run service unavailable"}), 503
         if page.get("status") not in (
                 "completed", "failed", "cancelled", "waiting_for_human"):
             return jsonify({"run_id": run_id,
@@ -1173,7 +1267,13 @@ def create_app(config: Config | None = None,
 
     @app.get("/api/trust")
     def trust():
-        badge = hc.conformance_badge()
+        try:
+            badge = hc.conformance_badge()
+        except HealthClawError:
+            # The badge is a claim about the engine. Unreachable means we do
+            # not have one — the same honest answer a non-200 already gives,
+            # rather than a 500 on the trust panel (#403).
+            badge = {}
         return jsonify({"badge": badge.get("message", "unavailable")})
 
     @app.get("/manifest.webmanifest")
@@ -1210,7 +1310,10 @@ def create_app(config: Config | None = None,
         including dependencies it does not control.
         """
         accounts_ok = svc.ping()
-        workers_ok = _workers_available()
+        # `run_workers` stays a boolean readiness VERDICT, not a claim about
+        # the workers: false is correct when we could not confirm them, and
+        # two runbooks plus the container-roles test read it as a bool.
+        workers_ok = _worker_state() == WORKERS_READY
         ready = accounts_ok and workers_ok
         body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
