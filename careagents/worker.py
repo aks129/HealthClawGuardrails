@@ -411,12 +411,47 @@ class RunWorker:
             raise RunDeadlineExceeded("run deadline exceeded")
 
 
+class _IdleBackoff:
+    """Per-slot idle poll interval for one worker pool.
+
+    A slot doubles its own interval while the queue hands it nothing, up to
+    the cap; a claim by any slot returns every slot to the floor. Slots are
+    threads in one process, so that reset is a shared list under a lock, not
+    coordination between processes.
+
+    The cap is bounded by latency, not by safety. Presence is committed by
+    the claim itself, so an idle slot's interval is also how stale its
+    presence row gets, and the cap has to stay well inside
+    CARE_RUN_WORKER_STALE_SECONDS.
+    """
+
+    def __init__(self, slots: int, floor: float, cap: float) -> None:
+        self._floor = floor
+        self._cap = cap
+        self._lock = threading.Lock()
+        self._intervals = [floor] * slots
+
+    def on_claim(self) -> None:
+        """Note that a slot took work: every slot returns to the floor."""
+        with self._lock:
+            self._intervals = [self._floor] * len(self._intervals)
+
+    def on_empty(self, slot: int) -> float:
+        """Return this slot's wait, then double it for the next empty poll."""
+        with self._lock:
+            interval = self._intervals[slot]
+            self._intervals[slot] = min(interval * 2, self._cap)
+            return interval
+
+
 def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     """Run a fixed-size pool; each slot owns its HTTP session and lease id."""
     stop = stop or threading.Event()
     accounts = AccountService(cfg)
     host = socket.gethostname().split(".")[0]
     base_id = f"careagents-{host}-{os.getpid()}"
+    backoff = _IdleBackoff(cfg.run_worker_concurrency, cfg.run_poll_seconds,
+                           cfg.run_poll_max_seconds)
 
     def loop(slot: int) -> None:
         hc = HealthClawClient(cfg.healthclaw_base, cfg.mint_secret)
@@ -427,8 +462,12 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
             except HealthClawError as exc:
                 logger.error("run claim failed: %s", exc)
                 worked = False
-            if not worked:
-                stop.wait(cfg.run_poll_seconds)
+            if worked:
+                backoff.on_claim()
+            else:
+                # Stays stop.wait, never time.sleep: a capped sleep would be
+                # added to every SIGTERM drain and every deploy.
+                stop.wait(backoff.on_empty(slot))
 
     threads = [threading.Thread(target=loop, args=(slot,), daemon=False,
                                 name=f"careagents-worker-{slot}")
