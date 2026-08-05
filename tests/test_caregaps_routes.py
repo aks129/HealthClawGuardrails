@@ -179,23 +179,41 @@ def test_care_gaps_with_a_supplied_subject_reports_that_state(
 # What we say when we did not look (#417)
 # ─────────────────────────────────────────────
 
-def test_the_fallback_path_claims_nothing_about_the_persons_record(
-        client, app, tenant_id, tenant_headers):
-    """The production call shape, against a record holding birthDate AND gender.
+def test_a_subject_we_hold_no_record_for_claims_nothing_about_that_record(
+        client, tenant_headers):
+    """A supplied subject naming a row we do not hold reads nothing, so it
+    cannot say what that record was missing.
 
-    The resolved Patient is deliberately held back from the evaluator
-    (#389 half two, behind the clinical gate), so every rule is indeterminate
-    for a reason that has nothing to do with this person's data. We told them
-    "Your date of birth and sex were not available to this check" anyway.
-
-    While we are not looking at someone's demographics, no reason we give
-    about their demographics can be true — including a more precise one. The
-    reason has to describe our limitation, not their record.
+    `check-incomplete` (#417) covers it. It used to answer
+    "Your date of birth and sex were not available to this check", which
+    describes a record this deployment has never seen.
 
     MUTATION: drop the `check-incomplete` branch in the route -> red.
     """
+    r = client.get("/r6/fhir/Patient/$care-gaps?subject=Patient/nope",
+                   headers=tenant_headers)
+    assert r.status_code == 200
+    consumer = json.loads(
+        _resp_param(r.get_json(), "consumerSummary")["valueString"])
+    assert consumer["unevaluated"] == "check-incomplete"
+    for claim in ("date of birth", "were not available", "not recorded"):
+        assert claim not in consumer["unevaluated_note"]
+
+
+def test_the_fallback_path_evaluates_the_patient_it_resolved(
+        client, app, tenant_id, tenant_headers):
+    """The production call shape, against a record holding birthDate AND gender.
+
+    The fallback resolved the Patient and reported it in `subjectResolution`,
+    then handed the evaluator `supplied` — None. Age and sex unknown, all
+    seven rules indeterminate, and the person got a reason instead of an
+    answer. #389 half two; released by the clinical ruling on the cadence
+    table, not by engineering.
+
+    MUTATION: pass `supplied` to _patient_for again -> red.
+    """
     _seed_patient(app, tenant_id, pid="p-onfile", gender="female",
-                  birth="1985-04-02")
+                  birth=_birth_date_for_age(50))
 
     r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
                     json={})
@@ -204,12 +222,43 @@ def test_the_fallback_path_claims_nothing_about_the_persons_record(
     resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
     assert resolution == {"state": "tenant-default", "subject": "Patient/p-onfile"}
 
+    # A 50yo woman: only the A1c rule is gated out (no diabetes Condition).
+    summary = json.loads(_resp_param(body, "summary")["valueString"])
+    assert summary["indeterminate"] == 0
+    assert summary["due"] + summary["up_to_date"] == 6
+
     consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
-    assert consumer["unevaluated"] == "check-incomplete"
-    note = consumer["unevaluated_note"]
-    for claim in ("date of birth", "were not available", "not recorded"):
-        assert claim not in note, note
-    assert "no screenings outstanding" in note
+    assert len(consumer["lines"]) == 6
+    assert "unevaluated" not in consumer
+    assert "were not available" not in r.get_data(as_text=True)
+
+
+def test_the_fallback_path_now_carries_a_reason_that_is_true(
+        client, app, tenant_id, tenant_headers):
+    """The production shape of #417's partial list, reachable only once the
+    evaluator sees the record.
+
+    On the held path this same call answered `check-incomplete`, because a
+    reason about demographics we never read could not be true. Now we read
+    them, so `sex-unavailable` describes the record and names the two
+    screenings it could not decide.
+
+    MUTATION: pass `supplied` to _patient_for again -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-nosex", gender=None,
+                  birth=_birth_date_for_age(50))
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    consumer = json.loads(
+        _resp_param(r.get_json(), "consumerSummary")["valueString"])
+    assert len(consumer["lines"]) == 4
+    assert consumer["unevaluated"] == "sex-unavailable"
+    assert consumer["unevaluated_count"] == 2
+    assert consumer["unevaluated_titles"] == [
+        "Cervical cancer screening (Pap)",
+        "Breast cancer screening (mammogram)"]
+    assert "date of birth" not in consumer["unevaluated_note"]
 
 
 def test_a_partial_screening_list_says_how_much_of_it_is_missing(
