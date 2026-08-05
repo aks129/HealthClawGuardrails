@@ -39,8 +39,11 @@ changing it fails here and forces the inventory to be updated deliberately.
 
 ## What it measured
 
-    curatr.py:1096      LEAK — the whole stored resource, every free-text
-                        field the fix did not touch, in the HTTP response
+    curatr.py:1096      LEAK, now closed — `$curatr-apply-fix` returned the
+                        whole stored resource, every free-text field the fix
+                        did not touch, in the HTTP response. The route
+                        redacts the outbound copy as of this PR; the rows
+                        below guard that and the ordering it depends on.
     form_fill.py:153    reaches a caller — the patient's own name, in the
                         title of the patient's own intake form
     smbp/routes.py      clean but for `effectiveDateTime`, which the report
@@ -504,63 +507,154 @@ def test_smbp_pdf_report_carries_only_the_observation_timestamp(
 
 # ---------------------------------------------------------------------------
 # Site 4: r6/curatr.py:1097 — apply_fix returns the stored resource as
-# `updated_resource`, and r6/routes.py:3118 `jsonify`s that result straight
-# back to the caller.
+# `updated_resource`, and r6/routes.py `jsonify`s that result back to the
+# caller. It used to go out verbatim; the route now redacts that copy, AFTER
+# the curation re-evaluation has scored the real one. Three rows: the leak is
+# closed, the HTTP body is what was measured, and the ordering holds.
 # ---------------------------------------------------------------------------
 
-def test_curatr_apply_fix_echoes_the_whole_stored_resource(
-        client, app, tenant_headers, auth_headers):
-    """LEAK — every free-text field of the resource leaves at curatr.py:1097.
-
-    `$curatr-apply-fix` writes the approved field and then returns
-    `resource.to_fhir_json()` as `updated_resource`; `r6/routes.py::
-    curatr_apply_fix` returns that dict verbatim. Nothing between the read and
-    the response calls `apply_redaction`, so the fields the fix did NOT touch
-    — here `code.text`, `code.coding[0].display` and `note[0].text` — come
-    back to the caller exactly as the upstream feed wrote them.
-
-    The fix in this probe rewrites only `code.coding[0].code`, which is the
-    shape curatr itself proposes for a retired ICD-9 code.
-    """
-    with app.app_context():
-        resource_id = _store(_marked_condition(), tenant_headers["X-Tenant-Id"])
-
-    response = client.post(
+def _apply_the_icd9_fix(client, resource_id, auth_headers):
+    """Drive `$curatr-apply-fix` with the fix curatr itself proposes for a
+    retired ICD-9 code: rewrite `code.coding[0].code`, touch nothing else."""
+    return client.post(
         "/r6/fhir/Condition/%s/$curatr-apply-fix" % resource_id,
         headers={**auth_headers, "X-Human-Confirmed": "true"},
         json={"fixes": [{"field_path": "Condition.code.coding[0].code",
                          "new_value": "E11.9"}],
               "patient_intent": "Updating from retired ICD-9 to ICD-10-CM"})
+
+
+def test_curatr_apply_fix_returns_no_upstream_free_text(
+        client, app, tenant_headers, auth_headers):
+    """`updated_resource` carries none of the feed's free text.
+
+    This leaked. `$curatr-apply-fix` wrote the approved field and returned
+    `resource.to_fhir_json()` as `updated_resource`, which `r6/routes.py`
+    jsonified verbatim — nothing between the read and the response called
+    `apply_redaction`. So `code.text`, `code.coding[0].display` and
+    `note[0].text`, none of which the fix touches, went back to the caller
+    exactly as upstream wrote them. The realistic caller is the
+    `curatr_apply_fix` MCP tool, so that text landed in a model's context;
+    `note[].text` is the one that matters, because free-text clinical notes
+    are where real feeds put names.
+
+    What closed it: the route redacts the outbound copy just before
+    `jsonify`. The fix's own value still comes back — redaction strips
+    upstream free text, it does not gut the response — so this asserts that
+    too, otherwise an endpoint that returned `{}` would pass.
+    """
+    with app.app_context():
+        resource_id = _store(_marked_condition(), tenant_headers["X-Tenant-Id"])
+
+    response = _apply_the_icd9_fix(client, resource_id, auth_headers)
     assert response.status_code == 200, (
         "the probe never reached apply_fix — a 403/404 here would make the "
-        "assertion below pass while measuring nothing: "
+        "assertions below pass while measuring nothing: "
         + response.get_data(as_text=True)[:300])
     body = response.get_json()
     assert body["issues_fixed"] == 1, response.get_data(as_text=True)[:300]
 
-    leaked = _markers_in(json.dumps(body["updated_resource"]))
-    assert leaked == {COND_TEXT_MARKER, COND_DISPLAY_MARKER, COND_NOTE_MARKER}, (
-        "the set of upstream free-text fields echoed by $curatr-apply-fix "
-        "changed; if it shrank because redaction was added, delete this row "
-        "and say so in the inventory")
+    updated = body["updated_resource"]
+    assert updated["code"]["coding"][0]["code"] == "E11.9", (
+        "the approved fix is not in the returned resource, so 'no markers' "
+        "below proves nothing: " + json.dumps(updated)[:300])
+    assert _markers_in(json.dumps(updated)) == set(), (
+        "$curatr-apply-fix echoed upstream free text again — the fields are "
+        "named by which marker came back")
 
 
-def test_curatr_apply_fix_response_is_what_the_http_caller_sees(
+def test_curatr_apply_fix_http_body_carries_no_upstream_free_text(
         client, app, tenant_headers, auth_headers):
-    """The escape is the HTTP body, not an internal return.
+    """The escape was the HTTP body, not an internal return.
 
     Asserting on the whole serialized response (rather than on
     `body['updated_resource']`) is what makes this a boundary measurement: an
-    MCP tool or agent calling this endpoint receives these bytes.
+    MCP tool or agent calling this endpoint receives these bytes. It also
+    covers the sibling keys — `provenance` and `change_summary` are built
+    from the request, not the feed, and this pins that they stay that way.
     """
     with app.app_context():
         resource_id = _store(_marked_condition(), tenant_headers["X-Tenant-Id"])
 
+    response = _apply_the_icd9_fix(client, resource_id, auth_headers)
+    assert response.status_code == 200, response.get_data(as_text=True)[:300]
+    assert _markers_in(response.get_data(as_text=True)) == set()
+
+
+def _text_only_condition():
+    """A Condition whose `code` has a text label and NO coding.
+
+    Redaction strips that text, which leaves `code` an empty dict. Curatr
+    scores the two shapes differently — "no structured coding" is a warning,
+    a missing `code` is critical — so this resource is what makes the
+    ordering in `test_curatr_scores_the_unredacted_resource` observable.
+    `clinicalStatus` carries an invalid code so there is a real fix to apply
+    that does not touch `code`.
+    """
+    return {
+        "resourceType": "Condition", "id": "probe-cond-2",
+        "code": {"text": COND_TEXT_MARKER},
+        "clinicalStatus": {"coding": [{
+            "system": ("http://terminology.hl7.org/CodeSystem/"
+                       "condition-clinical"),
+            "code": "activ"}]},
+        "verificationStatus": {"coding": [{
+            "system": ("http://terminology.hl7.org/CodeSystem/"
+                       "condition-ver-status"),
+            "code": "confirmed"}]},
+        "subject": {"reference": PROBE_PATIENT_REF},
+        "note": [{"text": COND_NOTE_MARKER}],
+    }
+
+
+def test_curatr_scores_the_unredacted_resource(
+        client, app, tenant_headers, auth_headers):
+    """The redaction goes AFTER the curation re-evaluation, not before it.
+
+    `r6/routes.py::curatr_apply_fix` feeds `result['updated_resource']` to
+    `_curatr_engine.evaluate` to recompute `quality_score` and promote
+    `curation_state`. Redacting before that would score stripped fields, and
+    nothing else in the suite would notice — the score is just a number in
+    the response, and for most resources redaction does not change it.
+
+    So this uses a resource where it does. `code` here is text-only:
+    unredacted that is one warning (0.8), redacted it is a missing `code`,
+    which is critical (0.6). If the redaction is ever moved into
+    `r6/curatr.py::apply_fix`, or above the promotion block, this row goes to
+    0.6 and reddens.
+
+    The persisted `quality_score` is checked too, because
+    `_persist_curation_state` writes the same evaluation to the row that the
+    consumer-facing curation views read.
+    """
+    with app.app_context():
+        resource_id = _store(_text_only_condition(),
+                             tenant_headers["X-Tenant-Id"])
+
     response = client.post(
         "/r6/fhir/Condition/%s/$curatr-apply-fix" % resource_id,
         headers={**auth_headers, "X-Human-Confirmed": "true"},
-        json={"fixes": [{"field_path": "Condition.code.coding[0].code",
-                         "new_value": "E11.9"}],
-              "patient_intent": "Updating from retired ICD-9 to ICD-10-CM"})
+        json={"fixes": [{
+            "field_path": "Condition.clinicalStatus.coding[0].code",
+            "new_value": "active"}],
+            "patient_intent": "Correcting an invalid clinical status"})
     assert response.status_code == 200, response.get_data(as_text=True)[:300]
-    assert COND_TEXT_MARKER in response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["issues_fixed"] == 1, response.get_data(as_text=True)[:300]
+
+    assert body["curation_state"] == "curated", (
+        "the promotion block did not run, so the score below is not the one "
+        "this row is about: " + response.get_data(as_text=True)[:300])
+    assert body["quality_score"] == 0.8, (
+        "the quality score was computed on a REDACTED resource. 0.6 means "
+        "redaction ran before _curatr_engine.evaluate and the stripped "
+        "`code.text` was read as a missing code")
+
+    with app.app_context():
+        row = R6Resource.query.filter_by(id=resource_id).first()
+        assert row.quality_score == 0.8, (
+            "the persisted score came from a redacted evaluation")
+
+    # And the response itself is still redacted — the ordering fix must not
+    # have been achieved by dropping the redaction.
+    assert _markers_in(response.get_data(as_text=True)) == set()
