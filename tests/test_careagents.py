@@ -2168,6 +2168,100 @@ def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
     assert c.get("/brief?agent=nope").status_code == 302
 
 
+# --- care gaps: the third state (#381) ------------------------------------
+#
+# "The screening review did not run" and "you have no screenings due" are
+# different sentences, and the second one is a clinical claim. The page must
+# never make it on the first one's behalf.
+
+_CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
+                      "brief-section-care-gaps")
+_UNAVAILABLE_COPY = b"Screening review unavailable"
+_NO_GAPS_COPY = b"no preventive care items"
+
+
+def _brief_with_care_gaps(status, fields=()):
+    return {
+        "resourceType": "Basic",
+        "extension": [{
+            "url": _CARE_GAPS_SECTION,
+            "extension": (
+                [{"url": "field", "valueString": f} for f in fields]
+                + [{"url": "status", "valueString": status}]
+            ),
+        }],
+    }
+
+
+def _agent_for_brief(c, svc, monkeypatch):
+    _login(c, svc, monkeypatch)
+    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                       "connection_id": conn_id}
+                  ).get_json()["id"]
+
+
+def test_brief_care_gaps_unavailable_is_not_rendered_as_no_gaps(app, svc,
+                                                                monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: _brief_with_care_gaps("unavailable"))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert _UNAVAILABLE_COPY in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+
+
+def test_brief_care_gaps_evaluated_and_empty_says_no_items(app, svc, monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: _brief_with_care_gaps("ok"))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    assert _NO_GAPS_COPY in resp.data
+    assert _UNAVAILABLE_COPY not in resp.data
+
+
+def test_brief_care_gaps_evaluated_with_gaps_lists_them(app, svc, monkeypatch):
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    field = ('{"label":"Colorectal cancer screening","value":"May be due",'
+             '"sourceType":"MeasureReport","sourceId":"gap-1"}')
+    monkeypatch.setattr(
+        FakeClient, "fetch_appointment_brief",
+        lambda self, tenant: _brief_with_care_gaps("ok", fields=[field]))
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert b"Colorectal cancer screening" in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+    assert _UNAVAILABLE_COPY not in resp.data
+
+
+def test_brief_missing_care_gaps_marker_is_not_reassurance(app, svc, monkeypatch):
+    """An unmarked brief — an older engine, a truncated payload, no brief at
+    all — is not an evaluation, so it cannot say "nothing due"."""
+    c = app.test_client()
+    agent_id = _agent_for_brief(c, svc, monkeypatch)
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: None)
+
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert _UNAVAILABLE_COPY in resp.data
+    assert _NO_GAPS_COPY not in resp.data
+
+
+def test_parse_care_gaps_status_defaults_to_not_ok():
+    from careagents.app import _parse_care_gaps_status
+    assert _parse_care_gaps_status(_brief_with_care_gaps("ok")) == "ok"
+    assert _parse_care_gaps_status(_brief_with_care_gaps("unavailable")) != "ok"
+    assert _parse_care_gaps_status({}) != "ok"
+    assert _parse_care_gaps_status(None) != "ok"
+
+
 def test_parse_brief_sections_extracts_fields():
     """_parse_brief_sections correctly deserializes section extensions."""
     from careagents.app import _parse_brief_sections

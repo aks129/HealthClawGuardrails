@@ -75,7 +75,12 @@
   <div class="hub-section">
     <div class="section-head"><h2>Preventive care due</h2></div>
     {% set fields = sections.get('care-gaps', []) %}
-    {% if fields %}
+    {# Three states, not two. An empty list only means "nothing due" when the
+       screening review actually ran, so care_gaps_ok is checked first — an
+       unset value falls through to unavailable, never to reassurance. #}
+    {% if not care_gaps_ok %}
+    <p class="brief-empty">Screening review unavailable — ask your clinician which preventive care you are due for.</p>
+    {% elif fields %}
     <div class="brief-section">
       {% for f in fields %}
       <div class="brief-field">

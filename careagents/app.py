@@ -97,6 +97,32 @@ def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
     return out
 
 
+# Mirrors r6.brief.engine.CARE_GAPS_OK. CareAgents talks to HealthClaw over
+# HTTP and imports nothing from it, so the string is repeated rather than
+# shared.
+_CARE_GAPS_OK = "ok"
+
+
+def _parse_care_gaps_status(resource: dict | None) -> str:
+    """Whether the screening review ran, from the brief's care-gaps section.
+
+    Anything short of an explicit "ok" — no brief, no care-gaps section, no
+    marker, an unparseable payload — is not an evaluation, and the page must
+    not render it as "nothing due" (#381). Callers get "" for all of those.
+    """
+    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
+    try:
+        for ext in (resource or {}).get("extension", []):
+            if ext.get("url") != care_gaps_url:
+                continue
+            for sub in ext.get("extension", []):
+                if sub.get("url") == "status":
+                    return sub.get("valueString") or ""
+    except (AttributeError, TypeError):
+        pass
+    return ""
+
+
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
                accounts: AccountService | None = None) -> Flask:
@@ -678,7 +704,9 @@ def create_app(config: Config | None = None,
         raw = hc.fetch_appointment_brief(ctx["tenant"])
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
-                               agent_id=agent_id, sections=sections)
+                               agent_id=agent_id, sections=sections,
+                               care_gaps_ok=(_parse_care_gaps_status(raw)
+                                             == _CARE_GAPS_OK))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
