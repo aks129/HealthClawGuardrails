@@ -215,3 +215,161 @@ def test_label_codings_still_refuses_to_carry_upstream_display(monkeypatch):
     terminology.label_codings(concept)
     assert concept["coding"][0]["display"] == "Psoriasis, unspecified"
     assert "Jane Secret" not in str(concept)
+
+
+# ---------------------------------------------------------------------------
+# The RxNorm path never returned a name (found live 2026-08-05).
+#
+# A patient asked "what medications am I on?" and their agent answered "I
+# cannot read the specific names of these medications ... they've been
+# redacted for your privacy." That sentence was true and the cause was ours:
+# four Medication rows carried correct RxNorm codings, redaction stripped the
+# upstream display as designed, and nothing put a label back.
+#
+# Two independent faults, either of which alone is enough to lose every drug
+# name:
+#
+#   1. The request went to /REST/rxcui.json?rxcui=<code>. That endpoint
+#      searches BY NAME (?name=); passing rxcui= is the wrong parameter and
+#      RXNav answers HTTP 400 "Path or Query Parameter error". Verified against
+#      the live service. It has done so since the call was written, so curatr's
+#      RxNorm validation has never once succeeded either — it returned None,
+#      which reads as "could not check", so nothing ever looked wrong.
+#   2. Even on success the method hardcoded "display": None. It was written as
+#      a VALIDITY checker for curatr's quality scan, where the question is
+#      "is this a real code?", and terminology_resolver.resolve() reuses it
+#      expecting a name it could never return.
+#
+# The fix uses /REST/rxcui/<code>/properties.json, which returns
+# {"properties": {"name": "atorvastatin 40 MG Oral Tablet", ...}}, and reports
+# an unknown code as {} with HTTP 200 — so absent properties means "not a
+# concept", not "lookup failed".
+# ---------------------------------------------------------------------------
+class _RxResp:
+    def __init__(self, status, payload):
+        self.status_code = status
+        self._payload = payload
+        self.text = str(payload)
+
+    def json(self):
+        return self._payload
+
+
+def _engine_with(monkeypatch, responses):
+    """A CuratrEngine whose HTTP session replays `responses` by URL."""
+    from r6.curatr import CuratrEngine
+
+    engine = CuratrEngine()
+    seen = []
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        seen.append(url)
+        for fragment, resp in responses.items():
+            if fragment in url:
+                return resp
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(engine._session, "get", fake_get)
+    return engine, seen
+
+
+def test_a_valid_rxcui_returns_the_drug_name(monkeypatch):
+    """The whole point: a name the patient can read."""
+    engine, seen = _engine_with(monkeypatch, {
+        "/rxcui/617311/properties.json": _RxResp(
+            200, {"properties": {"rxcui": "617311",
+                                 "name": "atorvastatin 40 MG Oral Tablet"}}),
+    })
+
+    result = engine._lookup_code(
+        "http://www.nlm.nih.gov/research/umls/rxnorm", "617311")
+
+    assert result == {"valid": True,
+                      "display": "atorvastatin 40 MG Oral Tablet",
+                      "message": None}
+    assert not any("rxcui.json" in url for url in seen), (
+        "went back to the name-search endpoint, which answers HTTP 400 for a "
+        "rxcui= parameter")
+
+
+def test_rxnav_is_asked_for_json_not_fhir_json(monkeypatch):
+    """The third fault, and the one no mock could have caught.
+
+    CuratrEngine sets `Accept: application/fhir+json` once on the shared
+    session, which is correct for tx.fhir.org. RXNav answers that Accept with
+    HTTP 406 Not Acceptable. Found only by calling the live service — a mocked
+    session has no opinion about headers, so every unit test passed while the
+    real call returned None.
+    """
+    from r6.curatr import CuratrEngine
+
+    engine = CuratrEngine()
+    sent = {}
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        sent["headers"] = headers or {}
+        return _RxResp(200, {"properties": {"name": "atorvastatin 40 MG"}})
+
+    monkeypatch.setattr(engine._session, "get", fake_get)
+    engine._lookup_code("http://www.nlm.nih.gov/research/umls/rxnorm", "617311")
+
+    assert sent["headers"].get("Accept") == "application/json", (
+        "RXNav was asked with the session's FHIR Accept header, which it "
+        "refuses with 406"
+    )
+
+
+def test_an_unknown_rxcui_is_reported_invalid_not_unavailable(monkeypatch):
+    """RXNav answers 200 with {} for a code that is not a concept.
+
+    That is an authoritative 'no', and it must not be collapsed into None —
+    None means 'we could not check', which is what every RxNorm lookup has
+    silently returned until now.
+    """
+    engine, _ = _engine_with(monkeypatch, {
+        "/rxcui/99999999/properties.json": _RxResp(200, {}),
+    })
+
+    result = engine._lookup_code(
+        "http://www.nlm.nih.gov/research/umls/rxnorm", "99999999")
+
+    assert result is not None, "an authoritative 'not a concept' became 'unknown'"
+    assert result["valid"] is False
+    assert result["display"] is None
+
+
+def test_a_transport_failure_stays_unavailable(monkeypatch):
+    """A 404 or an exception is 'could not check', which is NOT 'invalid'.
+
+    Same distinction as D2 in #344: only an authoritative verdict may be
+    cached, so returning valid=False here would poison the label permanently.
+    """
+    engine, _ = _engine_with(monkeypatch, {
+        "/rxcui/617311/properties.json": _RxResp(404, "Path or Query error"),
+    })
+    assert engine._lookup_code(
+        "http://www.nlm.nih.gov/research/umls/rxnorm", "617311") is None
+
+
+def test_the_resolver_now_produces_a_label_for_a_medication_code(monkeypatch):
+    """End to end through resolve(), which is what the read path calls.
+
+    MUTATION: restore `"display": None` in _validate_rxnorm. This goes red
+    while every validity assertion above stays green — which is exactly how
+    the defect survived: the code was 'working' at the only thing it was
+    tested for.
+    """
+    from r6 import terminology_resolver as resolver
+
+    engine, _ = _engine_with(monkeypatch, {
+        "/rxcui/314076/properties.json": _RxResp(
+            200, {"properties": {"name": "lisinopril 10 MG Oral Tablet"}}),
+    })
+    monkeypatch.setattr(resolver, "_engine", lambda: engine)
+    monkeypatch.setenv("TERMINOLOGY_LOOKUP_ENABLED", "true")
+    resolver.reset_cache()
+
+    label = resolver.resolve(
+        "http://www.nlm.nih.gov/research/umls/rxnorm", "314076")
+
+    assert label == "lisinopril 10 MG Oral Tablet"
