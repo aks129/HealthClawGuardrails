@@ -140,8 +140,10 @@ def register_labs_routes(blueprint, deps):
             # Interpretation needs the performing lab's own referenceRange,
             # which redaction is free to touch; the caller needs a resource
             # with no upstream free text in it. Those are different objects,
-            # so this echoed one is a deep copy — apply_redaction rewrites in
-            # place, and mutating `obs` would corrupt the analysis behind it.
+            # and `apply_redaction` already returns a new dict — it deep-copies
+            # its argument through a JSON round-trip (r6/redaction.py) rather
+            # than rewriting it. The explicit copy here is belt-and-braces, not
+            # the thing that keeps `obs` intact.
             #
             # This path had no redaction at all (#282). CareAgents' get_labs
             # drives it for "what do my labs say?", so an upstream `display`
