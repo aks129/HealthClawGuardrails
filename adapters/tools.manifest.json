@@ -258,7 +258,7 @@
     {
       "name": "fhir_propose_write",
       "title": "Propose FHIR Write",
-      "description": "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: requires step-up authorization (call fhir_get_token first; pass as _stepUpToken).",
+      "description": "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: step-up authorization is required and is supplied by the deployment as an X-Step-Up-Token header. You cannot obtain or pass it yourself. If it is absent this returns requires_step_up; tell the patient authorization is needed rather than attempting another route.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -629,7 +629,7 @@
     {
       "name": "fhir_get_token",
       "title": "Mint Step-Up Token",
-      "description": "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string — pass it as _stepUpToken in subsequent write tool calls.",
+      "description": "Get a fresh step-up authorization token for write operations. Tokens expire after 5 minutes. OPERATOR TOOL: this is withheld from hosted deployments (PRIVILEGED_TOOL_NAMES), and the token it returns travels as the X-Step-Up-Token header set by the caller — it is never an argument to another tool.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -745,7 +745,7 @@
     {
       "name": "action_commit",
       "title": "Submit Real-World Action for Confirmation",
-      "description": "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
+      "description": "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization, supplied by the deployment as an X-Step-Up-Token header; you cannot obtain or pass it yourself. This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -789,7 +789,7 @@
     {
       "name": "shl_generate",
       "title": "Generate SMART Health Link",
-      "description": "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
+      "description": "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — supplied by the deployment as an X-Step-Up-Token header), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
       "inputSchema": {
         "type": "object",
         "properties": {

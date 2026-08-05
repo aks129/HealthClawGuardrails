@@ -471,7 +471,7 @@ export class FHIRTools {
         name: "fhir_propose_write",
         title: "Propose FHIR Write",
         description:
-          "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: requires step-up authorization (call fhir_get_token first; pass as _stepUpToken).",
+          "Propose a write — validates the resource and returns a preview. Does NOT commit. Write tier: step-up authorization is required and is supplied by the deployment as an X-Step-Up-Token header. You cannot obtain or pass it yourself. If it is absent this returns requires_step_up; tell the patient authorization is needed rather than attempting another route.",
         tier: "write",
         handler: ({ input, headers }) =>
           this.proposeWrite(
@@ -846,7 +846,7 @@ export class FHIRTools {
         name: "fhir_get_token",
         title: "Mint Step-Up Token",
         description:
-          "Get a fresh step-up authorization token for write operations. Call this before fhir_propose_write, fhir_commit_write, or curatr_apply_fix. Tokens expire after 5 minutes. Returns the token string — pass it as _stepUpToken in subsequent write tool calls.",
+          "Get a fresh step-up authorization token for write operations. Tokens expire after 5 minutes. OPERATOR TOOL: this is withheld from hosted deployments (PRIVILEGED_TOOL_NAMES), and the token it returns travels as the X-Step-Up-Token header set by the caller — it is never an argument to another tool.",
         tier: "read",
         handler: async ({ input, headers, tenantId }) => {
           const tokenTenant = (input.tenant_id as string) || tenantId;
@@ -871,7 +871,7 @@ export class FHIRTools {
             tenant_id: tokenTenant,
             expires_in_seconds: 300,
             _mcp_summary:
-              "Step-up token issued (5-min TTL). Pass it as _stepUpToken in fhir_propose_write, fhir_commit_write, action_commit, shl_generate, or curatr_apply_fix.",
+              "Step-up token issued (5-min TTL). Send it as the X-Step-Up-Token header on subsequent write calls; no write tool accepts it as an argument.",
           };
         },
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -981,7 +981,7 @@ export class FHIRTools {
         name: "action_commit",
         title: "Submit Real-World Action for Confirmation",
         description:
-          "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization (call fhir_get_token first; pass as _stepUpToken). This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
+          "Submit a previously proposed action for the patient's OWN out-of-band confirmation (their dashboard or Telegram) AFTER they've reviewed and verbally/textually agreed to the draft. Requires step-up authorization, supplied by the deployment as an X-Step-Up-Token header; you cannot obtain or pass it yourself. This call does NOT execute anything and never accepts or sends any 'human confirmed' flag — only the patient tapping Approve in their own out-of-band channel can trigger execution. Returns status 'awaiting_confirmation' and is terminal for your turn: do not call action_commit again for the same action_id. Use action_status to check whether the patient has approved yet.",
         tier: "write",
         handler: ({ input, headers }) =>
           this.commitAction(input.action_id as string, headers),
@@ -1015,7 +1015,7 @@ export class FHIRTools {
         name: "shl_generate",
         title: "Generate SMART Health Link",
         description:
-          "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — pass _stepUpToken), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
+          "Generate a SMART Health Link (shlink:/ QR payload) sharing the patient's record with a clinic. Fetches the guardrailed share-bundle from HealthClaw (step-up required — supplied by the deployment as an X-Step-Up-Token header), encrypts it client-side (the SHL server never sees plaintext), uploads ciphertext, and returns the shlink URI, viewer link, and the patient's private manage link. ALWAYS get the patient's explicit consent before generating, and deliver the manage link ONLY to the patient.",
         tier: "write",
         handler: ({ input, headers }) => this.generateShl(input, headers),
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
