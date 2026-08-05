@@ -196,6 +196,12 @@ class ConformanceReport:
             if r.grade is not None:
                 label += f" — {r.effective_grade} ({r.coverage})"
             lines.append(f"  [{'PASS' if r.passed else 'FAIL'}] {label}")
+            # Notes were JSON-only, so the one caveat that limits what a PASS
+            # means — human-in-the-loop grades the gate, not the attestation
+            # behind it (#213/#214) — never reached the scorecard a partner
+            # actually reads.
+            if r.note:
+                lines.append(f"        note: {r.note}")
             for profile_name, profile in r.profiles.items():
                 status = profile.get("status", "unknown")
                 profile_grade = profile.get("grade")
@@ -417,6 +423,35 @@ def _create_synthetic(client, ctx) -> tuple[Optional[str], object]:
     return pid, status
 
 
+def _is_resource(body, resource_type: str, rid: str) -> bool:
+    """The response IS the resource that was asked for."""
+    return (isinstance(body, dict)
+            and body.get("resourceType") == resource_type
+            and body.get("id") == rid)
+
+
+def _bundle_contains(bundle, resource_type: str, rid: str) -> bool:
+    """A searchset actually carries the resource that was asked for."""
+    if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle":
+        return False
+    return any(_is_resource((entry or {}).get("resource"), resource_type, rid)
+               for entry in bundle.get("entry") or [])
+
+
+def _tampered(token: str) -> str:
+    """The issued token with one byte changed — i.e. a forged one.
+
+    Missing-header 401 is producible by a route that only checks the header is
+    PRESENT. This is the input that separates "validates the token" from
+    "notices a string", and it needs no knowledge of the token format: whatever
+    the deployment issued, this is not it.
+    """
+    if not token:
+        return "conformance-not-a-real-step-up-token"
+    i = len(token) // 2
+    return token[:i] + ("A" if token[i] != "A" else "B") + token[i + 1:]
+
+
 def probe_phi_redaction(client, ctx) -> ProbeResult:
     r = ProbeResult("phi_redaction", "PHI Redaction")
     pid, status = _create_synthetic(client, ctx)
@@ -429,6 +464,15 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
     blob = text or json.dumps(body or {})
     r.checks += [
         Check("read succeeds", status == 200, f"status {status}"),
+        # Two-sided (#213). The five ABSENCE checks below are all satisfied by
+        # a deployment that returns nothing at all — a redactor that deletes,
+        # a store that lost the row, an endpoint stubbed out. Redaction's
+        # contract is that the record survives it, so the record has to be
+        # here for the absences to mean anything.
+        Check("the redacted record is still returned",
+              _is_resource(body, "Patient", pid),
+              "the read did not return the Patient that was asked for; every "
+              "absence check below passes trivially on an empty response"),
         Check("family name not returned in full", _FAMILY not in blob),
         Check("given name not returned in full", _GIVEN not in blob),
         Check("SSN-class identifier masked", _SSN not in blob),
@@ -446,6 +490,14 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
     sblob = text or json.dumps(body or {})
     r.checks += [
         Check("search succeeds", status == 200, f"status {status}"),
+        # The same trap, and the one the badge was most exposed to: an empty
+        # searchset is a 200 with no PHI in it. Search is what builds an
+        # agent's context, so "search returns nothing" is a live outage that
+        # scored A.
+        Check("the search returns the resource it was asked for",
+              _bundle_contains(body, "Patient", pid),
+              "the searchset did not contain the Patient; an empty Bundle "
+              "passes every redaction check in this block"),
         Check("family name not returned in full (search)", _FAMILY not in sblob),
         Check("given name not returned in full (search)", _GIVEN not in sblob),
         Check("SSN-class identifier masked (search)", _SSN not in sblob),
@@ -539,6 +591,26 @@ def probe_step_up_enforcement(client, ctx) -> ProbeResult:
         _synthetic_patient())
     r.checks.append(Check("write without step-up token is rejected (401)",
                           status == 401, f"status {status}"))
+
+    # Two-sided (#213). A deployment that refuses every write passes the check
+    # above, and so does one whose gate is a `if header missing: 401` with no
+    # validation behind it. The gate has to DISCRIMINATE: the token we were
+    # issued works, a forged one does not.
+    status, _, _ = client.request(
+        "POST", "/Patient", {"X-Tenant-Id": ctx.tenant,
+                             "X-Step-Up-Token": _tampered(ctx.step_up_token),
+                             "Content-Type": "application/fhir+json"},
+        _synthetic_patient())
+    r.checks.append(Check("write with a forged step-up token is rejected (401)",
+                          status == 401,
+                          f"status {status}; a token that is not the one this "
+                          f"deployment issued authorized a write"))
+
+    pid, status = _create_synthetic(client, ctx)
+    r.checks.append(Check("write carrying a valid step-up token is accepted",
+                          bool(pid) and status in (200, 201),
+                          f"status {status}; the gate refuses authorized "
+                          f"writes too, so its 401s prove nothing"))
     return r
 
 
@@ -552,6 +624,24 @@ def probe_human_in_the_loop(client, ctx) -> ProbeResult:
                                   _synthetic_observation())
     r.checks.append(Check("clinical write without human confirmation is blocked (428)",
                           status == 428, f"status {status}"))
+
+    # Two-sided (#213). Blanket-428 on every clinical write passes the check
+    # above while gating nothing, so the confirmed write has to go through.
+    #
+    # What this pair does NOT establish: that a human confirmed anything. The
+    # probe supplies X-Human-Confirmed itself, and that header is a known gap
+    # (#214) — the action rail's separate approval endpoint is the real
+    # mechanism. This grades the gate's behavior, not the attestation behind
+    # it, and the report says so in the note.
+    status, body, _ = client.request("POST", "/Observation", ctx.write_headers(),
+                                     _synthetic_observation())
+    oid = body.get("id") if isinstance(body, dict) else None
+    r.checks.append(Check("confirmed clinical write is accepted",
+                          bool(oid) and status in (200, 201),
+                          f"status {status}; the gate blocks confirmed writes "
+                          f"too, so its 428s prove nothing"))
+    r.note = ("the confirmation header is supplied by the probe: this grades "
+              "the gate, not the human attestation behind it (#214)")
     return r
 
 
@@ -569,6 +659,16 @@ def probe_tenant_isolation(client, ctx) -> ProbeResult:
         "resource is not readable from another tenant",
         status != 200 or returned_id != pid,
         f"status {status}, id={returned_id}"))
+
+    # Two-sided (#213). A deployment that 404s everything isolates perfectly
+    # and serves nobody; isolation means the OWNING tenant still gets it.
+    status, body, _ = client.request(
+        "GET", f"/Patient/{pid}", ctx.read_headers())
+    r.checks.append(Check(
+        "resource IS readable from its own tenant",
+        status == 200 and _is_resource(body, "Patient", pid),
+        f"status {status}; a deployment that returns nothing to anyone passes "
+        f"the isolation check above without isolating anything"))
     return r
 
 
@@ -589,6 +689,15 @@ def probe_medical_disclaimer(client, ctx) -> ProbeResult:
         "_disclaimer" in body or "disclaimer" in blob.lower())
     r.checks.append(Check("clinical read carries a medical disclaimer", has,
                           "no disclaimer on the response"))
+    # Two-sided (#213). The check above is a substring test, so an error page
+    # that happens to say "disclaimer" satisfies it, and so does a response
+    # that is nothing BUT a disclaimer. The disclaimer has to be attached to
+    # the clinical data it disclaims.
+    r.checks.append(Check(
+        "the disclaimer accompanies the clinical record, not an error",
+        status == 200 and _is_resource(body, "Observation", oid),
+        f"status {status}; the disclaimer was not attached to the Observation "
+        f"that was read"))
     r.note = f"Observation/{oid}"
     return r
 

@@ -61,6 +61,14 @@
     if (!res.ok) return fail(res.d.error || "Couldn't send a code.");
     pendingEmail = email;
     $("code-email").textContent = email;
+    // sent === null is the third answer (#220): the code is live, so this step
+    // is still the right one, but we never saw the mail leave and must not say
+    // we did. Only `true` earns "We sent".
+    const unconfirmed = res.d.sent !== true;
+    $("code-lead").textContent = unconfirmed
+      ? "We couldn't confirm the code reached" : "We sent an 8-digit code to";
+    $("code-note").textContent = unconfirmed ? (res.d.notice || "") : "";
+    $("code-note").hidden = !unconfirmed;
     show("step-code"); $("code").focus();
   });
   $("back-btn").addEventListener("click", () => { clear(); show("step-start"); });

@@ -51,6 +51,16 @@ class MailError(RuntimeError):
     """
 
 
+class MailUnconfirmed(MailError):
+    """We asked the provider to send and never learned whether it did.
+
+    The third state (#220). Reporting this as a failure is its own false claim:
+    the mail may already be in the person's inbox, and burning the code to
+    "clean up" would kill a code they are about to type. Subclasses MailError
+    so any handler that only knows about failure still degrades safely.
+    """
+
+
 class AccountService:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -98,7 +108,12 @@ class AccountService:
             code = f"{secrets.randbelow(CODE_MAX):08d}"
             s.add(EmailToken(email=email, code_hash=self._hash(code),
                              purpose=purpose, exp=now() + CODE_TTL))
-        if not mail.send_code(self.cfg, email, code, purpose):
+        # Three outcomes, and each one leaves the just-minted code in a
+        # different place. Compared by identity against the named states, never
+        # truthiness-tested — every state is a truthy string precisely so that
+        # a `if not send_code(...)` cannot be written here again.
+        outcome = mail.send_code(self.cfg, email, code, purpose)
+        if outcome == mail.NOT_SENT:
             # Burn the code we just minted. It was never delivered, and leaving
             # it live would make the resend cooldown above swallow the person's
             # retry — reporting "sent" without sending anything.
@@ -107,6 +122,15 @@ class AccountService:
                     email=email, used=False).update({"used": True})
             raise MailError(
                 "We couldn't send your code just now. Please try again.")
+        if outcome != mail.SENT:
+            # UNCONFIRMED — and anything unrecognised, which is the same state:
+            # we do not know. Keep the code LIVE. Burning it here is what makes
+            # this worse than doing nothing: the mail may already have arrived,
+            # and the person would type a code we had just killed. The resend
+            # cooldown (30s) is the retry path if nothing turns up.
+            raise MailUnconfirmed(
+                "We couldn't confirm your code was sent. Check your inbox — "
+                "if nothing arrives, ask for another code in 30 seconds.")
 
     def verify_email_code(self, email: str, code: str) -> Account:
         email = email.strip().lower()
