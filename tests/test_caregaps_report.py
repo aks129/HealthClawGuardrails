@@ -7,10 +7,19 @@ _BANNED = re.compile(r"diagnos|prescrib|treatment", re.IGNORECASE)
 
 def _result(rule_id="bp-screening", title="Blood pressure check", cadence="yearly",
            source="uspstf", last_done=None, note="", applicable=True,
-           status="due"):
-    return {"rule_id": rule_id, "title": title, "cadence": cadence, "source": source,
-            "last_done": last_done, "note": note, "applicable": applicable,
-            "status": status}
+           status="due", indeterminate_reason=None):
+    out = {"rule_id": rule_id, "title": title, "cadence": cadence, "source": source,
+           "last_done": last_done, "note": note, "applicable": applicable,
+           "status": status}
+    if indeterminate_reason:
+        out["indeterminate_reason"] = indeterminate_reason
+    return out
+
+
+def _undecided(rule_id, title, why):
+    """An indeterminate rule as the engine emits it — carrying the cause."""
+    return _result(rule_id=rule_id, title=title, status="indeterminate",
+                   applicable=None, indeterminate_reason=why)
 
 
 def test_summary_counts_by_status():
@@ -91,7 +100,7 @@ def test_consumer_summary_note_text():
 def test_unresolved_subject_travels_with_the_empty_list():
     """An unresolvable subject is carried, not swallowed. The caller cannot
     otherwise tell it apart from a clean sheet."""
-    consumer = build_consumer_summary([], unresolved="no-patient")
+    consumer = build_consumer_summary([], not_evaluated="no-patient")
     assert consumer["lines"] == []
     assert consumer["unevaluated"] == "no-patient"
     assert "not a finding" in consumer["unevaluated_note"]
@@ -119,6 +128,58 @@ def test_no_lines_and_no_indeterminate_rules_claims_no_reason():
 
 
 def test_unevaluated_notes_have_no_banned_words():
-    for reason in ("no-patient", "ambiguous-patient", "demographics-unavailable"):
-        consumer = build_consumer_summary([], unresolved=reason)
+    for reason in ("no-patient", "ambiguous-patient", "check-incomplete"):
+        consumer = build_consumer_summary([], not_evaluated=reason)
         assert not _BANNED.search(consumer["unevaluated_note"])
+    for why in ("birth-date-unknown", "sex-unknown"):
+        consumer = build_consumer_summary(
+            [_undecided("mammography", "Breast cancer screening (mammogram)", why)])
+        assert not _BANNED.search(consumer["unevaluated_note"])
+
+
+# ─────────────────────────────────────────────
+# A reason may only claim what was actually read (#417)
+# ─────────────────────────────────────────────
+
+def test_the_reason_names_only_the_demographic_that_was_actually_missing():
+    """Reachable when a caller supplies a subject whose Patient really is
+    missing a field — the one path where we read the record and can say what
+    was not in it.
+
+    One `demographics-unavailable` covering every case told a person whose
+    birthDate was on file that it was not.
+    """
+    sex_only = build_consumer_summary(
+        [_undecided("mammography", "Breast cancer screening (mammogram)",
+                    "sex-unknown")])
+    assert sex_only["unevaluated"] == "sex-unavailable"
+    assert "date of birth" not in sex_only["unevaluated_note"]
+
+    dob_only = build_consumer_summary(
+        [_undecided("bp-screening", "Blood pressure check", "birth-date-unknown")])
+    assert dob_only["unevaluated"] == "birth-date-unavailable"
+    assert "sex" not in dob_only["unevaluated_note"]
+
+
+def test_a_caller_reason_outranks_anything_the_rules_seem_to_say():
+    """When the caller knows no Patient reached the evaluator, the rules'
+    own causes are an artefact of that and must not be quoted back.
+
+    Every rule below claims the date of birth was unknown. It was not — the
+    caller simply never handed it over.
+    """
+    consumer = build_consumer_summary(
+        [_undecided("bp-screening", "Blood pressure check", "birth-date-unknown"),
+         _undecided("flu-immunization", "Influenza (flu) vaccine",
+                    "birth-date-unknown")],
+        not_evaluated="check-incomplete")
+    assert consumer["unevaluated"] == "check-incomplete"
+    assert "date of birth" not in consumer["unevaluated_note"]
+
+
+def test_one_undecided_rule_reads_as_one():
+    consumer = build_consumer_summary(
+        [_undecided("mammography", "Breast cancer screening (mammogram)",
+                    "sex-unknown")])
+    assert "1 screening could not be checked" in consumer["unevaluated_note"]
+    assert "screenings" not in consumer["unevaluated_note"]

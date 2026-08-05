@@ -162,6 +162,43 @@ def test_care_gaps_with_a_supplied_subject_reports_that_state(
 
 
 # ─────────────────────────────────────────────
+# What we say when we did not look (#417)
+# ─────────────────────────────────────────────
+
+def test_the_fallback_path_claims_nothing_about_the_persons_record(
+        client, app, tenant_id, tenant_headers):
+    """The production call shape, against a record holding birthDate AND gender.
+
+    The resolved Patient is deliberately held back from the evaluator
+    (#389 half two, behind the clinical gate), so every rule is indeterminate
+    for a reason that has nothing to do with this person's data. We told them
+    "Your date of birth and sex were not available to this check" anyway.
+
+    While we are not looking at someone's demographics, no reason we give
+    about their demographics can be true — including a more precise one. The
+    reason has to describe our limitation, not their record.
+
+    MUTATION: drop the `check-incomplete` branch in the route -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-onfile", gender="female",
+                  birth="1985-04-02")
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    body = r.get_json()
+    resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
+    assert resolution == {"state": "tenant-default", "subject": "Patient/p-onfile"}
+
+    consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
+    assert consumer["unevaluated"] == "check-incomplete"
+    note = consumer["unevaluated_note"]
+    for claim in ("date of birth", "were not available", "not recorded"):
+        assert claim not in note, note
+    assert "no screenings outstanding" in note
+
+
+# ─────────────────────────────────────────────
 # MCP App page (embedded HTML surface)
 # ─────────────────────────────────────────────
 
