@@ -233,6 +233,12 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     Answering "Nothing has been sent — please try approving again" is as
     unobserved as the old "confirmed". The engine may already be executing the
     action, and a person who follows that instruction sends it twice.
+
+    This fake raises HealthClawUnconfirmed itself, so it proves the ROUTE
+    handles it and can never prove the client produces it — which is half of
+    why #416 survived a suite that looked like it covered this. The other half
+    is in tests/test_healthclaw_transport.py, where the real client meets a
+    real 504 over a real socket.
     """
     from careagents.app import create_app
     from careagents.healthclaw import HealthClawUnconfirmed
@@ -300,7 +306,11 @@ def test_confirm_action_separates_a_refusal_from_an_unanswered_confirm():
         client_with(requests.ReadTimeout("read timed out")).confirm_action(
             "t", "a1")
 
-    # An observed rejection stays an ordinary failure.
+    # An observed rejection stays an ordinary failure. 409 is a status the
+    # ENGINE answers with, so this assertion is true — and it says nothing
+    # about the statuses a gateway produces on the engine's behalf. A 504 took
+    # this same branch all through #416. Which statuses mean what is
+    # classified in tests/test_healthclaw_transport.py, against a real socket.
     class _Refused:
         ok, status_code = False, 409
 
