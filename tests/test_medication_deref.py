@@ -148,8 +148,86 @@ def test_only_medication_references_are_chased():
     are argued for Medication only; a Patient/ ref must never be fetched."""
     hc = _StubHC({})
     resolve = _resolver(hc)
-    assert resolve("Patient/p1") is None
-    assert resolve("Observation/o1") is None
-    assert resolve(None) is None
-    assert resolve({"reference": "Medication/m1"}) is None
+    # resolve now returns (label, reason) so the caller can tell "we could not
+    # look" from "we looked and there is no name" (2026-08-05). A non-
+    # Medication ref is neither: it is a ref we decline to chase at all.
+    for ref in ("Patient/p1", "Observation/o1", None,
+                {"reference": "Medication/m1"}):
+        assert resolve(ref) == (None, "not-a-ref"), ref
     assert hc.reads == []
+
+
+# ---------------------------------------------------------------------------
+# "Could not look it up" is not "the source sent free text" (2026-08-05).
+#
+# PR #376 fixed a case where four correctly-coded medications were reported
+# unreadable, and the agent volunteered a confident FALSE explanation to the
+# patient: "The source system sent these as free-text notes rather than
+# standardized codes." That sentence came from the note below, which is a
+# claim about the upstream feed made by a branch that never learned anything
+# about the upstream feed.
+#
+# #376 closed the RxNorm cause. The same false sentence is still reachable
+# from three others, because `resolve_ref(ref) or ""` collapses them all:
+#
+#   - the deref cap (MAX_MEDICATION_DEREFS) was hit — we never looked
+#   - the Medication read failed — we looked and could not tell
+#   - the Medication genuinely carries no label — the only case the sentence
+#     is true for
+#
+# A patient on more than ten medications gets the false sentence for the
+# overflow. A patient during a backend blip gets it for everything.
+# ---------------------------------------------------------------------------
+def _names(items):
+    return [i.get("name") for i in items]
+
+
+def test_a_read_failure_never_claims_the_source_sent_free_text():
+    hc = _StubHC({}, fail=True)
+    resolver = _medication_resolver(hc, "t1")
+
+    items = _summarize_bundle(
+        {"entry": [_med_request("mr1", ref="Medication/m1")]},
+        limit=10, resolve_ref=resolver)
+
+    assert items[0]["unreadable"] is True, "unreadable-not-absent still holds"
+    assert not items[0].get("uncoded"), (
+        "a failed read was reported as a fact about the source feed")
+    assert "not coded at the source" not in (items[0].get("name") or "")
+    assert "free text" not in (items[0].get("note") or "").lower()
+
+
+def test_the_deref_cap_never_claims_the_source_sent_free_text():
+    """The overflow rows were never looked at. Saying anything about how the
+    source coded them is inventing a finding."""
+    meds = {f"m{i}": {"resourceType": "Medication", "id": f"m{i}",
+                      "code": {"text": f"Drug {i}"}}
+            for i in range(MAX_MEDICATION_DEREFS + 3)}
+    hc = _StubHC(meds)
+    resolver = _medication_resolver(hc, "t1")
+    entries = [_med_request(f"mr{i}", ref=f"Medication/m{i}")
+               for i in range(MAX_MEDICATION_DEREFS + 3)]
+
+    items = _summarize_bundle({"entry": entries}, limit=50,
+                              resolve_ref=resolver)
+
+    overflow = [i for i in items if not i.get("name", "").startswith("Drug")]
+    assert overflow, "the cap did not engage; this test proves nothing"
+    for item in overflow:
+        assert not item.get("uncoded"), (
+            "a row we never read was reported as uncoded at the source")
+
+
+def test_a_medication_with_no_label_still_earns_the_source_sentence():
+    """The one case the sentence is true for must keep it — otherwise this
+    fix trades a false explanation for no explanation."""
+    hc = _StubHC({"m1": {"resourceType": "Medication", "id": "m1",
+                         "code": {}}})
+    resolver = _medication_resolver(hc, "t1")
+
+    items = _summarize_bundle(
+        {"entry": [_med_request("mr1", ref="Medication/m1")]},
+        limit=10, resolve_ref=resolver)
+
+    assert items[0]["uncoded"] is True
+    assert items[0]["name"] == "recorded but not coded at the source"

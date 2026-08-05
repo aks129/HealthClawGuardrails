@@ -392,6 +392,24 @@ class LiveMCPProbeClient:
 
 # --- Guardrail probes ----------------------------------------------------------
 
+# LOINC 2093-3 -> "Cholesterol (total)" in r6/terminology.py's static table,
+# so the positive relabel check below needs no terminology server.
+_EXPECTED_LABEL = "Cholesterol (total)"
+_UPSTREAM_JUNK = "UPSTREAM-DISPLAY-MUST-NOT-SURVIVE"
+
+
+def _synthetic_labelled_obs() -> dict:
+    """An Observation whose upstream display is junk we expect to LOSE, and
+    whose code we expect the server to label from its own table."""
+    return {
+        "resourceType": "Observation",
+        "status": "final",
+        "code": {"coding": [{"system": "http://loinc.org", "code": "2093-3",
+                             "display": _UPSTREAM_JUNK}]},
+        "valueQuantity": {"value": 188, "unit": "mg/dL"},
+    }
+
+
 def _create_synthetic(client, ctx) -> tuple[Optional[str], object]:
     status, body, _ = client.request(
         "POST", "/Patient", ctx.write_headers(), _synthetic_patient())
@@ -434,6 +452,39 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
         Check("phone number stripped (search)", _PHONE not in sblob),
         Check("street address stripped (search)", _STREET not in sblob),
     ]
+
+    # A POSITIVE check, and the only one in this file. Every assertion above
+    # is "a bad string is ABSENT", which a broken labeller passes HARDER — it
+    # strictly shrinks the response. That is not hypothetical: the RxNorm
+    # lookup returned None for its entire life (#376) and every guardrail
+    # check here stayed green while a patient was told their medications were
+    # unreadable. The grade said A about the wrong property.
+    #
+    # Redaction removes the upstream `display`; r6/terminology.py must put a
+    # server-derived one back, keyed by code. LOINC 2093-3 is in the static
+    # table, so this needs no network and no feature flag — it fails when the
+    # relabel step stops running, which is the half of the contract nothing
+    # else measures.
+    status, body, _ = client.request(
+        "POST", "/Observation", ctx.write_headers(), _synthetic_labelled_obs())
+    oid = body.get("id") if isinstance(body, dict) else None
+    if not oid:
+        r.checks.append(Check("labelled observation created", False,
+                              f"create returned {status}"))
+    else:
+        status, obody, otext = client.request(
+            "GET", f"/Observation/{oid}", ctx.read_headers())
+        oblob = otext or json.dumps(obody or {})
+        r.checks += [
+            Check("a recognised code is re-labelled after redaction",
+                  status == 200 and _EXPECTED_LABEL in oblob,
+                  f"status {status}; expected {_EXPECTED_LABEL!r}"),
+            # The other half of the same contract: the label must be OURS.
+            # Asserting only that a display exists would pass if redaction
+            # stopped running and the feed's own text survived.
+            Check("the upstream display did not survive",
+                  _UPSTREAM_JUNK not in oblob),
+        ]
     r.note = f"Patient/{pid}"
     return r
 

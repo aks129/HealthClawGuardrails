@@ -154,16 +154,28 @@ def _medication_resolver(hc: HealthClawClient, tenant: str):
     None and the item stays unreadable-not-absent; per-call memo so one ref
     costs one read; capped so a junk bundle cannot fan out.
     """
-    memo: dict[str, str | None] = {}
+    memo: dict[str, tuple[str | None, str]] = {}
 
-    def resolve(ref) -> str | None:
+    def resolve(ref) -> tuple[str | None, str]:
+        """Return (label, reason).
+
+        The reason is the point. This used to return a bare label, so four
+        different outcomes arrived at the caller as one `None` and the caller
+        explained all of them to the patient as "the source sent free text"
+        — a claim about the upstream feed, made by a branch that had learned
+        nothing about the upstream feed. PR #376 fixed one cause of that
+        sentence; this stops the remaining three from producing it.
+        """
         if not isinstance(ref, str) or not ref.startswith("Medication/"):
-            return None
+            return None, "not-a-ref"
         if ref in memo:
             return memo[ref]
         if len(memo) >= MAX_MEDICATION_DEREFS:
-            return None
+            # Never looked at. Anything said about how the source coded it
+            # would be invented.
+            return None, "not-attempted"
         label = None
+        reason = "no-label"
         try:
             med = hc.read(tenant, "Medication", ref.split("/", 1)[1])
             code = med.get("code") or {}
@@ -174,10 +186,11 @@ def _medication_resolver(hc: HealthClawClient, tenant: str):
                 label = label.strip() or None
             else:
                 label = None
+            reason = "resolved" if label else "no-label"
         except HealthClawError:
-            pass
-        memo[ref] = label
-        return label
+            reason = "unavailable"
+        memo[ref] = (label, reason)
+        return label, reason
 
     return resolve
 
@@ -212,11 +225,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
         code = res.get("code") or res.get("medicationCodeableConcept") or {}
         text = code.get("text") or " ".join(
             c.get("display", "") for c in (code.get("coding") or [])[:1])
+        lookup_reason = None
         if not text and resolve_ref is not None:
             # No inline code — the name may live behind medicationReference.
             ref = (res.get("medicationReference") or {}).get("reference")
             if ref:
-                text = resolve_ref(ref) or ""
+                text, lookup_reason = resolve_ref(ref)
+                text = text or ""
         if text:
             item["name"] = text.strip()
         else:
@@ -243,6 +258,18 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                         if isinstance(c, dict) and c.get("code")), None)
             if raw:
                 item["name"] = f"unlabeled record, code {raw}"
+            elif lookup_reason in ("unavailable", "not-attempted"):
+                # We did not learn anything about this record's coding, so we
+                # say nothing about it. "The source sent free text" below is a
+                # finding; asserting it here would be inventing one — the
+                # defect PR #376 fixed, reached by a different route.
+                item["name"] = "a medication I could not look up just now"
+                item["note"] = (
+                    "The name is stored behind a reference this turn could "
+                    "not read, so it is missing for a reason on OUR side, not "
+                    "the clinic's. Do not describe how the source recorded "
+                    "it. It is still a real record — never treat it as "
+                    "absent; offer to try again.")
             else:
                 item["name"] = "recorded but not coded at the source"
                 item["uncoded"] = True
