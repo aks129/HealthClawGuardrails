@@ -1,4 +1,4 @@
-"""The four #282 sites that are only reachable through a multi-step flow.
+"""Redaction sites that are only reachable through a multi-step flow.
 
 `tests/test_redaction_coverage_inventory.py` measured the three sites you can
 hit with one request and deliberately named these four as NOT covered:
@@ -7,6 +7,14 @@ hit with one request and deliberately named these four as NOT covered:
     r6/sdc/documents.py             (the persisted DocumentReference)
     r6/smbp/routes.py               (every tenant Observation -> BP report)
     r6/curatr.py                    ($curatr-apply-fix's updated_resource)
+
+A fifth was added afterwards (#382), because it was never on #282's list of
+eight and so was on neither file:
+
+    r6/brief/routes.py              (every tenant Condition / MedicationRequest
+                                     / Observation / Encounter -> the
+                                     AppointmentBrief a patient and their
+                                     clinic read)
 
 Same method as that file: seed resources whose free-text fields each carry a
 DISTINCT marker, drive the real flow to the point where content could reach a
@@ -50,6 +58,14 @@ changing it fails here and forces the inventory to be updated deliberately.
                         echoes verbatim from the stored Observation
     sdc/documents.py:72 internal; its return value reaches nobody, and the
                         row it writes is redacted on the FHIR read path
+    brief/routes.py:38  LEAK, LATENT — the brief renders upstream `code.text`,
+                        `coding[].display`, `dosageInstruction.text`,
+                        `valueString` and `medicationReference.display` into a
+                        document meant for a clinician. Nothing reaches a
+                        caller TODAY only because the handler is unreachable
+                        (registered at a doubled path) and crashes when it is
+                        reached (`R6Resource` has no `.resource`). Both are
+                        pinned below; fixing either publishes the leak.
 
 Each row was mutation-checked: the guard (or the field) was removed from
 production code, the probe was confirmed red, and the change was reverted.
@@ -72,6 +88,24 @@ reached the code it names.
   what an intake form is for, so it is not filed as a defect — but it means
   the review page and the delivery link carry full demographics, and no probe
   here bounds what else that step could pick up.
+
+Not covered for the brief specifically:
+
+- The CareAgents page. `careagents/app.py::brief` (line 654) renders whatever
+  `fetch_appointment_brief` returns, and CareAgents' own tests fake the
+  HealthClaw client. The probes here stop at HealthClaw's response bytes and
+  parse them with the consumer's real parser; the rendered HTML was checked
+  by hand against a running pair, not pinned by a test.
+- The brief's own caps and filters: `_MAX_LABS = 10`, five visits,
+  `clinicalStatus`-inactive Conditions and non-active MedicationRequests are
+  all dropped before rendering. Nothing here bounds a tenant large enough for
+  the caps to bite, so "12 markers arrive" is a floor, not a ceiling.
+- `_obs_value`'s `valueCodeableConcept` branch (engine.py:88-92) reads a
+  `text` and a `display` that no fixture here seeds.
+- `_encounter_display`'s `meta.lastUpdated` fallback (engine.py:123).
+- `BriefField.source_id` echoes the upstream resource id verbatim, and
+  `apply_redaction` never touches `id`. An id is not free text, so it is not
+  probed with a marker — but it is upstream-controlled and it does leave.
 """
 
 from __future__ import annotations
@@ -103,11 +137,32 @@ COND_TEXT_MARKER = "PHICONDTEXTMARKER"
 COND_DISPLAY_MARKER = "PHICONDDISPLAYMARKER"
 COND_NOTE_MARKER = "PHICONDNOTEMARKER"
 
+# Brief-only fields. The brief renders a label and a value per record and the
+# value is a different field per section, so each gets its own marker.
+BRIEF_DOSAGE_MARKER = "PHIBRIEFDOSAGEMARKER"
+BRIEF_MED_DISPLAY_MARKER = "PHIBRIEFMEDDISPLAYMARKER"
+BRIEF_MED_REF_MARKER = "PHIBRIEFMEDREFMARKER"
+BRIEF_OBS_VALUE_MARKER = "PHIBRIEFOBSVALUEMARKER"
+BRIEF_ENC_TEXT_MARKER = "PHIBRIEFENCTEXTMARKER"
+BRIEF_ENC_DISPLAY_MARKER = "PHIBRIEFENCDISPLAYMARKER"
+# `_code_text` / `_medication_display` return the FIRST field they find, so a
+# resource carrying both text and display leaks only one of them. These sit in
+# the losing field and are expected absent — which is why the fix has to cover
+# both fields, not the one a fixture happens to use.
+BRIEF_COND_SHADOWED_MARKER = "PHIBRIEFCONDSHADOWEDMARKER"
+BRIEF_MED_SHADOWED_MARKER = "PHIBRIEFMEDSHADOWEDMARKER"
+# Exactly 10 characters: `_effective_display` returns `dt[:10]`, so this is
+# what an Observation.effectiveDateTime that is not a date gives up.
+BRIEF_DATE_MARKER = "PHIBRIEFDT"
+
 ALL_MARKERS = (
     NAME_MARKER, SUBJECT_LABEL_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
     MED_TEXT_MARKER, ALLERGY_TEXT_MARKER, COMPONENT_DISPLAY_MARKER,
     EFFECTIVE_MARKER, OBS_NOTE_MARKER, COND_TEXT_MARKER, COND_DISPLAY_MARKER,
-    COND_NOTE_MARKER,
+    COND_NOTE_MARKER, BRIEF_DOSAGE_MARKER, BRIEF_MED_DISPLAY_MARKER,
+    BRIEF_MED_REF_MARKER, BRIEF_OBS_VALUE_MARKER, BRIEF_ENC_TEXT_MARKER,
+    BRIEF_ENC_DISPLAY_MARKER, BRIEF_COND_SHADOWED_MARKER,
+    BRIEF_MED_SHADOWED_MARKER, BRIEF_DATE_MARKER,
 )
 
 PROBE_PATIENT_ID = "probe-patient-1"
@@ -212,6 +267,23 @@ def _marked_condition():
 
 def _markers_in(text: str) -> set[str]:
     return {m for m in ALL_MARKERS if m in text}
+
+
+def test_no_marker_is_a_substring_of_another():
+    """The control for every `_markers_in` result in this file.
+
+    `_markers_in` is a substring search, so a marker contained in another one
+    is reported as present whenever the longer one leaks. That is not
+    hypothetical: the first draft of the brief probes below used
+    ...DISPLAY / ...DISPLAY2 and reported a leak from a field that was never
+    read. Every attribution in this file depends on this holding.
+    """
+    nested = sorted((a, b) for a in ALL_MARKERS for b in ALL_MARKERS
+                    if a != b and a in b)
+    assert nested == [], (
+        "these markers cannot be told apart by a substring search, so every "
+        "row that names one of them is unattributable: %s" % nested)
+    assert len(set(ALL_MARKERS)) == len(ALL_MARKERS), "duplicate marker"
 
 
 # ---------------------------------------------------------------------------
@@ -658,3 +730,655 @@ def test_curatr_scores_the_unredacted_resource(
     # And the response itself is still redacted — the ordering fix must not
     # have been achieved by dropping the redaction.
     assert _markers_in(response.get_data(as_text=True)) == set()
+
+
+# ---------------------------------------------------------------------------
+# Site 5: r6/brief/routes.py — `_resources_for` (line 28-38) hands every
+# Condition, MedicationRequest, Observation and Encounter in the tenant to
+# `r6/brief/engine.py`, which reads `code.text` first and `coding[].display`
+# second (engine.py:41-50) — the two fields CLAUDE.md names because real feeds
+# put patient names in them. There is no `apply_redaction` call anywhere in
+# `r6/brief/`.
+#
+# TWO DEFECTS SIT IN FRONT OF THAT, so nothing reaches a caller today:
+#
+#   D1 the handler is registered at /r6/fhir/fhir/AppointmentBrief. The
+#      blueprint's url_prefix is already /r6/fhir (r6/routes.py:74) and the
+#      route adds "/fhir/AppointmentBrief" (brief/routes.py:90). The URL
+#      CareAgents builds (careagents/healthclaw.py:334) therefore lands on the
+#      generic search route and 400s.
+#   D2 `_resources_for` returns `r.resource`, and `R6Resource` has no such
+#      attribute — it exposes `to_fhir_json()`. Any tenant holding one of the
+#      four types 500s the handler.
+#
+# Both are pinned first, so that fixing either turns a green row red and this
+# section has to be re-derived rather than silently starting to pass. The leak
+# itself is then measured with D2 shimmed and D1 routed around, because "the
+# fix publishes it" is the fact Dev needs.
+# ---------------------------------------------------------------------------
+
+BRIEF_PATH = "/r6/fhir/fhir/AppointmentBrief"          # where it IS registered
+CAREAGENTS_BRIEF_PATH = "/r6/fhir/AppointmentBrief"    # where it is CALLED
+
+LOINC_CHOL = "2093-3"          # in r6/terminology.py's static table
+LOINC_UNLABELLED = "99999-9"   # not in it, and not a real LOINC code
+ICD10 = "http://hl7.org/fhir/sid/icd-10-cm"
+ICD10_HTN = "I10"              # in the table
+ICD10_UNLABELLED = "Z99.89"    # not in it
+RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
+RXNORM_LISINOPRIL = "29046"    # in the table
+RXNORM_UNLABELLED = "999999"   # not in it
+SNOMED = "http://snomed.info/sct"
+
+
+def _brief_seed() -> list[dict]:
+    """Ten resources: every field the brief reads, plus the two it does not.
+
+    Codes are split deliberately: `*_HTN` / `_CHOL` / `_LISINOPRIL` are in
+    `r6/terminology.py`'s static table and `*_UNLABELLED` are not, so the
+    redact-only projection below can report both outcomes.
+    """
+    return [
+        # --- problems -----------------------------------------------------
+        {"resourceType": "Condition", "id": "brief-cond-text",
+         "clinicalStatus": {"coding": [{"code": "active"}]},
+         "code": {"coding": [{"system": ICD10, "code": ICD10_HTN,
+                              "display": BRIEF_COND_SHADOWED_MARKER}],
+                  "text": COND_TEXT_MARKER},
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "onsetDateTime": "2021-03-04",
+         "note": [{"text": COND_NOTE_MARKER}]},
+        {"resourceType": "Condition", "id": "brief-cond-display",
+         "clinicalStatus": {"coding": [{"code": "active"}]},
+         "code": {"coding": [{"system": ICD10, "code": ICD10_UNLABELLED,
+                              "display": COND_DISPLAY_MARKER}]},
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "onsetDateTime": "2019-07-11"},
+        # --- medications --------------------------------------------------
+        {"resourceType": "MedicationRequest", "id": "brief-med-text",
+         "status": "active", "intent": "order",
+         "medicationCodeableConcept": {
+             "coding": [{"system": RXNORM, "code": RXNORM_LISINOPRIL,
+                         "display": BRIEF_MED_SHADOWED_MARKER}],
+             "text": MED_TEXT_MARKER},
+         "dosageInstruction": [{"text": BRIEF_DOSAGE_MARKER}],
+         "subject": {"reference": PROBE_PATIENT_REF}},
+        {"resourceType": "MedicationRequest", "id": "brief-med-display",
+         "status": "active", "intent": "order",
+         "medicationCodeableConcept": {
+             "coding": [{"system": RXNORM, "code": RXNORM_UNLABELLED,
+                         "display": BRIEF_MED_DISPLAY_MARKER}]},
+         "subject": {"reference": PROBE_PATIENT_REF}},
+        {"resourceType": "MedicationRequest", "id": "brief-med-ref",
+         "status": "active", "intent": "order",
+         "medicationReference": {"reference": "Medication/brief-med-1",
+                                 "display": BRIEF_MED_REF_MARKER},
+         "subject": {"reference": PROBE_PATIENT_REF}},
+        # --- labs -----------------------------------------------------------
+        {"resourceType": "Observation", "id": "brief-obs-text",
+         "status": "final",
+         "code": {"coding": [{"system": LOINC, "code": LOINC_CHOL}],
+                  "text": OBS_TEXT_MARKER},
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "effectiveDateTime": "2026-01-15T08:00:00Z " + EFFECTIVE_MARKER,
+         "valueQuantity": {"value": 244, "unit": "mg/dL"},
+         "note": [{"text": OBS_NOTE_MARKER}]},
+        {"resourceType": "Observation", "id": "brief-obs-display",
+         "status": "final",
+         "code": {"coding": [{"system": LOINC, "code": LOINC_UNLABELLED,
+                              "display": OBS_DISPLAY_MARKER}]},
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "effectiveDateTime": BRIEF_DATE_MARKER,
+         "valueString": BRIEF_OBS_VALUE_MARKER},
+        # --- visits ---------------------------------------------------------
+        {"resourceType": "Encounter", "id": "brief-enc-text",
+         "status": "finished",
+         "type": [{"text": BRIEF_ENC_TEXT_MARKER}],
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "period": {"start": "2026-02-01T09:00:00Z"}},
+        {"resourceType": "Encounter", "id": "brief-enc-display",
+         "status": "planned",
+         "type": [{"coding": [{"system": SNOMED, "code": "185349003",
+                               "display": BRIEF_ENC_DISPLAY_MARKER}]}],
+         "subject": {"reference": PROBE_PATIENT_REF},
+         "period": {"start": "2026-03-01T09:00:00Z"}},
+        # --- the two the brief never loads ----------------------------------
+        _marked_patient(),
+        _marked_allergy(),
+    ]
+
+
+def _seed_the_brief(tenant_id) -> None:
+    for resource in _brief_seed():
+        _store(resource, tenant_id)
+
+
+def _brief_headers(auth_headers) -> dict:
+    """Exactly what CareAgents sends (careagents/healthclaw.py:134-137)."""
+    return {**auth_headers, "X-Agent-Id": "careagents"}
+
+
+def _parsed_sections(response) -> dict[str, list[dict]]:
+    """Deserialize with the CONSUMER's parser, not a re-implementation.
+
+    `careagents/app.py::_parse_brief_sections` is what turns this response
+    into the rows rendered on the patient's brief page, so running the real
+    one keeps the probe measuring what a patient sees rather than what a
+    hand-written parser thinks the wire format is.
+    """
+    from careagents.app import _parse_brief_sections
+    return _parse_brief_sections(response.get_json())
+
+
+def _section_text(sections: dict[str, list[dict]], name: str) -> str:
+    return json.dumps(sections.get(name, []))
+
+
+# --- D1 and D2: why nothing leaks today ------------------------------------
+
+def test_the_url_careagents_calls_does_not_reach_the_brief_handler(
+        client, app, tenant_headers, auth_headers):
+    """CHARACTERIZATION — D1. The brief is registered one segment too deep.
+
+    `r6_blueprint` already carries url_prefix="/r6/fhir" (r6/routes.py:74) and
+    `register_brief_routes` adds "/fhir/AppointmentBrief"
+    (r6/brief/routes.py:90), so the handler lives at
+    /r6/fhir/fhir/AppointmentBrief. `HealthClawClient.fetch_appointment_brief`
+    builds f"{base}/r6/fhir/AppointmentBrief", which matches the generic
+    `search_resources` rule instead — and "AppointmentBrief" is not in
+    `R6Resource.SUPPORTED_TYPES`, so it 400s. That client swallows every
+    non-200 and returns None, so the patient's brief page renders empty with
+    no error anywhere.
+
+    When this row goes red the leak measured below is live.
+    """
+    with app.app_context():
+        _seed_the_brief(tenant_headers["X-Tenant-Id"])
+
+    response = client.get(CAREAGENTS_BRIEF_PATH,
+                          headers=_brief_headers(auth_headers))
+    assert response.status_code == 400, (
+        "the URL CareAgents calls now reaches a handler — re-derive this "
+        "section, the brief leak below is no longer latent: "
+        + response.get_data(as_text=True)[:300])
+    body = response.get_json()
+    assert body["resourceType"] == "OperationOutcome", \
+        response.get_data(as_text=True)[:300]
+    assert "not supported" in json.dumps(body).lower(), (
+        "the 400 is not the 'unsupported resource type' one this row names, "
+        "so it is measuring some other failure: "
+        + response.get_data(as_text=True)[:300])
+    assert _markers_in(response.get_data(as_text=True)) == set()
+
+
+def test_the_registered_brief_path_crashes_on_any_stored_resource(
+        client, app, tenant_headers, auth_headers):
+    """CHARACTERIZATION — D2. `_resources_for` reads an attribute that is not
+    there.
+
+    `r6/brief/routes.py:38` returns `r.resource`; `R6Resource` (r6/models.py:33)
+    has `resource_json`, `to_fhir_json()` and no `resource`. One row of any of
+    the four types is enough. TESTING=True propagates the exception, so this
+    asserts the raise rather than a 500 page — a tenant with data gets a 500
+    in production, which is also why no probe here could have caught the
+    redaction gap by driving the endpoint alone.
+    """
+    with app.app_context():
+        _store(_brief_seed()[0], tenant_headers["X-Tenant-Id"])
+
+    with pytest.raises(AttributeError, match="has no attribute 'resource'"):
+        client.get(BRIEF_PATH, headers=_brief_headers(auth_headers))
+
+
+def test_the_brief_answers_for_a_tenant_with_no_records(
+        client, tenant_headers, auth_headers):
+    """The empty-tenant path is the only one that works end to end today.
+
+    It is also the control for D2: the handler, the audit call and the
+    serializer are all fine, so the crash above is the resource read and
+    nothing else.
+    """
+    response = client.get(BRIEF_PATH, headers=_brief_headers(auth_headers))
+    assert response.status_code == 200, response.get_data(as_text=True)[:300]
+    sections = _parsed_sections(response)
+    assert set(sections) == {"problems", "medications", "labs", "care-gaps",
+                             "visits"}, json.dumps(sections)[:300]
+    assert all(rows == [] for rows in sections.values()), \
+        json.dumps(sections)[:300]
+
+
+# --- the leak, with D2 shimmed and D1 routed around ------------------------
+
+@pytest.fixture
+def brief_reachable(app, tenant_headers, monkeypatch):
+    """Supply the one attribute `_resources_for` is missing, seed, and stop.
+
+    The shim is `R6Resource.resource -> to_fhir_json()`: the stored resource
+    with its envelope, which is what every other read path in this codebase
+    starts from and what any plausible fix for D2 will produce. Production
+    `_resources_for` — the line #382 is about — runs unchanged, so the rows
+    below measure the real read, the real engine and the real serializer.
+
+    Requests still go to BRIEF_PATH, the path the route is really registered
+    at, so nothing here depends on D1 being fixed one way or the other.
+    """
+    monkeypatch.setattr(R6Resource, "resource",
+                        property(lambda self: self.to_fhir_json()),
+                        raising=False)
+    with app.app_context():
+        _seed_the_brief(tenant_headers["X-Tenant-Id"])
+
+
+def _get_brief(client, auth_headers):
+    response = client.get(BRIEF_PATH, headers=_brief_headers(auth_headers))
+    assert response.status_code == 200, (
+        "the brief request failed, so every marker assertion against it "
+        "would pass while measuring nothing: "
+        + response.get_data(as_text=True)[:400])
+    return response
+
+
+def test_brief_problems_carry_the_conditions_own_free_text(
+        client, auth_headers, brief_reachable):
+    """LEAK — `Condition.code.text`, then `code.coding[].display`.
+
+    `engine.py::_code_text` (line 41-50) reads `code.text` first and falls
+    back to the first `coding[].display`, and `build_problems` puts the result
+    in `BriefField.label`, which `routes.py::_field_to_dict` serializes into
+    the response. Neither field ever met `apply_redaction` — there is no call
+    to it anywhere under `r6/brief/`.
+
+    Both fixtures are here because which field leaks depends on the feed: the
+    resource carrying `text` leaks the text and NOT its `display`
+    (BRIEF_COND_SHADOWED_MARKER), the one carrying only `display` leaks the
+    display. A fix that covers one field and not the other closes half of it.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    problems = sections["problems"]
+    assert len(problems) == 2, (
+        "the seeded active Conditions did not reach the brief, so the marker "
+        "assertions below prove nothing: " + json.dumps(sections)[:400])
+
+    text = _section_text(sections, "problems")
+    assert COND_TEXT_MARKER in text, "Condition.code.text did not reach the brief"
+    assert COND_DISPLAY_MARKER in text, \
+        "Condition.code.coding[].display did not reach the brief"
+    assert BRIEF_COND_SHADOWED_MARKER not in text, (
+        "_code_text returned BOTH text and display for one resource; this "
+        "row's attribution assumes it returns the first it finds")
+    assert COND_NOTE_MARKER not in text, (
+        "Condition.note reached the brief — the engine renders a fixed field "
+        "set, and a new field in it needs its own row here")
+
+
+def test_brief_medications_carry_the_feeds_name_and_dosage_free_text(
+        client, auth_headers, brief_reachable):
+    """LEAK — `medicationCodeableConcept.text`, `.coding[].display`,
+    `medicationReference.display` (engine.py:96-108) and
+    `dosageInstruction[].text` (engine.py:169-172).
+
+    The dosage line is the one to look at twice: it is the field a feed uses
+    for free-text sig ("take 1 tablet twice daily, per Dr Alvarez, call the
+    office at ..."), it is the brief's `value` rather than its label, and
+    `apply_redaction` strips it outright — so it is both the widest exposure
+    here and the field a redact-only fix silently deletes.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    meds = sections["medications"]
+    assert len(meds) == 3, (
+        "the seeded active MedicationRequests did not reach the brief: "
+        + json.dumps(sections)[:400])
+
+    text = _section_text(sections, "medications")
+    assert MED_TEXT_MARKER in text, "medicationCodeableConcept.text leaked?"
+    assert BRIEF_MED_DISPLAY_MARKER in text, \
+        "medicationCodeableConcept.coding[].display did not reach the brief"
+    assert BRIEF_MED_REF_MARKER in text, \
+        "medicationReference.display did not reach the brief"
+    assert BRIEF_DOSAGE_MARKER in text, \
+        "dosageInstruction[].text did not reach the brief"
+    assert BRIEF_MED_SHADOWED_MARKER not in text, (
+        "_medication_display returned both text and display for one resource")
+
+
+def test_brief_labs_carry_the_feeds_label_and_free_text_value(
+        client, auth_headers, brief_reachable):
+    """LEAK — `Observation.code.text` / `.coding[].display` and `valueString`.
+
+    `valueString` is the free-text result field: a feed that sends a narrative
+    result ("Positive — called patient at home, spoke to her husband") puts it
+    here, and `_obs_value` (engine.py:79-93) returns it verbatim as the
+    brief's value.
+
+    `note[].text` does not survive, and `effectiveDateTime` gets its own row.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    labs = sections["labs"]
+    assert len(labs) == 2, (
+        "the seeded Observations did not reach the brief: "
+        + json.dumps(sections)[:400])
+
+    text = _section_text(sections, "labs")
+    assert OBS_TEXT_MARKER in text, "Observation.code.text did not reach it"
+    assert OBS_DISPLAY_MARKER in text, \
+        "Observation.code.coding[].display did not reach it"
+    assert BRIEF_OBS_VALUE_MARKER in text, \
+        "Observation.valueString did not reach it"
+    assert OBS_NOTE_MARKER not in text, (
+        "Observation.note reached the brief — new field, new row")
+
+
+def test_brief_visits_carry_the_encounter_type_free_text(
+        client, auth_headers, brief_reachable):
+    """LEAK — `Encounter.type[].text` and `.type[].coding[].display`
+    (engine.py:111-126), rendered as "<label> (<date>)".
+
+    Encounter type is where a feed writes the visit reason, and a visit reason
+    is as identifying as a diagnosis.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    assert len(sections["visits"]) == 2, (
+        "the seeded Encounters did not reach the brief: "
+        + json.dumps(sections)[:400])
+
+    text = _section_text(sections, "visits")
+    assert BRIEF_ENC_TEXT_MARKER in text, "Encounter.type[].text did not reach it"
+    assert BRIEF_ENC_DISPLAY_MARKER in text, \
+        "Encounter.type[].coding[].display did not reach it"
+
+
+def test_brief_truncates_effective_date_time_but_does_not_sanitize_it(
+        client, auth_headers, brief_reachable):
+    """CHARACTERIZATION — the bound on `effectiveDateTime` is positional.
+
+    `_effective_display` (engine.py:66-76) returns `dt[:10]`. That is why the
+    marker appended to a real timestamp does NOT arrive — and why the
+    10-character marker seeded as the whole field DOES. The field is echoed,
+    not validated; a feed whose `effectiveDateTime` is not a date gives up its
+    first ten characters. `apply_redaction` does not touch this field either
+    (`_DATE_KEYS`, r6/redaction.py:141-144, does not list it), which is the
+    same finding the SMBP report carries above.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    text = _section_text(sections, "labs")
+    assert "244 mg/dL (2026-01-15)" in text, (
+        "the dated Observation did not render its value+date, so the "
+        "truncation claim below is unmeasured: " + text[:400])
+    assert EFFECTIVE_MARKER not in text, (
+        "the tail of effectiveDateTime survived — truncation to 10 chars is "
+        "the only thing bounding this field")
+    assert BRIEF_DATE_MARKER in text, (
+        "the 10-character effectiveDateTime did not arrive, so this row is "
+        "not measuring the echo it claims to")
+
+
+def test_brief_never_loads_patient_or_allergy_intolerance(
+        client, auth_headers, brief_reachable):
+    """CLEAN, by omission — and the omission is itself worth reading.
+
+    `appointment_brief` (routes.py:108-111) loads four resource types.
+    `Patient` is not one of them (`_care_gap_result` passes `patient=None`),
+    so `Patient.name` cannot reach the brief; `AllergyIntolerance` is not one
+    either, so a seeded allergy is absent — as is any allergies section.
+
+    A pre-appointment brief with no allergy list is a product decision this
+    row does not litigate, but it does record it: the clinician reading this
+    document gets problems, medications, labs and visits, and nothing about
+    what the patient reacts to. Cross-reference the NKA rule in CLAUDE.md —
+    "no known allergies" is never inferred, and an absent section is exactly
+    the kind of silence a reader infers it from.
+    """
+    response = _get_brief(client, auth_headers)
+    sections = _parsed_sections(response)
+    assert "allergies" not in sections, (
+        "the brief grew an allergies section; it needs its own leak row: "
+        + json.dumps(sections)[:400])
+
+    body = response.get_data(as_text=True)
+    assert NAME_MARKER not in body, "Patient.name.family reached the brief"
+    assert SUBJECT_LABEL_MARKER not in body, "Patient.name.text reached the brief"
+    assert ALLERGY_TEXT_MARKER not in body, \
+        "AllergyIntolerance.code.text reached the brief"
+
+
+def test_brief_care_gaps_section_is_always_empty(
+        client, auth_headers, brief_reachable):
+    """CLEAN because it never renders — for two independent reasons.
+
+    Filed as a probe rather than a redaction row because it is why "no marker
+    in care-gaps" proves nothing about redaction: nothing at all is there.
+    The two causes are pinned separately in the next row; either one alone
+    keeps this section empty, so fixing one and shipping would look like
+    progress and change nothing a patient sees.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    assert sections["care-gaps"] == [], (
+        "the care-gaps section populated — it needs a redaction row of its "
+        "own now: " + json.dumps(sections["care-gaps"])[:400])
+
+
+def test_brief_care_gaps_are_empty_for_two_independent_reasons():
+    """The two causes, separately, so neither hides behind the other.
+
+    C1 `_care_gap_result` (routes.py:69-83) calls `evaluate_care_gaps` with
+       `patient=None`. Every rule is age- or sex-gated, so with no
+       demographics all of them come back "indeterminate", and
+       `build_consumer_summary` only emits lines for "due" / "up_to_date".
+       The result is an empty summary before any brief code runs.
+    C2 `build_care_gaps` (engine.py:212-226) then reads `consumer["due"]`.
+       `build_consumer_summary` returns `{"lines": [...], "note": ...}`
+       (r6/caregaps/report.py:43-48) and has no "due" key at all.
+
+    Measured, not argued: the same records with a patient produce 7 due rules.
+    """
+    from r6.brief.engine import build_care_gaps
+    from r6.brief.routes import _care_gap_result
+    from r6.caregaps.evaluate import evaluate_care_gaps
+    from r6.caregaps.report import build_consumer_summary
+
+    conditions = [_marked_condition()]
+    patient = {"resourceType": "Patient", "gender": "female",
+               "birthDate": "1962-03-04"}
+    with_patient = build_consumer_summary(evaluate_care_gaps(
+        patient=patient, conditions=conditions, observations=[],
+        as_of="2026-08-04"))
+    assert len(with_patient["lines"]) > 0, (
+        "the evaluator finds nothing for these records even WITH "
+        "demographics, so this row cannot show what dropping them costs")
+
+    # C1: the brief's own call, with the patient it actually passes.
+    result = _care_gap_result(conditions, [])
+    assert result["consumer"]["lines"] == [], (
+        "patient=None no longer empties the summary — re-derive C1: "
+        + json.dumps(result)[:300])
+
+    # C2: even handed a populated summary, the reader looks for another key.
+    assert build_care_gaps({"consumer": with_patient}) == [], (
+        "build_care_gaps now reads the key build_consumer_summary emits — "
+        "C2 is fixed and this row needs re-deriving")
+
+
+def test_brief_response_carries_exactly_this_marker_set(
+        client, auth_headers, brief_reachable):
+    """Pins the whole boundary, the way the form_fill row does.
+
+    Asserting the set EXACTLY is what makes a future change visible: a new
+    field rendered from an upstream record fails here rather than shipping,
+    and a fix that closes some fields but not others reports precisely which
+    ones are left.
+    """
+    response = _get_brief(client, auth_headers)
+    assert _markers_in(response.get_data(as_text=True)) == {
+        COND_TEXT_MARKER, COND_DISPLAY_MARKER,
+        MED_TEXT_MARKER, BRIEF_MED_DISPLAY_MARKER, BRIEF_MED_REF_MARKER,
+        BRIEF_DOSAGE_MARKER,
+        OBS_TEXT_MARKER, OBS_DISPLAY_MARKER, BRIEF_OBS_VALUE_MARKER,
+        BRIEF_DATE_MARKER,
+        BRIEF_ENC_TEXT_MARKER, BRIEF_ENC_DISPLAY_MARKER,
+    }
+
+
+def test_no_redaction_call_exists_anywhere_under_r6_brief(
+        client, auth_headers, brief_reachable):
+    """Evidence for the "never met apply_redaction" claim, not a restatement.
+
+    The rows above show upstream text arriving; this shows there is no guard
+    to have failed. If a call appears, this row goes red and the section has
+    to be re-measured — which is the point, because a redaction call added in
+    the wrong place (before the terminology re-label) is the #376 shape the
+    projection rows below are about.
+    """
+    import inspect
+    from r6.brief import engine as brief_engine
+    from r6.brief import routes as brief_routes_mod
+    source = (inspect.getsource(brief_routes_mod)
+              + inspect.getsource(brief_engine))
+    assert "apply_redaction" not in source, (
+        "r6/brief/ now calls apply_redaction — re-derive this whole section")
+
+
+# --- the trap: what a redact-only fix would render --------------------------
+
+@pytest.fixture
+def brief_redacted(app, tenant_headers, monkeypatch):
+    """The candidate one-line fix, run for real: redact in `_resources_for`.
+
+    Substituting the whole function (rather than shimming `.resource` as
+    `brief_reachable` does) is deliberate — this fixture is not measuring
+    today's code, it is measuring what the obvious fix produces, so that the
+    "Unknown" question is answered with a response body instead of an
+    argument. Everything downstream — the engine, the serializer, the HTTP
+    boundary and CareAgents' own parser — is real.
+
+    The runtime terminology resolver is forced off: it is opt-in per
+    deployment (`TERMINOLOGY_LOOKUP_ENABLED`), budgeted, and returns None on
+    any failure, so a fix may not depend on it. These rows report what the
+    STATIC table in r6/terminology.py guarantees.
+    """
+    from r6 import terminology_resolver
+    from r6.brief import routes as brief_routes_mod
+    from r6.redaction import apply_redaction
+
+    monkeypatch.setattr(terminology_resolver, "resolve",
+                        lambda system, code: None)
+
+    def _redacting_resources_for(tenant_id, resource_type):
+        rows = (R6Resource.query
+                .filter(R6Resource.tenant_id == tenant_id,
+                        R6Resource.resource_type == resource_type,
+                        R6Resource.is_deleted.is_(False))
+                .all())
+        return [apply_redaction(r.to_fhir_json()) for r in rows]
+
+    monkeypatch.setattr(brief_routes_mod, "_resources_for",
+                        _redacting_resources_for)
+    with app.app_context():
+        _seed_the_brief(tenant_headers["X-Tenant-Id"])
+
+
+def test_redact_only_fix_relabels_the_codes_the_table_knows(
+        client, auth_headers, brief_redacted):
+    """PROJECTION — for codes IN r6/terminology.py, redaction alone is enough.
+
+    `apply_redaction` already calls `label_codings` after stripping
+    (r6/redaction.py:36), so a recognised coding comes back with a
+    server-derived `display` and, because the CodeableConcept has no `text`
+    left, a server-derived `text` too — which is the field `_code_text` reads
+    first. No second call is needed for these.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    labels = {row["label"] for rows in sections.values() for row in rows}
+    assert "High blood pressure (essential hypertension)" in labels, labels
+    assert "Lisinopril" in labels, labels
+    assert "Cholesterol (total)" in labels, labels
+
+
+def test_redact_only_fix_renders_unknown_for_everything_else(
+        client, auth_headers, brief_redacted):
+    """PROJECTION — the #376 shape, measured. This is the answer to "is the
+    fix one line?": no, not on its own.
+
+    For a code the static table does not carry, redaction removes the only
+    label the record had and nothing puts one back, so `_code_text` returns
+    its literal fallback and the clinician reads "Unknown". The same happens
+    to a medication carried as `medicationReference.display` even when its
+    RxNorm code IS known, because `label_codings` labels `coding` arrays and a
+    Reference has none — so `Unknown medication` can appear for a drug the
+    server could have named. Encounters fall back to "Visit".
+
+    How often is "the table does not carry it"? Measured on a live MEDENT
+    import, 2026-08-04 (r6/terminology_resolver.py:12-19): 1 of 15 distinct
+    ICD-10-CM codes and 0 of 11 SNOMED codes had a label — and the static
+    table contains no SNOMED entries at all, which is what
+    `test_the_static_table_has_no_snomed_entries` below pins.
+
+    "Unknown" is indistinguishable from "no data" to the reader, which is the
+    hole #376 is about: a document full of Unknown, handed to a clinician,
+    with nothing saying whether the record was missing or stripped.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    labels = {row["label"] for rows in sections.values() for row in rows}
+    assert "Unknown" in labels, (
+        "the unlabelled Condition/Observation did not fall back to Unknown, "
+        "so this row is not measuring the trap: %s" % labels)
+    assert "Unknown medication" in labels, labels
+    assert any(label.startswith("Visit (") for label in labels), labels
+
+    med_rows = {row["sourceId"]: row["label"]
+                for row in sections["medications"]}
+    assert med_rows["brief-med-ref"] == "Unknown medication", (
+        "a medicationReference.display drug is expected to lose its name "
+        "entirely under a redact-only fix: %s" % med_rows)
+
+
+def test_redact_only_fix_deletes_the_dosage_line(
+        client, auth_headers, brief_redacted):
+    """PROJECTION — redaction strips `dosageInstruction[].text` too.
+
+    `_redact_fields` pops `text` from every non-resource dict
+    (r6/redaction.py:67-70), and a dosageInstruction is one. So every
+    medication row's value becomes the placeholder "See record for dosage" —
+    for all three seeded medications, including the one whose sig was a plain
+    "take one tablet daily" with nothing patient-specific in it.
+
+    A brief that names three drugs and gives no dose for any of them is worse
+    than useless at the appointment it is written for. This is the second half
+    of the "one line or two" question, and it is not answered by relabelling
+    codes: no code table can restore a sig.
+    """
+    sections = _parsed_sections(_get_brief(client, auth_headers))
+    values = {row["value"] for row in sections["medications"]}
+    assert values == {"See record for dosage"}, (
+        "the dosage projection changed; re-derive it: %s" % values)
+
+
+def test_redact_only_fix_does_not_close_the_effective_date_echo(
+        client, auth_headers, brief_redacted):
+    """PROJECTION — one leak survives the redact-only fix.
+
+    `effectiveDateTime` is not in `_FREE_TEXT_KEYS` and not in `_DATE_KEYS`
+    (r6/redaction.py:137-144), so redaction passes it through untouched and
+    the brief still echoes its first ten characters. Whatever else the fix
+    does, this field needs handling of its own.
+    """
+    response = _get_brief(client, auth_headers)
+    assert _markers_in(response.get_data(as_text=True)) == {BRIEF_DATE_MARKER}, (
+        "the redact-only projection's residue changed — re-derive which "
+        "fields survive: %s"
+        % sorted(_markers_in(response.get_data(as_text=True))))
+
+
+def test_the_static_table_has_no_snomed_entries():
+    """The evidence behind "SNOMED-coded records become Unknown".
+
+    `r6/terminology.py` defines the SNOMED system URI and its aliases but has
+    no SNOMED rows, so every SNOMED-coded Condition, AllergyIntolerance and
+    Encounter type is a miss. Pinned as a number rather than a claim, because
+    the fix's cost depends on it: with the resolver off, a SNOMED-coded
+    problem list redacts to a page of "Unknown".
+    """
+    from r6 import terminology
+    snomed = [key for key in terminology._LABELS if key[0] == terminology.SNOMED]
+    assert snomed == [], (
+        "the static table grew SNOMED labels — the Unknown projection above "
+        "is now optimistic and should be re-measured: %s" % snomed[:10])
