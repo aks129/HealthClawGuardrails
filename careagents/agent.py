@@ -357,7 +357,19 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         gaps = hc.care_gaps(tenant)
         consumer = gaps.get("consumer") or {}
         out = {"consumer_summary": consumer}
-        if consumer.get("unevaluated"):
+        if consumer.get("unevaluated") and consumer.get("lines"):
+            # Some rules were decided and some were not (#417). The
+            # could-not-run note below would suppress the real due screenings
+            # in `lines`; no note at all would sell four screenings as the
+            # whole answer. Neither, so the partial case says it is partial.
+            out["note"] = (
+                "This preventive-care answer is PARTIAL: "
+                f"{consumer.get('unevaluated_count')} screening(s) could not "
+                f"be checked — reason: {consumer['unevaluated']}. Report the "
+                "lines you were given AND say, using unevaluated_note, which "
+                "screenings were not checked and why. Do not describe an "
+                "unchecked screening as up to date or as not due.")
+        elif consumer.get("unevaluated"):
             # The check produced no lines because it could not run, not
             # because nothing is outstanding. Those two arrive here looking
             # identical, and the second was being read out to people as the

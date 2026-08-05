@@ -4280,6 +4280,35 @@ def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
     assert "Do NOT tell the person they have no screenings due" in out["note"]
 
 
+def test_care_gaps_partial_result_reports_its_lines_and_says_what_is_missing(
+        cfg, svc):
+    """Some rules decided and some not (#417).
+
+    The could-not-run note tells the model to name no screening from the
+    result. Reused here it would suppress four real due screenings; dropped
+    here it would sell four lines as the whole answer. Neither, so the partial
+    case gets its own instruction.
+
+    MUTATION: fall through to the could-not-run note -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def care_gaps(self, _tenant):
+            return {"summary": {}, "consumer": {
+                "lines": [{"rule_id": "bp-screening", "message": "due"}],
+                "unevaluated": "sex-unavailable", "unevaluated_count": 2,
+                "unevaluated_note": "2 screenings could not be checked"}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
+    assert "PARTIAL" in out["note"]
+    assert "2" in out["note"]
+    assert "Do NOT tell the person they have no screenings due" not in out["note"]
+    assert "do not name or infer any screening" not in out["note"]
+
+
 def test_care_gaps_with_real_findings_carries_no_could_not_run_note(cfg, svc):
     """The note is earned, not boilerplate — a check that ran says nothing
     about having failed."""

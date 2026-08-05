@@ -177,6 +177,37 @@ def test_a_caller_reason_outranks_anything_the_rules_seem_to_say():
     assert "date of birth" not in consumer["unevaluated_note"]
 
 
+def test_a_partial_list_carries_the_marker_alongside_its_lines():
+    """Screenings decided and screenings not decided is not "the screenings".
+
+    The marker was attached only when `lines` came back entirely empty, so a
+    Patient with a birthDate and no gender had the two sex-gated rules dropped
+    with no hint they existed. All-or-nothing is the wrong granularity for a
+    completeness marker.
+
+    MUTATION: guard the marker with `if not lines:` again -> red.
+    """
+    consumer = build_consumer_summary([
+        _result(status="due"),
+        _result(rule_id="flu-immunization", title="Influenza (flu) vaccine",
+                status="due"),
+        _undecided("cervical-screening", "Cervical cancer screening (Pap)",
+                   "sex-unknown"),
+        _undecided("mammography", "Breast cancer screening (mammogram)",
+                   "sex-unknown"),
+    ])
+    assert len(consumer["lines"]) == 2
+    assert consumer["unevaluated"] == "sex-unavailable"
+    assert consumer["unevaluated_count"] == 2
+    assert consumer["unevaluated_titles"] == [
+        "Cervical cancer screening (Pap)",
+        "Breast cancer screening (mammogram)"]
+    # Counted and named — a partial answer has to say how much of it is missing.
+    assert "2 screenings" in consumer["unevaluated_note"]
+    for title in consumer["unevaluated_titles"]:
+        assert title in consumer["unevaluated_note"]
+
+
 def test_one_undecided_rule_reads_as_one():
     consumer = build_consumer_summary(
         [_undecided("mammography", "Breast cancer screening (mammogram)",

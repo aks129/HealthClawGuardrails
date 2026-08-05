@@ -126,9 +126,15 @@
           (r.status || '').replace(/_/g, ' '))}</span></div>
         ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
       </div>`).join('');
-    const lines = (consumer.lines || []).map(l => `<li>${esc(l)}</li>`).join('');
+    // A line is {rule_id, title, message}, not a string. Interpolating the
+    // object renders "[object Object]" — latent only because this box has
+    // never had a populated list to draw (#417).
+    const lines = (consumer.lines || [])
+      .map(l => `<li>${esc(l.message || l)}</li>`).join('');
     const consumerBox = lines ? `
       <div class="consumer"><h3>In plain terms</h3><ul>${lines}</ul>
+        ${consumer.unevaluated_note
+          ? `<div class="note">${esc(consumer.unevaluated_note)}</div>` : ''}
         ${consumer.note ? `<div class="note">${esc(consumer.note)}</div>` : ''}
       </div>` : '';
     contentEl.innerHTML = stats + consumerBox +

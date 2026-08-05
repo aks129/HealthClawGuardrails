@@ -110,6 +110,13 @@ def _unevaluated_marker(results, not_evaluated):
     #381). Same posture as r6/labs/interpret.py `_indeterminate` — say what
     could not be decided rather than emitting a clean result.
 
+    A PARTIAL list is that same defect one size down, and the marker used to
+    be attached only when `lines` came back entirely empty. A Patient with a
+    birthDate and no gender — routine in real feeds — showed four screenings
+    with the two sex-gated ones dropped in silence (#417). All-or-nothing is
+    the wrong granularity for a completeness marker, so it rides on any
+    undecided rule and says how many and which.
+
     A caller reason OUTRANKS the rules' own causes, and that ordering is the
     whole point. When no record reached the engine, every rule reports the
     date of birth as unknown — an artefact of the call, not a fact about the
@@ -143,8 +150,7 @@ def build_consumer_summary(results, not_evaluated=None):
             if line:
                 lines.append(line)
     out = {"lines": lines, "note": _CONSUMER_NOTE}
-    if not lines:
-        marker = _unevaluated_marker(results, not_evaluated)
-        if marker:
-            out.update(marker)
+    marker = _unevaluated_marker(results, not_evaluated)
+    if marker:
+        out.update(marker)
     return out

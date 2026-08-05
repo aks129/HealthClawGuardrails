@@ -1,5 +1,6 @@
 # tests/test_caregaps_routes.py
 import json
+from datetime import date
 
 from r6.models import R6Resource, db
 
@@ -15,12 +16,25 @@ def _store(app, resource, tenant_id):
 
 
 def _seed_patient(app, tenant_id, pid="p1", gender="female", birth="1968-05-01"):
-    _store(app, {"resourceType": "Patient", "id": pid, "gender": gender,
-                 "birthDate": birth}, tenant_id)
+    # gender=None omits the element rather than coding it null — the shape a
+    # real feed sends when sex was never captured.
+    patient = {"resourceType": "Patient", "id": pid, "birthDate": birth}
+    if gender:
+        patient["gender"] = gender
+    _store(app, patient, tenant_id)
     _store(app, {"resourceType": "Observation", "id": f"o-{pid}", "status": "final",
                  "code": {"coding": [{"system": "http://loinc.org", "code": "8480-6"}]},
                  "subject": {"reference": f"Patient/{pid}"},
                  "effectiveDateTime": "2026-03-01"}, tenant_id)
+
+
+def _birth_date_for_age(years):
+    """A birthDate that is `years` old whichever day the suite runs.
+
+    `as_of` is date.today() inside the route, so a hardcoded year would walk
+    a patient across the age bands and change which rules apply.
+    """
+    return f"{date.today().year - years}-01-01"
 
 
 def _resp_param(body, name):
@@ -198,6 +212,43 @@ def test_the_fallback_path_claims_nothing_about_the_persons_record(
     assert "no screenings outstanding" in note
 
 
+def test_a_partial_screening_list_says_how_much_of_it_is_missing(
+        client, app, tenant_id, tenant_headers):
+    """A Patient with a birthDate and no gender — routine in real feeds.
+
+    Four screenings are decided and the two sex-gated ones are not. The marker
+    was attached only when the consumer list was ENTIRELY empty, so four lines
+    shipped as the whole answer and cervical and mammography disappeared
+    without a word (#417).
+
+    Driven with an explicit subject, which is the only shape that reads the
+    Patient today — the fallback path is held behind the clinical gate, and
+    a reason about this record would be false there (see the fallback test
+    above). The defect and its fix are in the consumer summary either way.
+
+    MUTATION: restore `if not lines:` in build_consumer_summary -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-nosex", gender=None,
+                  birth=_birth_date_for_age(50))
+
+    r = client.get("/r6/fhir/Patient/$care-gaps?subject=Patient/p-nosex",
+                   headers=tenant_headers)
+    assert r.status_code == 200
+    consumer = json.loads(
+        _resp_param(r.get_json(), "consumerSummary")["valueString"])
+    assert len(consumer["lines"]) == 4
+    assert consumer["unevaluated"] == "sex-unavailable"
+    assert consumer["unevaluated_count"] == 2
+    assert consumer["unevaluated_titles"] == [
+        "Cervical cancer screening (Pap)",
+        "Breast cancer screening (mammogram)"]
+    # Both named to the person, and the reason claims only what was actually
+    # missing from the record we did read — the birthDate was on file.
+    for title in consumer["unevaluated_titles"]:
+        assert title in consumer["unevaluated_note"]
+    assert "date of birth" not in consumer["unevaluated_note"]
+
+
 # ─────────────────────────────────────────────
 # MCP App page (embedded HTML surface)
 # ─────────────────────────────────────────────
@@ -225,6 +276,25 @@ class TestCareGapsMcpApp:
         import re
         fetches = re.findall(r"fetch\('([^']+)'", body)
         assert fetches == ['/r6/fhir/Patient/$care-gaps']
+
+    def test_plain_terms_list_renders_the_message_not_the_object(self, client):
+        """`consumer.lines` are objects — {rule_id, title, message}.
+
+        The page interpolated the object itself, which renders as
+        "[object Object]". Latent only because this box has never had a
+        populated list to draw; it would surface the moment one worked.
+        String-level assertion — these pages have no JS harness in the Python
+        suite.
+        """
+        body = client.get('/r6/fhir/mcp-apps/care-gaps/').get_data(as_text=True)
+        assert 'esc(l.message' in body
+        assert 'esc(l)' not in body
+
+    def test_plain_terms_list_shows_what_was_not_checked(self, client):
+        """Whatever this box does draw, it must not draw a partial list as a
+        whole one (#417)."""
+        body = client.get('/r6/fhir/mcp-apps/care-gaps/').get_data(as_text=True)
+        assert 'unevaluated_note' in body
 
     def test_no_tenant_renders_empty_shell(self, client):
         resp = client.get('/r6/fhir/mcp-apps/care-gaps/')
