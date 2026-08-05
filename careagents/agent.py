@@ -258,11 +258,17 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                         if isinstance(c, dict) and c.get("code")), None)
             if raw:
                 item["name"] = f"unlabeled record, code {raw}"
-            elif lookup_reason in ("unavailable", "not-attempted"):
+            elif lookup_reason in ("unavailable", "not-attempted",
+                                  "not-a-ref"):
                 # We did not learn anything about this record's coding, so we
                 # say nothing about it. "The source sent free text" below is a
                 # finding; asserting it here would be inventing one — the
                 # defect PR #376 fixed, reached by a different route.
+                #
+                # "not-a-ref" belongs here too: a #contained or urn:uuid:
+                # target is ordinary FHIR that we decline to chase, so we
+                # learn nothing about its coding either. Routing it to the
+                # sentence below was the fourth way into the same falsehood.
                 item["name"] = "a medication I could not look up just now"
                 item["note"] = (
                     "The name is stored behind a reference this turn could "
