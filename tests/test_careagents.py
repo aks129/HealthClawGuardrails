@@ -3683,6 +3683,44 @@ def test_show_lab_timeline_emits_a_card_and_withholds_the_numbers(
     assert "244" not in _json.dumps(out), "the tool handed the model raw values"
 
 
+def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
+        cfg, svc, monkeypatch):
+    """The unresolved state has to survive the last hop to the model, or the
+    engine's honesty is thrown away one call short of the person (#389).
+
+    MUTATION: drop the note branch in _execute_tool -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def care_gaps(self, _tenant):
+            return {"summary": {}, "consumer": {
+                "lines": [], "unevaluated": "no-patient",
+                "unevaluated_note": "nothing was examined"}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
+    assert "no-patient" in out["note"]
+    assert "Do NOT tell the person they have no screenings due" in out["note"]
+
+
+def test_care_gaps_with_real_findings_carries_no_could_not_run_note(cfg, svc):
+    """The note is earned, not boilerplate — a check that ran says nothing
+    about having failed."""
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def care_gaps(self, _tenant):
+            return {"summary": {}, "consumer": {
+                "lines": [{"rule_id": "bp-screening", "message": "due"}]}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
+    assert "note" not in out
+
+
 def test_show_lab_timeline_with_no_match_emits_no_card_and_forbids_absence(
         cfg, svc, monkeypatch):
     """MUTATION: emit a card over an empty series -> red (an empty chart reads

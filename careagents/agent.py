@@ -355,7 +355,20 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         })
     if name == "get_care_gaps":
         gaps = hc.care_gaps(tenant)
-        return json.dumps({"consumer_summary": gaps["consumer"]})
+        consumer = gaps.get("consumer") or {}
+        out = {"consumer_summary": consumer}
+        if consumer.get("unevaluated"):
+            # The check produced no lines because it could not run, not
+            # because nothing is outstanding. Those two arrive here looking
+            # identical, and the second was being read out to people as the
+            # first on the busiest button in the product (#389).
+            out["note"] = (
+                "The preventive-care check did not reach a verdict — reason: "
+                f"{consumer['unevaluated']}. Say that plainly, using "
+                "unevaluated_note. Do NOT tell the person they have no "
+                "screenings due, and do not name or infer any screening from "
+                "this result.")
+        return json.dumps(out)
     if name == "search_records":
         rt = args.get("resource_type") or "Condition"
         return json.dumps(_summarize_bundle(
