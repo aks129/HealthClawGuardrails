@@ -1018,6 +1018,13 @@ def create_app(config: Config | None = None,
     # failure mode here, because nothing was.
     _REVIEW_UNCHECKABLE = ("We couldn't check this form right now. Nothing "
                            "has been approved — please try again in a moment.")
+    #: Distinct from the above: the review was SENT and the engine never
+    #: answered, so whether the decisions were recorded is unknown. What is
+    #: known is that the approval step below was never reached.
+    _REVIEW_UNSUBMITTED = ("We couldn't confirm your review reached your "
+                           "records. Nothing has been approved — please open "
+                           "the form again to check before approving, because "
+                           "approving twice could send it twice.")
 
     @app.get("/review/<agent_id>/<action_id>")
     @login_required
@@ -1030,8 +1037,26 @@ def create_app(config: Config | None = None,
         if not tenant:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
-        status, html = hc.fetch_review_page(tenant, action_id)
+        try:
+            status, html = hc.fetch_review_page(tenant, action_id)
+        except HealthClawError:
+            # A dead socket reached Flask as a 500 before this: no statement
+            # about the form, on the approval gate.
+            logger.exception("review fetch failed for %s", action_id)
+            return render_template("chat_error.html",
+                                   message=_REVIEW_UNCHECKABLE), 503
         if status != 200:
+            # Only the engine's own 4xx is an answer about this form. A 5xx,
+            # 408 or 429 is a gateway speaking for an engine that said
+            # nothing, and "no longer awaiting review" would be a claim about
+            # state this branch never observed — the #416 shape, one route
+            # over. A patient with a live pending request must not be told it
+            # is gone because a proxy timed out.
+            if not HealthClawClient._upstream_answered(status):
+                logger.warning("review fetch unanswered (%s) for %s",
+                               status, action_id)
+                return render_template("chat_error.html",
+                                       message=_REVIEW_UNCHECKABLE), 503
             return render_template(
                 "chat_error.html",
                 message="This form is no longer awaiting review."), 404
@@ -1050,7 +1075,30 @@ def create_app(config: Config | None = None,
         if not tenant:
             return jsonify({"error": "not yours"}), 404
         decisions = request.get_json(silent=True) or dict(request.form)
-        status, body = hc.submit_review(tenant, action_id, decisions)
+        try:
+            status, body = hc.submit_review(tenant, action_id, decisions)
+        except HealthClawError:
+            # The decisions are gone and nobody told the patient. Ownership
+            # was already confirmed, so this is not a permission answer.
+            logger.exception("review submit failed for %s", action_id)
+            return jsonify({
+                "error": "review_unavailable",
+                "confirmed": False,
+                "message": _REVIEW_UNSUBMITTED,
+            }), 503
+        if status and not HealthClawClient._upstream_answered(status) \
+                and status != 200:
+            # The engine never answered, so we cannot say the review was
+            # saved. We CAN say nothing was approved: confirm_action is only
+            # reached on a 200 below, and that is the half that keeps a
+            # second approval from sending the request twice.
+            logger.warning("review submit unanswered (%s) for %s",
+                           status, action_id)
+            return jsonify({
+                "error": "review_unavailable",
+                "confirmed": False,
+                "message": _REVIEW_UNSUBMITTED,
+            }), 503
         if status == 200:
             try:
                 hc.confirm_action(tenant, action_id)

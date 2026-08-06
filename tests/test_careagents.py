@@ -3596,6 +3596,127 @@ def test_a_review_we_could_not_check_is_never_reported_as_not_yours(
     assert posted.get_json().get("confirmed") is not True
 
 
+def test_a_gateway_504_never_says_the_form_is_no_longer_awaiting_review(
+        cfg, svc, monkeypatch):
+    """The #416 posture, applied to the review page itself.
+
+    `_agent_owns_action` learned this three lines earlier (#410): an outage
+    is not an answer about ownership. The very next branch had not. Any
+    non-200 from the review fetch — including a 502/503/504 the gateway
+    wrote on the engine's behalf, having learned nothing about the form —
+    was rendered as "This form is no longer awaiting review." with a 404.
+
+    That is a claim about state, made by a branch that observed no state, on
+    the human-approval gate this product exists to guarantee. A patient with
+    a live pending prescription request is told it is gone.
+
+    A 4xx from the engine is still an answer and must still read as gone
+    (pinned below). 5xx/408/429 must not.
+
+    MUTATION: restore the flat `if status != 200` -> red on the 504 case.
+    Ran it, saw red.
+    """
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    fake.fetch_review_page = lambda tenant, action_id: (504, "gateway timeout")
+    page = c.get(f"/review/{agent}/act-1")
+    body = page.get_data(as_text=True)
+    assert page.status_code == 503, "a gateway timeout is not a verdict"
+    assert "no longer awaiting review" not in body
+    assert "Nothing has been approved" in body
+
+    # The engine's own answer still means what it says.
+    fake.fetch_review_page = lambda tenant, action_id: (404, "gone")
+    gone = c.get(f"/review/{agent}/act-1")
+    assert gone.status_code == 404
+    assert "no longer awaiting review" in gone.get_data(as_text=True)
+
+
+def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(
+        cfg, svc, monkeypatch):
+    """`fetch_review_page` and `submit_review` raise; nothing caught them.
+
+    careagents registers no errorhandler for HealthClawError (there is not
+    one in the whole package), so a transport failure on either verb reached
+    Flask as a 500. On the submit verb that is worse than ugly: the patient's
+    approval decisions are gone with no statement about what happened to
+    them, after ownership was already confirmed.
+
+    MUTATION: drop the try/except around either call -> red with a 500.
+    Ran it, saw red.
+    """
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    fake.fetch_review_page = _unreachable
+    page = c.get(f"/review/{agent}/act-1")
+    assert page.status_code == 503, "a dead socket is not a 500 here"
+    assert "Nothing has been approved" in page.get_data(as_text=True)
+
+    fake.submit_review = _unreachable
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 503
+    assert posted.get_json().get("confirmed") is not True
+    assert "Nothing has been approved" in posted.get_json()["message"]
+
+
+def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
+        cfg, svc, monkeypatch):
+    """The engine never answered, so neither may we.
+
+    A 5xx here was passed straight through as the response status with the
+    engine's body, which tells the patient nothing about whether their
+    decisions were recorded. What we DO know is that `confirm_action` is
+    only reached on a 200, so nothing was approved — that half is sayable,
+    and it is the half that stops a second approval sending twice.
+
+    MUTATION: return `jsonify(body), status` unconditionally -> red.
+    Ran it, saw red.
+    """
+    from careagents.app import create_app
+
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    fake.submit_review = lambda t, a, d: (502, {"error": "bad gateway"})
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 503
+    payload = posted.get_json()
+    assert payload.get("confirmed") is not True
+    assert "Nothing has been approved" in payload["message"]
+
+    # A 422 is the engine's own answer — attestation missing — and must
+    # still reach the patient as the engine's answer, unchanged.
+    fake.submit_review = FakeClient.submit_review.__get__(fake, FakeClient)
+    refused = c.post(f"/review/{agent}/act-1/submit", json={"med-0": "yes"})
+    assert refused.status_code == 422
+
+
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
         cfg, svc, monkeypatch):
     """"Unknown run" and "unknown form" are claims about what exists (#410).
