@@ -259,3 +259,150 @@ def test_the_failure_text_has_exactly_one_home():
     assert owners == ["agent.py"], (
         f"patient-facing failure text is defined in {owners}; only agent.py "
         "may own it — import GENERIC_FAILURE_TEXT instead")
+
+
+# --- the call must not outlive the run waiting for it ----------------------
+#
+# A run holds a lease (60s) and a hard deadline (120s). The deadline is only
+# checked BETWEEN calls (careagents/worker.py), and nothing cancels a call in
+# flight, so any budget larger than the deadline is a worker slot pinned to a
+# run that is already dead.
+
+class _DeadlineCfg(_Cfg):
+    run_deadline_seconds = 120
+
+
+def test_the_openai_budget_fits_inside_the_run_deadline(monkeypatch, slept):
+    """MUTATION: drop the per-attempt timeout back to a flat 90 -> red.
+
+    3 attempts x 90s = 270s against a 120s deadline: the run is abandoned at
+    120 and the slot stays busy for another two and a half minutes. Ran it,
+    saw red.
+    """
+    seen: list[float] = []
+
+    def post(*_args, **kwargs):
+        seen.append(kwargs["timeout"])
+        return _Resp(200)
+
+    monkeypatch.setattr(llm.requests, "post", post)
+    llm.complete(_DeadlineCfg(), "sys", [{"role": "user", "content": "hi"}], [])
+
+    assert seen, "no call was made"
+    budget = seen[0] * llm.MAX_ATTEMPTS + llm.MAX_BACKOFF_SECONDS * (
+        llm.MAX_ATTEMPTS - 1)
+    assert budget <= _DeadlineCfg.run_deadline_seconds, (
+        f"worst-case model budget {budget}s exceeds the "
+        f"{_DeadlineCfg.run_deadline_seconds}s run deadline")
+
+
+def test_a_config_without_a_deadline_still_gets_a_bounded_timeout(
+        monkeypatch, slept):
+    """Config objects in the wild may predate the field; never fall back to
+    the library default, which is unbounded in practice.
+
+    MUTATION: return None when the attribute is missing -> red.
+    """
+    seen: list[float] = []
+
+    def post(*_args, **kwargs):
+        seen.append(kwargs["timeout"])
+        return _Resp(200)
+
+    monkeypatch.setattr(llm.requests, "post", post)
+    llm.complete(_Cfg(), "sys", [{"role": "user", "content": "hi"}], [])
+    assert seen and 0 < seen[0] <= 90
+
+
+def test_the_anthropic_client_is_given_an_explicit_budget(monkeypatch):
+    """The SDK default is 600s with 2 internal retries — 30 minutes of a
+    worker slot for a run that is abandoned at 120 seconds. Nothing here
+    cancels an in-flight call, so the budget IS the exposure.
+
+    MUTATION: construct Anthropic() without timeout/max_retries -> red.
+    Ran it, saw red.
+    """
+    captured: dict = {}
+
+    class _Messages:
+        def create(self, **_kw):
+            raise AssertionError("not reached")
+
+    class _Client:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.messages = _Messages()
+
+    fake_sdk = types.SimpleNamespace(
+        Anthropic=_Client, APIError=Exception,
+        NOT_GIVEN=None)
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_sdk)
+
+    class _ACfg:
+        provider = "anthropic"
+        anthropic_api_key = "k"
+        anthropic_model = "m"
+        anthropic_oauth_token = ""
+        run_deadline_seconds = 120
+
+    with pytest.raises(Exception):
+        llm.complete(_ACfg(), "sys", [{"role": "user", "content": "hi"}], [])
+
+    assert "timeout" in captured, "the client was built without a timeout"
+    assert "max_retries" in captured, "retries were left to the SDK default"
+    budget = captured["timeout"] * (1 + captured["max_retries"])
+    assert budget <= 120, f"worst-case Anthropic budget {budget}s exceeds 120s"
+
+
+# --- one heartbeat blip is not a lost lease -------------------------------
+
+class _FlakyHC:
+    """Fails the first N heartbeats, then succeeds."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        self.calls = 0
+
+    def heartbeat_agent_run(self, *_args, **_kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise worker.HealthClawError("heartbeat failed", 0)
+        return {"cancel_requested": False}
+
+
+def _beat(hc, times=1):
+    """Drive LeaseHeartbeat._loop's body without the thread or the sleep."""
+    hb = worker.LeaseHeartbeat(hc, "run-1", "w-1", lease_seconds=60)
+    for _ in range(times):
+        if hb.lost:
+            break
+        hb._beat_once()
+    return hb
+
+
+def test_a_single_failed_heartbeat_does_not_abandon_the_run():
+    """One 25s blip on a 20s interval aborted a turn the model may already
+    have answered, and the patient read "something went wrong on our side".
+
+    Recovery cost up to a full 60s lease expiry inside a 120s deadline, so the
+    run usually died rather than being retried.
+
+    MUTATION: set self.lost on the first failure -> red. Ran it, saw red.
+    """
+    hc = _FlakyHC(failures=1)
+    hb = _beat(hc, times=2)
+    assert hb.lost is False, "one failure ended the run"
+    assert hc.calls == 2, "the heartbeat did not try again"
+
+
+def test_consecutive_failures_still_lose_the_lease():
+    """The tolerance must not become "never give up".
+
+    If the engine is genuinely gone the run has to stop, or the worker keeps
+    a slot busy for a lease nobody is honouring.
+
+    MUTATION: never set self.lost -> red.
+    """
+    hc = _FlakyHC(failures=99)
+    hb = _beat(hc, times=4)
+    assert hb.lost is True, "the lease was never given up"

@@ -68,6 +68,36 @@ MAX_ATTEMPTS = 3
 BACKOFF_BASE_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 8.0
 
+#: The Anthropic SDK retries 429/5xx itself; this is that count made explicit
+#: so the timeout below can be divided by it.
+_ANTHROPIC_MAX_RETRIES = 2
+
+
+#: Used when a Config predates `run_deadline_seconds`. Never fall through to a
+#: library default: the Anthropic SDK's is 600 seconds, which is five times the
+#: deadline the run is measured against.
+_FALLBACK_DEADLINE_SECONDS = 120.0
+
+#: Leave the run somewhere to land. The deadline is checked BETWEEN calls
+#: (careagents/worker.py) and nothing cancels a call in flight, so a model
+#: budget equal to the deadline guarantees the check happens after it has
+#: already passed.
+_DEADLINE_SHARE = 0.75
+
+
+def _attempt_timeout(cfg, attempts: int) -> float:
+    """Seconds one model call may take, so `attempts` of them still fit.
+
+    The run holds a lease and a hard deadline while this is in flight. A
+    budget larger than the deadline does not make the call succeed; it pins a
+    worker slot to a run that has already been abandoned, which is how one
+    slow provider turns into no capacity at all.
+    """
+    deadline = float(getattr(cfg, "run_deadline_seconds", 0)
+                     or _FALLBACK_DEADLINE_SECONDS)
+    backoff = MAX_BACKOFF_SECONDS * max(0, attempts - 1)
+    return max(5.0, (deadline * _DEADLINE_SHARE - backoff) / attempts)
+
 
 def _retry_delay(attempt: int, retry_after: str | None) -> float:
     """Seconds to wait before attempt N+1. Honours Retry-After when sane."""
@@ -96,15 +126,24 @@ def complete(cfg, system: str, messages: list[dict], tools: list[dict]) -> LLMTu
 def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     import anthropic
 
+    # The SDK defaults to a 600s timeout and 2 internal retries — up to half an
+    # hour of a worker slot for a run abandoned at 120 seconds. Nothing here
+    # cancels an in-flight call, so this budget IS the exposure. Both are set
+    # explicitly; the retries stay, because the SDK is the only thing that can
+    # retry an Anthropic call, but they now fit inside the deadline.
+    _budget = {"timeout": _attempt_timeout(cfg, 1 + _ANTHROPIC_MAX_RETRIES),
+               "max_retries": _ANTHROPIC_MAX_RETRIES}
+
     # An OAuth access token (Claude subscription / OpenClaw) authenticates as a
     # Bearer token with the oauth beta header, instead of an x-api-key. The
     # token is short-lived — refresh it out of band when it expires.
     if getattr(cfg, "anthropic_oauth_token", ""):
         client = anthropic.Anthropic(
             auth_token=cfg.anthropic_oauth_token,
-            default_headers={"anthropic-beta": cfg.anthropic_oauth_beta})
+            default_headers={"anthropic-beta": cfg.anthropic_oauth_beta},
+            **_budget)
     else:
-        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key, **_budget)
     a_tools = [{"name": t["name"], "description": t["description"],
                 "input_schema": t["parameters"]} for t in tools]
     a_messages = _to_anthropic_messages(messages)
@@ -190,7 +229,7 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
                 # internal reasoning before the visible answer.
                 json={"model": cfg.openai_model, "messages": o_messages,
                       "tools": o_tools, "max_tokens": 4000},
-                timeout=90)
+                timeout=_attempt_timeout(cfg, MAX_ATTEMPTS))
         except requests.RequestException as exc:
             # Previously uncaught: a connection reset or read timeout escaped
             # as a raw requests exception rather than an LLMError, so the
