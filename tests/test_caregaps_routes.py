@@ -236,17 +236,31 @@ def test_a_partial_screening_list_says_how_much_of_it_is_missing(
     assert r.status_code == 200
     consumer = json.loads(
         _resp_param(r.get_json(), "consumerSummary")["valueString"])
-    assert len(consumer["lines"]) == 4
-    assert consumer["unevaluated"] == "sex-unavailable"
-    assert consumer["unevaluated_count"] == 2
+    # PIN MOVED with #425, in the PR that moved it. Colorectal screening used
+    # to be decided here and reported "due"; it is now undecided, because this
+    # check reads only colonoscopy and sigmoidoscopy procedures and a patient
+    # on annual FIT would have matched nothing. So the decided list drops from
+    # four to three and a third screening joins the undecided set — for a
+    # different reason than the other two.
+    assert len(consumer["lines"]) == 3
+    assert consumer["unevaluated_count"] == 3
     assert consumer["unevaluated_titles"] == [
+        "Colorectal cancer screening",
         "Cervical cancer screening (Pap)",
         "Breast cancer screening (mammogram)"]
-    # Both named to the person, and the reason claims only what was actually
-    # missing from the record we did read — the birthDate was on file.
+
+    # The two causes stay apart. "Your sex was not recorded" is true of the
+    # sex-gated pair and false of colorectal, which failed for our reason and
+    # not the record's — borrowing one reason for both is #417 with a
+    # different subject.
+    assert consumer["unevaluated"] == "partly-unchecked"
+    note = consumer["unevaluated_note"]
     for title in consumer["unevaluated_titles"]:
-        assert title in consumer["unevaluated_note"]
-    assert "date of birth" not in consumer["unevaluated_note"]
+        assert title in note
+    assert "sex was not recorded" in note
+    assert "does not yet read" in note and "stool-based" in note
+    # Still nothing about a birthDate that was on file.
+    assert "date of birth" not in note
 
 
 # ─────────────────────────────────────────────

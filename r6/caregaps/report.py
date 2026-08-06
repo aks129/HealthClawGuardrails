@@ -101,6 +101,28 @@ def _demographics_marker(undecided, titles):
         f"a finding that {pronoun} up to date.")
 
 
+#: A rule that could not decide because WE do not read all the evidence that
+#: satisfies it — not because the record was missing anything (#425). Kept
+#: apart from the demographic causes on purpose: "your sex was not recorded"
+#: is a statement about the person, and applying it to a screening that failed
+#: for our own reason is the #417 defect with a different subject.
+_COVERAGE_CAUSE = "evidence-not-read"
+
+
+def _coverage_marker(undecided, titles):
+    """Reason + prose for rules this check knowingly cannot fully read."""
+    evidence = sorted({r["unread_evidence"] for r in undecided
+                       if r.get("unread_evidence")})
+    n = len(undecided)
+    noun, pronoun = ("screening", "it is") if n == 1 else ("screenings", "they are")
+    named = f": {_name_all(titles)}" if titles else ""
+    what = _name_all(evidence) if evidence else "every test that can satisfy them"
+    return _COVERAGE_CAUSE, (
+        f"{n} {noun} could not be checked because this check does not yet read "
+        f"{what}{named}. That is a limit on the check and not a finding that "
+        f"{pronoun} up to date.")
+
+
 def _unevaluated_marker(results, not_evaluated):
     """What was not evaluated and why, or None when the answer is whole.
 
@@ -132,7 +154,25 @@ def _unevaluated_marker(results, not_evaluated):
     if not_evaluated:
         reason, note = not_evaluated, _NOT_EVALUATED_NOTES[not_evaluated]
     else:
-        reason, note = _demographics_marker(undecided, titles)
+        # Two kinds of undecided, and they must not borrow each other's
+        # reason. The record failed to say something, or this check failed to
+        # read something. Reporting a coverage gap as "your sex was not
+        # recorded" would be false about the person; reporting a demographic
+        # gap as a coverage limit would excuse us from a real one.
+        coverage = [r for r in undecided
+                    if r.get("indeterminate_reason") == _COVERAGE_CAUSE]
+        record = [r for r in undecided if r not in coverage]
+        if coverage and record:
+            _, record_note = _demographics_marker(
+                record, [r["title"] for r in record if r.get("title")])
+            _, coverage_note = _coverage_marker(
+                coverage, [r["title"] for r in coverage if r.get("title")])
+            reason = "partly-unchecked"
+            note = f"{record_note} {coverage_note}"
+        elif coverage:
+            reason, note = _coverage_marker(coverage, titles)
+        else:
+            reason, note = _demographics_marker(record, titles)
     return {"unevaluated": reason, "unevaluated_count": len(undecided),
             "unevaluated_titles": titles, "unevaluated_note": note}
 
