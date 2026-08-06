@@ -37,6 +37,13 @@
       {% endif %}
     </div>
     {% endif %}
+    {% if history_lost %}
+    {# An outage rendered as an empty conversation, so a returning patient was
+       greeted as a stranger. Say what happened instead of showing a blank
+       slate that looks like a fact about them. #}
+    <div class="chat-resumed">We could not load your earlier messages just now.
+      Nothing has been lost — try refreshing in a moment.</div>
+    {% endif %}
     {% if past %}
     {# Returning: replay what was actually said rather than greeting them as a
        stranger. The starters are for someone who hasn't asked anything yet. #}

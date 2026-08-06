@@ -485,23 +485,30 @@ def test_a_lost_approval_mint_is_a_refusal_and_not_silence(stub_base,
 
 def test_history_loss_is_not_the_same_value_as_an_empty_history(stub_base,
                                                                 reset_mode):
-    """`recent_messages` returns [] both for "this is a new conversation" and
-    for "HealthClaw is unreachable", so the agent silently answers with no
-    history instead of saying it lost the thread.
+    """PIN FLIPPED (E3). This test used to assert the collapse and invited
+    exactly this change: "if this changed, the collapse was fixed and this
+    test should assert the new distinction instead".
 
-    Not raised as a blocking defect: it logs, and answering without history
-    beats failing the turn. Pinned so the collapse is a decision on the
-    record rather than an accident.
+    [] meant both "this is a new conversation" and "HealthClaw is
+    unreachable". The earlier note reasoned that answering without history
+    beats failing the turn — true for the web tier, and wrong for the worker,
+    which builds the agent's context from this and so answered with amnesia
+    while saying nothing about it. The web tier had its own version: every
+    return visit during an outage rendered as a first visit.
+
+    MUTATION: return [] for the 503 again -> red. Ran it, saw red.
     """
-    _set(status=503, body=b'{"error": "down"}')
-    outage = _client(stub_base).recent_messages("t")
-
     _set(status=200, body=b"[]")
-    empty = _client(stub_base).recent_messages("t")
+    assert _client(stub_base).recent_messages("t") == [], (
+        "an engine that answered with no rows still means no rows")
 
-    assert outage == empty == [], (
-        "pinned as today's behaviour — if this changed, the collapse was "
-        "fixed and this test should assert the new distinction instead")
+    for status in (500, 502, 503, 504, 408, 429):
+        _set(status=status, body=b'{"error": "down"}')
+        with pytest.raises(HealthClawError):
+            _client(stub_base).recent_messages("t")
+
+    with pytest.raises(HealthClawError):
+        _client(DEAD_BASE).recent_messages("t")
 
 
 def test_a_lost_chat_turn_is_reported_to_the_caller(stub_base, reset_mode):
@@ -528,20 +535,34 @@ def test_an_unclaimable_inbound_message_is_never_reported_as_claimed(
 
 def test_a_missing_brief_and_an_unreachable_engine_are_both_unavailable(
         stub_base, reset_mode):
-    """`fetch_appointment_brief` is documented as None-on-any-failure and the
-    callers render "brief unavailable", which is true of both states. Pinned
-    because the docstring's promise — never raise to the UI — is the part
-    that must not regress."""
+    """PIN FLIPPED (E3). They are not both "unavailable" to the reader.
+
+    The template renders None as "Not available from your connected records"
+    — a statement about the patient's records, made during an outage that
+    read none of them. The same page already gets this right one section
+    down, where the screening review requires an explicit "ok" (#381).
+
+    404 is the engine answering that there is no brief, and still returns
+    None. Everything else raises, and the route renders "we could not reach
+    your records" instead.
+
+    MUTATION: return None for the 503 again -> red. Ran it, saw red.
+    """
     _set(status=404, body=b'{"error": "no brief"}')
-    assert _client(stub_base).fetch_appointment_brief("t") is None
+    assert _client(stub_base).fetch_appointment_brief("t") is None, (
+        "the engine answered: there is no brief")
 
-    _set(status=503, body=b'{"error": "down"}')
-    assert _client(stub_base).fetch_appointment_brief("t") is None
+    for status in (500, 502, 503, 504):
+        _set(status=status, body=b'{"error": "down"}')
+        with pytest.raises(HealthClawError):
+            _client(stub_base).fetch_appointment_brief("t")
 
-    assert _client(DEAD_BASE).fetch_appointment_brief("t") is None
+    with pytest.raises(HealthClawError):
+        _client(DEAD_BASE).fetch_appointment_brief("t")
 
     _set(delay=SLOW_ENOUGH_TO_TIME_OUT)
-    assert _client(stub_base).fetch_appointment_brief("t") is None
+    with pytest.raises(HealthClawError):
+        _client(stub_base).fetch_appointment_brief("t")
 
 
 def test_the_brief_returns_a_resource_or_none_and_never_a_bare_string(
@@ -557,11 +578,21 @@ def test_the_brief_returns_a_resource_or_none_and_never_a_bare_string(
     which is why the type check and not the wrapping is what turns this
     green.
 
+    PIN NARROWED (E3): the contract is now dict, or None when the engine said
+    there is no brief, or a raise. A malformed 200 raises rather than
+    returning None, because it means we did not learn whether a brief exists
+    — the same fact as an unreachable engine, and the caller now has somewhere
+    to put that. What the test is for is unchanged: a wrong shape must never
+    reach the renderer.
+
     MUTATION: return `r.json()` here instead of `self._json_object(...)` ->
     red, with `'just-a-string'` returned. Ran it, saw red.
     """
     _set(status=200, body=b'"just-a-string"')
-    got = _client(stub_base).fetch_appointment_brief("t")
+    try:
+        got = _client(stub_base).fetch_appointment_brief("t")
+    except HealthClawError:
+        got = None
     assert got is None or isinstance(got, dict), repr(got)
 
 
