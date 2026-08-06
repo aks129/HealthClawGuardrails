@@ -655,7 +655,11 @@ def update_resource(resource_type, resource_id):
     if too_deep:
         return _operation_outcome('error', 'invalid',
                                   'Request body nesting is too deep'), 400
-    if not body:
+    # isinstance, not truthiness: `[1]`, `42` and `"a string"` are truthy and
+    # lack .get(), so a bare `if not body` let them through to an
+    # AttributeError and a 500. Create got this in #331; update kept the old
+    # shape, and the two guards sat 190 lines apart looking equivalent.
+    if not isinstance(body, dict):
         return _operation_outcome('error', 'invalid', 'Request body must be valid JSON'), 400
 
     # Validate resourceType matches URL
