@@ -110,23 +110,18 @@ def register_caregaps_routes(blueprint, deps):
         not_evaluated = (state if state in ("no-patient", "ambiguous-patient")
                          else None)
 
-        # `supplied`, NOT `subject`. Feeding the evaluator the Patient the
-        # fallback just resolved makes every age-gated rule resolve, which
-        # changes WHICH screenings a person is told they are due for. That is
-        # clinical output and it is the second half of #389, gated on CTO
-        # sign-off and Dr. Magan's review — deliberately not this change.
-        # Until then age stays unknown on the fallback path, those rules stay
-        # `indeterminate`, and the consumer summary says why it is empty
-        # instead of reading as "nothing due".
-        patient = _patient_for(supplied, tenant_id)
+        # `subject`, NOT `supplied` — the Patient the fallback resolved is the
+        # Patient we evaluate. #389 half two, released by Dr. Magan's ruling
+        # on the cadence table.
+        patient = _patient_for(subject, tenant_id)
 
-        # No Patient reached the evaluator, so every rule comes back
-        # indeterminate for a reason that has nothing to do with this person's
-        # record — the engine reports the date of birth as unknown because it
-        # was never given one. Passed through, that became "Your date of birth
-        # and sex were not available to this check" for a record holding both
-        # (#417). While we are not looking at someone's demographics, the only
-        # honest reason is our own limitation.
+        # `check-incomplete` (#417) covered the window in which a resolved
+        # Patient was held back from the evaluator: every rule reported the
+        # date of birth as unknown because the engine was never given one, and
+        # no reason about this person's demographics could be true. The
+        # evaluator now sees the record, so the engine's own causes ARE about
+        # the record and say what is missing from it. A subject naming a row
+        # we do not hold still reads nothing, and still says so.
         if not_evaluated is None and patient is None:
             not_evaluated = "check-incomplete"
 
