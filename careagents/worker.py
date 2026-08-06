@@ -66,6 +66,12 @@ def _error_class(exc: Exception) -> str:
 _failure_text = agent_failure_text
 
 
+#: Consecutive heartbeat failures before the lease is given up. The interval
+#: is a third of the lease, so two misses still leave a third of it to
+#: recover in; one miss ending the run was the whole of the defect.
+_HEARTBEAT_MAX_MISSES = 3
+
+
 class LeaseHeartbeat:
     """Refresh one run lease independently of blocking provider calls."""
 
@@ -77,6 +83,7 @@ class LeaseHeartbeat:
         self.lease_seconds = lease_seconds
         self.cancel_requested = False
         self.lost = False
+        self._misses = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name=f"lease-{run_id[:8]}", daemon=True)
@@ -94,17 +101,40 @@ class LeaseHeartbeat:
         if self.lost:
             raise HealthClawError("worker lease was lost", 409)
 
+    def _beat_once(self) -> None:
+        """One heartbeat. Gives the lease up only after repeated failures.
+
+        A single failure used to end the run. The interval is a third of the
+        lease, so one blip shorter than the remaining two thirds costs
+        nothing — while abandoning the turn cost the patient an answer the
+        model may already have produced, reported as "something went wrong on
+        our side". Recovery then waited out the full lease inside a shorter
+        deadline, so the run usually died rather than being retried.
+
+        Consecutive failures still lose it: if the engine is genuinely gone,
+        holding a slot for a lease nobody is honouring helps no one.
+        """
+        try:
+            result = self.hc.heartbeat_agent_run(
+                self.run_id, self.worker_id, self.lease_seconds)
+        except HealthClawError as exc:
+            self._misses += 1
+            logger.warning("heartbeat %d/%d failed for run %s: %s",
+                           self._misses, _HEARTBEAT_MAX_MISSES,
+                           self.run_id, exc)
+            if self._misses >= _HEARTBEAT_MAX_MISSES:
+                logger.error("lease lost for run %s after %d misses",
+                             self.run_id, self._misses)
+                self.lost = True
+            return
+        self._misses = 0
+        self.cancel_requested = bool(result.get("cancel_requested"))
+
     def _loop(self) -> None:
         interval = max(2.0, self.lease_seconds / 3)
         while not self._stop.wait(interval):
-            try:
-                result = self.hc.heartbeat_agent_run(
-                    self.run_id, self.worker_id, self.lease_seconds)
-                self.cancel_requested = bool(result.get("cancel_requested"))
-            except HealthClawError as exc:
-                logger.error("heartbeat failed for run %s: %s",
-                             self.run_id, exc)
-                self.lost = True
+            self._beat_once()
+            if self.lost:
                 return
 
 
