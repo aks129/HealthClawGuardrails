@@ -72,6 +72,14 @@ CARE_GAP_RULES = [
         "cadence_months": 120,  # colonoscopy interval (conservative upper bound)
         "satisfied_by": {"resource": "Procedure",
                          "codes": {"45378", "45380", "45385", "44388", "45330"}},
+        # USPSTF accepts stool-based screening on its own schedule — FIT
+        # annually, FIT-DNA every 1-3 years — and those arrive as lab
+        # Observations, not Procedures. This rule reads neither, so an absent
+        # colonoscopy is not evidence of an absent screening (#425). Until
+        # the modalities are modelled, say what we did not read instead of
+        # calling the patient due. Removing this line does not add coverage;
+        # it only stops the disclosure.
+        "unread_evidence": "stool-based tests (FIT or Cologuard)",
         "source": "uspstf",
         "related_ecqm": "CMS130",
     },
@@ -260,6 +268,18 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
             results.append({**base, "applicable": True, "status": "up_to_date",
                             "last_done": last.isoformat(),
                             "note": f"recommended {cadence}"})
+        elif rule.get("unread_evidence"):
+            # We did not find the evidence this rule reads, and this rule is
+            # known not to read everything that satisfies it. "Due" would be a
+            # claim about the patient built out of a gap in our own model
+            # (#425), so name the gap. The prompt to act survives, because a
+            # patient who has genuinely never been screened still needs it.
+            results.append({**base, "applicable": True, "status": "indeterminate",
+                            "indeterminate_reason": "evidence-not-read",
+                            "unread_evidence": rule["unread_evidence"],
+                            "note": (f"we do not yet read {rule['unread_evidence']}, "
+                                     "so we cannot tell whether this is up to "
+                                     "date — worth raising with your clinician")})
         else:
             results.append({**base, "applicable": True, "status": "due",
                             "note": ("no record found in your connected data — "

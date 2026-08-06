@@ -101,6 +101,57 @@ def test_colorectal_satisfied_by_recent_procedure():
     assert res["colorectal-screening"]["status"] == "up_to_date"
 
 
+def test_colorectal_with_no_procedure_does_not_claim_the_patient_is_due():
+    """#425 — the rule cannot see two of the accepted tests.
+
+    Colorectal screening is satisfied here only by CPT colonoscopy and
+    sigmoidoscopy codes, which are Procedures. FIT (annual) and FIT-DNA /
+    Cologuard (1-3 yearly) are equally acceptable under USPSTF and arrive as
+    lab Observations, so this rule never looks at them.
+
+    "Due" therefore asserted something we had not checked: a patient
+    screening exactly as advised with annual FIT matched nothing and was told
+    they were overdue. The generic due note ("no record found in your
+    connected data") is not enough, because it implies we read the data that
+    would have satisfied the rule. We did not read it at all.
+
+    Indeterminate is the honest status while a whole class of qualifying
+    evidence is invisible, and the note still tells the patient to raise it —
+    so nothing prompting them to act is lost. The status change is the point:
+    a red "DUE" badge with fine print underneath is still a claim.
+
+    MUTATION: drop `unread_evidence` from the colorectal rule -> red,
+    status back to "due". Ran it, saw red.
+    """
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(birth="1968-05-01"), as_of="2026-07-01")}
+    gap = res["colorectal-screening"]
+
+    assert gap["status"] == "indeterminate", (
+        "claimed a screening gap without reading two of the accepted tests")
+    assert gap["applicable"] is True, "the patient is still in the age range"
+    assert gap["indeterminate_reason"] == "evidence-not-read"
+    note = gap["note"].lower()
+    assert "stool" in note, "the note must name what we could not see"
+    assert "clinician" in note, "the patient must still be told to raise it"
+
+
+def test_a_rule_with_no_blind_spot_still_reports_a_real_gap():
+    """The disclosure must not become a blanket refusal to answer.
+
+    Mammography reads the evidence that satisfies it, so an absent record
+    means absent, and "due" is the honest answer. If this ever goes
+    indeterminate too, the guard above has been over-applied and the report
+    has stopped being useful.
+
+    MUTATION: return indeterminate for every unsatisfied rule -> red.
+    """
+    res = {r["rule_id"]: r for r in evaluate_care_gaps(
+        _patient(birth="1968-05-01", gender="female"), as_of="2026-07-01")}
+    assert res["mammography"]["status"] == "due"
+    assert res["bp-screening"]["status"] == "due"
+
+
 def test_year_only_birthdate_still_yields_age():
     # FHIR partial dates are legal — and HealthClaw's own redaction truncates
     # birthDate to the year. A ~60yo must not come back all-indeterminate.

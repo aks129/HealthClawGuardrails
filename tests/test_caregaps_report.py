@@ -214,3 +214,81 @@ def test_one_undecided_rule_reads_as_one():
                     "sex-unknown")])
     assert "1 screening could not be checked" in consumer["unevaluated_note"]
     assert "screenings" not in consumer["unevaluated_note"]
+
+
+# ─────────────────────────────────────────────
+# #425 — a coverage gap is not a gap in the record
+# ─────────────────────────────────────────────
+
+def _unread(rule_id, title, evidence):
+    """An indeterminate rule the check knowingly cannot fully read."""
+    out = _undecided(rule_id, title, "evidence-not-read")
+    out["unread_evidence"] = evidence
+    return out
+
+
+def test_a_coverage_gap_never_borrows_a_reason_about_the_person():
+    """The reason has to name whose limitation it is.
+
+    Colorectal screening is undecided because this check reads only
+    colonoscopy and sigmoidoscopy procedures, never the stool-based tests that
+    also satisfy it. Saying "your sex was not recorded" about that screening
+    would be false about the patient; saying "we do not read everything" about
+    a genuinely missing sex would excuse a real gap in the record. Both
+    directions are #417 with the subject swapped.
+
+    MUTATION: fold the coverage rules back into _demographics_marker -> red,
+    the reason becomes demographics-unavailable and the note claims the
+    person's record was short. Ran it, saw red.
+    """
+    results = [
+        _result(status="due"),
+        _undecided("cervical-screening", "Cervical cancer screening (Pap)",
+                   "sex-unknown"),
+        _unread("colorectal-screening", "Colorectal cancer screening",
+                "stool-based tests (FIT or Cologuard)"),
+    ]
+    out = build_consumer_summary(results)
+
+    assert out["unevaluated"] == "partly-unchecked"
+    assert out["unevaluated_count"] == 2
+    note = out["unevaluated_note"]
+    # Each screening sits with its own cause.
+    assert "sex was not recorded" in note
+    assert "Cervical cancer screening (Pap)" in note
+    assert "does not yet read stool-based tests (FIT or Cologuard)" in note
+    assert "Colorectal cancer screening" in note
+    # And neither cause is offered as a finding about the patient's care.
+    assert "not a finding" in note
+
+
+def test_a_coverage_gap_alone_reads_as_our_limit_not_the_record_s():
+    """MUTATION: return the demographics fallback when no record cause exists
+    -> red with demographics-unavailable. Ran it, saw red."""
+    out = build_consumer_summary([
+        _result(status="due"),
+        _unread("colorectal-screening", "Colorectal cancer screening",
+                "stool-based tests (FIT or Cologuard)"),
+    ])
+    assert out["unevaluated"] == "evidence-not-read"
+    assert out["unevaluated_count"] == 1
+    note = out["unevaluated_note"]
+    assert "limit on the check" in note
+    assert "not a finding that it is up to date" in note
+    assert "your" not in note.lower().split("up to date")[0].replace(
+        "your clinician", ""), "a coverage limit must not describe the patient"
+
+
+def test_demographic_causes_alone_are_unchanged_by_the_split():
+    """The existing shape must survive. MUTATION: route record causes through
+    _coverage_marker -> red."""
+    out = build_consumer_summary([
+        _result(status="due"),
+        _undecided("cervical-screening", "Cervical cancer screening (Pap)",
+                   "sex-unknown"),
+        _undecided("mammography", "Breast cancer screening (mammogram)",
+                   "sex-unknown"),
+    ])
+    assert out["unevaluated"] == "sex-unavailable"
+    assert out["unevaluated_count"] == 2
+    assert "sex was not recorded" in out["unevaluated_note"]
