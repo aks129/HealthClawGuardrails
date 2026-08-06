@@ -132,11 +132,21 @@ def test_direct_step_up_validation_only_decreases():
 
 
 #: Modules that reach into r6/routes.py for a symbol. Every one of these is a
-#: utility that leaked out of a 3,905-line module because there was nowhere
-#: else to put it, and each import is written lazily to dodge the four
-#: import cycles through the auth stack. Playbook chunk A1 moves the three
-#: symbols out and takes this to 1 (main.py, for the blueprint itself).
-_ROUTES_IMPORTERS = 8
+#: utility that leaked out of a 3,900-line module because there was nowhere
+#: else to put it.
+#:
+#: A1 moved the two that formed import cycles — the env predicates now live in
+#: r6/runtime_config, the body guard in r6/body_guard — and
+#: tests/test_import_acyclicity.py holds that line directly. What is left is
+#: main.py importing the blueprint, which is the point, and three imports of
+#: `authenticate_tenant_read`.
+#:
+#: That one is deliberately still here. It needs an OperationOutcome builder,
+#: which is `r6.access.outcome_response` — so moving it is kernel slice work
+#: (A2-A5) rather than a cut-and-paste, and doing it here would either
+#: duplicate the builder or adopt the kernel outside its own slice. Ratchet
+#: reaches 1, not 0.
+_ROUTES_IMPORTERS = 4
 
 
 def test_imports_out_of_the_god_module_only_decrease():

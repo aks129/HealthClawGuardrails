@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import re
 
 from flask import request, session
 
+# Env-only predicates live in runtime_config, at the bottom of the import
+# graph. They were here, and r6.oauth reached through r6.routes' re-export of
+# one of them to get at it — a cycle built to fetch three lines that read an
+# environment variable. Re-exported so this module's own importers are
+# unchanged.
+from r6.runtime_config import is_public_tenant, read_auth_enabled
 from r6.oauth import validate_bearer_token
 from r6.stepup import validate_step_up_token
 
@@ -21,23 +26,6 @@ _OAUTH_READ_SCOPES = frozenset({
     "user/*.read",
     "system/*.read",
 })
-
-
-def read_auth_enabled() -> bool:
-    """Return whether tenant read authentication is explicitly enabled."""
-    return os.environ.get("READ_AUTH_ENABLED", "").strip().lower() in _TRUE_VALUES
-
-
-def public_tenants() -> frozenset[str]:
-    """Return the explicit allowlist of synthetic public tenants."""
-    raw = os.environ.get("PUBLIC_TENANTS", "").strip()
-    if not raw:
-        return frozenset()
-    return frozenset(item.strip() for item in raw.split(",") if item.strip())
-
-
-def is_public_tenant(tenant_id: str) -> bool:
-    return tenant_id in public_tenants()
 
 
 def read_auth_required(tenant_id: str) -> bool:

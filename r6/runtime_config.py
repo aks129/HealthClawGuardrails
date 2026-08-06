@@ -20,6 +20,23 @@ _INSECURE_STEP_UP_SECRETS = frozenset({
 _MIN_SECRET_LENGTH = 32
 
 
+def read_auth_enabled() -> bool:
+    """Whether tenant read authentication is explicitly enabled."""
+    return os.environ.get("READ_AUTH_ENABLED", "").strip().lower() in TRUE_VALUES
+
+
+def public_tenants() -> frozenset[str]:
+    """The explicit allowlist of synthetic public tenants."""
+    raw = os.environ.get("PUBLIC_TENANTS", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def is_public_tenant(tenant_id: str) -> bool:
+    return tenant_id in public_tenants()
+
+
 def resolve_app_env(environ: Mapping[str, str] | None = None) -> str:
     """Resolve one canonical environment while preserving ``FLASK_ENV``.
 
