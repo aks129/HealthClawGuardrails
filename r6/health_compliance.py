@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from flask import request, jsonify
+from r6.body_guard import json_body_within_depth
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +121,6 @@ def enforce_human_in_loop():
     # in before_request, ahead of every handler's auth gate, with nothing but
     # a tenant header presented. A depth guard inside create/update alone
     # would never be reached, because the RecursionError escapes from here.
-    # Lazy import: r6.routes imports this module at load time.
-    from r6.routes import json_body_within_depth
     body, too_deep = json_body_within_depth()
     if too_deep:
         return jsonify({

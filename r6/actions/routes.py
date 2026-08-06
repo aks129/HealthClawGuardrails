@@ -41,6 +41,7 @@ from r6.rate_limit import rate_limit_middleware
 from r6.read_auth import authorize_tenant_read
 from r6.stepup import generate_step_up_token, validate_step_up_token
 from r6.telegram_push import notify_tenant
+from r6.body_guard import json_body_within_depth
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +306,6 @@ def propose_action():
     # tenant. There is no auth gate to move above it; bounding the depth is
     # the fix (#312). Lazy import, like authenticate_tenant_read below, to
     # keep the r6.routes <-> r6.actions import graph acyclic.
-    from r6.routes import json_body_within_depth
     body, too_deep = json_body_within_depth()
     if too_deep:
         return _error(400, 'request body nesting is too deep')

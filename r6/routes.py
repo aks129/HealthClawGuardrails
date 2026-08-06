@@ -46,6 +46,9 @@ from r6.read_auth import (
 )
 from r6.runtime_config import resolve_app_env
 from r6.version import __version__
+from r6.body_guard import (INGEST_MAX_JSON_DEPTH as _INGEST_MAX_JSON_DEPTH,
+                           json_body_within_depth,
+                           json_depth_within as _json_depth_within)
 from r6.rate_limit import rate_limit_middleware
 from r6.health_compliance import (
     add_disclaimer, enforce_human_in_loop, deidentify_resource,
@@ -2071,59 +2074,9 @@ _INGEST_BUNDLE_ALLOWED_TYPES = frozenset(
     set(R6Resource.SUPPORTED_TYPES) - _INGEST_BUNDLE_FORBIDDEN_TYPES)
 
 
-_INGEST_MAX_JSON_DEPTH = 32
-
-
-def _json_depth_within(obj, limit, _depth=0):
-    """Bounded depth check, not a recursion-limit workaround.
-
-    Refuses at `limit` (32) regardless of Python's actual recursion ceiling
-    (typically ~1000), so a hostile payload is rejected long before it can
-    exhaust the stack — this walker itself never recurses past limit+1
-    levels. FHIR resources do not nest anywhere close to 32 levels deep in
-    practice; this is headroom, not a tight bound.
-    """
-    if _depth > limit:
-        return False
-    if isinstance(obj, dict):
-        return all(_json_depth_within(v, limit, _depth + 1)
-                  for v in obj.values())
-    if isinstance(obj, list):
-        return all(_json_depth_within(v, limit, _depth + 1) for v in obj)
-    return True
-
-
-def json_body_within_depth(limit=_INGEST_MAX_JSON_DEPTH):
-    """Parse this request's JSON body, refusing one nested too deep to be safe.
-
-    The write paths' shared entry point to the guard #267 put on
-    /internal/ingest-bundle. `request.get_json(silent=True)` suppresses decode
-    errors but NOT `RecursionError`, which json.loads raises on a ~1000-deep
-    payload — so every handler that parsed before its auth gate turned a few
-    kilobytes of `[[[[...` into a 500 with no credential presented (#312).
-
-    Returns `(body, too_deep)`. `body` is whatever `get_json(silent=True)`
-    returned (None on any decode failure) and `too_deep` is True when the
-    payload must be refused outright. The caller formats its own error, so no
-    handler's wire format changes: the FHIR routes answer an
-    OperationOutcome, actions answer `{"error": ...}`, smbp answers its own
-    OperationOutcome, all with the 400 they already use for a bad body.
-
-    Two layers, as on ingest-bundle: catching RecursionError handles the
-    payload that cannot be parsed, and _json_depth_within handles the one that
-    parses but is still absurd enough to hurt a downstream consumer.
-
-    Imported lazily by r6/actions and r6/smbp (`from r6.routes import
-    json_body_within_depth`), matching how those modules already borrow
-    authenticate_tenant_read, so the import graph stays acyclic.
-    """
-    try:
-        body = request.get_json(silent=True)
-    except RecursionError:
-        return None, True
-    if not _json_depth_within(body, limit):
-        return None, True
-    return body, False
+# Moved to r6/body_guard.py: three modules imported these back out of
+# here, lazily, to dodge the import cycle that reaching into this
+# module created. Re-exported for the callers already inside it.
 
 
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])

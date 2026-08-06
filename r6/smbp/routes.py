@@ -19,6 +19,7 @@ from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
 from r6.smbp.report import build_report, render_html, render_pdf
+from r6.body_guard import json_body_within_depth
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,6 @@ def enroll():
     # row), so this parse is reachable with no credential. No gate to move
     # above it; the depth bound is the fix (#312). Lazy import to keep the
     # r6.routes <-> r6.smbp import graph acyclic, as the report handler does.
-    from r6.routes import json_body_within_depth
     body, too_deep = json_body_within_depth()
     if too_deep:
         return jsonify(_oo("error", "invalid",

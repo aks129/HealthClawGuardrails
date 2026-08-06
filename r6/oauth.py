@@ -23,6 +23,7 @@ import uuid
 from functools import wraps
 from flask import request, jsonify
 from r6.runtime_config import resolve_app_env
+from r6.runtime_config import read_auth_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -282,8 +283,7 @@ def register_oauth_routes(blueprint):
         # real per-user consent (out of scope for this reference OAuth server).
         requested_tenant = request.headers.get('X-Tenant-Id', 'default')
         from r6.command_center.access import is_public
-        from r6.routes import _read_auth_enabled
-        if _read_auth_enabled() and not is_public(requested_tenant):
+        if read_auth_enabled() and not is_public(requested_tenant):
             return jsonify({
                 'error': 'access_denied',
                 'error_description': 'Auto-approve authorization is limited to '
