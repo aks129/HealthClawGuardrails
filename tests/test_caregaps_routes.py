@@ -222,15 +222,29 @@ def test_the_fallback_path_evaluates_the_patient_it_resolved(
     resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
     assert resolution == {"state": "tenant-default", "subject": "Patient/p-onfile"}
 
-    # A 50yo woman: only the A1c rule is gated out (no diabetes Condition).
+    # A 50yo woman: the A1c rule is gated out (no diabetes Condition), and
+    # colorectal is undecided because this check does not read stool-based
+    # tests (#425) — five decide.
+    #
+    # PIN MOVED with #425, in the PR that moved it. The property this test
+    # exists for is unchanged and is asserted below: the rules read the
+    # record. What moved is that one rule now declines for a reason of OURS.
     summary = json.loads(_resp_param(body, "summary")["valueString"])
-    assert summary["indeterminate"] == 0
-    assert summary["due"] + summary["up_to_date"] == 6
+    assert summary["indeterminate"] == 1
+    assert summary["due"] + summary["up_to_date"] == 5
 
     consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
-    assert len(consumer["lines"]) == 6
-    assert "unevaluated" not in consumer
+    assert len(consumer["lines"]) == 5
+
+    # The point of #389 half two, stated directly: nothing is undecided for
+    # want of demographics, because the evaluator was handed the record. The
+    # one undecided screening names our coverage, never the person.
+    assert consumer["unevaluated"] == "evidence-not-read"
+    assert consumer["unevaluated_titles"] == ["Colorectal cancer screening"]
+    assert "limit on the check" in consumer["unevaluated_note"]
     assert "were not available" not in r.get_data(as_text=True)
+    for demographic in ("date of birth", "sex was not recorded"):
+        assert demographic not in consumer["unevaluated_note"]
 
 
 def test_the_fallback_path_now_carries_a_reason_that_is_true(
@@ -240,8 +254,14 @@ def test_the_fallback_path_now_carries_a_reason_that_is_true(
 
     On the held path this same call answered `check-incomplete`, because a
     reason about demographics we never read could not be true. Now we read
-    them, so `sex-unavailable` describes the record and names the two
-    screenings it could not decide.
+    them, so the sex-gated pair is explained by the record's own gap and
+    named.
+
+    PIN MOVED with #425, in the PR that moved it: colorectal joins the
+    undecided set for a reason of ours, so the marker carries both causes and
+    keeps them apart. That is the same property this test was written for —
+    a reason that is true of what it covers — now proven across two causes
+    instead of one.
 
     MUTATION: pass `supplied` to _patient_for again -> red.
     """
@@ -252,13 +272,22 @@ def test_the_fallback_path_now_carries_a_reason_that_is_true(
                     json={})
     consumer = json.loads(
         _resp_param(r.get_json(), "consumerSummary")["valueString"])
-    assert len(consumer["lines"]) == 4
-    assert consumer["unevaluated"] == "sex-unavailable"
-    assert consumer["unevaluated_count"] == 2
+    assert len(consumer["lines"]) == 3
+    assert consumer["unevaluated"] == "partly-unchecked"
+    assert consumer["unevaluated_count"] == 3
     assert consumer["unevaluated_titles"] == [
+        "Colorectal cancer screening",
         "Cervical cancer screening (Pap)",
         "Breast cancer screening (mammogram)"]
-    assert "date of birth" not in consumer["unevaluated_note"]
+
+    note = consumer["unevaluated_note"]
+    # The record's gap explains the two it explains, and ours explains ours.
+    assert "sex was not recorded" in note
+    assert "Cervical cancer screening (Pap)" in note
+    assert "does not yet read" in note and "stool-based" in note
+    assert "Colorectal cancer screening" in note
+    # The birthDate was on file, and no reason may say otherwise.
+    assert "date of birth" not in note
 
 
 def test_a_partial_screening_list_says_how_much_of_it_is_missing(
