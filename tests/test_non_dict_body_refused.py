@@ -56,6 +56,36 @@ def test_a_non_object_body_is_refused_not_crashed(client, method, path, body):
         'raise')
 
 
+@pytest.mark.parametrize('body', NON_DICT_BODIES)
+def test_an_update_with_a_non_object_body_is_refused_not_crashed(
+        client, auth_headers, body):
+    """The same defect on PUT, which the rows above could not reach.
+
+    WRITE_PATHS is scoped to "reachable with only a tenant header", so the
+    update path was outside it: PUT runs its step-up gate first and needs a
+    token. The fix for #330/#331 landed on create as
+    `if not isinstance(body, dict)` and on update as `if not body`, so a
+    truthy non-object — `[1]`, `42`, `"a string"` — passed the guard and
+    reached `body.get('resourceType')`.
+
+    Needing a valid step-up token shrinks the blast radius to an authenticated
+    caller. It does not make a 500 the right answer, and an authenticated
+    caller is exactly who finds this by fuzzing a client.
+
+    Note `'null'` and `'[]'` were already refused by the falsy check — the
+    parametrization keeps them so the row proves the guard covers both kinds.
+
+    MUTATION: restore `if not body` at r6/routes.py -> the truthy bodies go
+    red with a 500. Ran it, saw red.
+    """
+    response = client.put(
+        '/r6/fhir/Patient/put-nonobject-1', data=body,
+        headers={**auth_headers, 'Content-Type': 'application/json'})
+    assert response.status_code < 500, (
+        f'PUT answered {response.status_code} for a non-object body {body!r}; '
+        'a malformed body must be refused, not raise')
+
+
 def test_the_human_in_the_loop_hook_tolerates_a_non_dict_body():
     """The hook runs before every handler, so it must not be the crash site.
 
