@@ -1070,7 +1070,7 @@ def create_app(config: Config | None = None,
             # state this branch never observed — the #416 shape, one route
             # over. A patient with a live pending request must not be told it
             # is gone because a proxy timed out.
-            if not HealthClawClient._upstream_answered(status):
+            if not HealthClawClient._answered_about_data(status):
                 logger.warning("review fetch unanswered (%s) for %s",
                                status, action_id)
                 return render_template("chat_error.html",
@@ -1104,7 +1104,7 @@ def create_app(config: Config | None = None,
                 "confirmed": False,
                 "message": _REVIEW_UNSUBMITTED,
             }), 503
-        if status and not HealthClawClient._upstream_answered(status) \
+        if status and not HealthClawClient._answered_about_data(status) \
                 and status != 200:
             # The engine never answered, so we cannot say the review was
             # saved. We CAN say nothing was approved: confirm_action is only

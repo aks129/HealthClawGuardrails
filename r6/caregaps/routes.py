@@ -111,8 +111,20 @@ def register_caregaps_routes(blueprint, deps):
                          else None)
 
         # `subject`, NOT `supplied` — the Patient the fallback resolved is the
-        # Patient we evaluate. #389 half two, released by Dr. Magan's ruling
-        # on the cadence table.
+        # Patient we evaluate. #389 half two.
+        #
+        # An earlier version of this comment said the change was "released by
+        # Dr. Magan's ruling on the cadence table". No such ruling exists in
+        # docs/, on #389, or on #423, and #389 asked for one in as many words:
+        # "it wants CTO sign-off and Dr. Magan's review, not an engineering
+        # judgement call". What actually released it was the owner's approval
+        # plus #428, which stopped the one rule that was demonstrably unsafe
+        # (colorectal, blind to FIT and Cologuard) from claiming anything.
+        #
+        # That is a narrower thing, and it leaves #389's other named rule
+        # unreviewed: A1c monitoring is patient-visible today and no clinician
+        # has passed on its cadence. Tracked on #389; do not let this comment
+        # be read as clearance.
         patient = _patient_for(subject, tenant_id)
 
         # `check-incomplete` (#417) covered the window in which a resolved

@@ -113,7 +113,12 @@ def register_brief_routes(blueprint, deps):
     operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
 
-    @blueprint.get("/fhir/AppointmentBrief")
+    # NOT "/fhir/AppointmentBrief": the blueprint is already mounted at
+    # /r6/fhir, and the extra segment registered the route at
+    # /r6/fhir/fhir/AppointmentBrief while every client asked for
+    # /r6/fhir/AppointmentBrief (#386). The brief page had therefore
+    # never populated for anyone.
+    @blueprint.get("/AppointmentBrief")
     def appointment_brief():
         tenant_id = _tenant()
         if not tenant_id:

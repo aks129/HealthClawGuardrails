@@ -123,6 +123,11 @@ class HealthClawClient:
         an edge rejected the request before delivering it. Nothing ran either
         way, so a caller may say so.
 
+        This asks "did it run?", which is the write path's question. A read
+        path asks a different one and must use `_answered_about_data`: a 401
+        settles whether an action executed (it did not) but says nothing about
+        whether a patient has a brief.
+
         Everything else — 5xx, 408, 429 — is a gateway speaking on the
         upstream's behalf, quite possibly after the request was already
         delivered and executed. It is silence with a status code on it. For a
@@ -130,6 +135,24 @@ class HealthClawClient:
         that can execute a clinical action it is the whole of #416.
         """
         return 400 <= status < 500 and status not in (408, 429)
+
+    @staticmethod
+    def _answered_about_data(status: int) -> bool:
+        """Whether `status` is the engine answering about the RESOURCE.
+
+        401 and 403 are the engine answering about our credential. Every read
+        caller turns "answered" into a statement about the patient — an empty
+        conversation, an absent brief, "this form is no longer awaiting
+        review" — so classifying a rejected token as an answer reintroduces
+        the exact collapses #416, #424 and #430 removed, through the one
+        predicate they share. Web and worker drifting onto different
+        credentials is a documented failure mode here, so a stale token is
+        reachable rather than theoretical.
+
+        A 404 stays an answer: the engine looked and there is no such thing.
+        """
+        return (HealthClawClient._upstream_answered(status)
+                and status not in (401, 403))
 
     # --- tenant lifecycle ---------------------------------------------------
 
@@ -477,7 +500,7 @@ class HealthClawClient:
             # though it were the FHIR Basic resource, moving the failure
             # one layer past the boundary that accepted it (#403).
             return self._json_object(r, "appointment brief")
-        if self._upstream_answered(r.status_code):
+        if self._answered_about_data(r.status_code):
             return None
         raise HealthClawError(
             f"appointment brief unavailable ({r.status_code})", r.status_code)
@@ -608,7 +631,7 @@ class HealthClawClient:
                      "X-Step-Up-Token": self.mint_token(tenant)},
             what="chat history")
         if r.status_code != 200:
-            if self._upstream_answered(r.status_code):
+            if self._answered_about_data(r.status_code):
                 return []
             raise HealthClawError(
                 f"chat history unavailable ({r.status_code})", r.status_code)
@@ -616,9 +639,17 @@ class HealthClawClient:
             rows = r.json() or []
         except ValueError as exc:
             raise HealthClawError("chat history was not JSON", 200) from exc
+        # A 200 of the wrong shape is a failed call, not history. Indexing it
+        # raised AttributeError/TypeError out of this module, past the one
+        # boundary whose job is to turn a bad call into a HealthClawError —
+        # and app.py catches only HealthClawError, so each was a 500 on /chat.
+        # #430 hardened the brief against exactly this and left the sibling.
+        if not isinstance(rows, list):
+            raise HealthClawError("chat history returned invalid data", 200)
         out = [{"role": m["role"], "content": m.get("text") or ""}
                for m in reversed(rows)          # endpoint returns newest-first
-               if m.get("role") in ("user", "assistant")]
+               if isinstance(m, dict)
+               and m.get("role") in ("user", "assistant")]
         return out
 
     # --- durable agent runs --------------------------------------------------
