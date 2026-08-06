@@ -29,7 +29,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="brief-empty">Not available from your connected records.</p>
+    {% if brief_unavailable %}<p class="brief-empty">We could not reach your records just now, so this section was not checked.</p>{% else %}<p class="brief-empty">Not available from your connected records.</p>{% endif %}
     {% endif %}
   </div>
 
@@ -48,7 +48,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="brief-empty">Not available from your connected records.</p>
+    {% if brief_unavailable %}<p class="brief-empty">We could not reach your records just now, so this section was not checked.</p>{% else %}<p class="brief-empty">Not available from your connected records.</p>{% endif %}
     {% endif %}
   </div>
 
@@ -67,7 +67,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="brief-empty">Not available from your connected records.</p>
+    {% if brief_unavailable %}<p class="brief-empty">We could not reach your records just now, so this section was not checked.</p>{% else %}<p class="brief-empty">Not available from your connected records.</p>{% endif %}
     {% endif %}
   </div>
 
@@ -110,7 +110,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="brief-empty">Not available from your connected records.</p>
+    {% if brief_unavailable %}<p class="brief-empty">We could not reach your records just now, so this section was not checked.</p>{% else %}<p class="brief-empty">Not available from your connected records.</p>{% endif %}
     {% endif %}
   </div>
 

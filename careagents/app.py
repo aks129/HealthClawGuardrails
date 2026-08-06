@@ -691,11 +691,20 @@ def create_app(config: Config | None = None,
         conversation_id = hc.conversation_id(agent_id)
         # Show the conversation they actually had. Rendering only the canned
         # greeting made every return visit look like a first visit.
-        past = hc.recent_messages(
-            ctx["tenant"], limit=30,
-            conversation_id=conversation_id,
-            agent_id=agent_id,
-        )
+        try:
+            past = hc.recent_messages(
+                ctx["tenant"], limit=30,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+            )
+            history_lost = False
+        except HealthClawError:
+            # An outage used to render as an empty conversation, so a
+            # returning patient was greeted as though they had never been
+            # here. Say we could not load it rather than showing a blank
+            # slate that looks like a fact about them.
+            logger.exception("chat history unavailable for agent %s", agent_id)
+            past, history_lost = [], True
         conn = ctx.get("connection") or {}
         pending = conn.get("status") == "pending"
         totals = None
@@ -739,6 +748,7 @@ def create_app(config: Config | None = None,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
                                past=past,
+                               history_lost=history_lost,
                                intake=intake,
                                summary_counts=intake.counts)
 
@@ -750,10 +760,18 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return redirect(url_for("home"))
-        raw = hc.fetch_appointment_brief(ctx["tenant"])
+        try:
+            raw = hc.fetch_appointment_brief(ctx["tenant"])
+            unavailable = False
+        except HealthClawError:
+            # "Not available from your connected records" is a statement about
+            # the records. We did not read them, so we cannot make it.
+            logger.exception("brief unavailable for agent %s", agent_id)
+            raw, unavailable = None, True
         sections = _parse_brief_sections(raw) if raw else {}
         return render_template("brief.html", me=ctx["agent"],
                                agent_id=agent_id, sections=sections,
+                               brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK))
 

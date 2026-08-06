@@ -455,25 +455,32 @@ class HealthClawClient:
         return total
 
     def fetch_appointment_brief(self, tenant: str) -> dict | None:
-        """Fetch the pre-appointment brief for this tenant.
+        """The brief, or None when the engine answered and there is none.
 
-        Returns the FHIR Basic resource dict, or None on any failure.
-        Callers treat None as "brief unavailable" — never raise to the UI.
+        Raises HealthClawError when we could not find out. The two were the
+        same value before, and the template renders None as "Not available
+        from your connected records" — a statement about the patient's
+        records, made during an outage that read none of them. The same page
+        already gets this right one section down, where the screening review
+        requires an explicit "ok" before it claims anything (#381).
+
+        A malformed 200 raises too: it means we did not learn whether a brief
+        exists, which is the same fact as an unreachable engine.
         """
-        try:
-            r = self._send(
-                "GET", f"{self.fhir}/AppointmentBrief",
-                headers=self._headers(tenant),
-                what="appointment brief")
-            if r.status_code == 200:
-                # dict-or-None is what the brief renderer is written against.
-                # A wrongly-shaped 200 used to be handed straight through as
-                # though it were the FHIR Basic resource, moving the failure
-                # one layer past the boundary that accepted it (#403).
-                return self._json_object(r, "appointment brief")
-        except (requests.RequestException, HealthClawError, ValueError):
-            pass
-        return None
+        r = self._send(
+            "GET", f"{self.fhir}/AppointmentBrief",
+            headers=self._headers(tenant),
+            what="appointment brief")
+        if r.status_code == 200:
+            # dict-or-None is what the brief renderer is written against.
+            # A wrongly-shaped 200 used to be handed straight through as
+            # though it were the FHIR Basic resource, moving the failure
+            # one layer past the boundary that accepted it (#403).
+            return self._json_object(r, "appointment brief")
+        if self._upstream_answered(r.status_code):
+            return None
+        raise HealthClawError(
+            f"appointment brief unavailable ({r.status_code})", r.status_code)
 
     def purge_tenant(self, tenant: str) -> dict:
         """Delete this tenant's records in HealthClaw. Raises on failure.
@@ -582,23 +589,33 @@ class HealthClawClient:
                         conversation_id: str | None = None,
                         agent_id: str | None = None,
                         through_message_id: str | None = None) -> list[dict]:
-        """Oldest-first [{role, text}] for rehydrating a conversation."""
-        try:
-            r = self.http.get(
-                f"{self.base}/command-center/api/conversations",
-                params={"limit": limit, "full": "1", "tenant": tenant,
-                        "conversation_id": conversation_id,
-                        "agent_id": agent_id,
-                        "through_message_id": through_message_id},
-                headers={"X-Tenant-Id": tenant,
-                         "X-Step-Up-Token": self.mint_token(tenant)},
-                timeout=self.timeout)
-            if r.status_code != 200:
+        """Oldest-first [{role, text}] for rehydrating a conversation.
+
+        An empty list means the engine answered and there is nothing to
+        replay. Losing the thread raises instead, because the two were the
+        same value and the collapse was invisible in both directions: the web
+        tier rendered every return visit during an outage as a first visit,
+        and the worker built the agent's context from it, so the model
+        answered with amnesia and said nothing about it.
+        """
+        r = self._send(
+            "GET", f"{self.base}/command-center/api/conversations",
+            params={"limit": limit, "full": "1", "tenant": tenant,
+                    "conversation_id": conversation_id,
+                    "agent_id": agent_id,
+                    "through_message_id": through_message_id},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Step-Up-Token": self.mint_token(tenant)},
+            what="chat history")
+        if r.status_code != 200:
+            if self._upstream_answered(r.status_code):
                 return []
+            raise HealthClawError(
+                f"chat history unavailable ({r.status_code})", r.status_code)
+        try:
             rows = r.json() or []
-        except (requests.RequestException, HealthClawError, ValueError):
-            logger.warning("could not load chat history for %s", tenant)
-            return []
+        except ValueError as exc:
+            raise HealthClawError("chat history was not JSON", 200) from exc
         out = [{"role": m["role"], "content": m.get("text") or ""}
                for m in reversed(rows)          # endpoint returns newest-first
                if m.get("role") in ("user", "assistant")]

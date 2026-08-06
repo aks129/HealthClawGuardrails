@@ -2565,6 +2565,61 @@ def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
     assert b"Not available from your connected records" in resp.data
 
 
+def test_an_unreachable_engine_does_not_blame_the_patient_s_records(
+        app, svc, monkeypatch):
+    """"Not available from your connected records" is a claim about the
+    records. During an outage we read none of them, so we cannot make it.
+
+    The same page already gets this right one section down: the screening
+    review says "unavailable" unless the brief carries an explicit "ok"
+    (#381). This is that posture applied to the other four sections.
+
+    MUTATION: swallow HealthClawError in the brief route and render None ->
+    red, the page blames the records again. Ran it, saw red.
+    """
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                           "connection_id": conn_id}
+                      ).get_json()["id"]
+
+    def _down(self, tenant):
+        raise HealthClawError("appointment brief unavailable (503)", 503)
+
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief", _down)
+    resp = c.get(f"/brief?agent={agent_id}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "could not reach your records" in body
+    assert "Not available from your connected records" not in body
+
+
+def test_a_returning_patient_is_not_greeted_as_a_stranger_during_an_outage(
+        app, svc, monkeypatch):
+    """An outage collapsed into an empty conversation, so every return visit
+    rendered as a first visit — a blank slate that reads as a fact about the
+    person rather than about the connection.
+
+    MUTATION: swallow HealthClawError and render past=[] silently -> red.
+    Ran it, saw red.
+    """
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
+                                           "connection_id": conn_id}
+                      ).get_json()["id"]
+
+    def _down(self, *a, **k):
+        raise HealthClawError("chat history unavailable (503)", 503)
+
+    monkeypatch.setattr(FakeClient, "recent_messages", _down)
+    resp = c.get(f"/chat?agent={agent_id}")
+    assert resp.status_code == 200
+    assert "could not load your earlier messages" in resp.get_data(as_text=True)
+
+
 def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
