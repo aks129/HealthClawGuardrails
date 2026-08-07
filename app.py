@@ -215,7 +215,19 @@ def fasten_connect(tenant_id):
         'fasten_connect.html',
         tenant_id=tenant_id,
         fasten_public_key=os.environ.get('FASTEN_PUBLIC_KEY', '').strip(),
-        tefca_mode=os.environ.get('FASTEN_TEFCA_MODE', 'true').strip().lower() == 'true',
+        # Opt-IN, not opt-out. This defaulted to 'true', so any deployment
+        # that never set the variable requested TEFCA IAS — a mode that
+        # requires per-account provisioning with Fasten ("additional fees
+        # involved with TEFCA IAS in live mode", their TEFCA IAS guide) AND
+        # third-party cookies in the embed frame. Where either is missing the
+        # patient meets fasten_unauthorized_client inside Fasten's iframe at
+        # the first identity step, and we cannot intercept or explain it
+        # (#326).
+        #
+        # A capability this process cannot verify from the inside must be
+        # declared by whoever knows it is provisioned, not assumed by the
+        # default. Deployments that ARE entitled set FASTEN_TEFCA_MODE=true.
+        tefca_mode=os.environ.get('FASTEN_TEFCA_MODE', 'false').strip().lower() == 'true',
     )
 
 
