@@ -16,6 +16,7 @@ from flask import request, jsonify
 
 from r6.models import R6Resource
 from r6.audit import record_audit_event
+from r6.redaction import apply_redaction
 from r6.brief.engine import (
     generate_brief,
     BriefResult,
@@ -41,7 +42,22 @@ def _resources_for(tenant_id: str, resource_type: str) -> list[dict]:
         )
         .all()
     )
-    return [r.resource for r in rows]
+    # Two defects, one line, and they MUST be fixed together (#391 + #382).
+    #
+    # `r.resource` is not an attribute of R6Resource, so this raised
+    # AttributeError and the brief 500'd for any tenant holding data (#391).
+    # The crash is currently the only thing preventing #382: there is no
+    # `apply_redaction` anywhere in r6/brief/, and `_code_text` reads
+    # `code.text` then `coding[].display` — the two fields CLAUDE.md names
+    # because real feeds put patient names in them. Repairing the attribute
+    # alone turns a 500 into a PHI leak into a document the patient and their
+    # clinic receive.
+    #
+    # apply_redaction strips the upstream free text and then re-labels from
+    # r6/terminology.py keyed by code (r6/redaction.py calls label_codings),
+    # so the brief stays readable without any of it coming from the feed —
+    # the same pair r6/routes.py and r6/labs/routes.py use.
+    return [apply_redaction(r.to_fhir_json()) for r in rows]
 
 
 def _field_to_dict(f: BriefField) -> dict:

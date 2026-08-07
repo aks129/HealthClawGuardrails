@@ -95,6 +95,9 @@ from tests.test_redaction_coverage_inventory import (
 # grep for a marker finds every probe that watches that field.
 SUBJECT_LABEL_MARKER = "PHISUBJECTLABELMARKER"
 MED_TEXT_MARKER = "PHIMEDTEXTMARKER"
+#: The brief reads medicationCodeableConcept.coding[].display when there
+#: is no .text, so the two need separate markers to tell which arrived.
+MED_DISPLAY_MARKER = "PHIMEDDISPLAYMARKER"
 ALLERGY_TEXT_MARKER = "PHIALLERGYTEXTMARKER"
 COMPONENT_DISPLAY_MARKER = "PHICOMPONENTDISPLAYMARKER"
 EFFECTIVE_MARKER = "PHIEFFECTIVEMARKER"
@@ -105,7 +108,8 @@ COND_NOTE_MARKER = "PHICONDNOTEMARKER"
 
 ALL_MARKERS = (
     NAME_MARKER, SUBJECT_LABEL_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
-    MED_TEXT_MARKER, ALLERGY_TEXT_MARKER, COMPONENT_DISPLAY_MARKER,
+    MED_TEXT_MARKER, MED_DISPLAY_MARKER, ALLERGY_TEXT_MARKER,
+    COMPONENT_DISPLAY_MARKER,
     EFFECTIVE_MARKER, OBS_NOTE_MARKER, COND_TEXT_MARKER, COND_DISPLAY_MARKER,
     COND_NOTE_MARKER,
 )
@@ -658,3 +662,110 @@ def test_curatr_scores_the_unredacted_resource(
     # And the response itself is still redacted — the ordering fix must not
     # have been achieved by dropping the redaction.
     assert _markers_in(response.get_data(as_text=True)) == set()
+
+
+# ---------------------------------------------------------------------------
+# AppointmentBrief (#382). Not on #282's list of eight, so neither this file
+# nor the inventory has ever measured it.
+#
+# Until #434 the route registered at /r6/fhir/fhir/AppointmentBrief and no
+# client could reach it (#386), so the unredacted read below was latent.
+# Fixing the path armed it. That is why this probe is being added now rather
+# than with the rest of #282: the leak did not change, its reachability did.
+# ---------------------------------------------------------------------------
+
+BRIEF_URL = "/r6/fhir/AppointmentBrief"
+
+
+def _marked_medication_request():
+    """`_code_text` reads medicationCodeableConcept for MedicationRequest."""
+    return {
+        "resourceType": "MedicationRequest", "id": "probe-medreq-1",
+        "status": "active", "intent": "order",
+        "medicationCodeableConcept": {
+            "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                        "code": "860975", "display": MED_DISPLAY_MARKER}],
+            "text": MED_TEXT_MARKER},
+        "subject": {"reference": PROBE_PATIENT_REF},
+    }
+
+
+def _marked_active_condition():
+    """`build_problems` keeps only conditions whose clinicalStatus is active
+    (engine.py:199). The shared `_marked_condition` has no clinicalStatus, so
+    seeding it alone leaves the problems section EMPTY and every assertion
+    about Condition labelling passes while measuring nothing."""
+    condition = dict(_marked_condition())
+    condition["id"] = "probe-cond-brief-1"
+    condition["clinicalStatus"] = {"coding": [{
+        "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+        "code": "active"}]}
+    return condition
+
+
+@pytest.fixture
+def brief_resources(app, tenant_headers):
+    with app.app_context():
+        _store(_marked_patient(), tenant_headers["X-Tenant-Id"])
+        _store(_marked_active_condition(), tenant_headers["X-Tenant-Id"])
+        _store(_marked_medication_request(), tenant_headers["X-Tenant-Id"])
+
+
+def test_the_brief_probe_actually_reaches_the_brief(
+        client, tenant_headers, brief_resources):
+    """Control. A 404 or a 400 here makes every marker assertion below pass
+    while measuring nothing — the failure mode #386 hid behind for weeks."""
+    response = client.get(BRIEF_URL, headers=tenant_headers)
+    assert response.status_code == 200, response.get_data(as_text=True)[:400]
+
+
+def test_appointment_brief_carries_no_upstream_free_text(
+        client, tenant_headers, brief_resources):
+    """#382 closed: the brief reads REDACTED resources.
+
+    `_resources_for` now returns `apply_redaction(r.to_fhir_json())`. That
+    fixes the #391 crash (`r.resource` is not an attribute) and the missing
+    redaction in the SAME change, because repairing the attribute alone turns
+    a 500 into a leak — the crash was the only thing preventing it.
+
+    MUTATION: drop `apply_redaction` and keep `to_fhir_json` -> COND_TEXT and
+    MED_TEXT arrive and this goes red.
+    """
+    response = client.get(BRIEF_URL, headers=tenant_headers)
+    assert response.status_code == 200, response.get_data(as_text=True)[:400]
+    text = response.get_data(as_text=True)
+    assert _markers_in(text) == set(), (
+        "upstream free text reached the brief: %s" % sorted(_markers_in(text)))
+
+
+def test_a_recognised_code_still_reads_as_a_name(
+        client, tenant_headers, brief_resources):
+    """The positive half, and the reason this is not a one-line fix.
+
+    Redaction strips `text` and `display`; `r6/terminology.py` puts back a
+    label keyed by code. Asserting only that the markers are gone is what let
+    #376 hide — a document full of "Unknown" passes a leak check perfectly.
+
+    RxNorm 860975 is in the terminology table, so the medication line must
+    carry the SERVER's name for it. That the marker is absent is asserted
+    above; that a real name is present is asserted here, and neither
+    assertion can stand in for the other.
+    """
+    response = client.get(BRIEF_URL, headers=tenant_headers)
+    text = response.get_data(as_text=True)
+    assert "Metformin" in text, (
+        "the medication degraded to an unnamed entry: redaction stripped the "
+        "feed's text and nothing put a server-derived label back, which is "
+        "the #376 hole #382 warns the naive fix creates: " + text[:600])
+    assert MED_TEXT_MARKER not in text
+
+
+def test_an_unnameable_code_is_not_reported_as_no_data(app, tenant_headers):
+    """Three states, not two. A code we hold but cannot label must not read
+    the same as a record that never had a code."""
+    from r6.brief.engine import UNKNOWN, UNLABELLED, _code_text
+
+    assert _code_text({"code": {"coding": [{"system": "urn:oid:1.2.3",
+                                            "code": "ZZ99"}]}}) == UNLABELLED
+    assert _code_text({}) == UNKNOWN
+    assert UNLABELLED != UNKNOWN

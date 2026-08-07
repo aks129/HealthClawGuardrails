@@ -73,16 +73,40 @@ class BriefResult:
 # Helpers
 # ---------------------------------------------------------------------------
 
+#: We hold a code but our terminology table cannot name it. Distinct from
+#: UNKNOWN on purpose: after #382 the brief reads REDACTED resources, so an
+#: unrecognised code arrives with its upstream text and display stripped and
+#: would otherwise be indistinguishable from a record that never had a code
+#: at all. Collapsing the two hands a clinician a document full of "Unknown"
+#: with no way to tell an absent entry from a stripped one — the #376 hole
+#: that #382 warns the naive fix creates.
+UNLABELLED = "Recorded, name unavailable"
+
+#: No code element at all. There is nothing to name.
+UNKNOWN = "Unknown"
+
+
 def _code_text(resource: dict) -> str:
-    """Best human-readable label from a FHIR code element."""
+    """Best human-readable label from a FHIR code element.
+
+    Three outcomes, never two: a label we can stand behind, a code we hold
+    but cannot name, or nothing recorded. `text` and `coding[].display` are
+    read only because `apply_redaction` has already replaced them with
+    server-derived values keyed by code (r6/terminology.py) — on an
+    unredacted resource these are the two fields that carry PHI, which is
+    why `_resources_for` must never hand this function raw feed data.
+    """
     code = resource.get("code") or resource.get("medicationCodeableConcept") or {}
     text = code.get("text", "")
     if text:
         return text
-    for coding in code.get("coding", []):
-        if coding.get("display"):
+    codings = code.get("coding") or []
+    for coding in codings:
+        if isinstance(coding, dict) and coding.get("display"):
             return coding["display"]
-    return "Unknown"
+    if any(isinstance(c, dict) and c.get("code") for c in codings):
+        return UNLABELLED
+    return UNKNOWN
 
 
 def _onset_display(resource: dict) -> str:
