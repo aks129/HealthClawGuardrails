@@ -502,13 +502,44 @@ def test_history_loss_is_not_the_same_value_as_an_empty_history(stub_base,
     assert _client(stub_base).recent_messages("t") == [], (
         "an engine that answered with no rows still means no rows")
 
-    for status in (500, 502, 503, 504, 408, 429):
+    # 401/403 included deliberately (QA F1). A rejected or rotated step-up
+    # token is the engine answering about our CREDENTIAL, not about this
+    # patient's conversation — we learn nothing about whether history exists,
+    # so [] would be the same collapse this test was flipped to forbid. The
+    # conversations endpoint answers 401 when the token is stale, which is a
+    # realistic drift between web and worker.
+    for status in (500, 502, 503, 504, 408, 429, 401, 403):
         _set(status=status, body=b'{"error": "down"}')
         with pytest.raises(HealthClawError):
             _client(stub_base).recent_messages("t")
 
     with pytest.raises(HealthClawError):
         _client(DEAD_BASE).recent_messages("t")
+
+
+def test_a_malformed_history_body_does_not_escape_the_boundary(stub_base,
+                                                              reset_mode):
+    """QA F7. #430 hardened the brief against this and left its sibling open.
+
+    `recent_messages` decoded a 200 and then indexed it, so a body that is
+    valid JSON of the wrong type raised AttributeError or TypeError out of the
+    client — past the one boundary whose whole job is to turn a bad call into
+    a HealthClawError. `careagents/app.py` catches HealthClawError and nothing
+    else, so each of these was an unhandled 500 on /chat.
+
+    MUTATION: drop the isinstance/row guards -> red with AttributeError.
+    Ran it, saw red.
+    """
+    for body in (b'{"error": "nope"}', b'42', b'"just-a-string"',
+                 b'[1, 2, 3]', b'[{"role": 7}]'):
+        _set(status=200, body=body)
+        try:
+            got = _client(stub_base).recent_messages("t")
+        except HealthClawError:
+            continue
+        assert isinstance(got, list), f"{body!r} produced {got!r}"
+        for row in got:
+            assert isinstance(row, dict) and "role" in row, repr(row)
 
 
 def test_a_lost_chat_turn_is_reported_to_the_caller(stub_base, reset_mode):
@@ -552,7 +583,7 @@ def test_a_missing_brief_and_an_unreachable_engine_are_both_unavailable(
     assert _client(stub_base).fetch_appointment_brief("t") is None, (
         "the engine answered: there is no brief")
 
-    for status in (500, 502, 503, 504):
+    for status in (500, 502, 503, 504, 401, 403):
         _set(status=status, body=b'{"error": "down"}')
         with pytest.raises(HealthClawError):
             _client(stub_base).fetch_appointment_brief("t")

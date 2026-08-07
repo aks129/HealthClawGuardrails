@@ -7,10 +7,12 @@ was told they were up to date on colorectal, cervical and breast cancer
 screening by a component that never ran.
 
 NOTE the URL. r6_blueprint is mounted at /r6/fhir and the handler adds a
-second "/fhir", so the route registers at /r6/fhir/fhir/AppointmentBrief
+second "/fhir", so the route registered at /r6/fhir/fhir/AppointmentBrief
 while its only client (careagents/healthclaw.py) requests
-/r6/fhir/AppointmentBrief. That mismatch is a separate defect, untouched
-here; these tests exercise the path the app actually serves.
+/r6/fhir/AppointmentBrief. FIXED (#386) — the URLs now agree, and this
+file asserts the one the client actually requests. Left in the docstring
+because the failure mode is worth remembering: every gate passed, every test
+was green, and the feature had never once run for a patient.
 """
 
 from r6.brief.engine import (
@@ -19,7 +21,7 @@ from r6.brief.engine import (
     CARE_GAPS_UNAVAILABLE,
 )
 
-_URL = "/r6/fhir/fhir/AppointmentBrief"
+_URL = "/r6/fhir/AppointmentBrief"
 _SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
 
 
@@ -86,3 +88,31 @@ def test_other_sections_are_unchanged(client, tenant_headers):
 
 def test_brief_requires_a_tenant(client):
     assert client.get(_URL).status_code == 400
+
+
+def test_the_route_serves_the_url_its_client_requests(app):
+    """#386. The defect that made every other test in this file meaningless.
+
+    The route registered at /r6/fhir/fhir/AppointmentBrief; the only client
+    (careagents/healthclaw.py) requested /r6/fhir/AppointmentBrief. Every gate
+    was green and the feature had never once run for a patient, because the
+    tests carried their own URL constant and so agreed with the route rather
+    than with the caller.
+
+    This asserts the two against each other instead: the path the client
+    builds must be a path the app serves. A test-visible URL is not a
+    contract; a shared one is.
+
+    MUTATION: restore "/fhir/AppointmentBrief" on the blueprint -> red.
+    Ran it, saw red.
+    """
+    from careagents.healthclaw import HealthClawClient
+
+    client_url = f"{HealthClawClient('http://x', 's').fhir}/AppointmentBrief"
+    path = client_url[len("http://x"):]
+
+    served = {str(rule) for rule in app.url_map.iter_rules()}
+    assert path in served, (
+        f"the client requests {path}, which the app does not serve. "
+        f"Brief-ish routes registered: "
+        f"{sorted(r for r in served if 'Brief' in r)}")
