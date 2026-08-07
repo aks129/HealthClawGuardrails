@@ -69,23 +69,58 @@ def _prune_memory_buckets(now):
             _rate_limits.pop(key, None)
 
 
+#: How many trusted proxies append to X-Forwarded-For before the request
+#: reaches this process. Railway is 1. Vercel is 2 — its edge appends the
+#: client and a second internal hop appends the edge. Configured rather than
+#: sniffed on purpose: every header that could reveal the platform is one the
+#: caller can also send, and trusting one would reopen #339.
+_DEFAULT_TRUSTED_PROXY_HOPS = 1
+
+#: The bucket for "the proxy chain is not the shape we were told it is". A
+#: real key would be a guess; sharing one bucket across every such request is
+#: the honest cost of not knowing, and it is visibly named so an operator can
+#: see it in Redis rather than inferring it from a throttling report.
+_UNIDENTIFIED_CLIENT = 'unidentified'
+
+
+def _trusted_proxy_hops():
+    """Configured proxy depth, never below 1 and never a crash."""
+    raw = os.environ.get('TRUSTED_PROXY_HOPS', '').strip()
+    try:
+        hops = int(raw)
+    except ValueError:
+        return _DEFAULT_TRUSTED_PROXY_HOPS
+    return hops if hops >= 1 else _DEFAULT_TRUSTED_PROXY_HOPS
+
+
 def _client_ip():
     """
     Best-effort client IP for rate-limit keying. Used only as a rate-limit
     bucket key — never for auth.
 
-    Behind a single trusted proxy (Railway/Vercel edge), the LAST entry in
-    X-Forwarded-For is the IP appended by that trusted proxy — i.e. the real
-    peer it saw. The leftmost entries are attacker-controllable: a client can
-    inject "X-Forwarded-For: spoofed" and split the bucket arbitrarily. Taking
-    the rightmost hop removes that spoofing surface for our 1-proxy topology.
-    (If proxy depth changes, count back that many hops instead.)
+    Each trusted proxy APPENDS the peer it saw, so with N trusted proxies the
+    real client is the Nth entry from the right. The leftmost entries are
+    attacker-controllable: a client can inject "X-Forwarded-For: spoofed" and
+    split the bucket arbitrarily, which is why we never read from the left.
+
+    This used to hardcode N=1 and describe it as correct for "Railway/Vercel
+    edge". It is correct for Railway and wrong for Vercel, where the rightmost
+    hop is Vercel's own internal address — a CONSTANT. Measured in production
+    on 2026-08-06, that collapsed every untenanted request on the internet
+    into one 120/min bucket and throttled the liveness probe along with
+    everyone else. A key resolver that cannot identify the client must say so
+    rather than return a value that reads like an identity.
     """
     fwd = request.headers.get('X-Forwarded-For', '')
     if fwd:
         hops = [h.strip() for h in fwd.split(',') if h.strip()]
-        if hops:
-            return hops[-1]
+        depth = _trusted_proxy_hops()
+        if len(hops) < depth:
+            # Shorter than the topology we were configured for: something
+            # other than the expected chain delivered this request. Guessing
+            # here hands the caller a key it controls.
+            return _UNIDENTIFIED_CLIENT
+        return hops[-depth]
     return request.remote_addr or 'unknown'
 
 
@@ -222,6 +257,13 @@ def rate_limit_middleware(blueprint):
         """Block requests that exceed the rate limit."""
         # Skip rate limiting for metadata (discovery)
         if request.path.endswith('/metadata'):
+            return None
+        # Liveness is exempt. prod_watch asks /health whether the process is
+        # alive; throttling it converts load into a false outage report, and
+        # on 2026-08-06 it did exactly that — the monitor read "busy" as
+        # "down" and paged on a system that was serving. A liveness probe
+        # that can be throttled is not a liveness probe.
+        if request.path.endswith('/health'):
             return None
         if request.path.endswith('/oauth-authorization-server'):
             return None
