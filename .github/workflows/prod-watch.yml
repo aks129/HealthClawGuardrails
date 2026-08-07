@@ -33,7 +33,7 @@ jobs:
           # the tip and fail every deploy that is legitimately in flight.
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
