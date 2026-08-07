@@ -26,7 +26,7 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # `git log --since` needs history. The default shallow clone returns
           # exactly one commit, which would silently narrow the accepted set to
