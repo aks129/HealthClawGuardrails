@@ -1,8 +1,9 @@
 # Why it keeps breaking: two generators, three laws
 
 Written at the end of 2026-08-06: eight behaviour PRs merged, one production
-incident caused by the person writing this document, and a conformance grader
-caught awarding its highest grade to an answer that contained nothing (#443).
+incident caused by the person writing this document, and one confident false
+finding filed against the conformance grader by the same person (#443,
+retracted — see §8).
 
 The 2026-08-02 retro named the defect species. The 2026-08-05 playbook planned
 the structural work. The 2026-08-06 retro counted fifteen instances in nine
@@ -32,7 +33,7 @@ Every row is from the last nine days. None is hypothetical.
 | code | stale step-up token; conversations returned 401 | an empty chat history; "this form is no longer awaiting review" (#434) |
 | code | colorectal rule cannot read FIT results | "you are due for screening", to a screened patient (#425, #428) |
 | code | AttributeError before redaction could run | a 500 that was, unnoticed, the only thing preventing a PHI leak (#391, #382) |
-| verifier | conformance read returned no Patient | grade A, with "passes trivially on an empty response" in its own evidence (#443) |
+| operator | a `detail` string describing a hypothetical failure | read as evidence the failure had occurred; #443 filed against a correct grader |
 | verifier | brief tests asserted their own URL constant | a green suite over a route no client could reach (#386) |
 | verifier | mutation harness compared a resolved path to a bare name | a correct Dockerfile failed; its mutation passed (08-06 retro §3) |
 | infra | worker health unreachable behind a blocked edge | healthz published `run_workers: false`; the incident read "workers down" (#410) |
@@ -163,10 +164,12 @@ A-series absorbs it.
 - Already practiced tonight and now the standard: #445 and #447 both carry
   their mutation tables in the PR body. A PR adding any gate without its
   demonstrated red is incomplete.
-- #443's fix applies Law 3 to the grader itself: a check whose subject is
-  absent is *not evaluated*, a run containing any not-evaluated check cannot
-  grade A, and the regression test asserts the negative — an empty tenant must
-  NOT grade A. Pinning only the happy path is what let the grader lie.
+- The pattern to copy is `probe_phi_redaction`'s: before asserting that five
+  fields are absent, assert the record came back at all
+  (`_is_resource`, `_bundle_contains`). Absence checks are satisfied by a
+  deployment that returns nothing, so the subject has to be present for them
+  to mean anything. That is Law 3 already implemented, and #443 was a false
+  report against it (see §8).
 
 **Process seeds (applied or pending owner action).**
 - Branch protection: all eight substantive checks required
@@ -225,3 +228,51 @@ the contradiction scan's result. Tonight it would have taken one sentence:
 this hostname, and I have not reconciled those." That sentence was available
 for six hours before the deletion. The system above makes such sentences
 harder to route around; it cannot make them unnecessary.
+
+## 8. The false finding, and what it cost to learn
+
+The first draft of this document opened by citing #443: `$conformance`
+awarding Grade A to a run whose own evidence said the substantive check
+"passes trivially on an empty response". It was presented as the sharpest
+instance in §1 — the defect living inside the instrument that certifies the
+others.
+
+**It was wrong.** `Check` is `(name, passed, detail)`. `detail` is the static
+explanation of what a failure *would* mean, attached whether or not the check
+fails. `"passed": true` meant `_is_resource(body, "Patient", pid)` returned
+True: the record was returned, the five absence checks below it were
+meaningful, and the A was earned. I read a warning label as a confession.
+
+The check I called broken is `r6/conformance/probes.py:471`, a deliberate
+two-sided guard added in #213, whose comment says exactly why it exists:
+
+> The five ABSENCE checks below are all satisfied by a deployment that returns
+> nothing at all... Redaction's contract is that the record survives it, so the
+> record has to be here for the absences to mean anything.
+
+There is a second at line 497 for the search path. Someone had already done
+the work I claimed was missing.
+
+**This stays in the document rather than being quietly deleted from it**, for
+three reasons.
+
+First, it is Law 3 broken in the act of proposing Law 3. I asserted a verifier
+did not work without ever seeing it fail: no probe against an empty tenant, no
+read of the dataclass. One `grep -n "class Check"` settled it — a day late,
+after the claim had become an issue, a section of a merged retro, and the
+headline of this document.
+
+Second, it is §4's generator wearing different clothes. There the collapse was
+*no domain listed* to *serves nothing*; here it was *a sentence describing a
+failure* to *the failure happened*. Both times the missing state was **I have
+not checked**, and both times it collapsed toward the confident reading.
+
+Third, and most useful: a false positive from a verification-obsessed process
+is not a harmless error. It consumed a day, produced an issue and two document
+sections, and aimed remediation at code that was already correct. **A system
+that defends only against under-verification produces confident wrong findings
+instead of confident wrong code.** The operator corollary in §3 has to run in
+both directions — before filing a defect as much as before deleting a project.
+
+Retraction landed on #443 (closed invalid); the merged 08-06 retro's §8 is
+struck by follow-up commit.
