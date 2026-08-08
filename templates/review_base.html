@@ -1,0 +1,52 @@
+{# Minimal shell for pages that are RELAYED to another origin.
+
+   `action_review.html` is fetched server-side by CareAgents and served from
+   careagents.cloud (careagents/app.py). Extending the site's `base.html`
+   sent three things across that boundary that only resolve on HealthClaw:
+
+     - `url_for('static', filename='css/r6-dashboard.css')` renders as the
+       absolute path /static/css/r6-dashboard.css. careagents/static/ has no
+       such file, so the patient got an UNSTYLED page.
+     - a HealthClaw navbar — Home, Dashboard, FAQ, Wiki, Skills — five links
+       that 404 on careagents.cloud.
+     - /_vercel/insights/script.js, which is not served there either.
+
+   All three at the moment a patient is asked to review and approve a
+   clinical form (#396). Beyond the cosmetics: someone who cannot tell whose
+   page they are on is being asked to attest on a surface that does not look
+   like the product they signed into.
+
+   So this shell carries NO navigation and NO same-origin asset references.
+   Bootstrap and Font Awesome stay, on public CDNs that resolve identically
+   from either origin — the defect was never "a CDN", it was a path that only
+   exists on one host.
+
+   Do not add a nav, a footer link, or a `url_for('static', ...)` here. Any of
+   them silently breaks only on the relayed origin, which is the one place
+   nothing in CI looks.
+#}<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Review{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+      /* The handful of rules this page took from r6-dashboard.css, inlined so
+         the page is self-contained on whichever origin serves it. */
+      body { background: #10131a; }
+      .review-shell { max-width: 900px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+      .review-mark { font-size: .8rem; letter-spacing: .04em; text-transform: uppercase;
+                     color: #8b95a7; margin-bottom: .75rem; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <div class="review-shell">
+      {% block content %}{% endblock %}
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
