@@ -109,7 +109,19 @@ def _encounter(id_, type_text, status="finished", date="2026-06-15T10:00:00Z"):
 
 
 def _care_gap_result(items):
-    return {"consumer": {"due": items}}
+    """Build the shape `build_consumer_summary` really emits.
+
+    This used to construct {"consumer": {"due": [...]}} — a key the producer
+    has never emitted at any point in its history, so every test below agreed
+    with a contract that existed only here (#387/#435). Items are the
+    producer's line shape: rule_id, title, status, message.
+    """
+    return {"consumer": {"lines": items, "note": "…"}}
+
+
+def _due(title, rule_id="rule-1", message="You may be due."):
+    return {"rule_id": rule_id, "title": title, "status": "due",
+            "message": message}
 
 
 # ---------------------------------------------------------------------------
@@ -136,9 +148,12 @@ class TestFullRecords:
         _encounter("e-1", "Annual wellness visit", "finished", "2026-06-01T10:00:00Z"),
         _encounter("e-2", "Cardiology follow-up", "planned", "2026-08-20T14:00:00Z"),
     ]
+    # The producer's line shape, not a hand-written one. `measure`/`reason`/
+    # `id` were this file's own invention and matched nothing in
+    # r6/caregaps/report.py (#387).
     CARE_GAPS = _care_gap_result([
-        {"measure": "Colorectal Cancer Screening", "reason": "No qualifying exam in period",
-         "id": "gap-1"},
+        _due("Colorectal Cancer Screening", rule_id="gap-1",
+             message="You may be due for colorectal cancer screening."),
     ])
 
     def test_problems_only_active(self):
@@ -211,7 +226,7 @@ class TestEmptyRecords:
             medication_requests=[],
             observations=[],
             encounters=[],
-            care_gap_result={"consumer": {"due": []}},
+            care_gap_result={"consumer": {"lines": [], "note": "…"}},
         )
         _assert_no_absence_strings(result)
 
@@ -291,22 +306,23 @@ class TestCareGapsThirdState:
         assert build_care_gaps({}).status == CARE_GAPS_UNAVAILABLE
         assert build_care_gaps(None).status == CARE_GAPS_UNAVAILABLE  # type: ignore[arg-type]
 
-    def test_consumer_payload_without_a_due_list_is_unavailable(self):
+    def test_consumer_payload_without_a_lines_list_is_unavailable(self):
         # A payload we cannot read is not an answer. Reporting "nothing due"
-        # off a shape that never carried the due items is the #381 defect.
+        # off a shape that never carried the lines is the #381 defect.
         section = build_care_gaps({"consumer": {"note": "some disclaimer"}})
         assert section.status == CARE_GAPS_UNAVAILABLE
         assert section.fields == []
 
     def test_successful_empty_evaluation_is_ok(self):
-        section = build_care_gaps({"consumer": {"due": []}})
+        section = build_care_gaps({"consumer": {"lines": [], "note": "…"}})
         assert section.status == CARE_GAPS_OK
         assert section.fields == []
         assert section.reason == ""
 
     def test_unavailable_and_no_gaps_are_distinguishable(self):
         failed = generate_brief([], [], [], [], {})
-        evaluated = generate_brief([], [], [], [], {"consumer": {"due": []}})
+        evaluated = generate_brief(
+            [], [], [], [], {"consumer": {"lines": [], "note": "…"}})
         assert failed.care_gaps == evaluated.care_gaps == []
         assert failed.care_gaps_status != evaluated.care_gaps_status
         assert failed.care_gaps_status == CARE_GAPS_UNAVAILABLE

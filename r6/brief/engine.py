@@ -285,20 +285,42 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
             reason=care_gap_result.get("reason") or CARE_GAPS_REASON_NO_RESULT)
 
     consumer = care_gap_result.get("consumer")
-    if not isinstance(consumer, dict) or "due" not in consumer:
+    # `lines`, not `due`. r6/caregaps/report.py::build_consumer_summary owns
+    # this shape and has never emitted a "due" key at any point in its
+    # history, so every brief rendered CARE_GAPS_REASON_UNREADABLE for a key
+    # mismatch rather than an error (#387, #435) — reproduced against
+    # production on 2026-08-06. Two copies of one fact drifting; the fix is
+    # to keep one (Law 2, docs/2026-08-06-two-generators-three-laws.md).
+    if not isinstance(consumer, dict) or "lines" not in consumer:
         return CareGapsSection(reason=CARE_GAPS_REASON_UNREADABLE)
 
-    due_items = consumer.get("due") or []
+    # `lines` carries due AND up-to-date; this section is gaps only. Listing
+    # an up-to-date screening under "care gaps" tells a patient to chase one
+    # they have already had.
+    lines = consumer.get("lines") or []
     out = []
-    for item in due_items:
-        label = item.get("measure") or item.get("name") or "Screening"
-        value = item.get("reason") or item.get("status") or "Due"
+    for item in lines:
+        if not isinstance(item, dict) or item.get("status") != "due":
+            continue
         out.append(BriefField(
-            label=label,
-            value=value,
+            label=item.get("title") or "Screening",
+            value=item.get("message") or "Due",
             source_type="MeasureReport",
-            source_id=item.get("id") or item.get("measure_id", ""),
+            source_id=item.get("rule_id", ""),
         ))
+
+    # An answer with a hole in it is not a whole answer. The producer already
+    # says which rules never decided and why (`unevaluated*`); discarding that
+    # would render an empty or partial gap list as a completed review, and
+    # "nothing is due" is a clinical claim only ever repeated from a result
+    # that made it (#428). The brief passes patient=None, so this is the
+    # ORDINARY path here, not an edge case (#435).
+    if consumer.get("unevaluated"):
+        return CareGapsSection(
+            fields=out, status=CARE_GAPS_UNAVAILABLE,
+            reason=consumer.get("unevaluated_note")
+            or CARE_GAPS_REASON_NO_RESULT)
+
     return CareGapsSection(fields=out, status=CARE_GAPS_OK, reason="")
 
 

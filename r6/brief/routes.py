@@ -116,7 +116,20 @@ def _care_gap_result(conditions: list[dict], observations: list[dict]) -> dict:
             observations=observations,
             as_of=date.today().isoformat(),
         )
-        consumer = build_consumer_summary(results)
+        # We KNOW we passed patient=None, and the caller reason outranks the
+        # rules' own causes for exactly this situation: with no record in
+        # front of them, every demographics-gated rule reports the date of
+        # birth as unknown, which is an artefact of this call and not a fact
+        # about the person (r6/caregaps/report.py::_unevaluated_marker, #417).
+        # Declaring it here is what stops the brief telling a patient their
+        # demographics are missing from a record that holds them.
+        #
+        # This is a stopgap, not the destination: the brief has no subject
+        # resolution at all, so no demographics-gated screening can be
+        # evaluated for anyone. Resolving a Patient for the brief is tracked
+        # separately (#435); until then the section says truthfully that it
+        # had nothing to read.
+        consumer = build_consumer_summary(results, not_evaluated="no-patient")
         return {"consumer": consumer}
     except Exception as exc:
         logger.warning("appointment brief: care-gaps evaluation failed (%s)",
