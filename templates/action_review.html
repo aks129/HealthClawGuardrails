@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "review_base.html" %}
 {% block title %}Review your intake form — HealthClaw Guardrails{% endblock %}
 
 {% block content %}
@@ -184,8 +184,29 @@
   // Client-side UX only. The SERVER POST re-populates from FHIR and is the
   // real, un-craftable gate (see r6/actions/review.py).
   (function () {
-    var TENANT = {{ tenant_id | tojson }};
-    var TOKEN = {{ step_up_token | tojson }};
+    // No TENANT/TOKEN literals here. A tenant-bound step-up token is a WRITE
+    // credential — the gate on clinical writes — and this page rendered it as
+    // a JavaScript literal, which CareAgents then relayed verbatim from
+    // careagents.cloud. Anything able to read the page body held a live write
+    // credential until it expired, across an origin boundary, at the clinical
+    // approval moment (#395).
+    //
+    // Nothing is lost by deleting it, and the reason is worth keeping:
+    //   - the GET at r6/actions/review.py:130 REQUIRES a step-up header and
+    //     401s without it. A browser navigation cannot set a custom header,
+    //     so no browser has ever loaded this page directly, and on any direct
+    //     request the literal rendered as "" anyway.
+    //   - the only caller that supplies that header is CareAgents' server-side
+    //     fetch_review_page — the path where the token got baked into HTML
+    //     and shipped onward to the patient.
+    //   - on submit, careagents/app.py rewrites this form's action to
+    //     /review/<agent>/<action>/submit, resolves the tenant from the
+    //     signed-in agent's ownership, and re-injects credentials itself. The
+    //     headers the browser sent were read by nobody.
+    //
+    // So the credential was populated ONLY on the path that does not need it.
+    // Do not "fix" a regression here by shortening the token's TTL instead:
+    // the exposure is the delivery, not the lifetime.
     var form = document.getElementById('review-form');
     var btn = document.getElementById('approve-btn');
     var gateMsg = document.getElementById('review-gate-msg');
@@ -227,11 +248,11 @@
       if (form.querySelector('#nka').checked) { payload['nka'] = 'true'; }
       fetch(form.action, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Tenant-Id': TENANT,
-          'X-Step-Up-Token': TOKEN
-        },
+        // Credentials are the server's to supply. The relay resolves the
+        // tenant from ownership and injects the step-up token itself, so the
+        // headers this used to send were unread as well as exposed (#395).
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify(payload)
       }).then(function (r) { return r.json().then(function (b) { return { r: r, b: b }; }); })
         .then(function (res) {
