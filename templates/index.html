@@ -1,5 +1,18 @@
-<!DOCTYPE html>
-<html lang="en">
+{#
+  healthclaw.io — the project site.
+
+  Presentation lives in static/css/healthclaw.css. This file carries content
+  and structure only. The previous version held ~200 inline `style=`
+  attributes and inline `onmouseover` handlers, which meant no visual fact had
+  a single owner and every section re-invented its own card. If you find
+  yourself adding a `style=` here, add a component there instead.
+
+  Class names that look historical are load-bearing — e2e/tests/landing.spec.ts
+  locates `#main-nav`, `h1.hero-title`, `.phi-compare` and `.pipeline-label`,
+  and tests/test_site_version_sync.py greps for `data-target="29"`. Renaming
+  one silently turns a Playwright assertion into a timeout.
+#}<!DOCTYPE html>
+<html lang="en" class="surface-paper">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,1087 +31,560 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="The guardrail layer between AI agents and clinical data">
   <meta name="twitter:description" content="Open-source safety layer for AI + FHIR health data. Try CareAgents — connect your records, spin up a guarded health agent.">
-  <meta name="theme-color" content="#0A0E17">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:        #0A0E17;
-      --bg-card:   #111827;
-      --bg-hover:  #1a2235;
-      --border:    #1e293b;
-      --cyan:      #22d3ee;
-      --cyan-dim:  rgba(34,211,238,0.53);
-      --cyan-glow: rgba(34,211,238,0.13);
-      --green:     #34d399;
-      --amber:     #fbbf24;
-      --red:       #f87171;
-      --white:     #f1f5f9;
-      --gray:      #94a3b8;
-      --gray-dim:  #64748b;
-      --gray-dark: #334155;
-      --font-sans: 'Outfit', sans-serif;
-      --font-mono: 'JetBrains Mono', monospace;
-    }
-
-    html { scroll-behavior: smooth; }
-    body { background: var(--bg); color: var(--white); font-family: var(--font-sans); overflow-x: hidden; }
-    a { text-decoration: none; }
-
-    /* ── Nav ── */
-    #main-nav {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      transition: background 0.3s, backdrop-filter 0.3s, border-bottom 0.3s;
-    }
-    #main-nav.scrolled {
-      background: rgba(10,14,23,0.92);
-      -webkit-backdrop-filter: blur(16px);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-    }
-    .nav-inner {
-      max-width: 1200px; margin: 0 auto; padding: 16px 24px;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .nav-brand { display: flex; align-items: center; gap: 10px; }
-    .nav-brand-name {
-      font-family: var(--font-sans); font-size: 20px; font-weight: 800;
-      color: var(--white); letter-spacing: -0.02em;
-    }
-    .nav-badge {
-      font-family: var(--font-mono); font-size: 10px; color: var(--cyan);
-      background: var(--cyan-glow); padding: 2px 8px; border-radius: 4px; font-weight: 600;
-    }
-    .nav-links { display: flex; gap: 28px; align-items: center; flex-wrap: wrap; }
-    .nav-link {
-      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
-      font-weight: 500; transition: color 0.2s;
-    }
-    .nav-link:hover { color: var(--white); }
-    .nav-cta {
-      background: var(--cyan); color: var(--bg) !important; font-weight: 600 !important;
-      padding: 8px 18px; border-radius: 8px; font-size: 13px !important;
-      transition: opacity 0.2s !important;
-    }
-    .nav-cta:hover { opacity: 0.88; }
-
-    /* ── Sections ── */
-    .section { padding: 80px 24px; max-width: 1200px; margin: 0 auto; }
-    .section-sm { padding: 40px 24px; max-width: 1200px; margin: 0 auto; }
-
-    /* ── Section header ── */
-    .section-tag {
-      font-family: var(--font-mono); font-size: 12px; font-weight: 600;
-      color: var(--cyan); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px;
-    }
-    .section-title {
-      font-family: var(--font-sans); font-size: clamp(26px, 3.5vw, 36px); font-weight: 800;
-      color: var(--white); line-height: 1.15; letter-spacing: -0.02em; margin-bottom: 12px;
-    }
-    .section-desc {
-      font-family: var(--font-sans); font-size: 16px; color: var(--gray);
-      line-height: 1.7; max-width: 700px;
-    }
-    .section-header { margin-bottom: 48px; }
-
-    /* ── Hero ── */
-    .hero-wrap { position: relative; padding: 140px 24px 60px; text-align: center; }
-    .hero-glow {
-      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-      width: 800px; height: 400px;
-      background: radial-gradient(ellipse, rgba(34,211,238,0.06) 0%, transparent 70%);
-      pointer-events: none;
-    }
-    .hero-inner { position: relative; max-width: 860px; margin: 0 auto; }
-    .hero-eyebrow {
-      font-family: var(--font-mono); font-size: 12px; color: var(--cyan);
-      letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 20px;
-    }
-    h1.hero-title {
-      font-family: var(--font-sans); font-size: clamp(36px, 5.5vw, 64px); font-weight: 800;
-      line-height: 1.08; letter-spacing: -0.03em; margin-bottom: 24px;
-    }
-    .hero-sub {
-      font-family: var(--font-sans); font-size: 18px; color: var(--gray);
-      max-width: 640px; margin: 0 auto 36px; line-height: 1.7;
-    }
-    .hero-ctas { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
-    .btn-primary {
-      background: var(--cyan); color: var(--bg); font-family: var(--font-sans);
-      font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 10px;
-      letter-spacing: -0.01em; transition: opacity 0.2s;
-    }
-    .btn-primary:hover { opacity: 0.88; }
-    .btn-outline {
-      background: transparent; color: var(--cyan); font-family: var(--font-sans);
-      font-weight: 600; font-size: 15px; padding: 14px 32px; border-radius: 10px;
-      border: 1px solid rgba(34,211,238,0.27); transition: border-color 0.2s, color 0.2s;
-    }
-    .btn-outline:hover { border-color: var(--cyan); }
-
-    /* ── Fade-in animations ── */
-    .fade-up { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
-    .fade-up.in { opacity: 1; transform: translateY(0); }
-    .hero-eyebrow, h1.hero-title, .hero-sub, .hero-ctas {
-      opacity: 0; transform: translateY(16px);
-      transition: opacity 0.7s ease, transform 0.7s ease;
-    }
-    .hero-loaded .hero-eyebrow { opacity: 1; transform: none; transition-delay: 0.1s; }
-    .hero-loaded h1.hero-title  { opacity: 1; transform: none; transition-delay: 0.22s; }
-    .hero-loaded .hero-sub      { opacity: 1; transform: none; transition-delay: 0.36s; }
-    .hero-loaded .hero-ctas     { opacity: 1; transform: none; transition-delay: 0.46s; }
-
-    /* ── Stats bar ── */
-    .stats-row {
-      display: flex; justify-content: center; gap: 48px; flex-wrap: wrap;
-      padding: 20px 24px 48px;
-    }
-    .stat { text-align: center; padding: 0 12px; }
-    .stat-num {
-      font-family: var(--font-mono); font-size: 42px; font-weight: 700;
-      color: var(--cyan); letter-spacing: -0.02em; display: block;
-    }
-    .stat-label { font-family: var(--font-sans); font-size: 14px; color: var(--gray-dim); margin-top: 4px; }
-
-    /* ── Guardrail pipeline cards ── */
-    .pipeline-grid {
-      display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;
-    }
-    .pipeline-card {
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 20px 18px; width: 175px; position: relative;
-    }
-    .pipeline-icon { font-size: 28px; margin-bottom: 8px; }
-    .pipeline-label {
-      font-family: var(--font-mono); font-size: 12px; font-weight: 600;
-      color: var(--cyan); margin-bottom: 6px; letter-spacing: 0.03em;
-    }
-    .pipeline-desc { font-family: var(--font-sans); font-size: 13px; color: var(--gray); line-height: 1.5; }
-
-    /* ── PHI redaction ── */
-    .phi-compare {
-      display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; align-items: center;
-    }
-    .phi-block {
-      font-family: var(--font-mono); font-size: 13px; line-height: 1.9;
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 24px; flex: 1 1 280px; max-width: 380px; white-space: pre-wrap;
-    }
-    .phi-label {
-      font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-      margin-bottom: 14px; letter-spacing: 0.06em; text-transform: uppercase;
-    }
-    .phi-arrow { color: var(--cyan); font-size: 28px; flex-shrink: 0; }
-    .phi-key { color: var(--gray-dim); }
-
-    /* ── Audience cards ── */
-    .audience-grid {
-      display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;
-    }
-    .audience-card {
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
-      padding: 32px; flex: 1 1 300px; max-width: 380px; position: relative;
-      overflow: hidden; transition: background 0.2s, border-color 0.2s; cursor: pointer;
-    }
-    .audience-card:hover { background: var(--bg-hover); }
-    .audience-glow {
-      position: absolute; top: -40px; right: -40px; width: 120px; height: 120px;
-      border-radius: 50%;
-    }
-    .audience-icon { font-size: 36px; margin-bottom: 16px; }
-    .audience-title {
-      font-family: var(--font-sans); font-size: 22px; font-weight: 700;
-      color: var(--white); margin-bottom: 6px; letter-spacing: -0.01em;
-    }
-    .audience-sub { font-family: var(--font-sans); font-size: 14px; font-weight: 500; margin-bottom: 20px; }
-    .audience-list { list-style: none; margin-bottom: 24px; }
-    .audience-list li {
-      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
-      line-height: 1.7; padding-left: 18px; position: relative;
-    }
-    .audience-list li::before {
-      content: "●"; position: absolute; left: 0; top: 3px; font-size: 10px;
-    }
-    .audience-cta { font-family: var(--font-mono); font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
-
-    /* ── Curatr checks ── */
-    .curatr-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
-    }
-    .check-card {
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
-      padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;
-    }
-    .check-badge {
-      font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-      padding: 2px 8px; border-radius: 4px; text-transform: uppercase;
-      letter-spacing: 0.05em; display: inline-block; width: fit-content;
-    }
-    .check-label { font-family: var(--font-sans); font-size: 14px; font-weight: 600; color: var(--white); }
-    .check-source { font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim); }
-    .curatr-note {
-      margin-top: 24px; font-family: var(--font-sans); font-size: 14px;
-      color: var(--gray); line-height: 1.7; max-width: 700px;
-    }
-
-    /* ── Comparison table ── */
-    .compare-wrap { overflow-x: auto; }
-    .compare-table {
-      width: 100%; border-collapse: collapse; font-family: var(--font-sans); font-size: 14px;
-    }
-    .compare-table th {
-      padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap;
-    }
-    .compare-table td {
-      padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px;
-    }
-    .compare-table td.hl { background: var(--cyan-glow); }
-    .compare-table .tick { color: var(--green); font-size: 16px; }
-    .compare-table .cross { color: rgba(248,113,113,0.55); font-size: 16px; }
-    .compare-table .val { color: var(--gray); font-family: var(--font-mono); font-size: 12px; }
-
-    /* ── Quick start ── */
-    .code-wrap { position: relative; }
-    .code-block {
-      font-family: var(--font-mono); font-size: 13px; line-height: 1.8;
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
-      padding: 24px 28px; color: var(--gray); overflow-x: auto; margin: 0;
-    }
-    .code-comment { color: var(--gray-dim); }
-    .code-cmd { color: var(--cyan); }
-    .copy-btn {
-      position: absolute; top: 12px; right: 12px;
-      background: var(--gray-dark); border: none; border-radius: 6px;
-      color: var(--gray); font-family: var(--font-mono); font-size: 11px;
-      padding: 6px 12px; cursor: pointer; transition: color 0.2s;
-    }
-    .copy-btn:hover { color: var(--white); }
-
-    /* ── Blog posts ── */
-    .blog-grid { display: flex; gap: 24px; flex-wrap: wrap; }
-    .blog-card {
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
-      padding: 28px; flex: 1 1 300px; max-width: 500px; transition: border-color 0.2s;
-    }
-    .blog-card:hover { border-color: rgba(34,211,238,0.27); }
-    .blog-title {
-      font-family: var(--font-sans); font-size: 18px; font-weight: 700;
-      color: var(--white); line-height: 1.3; margin-bottom: 8px;
-    }
-    .blog-desc {
-      font-family: var(--font-sans); font-size: 14px; color: var(--gray);
-      line-height: 1.6; margin-bottom: 16px;
-    }
-    .blog-cta { font-family: var(--font-mono); font-size: 12px; color: var(--cyan); font-weight: 500; }
-
-    /* ── Subscribe ── */
-    .subscribe-wrap {
-      max-width: 720px; margin: 0 auto; padding: 80px 24px 0;
-      text-align: center;
-    }
-    .subscribe-eyebrow {
-      font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em;
-      text-transform: uppercase; color: var(--cyan); margin-bottom: 14px;
-    }
-    .subscribe-title {
-      font-family: var(--font-sans); font-weight: 700; font-size: 28px;
-      color: var(--white); letter-spacing: -0.01em; margin-bottom: 10px;
-    }
-    .subscribe-sub {
-      font-family: var(--font-sans); font-size: 15px; color: var(--gray);
-      line-height: 1.6; margin-bottom: 28px;
-    }
-    .subscribe-form {
-      display: flex; gap: 10px; justify-content: center;
-      max-width: 480px; margin: 0 auto; flex-wrap: wrap;
-    }
-    .subscribe-input {
-      flex: 1 1 260px; min-width: 0;
-      background: rgba(255,255,255,0.04); border: 1px solid var(--border);
-      color: var(--white); padding: 12px 16px; border-radius: 8px;
-      font-family: var(--font-sans); font-size: 14px; outline: none;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .subscribe-input::placeholder { color: var(--gray-dim); }
-    .subscribe-input:focus { border-color: var(--cyan); background: rgba(255,255,255,0.06); }
-    .subscribe-btn {
-      background: var(--cyan); color: #001218; border: none;
-      padding: 12px 22px; border-radius: 8px;
-      font-family: var(--font-mono); font-size: 13px; font-weight: 700;
-      letter-spacing: 0.04em; cursor: pointer;
-      transition: opacity 0.2s, transform 0.1s;
-    }
-    .subscribe-btn:hover { opacity: 0.88; }
-    .subscribe-btn:active { transform: translateY(1px); }
-    .subscribe-btn[disabled] { opacity: 0.5; cursor: wait; }
-    .subscribe-msg {
-      margin-top: 14px; font-family: var(--font-mono); font-size: 12px;
-      min-height: 18px;
-    }
-    .subscribe-msg.ok    { color: var(--green); }
-    .subscribe-msg.error { color: #ff7b7b; }
-    .subscribe-fineprint {
-      font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim);
-      margin-top: 16px;
-    }
-    .subscribe-fineprint + .subscribe-fineprint { margin-top: 6px; }
-
-    /* ── Footer ── */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 40px 24px;
-    }
-    .footer-inner {
-      max-width: 1200px; margin: 0 auto;
-      display: flex; justify-content: space-between; align-items: flex-start;
-      flex-wrap: wrap; gap: 24px;
-    }
-    .footer-brand { font-family: var(--font-sans); font-weight: 800; font-size: 16px; color: var(--white); }
-    .footer-sub { font-family: var(--font-mono); font-size: 11px; color: var(--gray-dim); margin-top: 4px; }
-    .footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
-    .footer-link { font-family: var(--font-sans); font-size: 13px; color: var(--gray-dim); transition: color 0.2s; }
-    .footer-link:hover { color: var(--white); }
-    .footer-endpoints {
-      width: 100%; display: flex; gap: 24px; flex-wrap: wrap;
-      padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--border);
-    }
-    .footer-ep { font-family: var(--font-mono); font-size: 12px; color: var(--cyan-dim); transition: color 0.2s; }
-    .footer-ep:hover { color: var(--cyan); }
-
-    @media (max-width: 640px) {
-      .nav-links { gap: 16px; }
-      .section { padding: 56px 16px; }
-      .hero-wrap { padding: 120px 16px 48px; }
-      .pipeline-card { width: 150px; }
-      .stats-row { gap: 28px; }
-    }
-  </style>
+  <meta name="theme-color" content="#FAF9F5">
+  {# Self-hosted. No page on either surface calls a third party on load —
+     see scripts/vendor_frontend_assets.py and the CSP in app.py. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/healthclaw.css') }}">
 </head>
 <body>
 
-<!-- ═══ NAV ═══ -->
-<nav id="main-nav">
-  <div class="nav-inner">
-    <a href="{{ url_for('index') }}" class="nav-brand" style="text-decoration:none">
-      <span class="nav-brand-name">HealthClaw</span>
-      <span class="nav-badge">v{{ health_context.version }}</span>
+<a href="#main" class="visually-hidden">Skip to content</a>
+
+<!-- ═══ MASTHEAD ═══ -->
+<nav id="main-nav" class="hc-nav">
+  <div class="hc-nav__inner">
+    <a href="{{ url_for('index') }}" class="hc-nav__brand">
+      <span class="hc-nav__mark">HealthClaw</span>
+      <span class="hc-nav__ver">v{{ health_context.version }}</span>
     </a>
-    <div class="nav-links">
-      <a href="{{ url_for('index') }}" class="nav-link">Home</a>
-      <a href="{{ url_for('r6_dashboard') }}" class="nav-link">Health Data Dashboard</a>
-      <a href="{{ url_for('skills_index') }}" class="nav-link">Skills</a>
-      <a href="{{ url_for('wiki') }}" class="nav-link">Docs</a>
-      <a href="{{ url_for('faq') }}" class="nav-link">FAQ</a>
-      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="nav-link nav-cta">GitHub</a>
+    <div class="hc-nav__links">
+      <a href="{{ url_for('index') }}" class="hc-nav__link" aria-current="page">Home</a>
+      <a href="{{ url_for('r6_dashboard') }}" class="hc-nav__link">Health Data Dashboard</a>
+      <a href="{{ url_for('skills_index') }}" class="hc-nav__link">Skills</a>
+      <a href="{{ url_for('wiki') }}" class="hc-nav__link">Docs</a>
+      <a href="{{ url_for('faq') }}" class="hc-nav__link">FAQ</a>
+      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="hc-nav__link">GitHub</a>
     </div>
   </div>
 </nav>
 
+<main id="main">
+
 <!-- ═══ HERO ═══ -->
-<div class="hero-wrap" id="hero-wrap">
-  <div class="hero-glow"></div>
-  <div class="hero-inner">
-    <div class="hero-eyebrow">Open reference implementation &middot; MIT License &middot; Community project</div>
-    <h1 class="hero-title">
-      The guardrail layer between<br>
-      <span style="color:var(--cyan)">AI agents</span> and
-      <span style="color:var(--green)">clinical data</span>
-    </h1>
-    <p class="hero-sub">
-      FHIR standardized health data. MCP standardized how AI connects to tools.
-      Nobody standardized the guardrails in between &mdash; so we built a shared, open
-      reference for that layer. See it working in <strong style="color:var(--white)">CareAgents</strong>:
-      sign in with your face, connect your records, and spin up a health agent
-      that reads them &mdash; redaction, audit, and human sign-off enforced server-side.
-    </p>
-    <div class="hero-ctas">
-      <a href="https://careagents.cloud" target="_blank" rel="noopener" class="btn-primary">Try CareAgents &rarr;</a>
-      <a href="{{ url_for('r6_dashboard') }}" class="btn-outline">Explore the live dashboard</a>
+<section class="wrap hero">
+  <p class="hero__eyebrow">Open reference implementation · MIT License · Community project</p>
+  <h1 class="hero-title">The guardrail layer between <em>AI agents</em> and clinical data</h1>
+  <p class="hero__lede">
+    FHIR standardised health data. MCP standardised how AI connects to tools.
+    Nobody standardised the guardrails in between — so we built a shared, open
+    reference for that layer. See it working in <strong>CareAgents</strong>:
+    sign in with your face, connect your records, and spin up a health agent
+    that reads them, with redaction, audit, and human sign-off enforced
+    server-side.
+  </p>
+  <div class="hero__ctas">
+    <a href="https://careagents.cloud" target="_blank" rel="noopener" class="btn btn--primary">Try CareAgents →</a>
+    <a href="{{ url_for('r6_dashboard') }}" class="btn btn--ghost">Explore the live dashboard</a>
+  </div>
+  <p class="hero__fine">
+    Building on it? It is MIT-licensed —
+    <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">use it, fork it, send a PR</a>.
+  </p>
+</section>
+
+<!-- ═══ SPEC STRIP ═══ -->
+<div class="wrap">
+  <div class="spec-strip">
+    <div class="spec">
+      <span class="spec__num" data-target="29">0</span>
+      <div class="spec__label">MCP tools</div>
     </div>
-    <p style="margin-top:18px;font-size:13px;color:var(--gray)">
-      Building on it? It's MIT-licensed &mdash;
-      <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" style="color:var(--cyan)">use it, fork it, send a PR</a>.
-    </p>
-  </div>
-</div>
-
-<!-- ═══ STATS ═══ -->
-<div class="stats-row">
-  <div class="stat">
-    <span class="stat-num" data-target="29">0</span>
-    <div class="stat-label">MCP Tools</div>
-  </div>
-  <div class="stat">
-    <span class="stat-num" data-target="39">0</span>
-    <div class="stat-label">FHIR Resource Types</div>
-  </div>
-  <div class="stat">
-    <span class="stat-num" data-target="1665">0</span>
-    <div class="stat-label">Tests Passing</div>
-  </div>
-  <div class="stat">
-    <span class="stat-num" data-target="6">0</span>
-    <div class="stat-label">Guardrail Layers</div>
-  </div>
-</div>
-
-<!-- ═══ VIDEO WALKTHROUGHS ═══ -->
-<div class="section" style="padding-top:64px" id="videos">
-  <div class="section-header fade-up">
-    <div class="section-tag" style="color:var(--cyan)">See it in action</div>
-    <h2 class="section-title">Watch HealthClaw guard a live agent</h2>
-    <p class="section-desc">A 3-minute showcase built for the PromptOpinion Agents Assemble Challenge, plus a 5-minute deep-dive for engineers who want the architecture story.</p>
-  </div>
-
-  <div class="fade-up" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px;max-width:1100px;margin:32px auto 0">
-    <div style="background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.18);border-radius:12px;overflow:hidden">
-      <video controls preload="metadata" playsinline style="display:block;width:100%;height:auto;background:#000" poster="">
-        <source src="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}" type="video/mp4">
-        Your browser does not support the video tag. <a href="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}" style="color:var(--cyan)">Download the MP4</a>.
-      </video>
-      <div style="padding:16px 18px 18px">
-        <div style="font-family:var(--font-mono);font-size:11px;color:var(--cyan);letter-spacing:0.04em;text-transform:uppercase;margin-bottom:6px">3-minute demo &middot; Devpost submission</div>
-        <div style="font-size:15.5px;font-weight:600;color:var(--white);margin-bottom:6px">Agents Assemble Challenge showcase</div>
-        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0">An AI agent calls HealthClaw FHIR tools; you see PHI redaction, audit emission, and the synthetic-data disclaimer fire in real time.</p>
-      </div>
+    <div class="spec">
+      <span class="spec__num" data-target="39">0</span>
+      <div class="spec__label">FHIR resource types</div>
     </div>
-
-    <div style="background:rgba(13,17,23,0.6);border:1px solid rgba(52,211,153,0.18);border-radius:12px;overflow:hidden">
-      <video controls preload="metadata" playsinline style="display:block;width:100%;height:auto;background:#000" poster="">
-        <source src="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}" type="video/mp4">
-        Your browser does not support the video tag. <a href="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}" style="color:var(--green)">Download the MP4</a>.
-      </video>
-      <div style="padding:16px 18px 18px">
-        <div style="font-family:var(--font-mono);font-size:11px;color:var(--green);letter-spacing:0.04em;text-transform:uppercase;margin-bottom:6px">5-minute deep dive</div>
-        <div style="font-size:15.5px;font-weight:600;color:var(--white);margin-bottom:6px">Architecture &amp; SHARP-on-MCP walkthrough</div>
-        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0">How HealthClaw forwards SMART-on-FHIR tokens via SHARP headers, applies the guardrail stack, and stays compatible with any EHR &mdash; with the code paths called out.</p>
-      </div>
+    <div class="spec">
+      <span class="spec__num" data-target="1665">0</span>
+      <div class="spec__label">Tests passing</div>
     </div>
-  </div>
-</div>
-
-<!-- ═══ WHERE TO USE IT ═══ -->
-<div class="section" style="padding-top:72px" id="gateways">
-  <div class="section-header fade-up">
-    <div class="section-tag" style="color:var(--amber)">Where to use it</div>
-    <h2 class="section-title">Pick your chat surface &mdash; HealthClaw is the same underneath</h2>
-    <p class="section-desc">HealthClaw is the data + guardrail layer. Three gateways are wired in today; all three call the same MCP server, get the same redacted responses, and emit the same audit trail. <a href="{{ url_for('wiki') }}#gateways" style="color:var(--cyan)">Compare them on the wiki</a>.</p>
-  </div>
-
-  <div class="fade-up" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:20px;max-width:1180px;margin:32px auto 0">
-
-    <!-- PROMPTOPINION -->
-    <a href="https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(251,191,36,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(251,191,36,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(251,191,36,0.22)';this.style.transform='translateY(0)'">
-      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--amber);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
-        <span>PromptOpinion Marketplace</span>
-        <span style="background:rgba(52,211,153,0.18);color:var(--green);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Open Access</span>
-        <span style="background:rgba(34,211,238,0.18);color:var(--cyan);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Po FHIR Context</span>
-      </div>
-      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">HealthClaw on PromptOpinion</div>
-      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">Published as both a Superpower (MCP server, 16 tools) and an Agent (Clinical Reviewer). Click <em>Add to Workspace</em>, pick a model, start chatting in the browser &mdash; synthetic Grover Keeling demo data preloaded.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:auto">
-        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);background:rgba(34,211,238,0.08);padding:3px 8px;border-radius:5px">Devpost: Agents Assemble</span>
-        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--gray-dim);background:rgba(255,255,255,0.04);padding:3px 8px;border-radius:5px">SHARP-on-MCP</span>
-      </div>
-      <div style="margin-top:14px;font-size:12.5px;color:var(--amber)">Open Agent listing &rarr;</div>
-    </a>
-
-    <!-- HERMES -->
-    <a href="{{ url_for('wiki') }}#hermes-quickstart" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(34,211,238,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(34,211,238,0.22)';this.style.transform='translateY(0)'">
-      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
-        <span>Hermes (Nous Research)</span>
-        <span style="background:rgba(52,211,153,0.18);color:var(--green);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">New</span>
-        <span style="background:rgba(34,211,238,0.18);color:var(--cyan);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Self-improving</span>
-      </div>
-      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">Multi-gateway chat that learns</div>
-      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">Telegram &middot; Discord &middot; Slack &middot; WhatsApp &middot; Signal &middot; CLI &middot; HTTP. Native MCP client. Skills get better as you use them &mdash; the 10 HealthClaw skills ship as starting points.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">
-        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--cyan);background:rgba(34,211,238,0.08);padding:3px 8px;border-radius:5px">./hermes/install.sh</span>
-        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--gray-dim);background:rgba(255,255,255,0.04);padding:3px 8px;border-radius:5px">agentskills.io</span>
-      </div>
-      <div style="margin-top:14px;font-size:12.5px;color:var(--cyan)">Hermes Quick Start &rarr;</div>
-    </a>
-
-    <!-- OPENCLAW -->
-    <a href="{{ url_for('wiki') }}#gateway-openclaw" style="display:block;text-decoration:none;background:rgba(13,17,23,0.6);border:1px solid rgba(52,211,153,0.22);border-radius:12px;padding:22px 22px 20px;transition:border-color 0.2s,transform 0.2s" onmouseover="this.style.borderColor='rgba(52,211,153,0.55)';this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='rgba(52,211,153,0.22)';this.style.transform='translateY(0)'">
-      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;color:var(--green);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
-        <span>OpenClaw</span>
-        <span style="background:rgba(255,255,255,0.07);color:var(--gray-dim);padding:2px 7px;border-radius:6px;font-size:9.5px;letter-spacing:0.04em">Telegram</span>
-      </div>
-      <div style="font-size:16px;font-weight:600;color:var(--white);margin-bottom:6px">One bot, fixed commands, zero ambiguity</div>
-      <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.6;margin:0 0 14px">The original integration. Telegram bot with slash commands (<code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/conditions</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/labs</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/curatr</code>, <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--green)">/approve</code>). Best when you want exactly one chat channel and predictable behavior.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">
-        <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--green);background:rgba(52,211,153,0.08);padding:3px 8px;border-radius:5px">docker-compose --profile openclaw up</span>
-      </div>
-      <div style="margin-top:14px;font-size:12.5px;color:var(--green)">OpenClaw setup &rarr;</div>
-    </a>
-  </div>
-
-  <div class="fade-up" style="text-align:center;margin-top:28px;color:var(--gray-dim);font-size:13px">
-    Need raw MCP &mdash; Claude Desktop, MCP Inspector, or your own client? Point it at <code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">https://mcp-demo-production-ee2c.up.railway.app/mcp</code> &mdash; no credential needed, and it is pinned server-side to the synthetic <code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">desktop-demo</code> tenant, so it only ever serves fake data.
-  </div>
-</div>
-
-<!-- ═══ COMPILED TRUTH (flagship in v1.2.0) ═══ -->
-<div style="background:linear-gradient(180deg,rgba(34,211,238,0.045) 0%,transparent 100%);border-top:1px solid rgba(34,211,238,0.08);border-bottom:1px solid rgba(34,211,238,0.08)">
-  <div class="section" style="padding-top:72px">
-    <div class="section-header fade-up">
-      <div class="section-tag" style="color:var(--cyan)">Compiled Truth</div>
-      <h2 class="section-title">See what your record says now &mdash; and why it says that.</h2>
-      <p class="section-desc">Every other health tool shows you data. HealthClaw shows you the <em>trail</em>. One FHIR operation, one MCP tool, one review surface. Built on the dead-simple primitive every PHR is missing: current state + append-only evidence.</p>
+    <div class="spec">
+      <span class="spec__num" data-target="6">0</span>
+      <div class="spec__label">Guardrail layers</div>
     </div>
-
-    <div class="audience-grid fade-up" style="transition-delay:0.1s">
-      <div class="audience-card" style="border-color:var(--border);cursor:default">
-        <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
-        <div class="audience-icon">📖</div>
-        <div class="audience-title" style="color:var(--cyan)">One primitive</div>
-        <div class="audience-sub" style="color:var(--gray-dim)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--cyan)">GET /$compiled-truth</code></div>
-        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">Returns a FHIR Parameters bundle: the redacted current resource, its curation state, quality score, and the full Provenance timeline &mdash; newest first. Nothing hidden.</p>
-      </div>
-
-      <div class="audience-card" style="border-color:var(--border);cursor:default">
-        <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
-        <div class="audience-icon">🧩</div>
-        <div class="audience-title" style="color:var(--green)">One MCP tool</div>
-        <div class="audience-sub" style="color:var(--gray-dim)"><code style="font-family:var(--font-mono);font-size:12px;color:var(--green)">fhir_compiled_truth</code></div>
-        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">Agents call this before making resource-specific claims. Responses carry <code style="font-family:var(--font-mono);font-size:12px;color:var(--green)">_meta.ui.resourceUri</code> &mdash; an embeddable review surface. No more chat-text walls of fine print.</p>
-      </div>
-
-      <div class="audience-card" style="border-color:var(--border);cursor:default">
-        <div class="audience-glow" style="background:rgba(251,191,36,0.05)"></div>
-        <div class="audience-icon">🗂️</div>
-        <div class="audience-title" style="color:var(--amber)">One review surface</div>
-        <div class="audience-sub" style="color:var(--gray-dim)">MCP App &middot; native HTML</div>
-        <p style="color:var(--gray-dim);font-size:13.5px;line-height:1.65;margin:12px 0 0">A focused page renders exactly when the agent needs it: current data left, evidence right, approve / re-evaluate bottom. Zero install. No app-nobody-opens.</p>
-      </div>
-    </div>
-
-    <div class="fade-up" style="max-width:820px;margin:36px auto 0;padding:22px 24px;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.2);border-radius:10px;font-family:var(--font-mono);font-size:13px;line-height:1.85;color:var(--gray-dim)">
-      <div style="color:var(--cyan);margin-bottom:10px;font-size:11.5px">&#47;&#47; Example: agent reads the compiled truth before answering</div>
-      <div><span style="color:var(--green)">curl</span> -H <span style="color:var(--white)">"X-Tenant-Id: your-tenant"</span> \</div>
-      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--white)">https://healthclaw.io/r6/fhir/Condition/&lt;id&gt;/$compiled-truth</span></div>
-      <div style="color:var(--cyan);margin-top:14px;margin-bottom:10px;font-size:11.5px">&#47;&#47; Or via MCP from Claude Desktop</div>
-      <div>&gt; <span style="color:var(--white)">fhir_compiled_truth(resource_type="Condition", resource_id="&lt;id&gt;")</span></div>
-    </div>
-
-    <p class="fade-up" style="text-align:center;color:var(--gray-dim);font-size:13px;margin-top:28px;transition-delay:0.2s">
-      Inspired by the compiled-truth + append-only-evidence pattern.
-      Backed by R6 Provenance. Patient-first by construction.
-    </p>
   </div>
 </div>
 
 <!-- ═══ GUARDRAIL PIPELINE ═══ -->
-<div class="section">
-  <div class="section-header fade-up">
-    <div class="section-tag">How it works</div>
-    <h2 class="section-title">Every request passes through 6 layers</h2>
-    <p class="section-desc">When an AI agent accesses clinical data through HealthClaw, each request is validated, redacted, authorized, and recorded before anything touches the FHIR server.</p>
+<section class="wrap section" id="pipeline">
+  <div class="section-head rise">
+    <span class="eyebrow">How it works</span>
+    <h2 class="section-title">Every request passes through six layers</h2>
+    <p class="section-lede">When an AI agent reaches clinical data through HealthClaw, each request is validated, redacted, authorised, and recorded before anything touches the FHIR server.</p>
   </div>
-  <div class="pipeline-grid" id="pipeline-grid">
-    <div class="pipeline-card fade-up" style="transition-delay:0s">
-      <div class="pipeline-icon">🛡️</div>
+  <div class="grid grid--3 seq rise">
+    <div class="seq__item">
+      <span class="seq__n">01</span>
       <div class="pipeline-label">PHI Redacted</div>
-      <div class="pipeline-desc">Names, addresses, DOB stripped before agent sees data</div>
+      <p class="seq__note">Names, addresses and dates of birth stripped before the agent sees data.</p>
     </div>
-    <div class="pipeline-card fade-up" style="transition-delay:0.1s">
-      <div class="pipeline-icon">✅</div>
+    <div class="seq__item">
+      <span class="seq__n">02</span>
       <div class="pipeline-label">$validate Gate</div>
-      <div class="pipeline-desc">Structural validation before any write proposal</div>
+      <p class="seq__note">Structural validation before any write proposal.</p>
     </div>
-    <div class="pipeline-card fade-up" style="transition-delay:0.2s">
-      <div class="pipeline-icon">🔒</div>
+    <div class="seq__item">
+      <span class="seq__n">03</span>
       <div class="pipeline-label">Permission Eval</div>
-      <div class="pipeline-desc">R6 Permission $evaluate: deny by default</div>
+      <p class="seq__note">R6 Permission $evaluate, denying by default.</p>
     </div>
-    <div class="pipeline-card fade-up" style="transition-delay:0.3s">
-      <div class="pipeline-icon">🔑</div>
+    <div class="seq__item">
+      <span class="seq__n">04</span>
       <div class="pipeline-label">HMAC Step-up</div>
-      <div class="pipeline-desc">Signed token with 128-bit nonce, 5-min TTL</div>
+      <p class="seq__note">Signed token with a 128-bit nonce and a five-minute TTL.</p>
     </div>
-    <div class="pipeline-card fade-up" style="transition-delay:0.4s">
-      <div class="pipeline-icon">👤</div>
+    <div class="seq__item">
+      <span class="seq__n">05</span>
       <div class="pipeline-label">Human Gate</div>
-      <div class="pipeline-desc">Clinical writes blocked until human confirms</div>
+      <p class="seq__note">Clinical writes stay blocked until a person confirms.</p>
     </div>
-    <div class="pipeline-card fade-up" style="transition-delay:0.5s">
-      <div class="pipeline-icon">📋</div>
+    <div class="seq__item">
+      <span class="seq__n">06</span>
       <div class="pipeline-label">Audit Trail</div>
-      <div class="pipeline-desc">Immutable, append-only record of every action</div>
+      <p class="seq__note">An immutable, append-only record of every action.</p>
     </div>
-  </div>
-</div>
-
-<!-- ═══ PHI REDACTION ═══ -->
-<div class="section" style="padding-top:0">
-  <div class="section-header fade-up">
-    <div class="section-tag">PHI Redaction</div>
-    <h2 class="section-title">The agent never sees raw patient data</h2>
-    <p class="section-desc">Applied on every read path: direct reads, search results, upstream proxy responses, and context envelopes. Agents work with safe, de-identified data by default.</p>
-  </div>
-  <div class="phi-compare fade-up">
-    <div class="phi-block">
-      <div class="phi-label" style="color:var(--red)">Stored in FHIR Server</div><span class="phi-key">name:    </span><span style="color:var(--white)">Maria Elena Rivera</span>
-<span class="phi-key">mrn:     </span><span style="color:var(--white)">MRN-2026-4471</span>
-<span class="phi-key">phone:   </span><span style="color:var(--white)">617-555-0198</span>
-<span class="phi-key">address: </span><span style="color:var(--white)">123 Clinical Ave, Boston MA 02101</span>
-<span class="phi-key">dob:     </span><span style="color:var(--white)">1985-03-15</span></div>
-    <div class="phi-arrow">→</div>
-    <div class="phi-block">
-      <div class="phi-label" style="color:var(--green)">Delivered to AI Agent</div><span class="phi-key">name:    </span><span style="color:var(--green)">M. E. Rivera</span>
-<span class="phi-key">mrn:     </span><span style="color:var(--green)">***4471</span>
-<span class="phi-key">phone:   </span><span style="color:var(--green)">[Redacted]</span>
-<span class="phi-key">address: </span><span style="color:var(--green)">Boston, MA</span>
-<span class="phi-key">dob:     </span><span style="color:var(--green)">1985</span></div>
-  </div>
-</div>
-
-<!-- ═══ AUDIENCE CARDS ═══ -->
-<div class="section" style="padding-top:0">
-  <div class="section-header fade-up">
-    <div class="section-tag">Built for</div>
-    <h2 class="section-title">Three paths, one guardrail stack</h2>
-    <p class="section-desc">Whether you're building an AI health agent, managing your own health data, or evaluating compliance infrastructure — HealthClaw meets you where you are.</p>
-  </div>
-  <div class="audience-grid">
-
-    <a href="{{ url_for('wiki') }}" class="audience-card fade-up" style="transition-delay:0s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(34,211,238,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
-      <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
-      <div class="audience-icon">⚡</div>
-      <div class="audience-title">AI Agent Developer</div>
-      <div class="audience-sub" style="color:var(--cyan)">Ship HIPAA-safe agents in minutes, not months</div>
-      <ul class="audience-list" style="--dot:var(--cyan)">
-        <li style="--before-color:var(--cyan)">29 MCP tools — drop into Claude Desktop, or any framework via the OpenAI/Gemini adapters</li>
-        <li style="--before-color:var(--cyan)">Fill & extract forms the standard way — HL7 SDC $populate / $extract</li>
-        <li style="--before-color:var(--cyan)">One-line Claude Code install (marketplace below)</li>
-        <li style="--before-color:var(--cyan)">Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
-        <li style="--before-color:var(--cyan)">PHI redaction, audit, step-up auth — zero config</li>
-      </ul>
-      <div class="audience-cta" style="color:var(--cyan)">Quick Start →</div>
-    </a>
-
-    <a href="{{ url_for('r6_dashboard') }}" class="audience-card fade-up" style="transition-delay:0.15s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(52,211,153,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
-      <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
-      <div class="audience-icon">💊</div>
-      <div class="audience-title">Patient / Consumer</div>
-      <div class="audience-sub" style="color:var(--green)">See what's wrong with your health data — and fix it</div>
-      <ul class="audience-list">
-        <li style="--before-color:var(--green)">Curatr checks records against live medical code databases</li>
-        <li style="--before-color:var(--green)">Plain-language explanations of coding errors and their impact</li>
-        <li style="--before-color:var(--green)">You approve every fix — full provenance trail, no black boxes</li>
-        <li style="--before-color:var(--green)">Connect 1,000+ EHR systems via Fasten Connect</li>
-        <li style="--before-color:var(--green)">Wearable data (Garmin, Oura, Polar, Whoop, Fitbit) via Open Wearables</li>
-      </ul>
-      <div class="audience-cta" style="color:var(--green)">Try Curatr →</div>
-    </a>
-
-    <a href="{{ url_for('faq') }}" class="audience-card fade-up" style="transition-delay:0.3s;border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(251,191,36,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
-      <div class="audience-glow" style="background:rgba(251,191,36,0.05)"></div>
-      <div class="audience-icon">🏥</div>
-      <div class="audience-title">Health System / Payer</div>
-      <div class="audience-sub" style="color:var(--amber)">Let AI agents touch clinical data without a compliance disaster</div>
-      <ul class="audience-list">
-        <li style="--before-color:var(--amber)">Vendor-neutral proxy — works with your existing FHIR stack</li>
-        <li style="--before-color:var(--amber)">Tenant isolation, immutable audit, OAuth 2.1 + PKCE</li>
-        <li style="--before-color:var(--amber)">Human-in-the-loop for clinical writes (HTTP 428 pattern)</li>
-        <li style="--before-color:var(--amber)">950+ tests, Playwright e2e, open source (MIT)</li>
-      </ul>
-      <div class="audience-cta" style="color:var(--amber)">Architecture →</div>
-    </a>
-
-  </div>
-</div>
-
-<!-- ═══ CLAUDE CODE PLUGIN MARKETPLACE ═══ -->
-<div style="background:linear-gradient(180deg,rgba(34,211,238,0.04) 0%,transparent 100%)">
-  <div class="section" style="padding-top:60px">
-    <div class="section-header fade-up">
-      <div class="section-tag">Claude Code Plugin</div>
-      <h2 class="section-title">Install HealthClaw skills into Claude Code in one line</h2>
-      <p class="section-desc">The <code style="color:var(--cyan);font-family:var(--font-mono);font-size:14px">healthclaw-marketplace</code> hosts two plugins that ship as auto-discoverable Claude Code skills. Add the marketplace once, install either plugin, and Claude invokes the right skill whenever your prompt matches its triggers — no manual tool wiring.</p>
-    </div>
-
-    <div class="fade-up" style="max-width:820px;margin:0 auto 36px;padding:24px 28px;background:rgba(13,17,23,0.6);border:1px solid rgba(34,211,238,0.2);border-radius:10px;font-family:var(--font-mono);font-size:14px;line-height:1.9">
-      <div style="color:var(--gray-dim);margin-bottom:8px;font-size:12px">&#47;&#47; Add the marketplace (once)</div>
-      <div><span style="color:var(--green)">$</span> claude plugin marketplace add <span style="color:var(--cyan)">aks129&#47;HealthClawGuardrails</span></div>
-      <div style="color:var(--gray-dim);margin-top:18px;margin-bottom:8px;font-size:12px">&#47;&#47; Install the guardrail plugin (FHIR + MCP + Curatr + Fasten Connect)</div>
-      <div><span style="color:var(--green)">$</span> claude plugin install <span style="color:var(--cyan)">healthclaw-guardrails@healthclaw-marketplace</span></div>
-      <div style="color:var(--gray-dim);margin-top:18px;margin-bottom:8px;font-size:12px">&#47;&#47; Or skip the install — hosted consumer app</div>
-      <div><span style="color:var(--green)">$</span> open <span style="color:var(--cyan)">https:&#47;&#47;careagents.cloud</span></div>
-    </div>
-
-    <div class="audience-grid fade-up" style="transition-delay:0.15s">
-      <div class="audience-card" style="border-color:var(--border);cursor:default">
-        <div class="audience-glow" style="background:rgba(34,211,238,0.05)"></div>
-        <div class="audience-icon">🛡️</div>
-        <div class="audience-title">healthclaw-guardrails</div>
-        <div class="audience-sub" style="color:var(--cyan)">FHIR agent guardrails + EHR integration</div>
-        <ul class="audience-list" style="--dot:var(--cyan)">
-          <li style="--before-color:var(--cyan)"><strong>fhir-r6-guardrails</strong> — 29 MCP tools, PHI redaction, step-up auth, audit</li>
-          <li style="--before-color:var(--cyan)"><strong>curatr</strong> — data-quality evaluation + patient-approved fixes</li>
-          <li style="--before-color:var(--cyan)"><strong>fasten-connect</strong> — EHR + TEFCA ingestion</li>
-          <li style="--before-color:var(--cyan)"><strong>phi-redaction</strong> — conservative de-identification preview</li>
-          <li style="--before-color:var(--cyan)"><strong>fhir-upstream-proxy</strong> — HAPI &middot; Epic &middot; Medplum</li>
-          <li style="--before-color:var(--cyan)"><strong>healthex-export</strong> — portable FHIR bundle export</li>
-        </ul>
-      </div>
-
-      <a href="https://careagents.cloud" target="_blank" rel="noopener" class="audience-card" style="border-color:var(--border)" onmouseenter="this.style.borderColor='rgba(52,211,153,0.33)'" onmouseleave="this.style.borderColor='var(--border)'">
-        <div class="audience-glow" style="background:rgba(52,211,153,0.05)"></div>
-        <div class="audience-icon">💚</div>
-        <div class="audience-title">careagents</div>
-        <div class="audience-sub" style="color:var(--green)">Hosted personal health agents — advisors built in</div>
-        <ul class="audience-list">
-          <li style="--before-color:var(--green)"><strong>healthy-habits</strong> — vitals, sleep &amp; activity trends</li>
-          <li style="--before-color:var(--green)"><strong>care-completion</strong> — preventive care-gap follow-through</li>
-          <li style="--before-color:var(--green)"><strong>medication-refills</strong> — refill windows + projections</li>
-          <li style="--before-color:var(--green)"><strong>diet-exercise</strong> — activity + nutrition coaching</li>
-          <li style="--before-color:var(--green)">passkey sign-in &middot; web, Telegram &amp; iMessage</li>
-          <li style="--before-color:var(--green)">every answer through the guardrail layer — no PHI stored</li>
-        </ul>
-        <div class="audience-cta" style="color:var(--green)">Try CareAgents →</div>
-      </a>
-    </div>
-
-    <p class="fade-up" style="text-align:center;color:var(--gray-dim);font-size:13px;margin-top:28px;transition-delay:0.3s">
-      Marketplace manifest: <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/.claude-plugin/marketplace.json" target="_blank" rel="noopener" style="color:var(--cyan)">.claude-plugin/marketplace.json</a>
-      &middot;
-      Skills authored against <a href="https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf" target="_blank" rel="noopener" style="color:var(--cyan)">Anthropic's Skill Authoring Guide</a>
-    </p>
-  </div>
-</div>
-
-<!-- ═══ CURATR ═══ -->
-<div style="background:linear-gradient(180deg,rgba(52,211,153,0.04) 0%,transparent 100%)">
-  <div class="section" style="padding-top:60px">
-    <div class="section-header fade-up">
-      <div class="section-tag">Curatr — Patient Data Quality</div>
-      <h2 class="section-title">Your health data is full of errors. Now you can fix them.</h2>
-      <p class="section-desc">Curatr evaluates FHIR resources against live public terminology services, explains issues in plain language, and lets you approve fixes with full provenance tracking.</p>
-    </div>
-    <div class="curatr-grid fade-up">
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--red);background:rgba(248,113,113,0.1)">critical</span>
-        <div class="check-label">Deprecated ICD-9</div>
-        <div class="check-source">Local lookup</div>
-      </div>
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
-        <div class="check-label">Invalid ICD-10-CM</div>
-        <div class="check-source">NLM Clinical Tables</div>
-      </div>
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
-        <div class="check-label">Unknown SNOMED CT</div>
-        <div class="check-source">tx.fhir.org</div>
-      </div>
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
-        <div class="check-label">Missing RxNorm</div>
-        <div class="check-source">RXNAV API</div>
-      </div>
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--cyan);background:rgba(34,211,238,0.1)">info</span>
-        <div class="check-label">Display mismatch</div>
-        <div class="check-source">Cross-check</div>
-      </div>
-      <div class="check-card">
-        <span class="check-badge" style="color:var(--amber);background:rgba(251,191,36,0.1)">warning</span>
-        <div class="check-label">Missing fields</div>
-        <div class="check-source">Structural</div>
-      </div>
-    </div>
-    <p class="curatr-note fade-up" style="transition-delay:0.2s">
-      Every approved fix creates a linked <code style="color:var(--green);font-family:var(--font-mono);font-size:13px">Provenance</code> resource
-      recording patient intent, field changes, and agent attribution — recorded in the immutable audit trail. No black-box corrections.
-    </p>
-  </div>
-</div>
-
-<!-- ═══ COMPARISON ═══ -->
-<div class="section">
-  <div class="section-header fade-up">
-    <div class="section-tag">Comparison</div>
-    <h2 class="section-title">Vendor-neutral by design</h2>
-    <p class="section-desc">HealthClaw works with any FHIR server. The guardrails are the product, not the data layer.</p>
-  </div>
-  <div class="compare-wrap fade-up">
-    <table class="compare-table">
-      <thead>
-        <tr>
-          <th style="text-align:left;color:var(--gray-dim);font-weight:500;font-size:13px"></th>
-          <th style="text-align:center;color:var(--cyan);font-weight:700;font-size:15px">HealthClaw</th>
-          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">AWS HealthLake</th>
-          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">Medplum MCP</th>
-          <th style="text-align:center;color:var(--gray-dim);font-weight:500;font-size:13px">Raw FHIR</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="color:var(--white);font-weight:500">Any FHIR server</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="val">—</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">PHI redaction on reads</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">Immutable audit trail</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="val">Separate</span></td>
-          <td style="text-align:center"><span class="val">Partial</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">Step-up auth for writes</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="val">Separate</span></td>
-          <td style="text-align:center"><span class="val">Built-in</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">Human-in-the-loop</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">R6 Permission $evaluate</td>
-          <td class="hl" style="text-align:center"><span class="tick">✓</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-          <td style="text-align:center"><span class="cross">✗</span></td>
-        </tr>
-        <tr>
-          <td style="color:var(--white);font-weight:500">Setup time</td>
-          <td class="hl" style="text-align:center"><span class="val" style="color:var(--green)">10 sec</span></td>
-          <td style="text-align:center"><span class="val">30+ min</span></td>
-          <td style="text-align:center"><span class="val">15+ min</span></td>
-          <td style="text-align:center"><span class="val">Varies</span></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- ═══ QUICK START ═══ -->
-<div class="section" style="padding-top:0">
-  <div class="section-header fade-up">
-    <div class="section-tag">Get Started</div>
-    <h2 class="section-title">Running in 10 seconds</h2>
-    <p class="section-desc">No accounts. No API keys. No cloud setup. Clone, install, run.</p>
-  </div>
-  <div class="code-wrap fade-up">
-    <pre class="code-block" id="quickstart-code"><span class="code-comment"># Install + run in 10 seconds</span>
-<span class="code-cmd">uv sync</span>
-<span class="code-cmd">STEP_UP_SECRET=your-secret python main.py</span>
-
-<span class="code-comment"># Or with Docker</span>
-<span class="code-cmd">docker-compose up -d --build</span>
-
-<span class="code-comment"># Connect to your FHIR server</span>
-<span class="code-cmd">FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py</span></pre>
-    <button type="button" class="copy-btn" id="copy-btn" onclick="copyQuickstart()">Copy</button>
-  </div>
-</div>
-
-<!-- ═══ FROM THE BUILDER ═══ -->
-<div class="section" style="padding-top:0">
-  <div class="section-header fade-up">
-    <div class="section-tag">From the Builder</div>
-    <h2 class="section-title">The why behind this</h2>
-  </div>
-  <div class="blog-grid">
-    <a href="https://evestel.substack.com/p/building-a-new-empowered-health-system" target="_blank" rel="noopener" class="blog-card fade-up" style="transition-delay:0s">
-      <div class="blog-title">Building a New, Empowered Health System</div>
-      <p class="blog-desc">The current health data system was built around institutions, not patients. What happens when we flip that?</p>
-      <span class="blog-cta">Read on Substack →</span>
-    </a>
-    <a href="https://evestel.substack.com/p/how-i-build-my-personal-openclaw" target="_blank" rel="noopener" class="blog-card fade-up" style="transition-delay:0.15s">
-      <div class="blog-title">How I Build My Personal OpenClaw</div>
-      <p class="blog-desc">A walkthrough of building an AI health agent using OpenClaw skills and HealthClaw Guardrails with real health data.</p>
-      <span class="blog-cta">Read on Substack →</span>
-    </a>
-  </div>
-</div>
-
-<!-- ═══ SUBSCRIBE ═══ -->
-<section class="subscribe-wrap fade-up" id="subscribe">
-  <div class="subscribe-eyebrow">Stay in the loop</div>
-  <h2 class="subscribe-title">Get release notes &amp; new guardrail patterns</h2>
-  <p class="subscribe-sub">
-    A short email when we ship a new MCP tool, redaction rule, or upstream-server
-    integration. No marketing — just what's actually changed in the repo.
-  </p>
-  <form class="subscribe-form" id="subscribe-form" novalidate>
-    <input
-      type="email"
-      name="email"
-      class="subscribe-input"
-      id="subscribe-input"
-      placeholder="you@example.com"
-      autocomplete="email"
-      required
-    >
-    <button type="submit" class="subscribe-btn" id="subscribe-btn">Subscribe</button>
-  </form>
-  <div class="subscribe-msg" id="subscribe-msg" aria-live="polite"></div>
-  <div class="subscribe-fineprint">
-    Subscribers get the quickstart guide PDF as a thank-you.
-    Or grab it now: <a href="{{ url_for('static', filename='healthclaw-quickstart.pdf') }}"
-       class="footer-ep" download>healthclaw-quickstart.pdf</a> ·
-    explore the <a href="{{ url_for('skills_index') }}" class="footer-ep">skill catalogue</a>.
-  </div>
-  <div class="subscribe-fineprint">
-    We use <a href="https://resend.com" target="_blank" rel="noopener" class="footer-ep">Resend</a>
-    to deliver mail from <code>updates@healthclaw.io</code>. One-click unsubscribe in every email.
   </div>
 </section>
 
+<!-- ═══ PHI REDACTION ═══ -->
+<section class="section section--sunk" id="redaction">
+  <div class="wrap">
+    <div class="section-head rise">
+      <span class="eyebrow">PHI redaction</span>
+      <h2 class="section-title">The agent never sees raw patient data</h2>
+      <p class="section-lede">Applied on every read path: direct reads, search results, upstream proxy responses, and context envelopes. Agents work with de-identified data by default.</p>
+    </div>
+    <div class="phi-compare rise">
+      <div class="phi-pane">
+        <div class="phi-pane__head">Stored in FHIR server</div>
+        <div class="phi-row"><span class="k">name    </span>Maria Elena Rivera</div>
+        <div class="phi-row"><span class="k">mrn     </span>MRN-2026-4471</div>
+        <div class="phi-row"><span class="k">phone   </span>617-555-0198</div>
+        <div class="phi-row"><span class="k">address </span>123 Clinical Ave, Boston MA 02101</div>
+        <div class="phi-row"><span class="k">dob     </span>1985-03-15</div>
+      </div>
+      <div class="phi-compare__arrow" aria-hidden="true">→</div>
+      <div class="phi-pane phi-pane--out">
+        <div class="phi-pane__head">Delivered to the AI agent</div>
+        <div class="phi-row"><span class="k">name    </span><span class="redacted">M. E. Rivera</span></div>
+        <div class="phi-row"><span class="k">mrn     </span><span class="redacted">***4471</span></div>
+        <div class="phi-row"><span class="k">phone   </span><span class="redacted">[Redacted]</span></div>
+        <div class="phi-row"><span class="k">address </span><span class="redacted">Boston, MA</span></div>
+        <div class="phi-row"><span class="k">dob     </span><span class="redacted">1985</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ VIDEO WALKTHROUGHS ═══ -->
+<section class="wrap section" id="videos">
+  <div class="section-head rise">
+    <span class="eyebrow">See it in action</span>
+    <h2 class="section-title">Watch HealthClaw guard a live agent</h2>
+    <p class="section-lede">A three-minute showcase built for the PromptOpinion Agents Assemble Challenge, plus a five-minute deep dive for engineers who want the architecture story.</p>
+  </div>
+  <div class="grid grid--2 rise">
+    <div class="figure">
+      <video controls preload="metadata" playsinline>
+        <source src="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}" type="video/mp4">
+        Your browser does not support the video tag.
+        <a href="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}">Download the MP4</a>.
+      </video>
+      <div class="figure__cap">
+        <div class="card__kicker">Three-minute demo · Devpost submission</div>
+        <div class="card__title">Agents Assemble Challenge showcase</div>
+        <p class="card__body">An AI agent calls HealthClaw FHIR tools; you see PHI redaction, audit emission, and the synthetic-data disclaimer fire in real time.</p>
+      </div>
+    </div>
+    <div class="figure">
+      <video controls preload="metadata" playsinline>
+        <source src="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}" type="video/mp4">
+        Your browser does not support the video tag.
+        <a href="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}">Download the MP4</a>.
+      </video>
+      <div class="figure__cap">
+        <div class="card__kicker">Five-minute deep dive</div>
+        <div class="card__title">Architecture and SHARP-on-MCP walkthrough</div>
+        <p class="card__body">How HealthClaw forwards SMART-on-FHIR tokens via SHARP headers, applies the guardrail stack, and stays compatible with any EHR, with the code paths called out.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ WHERE TO USE IT ═══ -->
+<section class="wrap section" id="gateways">
+  <div class="section-head rise">
+    <span class="eyebrow">Where to use it</span>
+    <h2 class="section-title">Pick your chat surface. HealthClaw is the same underneath.</h2>
+    <p class="section-lede">HealthClaw is the data and guardrail layer. Three gateways are wired in today; all three call the same MCP server, get the same redacted responses, and emit the same audit trail. <a href="{{ url_for('wiki') }}#gateways">Compare them on the wiki</a>.</p>
+  </div>
+
+  <div class="grid grid--3 rise">
+    <a href="https://app.promptopinion.ai/marketplace/agent/019e183d-c819-733f-9a91-6cf6756d4bed" target="_blank" rel="noopener noreferrer" class="card">
+      <div class="card__kicker">
+        <span>PromptOpinion Marketplace</span>
+        <span class="chip chip--pass">Open access</span>
+      </div>
+      <div class="card__title">HealthClaw on PromptOpinion</div>
+      <p class="card__body">Published as both a Superpower (MCP server, 16 tools) and an Agent (Clinical Reviewer). Add it to a workspace, pick a model, and start chatting in the browser — synthetic Grover Keeling demo data preloaded.</p>
+      <ul class="card__list">
+        <li>Devpost: Agents Assemble</li>
+        <li>SHARP-on-MCP</li>
+      </ul>
+      <div class="card__more">Open the agent listing →</div>
+    </a>
+
+    <a href="{{ url_for('wiki') }}#hermes-quickstart" class="card">
+      <div class="card__kicker">
+        <span>Hermes (Nous Research)</span>
+        <span class="chip chip--signal">Self-improving</span>
+      </div>
+      <div class="card__title">Multi-gateway chat that learns</div>
+      <p class="card__body">Telegram, Discord, Slack, WhatsApp, Signal, CLI and HTTP. A native MCP client. Skills get better as you use them; the ten HealthClaw skills ship as starting points.</p>
+      <ul class="card__list">
+        <li><code>./hermes/install.sh</code></li>
+        <li>agentskills.io</li>
+      </ul>
+      <div class="card__more">Hermes quick start →</div>
+    </a>
+
+    <a href="{{ url_for('wiki') }}#gateway-openclaw" class="card">
+      <div class="card__kicker">
+        <span>OpenClaw</span>
+        <span class="chip">Telegram</span>
+      </div>
+      <div class="card__title">One bot, fixed commands, zero ambiguity</div>
+      <p class="card__body">The original integration. A Telegram bot with slash commands (<code>/conditions</code>, <code>/labs</code>, <code>/curatr</code>, <code>/approve</code>). Best when you want exactly one chat channel and predictable behaviour.</p>
+      <ul class="card__list">
+        <li><code>docker-compose --profile openclaw up</code></li>
+      </ul>
+      <div class="card__more">OpenClaw setup →</div>
+    </a>
+  </div>
+
+  <p class="fine measure push-5">
+    Need raw MCP — Claude Desktop, MCP Inspector, or your own client? Point it at
+    <code>https://mcp-demo-production-ee2c.up.railway.app/mcp</code>. No credential needed,
+    and it is pinned server-side to the synthetic <code>desktop-demo</code> tenant, so it
+    only ever serves fake data.
+  </p>
+</section>
+
+<!-- ═══ COMPILED TRUTH ═══ -->
+<section class="section section--sunk" id="compiled-truth">
+  <div class="wrap">
+    <div class="section-head rise">
+      <span class="eyebrow">Compiled truth</span>
+      <h2 class="section-title">See what your record says now, and why it says that.</h2>
+      <p class="section-lede">Every other health tool shows you data. HealthClaw shows you the trail. One FHIR operation, one MCP tool, one review surface — built on the primitive every PHR is missing: current state plus append-only evidence.</p>
+    </div>
+
+    <div class="grid grid--3 rise">
+      <div class="card">
+        <div class="card__kicker">One primitive</div>
+        <div class="card__title"><code>GET /$compiled-truth</code></div>
+        <p class="card__body">Returns a FHIR Parameters bundle: the redacted current resource, its curation state, quality score, and the full Provenance timeline, newest first. Nothing hidden.</p>
+      </div>
+      <div class="card">
+        <div class="card__kicker">One MCP tool</div>
+        <div class="card__title"><code>fhir_compiled_truth</code></div>
+        <p class="card__body">Agents call this before making resource-specific claims. Responses carry <code>_meta.ui.resourceUri</code>, an embeddable review surface, instead of a wall of chat-text fine print.</p>
+      </div>
+      <div class="card">
+        <div class="card__kicker">One review surface</div>
+        <div class="card__title">MCP App · native HTML</div>
+        <p class="card__body">The same evidence rendered for a person: what changed, who proposed it, what you approved, and when. Backed by R6 Provenance.</p>
+      </div>
+    </div>
+
+    <div class="code-block rise push-5">
+      <pre class="code"><span class="c"># agent reads the compiled truth before answering</span>
+<span class="p">curl</span> -H <span class="v">"X-Tenant-Id: your-tenant"</span> \
+     <span class="v">https://healthclaw.io/r6/fhir/Condition/&lt;id&gt;/$compiled-truth</span>
+
+<span class="c"># or via MCP from Claude Desktop</span>
+&gt; <span class="v">fhir_compiled_truth(resource_type="Condition", resource_id="&lt;id&gt;")</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ AUDIENCE CARDS ═══ -->
+<section class="wrap section" id="audiences">
+  <div class="section-head rise">
+    <span class="eyebrow">Built for</span>
+    <h2 class="section-title">Three paths, one guardrail stack</h2>
+    <p class="section-lede">Whether you are building an AI health agent, managing your own health data, or evaluating compliance infrastructure, HealthClaw meets you where you are.</p>
+  </div>
+
+  <div class="grid grid--3 rise">
+    <a href="{{ url_for('wiki') }}" class="card">
+      <div class="card__kicker"><span class="seq__n">01</span></div>
+      <div class="card__title">AI Agent Developer</div>
+      <p class="card__body">Ship HIPAA-safe agents in minutes, not months.</p>
+      <ul class="card__list">
+        <li>29 MCP tools — drop into Claude Desktop, or any framework via the OpenAI and Gemini adapters</li>
+        <li>Fill and extract forms the standard way, with HL7 SDC <code>$populate</code> and <code>$extract</code></li>
+        <li>One-line Claude Code install</li>
+        <li>Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
+        <li>PHI redaction, audit and step-up auth with zero config</li>
+      </ul>
+      <div class="card__more">Quick start →</div>
+    </a>
+
+    <a href="{{ url_for('r6_dashboard') }}" class="card">
+      <div class="card__kicker"><span class="seq__n">02</span></div>
+      <div class="card__title">Patient / Consumer</div>
+      <p class="card__body">See what is wrong with your health data, and fix it.</p>
+      <ul class="card__list">
+        <li>Curatr checks records against live medical code databases</li>
+        <li>Plain-language explanations of coding errors and their impact</li>
+        <li>You approve every fix, with a full provenance trail</li>
+        <li>Connect 1,000+ EHR systems via Fasten Connect</li>
+        <li>Wearable data (Garmin, Oura, Polar, Whoop, Fitbit) via Open Wearables</li>
+      </ul>
+      <div class="card__more">Try Curatr →</div>
+    </a>
+
+    <a href="{{ url_for('faq') }}" class="card">
+      <div class="card__kicker"><span class="seq__n">03</span></div>
+      <div class="card__title">Health System / Payer</div>
+      <p class="card__body">Let AI agents touch clinical data without a compliance disaster.</p>
+      <ul class="card__list">
+        <li>Vendor-neutral proxy that works with your existing FHIR stack</li>
+        <li>Tenant isolation, immutable audit, OAuth 2.1 with PKCE</li>
+        <li>Human-in-the-loop for clinical writes (the HTTP 428 pattern)</li>
+        <li>950+ tests, Playwright e2e, open source under MIT</li>
+      </ul>
+      <div class="card__more">Architecture →</div>
+    </a>
+  </div>
+</section>
+
+<!-- ═══ CLAUDE CODE PLUGIN MARKETPLACE ═══ -->
+<section class="wrap section" id="plugin">
+  <div class="section-head rise">
+    <span class="eyebrow">Claude Code plugin</span>
+    <h2 class="section-title">Install HealthClaw skills into Claude Code in one line</h2>
+    <p class="section-lede">The <code>healthclaw-marketplace</code> hosts two plugins that ship as auto-discoverable Claude Code skills. Add the marketplace once, install either plugin, and Claude invokes the right skill whenever your prompt matches its triggers — no manual tool wiring.</p>
+  </div>
+
+  <div class="code-block rise">
+    <pre class="code"><span class="c">// add the marketplace (once)</span>
+<span class="p">$</span> claude plugin marketplace add <span class="v">aks129/HealthClawGuardrails</span>
+
+<span class="c">// install the guardrail plugin (FHIR + MCP + Curatr + Fasten Connect)</span>
+<span class="p">$</span> claude plugin install <span class="v">healthclaw-guardrails@healthclaw-marketplace</span>
+
+<span class="c">// or skip the install — hosted consumer app</span>
+<span class="p">$</span> open <span class="v">https://careagents.cloud</span></pre>
+  </div>
+
+  <div class="grid grid--2 rise push-5">
+    <div class="card">
+      <div class="card__kicker">Plugin</div>
+      <div class="card__title">healthclaw-guardrails</div>
+      <p class="card__body">FHIR agent guardrails and EHR integration.</p>
+      <ul class="card__list">
+        <li><strong>fhir-r6-guardrails</strong> — 29 MCP tools, PHI redaction, step-up auth, audit</li>
+        <li><strong>curatr</strong> — data-quality evaluation and patient-approved fixes</li>
+        <li><strong>fasten-connect</strong> — EHR and TEFCA ingestion</li>
+        <li><strong>phi-redaction</strong> — conservative de-identification preview</li>
+        <li><strong>fhir-upstream-proxy</strong> — HAPI, Epic, Medplum</li>
+        <li><strong>healthex-export</strong> — portable FHIR bundle export</li>
+      </ul>
+    </div>
+
+    <a href="https://careagents.cloud" target="_blank" rel="noopener" class="card">
+      <div class="card__kicker">Hosted app</div>
+      <div class="card__title">careagents</div>
+      <p class="card__body">Hosted personal health agents, with advisors built in.</p>
+      <ul class="card__list">
+        <li><strong>healthy-habits</strong> — vitals, sleep and activity trends</li>
+        <li><strong>care-completion</strong> — preventive care-gap follow-through</li>
+        <li><strong>medication-refills</strong> — refill windows and projections</li>
+        <li><strong>diet-exercise</strong> — activity and nutrition coaching</li>
+        <li>Passkey sign-in, on web, Telegram and iMessage</li>
+        <li>Every answer through the guardrail layer, with no PHI stored</li>
+      </ul>
+      <div class="card__more">Open CareAgents →</div>
+    </a>
+  </div>
+
+  <p class="fine measure push-5">
+    Marketplace manifest:
+    <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/.claude-plugin/marketplace.json" target="_blank" rel="noopener">.claude-plugin/marketplace.json</a>
+    · Skills authored against
+    <a href="https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf" target="_blank" rel="noopener">Anthropic's Skill Authoring Guide</a>.
+  </p>
+</section>
+
+<!-- ═══ CURATR ═══ -->
+<section class="section section--sunk" id="curatr">
+  <div class="wrap">
+    <div class="section-head rise">
+      <span class="eyebrow">Curatr — patient data quality</span>
+      <h2 class="section-title">Your health data is full of errors. Now you can fix them.</h2>
+      <p class="section-lede">Curatr evaluates FHIR resources against live public terminology services, explains issues in plain language, and lets you approve fixes with full provenance tracking.</p>
+    </div>
+
+    <div class="matrix-scroll rise">
+      <table class="matrix">
+        <caption class="visually-hidden">Issue classes Curatr detects and the source it checks against</caption>
+        <thead>
+          <tr><th scope="col">Severity</th><th scope="col">Issue</th><th scope="col">Checked against</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="chip chip--fail">critical</span></td><th scope="row">Deprecated ICD-9</th><td>Local lookup</td></tr>
+          <tr><td><span class="chip chip--warn">warning</span></td><th scope="row">Invalid ICD-10-CM</th><td>NLM Clinical Tables</td></tr>
+          <tr><td><span class="chip chip--warn">warning</span></td><th scope="row">Unknown SNOMED CT</th><td>tx.fhir.org</td></tr>
+          <tr><td><span class="chip chip--warn">warning</span></td><th scope="row">Missing RxNorm</th><td>RxNav API</td></tr>
+          <tr><td><span class="chip">info</span></td><th scope="row">Display mismatch</th><td>Cross-check</td></tr>
+          <tr><td><span class="chip chip--warn">warning</span></td><th scope="row">Missing fields</th><td>Structural</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="fine measure rise push-5">
+      Every approved fix creates a linked <code>Provenance</code> resource recording patient
+      intent, field changes, and agent attribution, written to the immutable audit trail.
+      No black-box corrections.
+    </p>
+  </div>
+</section>
+
+<!-- ═══ COMPARISON ═══ -->
+<section class="wrap section" id="comparison">
+  <div class="section-head rise">
+    <span class="eyebrow">Comparison</span>
+    <h2 class="section-title">Vendor-neutral by design</h2>
+    <p class="section-lede">HealthClaw works with any FHIR server. The guardrails are the product, not the data layer.</p>
+  </div>
+  <div class="matrix-scroll rise">
+    <table class="matrix">
+      <caption class="visually-hidden">HealthClaw compared with AWS HealthLake, Medplum MCP and raw FHIR</caption>
+      <thead>
+        <tr>
+          <th scope="col"><span class="visually-hidden">Capability</span></th>
+          <th scope="col">HealthClaw</th>
+          <th scope="col">AWS HealthLake</th>
+          <th scope="col">Medplum MCP</th>
+          <th scope="col">Raw FHIR</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Any FHIR server</th><td class="y">yes</td><td class="n">no</td><td class="n">no</td><td class="n">—</td></tr>
+        <tr><th scope="row">PHI redaction on reads</th><td class="y">yes</td><td class="n">no</td><td class="n">no</td><td class="n">no</td></tr>
+        <tr><th scope="row">Immutable audit trail</th><td class="y">yes</td><td class="n">separate</td><td class="n">partial</td><td class="n">no</td></tr>
+        <tr><th scope="row">Step-up auth for writes</th><td class="y">yes</td><td class="n">separate</td><td class="n">built-in</td><td class="n">no</td></tr>
+        <tr><th scope="row">Human-in-the-loop</th><td class="y">yes</td><td class="n">no</td><td class="n">no</td><td class="n">no</td></tr>
+        <tr><th scope="row">R6 Permission $evaluate</th><td class="y">yes</td><td class="n">no</td><td class="n">no</td><td class="n">no</td></tr>
+        <tr><th scope="row">Setup time</th><td class="y">10 sec</td><td class="n">30+ min</td><td class="n">15+ min</td><td class="n">varies</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ QUICK START ═══ -->
+<section class="wrap section" id="quickstart">
+  <div class="section-head rise">
+    <span class="eyebrow">Get started</span>
+    <h2 class="section-title">Running in ten seconds</h2>
+    <p class="section-lede">No accounts. No API keys. No cloud setup. Clone, install, run.</p>
+  </div>
+  <div class="code-block rise">
+    <pre class="code" id="quickstart-code"><span class="c"># install + run in 10 seconds</span>
+<span class="p">uv</span> sync
+<span class="p">STEP_UP_SECRET</span>=your-secret python main.py
+
+<span class="c"># or with Docker</span>
+<span class="p">docker-compose</span> up -d --build
+
+<span class="c"># connect to your FHIR server</span>
+<span class="p">FHIR_UPSTREAM_URL</span>=https://hapi.fhir.org/baseR4 python main.py</pre>
+    <button type="button" class="code-block__copy" id="copy-btn">Copy</button>
+  </div>
+</section>
+
+<!-- ═══ FROM THE BUILDER ═══ -->
+<section class="wrap section" id="writing">
+  <div class="section-head rise">
+    <span class="eyebrow">From the builder</span>
+    <h2 class="section-title">The why behind this</h2>
+  </div>
+  <div class="grid grid--2 rise">
+    <a href="https://evestel.substack.com/p/building-a-new-empowered-health-system" target="_blank" rel="noopener" class="card">
+      <div class="card__kicker">Essay</div>
+      <div class="card__title">Building a New, Empowered Health System</div>
+      <p class="card__body">The current health data system was built around institutions, not patients. What happens when we flip that?</p>
+      <div class="card__more">Read on Substack →</div>
+    </a>
+    <a href="https://evestel.substack.com/p/how-i-build-my-personal-openclaw" target="_blank" rel="noopener" class="card">
+      <div class="card__kicker">Essay</div>
+      <div class="card__title">How I Build My Personal OpenClaw</div>
+      <p class="card__body">A walkthrough of building an AI health agent using OpenClaw skills and HealthClaw Guardrails with real health data.</p>
+      <div class="card__more">Read on Substack →</div>
+    </a>
+  </div>
+</section>
+
+<!-- ═══ SUBSCRIBE ═══ -->
+<section class="section section--sunk" id="subscribe">
+  <div class="wrap">
+    <div class="section-head rise">
+      <span class="eyebrow">Stay in the loop</span>
+      <h2 class="section-title">Get release notes and new guardrail patterns</h2>
+      <p class="section-lede">A short email when we ship a new MCP tool, redaction rule, or upstream-server integration. No marketing, just what has actually changed in the repo.</p>
+    </div>
+    <form id="subscribe-form" class="subscribe__form rise" novalidate>
+      <label for="subscribe-input" class="visually-hidden">Email address</label>
+      <input type="email" name="email" id="subscribe-input" class="field"
+             placeholder="you@example.com" autocomplete="email" required>
+      <button type="submit" id="subscribe-btn" class="btn btn--primary">Subscribe</button>
+    </form>
+    <div id="subscribe-msg" class="form-msg" aria-live="polite"></div>
+    <p class="fine measure push-4">
+      Subscribers get the quickstart guide PDF as a thank-you. Or grab it now:
+      <a href="{{ url_for('static', filename='healthclaw-quickstart.pdf') }}" download>healthclaw-quickstart.pdf</a>
+      · explore the <a href="{{ url_for('skills_index') }}">skill catalogue</a>.
+    </p>
+    <p class="fine measure push-2">
+      We use <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> to deliver
+      mail from <code>updates@healthclaw.io</code>. One-click unsubscribe in every email.
+    </p>
+  </div>
+</section>
+
+</main>
+
 <!-- ═══ FOOTER ═══ -->
-<footer>
-  <div class="footer-inner">
+<footer class="hc-foot">
+  <div class="hc-foot__inner">
     <div>
-      <div class="footer-brand">HealthClaw Guardrails</div>
-      <div class="footer-sub">FHIR R4 US Core v9 + R6 &middot; MCP &middot; MIT License &middot; a <a href="https://healthclaw.io" target="_blank" rel="noopener" style="color:inherit">healthclaw.io</a> project</div>
+      <div class="hc-foot__mark">HealthClaw Guardrails</div>
+      <div>FHIR R4 US Core v9 + R6 · MCP · MIT License</div>
+      <div>a <a href="https://healthclaw.io" target="_blank" rel="noopener">healthclaw.io</a> project</div>
     </div>
-    <div class="footer-links">
-      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener" class="footer-link">GitHub</a>
-      <a href="{{ url_for('skills_index') }}" class="footer-link">Skills</a>
-      <a href="{{ url_for('r6_dashboard') }}" class="footer-link">Dashboard</a>
-      <a href="{{ url_for('privacy') }}" class="footer-link">Privacy</a>
-      <a href="{{ url_for('terms') }}" class="footer-link">Terms</a>
+    <div class="hc-foot__col">
+      <div class="hc-foot__h">Project</div>
+      <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener">GitHub</a>
+      <a href="{{ url_for('skills_index') }}">Skills</a>
+      <a href="{{ url_for('r6_dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('privacy') }}">Privacy</a>
+      <a href="{{ url_for('terms') }}">Terms</a>
     </div>
-    <!-- Discovery links (kept for e2e tests + developer discovery) -->
-    <div class="footer-endpoints">
-      <a href="/r6/fhir/metadata" target="_blank" class="footer-ep">/r6/fhir/metadata</a>
-      <a href="/r6/fhir/health" target="_blank" class="footer-ep">/r6/fhir/health</a>
-      <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" class="footer-ep">SMART Configuration</a>
-      <a href="/fasten/jobs" target="_blank" class="footer-ep">/fasten/jobs</a>
+    {# Discovery links — kept for e2e tests and developer discovery.
+       landing.spec.ts asserts the first two are visible. #}
+    <div class="hc-foot__col">
+      <div class="hc-foot__h">Endpoints</div>
+      <a class="hc-foot__ep" href="/r6/fhir/metadata" target="_blank">/r6/fhir/metadata</a>
+      <a class="hc-foot__ep" href="/r6/fhir/health" target="_blank">/r6/fhir/health</a>
+      <a class="hc-foot__ep" href="/r6/fhir/.well-known/smart-configuration" target="_blank">SMART configuration</a>
+      <a class="hc-foot__ep" href="/fasten/jobs" target="_blank">/fasten/jobs</a>
     </div>
   </div>
 </footer>
 
-<script>
-// ── Hero entrance ──
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => document.getElementById('hero-wrap').classList.add('hero-loaded'), 80);
-});
-
-// ── Nav blur on scroll ──
-window.addEventListener('scroll', () => {
-  document.getElementById('main-nav').classList.toggle('scrolled', window.scrollY > 40);
-}, { passive: true });
-
-// ── Intersection observer for fade-up + stat counters ──
-const io = new IntersectionObserver((entries) => {
-  entries.forEach(e => {
-    if (!e.isIntersecting) return;
-    e.target.classList.add('in');
-    io.unobserve(e.target);
-  });
-}, { threshold: 0.15 });
-
-document.querySelectorAll('.fade-up').forEach(el => io.observe(el));
-
-// ── Animated stat counters ──
-function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
-
-function animateCounter(el, target, duration) {
-  const t0 = performance.now();
-  const tick = (now) => {
-    const p = Math.min((now - t0) / duration, 1);
-    el.textContent = Math.round(target * easeOut(p));
-    if (p < 1) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
-
-const statsIO = new IntersectionObserver((entries) => {
-  entries.forEach(e => {
-    if (!e.isIntersecting) return;
-    const target = parseInt(e.target.dataset.target, 10);
-    animateCounter(e.target, target, 1100);
-    statsIO.unobserve(e.target);
-  });
-}, { threshold: 0.5 });
-
-document.querySelectorAll('.stat-num').forEach(el => statsIO.observe(el));
-
-// ── Audience list bullet colors via CSS custom property ──
-document.querySelectorAll('.audience-list li').forEach(li => {
-  const color = window.getComputedStyle(li).getPropertyValue('--before-color').trim();
-  if (color) li.style.setProperty('--before-color', color);
-});
-
-// ── Copy quickstart ──
-function copyQuickstart() {
-  const text = `uv sync\nSTEP_UP_SECRET=your-secret python main.py\n\ndocker-compose up -d --build\n\nFHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py`;
-  navigator.clipboard?.writeText(text);
-  const btn = document.getElementById('copy-btn');
-  btn.textContent = 'Copied!';
-  setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-}
-
-// ── Subscribe form ──
-(() => {
-  const form  = document.getElementById('subscribe-form');
-  const input = document.getElementById('subscribe-input');
-  const btn   = document.getElementById('subscribe-btn');
-  const msg   = document.getElementById('subscribe-msg');
-  if (!form) return;
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = input.value.trim();
-    msg.className = 'subscribe-msg';
-    msg.textContent = '';
-    if (!email) {
-      msg.textContent = 'Please enter your email.';
-      msg.classList.add('error');
-      return;
-    }
-    btn.disabled = true;
-    const original = btn.textContent;
-    btn.textContent = 'Sending…';
-    try {
-      const r = await fetch('/api/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (r.ok) {
-        msg.textContent = data.already_subscribed
-          ? "You're already on the list — thanks!"
-          : "Subscribed. Watch your inbox.";
-        msg.classList.add('ok');
-        form.reset();
-      } else {
-        msg.textContent = data.error || 'Something went wrong. Please try again.';
-        msg.classList.add('error');
-      }
-    } catch (err) {
-      msg.textContent = 'Network error. Please try again.';
-      msg.classList.add('error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
-  });
-})();
-</script>
+<script src="{{ url_for('static', filename='js/landing.js') }}" defer></script>
 
 </body>
 </html>

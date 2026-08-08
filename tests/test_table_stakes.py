@@ -151,10 +151,43 @@ def test_apple_system_in_a_fallback_chain_is_fine():
                              '-apple-system, sans-serif;'))
 
 
-def test_google_fonts_is_allowed_because_the_csp_allows_it():
-    assert not _rules(_style(
-        '<link href="https://fonts.googleapis.com/css2?family=Fraunces" '
-        'rel="stylesheet">'))
+def test_a_host_the_csp_permits_is_not_flagged():
+    """The rule tracks app.py's policy instead of carrying its own list.
+
+    This test used to be `test_google_fonts_is_allowed_because_the_csp_allows_it`
+    and asserted that fonts.googleapis.com passes. It no longer does, because
+    the policy no longer allows it and the faces are vendored under
+    static/fonts/. That is the point: the pin moved because the thing it pins
+    moved, in the same change.
+
+    Written against a host the policy names right now, resolved at run time, so
+    it cannot rot into asserting a host nobody allows any more.
+    """
+    from check_table_stakes import csp_allowed_hosts
+
+    allowed = csp_allowed_hosts()
+    if not allowed:
+        pytest.skip("policy permits no asset hosts — nothing to assert here")
+    host = sorted(allowed)[0].lstrip("*.")
+    assert not _rules(_style(f'<link href="https://{host}/x.css" rel="stylesheet">'))
+
+
+def test_a_host_the_csp_does_not_permit_is_flagged():
+    """MUTATION: widen style-src in app.py and this stops firing.
+
+    The companion above can pass vacuously when the policy is strict, so the
+    load-bearing assertion is this one — a check that has never been seen to
+    fail proves nothing.
+    """
+    assert "csp-external-asset" in _rules(_style(
+        '<link href="https://cdn.example-not-allowed.net/x.css" rel="stylesheet">'))
+
+
+def test_an_unreadable_policy_denies_rather_than_permits():
+    """Fail closed. A parse error must not license every CDN on the internet."""
+    from check_table_stakes import csp_allowed_hosts
+
+    assert csp_allowed_hosts(root="/nonexistent-path") == set()
 
 
 def test_sixteen_px_is_the_floor_not_a_violation():

@@ -1,97 +1,71 @@
 {% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
 
 {% block title %}FAQ — HealthClaw Guardrails{% endblock %}
 
 {% block head %}
 <style>
-.faq-hero {
-  padding: 3rem 0 2rem;
-  text-align: center;
-  border-bottom: 1px solid var(--r6-border);
-  margin-bottom: 2.5rem;
-}
-.faq-hero h1 {
-  font-size: 2rem;
-  font-weight: 800;
-  margin-bottom: 0.5rem;
-}
-.faq-hero p {
-  color: var(--r6-text-muted);
-  max-width: 600px;
-  margin: 0 auto;
-  font-size: 0.95rem;
-}
+/* FAQ — page-specific, built only from the tokens in healthclaw.css so it
+   cannot drift from the system. Body sizes were 0.875rem/0.92rem here; the
+   design system's floor is 1rem because iOS zooms the page on a smaller
+   control and 14px prose is hard to read at arm's length. */
+.faq-hero { padding: var(--s7) 0 var(--s5); border-bottom: 2px solid var(--rule-firm);
+            margin-bottom: var(--s6); }
+.faq-hero h1 { font-size: clamp(1.75rem, 3.6vw, 2.375rem); }
+.faq-hero p { color: var(--ink-soft); max-width: var(--measure);
+              margin-top: var(--s3); font-size: 1.1875rem; line-height: 1.55; }
+
 .faq-section-title {
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--r6-text-muted);
-  padding: 0 0 0.5rem 1rem;
-  margin-top: 2rem;
-  margin-bottom: 0.25rem;
-  border-left: 3px solid var(--r6-primary);
+  font-family: var(--mono); font-size: 0.75rem; font-weight: 400;
+  letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint);
+  margin-top: var(--s7); margin-bottom: var(--s3);
+  padding-bottom: var(--s2); border-bottom: 1px solid var(--rule);
 }
-.faq-item {
-  border: 1px solid var(--r6-border);
-  border-radius: 0.5rem;
-  margin-bottom: 0.75rem;
-  overflow: hidden;
-  background: var(--r6-surface);
-}
+
+.faq-item { border-bottom: 1px solid var(--rule); background: transparent; }
 .faq-question {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.25rem;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 0.92rem;
-  user-select: none;
-  gap: 1rem;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--s4); padding: var(--s4) 0; cursor: pointer;
+  font-weight: 600; font-size: 1.0625rem; color: var(--ink);
+  min-height: var(--tap); user-select: none;
 }
-.faq-question:hover { background: var(--r6-surface-2); }
+.faq-question:hover { color: var(--signal); }
 .faq-question .faq-icon {
-  flex-shrink: 0;
-  width: 1.2rem;
-  text-align: center;
-  color: var(--r6-primary);
-  transition: transform 0.2s;
+  flex-shrink: 0; width: 1.2rem; text-align: center; color: var(--ink-faint);
+  font-family: var(--mono); transition: transform 140ms ease-out;
 }
-.faq-item.open .faq-icon { transform: rotate(45deg); }
+.faq-item.open .faq-icon { transform: rotate(45deg); color: var(--signal); }
 .faq-answer {
-  display: none;
-  padding: 0 1.25rem 1.1rem;
-  font-size: 0.875rem;
-  color: var(--r6-text-muted);
-  line-height: 1.65;
-  border-top: 1px solid var(--r6-border);
+  display: none; padding: 0 0 var(--s5); max-width: var(--measure);
+  font-size: 1rem; color: var(--ink-soft); line-height: 1.65;
 }
 .faq-item.open .faq-answer { display: block; }
 .faq-answer code {
-  background: rgba(99,102,241,0.12);
-  padding: 0.1em 0.35em;
-  border-radius: 3px;
-  font-size: 0.82rem;
+  background: var(--signal-wash); color: var(--signal-deep);
+  padding: 0.1em 0.35em; border-radius: var(--radius); font-size: 0.9em;
 }
-.faq-answer a { color: var(--r6-primary); }
+.faq-answer a { color: var(--signal); }
+
 .faq-cta {
-  background: linear-gradient(135deg, var(--r6-surface) 0%, #1e1b4b 100%);
-  border: 1px solid var(--r6-primary);
-  border-radius: 0.75rem;
-  padding: 2rem;
-  text-align: center;
-  margin-top: 3rem;
-  margin-bottom: 2rem;
+  border: 1px solid var(--rule-firm); border-radius: var(--radius);
+  background: var(--paper-raise); padding: var(--s6);
+  margin-top: var(--s8); margin-bottom: var(--s6);
 }
-.faq-cta h3 { font-size: 1.2rem; margin-bottom: 0.5rem; }
-.faq-cta p { color: var(--r6-text-muted); font-size: 0.88rem; margin-bottom: 1.25rem; }
+.faq-cta h3 { font-size: 1.375rem; margin-bottom: var(--s2); }
+.faq-cta p { color: var(--ink-soft); font-size: 1rem; margin-bottom: var(--s4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .faq-question .faq-icon { transition: none; }
+}
+
+.faq-cta__actions { display: flex; gap: var(--s3); flex-wrap: wrap; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="faq-hero">
-  <h1><i class="fas fa-question-circle me-2" style="color:var(--r6-primary)"></i>Frequently Asked Questions</h1>
+  <h1>Frequently Asked Questions</h1>
   <p>Everything you need to know about HealthClaw Guardrails, FHIR, and AI-safe clinical data access.</p>
 </div>
 
@@ -371,7 +345,7 @@ cd HealthClawGuardrails
   </div>
   <div class="faq-answer">
     <p>Set the <code>FHIR_UPSTREAM_URL</code> environment variable:</p>
-    <pre style="background:var(--r6-surface-2);padding:0.75rem;border-radius:0.4rem;font-size:0.8rem;margin:0.5rem 0">FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py</pre>
+    <pre>FHIR_UPSTREAM_URL=https://hapi.fhir.org/baseR4 python main.py</pre>
     <p>All guardrails remain active. Reads are fetched from upstream, redacted, and audited. Writes are validated locally first, then forwarded with step-up auth enforcement. Upstream URLs never leak to clients.</p>
     <p>Tested with: HAPI FHIR R4/R5, SMART Health IT, Epic Sandbox.</p>
   </div>
@@ -418,9 +392,9 @@ cd HealthClawGuardrails
 
 <!-- ===== CTA ===== -->
 <div class="faq-cta">
-  <h3><i class="fas fa-book me-2" style="color:var(--r6-primary)"></i>Want to go deeper?</h3>
+  <h3>Want to go deeper?</h3>
   <p>The Wiki covers architecture, guardrail patterns, FHIR concepts, and how each component works.</p>
-  <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap">
+  <div class="faq-cta__actions">
     <a href="{{ url_for('wiki') }}" class="r6-btn r6-btn-primary">
       <i class="fas fa-book"></i> Read the Wiki
     </a>

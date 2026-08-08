@@ -21,6 +21,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
+import os
 import re
 import subprocess
 import sys
@@ -141,9 +143,69 @@ BANNED_PRIMARY_FONT = re.compile(
     r"font-family\s*:\s*['\"]?(Inter|Roboto|Open Sans|Lato|Montserrat|Nunito)"
     r"['\"]?", re.I)
 
-CDN_ASSET = re.compile(
-    r"<(?:script|link)\b[^>]*\b(?:src|href)\s*=\s*['\"]https?://"
-    r"(?!fonts\.googleapis\.com|fonts\.gstatic\.com)", re.I)
+# --- external assets, judged against the REAL policy ------------------------
+#
+# This rule used to hardcode its own idea of what was allowed, and so did
+# design.md, and so did app.py. All three disagreed: app.py permitted four CDN
+# hosts, design.md said none were permitted, and this regex exempted exactly
+# two (fonts.googleapis.com, fonts.gstatic.com). A check that asserts a policy
+# it does not read cannot fail when the policy changes — it can only be wrong
+# in a new way.
+#
+# The policy in app.py is now the single definition. This reads it.
+
+_CSP_CONST = "_CONTENT_SECURITY_POLICY"
+_HOST_IN_CSP = re.compile(r"https?://([^\s;']+)")
+
+_ASSET_TAG = re.compile(
+    r"<(?:script|link)\b[^>]*\b(?:src|href)\s*=\s*['\"](https?://[^'\"]+)", re.I)
+
+
+def csp_allowed_hosts(root: str = ".") -> set[str]:
+    """Hosts app.py's CSP permits, read out of app.py itself.
+
+    Returns an empty set when the policy cannot be parsed, which makes the
+    rule strictest exactly when it is least sure — a parse failure must not
+    quietly permit every CDN on the internet.
+    """
+    try:
+        tree = ast.parse(read_file(os.path.join(root, "app.py")))
+    except (OSError, SyntaxError):
+        return set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if _CSP_CONST not in names:
+            continue
+        try:
+            policy = ast.literal_eval(node.value)
+        except ValueError:
+            return set()
+        if not isinstance(policy, str):
+            return set()
+        # frame-src is what we EMBED (the Fasten widget, CLEAR, ID.me), not an
+        # asset we load into our own document, so it never licenses a
+        # <script> or <link>.
+        directives = [d.strip() for d in policy.split(";")]
+        hosts: set[str] = set()
+        for directive in directives:
+            if directive.startswith("frame-src"):
+                continue
+            hosts.update(_HOST_IN_CSP.findall(directive))
+        return hosts
+    return set()
+
+
+def _host_permitted(url: str, allowed: set[str]) -> bool:
+    host = re.sub(r"^https?://", "", url).split("/")[0].lower()
+    for pattern in allowed:
+        if pattern == host:
+            return True
+        if pattern.startswith("*.") and host.endswith(pattern[1:]):
+            return True
+    return False
 
 SMALL_INPUT_FONT = re.compile(
     r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
@@ -194,11 +256,12 @@ def check_style(path: str, lines: list[tuple[int, str]],
                 f"{m.group(1)} as the primary face — see design.md",
                 raw.strip()[:100]))
 
-        m = CDN_ASSET.search(raw)
-        if m:
+        m = _ASSET_TAG.search(raw)
+        if m and not _host_permitted(m.group(1), csp_allowed_hosts()):
             out.append(Finding(
                 path, num, "csp-external-asset",
-                "CSP is default-src 'self'; self-host it or inline it",
+                "the CSP in app.py does not permit this host; vendor it with "
+                "scripts/vendor_frontend_assets.py or inline it",
                 raw.strip()[:100]))
 
         m = SMALL_INPUT_FONT.search(raw)

@@ -8,6 +8,7 @@ We mock httpx so tests never reach the network.
 from __future__ import annotations
 
 import json
+import pathlib
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -194,7 +195,23 @@ class TestSubscribeFormOnLandingPage:
         html = r.data.decode()
         assert 'id="subscribe-form"' in html
         assert 'name="email"' in html
-        assert '/api/subscribe' in html  # JS posts here
+
+    def test_the_page_loads_the_script_that_posts_the_form(self, client):
+        """The endpoint used to be asserted as a literal in the page HTML.
+
+        It is not there any more: the handler moved from an inline <script>
+        into static/js/landing.js, so the old assertion was pinning where the
+        code lived rather than that the form works. Follow it to the file —
+        a form with no wired submit handler is the failure this class exists
+        to catch, and it would still pass a check that only greps the page.
+        """
+        html = client.get('/').data.decode()
+        assert 'js/landing.js' in html, "landing page does not load its script"
+
+        script = (pathlib.Path(__file__).resolve().parents[1]
+                  / "static" / "js" / "landing.js").read_text(encoding="utf-8")
+        assert "'/api/subscribe'" in script or '"/api/subscribe"' in script
+        assert "subscribe-form" in script
 
     def test_eyebrow_and_resend_credit_present(self, client):
         html = client.get('/').data.decode()

@@ -530,3 +530,57 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .spark-pt.IND { fill: #9A8F7D; }
 .muted { color: var(--ink-soft); }
 .muted.small { font-size: 12px; margin-top: 10px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Design-system compliance. Every rule below fixes something design.md
+   already required and this file did not do. Appended rather than edited in
+   place so the warm editorial look is untouched — none of this changes a
+   colour, a radius or a spacing value.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* 1. FOCUS. design.md: "Focus rings are never removed; keyboard users are not
+      an edge case here." Two rules removed them and offered a 1.5px
+      border-colour change instead, which is not a focus indicator a person
+      tabbing through a health form can find.
+
+      `:focus-visible` is deliberately narrower than the `:focus` rules above:
+      the ring appears for keyboard and assistive navigation and stays off for
+      a mouse click, which is why those rules could be written at all. */
+.field:focus-visible,
+.chat-input input:focus-visible,
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--clay);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* 2. MOTION. design.md: "Someone reading a lab result they are frightened of
+      should not have to sit through a transition." The file had nine
+      transitions and never honoured the preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 3. NUMBERS. Lab values, dates and dosages line up in columns only with
+      tabular figures; proportional digits make two readings of the same
+      test look like different lengths. */
+.spark-axis, .lab-value, .trend-num, .metric-num, table td, table th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 4. READING SIZE. design.md sets a 16px floor for body text. These three are
+      the boxes that carry an error or a partial-success summary — the text a
+      person reads when something has just gone wrong, and the last place to
+      set 14px. */
+.form-error, .form-ok, .form-warn { font-size: 16px; }
