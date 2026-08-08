@@ -419,9 +419,32 @@
         type === 'authorization.complete' || oid) {
       backdrop.classList.remove('open');
       await _registerConnection(payload);
-    } else if (type === 'widget.error' || type === 'error') {
+    } else if (type === 'widget.config_error') {
+      // The REAL event name. This branch used to test 'widget.error' and
+      // 'error', neither of which Fasten emits — read out of the shipped
+      // bundle (cdn.fastenhealth.com/connect/v4), whose only widget events
+      // are widget.close, widget.complete and widget.config_error. So every
+      // configuration refusal fell through both branches and produced
+      // nothing from us: the patient saw Fasten's own opaque "Oops!
+      // Something went wrong" inside the iframe and this page stayed
+      // silent, still showing the modal (#326).
+      //
+      // fasten_unauthorized_client on "retrieving vault profile" — the
+      // reported failure — arrives here. We cannot say WHY (the entitlement
+      // lives in Fasten's account, not in anything we can read), so this
+      // says what we know and what to do, and never guesses at a cause.
       backdrop.classList.remove('open');
-      showStatus('Widget error: ' + (data.message || 'unknown'), 'error');
+      var detail = data.message || (data.data && data.data.message) ||
+                   data.error_type || '';
+      showStatus(
+        'The records widget refused this configuration' +
+        (detail ? ' (' + detail + ')' : '') +
+        '. Identity verification is unavailable right now — this is a ' +
+        'problem on our side, not with your records. Please tell us you ' +
+        'saw this so we can chase it.', 'error');
+    } else if (type === 'widget.close') {
+      // Dismissal is not failure and must not be reported as one.
+      backdrop.classList.remove('open');
     }
   });
 })();
