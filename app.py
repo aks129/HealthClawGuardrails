@@ -72,22 +72,34 @@ _SKILLS_CACHE: list[dict] = _load_skills()
 # script and connect-src stays 'self'. img-src allows data: URIs (inline
 # SVG/PNG badges). frame-ancestors 'none' mirrors X-Frame-Options: DENY.
 #
-# templates/base.html and templates/index.html load assets from external CDNs:
-#   - Bootstrap CSS+JS  → cdn.jsdelivr.net
-#   - FontAwesome CSS+fonts → cdnjs.cloudflare.com
-#   - Google Fonts CSS  → fonts.googleapis.com (font files on fonts.gstatic.com)
-# The previous "no external CDNs" policy silently broke styling/fonts on every
-# deploy (flag-independent), so those hosts are explicitly allowed below.
+# THIS CONSTANT IS THE ONLY DEFINITION OF WHAT WE ALLOW.
+# design.md describes it in prose and scripts/check_table_stakes.py enforces
+# it; both derive from this string rather than restating it. They disagreed
+# for months — design.md and the checker claimed "default-src 'self', no
+# CDNs" while this policy allowed four CDN hosts, because the strict version
+# had silently broken styling and fonts on every deploy. Whoever fixed the
+# deploy did not own the two documents that described it.
+#
+# Bootstrap, Font Awesome and both webfont families are now vendored under
+# static/ (scripts/vendor_frontend_assets.py), so the strict policy is true
+# rather than aspirational, and no page a patient opens announces itself to a
+# third party. Re-vendor on upgrade; do not re-add a host here to pick up a
+# newer version.
+#
+# frame-src is the one remaining third party and it is load-bearing: the
+# /connect/<tenant> page embeds the Fasten Stitch widget, and TEFCA identity
+# verification may navigate that frame to CLEAR or ID.me. It controls what WE
+# embed — frame-ancestors 'none' still forbids anyone embedding US.
 #
 # DEBT: script-src 'unsafe-inline' is a stopgap until inline <script> blocks are
 # moved behind per-response nonces; tighten to 'self' + nonce when that lands.
+# static/js/landing.js was the first block moved out.
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "img-src 'self' data:; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net "
-    "https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-    "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "font-src 'self'; "
     "connect-src 'self'; "
     # frame-src: the /connect/<tenant> page embeds the Fasten Stitch widget
     # (embed.connect.fastenhealth.com); TEFCA identity verification may
