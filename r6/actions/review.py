@@ -343,7 +343,10 @@ def review_form(action_id):
         'action_review.html', action_id=action_id, demographics=demographics,
         meds=meds, allergies=allergies, conditions=conditions,
         record_readable=content.resolved, record_reason=content.reason,
-        step_up_token=request.headers.get('X-Step-Up-Token', ''),
+        # step_up_token is deliberately NOT passed. It is a write credential,
+        # and handing it to a template is how it reached the patient's browser
+        # across an origin boundary (#395). The submit path supplies its own
+        # credentials server-side; nothing in the page needs this.
         tenant_id=tenant_id)
     return html, 200
 
