@@ -102,6 +102,14 @@
   color: var(--ink-soft); vertical-align: top;
 }
 .wiki-table td:first-child { color: var(--ink); font-weight: 600; }
+
+  /* healthclaw.css carries a global reduced-motion override, but the policy
+     is restated where the motion is declared: a style block that gets copied
+     to another page must carry its own guard, and a reviewer reading this
+     block should not have to know a second file exists. */
+  @media (prefers-reduced-motion: reduce) {
+    .wiki-toc a { transition: none; }
+  }
 </style>
 {% endblock %}
 

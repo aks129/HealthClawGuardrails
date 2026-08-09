@@ -71,6 +71,14 @@
 
   .skills-note { color: var(--ink-faint); font-size: 0.9375rem;
                  margin-bottom: var(--s7); }
+
+  /* healthclaw.css carries a global reduced-motion override, but the policy
+     is restated where the motion is declared: a style block that gets copied
+     to another page must carry its own guard, and a reviewer reading this
+     block should not have to know a second file exists. */
+  @media (prefers-reduced-motion: reduce) {
+    .skill-card, .quickstart-btn { transition: none; }
+  }
 </style>
 {% endblock %}
 

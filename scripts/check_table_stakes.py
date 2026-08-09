@@ -42,6 +42,28 @@ EXEMPT = {
     "docs/2026-08-02-retro.md",
 }
 
+# Third-party bytes we vendor but do not author. Holding Bootstrap's minified
+# bundle to our house style is noise — we cannot fix it, and every vendored
+# upgrade would re-raise it. A gate that fires on things nobody can act on is
+# a gate that gets switched off, which is the failure documented in
+# docs/2026-08-02-retro.md.
+#
+# This is a real consequence of vendoring: self-hosting to satisfy the CSP
+# pulled ~1.1MB of other people's code into the lint's field of view. The
+# first CI run after that change reported bootstrap.bundle.min.js for not
+# honouring prefers-reduced-motion.
+EXEMPT_PREFIXES = (
+    "static/css/vendor/",
+    "static/js/vendor/",
+    "static/fonts/",
+    "static/webfonts/",
+    "careagents/static/fonts/",
+)
+
+
+def is_exempt(path: str) -> bool:
+    return path in EXEMPT or path.startswith(EXEMPT_PREFIXES)
+
 
 @dataclass
 class Finding:
@@ -325,7 +347,7 @@ def read_file(path: str) -> str:
 def run(base: str) -> list[Finding]:
     findings: list[Finding] = []
     for path, lines in added_lines(base).items():
-        if path in EXEMPT or not lines:
+        if is_exempt(path) or not lines:
             continue
         suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ""
         if suffix in PROSE_SUFFIXES:
@@ -360,9 +382,24 @@ def main() -> int:
         print(RULES)
         return 0
 
+    checked = sum(1 for path, lines in added_lines(args.base).items()
+                  if lines and not is_exempt(path)
+                  and ("." + path.rsplit(".", 1)[-1] if "." in path else "")
+                  in (PROSE_SUFFIXES | STYLE_SUFFIXES))
+
     findings = run(args.base)
     if not findings:
-        print("table stakes: clean")
+        # "clean" and "examined nothing" are different outcomes and must not
+        # print the same word. Running this against origin/main with the work
+        # still uncommitted diffs an empty range and finds nothing, which
+        # reads as a pass — that is how three real findings reached CI on the
+        # design redesign after a local run reported clean.
+        if checked == 0:
+            print(f"table stakes: NOTHING TO CHECK — no added lines vs "
+                  f"{args.base}. If you expected findings, your work is "
+                  f"probably uncommitted; this is not a pass.")
+            return 0
+        print(f"table stakes: clean ({checked} file(s) checked)")
         return 0
 
     by_rule: dict[str, int] = {}
