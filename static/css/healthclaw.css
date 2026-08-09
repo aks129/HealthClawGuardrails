@@ -88,6 +88,10 @@
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
+  /* The masthead is sticky, so an in-page jump (#gateways, #curatr, the
+     wiki's contents list) would otherwise land with the heading hidden
+     underneath it. */
+  scroll-padding-top: 88px;
 }
 /* Someone reading a result they are frightened of should not be moved
    through it. Guarded here rather than at each animation, so a new
@@ -124,9 +128,19 @@ html {
 }
 .surface-paper p { margin: 0; }
 
-.surface-paper a { color: var(--signal); text-decoration-thickness: 1px;
-                   text-underline-offset: 2px; }
-.surface-paper a:hover { color: var(--signal-deep); }
+/* `:where()` contributes ZERO specificity, so this is the accent for a bare
+   link and loses to any component that names a colour.
+
+   Written as `.surface-paper a` first, which scores (0,1,1) and therefore beat
+   every single-class component rule below it: `.btn--primary` (0,1,0) rendered
+   its label in ultramarine on near-black, and `.hc-nav__link` lost its grey.
+   A base element rule has to sit UNDER the components, not over them. */
+.surface-paper :where(a) {
+  color: var(--signal);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.surface-paper :where(a):hover { color: var(--signal-deep); }
 
 /* Focus is never removed. Keyboard users are not an edge case on a page
    that leads to a health record. */
@@ -454,8 +468,12 @@ code, .mono { font-family: var(--mono); font-size: 0.9em; }
 .code .v { color: #E7E5DC; }         /* value */
 .code-block { position: relative; }
 .code-block__copy {
-  position: absolute; top: var(--s3); right: var(--s3);
-  min-height: 32px; padding: 0 var(--s3);
+  position: absolute; top: var(--s2); right: var(--s2);
+  /* 44px, not the 32px an overlay button wants to be. The rule has no
+     small-control exemption, and this is the one thing on the page a phone
+     user actually taps. */
+  min-height: var(--tap); display: inline-flex; align-items: center;
+  padding: 0 var(--s3);
   font-family: var(--mono); font-size: 0.75rem;
   background: transparent; color: #8F8D82;
   border: 1px solid #3A3931; border-radius: var(--radius); cursor: pointer;
