@@ -27,6 +27,7 @@ STEP_UP_SECRET       HMAC secret for step-up tokens.
 
 import json
 import logging
+import re
 import os
 import time
 from collections import deque
@@ -352,6 +353,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # that does nothing leaves the user worse off than saying nothing, because
     # they choose to continue on the strength of it. If summary-only ships,
     # add it back here and to the privacy policy's mitigations list together.
+    #
+    # The SAME rule governs the command list below, and it was broken there:
+    # /summary and /curatr_fix were both listed with no handler registered,
+    # so each answered 'Unknown command. Try /start for the command list.' —
+    # the list that had just offered them. /curatr_fix now has its handler;
+    # /summary is gone, because nothing implements it.
+    # tests/test_bot_answers_what_it_advertises.py holds the two in sync.
     risk_line = (
         '⚠️ Heads up: chat apps aren’t encrypted medical channels. '
         'You’re accessing your own records here; by continuing you accept '
@@ -367,7 +375,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/hbo\\_connect — authorize Health Bank One (OAuth)\n'
         '/hbo\\_pull — pull + ingest HBO verified records\n'
         '/dashboard — open the command center (signed 24h link)\n'
-        '/summary — high-level review of your record\n'
         '/conditions — list Conditions\n'
         '/labs — recent lab results\n'
         '/curatr — run Curatr data-quality evaluation\n'
@@ -810,6 +817,188 @@ async def cmd_hbo_pull(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     _thr.Thread(target=_run_pull, daemon=True).start()
 
 
+# ---------------------------------------------------------------------------
+# Plain text
+# ---------------------------------------------------------------------------
+
+#: A blood-pressure reading in ordinary phrasing: "150/94", "150 over 94",
+#: "my blood pressure this morning was 150 over 94".
+#:
+#: The separator must be `/` or the word `over`, and both numbers must be
+#: plausible cuff readings. A bare `\d+/\d+` also matches "see you on 10/11"
+#: and "9 over 10", and putting a triage band on a date is worse than not
+#: answering.
+_BP_RE = re.compile(
+    r'\b(?P<sys>[6-9]\d|1\d\d|2[0-5]\d)\s*(?:/|\s+over\s+)\s*'
+    r'(?P<dia>[3-9]\d|1[0-5]\d)\b',
+    re.IGNORECASE,
+)
+
+#: Red-flag symptoms in the words a patient actually types, mapped to the
+#: triage module's keys. classify() treats ANY of these as an emergency
+#: regardless of the number, because they are stroke and heart-attack signs.
+_SYMPTOM_PHRASES = (
+    ('chest_pain', ('chest pain', 'chest pressure', 'chest tightness')),
+    ('shortness_of_breath', ('short of breath', 'shortness of breath',
+                             'can\'t breathe', 'trouble breathing')),
+    ('one_sided_weakness', ('one side', 'weakness on', 'face droop',
+                            'arm is weak', 'numb on one')),
+    ('trouble_speaking', ('slurred', 'trouble speaking', 'can\'t speak')),
+    ('vision_change', ('vision change', 'blurred vision', 'lost vision',
+                       'double vision')),
+    ('severe_headache', ('worst headache', 'severe headache',
+                         'terrible headache')),
+    ('confusion', ('confused', 'confusion', 'disoriented')),
+)
+
+
+def _parse_bp(text: str):
+    """Return (systolic, diastolic) from ordinary phrasing, or None.
+
+    None means "this is not a reading", not "this failed" — the caller still
+    answers. Returning None for anything unclear is deliberate: a wrong parse
+    attaches a clinical triage band to a sentence that was never a
+    measurement.
+    """
+    if not text:
+        return None
+    m = _BP_RE.search(text)
+    if not m:
+        return None
+    systolic, diastolic = int(m.group('sys')), int(m.group('dia'))
+    if systolic <= diastolic:
+        return None
+    return systolic, diastolic
+
+
+def _symptoms_in(text: str) -> list:
+    lowered = (text or '').lower()
+    return [key for key, phrases in _SYMPTOM_PHRASES
+            if any(p in lowered for p in phrases)]
+
+
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer a plain sentence.
+
+    Before this existed, main() registered a single MessageHandler on
+    filters.COMMAND, so typed text reached nothing and the user got silence.
+    The physician advisor hit it rehearsing the launch demo and read it,
+    reasonably, as a phrasing problem — silence cannot tell you which.
+
+    A recognised reading is classified SERVER-SIDE by r6/smbp/triage.py, the
+    shared 2025 AHA/ACC decision logic the clinician report and the flags also
+    use. This container ships only bot.py (see openclaw/Dockerfile), so the
+    thresholds are not importable here — and copying them in is precisely the
+    drift that module exists to prevent. If the server cannot be reached, this
+    says so and stops. It never guesses a band: a made-up "you are fine" is
+    the one output worse than an error.
+    """
+    text = (update.effective_message.text if update and update.effective_message
+            else '') or ''
+    agent_id = 'health-advisor'
+    _persist_turn(update, agent_id, 'user', text)
+
+    reading = _parse_bp(text)
+    if reading is None:
+        await _reply(
+            update,
+            'I can log a blood-pressure reading if you send one — for '
+            'example "150 over 94" or "150/94". For anything else, /start '
+            'lists what I can do.',
+            agent_id,
+        )
+        return
+
+    systolic, diastolic = reading
+    symptoms = _symptoms_in(text)
+
+    try:
+        triage = _smbp_reading(systolic, diastolic, symptoms)
+    except Exception as exc:
+        logger.error('smbp reading failed: %s', exc)
+        await _reply(
+            update,
+            f'I read that as *{systolic}/{diastolic}* but could not reach the '
+            'service that classifies it, so I have not logged it and I will '
+            'not guess. Please try again shortly.',
+            agent_id, parse_mode='Markdown')
+        return
+
+    lines = [f'Recorded: *{systolic}/{diastolic}* mmHg.']
+    if triage.get('emergency'):
+        lines.append(
+            '\U0001F6A8 You mentioned a symptom that needs emergency care now. '
+            '*Call 911.* Do not wait for another reading.')
+    else:
+        lines.append(_BAND_LINES.get(
+            triage.get('band'),
+            'Logged. Your care team will see this in the report.'))
+    lines.append('_This logs and routes; it is not medical advice or a '
+                 'diagnosis._')
+
+    await _reply(update, '\n\n'.join(lines), agent_id, parse_mode='Markdown')
+
+
+def _smbp_reading(systolic: int, diastolic: int, symptoms: list) -> dict:
+    """POST the reading to /r6/smbp/reading and return its triage block.
+
+    The server owns classification, persistence and the audit event. Raises on
+    any failure so the caller can say nothing rather than something wrong.
+    """
+    patient_ref = _first_patient_ref()
+    resp = requests.post(
+        f'{FHIR_BASE_URL.replace("/r6/fhir", "")}/r6/smbp/reading',
+        json={
+            'patient_ref': patient_ref,
+            'systolic': systolic,
+            'diastolic': diastolic,
+            'effective': _now_iso(),
+            'symptoms': symptoms,
+        },
+        headers={
+            'X-Tenant-Id': TENANT_ID,
+            'X-Step-Up-Token': _get_step_up_token(),
+            'X-Agent-Id': 'health-advisor',
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    triage = (resp.json() or {}).get('triage')
+    if not isinstance(triage, dict) or 'band' not in triage:
+        raise RuntimeError('smbp response carried no triage band')
+    return triage
+
+
+def _now_iso() -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def _first_patient_ref() -> str:
+    """The tenant's Patient, as `Patient/<id>`."""
+    bundle = _fhir_get('Patient?_count=1')
+    entries = bundle.get('entry') or []
+    if not entries:
+        raise RuntimeError('no Patient in this tenant to attach the reading to')
+    return f"Patient/{(entries[0].get('resource') or {}).get('id')}"
+
+
+#: One line per triage band. Navigation only — what happens next, never what
+#: the reading means clinically. The bands themselves are owned by
+#: r6/smbp/triage.py and must not be re-derived here.
+_BAND_LINES = {
+    'at_goal': 'That is within the home target range (under 130/80). '
+               'Keep logging.',
+    'stage1': 'That is Stage 1 (130–139 / 80–89). Worth logging and raising '
+              'at your next visit.',
+    'stage2': 'That is Stage 2 (140 or above / 90 or above). This is a '
+              'timely follow-up with your care team, not the emergency '
+              'department.',
+    'crisis': 'That is in the crisis range (180 or above / 120 or above). '
+              'Rest five minutes and take it again. If it stays this high, '
+              'contact your care team today.',
+}
+
+
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent_id = 'health-advisor'
     if update and update.effective_message:
@@ -835,12 +1024,18 @@ def main() -> None:
     app.add_handler(CommandHandler('conditions', cmd_conditions))
     app.add_handler(CommandHandler('labs', cmd_labs))
     app.add_handler(CommandHandler('curatr', cmd_curatr))
+    # Advertised on /start since it shipped; never registered until now.
+    app.add_handler(CommandHandler('curatr_fix', _curatr_fix))
     app.add_handler(CommandHandler('approve', cmd_approve))
     app.add_handler(CommandHandler('token', cmd_token))
     app.add_handler(CommandHandler('dashboard', cmd_dashboard))
     app.add_handler(CommandHandler('hbo_connect', cmd_hbo_connect))
     app.add_handler(CommandHandler('hbo_pull', cmd_hbo_pull))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # Plain text, registered LAST so it cannot shadow a command. Without this
+    # the bot answered nothing at all to a typed sentence (see
+    # tests/test_bot_answers_what_it_advertises.py).
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(_on_error)
 
     _preflight_singleton_check()
