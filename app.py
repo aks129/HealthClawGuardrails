@@ -255,6 +255,28 @@ def wiki():
     return render_template('wiki.html')
 
 
+@web_blueprint.route('/about')
+def about():
+    """Who maintains this, under what rules, and how to engage.
+
+    Table stakes rather than marketing: the operating entity was named only in
+    Terms section 13, so every reader who needed to know who stands behind the
+    guardrails had to open the legal page to find out.
+    """
+    return render_template('about.html')
+
+
+@web_blueprint.route('/security')
+def security():
+    """Security posture — controls, what the live grade covers, and the gaps.
+
+    Deliberately states the gaps (no SOC 2, no BAA, redaction is not an Expert
+    Determination) at the same weight as the controls. An evaluator finds them
+    regardless; finding them here is worth more than finding them on a call.
+    """
+    return render_template('security.html')
+
+
 @web_blueprint.route('/privacy')
 def privacy():
     """Privacy Policy."""

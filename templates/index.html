@@ -95,7 +95,7 @@
       <div class="spec__label">FHIR resource types</div>
     </div>
     <div class="spec">
-      <span class="spec__num" data-target="1665">0</span>
+      <span class="spec__num" data-target="2812">0</span>
       <div class="spec__label">Tests passing</div>
     </div>
     <div class="spec">
@@ -345,17 +345,18 @@
       <div class="card__more">Try Curatr →</div>
     </a>
 
-    <a href="{{ url_for('faq') }}" class="card">
+    <a href="{{ url_for('security') }}" class="card">
       <div class="card__kicker"><span class="seq__n">03</span></div>
       <div class="card__title">Health System / Payer</div>
-      <p class="card__body">Let AI agents touch clinical data without a compliance disaster.</p>
+      <p class="card__body">Evaluate the guardrails before an agent goes near patient or member data.</p>
       <ul class="card__list">
         <li>Vendor-neutral proxy that works with your existing FHIR stack</li>
-        <li>Tenant isolation, immutable audit, OAuth 2.1 with PKCE</li>
+        <li>Tenant isolation, append-only audit, OAuth 2.1 with PKCE</li>
         <li>Human-in-the-loop for clinical writes (the HTTP 428 pattern)</li>
-        <li>950+ tests, Playwright e2e, open source under MIT</li>
+        <li>Care-gap evaluation that shows its reasoning and records who approved it</li>
+        <li>The gaps are published too: no SOC 2, no BAA, and redaction is not an Expert Determination</li>
       </ul>
-      <div class="card__more">Architecture →</div>
+      <div class="card__more">Read the security posture →</div>
     </a>
   </div>
 </section>
@@ -562,10 +563,12 @@
     <div>
       <div class="hc-foot__mark">HealthClaw Guardrails</div>
       <div>FHIR R4 US Core v9 + R6 · MCP · MIT License</div>
-      <div>a <a href="https://healthclaw.io" target="_blank" rel="noopener">healthclaw.io</a> project</div>
+      <div>Built by <a href="{{ url_for('about') }}">Vestel AI LLC</a></div>
     </div>
     <div class="hc-foot__col">
       <div class="hc-foot__h">Project</div>
+      <a href="{{ url_for('about') }}">About</a>
+      <a href="{{ url_for('security') }}">Security posture</a>
       <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener">GitHub</a>
       <a href="{{ url_for('skills_index') }}">Skills</a>
       <a href="{{ url_for('r6_dashboard') }}">Dashboard</a>

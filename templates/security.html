@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
+
+{% block title %}Security posture — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<meta name="description" content="What HealthClaw enforces, what the live conformance grade covers, what it does not, and what is missing for procurement. Written so an evaluator can decide without a call.">
+<style>
+  .posture { max-width: 76ch; margin-inline: auto; padding-block: var(--s7); }
+  .posture h2 { font-size: 1.5rem; margin-top: var(--s8); margin-bottom: var(--s4);
+                padding-bottom: var(--s2); border-bottom: 2px solid var(--rule-firm); }
+  .posture h3 { font-size: 1.0625rem; margin-top: var(--s5); margin-bottom: var(--s2); }
+  .posture p { color: var(--ink-soft); }
+  .posture p + p { margin-top: var(--s3); }
+  .posture ul { padding-left: var(--s4); margin-top: var(--s3); color: var(--ink-soft); }
+  .posture li { margin-bottom: var(--s2); }
+
+  /* The properties table: what is enforced, and where it is enforced. */
+  .props { width: 100%; border-collapse: collapse; margin-top: var(--s4);
+           font-size: 0.9375rem; }
+  .props th { text-align: left; padding: var(--s2) var(--s3);
+              font-family: var(--mono); font-size: 0.75rem; font-weight: 400;
+              letter-spacing: 0.07em; text-transform: uppercase;
+              color: var(--ink-faint); border-bottom: 2px solid var(--rule-firm); }
+  .props td { padding: var(--s3); border-bottom: 1px solid var(--rule);
+              vertical-align: top; color: var(--ink-soft); }
+  .props td:first-child { font-family: var(--mono); font-size: 0.875rem;
+                          color: var(--ink); white-space: nowrap; }
+
+  /* Gaps are stated in the same visual weight as the strengths on purpose.
+     A posture page that styles its gaps as fine print is a sales page. */
+  .gap { border-left: 3px solid var(--warn); background: var(--warn-wash);
+         padding: var(--s4); border-radius: 0 var(--radius) var(--radius) 0;
+         margin-block: var(--s4); }
+  .gap p { color: var(--ink); }
+  .gap__label { font-family: var(--mono); font-size: 0.75rem;
+                letter-spacing: 0.08em; text-transform: uppercase;
+                color: var(--warn); margin-bottom: var(--s2); }
+
+  .live { border: 1px solid var(--rule-firm); border-radius: var(--radius);
+          padding: var(--s5); margin-top: var(--s5); background: var(--paper-raise); }
+  .live__grade { font-family: var(--mono); font-size: 2.5rem; line-height: 1;
+                 color: var(--ink); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="posture">
+
+  <span class="eyebrow">Security posture</span>
+  <h1 class="section-title">What is enforced, what is verified, and what is missing.</h1>
+  <p class="section-lede">
+    Written so an evaluator can decide without a call. The gaps are listed at
+    the same weight as the controls, because you will find them anyway.
+  </p>
+
+  <h2 id="grade">The grade is a live self-test</h2>
+  <p>
+    Every deployment can grade itself A–F. The probe creates a synthetic
+    patient, drives real requests through the running stack, and checks seven
+    properties against what actually comes back. Nothing is asserted from
+    configuration.
+  </p>
+
+  {# No grade letter is printed here on purpose. Writing "A" into this page
+     would put the same fact in two places, and the copy would keep claiming A
+     on the morning the deployment earned a B. The endpoint is the only owner;
+     this panel points at it. #}
+  <div class="live">
+    <div class="card__kicker">Check it against the running deployment</div>
+    <p>
+      <a href="https://app.healthclaw.io/r6/fhir/$conformance?format=text" target="_blank" rel="noopener">app.healthclaw.io/r6/fhir/$conformance</a>
+    </p>
+    <p class="fine push-2">
+      This page prints no grade. It would be a copy of a number that changes,
+      and a stale copy always reads as the better one. The check runs on
+      request, so what you get is what is true when you ask.
+    </p>
+  </div>
+
+  <div class="gap">
+    <div class="gap__label">What the grade is not</div>
+    <p>
+      It is a self-test of the guardrail layer, not an audit, not a
+      certification, and not a HIPAA compliance determination. It says the
+      controls fired on a synthetic record a moment ago. It says nothing about
+      the organisation running the deployment, its hosting, or its staff.
+    </p>
+  </div>
+
+  <h2 id="properties">The seven properties</h2>
+  <p>
+    These are the names in the code, so a result you read here matches a result
+    you get from the endpoint.
+  </p>
+
+  <table class="props">
+    <thead>
+      <tr><th scope="col">Property</th><th scope="col">What passing means</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>phi_redaction</td><td>Names, phone numbers and identifier-class fields do not come back in full on reads or searches.</td></tr>
+      <tr><td>audit_trail</td><td>Every resource access writes an AuditEvent, and the audit detail itself carries no PHI.</td></tr>
+      <tr><td>step_up_enforcement</td><td>A write without a valid signed token is refused.</td></tr>
+      <tr><td>human_in_the_loop</td><td>A clinical write without human confirmation is blocked with a 428, and an approved one is accepted.</td></tr>
+      <tr><td>tenant_isolation</td><td>A request scoped to one tenant cannot read another's records.</td></tr>
+      <tr><td>medical_disclaimer</td><td>Clinical reads carry a disclaimer, applied by the server rather than the prompt.</td></tr>
+      <tr><td>error_fidelity</td><td>Failures are reported truthfully: an upstream auth failure is not reported as "not found", and a degraded read is not reported as an empty one.</td></tr>
+    </tbody>
+  </table>
+
+  <p class="push-5">
+    The last one is the unusual entry, and it is the one this project cares
+    about most. A guardrail that returns nothing when it could not check looks
+    identical to a guardrail that checked and found nothing. Every serious
+    defect found in this codebase has been a version of that.
+  </p>
+
+  <h2 id="phi">Where PHI can and cannot go</h2>
+  <ul>
+    <li><strong>The agent never receives raw identifiers.</strong> Redaction is
+      applied on every read path: direct reads, searches, upstream proxy
+      responses, and context envelopes.</li>
+    <li><strong>Labels are re-applied after redaction, from a terminology table
+      keyed by code</strong> — never by preserving text the upstream sent.
+      Upstream systems put patient names in display fields, so passing those
+      through to make a record readable is how a redaction layer leaks.</li>
+    <li><strong>The consumer app stores no PHI.</strong> Accounts and pointers
+      only.</li>
+    <li><strong>Consumer chat channels are not treated as covered transport.</strong>
+      Telegram, Slack and Discord are patient-directed channels, not a
+      substitute for a BAA-covered path where a covered entity is disclosing.</li>
+  </ul>
+
+  <h2 id="gaps">What is missing</h2>
+  <p>
+    If any of these is disqualifying for your process, it will still be
+    disqualifying in month three.
+  </p>
+
+  <div class="gap">
+    <div class="gap__label">No SOC 2, no HITRUST</div>
+    <p>
+      There is no third-party audit report today. What exists instead is the
+      live conformance check, a public test suite, and a public incident
+      history. That is evidence, not a substitute for an audit.
+    </p>
+  </div>
+
+  <div class="gap">
+    <div class="gap__label">Redaction is Safe-Harbor-style, not a determination</div>
+    <p>
+      Field redaction removes identifier-class fields. It is a compensating
+      control. It is not HIPAA Expert Determination and must not be described
+      as de-identified data in a filing. A profile-specific recursive allowlist
+      and an Expert Determination path are on the roadmap.
+    </p>
+  </div>
+
+  <div class="gap">
+    <div class="gap__label">Not a covered entity or business associate</div>
+    <p>
+      An organisation running this against real patient data owns its own
+      compliance, agreements and controls.
+      <a href="{{ url_for('terms') }}#hipaa">Terms, section 5</a> is the
+      governing text.
+    </p>
+  </div>
+
+  <div class="gap">
+    <div class="gap__label">One maintainer</div>
+    <p>
+      There is no support rota and no contractual response time. For a design
+      partnership that is usually acceptable. For a production dependency it is
+      a risk you should price.
+    </p>
+  </div>
+
+  <h2 id="controls">Controls that are in place</h2>
+  <ul>
+    <li>Deny by default on permission evaluation.</li>
+    <li>Signed step-up tokens with a nonce and a short expiry for writes.</li>
+    <li>Human confirmation required before a clinical write lands.</li>
+    <li>Append-only audit, with the audit detail held PHI-free.</li>
+    <li>Tenant isolation enforced server-side, never from a client-supplied
+      claim alone.</li>
+    <li>A strict content security policy: the site loads no third-party script,
+      stylesheet or font, so no outside party observes a page a patient opens.</li>
+    <li>Transport security headers, and framing denied.</li>
+  </ul>
+
+  <h2 id="disclosure">Reporting a vulnerability</h2>
+  <p>
+    Email <a href="mailto:security@healthclaw.io">security@healthclaw.io</a>.
+    Please include what you did, what you expected, and what happened. If it
+    involves patient data on a deployment you do not operate, report it without
+    retrieving more of it than the report needs.
+  </p>
+  <p>
+    Findings are fixed in the open. The repository carries the write-ups,
+    including the ones that were the maintainer's fault.
+  </p>
+
+  <h2 id="evaluating">If you are evaluating this formally</h2>
+  <p>
+    Available today, on request: the conformance output for your own
+    deployment, the test suite and its coverage of these properties, the
+    architecture documentation, and a written account of known gaps that
+    matches this page.
+  </p>
+  <p>
+    Not available today: a SOC 2 report, a signed BAA, or a penetration test
+    report from a third party. Ask anyway if you need them, because knowing who
+    is asking changes what gets built next.
+  </p>
+
+</div>
+{% endblock %}
