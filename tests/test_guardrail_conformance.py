@@ -683,7 +683,12 @@ def test_proxy_profile_does_not_echo_malformed_audit_codes():
             return next(responses)
 
     _, checks = _proxy_profile(Client(), ProbeContext("tenant", "token"))
-    assert hostile not in json.dumps([check.detail for check in checks])
+    # Both halves, not the derived `detail`. `detail` returns only `observed`
+    # on a passing check, so scanning it alone would let a hostile token sit
+    # unnoticed in `on_failure` for as long as that check kept passing — and
+    # the leak would surface on the day it started failing.
+    assert hostile not in json.dumps(
+        [[check.observed, check.on_failure] for check in checks])
 
 
 def test_error_fidelity_crash_still_runs_configured_optional_profiles():
