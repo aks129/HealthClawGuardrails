@@ -87,7 +87,13 @@ def register_conformance_routes(blueprint, deps):
             results = [
                 ProbeResult(
                     p["key"], p["property"],
-                    [Check(c["name"], c["passed"], c["detail"]) for c in p["checks"]],
+                    # Rehydrate the two halves, not the derived `detail`.
+                    # Feeding `detail` back in as the measurement would put a
+                    # failure sentence into `observed`, where it prints on a
+                    # pass — the exact bug, reintroduced by the cache path.
+                    [Check(c["name"], c["passed"], c.get("observed", ""),
+                           on_failure=c.get("on_failure", ""))
+                     for c in p["checks"]],
                     note=p.get("note", ""),
                     grade=p.get("grade"),
                     coverage=p.get("coverage", "full"),
