@@ -21,6 +21,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
+import os
 import re
 import subprocess
 import sys
@@ -39,6 +41,28 @@ EXEMPT = {
     "tests/test_table_stakes.py",
     "docs/2026-08-02-retro.md",
 }
+
+# Third-party bytes we vendor but do not author. Holding Bootstrap's minified
+# bundle to our house style is noise — we cannot fix it, and every vendored
+# upgrade would re-raise it. A gate that fires on things nobody can act on is
+# a gate that gets switched off, which is the failure documented in
+# docs/2026-08-02-retro.md.
+#
+# This is a real consequence of vendoring: self-hosting to satisfy the CSP
+# pulled ~1.1MB of other people's code into the lint's field of view. The
+# first CI run after that change reported bootstrap.bundle.min.js for not
+# honouring prefers-reduced-motion.
+EXEMPT_PREFIXES = (
+    "static/css/vendor/",
+    "static/js/vendor/",
+    "static/fonts/",
+    "static/webfonts/",
+    "careagents/static/fonts/",
+)
+
+
+def is_exempt(path: str) -> bool:
+    return path in EXEMPT or path.startswith(EXEMPT_PREFIXES)
 
 
 @dataclass
@@ -141,9 +165,69 @@ BANNED_PRIMARY_FONT = re.compile(
     r"font-family\s*:\s*['\"]?(Inter|Roboto|Open Sans|Lato|Montserrat|Nunito)"
     r"['\"]?", re.I)
 
-CDN_ASSET = re.compile(
-    r"<(?:script|link)\b[^>]*\b(?:src|href)\s*=\s*['\"]https?://"
-    r"(?!fonts\.googleapis\.com|fonts\.gstatic\.com)", re.I)
+# --- external assets, judged against the REAL policy ------------------------
+#
+# This rule used to hardcode its own idea of what was allowed, and so did
+# design.md, and so did app.py. All three disagreed: app.py permitted four CDN
+# hosts, design.md said none were permitted, and this regex exempted exactly
+# two (fonts.googleapis.com, fonts.gstatic.com). A check that asserts a policy
+# it does not read cannot fail when the policy changes — it can only be wrong
+# in a new way.
+#
+# The policy in app.py is now the single definition. This reads it.
+
+_CSP_CONST = "_CONTENT_SECURITY_POLICY"
+_HOST_IN_CSP = re.compile(r"https?://([^\s;']+)")
+
+_ASSET_TAG = re.compile(
+    r"<(?:script|link)\b[^>]*\b(?:src|href)\s*=\s*['\"](https?://[^'\"]+)", re.I)
+
+
+def csp_allowed_hosts(root: str = ".") -> set[str]:
+    """Hosts app.py's CSP permits, read out of app.py itself.
+
+    Returns an empty set when the policy cannot be parsed, which makes the
+    rule strictest exactly when it is least sure — a parse failure must not
+    quietly permit every CDN on the internet.
+    """
+    try:
+        tree = ast.parse(read_file(os.path.join(root, "app.py")))
+    except (OSError, SyntaxError):
+        return set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if _CSP_CONST not in names:
+            continue
+        try:
+            policy = ast.literal_eval(node.value)
+        except ValueError:
+            return set()
+        if not isinstance(policy, str):
+            return set()
+        # frame-src is what we EMBED (the Fasten widget, CLEAR, ID.me), not an
+        # asset we load into our own document, so it never licenses a
+        # <script> or <link>.
+        directives = [d.strip() for d in policy.split(";")]
+        hosts: set[str] = set()
+        for directive in directives:
+            if directive.startswith("frame-src"):
+                continue
+            hosts.update(_HOST_IN_CSP.findall(directive))
+        return hosts
+    return set()
+
+
+def _host_permitted(url: str, allowed: set[str]) -> bool:
+    host = re.sub(r"^https?://", "", url).split("/")[0].lower()
+    for pattern in allowed:
+        if pattern == host:
+            return True
+        if pattern.startswith("*.") and host.endswith(pattern[1:]):
+            return True
+    return False
 
 SMALL_INPUT_FONT = re.compile(
     r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
@@ -194,11 +278,12 @@ def check_style(path: str, lines: list[tuple[int, str]],
                 f"{m.group(1)} as the primary face — see design.md",
                 raw.strip()[:100]))
 
-        m = CDN_ASSET.search(raw)
-        if m:
+        m = _ASSET_TAG.search(raw)
+        if m and not _host_permitted(m.group(1), csp_allowed_hosts()):
             out.append(Finding(
                 path, num, "csp-external-asset",
-                "CSP is default-src 'self'; self-host it or inline it",
+                "the CSP in app.py does not permit this host; vendor it with "
+                "scripts/vendor_frontend_assets.py or inline it",
                 raw.strip()[:100]))
 
         m = SMALL_INPUT_FONT.search(raw)
@@ -262,7 +347,7 @@ def read_file(path: str) -> str:
 def run(base: str) -> list[Finding]:
     findings: list[Finding] = []
     for path, lines in added_lines(base).items():
-        if path in EXEMPT or not lines:
+        if is_exempt(path) or not lines:
             continue
         suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ""
         if suffix in PROSE_SUFFIXES:
@@ -297,9 +382,24 @@ def main() -> int:
         print(RULES)
         return 0
 
+    checked = sum(1 for path, lines in added_lines(args.base).items()
+                  if lines and not is_exempt(path)
+                  and ("." + path.rsplit(".", 1)[-1] if "." in path else "")
+                  in (PROSE_SUFFIXES | STYLE_SUFFIXES))
+
     findings = run(args.base)
     if not findings:
-        print("table stakes: clean")
+        # "clean" and "examined nothing" are different outcomes and must not
+        # print the same word. Running this against origin/main with the work
+        # still uncommitted diffs an empty range and finds nothing, which
+        # reads as a pass — that is how three real findings reached CI on the
+        # design redesign after a local run reported clean.
+        if checked == 0:
+            print(f"table stakes: NOTHING TO CHECK — no added lines vs "
+                  f"{args.base}. If you expected findings, your work is "
+                  f"probably uncommitted; this is not a pass.")
+            return 0
+        print(f"table stakes: clean ({checked} file(s) checked)")
         return 0
 
     by_rule: dict[str, int] = {}

@@ -1,107 +1,114 @@
-<!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+{#
+  Shared chrome for every page except index.html (standalone) and
+  review_base.html (relayed to careagents.cloud — see #396; it must not carry
+  navigation or same-origin assets).
+
+  TWO GROUNDS, and the default is deliberate.
+
+  `surface-console` + data-bs-theme="dark" is the DEFAULT so that any template
+  extending this file renders exactly as it did before the redesign. The
+  operational dashboards (r6_dashboard, fhir_control_panel, command_center)
+  style their own components in r6-dashboard.css and inherit the dark ground
+  from Bootstrap; repainting them was explicitly out of scope. A page opts IN
+  to the editorial ground:
+
+      {% block surface %}surface-paper{% endblock %}
+      {% block bstheme %}light{% endblock %}
+
+  Every asset below is self-hosted. Nothing here calls a CDN — that is what
+  lets the CSP in app.py stay default-src 'self'. Re-vendor with
+  scripts/vendor_frontend_assets.py; do not swap a local path back to a CDN to
+  pick up a newer version.
+#}<!DOCTYPE html>
+<html lang="en"
+      class="{% block surface %}surface-console{% endblock %}"
+      data-bs-theme="{% block bstheme %}dark{% endblock %}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}HealthClaw Guardrails{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/vendor/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/vendor/fontawesome.min.css') }}">
+    {# healthclaw.css last of the shared sheets: it sets the type tokens that
+       override Bootstrap's, and the chrome below depends on them. #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/healthclaw.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/r6-dashboard.css') }}">
     {% block head %}{% endblock %}
-    
-    <!-- Vercel Web Analytics -->
-    <script>
-        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-    </script>
-    <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="fas fa-shield-alt me-2" style="color:var(--r6-primary)"></i>HealthClaw Guardrails
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
-                    aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == url_for('index') %}active{% endif %}"
-                           href="{{ url_for('index') }}">Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == url_for('r6_dashboard') %}active{% endif %}"
-                           href="{{ url_for('r6_dashboard') }}">
-                           <i class="fas fa-heartbeat me-1"></i>Health Data Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path.startswith('/command-center') %}active{% endif %}"
-                           href="/command-center">
-                           <i class="fas fa-shield-heart me-1"></i>Command Center
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == url_for('faq') %}active{% endif %}"
-                           href="{{ url_for('faq') }}">
-                           <i class="fas fa-question-circle me-1"></i>FAQ
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == url_for('wiki') %}active{% endif %}"
-                           href="{{ url_for('wiki') }}">
-                           <i class="fas fa-book me-1"></i>Wiki
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.path == url_for('skills_index') %}active{% endif %}"
-                           href="{{ url_for('skills_index') }}">
-                           <i class="fas fa-puzzle-piece me-1"></i>Skills
-                        </a>
-                    </li>
-                </ul>
-                <div class="d-flex align-items-center gap-2">
-                    <span class="badge bg-secondary" style="font-size:0.7rem">v1.9.0</span>
-                    <span class="badge bg-success" style="font-size:0.7rem">R4 US Core v9</span>
-                    <span class="badge bg-info" style="font-size:0.7rem">R6 ballot3</span>
-                </div>
-            </div>
+    <a href="#main" class="visually-hidden">Skip to content</a>
+
+    <nav id="main-nav" class="hc-nav">
+      <div class="hc-nav__inner">
+        <a href="{{ url_for('index') }}" class="hc-nav__brand">
+          <span class="hc-nav__mark">HealthClaw</span>
+          {# Released version. tests/test_site_version_sync.py greps this file
+             for the literal and fails the build when a release moves past it
+             (RELEASING.md step 2). #}
+          <span class="hc-nav__ver">v1.9.0</span>
+        </a>
+        <div class="hc-nav__links">
+          <a class="hc-nav__link"
+             href="{{ url_for('index') }}"
+             {% if request.path == url_for('index') %}aria-current="page"{% endif %}>Home</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('r6_dashboard') }}"
+             {% if request.path == url_for('r6_dashboard') %}aria-current="page"{% endif %}>Health Data Dashboard</a>
+          <a class="hc-nav__link"
+             href="/command-center"
+             {% if request.path.startswith('/command-center') %}aria-current="page"{% endif %}>Command Center</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('faq') }}"
+             {% if request.path == url_for('faq') %}aria-current="page"{% endif %}>FAQ</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('wiki') }}"
+             {% if request.path == url_for('wiki') %}aria-current="page"{% endif %}>Wiki</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('skills_index') }}"
+             {% if request.path == url_for('skills_index') %}aria-current="page"{% endif %}>Skills</a>
         </div>
+      </div>
     </nav>
 
-    <div class="container">
+    <main id="main" class="{% block mainclass %}container{% endblock %}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    <div class="flash flash--{{ category }}" role="alert">
+                        <span>{{ message }}</span>
+                        <button type="button" class="flash__close"
+                                data-bs-dismiss="alert" aria-label="Dismiss">&times;</button>
                     </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
 
         {% block content %}{% endblock %}
-    </div>
+    </main>
 
-    <footer class="footer mt-5 py-3 bg-dark">
-        <div class="container text-center">
-            <span class="text-muted">
-                HealthClaw Guardrails &middot;
-                <a href="https://healthclaw.io" class="text-muted" target="_blank" rel="noopener noreferrer">healthclaw.io</a>
-                &middot; FHIR R4 US Core v9 + R6 &middot; MCP
-            </span>
-            <div class="mt-1 footer-legal">
-                <a href="{{ url_for('privacy') }}" class="text-muted me-3">Privacy Policy</a>
-                <a href="{{ url_for('terms') }}" class="text-muted me-3">Terms &amp; Conditions</a>
-                <a href="https://github.com/aks129/HealthClawGuardrails" class="text-muted" target="_blank" rel="noopener noreferrer">GitHub</a>
-            </div>
+    <footer class="hc-foot">
+      <div class="hc-foot__inner">
+        <div>
+          <div class="hc-foot__mark">HealthClaw Guardrails</div>
+          <div>FHIR R4 US Core v9 + R6 · MCP</div>
+          <div>a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer">healthclaw.io</a> project</div>
         </div>
+        <div class="hc-foot__col">
+          <div class="hc-foot__h">Project</div>
+          <a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="{{ url_for('skills_index') }}">Skills</a>
+          <a href="{{ url_for('r6_dashboard') }}">Dashboard</a>
+        </div>
+        <div class="hc-foot__col">
+          <div class="hc-foot__h">Legal</div>
+          <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+          <a href="{{ url_for('terms') }}">Terms &amp; Conditions</a>
+        </div>
+      </div>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/vendor/bootstrap.bundle.min.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

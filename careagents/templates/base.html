@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}CareAgents — your personal care agent{% endblock %}</title>
   <meta name="description" content="Spin up a personal health agent in under a minute. Every read redacted, every access audited, every action approved by you — guardrailed by HealthClaw.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,560;0,9..144,700;1,9..144,400&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  {# Fonts are self-hosted (scripts/vendor_frontend_assets.py). They used to
+     come from fonts.googleapis.com, which meant every page a patient opened —
+     including the one showing a lab result — announced itself to a third
+     party with their IP, the referring URL and their user agent. Nothing
+     about rendering type requires that. Do not put the CDN back. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='careagents.css') }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>">
   {% block head %}{% endblock %}

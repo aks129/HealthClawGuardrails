@@ -1,99 +1,84 @@
 {% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
 {% block title %}Skills · HealthClaw Guardrails{% endblock %}
 
 {% block head %}
 <style>
-  :root {
-    --cyan:      #22d3ee;
-    --cyan-dim:  rgba(34,211,238,0.45);
-    --amber:     #fbbf24;
-    --green:     #34d399;
-    --bg-card:   #111827;
-    --border:    #1e293b;
-    --gray:      #94a3b8;
-    --gray-dim:  #64748b;
-    --white:     #f1f5f9;
-  }
-  .skills-hero {
-    text-align: center; padding: 24px 0 36px;
-  }
+  /* Skills catalogue. This block used to redeclare a whole palette
+     (--cyan, --bg-card, --border, --gray ...) that shadowed the site's own,
+     and asked for 'JetBrains Mono', which base.html has never loaded — so
+     every identifier here silently fell back to the platform monospace.
+     Both are the same defect: a second owner for a fact the design system
+     already owns. Tokens only now. */
+  .skills-hero { padding: var(--s6) 0 var(--s6);
+                 border-bottom: 2px solid var(--rule-firm); margin-bottom: var(--s6); }
   .skills-eyebrow {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--cyan); margin-bottom: 12px;
+    font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-faint); margin-bottom: var(--s3);
   }
-  .skills-title {
-    font-size: 32px; font-weight: 700; color: var(--white);
-    letter-spacing: -0.01em; margin-bottom: 10px;
-  }
-  .skills-sub {
-    font-size: 15px; color: var(--gray); max-width: 640px; margin: 0 auto;
-    line-height: 1.6;
-  }
+  .skills-title { font-size: clamp(1.75rem, 3.6vw, 2.375rem); }
+  .skills-sub { font-size: 1.1875rem; color: var(--ink-soft);
+                max-width: var(--measure); margin-top: var(--s3); line-height: 1.55; }
+
   .skills-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 18px; margin-bottom: 40px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--s4); margin-bottom: var(--s7);
   }
   .skill-card {
-    background: var(--bg-card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 22px;
-    transition: border-color 0.2s, transform 0.15s;
+    background: var(--paper-raise); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: var(--s5);
     display: flex; flex-direction: column;
+    transition: border-color 140ms ease-out;
   }
-  .skill-card:hover {
-    border-color: var(--cyan-dim);
-    transform: translateY(-2px);
-  }
-  .skill-card.entry {
-    border-color: var(--cyan-dim);
-    background: linear-gradient(180deg,
-      rgba(34,211,238,0.06) 0%, var(--bg-card) 60%);
-  }
+  .skill-card:hover { border-color: var(--rule-firm); }
+  .skill-card.entry { border-color: var(--signal); background: var(--signal-wash); }
   .skill-name {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px; font-weight: 700; color: var(--cyan);
-    letter-spacing: -0.01em; margin-bottom: 8px;
-    word-break: break-word;
+    font-family: var(--mono); font-size: 0.9375rem; color: var(--signal-deep);
+    margin-bottom: var(--s2); word-break: break-word;
   }
-  .skill-desc {
-    font-size: 13.5px; color: var(--gray); line-height: 1.55;
-    flex-grow: 1; margin-bottom: 14px;
-  }
+  .skill-desc { font-size: 1rem; color: var(--ink-soft); line-height: 1.55;
+                flex-grow: 1; margin-bottom: var(--s4); }
   .skill-footer {
     display: flex; justify-content: space-between; align-items: center;
-    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    gap: var(--s3); font-family: var(--mono); font-size: 0.8125rem;
+    padding-top: var(--s3); border-top: 1px solid var(--rule);
   }
-  .skill-meta { color: var(--gray-dim); }
-  .skill-link {
-    color: var(--cyan); text-decoration: none; font-weight: 600;
-  }
-  .skill-link:hover { color: var(--white); }
+  .skill-meta { color: var(--ink-faint); }
+  .skill-link { color: var(--signal); text-decoration: none; }
+  .skill-link:hover { color: var(--signal-deep); text-decoration: underline; }
 
   .quickstart-banner {
-    background: linear-gradient(135deg,
-      rgba(34,211,238,0.10) 0%, rgba(251,191,36,0.06) 100%);
-    border: 1px solid var(--cyan-dim);
-    border-radius: 14px; padding: 28px 32px; margin: 0 0 36px;
-    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+    border: 1px solid var(--rule-firm); border-radius: var(--radius);
+    background: var(--paper-raise); padding: var(--s6);
+    margin: 0 0 var(--s6);
+    display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap;
   }
   .quickstart-banner-text { flex: 1 1 280px; }
-  .quickstart-banner h3 {
-    color: var(--white); font-size: 20px; font-weight: 700;
-    margin: 0 0 6px;
-  }
-  .quickstart-banner p {
-    color: var(--gray); font-size: 14px; line-height: 1.55; margin: 0;
-  }
+  .quickstart-banner h3 { font-size: 1.375rem; margin: 0 0 var(--s2); }
+  .quickstart-banner p { color: var(--ink-soft); font-size: 1rem;
+                         line-height: 1.55; margin: 0; }
   .quickstart-btn {
-    background: var(--cyan); color: #001218; border: none;
-    padding: 12px 22px; border-radius: 8px;
-    font-family: 'JetBrains Mono', monospace; font-size: 13px;
-    font-weight: 700; letter-spacing: 0.04em; cursor: pointer;
-    text-decoration: none; display: inline-block;
-    transition: opacity 0.2s, transform 0.1s;
+    background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
+    min-height: var(--tap); padding: 0 var(--s4);
+    display: inline-flex; align-items: center; border-radius: var(--radius);
+    font-family: var(--sans); font-size: 1rem; font-weight: 500;
+    text-decoration: none; cursor: pointer;
+    transition: background-color 140ms ease-out, border-color 140ms ease-out;
   }
-  .quickstart-btn:hover { opacity: 0.88; color: #001218; }
-  .quickstart-btn:active { transform: translateY(1px); }
+  .quickstart-btn:hover { background: var(--signal); border-color: var(--signal);
+                          color: var(--paper); }
+
+  .skills-note { color: var(--ink-faint); font-size: 0.9375rem;
+                 margin-bottom: var(--s7); }
+
+  /* healthclaw.css carries a global reduced-motion override, but the policy
+     is restated where the motion is declared: a style block that gets copied
+     to another page must carry its own guard, and a reviewer reading this
+     block should not have to know a second file exists. */
+  @media (prefers-reduced-motion: reduce) {
+    .skill-card, .quickstart-btn { transition: none; }
+  }
 </style>
 {% endblock %}
 
@@ -147,7 +132,7 @@
   {% endfor %}
 </div>
 
-<div class="text-center" style="color: var(--gray); font-size: 13px; margin-bottom: 40px;">
+<div class="skills-note">
   Source: <a href="https://github.com/aks129/HealthClawGuardrails/tree/main/skills"
             class="skill-link" target="_blank" rel="noopener">github.com/aks129/HealthClawGuardrails/tree/main/skills</a>
 </div>

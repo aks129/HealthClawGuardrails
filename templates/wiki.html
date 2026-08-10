@@ -1,149 +1,124 @@
 {% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
 
 {% block title %}Wiki — HealthClaw Guardrails{% endblock %}
 
 {% block head %}
 <style>
+/* Wiki — page-specific layout on the shared tokens. Prose was 0.875rem and
+   table text 0.82rem; both are raised to the system's 1rem / 0.9375rem floor.
+   This is the page people read to learn how the guardrails work, so it is the
+   last place to set 14px grey-on-grey. */
+.wiki-head { padding: var(--s7) 0 var(--s4);
+             border-bottom: 2px solid var(--rule-firm); }
+.wiki-head h1 { font-size: clamp(1.75rem, 3.6vw, 2.375rem); }
+.wiki-head__sub { color: var(--ink-soft); font-size: 1.1875rem;
+                  line-height: 1.55; margin: var(--s3) 0 0;
+                  max-width: var(--measure); }
+
 .wiki-layout {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 2rem;
-  align-items: start;
-  margin-top: 1.5rem;
+  display: grid; grid-template-columns: 232px 1fr;
+  gap: var(--s6); align-items: start; margin-top: var(--s5);
 }
-@media (max-width: 768px) {
+@media (max-width: 860px) {
   .wiki-layout { grid-template-columns: 1fr; }
   .wiki-toc { display: none; }
 }
 .wiki-toc {
-  position: sticky;
-  top: 1.5rem;
-  background: var(--r6-surface);
-  border: 1px solid var(--r6-border);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  font-size: 0.82rem;
+  position: sticky; top: calc(var(--s7) + var(--s3));
+  border-left: 1px solid var(--rule); padding-left: var(--s4);
+  font-size: 0.9375rem;
 }
 .wiki-toc-title {
-  font-weight: 700;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--r6-text-muted);
-  margin-bottom: 0.75rem;
+  font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.09em; color: var(--ink-faint); margin-bottom: var(--s3);
 }
 .wiki-toc a {
-  display: block;
-  color: var(--r6-text-muted);
-  text-decoration: none;
-  padding: 0.2rem 0;
-  border-left: 2px solid transparent;
-  padding-left: 0.6rem;
-  transition: all 0.15s;
+  display: block; color: var(--ink-soft); text-decoration: none;
+  padding: var(--s1) 0 var(--s1) var(--s3);
+  border-left: 2px solid transparent; margin-left: calc(-1 * var(--s4) - 1px);
+  transition: color 140ms ease-out, border-color 140ms ease-out;
 }
 .wiki-toc a:hover, .wiki-toc a.active {
-  color: var(--r6-primary);
-  border-left-color: var(--r6-primary);
+  color: var(--ink); border-left-color: var(--ink);
 }
-.wiki-toc .toc-sub { padding-left: 1.4rem; font-size: 0.78rem; }
+.wiki-toc .toc-sub { padding-left: var(--s5); font-size: 0.875rem; }
+
+.wiki-content { max-width: 76ch; }
 .wiki-content h2 {
-  font-size: 1.4rem;
-  font-weight: 800;
-  margin: 2.5rem 0 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--r6-border);
-  color: #fff;
+  font-size: 1.5rem; font-weight: 600; color: var(--ink);
+  margin: var(--s8) 0 var(--s4);
+  padding-bottom: var(--s2); border-bottom: 2px solid var(--rule-firm);
 }
-.wiki-content h3 {
-  font-size: 1.05rem;
-  font-weight: 700;
-  margin: 1.75rem 0 0.6rem;
-  color: var(--r6-primary);
-}
+.wiki-content h3 { font-size: 1.125rem; font-weight: 600; color: var(--ink);
+                   margin: var(--s6) 0 var(--s3); }
 .wiki-content p, .wiki-content li {
-  color: var(--r6-text-muted);
-  font-size: 0.875rem;
-  line-height: 1.7;
+  color: var(--ink-soft); font-size: 1rem; line-height: 1.7;
 }
-.wiki-content ul, .wiki-content ol {
-  padding-left: 1.4rem;
-  margin-bottom: 1rem;
-}
+.wiki-content p + p { margin-top: var(--s3); }
+.wiki-content ul, .wiki-content ol { padding-left: var(--s4); margin-block: var(--s3); }
+.wiki-content li { margin-bottom: var(--s2); }
 .wiki-content code {
-  background: rgba(99,102,241,0.12);
-  padding: 0.1em 0.35em;
-  border-radius: 3px;
-  font-size: 0.82rem;
+  background: var(--signal-wash); color: var(--signal-deep);
+  padding: 0.1em 0.35em; border-radius: var(--radius); font-size: 0.9em;
 }
 .wiki-content pre {
-  background: var(--r6-surface-2);
-  border: 1px solid var(--r6-border);
-  border-radius: 0.4rem;
-  padding: 1rem;
-  font-size: 0.8rem;
-  overflow-x: auto;
-  margin: 0.75rem 0 1rem;
+  background: var(--ink); color: #E7E5DC; border-radius: var(--radius);
+  padding: var(--s4); font-size: 0.875rem; line-height: 1.7;
+  overflow-x: auto; margin: var(--s3) 0 var(--s4);
 }
-.wiki-content a { color: var(--r6-primary); }
+.wiki-content pre code { background: none; color: inherit; padding: 0; }
+.wiki-content a { color: var(--signal); }
+
 .wiki-callout {
-  border-left: 3px solid var(--r6-primary);
-  background: rgba(99,102,241,0.06);
-  padding: 0.8rem 1rem;
-  border-radius: 0 0.4rem 0.4rem 0;
-  margin: 1rem 0;
-  font-size: 0.85rem;
-  color: var(--r6-text-muted);
+  border-left: 3px solid var(--signal); background: var(--signal-wash);
+  padding: var(--s3) var(--s4); border-radius: 0 var(--radius) var(--radius) 0;
+  margin: var(--s4) 0; font-size: 1rem; color: var(--ink-soft);
 }
-.wiki-callout.warn {
-  border-color: var(--r6-warning);
-  background: rgba(245,158,11,0.06);
-}
-.wiki-callout.success {
-  border-color: var(--r6-success);
-  background: rgba(16,185,129,0.06);
-}
+.wiki-callout.warn { border-left-color: var(--warn); background: var(--warn-wash); }
+.wiki-callout.success { border-left-color: var(--pass); background: var(--pass-wash); }
+
 .wiki-badge {
-  display: inline-block;
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 0.1em 0.5em;
-  border-radius: 99px;
-  vertical-align: middle;
-  margin-left: 0.4rem;
+  display: inline-block; font-family: var(--mono); font-size: 0.75rem;
+  padding: 0.1em 0.5em; border-radius: var(--radius);
+  vertical-align: middle; margin-left: var(--s2);
 }
-.wiki-badge.stable { background: rgba(16,185,129,0.2); color: #10b981; }
-.wiki-badge.experimental { background: rgba(99,102,241,0.2); color: #6366f1; }
+.wiki-badge.stable { background: var(--pass-wash); color: var(--pass); }
+.wiki-badge.experimental { background: var(--signal-wash); color: var(--signal-deep); }
+
 .wiki-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-  margin: 0.75rem 0 1.25rem;
+  width: 100%; border-collapse: collapse;
+  font-size: 0.9375rem; margin: var(--s3) 0 var(--s5);
 }
 .wiki-table th {
-  text-align: left;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--r6-text-muted);
-  border-bottom: 1px solid var(--r6-border);
+  text-align: left; padding: var(--s2) var(--s3);
+  font-family: var(--mono); font-size: 0.75rem; font-weight: 400;
+  text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-faint);
+  border-bottom: 2px solid var(--rule-firm);
 }
 .wiki-table td {
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  color: var(--r6-text-muted);
-  vertical-align: top;
+  padding: var(--s2) var(--s3); border-bottom: 1px solid var(--rule);
+  color: var(--ink-soft); vertical-align: top;
 }
-.wiki-table td:first-child { color: #fff; font-weight: 600; }
+.wiki-table td:first-child { color: var(--ink); font-weight: 600; }
+
+  /* healthclaw.css carries a global reduced-motion override, but the policy
+     is restated where the motion is declared: a style block that gets copied
+     to another page must carry its own guard, and a reviewer reading this
+     block should not have to know a second file exists. */
+  @media (prefers-reduced-motion: reduce) {
+    .wiki-toc a { transition: none; }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
-<div style="padding: 2rem 0 1rem; border-bottom: 1px solid var(--r6-border); margin-bottom: 0.5rem;">
-  <h1 style="font-size: 2rem; font-weight: 800; margin-bottom: 0.4rem;">
-    <i class="fas fa-book me-2" style="color:var(--r6-primary)"></i>Wiki
+<div class="wiki-head">
+  <h1>
+    Wiki
   </h1>
-  <p style="color: var(--r6-text-muted); font-size: 0.92rem; margin: 0;">
+  <p class="wiki-head__sub">
     Architecture, guardrail patterns, FHIR concepts, and how-tos for HealthClaw Guardrails.
   </p>
 </div>

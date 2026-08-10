@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""Vendor every third-party byte we serve, so no page calls out on load.
+
+Covers the webfaces both surfaces use, plus the two CSS libraries the older
+pages still depend on (Bootstrap, Font Awesome). One script so that "what
+third party is in our serving path" has a single answer.
+
+Why this exists rather than a `<link>` to fonts.googleapis.com:
+
+  1. **Privacy.** A patient opening CareAgents to read a lab result should not
+     announce that page load to Google. The font request carries their IP, the
+     referring URL, and their user agent. Nothing about rendering type needs a
+     third party to know a person visited a health page.
+  2. **The CSP can be honest.** `design.md` claimed for months that the policy
+     was `default-src 'self'` while `app.py` allowed four CDN hosts, because
+     the strict policy had broken fonts on every deploy. Self-hosting is what
+     lets the strict claim be true instead of aspirational.
+  3. **One less render-blocking round trip** to a host we do not control.
+
+Run it again to re-vendor after a version bump:
+
+    uv run python scripts/vendor_webfonts.py
+
+It is deliberately NOT run in CI. Vendored bytes are committed and reviewed;
+a build step that silently re-downloads them would put an unreviewed third
+party back in the serving path, which is the thing this script exists to stop.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+import urllib.request
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# Google's CSS API returns woff2 only when it believes the client supports it.
+_CHROME_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+# Latin only. The two surfaces ship English; carrying Cyrillic and Greek
+# subsets would roughly triple the bytes for glyphs nothing renders.
+_KEEP_SUBSETS = {"latin", "latin-ext"}
+
+#: (family spec for the CSS API, slug used in filenames)
+_HEALTHCLAW = [
+    # Archivo — grotesque built for headlines and dense body copy. Variable,
+    # so one file covers 300..800 and hierarchy costs no extra request.
+    ("Archivo:ital,wght@0,300..800;1,400..600", "archivo"),
+    # Fragment Mono — data, codes, labels. Deliberately not JetBrains Mono:
+    # every developer-tool site on the web uses it, and identifiers here are
+    # meant to read as record-keeping, not as an IDE.
+    ("Fragment+Mono:ital@0;1", "fragment-mono"),
+]
+
+_CAREAGENTS = [
+    ("Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400", "fraunces"),
+    ("Public+Sans:ital,wght@0,400..700;1,400", "public-sans"),
+]
+
+_BLOCK = re.compile(
+    r"/\*\s*(?P<subset>[a-z0-9-]+)\s*\*/\s*(?P<block>@font-face\s*\{[^}]*\})",
+    re.I,
+)
+_URL = re.compile(r"url\((https://[^)]+\.woff2)\)")
+
+
+def _get(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": _CHROME_UA})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        return resp.read().decode("utf-8")
+
+
+def _get_bytes(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": _CHROME_UA})
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+        return resp.read()
+
+
+def vendor(families: list[tuple[str, str]], static_dir: pathlib.Path,
+           css_path: pathlib.Path, css_rel_prefix: str) -> int:
+    """Download every kept subset and write a @font-face sheet pointing local.
+
+    `css_rel_prefix` is how the stylesheet reaches the font directory. It stays
+    relative so the sheet works under any mount point — the two apps serve
+    their static trees at different roots.
+    """
+    font_dir = static_dir / "fonts"
+    font_dir.mkdir(parents=True, exist_ok=True)
+    blocks: list[str] = []
+    written = 0
+
+    for spec, slug in families:
+        css = _get(f"https://fonts.googleapis.com/css2?family={spec}&display=swap")
+        seen: dict[str, int] = {}
+        for match in _BLOCK.finditer(css):
+            subset = match.group("subset").lower()
+            if subset not in _KEEP_SUBSETS:
+                continue
+            block = match.group("block")
+            url_match = _URL.search(block)
+            if not url_match:
+                continue
+            remote = url_match.group(1)
+
+            # Italic and roman come back as separate faces for the same subset;
+            # number them so the second does not overwrite the first.
+            idx = seen.get(subset, 0)
+            seen[subset] = idx + 1
+            name = f"{slug}-{subset}" + (f"-{idx}" if idx else "") + ".woff2"
+
+            (font_dir / name).write_bytes(_get_bytes(remote))
+            written += 1
+            blocks.append(
+                block.replace(remote, f"{css_rel_prefix}{name}").strip())
+            print(f"  {name:<34} {(font_dir / name).stat().st_size // 1024:>4} KB")
+
+    header = (
+        "/* Vendored webfaces. GENERATED by scripts/vendor_webfonts.py —\n"
+        "   edit that script, not this file.\n\n"
+        "   Self-hosted on purpose: a page a patient opens must not announce\n"
+        "   itself to a third party, and it is what lets the CSP in app.py\n"
+        "   stay default-src 'self'. See design.md. */\n\n"
+    )
+    css_path.parent.mkdir(parents=True, exist_ok=True)
+    css_path.write_text(header + "\n\n".join(blocks) + "\n", encoding="utf-8")
+    print(f"  -> {css_path.relative_to(ROOT)}")
+    return written
+
+
+# --- CSS libraries the pre-redesign pages still depend on -------------------
+#
+# The redesigned surfaces (index.html, base.html chrome, the CareAgents
+# landing) use neither. These stay vendored for the dashboards and the older
+# content pages, which carry 122 Font Awesome icons and lean on Bootstrap's
+# grid. Removing those is a separate change with its own blast radius; pinning
+# them here is what lets the CSP tighten TODAY without waiting on it.
+
+_BOOTSTRAP = "5.3.0"
+_FONTAWESOME = "6.0.0"
+
+# Icons are also assembled at runtime in static/js/*.js, so the used set cannot
+# be determined statically and the families are vendored whole. Every face the
+# stylesheet names must be here — a missing one 404s silently once the CSP no
+# longer permits the CDN to answer for it. `_assert_faces_resolve` checks it.
+_FA_FACES = ("fa-solid-900", "fa-brands-400", "fa-regular-400",
+             "fa-v4compatibility")
+
+_SOURCEMAP = re.compile(r"/\*#\s*sourceMappingURL=[^*]*\*/")
+_TTF_SRC = re.compile(r",\s*url\([^)]*\.ttf\)\s*format\(\"truetype\"\)")
+
+
+def vendor_libs(static_dir: pathlib.Path) -> int:
+    """Bootstrap CSS+JS and Font Awesome CSS+webfonts, rewritten to serve local."""
+    css_dir = static_dir / "css" / "vendor"
+    js_dir = static_dir / "js" / "vendor"
+    fonts_dir = static_dir / "webfonts"
+    for d in (css_dir, js_dir, fonts_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    written = 0
+
+    base = f"https://cdn.jsdelivr.net/npm/bootstrap@{_BOOTSTRAP}/dist"
+    css = _SOURCEMAP.sub("", _get(f"{base}/css/bootstrap.min.css"))
+    (css_dir / "bootstrap.min.css").write_text(css, encoding="utf-8")
+    js = _SOURCEMAP.sub("", _get(f"{base}/js/bootstrap.bundle.min.js"))
+    (js_dir / "bootstrap.bundle.min.js").write_text(js, encoding="utf-8")
+    written += 2
+
+    fa = f"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/{_FONTAWESOME}"
+    # Drop the .ttf fallbacks: every browser that runs this app takes woff2,
+    # and carrying both doubles the vendored bytes for nothing.
+    fa_css = _TTF_SRC.sub("", _SOURCEMAP.sub("", _get(f"{fa}/css/all.min.css")))
+    # Upstream ships `url(../webfonts/…)`, written for a stylesheet at
+    # static/css/. Ours lives one level deeper at static/css/vendor/, so that
+    # path resolves to static/css/webfonts/ and every face 404s — silently,
+    # because a missing font renders as a fallback glyph rather than an error.
+    fa_css = fa_css.replace("../webfonts/", "../../webfonts/")
+    (css_dir / "fontawesome.min.css").write_text(fa_css, encoding="utf-8")
+    written += 1
+    for face in _FA_FACES:
+        (fonts_dir / f"{face}.woff2").write_bytes(
+            _get_bytes(f"{fa}/webfonts/{face}.woff2"))
+        written += 1
+
+    for path in (css_dir / "bootstrap.min.css", js_dir / "bootstrap.bundle.min.js",
+                 css_dir / "fontawesome.min.css"):
+        print(f"  {path.name:<34} {path.stat().st_size // 1024:>4} KB")
+    for face in _FA_FACES:
+        p = fonts_dir / f"{face}.woff2"
+        print(f"  {p.name:<34} {p.stat().st_size // 1024:>4} KB")
+
+    _assert_faces_resolve(css_dir / "fontawesome.min.css")
+    return written
+
+
+_FACE_REF = re.compile(r"url\(([^)\"']+\.woff2)\)")
+
+
+def _assert_faces_resolve(css_path: pathlib.Path) -> None:
+    """Every face URL must resolve, RELATIVE TO THE STYLESHEET.
+
+    The first version of this took the font directory as an argument and
+    checked the files were in it. They were — and every one still 404'd,
+    because the browser resolves `url(...)` against the stylesheet's own
+    location and the stylesheet had moved a level deeper. The check confirmed
+    a fact nobody was asking about.
+
+    So resolve the URL the way a browser does. Before the CSP tightened, a
+    broken path still rendered: the browser fell through to cdnjs. It cannot
+    now, and a missing face degrades to a fallback glyph rather than an error,
+    so nothing downstream would report it.
+    """
+    css = css_path.read_text(encoding="utf-8")
+    base = css_path.parent
+    missing = sorted({
+        ref for ref in _FACE_REF.findall(css)
+        if not ref.startswith(("http://", "https://", "data:"))
+        and not (base / ref).resolve().is_file()
+    })
+    if missing:
+        raise SystemExit(
+            f"{css_path.name} references faces that do not resolve from "
+            f"{css_path.parent}:\n  " + "\n  ".join(missing)
+            + "\nAdd them to _FA_FACES, or fix the rewritten url() prefix.")
+
+
+def main() -> int:
+    print("HealthClaw webfaces (static/)")
+    n = vendor(_HEALTHCLAW, ROOT / "static",
+               ROOT / "static" / "css" / "fonts.css", "../fonts/")
+    print("\nCareAgents webfaces (careagents/static/)")
+    n += vendor(_CAREAGENTS, ROOT / "careagents" / "static",
+                ROOT / "careagents" / "static" / "fonts.css", "fonts/")
+    print(f"\nCSS libraries (static/) — Bootstrap {_BOOTSTRAP}, "
+          f"Font Awesome {_FONTAWESOME}")
+    n += vendor_libs(ROOT / "static")
+    print(f"\n{n} files vendored. No page loads a third-party asset.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

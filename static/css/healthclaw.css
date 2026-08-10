@@ -1,0 +1,628 @@
+/* HealthClaw — the project site.
+   International Typographic Style: a strict grid, hierarchy from size and
+   weight alone, hairline rules instead of shadows, and a monospace face
+   carrying every number and identifier.
+
+   The look is documented in design.md. That file and this one must agree; if
+   you change a token here, change it there in the same commit.
+
+   Why a stylesheet exists at all: index.html previously carried ~200 inline
+   `style=` attributes and no shared component. Every section re-declared its
+   own card, so no visual fact had an owner and the page drifted by
+   construction. Components live here now. A page that needs a new colour
+   needs a token, not an attribute.
+
+   Two grounds share this sheet:
+     .surface-paper    the site — light, editorial (index, faq, wiki, ...)
+     .surface-console  the operational dashboards — dark, unchanged by this
+                       redesign. They style their own components in
+                       r6-dashboard.css and inherit the ground from
+                       data-bs-theme="dark"; nothing here may repaint them. */
+
+/* ══ TOKENS ══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Ground and ink. The paper is warm and slightly off-white: pure #FFF is
+     harsh under fluorescent light and reads as an unstyled document. */
+  --paper:       #FAF9F5;
+  --paper-sunk:  #F1EFE8;
+  --paper-raise: #FFFFFF;
+  --ink:         #14140F;
+  --ink-soft:    #55534B;
+  --ink-faint:   #76746A;
+  --rule:        #DFDCD2;
+  --rule-firm:   #14140F;
+
+  /* ONE accent. Ultramarine sits deliberately outside the semantic set
+     below: green, amber and red already mean pass, caution and fail on this
+     site, so an accent drawn from those hues would make a decorative chip
+     read as a status claim. */
+  --signal:      #1B2FBF;
+  --signal-deep: #131F8A;
+  --signal-wash: #ECEEFA;
+
+  /* Semantic. These MEAN something. Never decorative. Darkened from the
+     old dark-mode values because they now sit on light paper and have to
+     clear WCAG AA against it. */
+  --pass:      #1B6B45;
+  --warn:      #7E5000;
+  --fail:      #A82318;
+  --pass-wash: #E7F1EB;
+  --warn-wash: #F6EFE1;
+  --fail-wash: #F7EAE8;
+
+  /* Type. Archivo is a grotesque cut for headlines and dense body copy.
+     Fragment Mono carries data, codes and labels — deliberately not
+     JetBrains Mono, which every developer-tool site on the web already
+     uses; identifiers here should read as record-keeping, not as an IDE. */
+  --sans: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* 8pt spacing scale. Every gap in the design is one of these. */
+  --s1: 4px;  --s2: 8px;  --s3: 16px; --s4: 24px; --s5: 32px;
+  --s6: 48px; --s7: 64px; --s8: 96px; --s9: 144px;
+
+  --page: 1240px;
+  --measure: 64ch;
+
+  /* One radius, near-square. CareAgents uses 18px because it is warm and
+     wants to feel soft; this surface is the opposite claim. */
+  --radius: 2px;
+
+  /* No shadows anywhere on this surface. Depth is a rule or a ground shift.
+     A shadow here would be the one thing not drawn from the grid. */
+
+  --tap: 44px;  /* minimum touch target */
+
+  /* Bootstrap runs on the older pages. Overriding its variables is how the
+     type lands there without fighting its selectors. */
+  --bs-body-font-family: var(--sans);
+  --bs-body-font-size: 1.0625rem;
+}
+
+/* ══ RESET ═══════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /* The masthead is sticky, so an in-page jump (#gateways, #curatr, the
+     wiki's contents list) would otherwise land with the heading hidden
+     underneath it. */
+  scroll-padding-top: 88px;
+}
+/* Someone reading a result they are frightened of should not be moved
+   through it. Guarded here rather than at each animation, so a new
+   transition cannot forget. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.surface-paper body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1.0625rem;      /* 17px — never below 16 */
+  line-height: 1.6;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+.surface-paper h1, .surface-paper h2,
+.surface-paper h3, .surface-paper h4 {
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+  text-wrap: balance;
+}
+.surface-paper p { margin: 0; }
+
+/* `:where()` contributes ZERO specificity, so this is the accent for a bare
+   link and loses to any component that names a colour.
+
+   Written as `.surface-paper a` first, which scores (0,1,1) and therefore beat
+   every single-class component rule below it: `.btn--primary` (0,1,0) rendered
+   its label in ultramarine on near-black, and `.hc-nav__link` lost its grey.
+   A base element rule has to sit UNDER the components, not over them. */
+.surface-paper :where(a) {
+  color: var(--signal);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.surface-paper :where(a):hover { color: var(--signal-deep); }
+
+/* Focus is never removed. Keyboard users are not an edge case on a page
+   that leads to a health record. */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+img, video { max-width: 100%; height: auto; display: block; }
+
+/* ══ LAYOUT ══════════════════════════════════════════════════════════════ */
+
+.wrap { width: 100%; max-width: var(--page); margin: 0 auto;
+        padding-inline: var(--s4); }
+
+.section { padding-block: var(--s8); }
+.section--tight { padding-block: var(--s6); }
+.section--sunk { background: var(--paper-sunk);
+                 border-block: 1px solid var(--rule); }
+
+/* The Swiss section head: an eyebrow, a firm rule, then the statement. */
+.section-head { max-width: var(--measure); margin-bottom: var(--s6); }
+.section-head--wide { max-width: none; }
+
+.eyebrow {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: var(--s3);
+  padding-bottom: var(--s3);
+  border-bottom: 2px solid var(--rule-firm);
+}
+
+.section-title { font-size: clamp(1.625rem, 3.2vw, 2.375rem); }
+.section-lede {
+  margin-top: var(--s3);
+  color: var(--ink-soft);
+  font-size: 1.1875rem;
+  line-height: 1.55;
+  max-width: var(--measure);
+}
+
+.grid { display: grid; gap: var(--s4); }
+.grid--2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.grid--3 { grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.grid--6 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+
+/* ══ MASTHEAD ════════════════════════════════════════════════════════════ */
+/* Chrome tokens flip with the surface so one masthead serves both the paper
+   pages and the dark dashboards without a second component. */
+
+.surface-paper  { --chrome-bg: var(--paper); --chrome-ink: var(--ink);
+                  --chrome-soft: var(--ink-soft); --chrome-rule: var(--rule); }
+.surface-console { --chrome-bg: #16162a; --chrome-ink: #e7e6e0;
+                   --chrome-soft: #a2a0b4; --chrome-rule: #2c2c46; }
+
+.hc-nav {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--chrome-rule);
+  font-family: var(--sans);
+}
+.hc-nav__inner {
+  max-width: var(--page); margin: 0 auto; padding: var(--s3) var(--s4);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s4); flex-wrap: wrap;
+}
+.hc-nav__brand {
+  display: inline-flex; align-items: baseline; gap: var(--s2);
+  text-decoration: none; color: var(--chrome-ink);
+}
+.hc-nav__mark {
+  font-size: 1.125rem; font-weight: 600; letter-spacing: -0.03em;
+  color: var(--chrome-ink);
+}
+.hc-nav__ver {
+  font-family: var(--mono); font-size: 0.75rem; color: var(--chrome-soft);
+}
+.hc-nav__links {
+  display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap;
+}
+.hc-nav__link {
+  color: var(--chrome-soft); text-decoration: none;
+  font-size: 0.9375rem;
+  padding-block: var(--s2);
+  border-bottom: 1px solid transparent;
+  transition: color 140ms ease-out, border-color 140ms ease-out;
+}
+.hc-nav__link:hover,
+.hc-nav__link[aria-current="page"] {
+  color: var(--chrome-ink); border-bottom-color: var(--chrome-ink);
+}
+
+/* ══ TYPE OBJECTS ════════════════════════════════════════════════════════ */
+
+.hero { padding-block: var(--s8) var(--s7); }
+.hero__eyebrow {
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--ink-faint);
+  letter-spacing: 0.06em; margin-bottom: var(--s5);
+  padding-bottom: var(--s3); border-bottom: 1px solid var(--rule);
+}
+/* .hero-title keeps its historical class name: e2e/tests/landing.spec.ts
+   locates `h1.hero-title` and asserts it contains "AI agents". */
+h1.hero-title {
+  font-size: clamp(2.5rem, 6.2vw, 4.75rem);
+  font-weight: 500;
+  letter-spacing: -0.038em;
+  line-height: 0.98;
+  max-width: 18ch;
+}
+.hero-title em {
+  font-style: normal;
+  color: var(--signal);
+}
+.hero__lede {
+  margin-top: var(--s5); max-width: var(--measure);
+  font-size: 1.1875rem; line-height: 1.55; color: var(--ink-soft);
+}
+.hero__lede strong { color: var(--ink); font-weight: 600; }
+.hero__ctas {
+  margin-top: var(--s6); display: flex; gap: var(--s3); flex-wrap: wrap;
+}
+.hero__fine { margin-top: var(--s4); font-size: 0.9375rem; color: var(--ink-faint); }
+
+.lede { font-size: 1.1875rem; line-height: 1.55; color: var(--ink-soft); }
+.fine { font-size: 0.9375rem; color: var(--ink-faint); }
+
+/* ══ BUTTONS ═════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--tap); padding: 0 var(--s4);
+  font-family: var(--sans); font-size: 1rem; font-weight: 500;
+  border-radius: var(--radius); border: 1px solid transparent;
+  text-decoration: none; cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out,
+              border-color 140ms ease-out;
+}
+.btn--primary { background: var(--ink); color: var(--paper); }
+.btn--primary:hover { background: var(--signal); color: var(--paper); }
+.btn--ghost {
+  background: transparent; color: var(--ink); border-color: var(--rule-firm);
+}
+.btn--ghost:hover { background: var(--ink); color: var(--paper); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ══ SPEC STRIP — the numbers, set as a data table ════════════════════════ */
+
+.spec-strip {
+  border-top: 2px solid var(--rule-firm);
+  border-bottom: 1px solid var(--rule);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.spec {
+  padding: var(--s5) var(--s4) var(--s5) 0;
+  border-right: 1px solid var(--rule);
+}
+.spec:last-child { border-right: 0; }
+.spec__num {
+  display: block; font-family: var(--mono);
+  font-size: clamp(1.75rem, 3.6vw, 2.5rem);
+  color: var(--ink); line-height: 1; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.spec__label {
+  margin-top: var(--s2); font-size: 0.8125rem; color: var(--ink-faint);
+  font-family: var(--mono); letter-spacing: 0.04em;
+}
+
+/* ══ CARD ════════════════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--paper-raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--s5);
+  display: flex; flex-direction: column;
+}
+a.card { text-decoration: none; color: inherit;
+         transition: border-color 140ms ease-out; }
+a.card:hover { border-color: var(--rule-firm); }
+.card__kicker {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: var(--s3);
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+}
+.card__title {
+  font-size: 1.1875rem; font-weight: 600; letter-spacing: -0.012em;
+  line-height: 1.25; margin-bottom: var(--s2); color: var(--ink);
+}
+.card__body { color: var(--ink-soft); font-size: 1rem; line-height: 1.6; }
+.card__more {
+  margin-top: auto; padding-top: var(--s4);
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--signal);
+}
+.card__list {
+  margin: var(--s3) 0 0; padding: 0; list-style: none;
+  color: var(--ink-soft); font-size: 0.9375rem; line-height: 1.55;
+}
+.card__list li {
+  padding-left: var(--s4); position: relative; margin-bottom: var(--s2);
+}
+.card__list li::before {
+  content: ""; position: absolute; left: 0; top: 0.62em;
+  width: 8px; height: 1px; background: var(--ink-faint);
+}
+.card__list strong { color: var(--ink); font-weight: 600; }
+
+/* ══ CHIPS ═══════════════════════════════════════════════════════════════ */
+
+.chip {
+  display: inline-block; font-family: var(--mono); font-size: 0.75rem;
+  letter-spacing: 0.03em; padding: 2px var(--s2);
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  color: var(--ink-soft); background: var(--paper-sunk);
+  text-transform: none;
+}
+.chip--signal { color: var(--signal-deep); background: var(--signal-wash);
+                border-color: var(--signal-wash); }
+.chip--pass { color: var(--pass); background: var(--pass-wash);
+              border-color: var(--pass-wash); }
+.chip--warn { color: var(--warn); background: var(--warn-wash);
+              border-color: var(--warn-wash); }
+.chip--fail { color: var(--fail); background: var(--fail-wash);
+              border-color: var(--fail-wash); }
+
+code, .mono { font-family: var(--mono); font-size: 0.9em; }
+.surface-paper code { color: var(--signal-deep); }
+
+/* ══ NUMBERED SEQUENCE (pipeline, audience) ══════════════════════════════ */
+/* Replaces the emoji that used to head these cards. design.md bans emoji as
+   UI iconography — they are identity, not buttons — and a numeral carries
+   the ordering the pipeline actually has. */
+
+.seq { border-top: 2px solid var(--rule-firm); }
+.seq__item {
+  padding: var(--s4) var(--s4) var(--s5) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.seq__n {
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--signal);
+  letter-spacing: 0.06em; display: block; margin-bottom: var(--s3);
+}
+/* .pipeline-label keeps its historical name — landing.spec.ts asserts three
+   of these by text. */
+.pipeline-label {
+  font-size: 1.0625rem; font-weight: 600; color: var(--ink);
+  letter-spacing: -0.01em; margin-bottom: var(--s1);
+}
+.seq__note { font-size: 0.9375rem; color: var(--ink-soft); line-height: 1.5; }
+
+/* ══ PHI COMPARISON ══════════════════════════════════════════════════════ */
+/* .phi-compare is asserted visible by landing.spec.ts. */
+
+.phi-compare {
+  display: grid; gap: var(--s4);
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+}
+@media (max-width: 780px) {
+  .phi-compare { grid-template-columns: 1fr; }
+  .phi-compare__arrow { transform: rotate(90deg); }
+}
+.phi-pane {
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--paper-raise); padding: var(--s4);
+  overflow-x: auto;
+}
+.phi-pane--out { border-color: var(--pass); background: var(--pass-wash); }
+.phi-pane__head {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding-bottom: var(--s3); margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+.phi-row {
+  font-family: var(--mono); font-size: 0.875rem; line-height: 1.9;
+  white-space: pre; color: var(--ink);
+}
+.phi-row .k { color: var(--ink-faint); }
+.phi-row .redacted { color: var(--pass); }
+.phi-compare__arrow {
+  align-self: center; font-family: var(--mono); color: var(--ink-faint);
+  font-size: 1.25rem;
+}
+
+/* ══ MATRIX (comparison table) ═══════════════════════════════════════════ */
+
+.matrix-scroll { overflow-x: auto; }
+.matrix {
+  width: 100%; border-collapse: collapse;
+  font-size: 0.9375rem; min-width: 640px;
+}
+.matrix th, .matrix td {
+  text-align: left; padding: var(--s3) var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+.matrix thead th {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint);
+  border-bottom: 2px solid var(--rule-firm); font-weight: 400;
+  vertical-align: bottom;
+}
+.matrix thead th:nth-child(2) { color: var(--ink); }
+.matrix tbody th { font-weight: 400; color: var(--ink-soft); }
+.matrix td { font-family: var(--mono); font-size: 0.875rem; }
+.matrix td:nth-child(2) { background: var(--signal-wash); color: var(--ink); }
+.matrix .y { color: var(--pass); }
+.matrix .n { color: var(--ink-faint); }
+
+/* ══ CODE ════════════════════════════════════════════════════════════════ */
+
+.code {
+  background: var(--ink); color: #E7E5DC;
+  border-radius: var(--radius); padding: var(--s5);
+  font-family: var(--mono); font-size: 0.875rem; line-height: 1.85;
+  overflow-x: auto; margin: 0;
+}
+.code .c { color: #8F8D82; }         /* comment */
+.code .p { color: #9FB0FF; }         /* prompt / path */
+.code .v { color: #E7E5DC; }         /* value */
+.code-block { position: relative; }
+.code-block__copy {
+  position: absolute; top: var(--s2); right: var(--s2);
+  /* 44px, not the 32px an overlay button wants to be. The rule has no
+     small-control exemption, and this is the one thing on the page a phone
+     user actually taps. */
+  min-height: var(--tap); display: inline-flex; align-items: center;
+  padding: 0 var(--s3);
+  font-family: var(--mono); font-size: 0.75rem;
+  background: transparent; color: #8F8D82;
+  border: 1px solid #3A3931; border-radius: var(--radius); cursor: pointer;
+  transition: color 140ms ease-out, border-color 140ms ease-out;
+}
+.code-block__copy:hover { color: #E7E5DC; border-color: #6A6960; }
+
+/* ══ FIGURE (video) ══════════════════════════════════════════════════════ */
+
+.figure { border: 1px solid var(--rule); border-radius: var(--radius);
+          background: var(--paper-raise); overflow: hidden; }
+.figure video { background: #000; width: 100%; }
+.figure__cap { padding: var(--s4); }
+
+/* ══ SUBSCRIBE ═══════════════════════════════════════════════════════════ */
+
+.subscribe__form { display: flex; gap: var(--s2); flex-wrap: wrap;
+                   margin-top: var(--s5); max-width: 520px; }
+.field {
+  flex: 1 1 240px; min-height: var(--tap); padding: 0 var(--s3);
+  font-family: var(--sans);
+  font-size: 1rem;              /* 16px floor — iOS zooms the page below it */
+  color: var(--ink); background: var(--paper-raise);
+  border: 1px solid var(--rule-firm); border-radius: var(--radius);
+}
+.field::placeholder { color: var(--ink-faint); }
+.field:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.form-msg { margin-top: var(--s3); font-size: 0.9375rem; min-height: 1.4em; }
+.form-msg.ok { color: var(--pass); }
+.form-msg.error { color: var(--fail); }
+
+/* ══ FOOTER ══════════════════════════════════════════════════════════════ */
+
+.hc-foot {
+  background: var(--chrome-bg); color: var(--chrome-soft);
+  border-top: 2px solid var(--chrome-rule);
+  margin-top: var(--s8); padding-block: var(--s6);
+  font-size: 0.9375rem;
+}
+.hc-foot__inner {
+  max-width: var(--page); margin: 0 auto; padding-inline: var(--s4);
+  display: grid; gap: var(--s5);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.hc-foot__mark { color: var(--chrome-ink); font-weight: 600;
+                 letter-spacing: -0.02em; margin-bottom: var(--s2); }
+.hc-foot a { color: var(--chrome-soft); text-decoration: none; }
+.hc-foot a:hover { color: var(--chrome-ink); text-decoration: underline; }
+.hc-foot__col { display: flex; flex-direction: column; gap: var(--s2); }
+.hc-foot__h {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--chrome-soft); opacity: 0.75;
+  margin-bottom: var(--s1);
+}
+.hc-foot__ep { font-family: var(--mono); font-size: 0.8125rem; }
+
+/* ══ LEGAL PAGES ═════════════════════════════════════════════════════════ */
+/* privacy.html and terms.html carried byte-identical <style> blocks. Same
+   fact, two owners, and they had already drifted apart by one rule. */
+
+.legal { max-width: 72ch; margin-inline: auto; padding-block: var(--s7); }
+.legal__title { font-size: clamp(1.75rem, 3.4vw, 2.25rem); }
+.legal__meta { font-family: var(--mono); font-size: 0.8125rem;
+               color: var(--ink-faint); margin-top: var(--s2); }
+.legal__body h2 {
+  margin-top: var(--s7); margin-bottom: var(--s3);
+  font-size: 1.25rem; font-weight: 600;
+  padding-bottom: var(--s2); border-bottom: 1px solid var(--rule);
+}
+.legal__body h3 { margin-top: var(--s5); margin-bottom: var(--s2);
+                  font-size: 1.0625rem; font-weight: 600; }
+.legal__body p, .legal__body li { color: var(--ink-soft); line-height: 1.7; }
+.legal__body p + p { margin-top: var(--s3); }
+.legal__body ul { padding-left: var(--s4); margin-top: var(--s3); }
+.legal__body li { margin-bottom: var(--s2); }
+
+.legal-toc { margin-block: var(--s5); padding-left: var(--s4); }
+.legal-toc a { color: var(--ink-soft); text-decoration: none; font-size: 0.9375rem; }
+.legal-toc a:hover { color: var(--signal); text-decoration: underline; }
+.legal-toc li { margin-bottom: var(--s1); }
+
+/* Callouts. The left rule carries the meaning; the wash only supports it. */
+.callout {
+  border-left: 3px solid var(--signal); background: var(--signal-wash);
+  padding: var(--s4); border-radius: 0 var(--radius) var(--radius) 0;
+  margin-block: var(--s4);
+}
+.callout p { color: var(--ink-soft); }
+.callout--warn { border-left-color: var(--warn); background: var(--warn-wash); }
+.callout--danger { border-left-color: var(--fail); background: var(--fail-wash); }
+
+/* ══ FLASH MESSAGES (base.html) ══════════════════════════════════════════ */
+
+/* Flashes appear on both grounds, so the accent has to stay legible on each.
+   The ultramarine that reads well on paper is near-invisible on the console
+   ground; each surface names its own. */
+
+.flash {
+  border: 1px solid var(--chrome-rule); border-left: 3px solid var(--flash-accent);
+  border-radius: var(--radius);
+  background: var(--flash-bg); color: var(--chrome-ink);
+  padding: var(--s3) var(--s4); margin-bottom: var(--s4);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+}
+.surface-paper   { --flash-bg: var(--paper-raise); --flash-accent: var(--signal); }
+.surface-console { --flash-bg: #1d1d33;            --flash-accent: #8FA0FF; }
+
+.surface-paper .flash--success { --flash-accent: var(--pass); }
+.surface-paper .flash--warning { --flash-accent: var(--warn); }
+.surface-paper .flash--danger,
+.surface-paper .flash--error   { --flash-accent: var(--fail); }
+.surface-console .flash--success { --flash-accent: #4ADE9A; }
+.surface-console .flash--warning { --flash-accent: #F5C451; }
+.surface-console .flash--danger,
+.surface-console .flash--error   { --flash-accent: #F58C82; }
+
+.flash__close {
+  background: none; border: 0; cursor: pointer; color: var(--chrome-soft);
+  font-family: var(--mono); font-size: 1.25rem; line-height: 1;
+  min-width: var(--tap); min-height: var(--tap);
+}
+.flash__close:hover { color: var(--chrome-ink); }
+
+/* ══ ENTRANCE ════════════════════════════════════════════════════════════ */
+/* One transition, used to explain that a section arrived. Nothing parallaxes
+   and nothing is scroll-jacked: native scroll is what a phone gives us and
+   what an in-app webview reliably supports. */
+
+.rise { opacity: 0; transform: translateY(12px);
+        transition: opacity 260ms ease-out, transform 260ms ease-out; }
+.rise.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .rise { opacity: 1; transform: none; transition: none; }
+}
+
+/* ══ UTILITIES ═══════════════════════════════════════════════════════════ */
+
+.stack-3 > * + * { margin-top: var(--s3); }
+.stack-4 > * + * { margin-top: var(--s4); }
+.stack-5 > * + * { margin-top: var(--s5); }
+
+/* Named `push-*` rather than `mt-*`: Bootstrap owns `mt-*` on the older
+   pages that share this sheet, and quietly redefining one of its utilities
+   would change spacing on templates nothing here is meant to touch. */
+.push-2 { margin-top: var(--s2); }
+.push-4 { margin-top: var(--s4); }
+.push-5 { margin-top: var(--s5); }
+.measure { max-width: var(--measure); }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

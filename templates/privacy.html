@@ -1,43 +1,31 @@
 {% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
 
 {% block title %}Privacy Policy — HealthClaw Guardrails{% endblock %}
 
-{% block head %}
-<style>
-.legal-page h2 { margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.25rem; color: var(--r6-primary); }
-.legal-page h3 { margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 1rem; color: var(--bs-body-color); }
-.legal-page p, .legal-page li { color: var(--bs-secondary-color); line-height: 1.75; }
-.legal-page ul { padding-left: 1.5rem; }
-.legal-meta { font-size: 0.85rem; color: var(--bs-secondary-color); }
-.legal-toc a { color: var(--bs-secondary-color); text-decoration: none; font-size: 0.9rem; }
-.legal-toc a:hover { color: var(--r6-primary); }
-.legal-toc li { margin-bottom: 0.25rem; }
-.callout-hipaa { border-left: 3px solid var(--r6-warning); background: rgba(255,193,7,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
-</style>
-{% endblock %}
-
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-lg-8">
+<div class="legal">
+  <div>
 
     <div class="mb-4">
-      <h1 class="h3 mb-1">Privacy Policy</h1>
-      <p class="legal-meta">
+      <h1 class="legal__title">Privacy Policy</h1>
+      <p class="legal__meta">
         <strong>HealthClaw Guardrails</strong> &middot; healthclaw.io &middot;
         Effective: March 29, 2026 &middot; Last updated: July 4, 2026
       </p>
     </div>
 
-    <div class="card bg-dark border-secondary mb-4 p-4 legal-page">
+    <div class="legal__body">
 
-      <div class="callout-hipaa mb-4">
+      <div class="callout callout--warn">
         <strong>Important:</strong> HealthClaw Guardrails is a <strong>developer tool and reference implementation</strong>.
         It is not a covered entity or business associate under HIPAA. When used in upstream proxy mode with real patient
         data, operators are responsible for their own HIPAA compliance, BAAs, and applicable regulations.
       </div>
 
       <nav class="mb-4">
-        <p class="text-muted mb-2" style="font-size:0.85rem">Contents</p>
+        <p class="legal__meta">Contents</p>
         <ol class="legal-toc">
           <li><a href="#information-we-collect">Information We Collect</a></li>
           <li><a href="#how-we-use">How We Use Information</a></li>

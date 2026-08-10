@@ -1,37 +1,24 @@
 {% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
 
 {% block title %}Terms &amp; Conditions — HealthClaw Guardrails{% endblock %}
 
-{% block head %}
-<style>
-.legal-page h2 { margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.25rem; color: var(--r6-primary); }
-.legal-page h3 { margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 1rem; color: var(--bs-body-color); }
-.legal-page p, .legal-page li { color: var(--bs-secondary-color); line-height: 1.75; }
-.legal-page ul { padding-left: 1.5rem; }
-.legal-meta { font-size: 0.85rem; color: var(--bs-secondary-color); }
-.legal-toc a { color: var(--bs-secondary-color); text-decoration: none; font-size: 0.9rem; }
-.legal-toc a:hover { color: var(--r6-primary); }
-.legal-toc li { margin-bottom: 0.25rem; }
-.callout-warning { border-left: 3px solid var(--r6-danger); background: rgba(220,53,69,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
-.callout-info { border-left: 3px solid var(--r6-primary); background: rgba(13,202,240,0.06); padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; }
-</style>
-{% endblock %}
-
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-lg-8">
+<div class="legal">
+  <div>
 
     <div class="mb-4">
-      <h1 class="h3 mb-1">Terms &amp; Conditions</h1>
-      <p class="legal-meta">
+      <h1 class="legal__title">Terms &amp; Conditions</h1>
+      <p class="legal__meta">
         <strong>HealthClaw Guardrails</strong> &middot; healthclaw.io &middot;
         Effective: March 29, 2026 &middot; Last updated: March 29, 2026
       </p>
     </div>
 
-    <div class="card bg-dark border-secondary mb-4 p-4 legal-page">
+    <div class="legal__body">
 
-      <div class="callout-warning mb-4">
+      <div class="callout callout--danger">
         <strong>Not a Medical Device.</strong> HealthClaw Guardrails is a software development tool and security
         reference implementation. It is <strong>not a medical device</strong>, does not provide medical advice,
         diagnoses, or treatment recommendations, and is not intended to be used as clinical decision support
@@ -39,7 +26,7 @@
       </div>
 
       <nav class="mb-4">
-        <p class="text-muted mb-2" style="font-size:0.85rem">Contents</p>
+        <p class="legal__meta">Contents</p>
         <ol class="legal-toc">
           <li><a href="#acceptance">Acceptance of Terms</a></li>
           <li><a href="#description">Description of Service</a></li>
