@@ -2266,8 +2266,21 @@ def purge_tenant_route():
 def seed_tenant():
     """
     Seed a tenant with a realistic Patient + Observations + Condition bundle
-    for live MCP testing. Idempotent — re-seeding the same tenant appends
-    new resources (IDs are generated fresh each call).
+    for live MCP testing.
+
+    Re-seeding with the BUILT-IN set is a no-op: every built-in resource
+    carries a stable id and the seed skips what is already present (#457).
+    A caller-supplied `bundle` is different — resources in it without an
+    `id` still get a generated one and are appended, because a caller
+    posting their own data is asking for new rows.
+
+    This docstring used to open with "Idempotent" and then, in the same
+    sentence, describe re-seeding as appending new rows with newly generated
+    ids. It claimed the guarantee and described its violation in one breath.
+    Nobody read past the first word, and the demo tenant reached twelve
+    copies of the same patient. tests/test_seed_endpoint_is_idempotent.py
+    now pins the behaviour, so this text describes something enforced rather
+    than something asserted.
 
     Body (all optional):
         tenant_id: str  — defaults to 'desktop-demo'
