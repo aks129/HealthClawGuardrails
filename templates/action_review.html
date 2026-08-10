@@ -253,12 +253,91 @@
             gateMsg.className = 'alert alert-success';
             gateMsg.textContent = 'Review recorded. ' + (res.b.next_step || '');
             btn.disabled = true;
-          } else {
-            gateMsg.className = 'alert alert-danger';
-            gateMsg.textContent = res.b.error || 'Submission rejected.';
+            return;
           }
+
+          // THREE answers, not two (#220, #416). `confirmed === null` means
+          // the engine never replied, so the approval MAY already have run.
+          // This branch used to fall through to the else below and print
+          // "Submission rejected." — a definite failure, for the one case
+          // the server deliberately refused to call. Told it was rejected, a
+          // reasonable person approves again, which is the double-send #416
+          // exists to prevent.
+          if (res.b.confirmed === null) {
+            btn.disabled = true;             // never invite a second send here
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'Your review was saved. We are checking whether the approval ' +
+              'went through.';
+            checkStatus();
+            return;
+          }
+
+          gateMsg.className = 'alert alert-danger';
+          // `message` first: it is the field the server uses when it has
+          // something specific to say. `error` is a machine code.
+          // The fallback fires only when the server sent NEITHER message nor
+          // error, which is precisely when we cannot say what happened to
+          // the request. It therefore states the failure to record and
+          // claims nothing about what was or was not sent.
+          gateMsg.textContent = res.b.message || res.b.error ||
+            'We could not record your review. Please try again.';
         });
     });
+
+    // Resolve the unknown outcome instead of telling the patient to go and
+    // find it themselves. #419: the copy said "check the request's status
+    // first" while `form_status` had no caller anywhere in CareAgents, so
+    // the instruction pointed at nothing.
+    //
+    // form.action is /review/<agent_id>/<action_id>/submit, which is where
+    // both ids come from; the status endpoint 404s without ?agent=.
+    function checkStatus() {
+      var parts = form.getAttribute('action').split('/');
+      var agentId = parts[2], actionId = parts[3];
+      var tries = 0;
+
+      (function poll() {
+        tries += 1;
+        fetch('/api/form/' + encodeURIComponent(actionId) +
+              '?agent=' + encodeURIComponent(agentId),
+              { credentials: 'same-origin' })
+          .then(function (r) { return r.json().then(function (b) {
+            return { ok: r.ok, b: b }; }); })
+          .then(function (res) {
+            var status = res.ok ? (res.b.status || '') : '';
+            if (status === 'completed' || status === 'sent') {
+              gateMsg.className = 'alert alert-success';
+              // "and nothing was sent twice" was in this string. A status
+              // of completed says the action completed; it says nothing
+              // about how many times it ran. Claim only what was observed.
+              gateMsg.textContent = 'Confirmed. Your approval went through.';
+              return;
+            }
+            if (status === 'pending' || status === 'approved') {
+              gateMsg.className = 'alert alert-success';
+              gateMsg.textContent =
+                'Confirmed. Your approval was recorded and is being sent.';
+              return;
+            }
+            if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
+            // Still unknown after four tries. Say that, and say what we will
+            // do about it. Do NOT invite a retry: the first one may have run.
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We still cannot tell whether your approval went through, so ' +
+              'we have not sent it again. Your care team will see this ' +
+              'request either way. Please do not approve a second time.';
+          })
+          .catch(function () {
+            if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We still cannot tell whether your approval went through, so ' +
+              'we have not sent it again. Please do not approve a second time.';
+          });
+      })();
+    }
 
     evaluate();
   })();

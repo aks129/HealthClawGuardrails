@@ -131,6 +131,11 @@
       .alert { padding: .9rem 1.1rem; border-radius: 12px;
                border: 1px solid var(--hairline); border-left-width: 4px;
                background: var(--card); }
+      /* The happy path sets this from JS (className = 'alert alert-success'),
+         so it never appeared in the HTML the class-coverage guard read, and
+         a successful approval rendered with no styling at all. */
+      .alert-success { border-left-color: var(--ok, #2E7D32);
+                       background: #F2F7F2; }
       .alert-danger { border-left-color: var(--danger);
                       background: var(--danger-wash); color: var(--danger); }
       .alert-warning { border-left-color: var(--warn);
