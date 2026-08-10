@@ -25,16 +25,26 @@ def test_seeded_questionnaire_resolves_by_logical_id(app):
         assert q.to_fhir_json()["id"] == "healthclaw-intake"
 
 
-def test_seeded_patient_still_gets_generated_id(app):
-    # Resources without an explicit `id` (Patient, Condition, ...) keep a
-    # generated UUID PK — the fix must not force ids onto id-less resources.
+def test_seeded_patient_now_has_a_stable_id(app):
+    # MOVED PIN. This asserted the OPPOSITE until 2026-08-10: that the Patient
+    # kept a generated UUID because "the fix must not force ids onto id-less
+    # resources". That was right about the mechanism and wrong about the
+    # demo tenant, and the pin is what made the consequence invisible.
+    #
+    # railway.toml re-seeds desktop-demo before every deploy. A generated id
+    # means a NEW patient each time: production reached 19 Patients, 12
+    # duplicate diabetes Conditions and 40 Observations before the physician
+    # advisor found it while rehearsing the launch demo. The stable id is now
+    # the thing being protected.
+    #
+    # A resource genuinely without an `id` still gets a UUID; that path is
+    # unchanged and covered by the custom-resources test below.
     with app.app_context():
         seed_demo_data("t-seed-2")
         patients = R6Resource.query.filter_by(
             resource_type="Patient", tenant_id="t-seed-2").all()
         assert len(patients) == 1
-        assert patients[0].id != "healthclaw-intake"
-        assert len(patients[0].id) >= 32  # uuid4 hex-ish
+        assert patients[0].id == "demo-patient-rivera"
 
 
 def test_reseed_is_idempotent_for_fixed_id_resources(app):

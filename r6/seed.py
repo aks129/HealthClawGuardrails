@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Built-in demo resources: Patient + Condition (ICD-9) + 3 Obs + MedRequest
+#
+# EVERY resource here carries a fixed `id`, and that is load-bearing rather
+# than tidy. railway.toml runs `seed-demo --tenant-id desktop-demo` before
+# every deploy. A resource without an id takes a generated UUID, so it was
+# inserted again on each of those deploys: production reached 19 Patients and
+# 12 diabetes Conditions against a seed set of one and one. Adding a resource
+# here without an id silently restores that, for that resource alone.
+# tests/test_demo_tenant_stays_one_patient.py holds the line.
 # ---------------------------------------------------------------------------
 
 def _built_in_resources() -> list[dict]:
@@ -28,6 +36,7 @@ def _built_in_resources() -> list[dict]:
     return [
         {
             "resourceType": "Patient",
+            "id": "demo-patient-rivera",
             "name": [{"use": "official", "family": "Rivera", "given": ["Maria", "Elena"]}],
             "birthDate": "1985-03-15",
             "gender": "female",
@@ -37,6 +46,7 @@ def _built_in_resources() -> list[dict]:
         },
         {
             "resourceType": "Condition",
+            "id": "demo-condition-dm2",
             "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical", "code": "active"}]},
             "verificationStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-ver-status", "code": "confirmed"}]},
             "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-9-cm", "code": "250.00", "display": "Diabetes mellitus without mention of complication"}]},
@@ -44,6 +54,7 @@ def _built_in_resources() -> list[dict]:
         },
         {
             "resourceType": "Observation",
+            "id": "demo-obs-glucose",
             "status": "final",
             "code": {"coding": [{"system": "http://loinc.org", "code": "2339-0", "display": "Glucose [Mass/volume] in Blood"}]},
             "subject": {"reference": "Patient/__PATIENT_ID__"},
@@ -52,6 +63,7 @@ def _built_in_resources() -> list[dict]:
         },
         {
             "resourceType": "Observation",
+            "id": "demo-obs-a1c",
             "status": "final",
             "code": {"coding": [{"system": "http://loinc.org", "code": "4548-4", "display": "Hemoglobin A1c/Hemoglobin.total in Blood"}]},
             "subject": {"reference": "Patient/__PATIENT_ID__"},
@@ -60,6 +72,7 @@ def _built_in_resources() -> list[dict]:
         },
         {
             "resourceType": "Observation",
+            "id": "demo-obs-bp",
             "status": "final",
             "code": {"coding": [{"system": "http://loinc.org", "code": "55284-4", "display": "Blood pressure systolic and diastolic"}]},
             "subject": {"reference": "Patient/__PATIENT_ID__"},
@@ -71,6 +84,7 @@ def _built_in_resources() -> list[dict]:
         },
         {
             "resourceType": "MedicationRequest",
+            "id": "demo-medreq-metformin",
             "status": "active",
             "intent": "order",
             "subject": {"reference": "Patient/__PATIENT_ID__"},
@@ -100,6 +114,7 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
 
     patient_id = None
     created = 0
+    skipped = 0
 
     for resource in resources:
         rtype = resource.get('resourceType')
@@ -110,14 +125,38 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
         if patient_id and rtype != 'Patient':
             resource_str = resource_str.replace('__PATIENT_ID__', patient_id)
 
+        # Skip what is already seeded, rather than inserting and catching the
+        # primary-key collision below. The collision path logged a warning and
+        # carried on, which is indistinguishable in a deploy log from a seed
+        # that had nothing to do — so the one resource that DID have a stable
+        # id failed quietly on every deploy while the six without ids
+        # duplicated loudly in the UI and nowhere else.
+        rid = resource.get('id')
+        # `is_deleted=False` is load-bearing, not defensive. A soft-deleted
+        # row is a tombstone: if the demo patient has been purged, this must
+        # seed a live one rather than see the tombstone, decide the tenant is
+        # already seeded, and leave the demo empty. That is #422's shape
+        # (soft-deleted rows counted as present) in a second place, and
+        # tests/test_ratchets.py caught it here before it shipped.
+        existing = (R6Resource.query
+                    .filter_by(tenant_id=tenant_id, resource_type=rtype,
+                               id=rid, is_deleted=False)
+                    .first()) if rid else None
+        if existing is not None:
+            # Resolve the placeholder against the patient already on file, or
+            # every later resource in this pass points at nothing.
+            if rtype == 'Patient':
+                patient_id = str(existing.id)
+            skipped += 1
+            continue
+
         try:
             r = R6Resource(
                 resource_type=rtype,
                 resource_json=resource_str,
                 # Preserve the FHIR logical id as the PK so consumers can resolve
                 # the resource by it (e.g. GET /Questionnaire/healthclaw-intake).
-                # Resources without an `id` fall back to a generated UUID.
-                resource_id=resource.get('id'),
+                resource_id=rid,
                 tenant_id=tenant_id,
             )
             db.session.add(r)
@@ -143,11 +182,15 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             logger.error("Seed aborted: audit trail unavailable for %s", rtype)
             raise
         except Exception as e:
-            # A fixed-id resource re-seeded onto an existing PK raises here.
-            # Roll back the failed insert so it can't poison the final commit;
-            # prior resources are already durable (record_audit_event commits).
+            # Already-seeded resources no longer reach this branch, so anything
+            # landing here is unexpected. Roll back the failed insert so it
+            # can't poison the final commit; prior resources are already
+            # durable (record_audit_event commits).
             db.session.rollback()
             logger.warning("Seed failed for %s: %s", rtype, e)
 
     db.session.commit()
+    if skipped:
+        logger.info("Seed complete for %s: %d created, %d already present",
+                    tenant_id, created, skipped)
     return created
