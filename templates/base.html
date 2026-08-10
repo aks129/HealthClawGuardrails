@@ -67,6 +67,12 @@
           <a class="hc-nav__link"
              href="{{ url_for('skills_index') }}"
              {% if request.path == url_for('skills_index') %}aria-current="page"{% endif %}>Skills</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('security') }}"
+             {% if request.path == url_for('security') %}aria-current="page"{% endif %}>Security</a>
+          <a class="hc-nav__link"
+             href="{{ url_for('about') }}"
+             {% if request.path == url_for('about') %}aria-current="page"{% endif %}>About</a>
         </div>
       </div>
     </nav>
@@ -92,7 +98,7 @@
         <div>
           <div class="hc-foot__mark">HealthClaw Guardrails</div>
           <div>FHIR R4 US Core v9 + R6 · MCP</div>
-          <div>a <a href="https://healthclaw.io" target="_blank" rel="noopener noreferrer">healthclaw.io</a> project</div>
+          <div>Built by <a href="{{ url_for('about') }}">Vestel AI LLC</a></div>
         </div>
         <div class="hc-foot__col">
           <div class="hc-foot__h">Project</div>
@@ -101,7 +107,10 @@
           <a href="{{ url_for('r6_dashboard') }}">Dashboard</a>
         </div>
         <div class="hc-foot__col">
-          <div class="hc-foot__h">Legal</div>
+          <div class="hc-foot__h">Company</div>
+          <a href="{{ url_for('about') }}">About</a>
+          <a href="{{ url_for('security') }}">Security posture</a>
+          <div class="hc-foot__h push-4">Legal</div>
           <a href="{{ url_for('privacy') }}">Privacy Policy</a>
           <a href="{{ url_for('terms') }}">Terms &amp; Conditions</a>
         </div>

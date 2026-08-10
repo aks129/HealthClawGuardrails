@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
+
+{% block title %}Who builds this — HealthClaw Guardrails{% endblock %}
+
+{% block head %}
+<meta name="description" content="HealthClaw Guardrails is built by Vestel AI LLC. Who maintains it, the rules it is built under, what it is not, and how to work together.">
+<style>
+  .about { max-width: 72ch; margin-inline: auto; padding-block: var(--s7); }
+  .about h2 { font-size: 1.5rem; margin-top: var(--s8); margin-bottom: var(--s4);
+              padding-bottom: var(--s2); border-bottom: 2px solid var(--rule-firm); }
+  .about h3 { font-size: 1.125rem; margin-top: var(--s6); margin-bottom: var(--s2); }
+  .about p { color: var(--ink-soft); }
+  .about p + p { margin-top: var(--s3); }
+  .about ul { padding-left: var(--s4); margin-top: var(--s3); color: var(--ink-soft); }
+  .about li { margin-bottom: var(--s2); }
+  .about li strong { color: var(--ink); }
+
+  /* The three ways to engage. One row each, so the reader finds theirs
+     without reading the other two. */
+  .paths { border-top: 2px solid var(--rule-firm); margin-top: var(--s5); }
+  .path { padding: var(--s5) 0; border-bottom: 1px solid var(--rule); }
+  .path__who { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.08em;
+               text-transform: uppercase; color: var(--ink-faint);
+               margin-bottom: var(--s2); }
+  .path__what { font-size: 1.125rem; font-weight: 600; margin-bottom: var(--s2); }
+  .path p { margin-bottom: var(--s3); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="about">
+
+  <span class="eyebrow">Who builds this</span>
+  <h1 class="section-title">A guardrail layer is only worth as much as the people who maintain it.</h1>
+  <p class="section-lede">
+    So this page says who does, under what rules, and what is not covered.
+    It is deliberately specific about the limits.
+  </p>
+
+  <h2 id="who">Who</h2>
+  <p>
+    HealthClaw Guardrails is built and maintained by <strong>Vestel AI LLC</strong>,
+    a limited liability company organised in the Commonwealth of Pennsylvania.
+    The maintainer is Eugene Vestel.
+  </p>
+  {# TODO(eugene): two or three sentences of background — what you worked on
+     before this, and why health data specifically. This is the paragraph a
+     partnerships lead or an investor reads first, and it is the one thing on
+     this page nobody else can write for you. Keep it factual: roles and
+     systems, not adjectives. #}
+  <p>
+    Longer-form writing on the thinking behind the project:
+    <a href="https://evestel.substack.com/p/building-a-new-empowered-health-system" target="_blank" rel="noopener">Building a New, Empowered Health System</a>
+    and
+    <a href="https://evestel.substack.com/p/how-i-build-my-personal-openclaw" target="_blank" rel="noopener">How I Build My Personal OpenClaw</a>.
+  </p>
+
+  <h2 id="how">The rules this is built under</h2>
+  <p>
+    Most of what makes a guardrail layer trustworthy is process, not code.
+    These are enforced in CI, not stated as intentions.
+  </p>
+  <ul>
+    <li><strong>Every deployment grades itself.</strong> Seven safety properties,
+      checked against synthetic data the probe creates, A–F, live and public.
+      A pull request that drops the grade cannot merge.</li>
+    <li><strong>Nobody merges their own work.</strong> A maintainer approves.
+      That gate is the point of having it.</li>
+    <li><strong>Failures get written up in public.</strong> When something breaks,
+      the retrospective goes in the repository next to the fix, including the
+      ones caused by the maintainer.</li>
+    <li><strong>Demos use synthetic data only.</strong> The public MCP endpoint is
+      pinned server-side to a synthetic tenant. It cannot serve real records
+      even if asked.</li>
+    <li><strong>A control that cannot answer must say so.</strong> "No data" and
+      "could not check" are different answers, and the second is never rendered
+      as the first.</li>
+  </ul>
+  <p>
+    <a href="{{ url_for('security') }}">The security posture page</a> covers what
+    the grade does and does not cover.
+  </p>
+
+  <h2 id="limits">What this is not</h2>
+  <p>
+    Stated plainly, because finding it out on a procurement call wastes your time
+    and mine.
+  </p>
+  <ul>
+    <li><strong>Not a large team.</strong> This is maintained by one person with
+      clinical and standards advisors. That is fine for a reference
+      implementation and a design partnership. It is a real risk if you need a
+      vendor with a support rota, and you should weigh it.</li>
+    <li><strong>Not a covered entity or business associate</strong> under HIPAA.
+      An organisation running this against real patient data owns its own
+      compliance, agreements, and controls.</li>
+    <li><strong>Not certified.</strong> There is no SOC 2 report and no HITRUST
+      certification today.</li>
+    <li><strong>Not a medical device, and not medical advice.</strong> Every
+      clinical read carries a disclaimer, enforced rather than written into a
+      style guide.</li>
+  </ul>
+
+  <h2 id="work-together">Working together</h2>
+  <p>
+    Three ways, depending on what you need. All of them start at
+    <a href="mailto:support@healthclaw.io">support@healthclaw.io</a>.
+  </p>
+
+  <div class="paths">
+    <div class="path">
+      <div class="path__who">Build on it</div>
+      <div class="path__what">Use the code. No conversation required.</div>
+      <p>
+        MIT licensed. Run it locally in ten seconds, point it at your own FHIR
+        server, or install the plugin into Claude Code. If a guardrail is missing
+        for your case, an issue or a pull request is the fastest path.
+      </p>
+      <p><a href="https://github.com/aks129/HealthClawGuardrails" target="_blank" rel="noopener">The repository</a> · <a href="{{ url_for('wiki') }}">Architecture and how-tos</a></p>
+    </div>
+
+    <div class="path">
+      <div class="path__who">Integrate or partner</div>
+      <div class="path__what">For AI platforms and health tech teams.</div>
+      <p>
+        If you are putting an agent near clinical data and need the permission,
+        redaction, and audit layer to be someone else's problem, this is the
+        layer. Useful when you want FHIR and MCP expertise applied to your
+        surface rather than rebuilt in-house.
+      </p>
+      <p>
+        Say what you are building and where it touches patient data. A short
+        technical call is usually enough to tell whether this fits.
+      </p>
+    </div>
+
+    <div class="path">
+      <div class="path__who">Pilot</div>
+      <div class="path__what">For providers and payers.</div>
+      <p>
+        Read <a href="{{ url_for('security') }}">the security posture</a> first.
+        If the gaps listed there are disqualifying for your procurement process,
+        they will be disqualifying in month three as well, and it is better to
+        know now.
+      </p>
+      <p>
+        Where a pilot does work: a scoped evaluation against synthetic or
+        de-identified data, with the conformance grade as the acceptance
+        criterion, and a written account of what the guardrails did and did not
+        cover.
+      </p>
+    </div>
+  </div>
+
+  <h2 id="advisors">Advisors</h2>
+  {# TODO(eugene): naming one clinical advisor and one standards advisor — with
+     their consent — is the single highest-credibility addition to this page.
+     "Reviewed by a practising physician" is worth more to every reader here
+     than another paragraph of architecture. Left blank rather than vague:
+     an unnamed advisory board reads as no advisory board. #}
+  <p>
+    Clinical and standards advisors review the parts of this that make claims
+    about care. Named here once they have agreed to be.
+  </p>
+
+</div>
+{% endblock %}
