@@ -2079,6 +2079,60 @@ _INGEST_BUNDLE_ALLOWED_TYPES = frozenset(
 # module created. Re-exported for the callers already inside it.
 
 
+#: Hard cap on a diagnostic payload. This endpoint takes caller-controlled
+#: JSON and writes it to operational logs, so unbounded input is a
+#: log-flooding primitive (#279 is the same shape on ingest). Fasten's real
+#: refusal payloads are a few hundred bytes.
+_CONNECT_DIAGNOSTIC_MAX_BYTES = 4096
+
+#: Keys that mean a FHIR resource arrived. A configuration refusal happens
+#: BEFORE any record is retrieved, so a resource here means either the page is
+#: sending more than it should or someone is probing the endpoint. Either way
+#: this must not become the one unaudited, unredacted write path into our logs.
+_CONNECT_DIAGNOSTIC_FORBIDDEN = ('resourceType', 'entry', 'identifier')
+
+
+@r6_blueprint.route('/internal/connect-diagnostic', methods=['POST'])
+def record_connect_diagnostic():
+    """Record a records-connection refusal so support has something to quote.
+
+    The connect page handles Fasten's `widget.config_error` and tells the
+    patient the truth, but the payload only ever reached the browser console.
+    When Fasten asked for "a request id so we can correlate the error in our
+    logs" (FAS-864) there was nothing to send: two testers had hit
+    fasten_unauthorized_client and the only record of either attempt was an
+    email describing it.
+
+    This endpoint is deliberately NOT a FHIR write. It records an operational
+    event and returns a short reference the patient can read back to us and we
+    can quote upstream.
+    """
+    body = request.get_json(silent=True) or {}
+    payload = body.get('payload')
+    if not isinstance(payload, dict) or not payload:
+        return jsonify({'error': 'payload object required'}), 400
+
+    raw = json.dumps(payload, separators=(',', ':'))
+    if len(raw.encode('utf-8')) > _CONNECT_DIAGNOSTIC_MAX_BYTES:
+        # No size echoed back and nothing from the payload: a 4xx that quotes
+        # what it rejected reflects the caller's string.
+        return jsonify({'error': 'diagnostic payload too large'}), 413
+
+    if any(key in payload for key in _CONNECT_DIAGNOSTIC_FORBIDDEN):
+        logger.warning(
+            'connect-diagnostic refused: payload carries record-shaped keys '
+            '(tenant=%s)', request.headers.get('X-Tenant-Id', 'unknown'))
+        return jsonify({'error': 'diagnostic payload rejected'}), 422
+
+    reference = f'ccd_{uuid.uuid4().hex[:12]}'
+    # WARNING, not INFO: this is a user-visible failure of the product's front
+    # door, and it needs to be greppable in the same pass as an outage.
+    logger.warning(
+        'connect-diagnostic %s tenant=%s payload=%s',
+        reference, request.headers.get('X-Tenant-Id', 'unknown'), raw)
+    return jsonify({'reference': reference}), 202
+
+
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
 def issue_step_up_token():
     """

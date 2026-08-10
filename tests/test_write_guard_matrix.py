@@ -592,6 +592,13 @@ NON_CLINICAL_MUTATORS = {
     "command_center.logout": "clears the session cookie only",
     # Credential minting and non-store side effects.
     "r6.issue_step_up_token": "mints a token; no store write",
+    # Records-connection refusal telemetry. Writes a log line, never the
+    # store: tests/test_connect_diagnostic_is_captured.py pins that it
+    # creates no R6Resource, caps the payload at 4KB, and refuses anything
+    # record-shaped. It is unauthenticated on purpose — the failure it
+    # records happens BEFORE a connection exists, so requiring a credential
+    # would guarantee the cases we most need to see go unrecorded.
+    "r6.record_connect_diagnostic": "connect telemetry: log line, no store write",
     "r6.register_client": "OAuth dynamic client registration (token store)",
     "r6.token": "OAuth token grant (token store)",
     "r6.revoke": "OAuth revocation (token store)",

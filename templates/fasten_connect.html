@@ -436,12 +436,36 @@
       backdrop.classList.remove('open');
       var detail = data.message || (data.data && data.data.message) ||
                    data.error_type || '';
+
+      // Send the payload to the server BEFORE showing anything. Until this
+      // existed, the only record of a refusal was the console.log below, so
+      // when Fasten asked for "a request id so we can correlate the error in
+      // our logs" (FAS-864) we had nothing: two testers had hit
+      // fasten_unauthorized_client and all we could offer was a description.
+      //
+      // The whole object goes, untruncated. The console line is sliced to 500
+      // characters and the vendor's correlation id may sit past that.
+      var reference = null;
+      try {
+        var diag = await fetch('/r6/fhir/internal/connect-diagnostic', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({payload: data})
+        });
+        if (diag.ok) reference = (await diag.json()).reference;
+      } catch (e) {
+        // Reporting the failure must never itself become the failure the
+        // patient sees. They still get the message below.
+      }
+
       showStatus(
         'The records widget refused this configuration' +
         (detail ? ' (' + detail + ')' : '') +
         '. Identity verification is unavailable right now — this is a ' +
         'problem on our side, not with your records. Please tell us you ' +
-        'saw this so we can chase it.', 'error');
+        'saw this so we can chase it' +
+        (reference ? ', and quote reference ' + reference : '') +
+        '.', 'error');
     } else if (type === 'widget.close') {
       // Dismissal is not failure and must not be reported as one.
       backdrop.classList.remove('open');
