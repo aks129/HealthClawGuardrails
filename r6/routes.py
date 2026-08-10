@@ -2316,7 +2316,8 @@ def seed_tenant():
         'tenant_id': tenant_id,
         'created_count': count,
         'step_up_token': token,
-        'note': 'Use step_up_token for write operations. Re-seed anytime to add more resources.'
+        'note': ('Use step_up_token for write operations. Re-seeding the built-in '
+                 'set is a no-op; supply a bundle to add resources.')
     }), 201
 
 

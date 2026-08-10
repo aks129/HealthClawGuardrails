@@ -121,14 +121,28 @@ def test_no_surface_still_claims_ids_are_generated_fresh_each_call():
 
     MUTATION: restore "IDs are generated fresh each call" anywhere -> red.
     """
+    # Every phrasing that promises appending, not just the one the docstring
+    # used. The first version of this guard checked only "generated fresh
+    # each call" and so missed the endpoint's own RESPONSE note, which went
+    # on telling live callers "Re-seed anytime to add more resources" after
+    # the docstring four lines above it had been corrected.
+    #
+    # A guard aimed at one sentence protects that sentence, not the claim.
+    STALE = (
+        "generated fresh each call",
+        "add more resources",
+        "appends new resources",
+    )
     root = Path(__file__).resolve().parents[1]
     offenders = []
     for path in list(root.glob("r6/**/*.py")) + [root / "railway.toml"]:
         text = path.read_text(encoding="utf-8", errors="replace")
         # Rejoin adjacent string literals so a reflowed line does not hide it.
         joined = re.sub(r'"\s*\n\s*"', "", text)
-        if "generated fresh each call" in joined:
-            offenders.append(str(path.relative_to(root)))
+        joined = re.sub(r"'\s*\n\s*'", "", joined)
+        for phrase in STALE:
+            if phrase in joined:
+                offenders.append(f"{path.relative_to(root)}: {phrase!r}")
 
     assert not offenders, (
         f"these files still describe the pre-#457 behaviour: {offenders}. "
