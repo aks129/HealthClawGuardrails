@@ -103,9 +103,54 @@ def _synthetic_observation(subject_ref: str = "Patient/conformance-subject"):
 
 @dataclass
 class Check:
+    """One assertion in the scorecard, with its two halves kept apart.
+
+    `observed` is what the probe MEASURED — "status 200", "grade A",
+    "id=None". It is true whichever way the check went, so it is safe beside
+    a PASS.
+
+    `on_failure` says what a failure would MEAN — "PHI leaked into audit",
+    "no disclaimer on the response". It is a sentence about a world in which
+    `passed` is False.
+
+    Both used to share one `detail` field. The text renderer hid that field on
+    a pass, which kept one output honest and left every other consumer to
+    rediscover the rule; none did. Fifteen checks shipped emitting
+
+        {"name": "no raw SSN in the audit trail",
+         "passed": true, "detail": "PHI leaked into audit"}
+
+    Two readers hit it independently and both concluded the deployment was
+    leaking PHI. The second was the physician advisor, about thirty hours
+    before a demo recording. The checks were right; the report was not.
+
+    Splitting the field is what makes the report unable to say it. A consumer
+    that prints everything it is handed now prints only true sentences,
+    without having to know this rule.
+    """
+
     name: str
     passed: bool
-    detail: str = ""
+    #: Third positional on purpose. The measurement is both the common case
+    #: and the safe one, so the thirty-odd sites that pass one positionally
+    #: are correct untouched — and a failure explanation has to be named to
+    #: get in, which is exactly where the author should have to think.
+    observed: str = ""
+    on_failure: str = ""
+
+    @property
+    def detail(self) -> str:
+        """Both halves as one string, true of THIS run.
+
+        Kept because `detail` is the key partner scripts already read, and
+        derived rather than stored so it cannot drift from the two halves it
+        summarises.
+        """
+        if self.passed or not self.on_failure:
+            return self.observed
+        if not self.observed:
+            return self.on_failure
+        return f"{self.observed}; {self.on_failure}"
 
 
 @dataclass
@@ -176,7 +221,14 @@ class ConformanceReport:
                 {"key": r.key, "property": r.property, "passed": r.passed,
                  "grade": r.grade, "coverage": r.coverage,
                  "profiles": r.profiles, "note": r.note,
-                 "checks": [{"name": c.name, "passed": c.passed, "detail": c.detail}
+                 # `on_failure` is withheld on a pass rather than left to the
+                 # consumer to suppress. That was the bug: the rule existed
+                 # only inside render(), so every other reader of this JSON
+                 # printed a failure sentence next to a PASS.
+                 "checks": [{"name": c.name, "passed": c.passed,
+                             "observed": c.observed,
+                             "on_failure": "" if c.passed else c.on_failure,
+                             "detail": c.detail}
                             for c in r.checks]}
                 for r in self.results
             ],
@@ -214,7 +266,12 @@ class ConformanceReport:
                         f"          checks: {', '.join(profile_checks)}")
             for c in r.checks:
                 mark = "✓" if c.passed else "✗"
-                suffix = f" — {c.detail}" if c.detail and not c.passed else ""
+                # No `and not c.passed` here any more. `detail` is now true of
+                # this run either way, so the text and the JSON can share one
+                # rule instead of disagreeing about the same report. It also
+                # earns the reader something: a passing check now shows the
+                # status it actually got back, not just a tick.
+                suffix = f" — {c.detail}" if c.detail else ""
                 lines.append(f"        {mark} {c.name}{suffix}")
         return "\n".join(lines)
 
@@ -471,8 +528,9 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
         # here for the absences to mean anything.
         Check("the redacted record is still returned",
               _is_resource(body, "Patient", pid),
-              "the read did not return the Patient that was asked for; every "
-              "absence check below passes trivially on an empty response"),
+              on_failure="the read did not return the Patient that was asked "
+                         "for; every absence check below passes trivially on "
+                         "an empty response"),
         Check("family name not returned in full", _FAMILY not in blob),
         Check("given name not returned in full", _GIVEN not in blob),
         Check("SSN-class identifier masked", _SSN not in blob),
@@ -496,8 +554,8 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
         # scored A.
         Check("the search returns the resource it was asked for",
               _bundle_contains(body, "Patient", pid),
-              "the searchset did not contain the Patient; an empty Bundle "
-              "passes every redaction check in this block"),
+              on_failure="the searchset did not contain the Patient; an empty "
+                         "Bundle passes every redaction check in this block"),
         Check("family name not returned in full (search)", _FAMILY not in sblob),
         Check("given name not returned in full (search)", _GIVEN not in sblob),
         Check("SSN-class identifier masked (search)", _SSN not in sblob),
@@ -574,10 +632,11 @@ def probe_audit_trail(client, ctx) -> ProbeResult:
     r.checks += [
         Check("AuditEvent endpoint readable", readable, f"status {st}"),
         Check("resource READ is recorded in the audit trail", read_audited,
-              "no AuditEvent with action=R references the resource that was "
-              "read (a create event alone does not demonstrate read auditing)"),
+              on_failure="no AuditEvent with action=R references the resource "
+                         "that was read (a create event alone does not "
+                         "demonstrate read auditing)"),
         Check("no raw SSN in the audit trail", _SSN not in blob,
-              "PHI leaked into audit"),
+              on_failure="PHI leaked into audit"),
     ]
     return r
 
@@ -602,15 +661,16 @@ def probe_step_up_enforcement(client, ctx) -> ProbeResult:
                              "Content-Type": "application/fhir+json"},
         _synthetic_patient())
     r.checks.append(Check("write with a forged step-up token is rejected (401)",
-                          status == 401,
-                          f"status {status}; a token that is not the one this "
-                          f"deployment issued authorized a write"))
+                          status == 401, f"status {status}",
+                          on_failure="a token that is not the one this "
+                                     "deployment issued authorized a write"))
 
     pid, status = _create_synthetic(client, ctx)
     r.checks.append(Check("write carrying a valid step-up token is accepted",
                           bool(pid) and status in (200, 201),
-                          f"status {status}; the gate refuses authorized "
-                          f"writes too, so its 401s prove nothing"))
+                          f"status {status}",
+                          on_failure="the gate refuses authorized writes too, "
+                                     "so its 401s prove nothing"))
     return r
 
 
@@ -638,8 +698,9 @@ def probe_human_in_the_loop(client, ctx) -> ProbeResult:
     oid = body.get("id") if isinstance(body, dict) else None
     r.checks.append(Check("confirmed clinical write is accepted",
                           bool(oid) and status in (200, 201),
-                          f"status {status}; the gate blocks confirmed writes "
-                          f"too, so its 428s prove nothing"))
+                          f"status {status}",
+                          on_failure="the gate blocks confirmed writes too, "
+                                     "so its 428s prove nothing"))
     r.note = ("the confirmation header is supplied by the probe: this grades "
               "the gate, not the human attestation behind it (#214)")
     return r
@@ -667,8 +728,9 @@ def probe_tenant_isolation(client, ctx) -> ProbeResult:
     r.checks.append(Check(
         "resource IS readable from its own tenant",
         status == 200 and _is_resource(body, "Patient", pid),
-        f"status {status}; a deployment that returns nothing to anyone passes "
-        f"the isolation check above without isolating anything"))
+        f"status {status}",
+        on_failure="a deployment that returns nothing to anyone passes the "
+                   "isolation check above without isolating anything"))
     return r
 
 
@@ -688,7 +750,7 @@ def probe_medical_disclaimer(client, ctx) -> ProbeResult:
     has = isinstance(body, dict) and (
         "_disclaimer" in body or "disclaimer" in blob.lower())
     r.checks.append(Check("clinical read carries a medical disclaimer", has,
-                          "no disclaimer on the response"))
+                          on_failure="no disclaimer on the response"))
     # Two-sided (#213). The check above is a substring test, so an error page
     # that happens to say "disclaimer" satisfies it, and so does a response
     # that is nothing BUT a disclaimer. The disclaimer has to be attached to
@@ -696,8 +758,9 @@ def probe_medical_disclaimer(client, ctx) -> ProbeResult:
     r.checks.append(Check(
         "the disclaimer accompanies the clinical record, not an error",
         status == 200 and _is_resource(body, "Observation", oid),
-        f"status {status}; the disclaimer was not attached to the Observation "
-        f"that was read"))
+        f"status {status}",
+        on_failure="the disclaimer was not attached to the Observation that "
+                   "was read"))
     r.note = f"Observation/{oid}"
     return r
 
