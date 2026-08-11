@@ -4,6 +4,8 @@
 
 # HealthClaw Guardrails
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.aks129%2Fhealthclaw-guardrails.svg)](https://mcptoplist.com/server/io.github.aks129%2Fhealthclaw-guardrails)
+
 ### The open-source security layer between AI agents and clinical data.
 
 *FHIR standardized how health data is structured. MCP standardized how AI connects to tools.*
