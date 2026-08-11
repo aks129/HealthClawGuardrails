@@ -323,6 +323,23 @@ def test_confirm_rejects_unknown_approval_channel(client, tenant_headers,
 # step-up nonce consumption at confirm (single-use execution credential)
 # ---------------------------------------------------------------------------
 
+
+def _refusal_text(resp):
+    """The refusal reason, whatever envelope the endpoint answers in.
+
+    /confirm used to answer {'error': '...'} from this blueprint's _error
+    helper. Kernel slice 5d moved its step-up gate to require_grant, which
+    renders a FHIR OperationOutcome — the same change the three gates in
+    slice 5 made. The REASON is what this file pins and the reason survives;
+    only the envelope moved, so these assertions read either shape rather
+    than pinning one.
+    """
+    body = resp.get_json() or {}
+    if 'error' in body:
+        return body['error']
+    return ' '.join(i.get('diagnostics', '')
+                    for i in body.get('issue', []))
+
 def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
                                          app, action_registry, fake_providers,
                                          monkeypatch):
@@ -343,7 +360,7 @@ def test_same_token_cannot_confirm_twice(client, tenant_headers, auth_headers,
     # the already-spent action state is considered.
     second = _confirm(client, auth_headers, first_action, headers=approval)
     assert second.status_code == 401
-    assert 'already used (replay)' in second.get_json()['error']
+    assert 'already used (replay)' in _refusal_text(second)
     assert len(fake_providers) == 1   # nothing executed
     with app.app_context():
         row = db.session.get(ProposedAction, second_action)
@@ -360,7 +377,7 @@ def test_generic_commit_token_cannot_confirm(
     assert _commit(client, auth_headers, action_id).status_code == 202
     resp = _confirm(client, auth_headers, action_id, headers=auth_headers)
     assert resp.status_code == 401
-    assert 'audience mismatch' in resp.get_json()['error']
+    assert 'audience mismatch' in _refusal_text(resp)
     assert fake_providers == []
 
     # The rejected generic token was not consumed; the separately minted,
@@ -383,7 +400,7 @@ def test_action_bound_token_cannot_confirm_a_different_action(
     wrong_action = _confirm(client, auth_headers, second_action,
                             headers=approval)
     assert wrong_action.status_code == 401
-    assert 'operation mismatch' in wrong_action.get_json()['error']
+    assert 'operation mismatch' in _refusal_text(wrong_action)
     assert fake_providers == []
 
 
