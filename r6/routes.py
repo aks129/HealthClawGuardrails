@@ -37,7 +37,8 @@ from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
-from r6.access import TenantSource, tenant_from_request
+from r6.access import (Scope, TenantSource, require_grant,
+                       tenant_from_request)
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -475,16 +476,14 @@ def create_resource(resource_type):
                                   f'resourceType mismatch: expected {resource_type}'), 400
 
     # Step-up authorization check with HMAC validation
-    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _operation_outcome('error', 'security',
-                                  'Write operations require X-Step-Up-Token header'), 401
-
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _operation_outcome('error', 'security',
-                                  f'Step-up token rejected: {err}'), 401
+    tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+    tenant_id = tenant.id
+    # Access kernel, slice 6. 401 for both halves keeps this site's dialect.
+    # The refusal text changes: the kernel names the nine causes a caller can
+    # act on and collapses 'Token tenant mismatch', which this line used to
+    # hand back verbatim (#478).
+    require_grant(scope=Scope.WRITE, tenant=tenant,
+                  absent_status=401, rejected_status=401)
 
     # Validate before storing (agent proposals must pass $validate before commit)
     validation_result = validator.validate_resource(body)
@@ -640,16 +639,14 @@ def update_resource(resource_type, resource_id):
                                   f'{resource_type} is system-managed and cannot be modified via API'), 403
 
     # Step-up authorization with HMAC validation
-    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _operation_outcome('error', 'security',
-                                  'Write operations require X-Step-Up-Token header'), 401
-
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _operation_outcome('error', 'security',
-                                  f'Step-up token rejected: {err}'), 401
+    tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+    tenant_id = tenant.id
+    # Access kernel, slice 6. 401 for both halves keeps this site's dialect.
+    # The refusal text changes: the kernel names the nine causes a caller can
+    # act on and collapses 'Token tenant mismatch', which this line used to
+    # hand back verbatim (#478).
+    require_grant(scope=Scope.WRITE, tenant=tenant,
+                  absent_status=401, rejected_status=401)
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a
@@ -3531,22 +3528,16 @@ def share_bundle():
         'MedicationRequest', 'Immunization', 'Observation', 'Coverage',
     ]
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+    tenant_id = tenant.id
 
     # Step-up required — this bundle carries identified patient data
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _operation_outcome(
-            'error', 'security',
-            '$share-bundle requires X-Step-Up-Token header'
-        ), 401
-
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _operation_outcome(
-            'error', 'security',
-            f'Step-up token rejected: {err}'
-        ), 401
+    # Access kernel, slice 6. 401 for both halves keeps this site's dialect.
+    # The refusal text changes: the kernel names the nine causes a caller can
+    # act on and collapses 'Token tenant mismatch', which this line used to
+    # hand back verbatim (#478).
+    require_grant(scope=Scope.WRITE, tenant=tenant,
+                  absent_status=401, rejected_status=401)
 
     body = request.get_json(silent=True) or {}
     patient_id = body.get('patient_id') or None

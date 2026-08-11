@@ -1105,9 +1105,28 @@ def test_step_up_validation_turned_off_no_longer_scores_a(
     authorizes a write. The missing-header 401 still fires, so the old harness
     saw nothing wrong.
     """
+    # BOTH modules, and the migration is why.
+    #
+    # r6/routes.py does `from r6.stepup import validate_step_up_token`, so the
+    # name is bound at import time and patching r6.stepup would not reach the
+    # call sites that still call it directly.
+    #
+    # The gates migrated in kernel slice 6 (create, update, $share-bundle) no
+    # longer consult that name at all. They go through require_grant, which
+    # resolves the validator as a MODULE ATTRIBUTE on r6.stepup — deliberately,
+    # so that monkeypatching by module path keeps working (r6/access.py §1.0).
+    #
+    # Patching only r6.routes stopped switching the guardrail off when those
+    # three moved: the writes were still refused, the grade stayed A, and this
+    # test failed. It failed rather than passing vacuously, which is the right
+    # way round — but a test that cannot break the thing it is trying to break
+    # proves nothing about the harness. Patch both, and this keeps grading the
+    # harness for as long as the migration takes.
     import r6.routes
-    monkeypatch.setattr(r6.routes, "validate_step_up_token",
-                        lambda *a, **k: (True, ""))
+    import r6.stepup
+    for module in (r6.routes, r6.stepup):
+        monkeypatch.setattr(module, "validate_step_up_token",
+                            lambda *a, **k: (True, ""))
 
     report = run_conformance(FlaskProbeClient(client),
                              _ctx(None, tenant_id, step_up_token))
