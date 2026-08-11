@@ -195,6 +195,40 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     check("healthclaw: records are readable", total > 0 and labelled == total,
           f"{labelled}/{total} labelled")
 
+    # --- the demo tenant's shape (#457, docs/defect-catalogue.md §10) --------
+    # Deployment truth is not code truth, and nothing was reconciling them.
+    # railway.toml runs a pre-deploy seed and its own comment called that seed
+    # idempotent; it was not, and the demo tenant reached 19 Patients against
+    # a seed set of one. Separately, running the conformance harness against
+    # this tenant leaves a probe Patient behind each time. Neither source
+    # showed up in any check, because every other check here is satisfied
+    # just as well by a tenant with twenty patients in it.
+    #
+    # A physician advisor found it, on camera, the day before a launch
+    # recording: "/conditions shows about a dozen duplicate Type 2 diabetes
+    # mellitus entries".
+    #
+    # This watches the CONSEQUENCE rather than the mechanism. A count is
+    # observable from outside; "did the pre-deploy step run" is not, and the
+    # count is what a viewer of the demo actually sees.
+    r = get(f"{HEALTHCLAW}/r6/fhir/Patient?_count=200", timeout,
+            headers={"X-Tenant-Id": DEMO_TENANT})
+    patients = None
+    if getattr(r, "status_code", None) == 200:
+        try:
+            patients = len(r.json().get("entry") or [])
+        except ValueError:
+            patients = None
+    # `is not None` rather than a truthiness test: zero patients is a real
+    # failure (an empty demo), and `if patients:` would report it as
+    # unreadable instead. The read failing and the tenant being empty are
+    # different alarms.
+    check("healthclaw: the demo tenant is one patient",
+          patients == 1,
+          f"{patients} Patient(s) in {DEMO_TENANT}"
+          if patients is not None else
+          f"could not read the tenant ({getattr(r, 'status_code', r)})")
+
     # --- the consumer app ----------------------------------------------------
     r = get(f"{CAREAGENTS}/healthz", timeout)
     body = {}
