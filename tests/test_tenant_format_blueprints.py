@@ -213,3 +213,33 @@ def test_wearables_still_refuses_an_absent_tenant_header_in_its_own_dialect(
     resp = client.post("/wearables/sync-now")
     assert resp.status_code == 400
     assert resp.get_json() == {"error": "X-Tenant-Id required"}
+
+
+# ---------------------------------------------------------------------------
+# actions — every route behind _tenant_or_none (kernel slice 10)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tenant", MALFORMED)
+def test_actions_propose_refuses_a_malformed_tenant_id(client, tenant):
+    """MUTATION: return the raw header from _tenant_or_none -> red.
+
+    Before slice 10 this blueprint collapsed ABSENT and MALFORMED into the
+    same `None`, so both answered the same 400 with the same message. The
+    status is unchanged; what changes is that a malformed id is now refused
+    by the kernel and says so, instead of being reported as a missing
+    header.
+    """
+    resp = client.post("/r6/actions/propose", json={},
+                       headers={"X-Tenant-Id": tenant})
+    assert resp.status_code == 400, resp.get_data(as_text=True)
+
+
+def test_actions_still_refuses_an_absent_tenant_header_in_its_own_dialect(client):
+    """The absent case must not move — six handlers answer it.
+
+    MUTATION: let TenantRejected('absent') propagate out of
+    _tenant_or_none -> red (the body becomes an OperationOutcome).
+    """
+    resp = client.post("/r6/actions/propose", json={})
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "X-Tenant-Id header is required"}
