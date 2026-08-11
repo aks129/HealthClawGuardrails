@@ -389,6 +389,30 @@ class TestWearableRoutes:
         resp = client.post('/wearables/sync-now', headers=tenant_headers)
         assert resp.status_code == 403
 
+    def test_sync_now_refuses_a_read_scoped_token(self, client):
+        """A read token must not drive a write sweep.
+
+        sync-now ingests Observations into the tenant, so it has always
+        demanded a write-capable token — `validate_step_up_token`'s
+        `require_scope` defaults to 'write', and the two-argument call this
+        endpoint used took that default silently.
+
+        Kernel slice 4 made the requirement explicit as `Scope.WRITE`. That
+        made it something a reader could get wrong, and nothing in the suite
+        would have noticed: swapping in Scope.TENANT_BOUND left every other
+        wearables test green. This is the pin for the property the default
+        was providing by accident.
+
+        MUTATION: scope=Scope.TENANT_BOUND in wearables.sync_now -> red.
+        """
+        from r6.stepup import generate_step_up_token
+
+        resp = client.post('/wearables/sync-now', headers={
+            'X-Tenant-Id': 'tenant-a',
+            'X-Step-Up-Token': generate_step_up_token('tenant-a', scope='read'),
+        })
+        assert resp.status_code == 403
+
 
 # ─────────────────────────────────────────────
 # MCP App tests

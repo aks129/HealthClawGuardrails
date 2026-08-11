@@ -119,7 +119,12 @@ def _report(sites, pin, what):
 #: silently misreads as authorized (#307). r6/access.py itself is excluded —
 #: it is the one module that is *supposed* to call this.
 #: Playbook chunks A2, A3, A6.
-_STEP_UP_CALLSITES = 20
+#:
+#: 20 -> 19: kernel slice 4 migrated `/wearables/sync-now`. That slice's job
+#: was to prove the MINORITY 403 dialect survives migration without being
+#: normalized, so require_grant carries absent_status=403 and
+#: rejected_status=403 and the wire behaviour is byte-identical.
+_STEP_UP_CALLSITES = 19
 
 
 def test_direct_step_up_validation_only_decreases():
