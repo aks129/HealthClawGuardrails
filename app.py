@@ -3,7 +3,7 @@ Flask application routes for HealthClaw Guardrails.
 
 Web UI routes:
 - / (landing page)
-- /r6-dashboard (Health Data Dashboard — FHIR interactive showcase)
+- /r6-dashboard (Conformance — the live guardrail measurement)
 - /faq (Frequently Asked Questions)
 - /wiki (Project Wiki)
 - /skills (skill index — auto-generated from skills/*/SKILL.md)
@@ -21,6 +21,8 @@ import httpx
 import yaml
 from email_validator import EmailNotValidError, validate_email
 from flask import Blueprint, Response, current_app, jsonify, render_template, request
+
+from deployment import STATEFUL_HOST, is_read_only
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +185,34 @@ def index():
 
 @web_blueprint.route('/r6-dashboard')
 def r6_dashboard():
-    """Health Data Dashboard (FHIR) — interactive guardrail showcase."""
-    return render_template('r6_dashboard.html')
+    """Guardrail conformance — the live measurement, rendered.
+
+    Server-rendered on purpose. The page it replaced fetched everything from
+    the browser and shipped fifteen buttons that POST to /r6/…, which the
+    read-only host refuses with 405 — so on healthclaw.io the whole page was
+    dead controls over a hand-written list of green checkmarks. Rendering the
+    measurement here means the public host serves real content on first paint
+    and states where that content came from.
+
+    `summary` is only computed when there is something to summarise. Passing a
+    zeroed summary on failure would let the template print "0 checks failed"
+    over a report that was never obtained.
+    """
+    from r6.conformance.snapshot import guardrail_snapshot, summarize
+    # ?fresh=1 bypasses the 10-minute cache. Honoured only where a run is
+    # possible; guardrail_snapshot ignores it on the read-only host, which
+    # fetches rather than measures. This adds no exposure the public
+    # $conformance endpoint did not already have, and the rate limiter covers
+    # both.
+    fresh = request.args.get('fresh') in ('1', 'true', 'yes')
+    snapshot = guardrail_snapshot(current_app.config, fresh=fresh)
+    return render_template(
+        'r6_dashboard.html',
+        snapshot=snapshot,
+        summary=summarize(snapshot['report']) if snapshot['measured'] else None,
+        writes_here=not is_read_only(current_app.config),
+        stateful_host=STATEFUL_HOST,
+    )
 
 
 @web_blueprint.route('/fhir-control-panel')

@@ -268,6 +268,32 @@ does the PR say when, and is the interface smaller than the thing it hides?
 
 ---
 
+## 12. A control that cannot work where it is served
+
+**Shape.** A page ships an interactive control whose backend the serving host
+refuses. The control renders, looks live, and fails only when someone presses
+it. Nothing in the test suite presses it, so the suite stays green.
+
+**Evidence.**
+
+| What | Where | Cost |
+|---|---|---|
+| /r6-dashboard shipped 15 panels of buttons POSTing to `/r6/…`; healthclaw.io runs on Vercel, where `api/index.py` answers every mutating request to a stateful path with 405. The flagship "Run 6-Step Guardrail Demo" POSTed to `/r6/demo/agent-loop`. | 2026-08-10, fixed in the dashboard rebuild | Every interactive control on the most-linked public page was dead for anyone who clicked it. Eleven e2e tests and four unit tests asserted the panels were *present* and passed throughout. |
+
+**Why the tests did not catch it.** `expect(page.locator('#patient-panel')).toBeVisible()`
+asserts an element exists. Existence and function are different claims, and a
+suite that only ever makes the first one will pass through a page of dead
+buttons. The e2e suite ran against a local server *with* a database, so even a
+test that had clicked would have passed — the failure only exists on the
+deployment the public actually reaches.
+
+**Guard.** A control is rendered only where its backend works. On /r6-dashboard
+the re-run link is inside `{% if writes_here %}`, and
+`tests/test_dashboard_reports_what_it_measured.py::TestNoDeadControls` asserts
+both halves: no control at all on the read-only host, and no `<button>`,
+`onclick` or `fetch(` anywhere in the page body. Where a host genuinely cannot
+do the thing, say so in prose instead of offering a button that will 405.
+
 ## How to use this in review
 
 1. Read §0. Ask what in the PR *claims* to have been checked.

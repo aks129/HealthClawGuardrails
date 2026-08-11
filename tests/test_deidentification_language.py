@@ -9,7 +9,11 @@ PUBLIC_SURFACES = (
     "templates/faq.html",
     "templates/r6_dashboard.html",
     "templates/index.html",
-    "static/js/r6-dashboard.js",
+    # static/js/r6-dashboard.js was on this list until the dashboard became a
+    # server-rendered conformance report and stopped loading any script. The
+    # file is deleted, not exempted — a missing path here raises
+    # FileNotFoundError rather than passing quietly, which is what keeps this
+    # list from shrinking by accident.
     "skills/phi-redaction/SKILL.md",
     "skills/healthex-export/SKILL.md",
     "r6/routes.py",
