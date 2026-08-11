@@ -198,6 +198,7 @@ def r6_dashboard():
     zeroed summary on failure would let the template print "0 checks failed"
     over a report that was never obtained.
     """
+    from r6.conformance.probes import UNGRADED
     from r6.conformance.snapshot import guardrail_snapshot, summarize
     # ?fresh=1 bypasses the 10-minute cache. Honoured only where a run is
     # possible; guardrail_snapshot ignores it on the read-only host, which
@@ -212,6 +213,11 @@ def r6_dashboard():
         summary=summarize(snapshot['report']) if snapshot['measured'] else None,
         writes_here=not is_read_only(current_app.config),
         stateful_host=STATEFUL_HOST,
+        # Rendered whether or not the measurement arrived: what the harness
+        # never covers does not depend on today's run, and a page that drops
+        # its exclusions on a bad day is at its least honest exactly when it
+        # can least afford to be.
+        ungraded=UNGRADED,
     )
 
 

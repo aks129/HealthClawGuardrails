@@ -244,6 +244,17 @@
       {% endfor %}
     {% endif %}
 
+    {# Not conditional on snapshot.measured: these hold on every run. #}
+    {% for name, why in ungraded %}
+    <div class="cf-limit">
+      {# "Not graded:" rather than "{{ name }} is not graded": the entries
+         are a mix of singular and plural ("read authentication" vs "step-up
+         refusals"), and one verb cannot agree with both. #}
+      <h3 class="cf-limit__h">Not graded: {{ name }}</h3>
+      <p class="cf-limit__b">{{ why }}</p>
+    </div>
+    {% endfor %}
+
     <div class="cf-limit">
       <h3 class="cf-limit__h">It is a self-test, not an audit</h3>
       <p class="cf-limit__b">
