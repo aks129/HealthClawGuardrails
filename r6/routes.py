@@ -1202,7 +1202,7 @@ def validate_resource(resource_type):
 
     result = validator.validate_resource(body, mode=mode, profile=profile)
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     record_audit_event('validate', resource_type, body.get('id'),
                        agent_id=request.headers.get('X-Agent-Id'),
                        tenant_id=tenant_id,
@@ -1236,7 +1236,7 @@ def ingest_context():
         return _operation_outcome('error', 'invalid',
                                   f'Bundle.type "{bundle_type}" is not a valid FHIR Bundle type'), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # In hardened deployments, bundle ingestion is a write boundary—not a
     # read-shaped convenience operation. Public/demo tenants remain usable in
@@ -1299,7 +1299,7 @@ def get_context(context_id):
     If ?_include=resources is passed, the actual resource data is included
     (redacted, filtered to context membership only).
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     envelope = ContextEnvelope.query.filter_by(
         context_id=context_id, tenant_id=tenant_id
     ).first()
@@ -1351,7 +1351,7 @@ def get_context(context_id):
 @r6_blueprint.route('/AuditEvent', methods=['GET'])
 def search_audit_events():
     """Search AuditEvent records, optionally filtered by context-id."""
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     agent_id = request.headers.get('X-Agent-Id')
     modifier_keys = [key for key in request.args if ':' in key]
     ignored_params = [key for key in request.args
@@ -1483,7 +1483,7 @@ def import_stub():
 
     source_version = request.args.get('source-version', 'R4')
     entries = body.get('entry', [])
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     result = {
         'resourceType': 'OperationOutcome',
@@ -1536,7 +1536,7 @@ def observation_stats():
     Limitations: only supports valueQuantity (not valueCodeableConcept,
     valueString, etc.). No percentile or median. No component support.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     code = request.args.get('code')
     patient_ref = request.args.get('patient')
 
@@ -1624,7 +1624,7 @@ def observation_lastn():
     Returns the most recent observations grouped by code, optionally
     filtered by patient and code. Default N=1.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     code = request.args.get('code')
     patient_ref = request.args.get('patient')
     max_n = request.args.get('max', 1, type=int)
@@ -1697,7 +1697,7 @@ def list_subscription_topics():
     Introduced in R5, maturing in R6. Topics define subscribable events.
     This endpoint supports discovery only — no notification dispatch.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # Query stored SubscriptionTopics for this tenant
     topics = R6Resource.query.filter_by(
@@ -1738,7 +1738,7 @@ def evaluate_permission():
     action, and resource, returns whether the action is permitted or denied
     based on stored Permission resources.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     body = request.get_json(silent=True)
     if not body:
         return _operation_outcome('error', 'invalid', 'Request body must be valid JSON'), 400
@@ -1839,7 +1839,7 @@ def deidentify_endpoint(resource_type, resource_id):
         return _operation_outcome('error', 'not-supported',
                                   f'Resource type {resource_type} is not supported'), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     resource = R6Resource.query.filter_by(
         id=resource_id, resource_type=resource_type,
         is_deleted=False, tenant_id=tenant_id
@@ -1880,7 +1880,7 @@ def export_audit():
     context_id = request.args.get('context-id')
     count = request.args.get('_count', 1000, type=int)
     count = max(1, min(count, 10000))
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # Enforce tenant isolation on audit export
     query = AuditEventRecord.query.filter_by(
@@ -2611,7 +2611,7 @@ def audit_stream():
     Server-Sent Events stream for real-time audit trail.
     Clients receive new AuditEvents as they are created.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     def generate():
         last_id = None
@@ -3012,7 +3012,7 @@ def curatr_evaluate(resource_type, resource_id):
             f'Resource type {resource_type} is not supported'
         ), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     resource = R6Resource.query.filter_by(
         id=resource_id, resource_type=resource_type,
         is_deleted=False, tenant_id=tenant_id
@@ -3083,7 +3083,7 @@ def curatr_apply_fix(resource_type, resource_id):
             f'Resource type {resource_type} is not supported'
         ), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _operation_outcome(
@@ -3224,7 +3224,7 @@ def compiled_truth(resource_type, resource_id):
             f'Resource type {resource_type} is not supported',
         ), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     if not tenant_id:
         return _operation_outcome(
             'error', 'security',
@@ -3678,7 +3678,7 @@ def fhir_inventory():
 
     Read-only: tenant isolation + audit apply, no step-up required.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # Efficient grouped count: one query, GROUP BY resource_type.
     rows = (
@@ -3755,7 +3755,7 @@ def fhir_profile_adherence():
 
     Read-only: tenant isolation + audit apply, no step-up required.
     """
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # Distinct types present for this tenant, with totals.
     type_rows = (

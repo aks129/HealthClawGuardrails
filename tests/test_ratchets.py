@@ -330,9 +330,18 @@ def test_the_god_module_only_shrinks():
 
 
 #: Call sites that read the tenant straight off the header instead of asking
-#: the access kernel, across all of r6/. 31 -> 27: slice 10a migrated create,
-#: read, update and search in r6/routes.py, which is also that module's first
-#: r6.access import.
+#: the access kernel, across all of r6/. 31 -> 27 -> 9: slice 10a took create,
+#: read, update and search; slice 10b took the remaining seventeen in
+#: r6/routes.py.
+#:
+#: Every one of the seventeen was checked against the exempt-path list before
+#: it moved, by walking each read back to the route decorator that owns it.
+#: The first version of that walker matched only single-line decorators, fell
+#: back to an earlier unrelated route, and reported three curatr endpoints as
+#: sitting on the exempt /demo/ prefix. They are not — they are
+#: /<resource_type>/<resource_id>/$curatr-*. The walker was fixed and re-run
+#: before anything moved. A migration tool that is wrong in the SAFE
+#: direction on Tuesday is wrong in the other direction on Wednesday.
 #:
 #: This counts the whole package, not just r6/routes.py. The first draft
 #: scanned only the god module and pinned 20; the scan then reported 27 and
@@ -360,7 +369,7 @@ def test_the_god_module_only_shrinks():
 #: behaviour change, not a refactor. Check _is_exempt_discovery_path before
 #: moving a call site, per site — that is the whole reason this is 6 PRs and
 #: not one sed.
-_RAW_TENANT_READS = 27
+_RAW_TENANT_READS = 9
 
 
 def test_raw_tenant_header_reads_only_decrease():
