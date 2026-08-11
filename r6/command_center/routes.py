@@ -36,6 +36,7 @@ from sqlalchemy.exc import IntegrityError
 
 from models import db
 from r6.command_center import projector, access, gateway
+from r6.audit import add_audit_event
 from r6.command_center.models import (
     AgentTask,
     Conversation,
@@ -440,6 +441,28 @@ def api_conversations_create():
     )
     db.session.add(msg)
     conversation.updated_at = datetime.now(timezone.utc)
+    # add_audit_event, not record_audit_event: it flushes inside THIS
+    # transaction so the message and its audit row commit or roll back
+    # together. record_audit_event commits after the caller has already
+    # committed, which fails open on the data and closed on the response —
+    # a write persisted and unaudited. tests/test_ratchets.py enforces the
+    # choice for every new call site.
+    #
+    # The flush above assigns msg.id, so the audit can name the row it is
+    # evidence for.
+    db.session.flush()
+    # DETAIL IS PHI-FREE, and that is load-bearing here more than anywhere
+    # else in the repo: `text` is the conversation turn itself. Ids, role,
+    # channel and a length — never the message. CLAUDE.md treats chat
+    # transcripts as PHI-adjacent, and the audit trail is the one store
+    # whose whole contract is that it holds none.
+    add_audit_event(
+        "create", "ConversationMessage", msg.id,
+        agent_id=agent_id,
+        tenant_id=tenant_id,
+        detail=(f"conversation={conversation_id} role={role} "
+                f"channel={channel} chars={len(text)}"),
+    )
     try:
         db.session.commit()
     except IntegrityError:
@@ -505,6 +528,15 @@ def api_tasks_create():
         source=body.get("source"),
     )
     db.session.add(task)
+    db.session.flush()
+    # `title` is caller-supplied free text and may name a condition, so the
+    # detail carries its length rather than its content.
+    add_audit_event(
+        "create", "AgentTask", task.id,
+        agent_id=agent_id,
+        tenant_id=tenant_id,
+        detail=f"priority={task.priority} title_chars={len(title)}",
+    )
     db.session.commit()
     return jsonify(task.to_dict()), 201
 
@@ -528,6 +560,15 @@ def api_tasks_update(task_id: str):
 
     task.status = new_status
     task.updated_at = datetime.now(timezone.utc)
+    add_audit_event(
+        "update", "AgentTask", task.id,
+        agent_id=task.agent_id,
+        # task.tenant_id, not a header: this handler authorizes against the
+        # row it loaded, so the audit records the tenant the write actually
+        # touched rather than one the caller asserted.
+        tenant_id=task.tenant_id,
+        detail=f"status={task.status}",
+    )
     db.session.commit()
     return jsonify(task.to_dict())
 
