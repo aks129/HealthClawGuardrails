@@ -37,6 +37,7 @@ from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
+from r6.access import TenantSource, tenant_from_request
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -474,7 +475,7 @@ def create_resource(resource_type):
                                   f'resourceType mismatch: expected {resource_type}'), 400
 
     # Step-up authorization check with HMAC validation
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _operation_outcome('error', 'security',
@@ -560,7 +561,7 @@ def read_resource(resource_type, resource_id):
         return _operation_outcome('error', 'not-supported',
                                   f'Resource type {resource_type} is not supported'), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # --- Upstream proxy mode: fetch from real FHIR server ---
     proxy = get_proxy_for_request()
@@ -639,7 +640,7 @@ def update_resource(resource_type, resource_id):
                                   f'{resource_type} is system-managed and cannot be modified via API'), 403
 
     # Step-up authorization with HMAC validation
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _operation_outcome('error', 'security',
@@ -870,7 +871,7 @@ def search_resources(resource_type):
             'error', 'not-supported',
             'Resource type is not supported.')), 400
 
-    tenant_id = request.headers.get('X-Tenant-Id')
+    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
     # --- Upstream proxy mode: forward search to real FHIR server ---
     proxy = get_proxy_for_request()

@@ -1032,7 +1032,13 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # blueprint. review.py imports the kernel directly for
                      # _require_step_up rather than going through routes.py,
                      # so it is named here in its own right.
-                     'r6/actions/review.py'}
+                     'r6/actions/review.py',
+                     # slice 10a: the four FHIR resource handlers (create,
+                     # read, update, search) read the tenant through the
+                     # kernel. This is the god module's FIRST kernel import
+                     # and the remaining 20 raw reads in it are pinned by
+                     # tests/test_ratchets.py::_RAW_TENANT_READS.
+                     'r6/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
