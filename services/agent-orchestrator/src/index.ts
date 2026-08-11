@@ -395,8 +395,39 @@ app.post("/mcp", async (req, res) => {
       }
 
       case "tools/call": {
-        // Require valid session for tool calls
-        if (!requestSessionId || !existingSession) {
+        // Require valid session for tool calls.
+        //
+        // The two failures below are NOT the same failure, and answering both
+        // with 400 is what turned a routine session expiry into a dead
+        // conversation for the first clinician to use this.
+        //
+        // Sessions live in an in-memory Map with a 30-minute idle TTL, so they
+        // end constantly: every redeploy, every restart, every user who leaves
+        // a chat open over lunch. Per the Streamable HTTP spec a server that
+        // does not recognise an Mcp-Session-Id MUST answer 404, and a client
+        // that receives 404 MUST re-initialise. That handshake is the entire
+        // recovery mechanism, and 400 does not trigger it — the client reports
+        // an execution error and stops.
+        //
+        // What made it hard to see: tools/list requires no session, so the
+        // tool list kept rendering while every call failed. It looks like a
+        // broken deployment and is a expired cookie.
+        if (requestSessionId && !existingSession) {
+          return res.status(404).json({
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32600,
+              message:
+                "Unknown or expired session. Re-initialize to obtain a new " +
+                "Mcp-Session-Id, then retry.",
+            },
+          });
+        }
+        // No session id at all: the client never initialised. The spec calls
+        // for 400 here, and there is nothing to recover — re-initialising is
+        // what it should have done first.
+        if (!existingSession) {
           return res.status(400).json({
             jsonrpc: "2.0",
             id,

@@ -2361,7 +2361,9 @@ describe("Express App Tests", () => {
             arguments: { resource_type: "Patient", resource_id: "pt-1" },
           },
         });
-      expect(callRes.status).toBe(400);
+      // 400 -> 404: an ended session is recoverable, and 404 is the status
+      // that makes the client re-initialise instead of giving up.
+      expect(callRes.status).toBe(404);
       expect(callRes.body.error.message).toContain("session");
     });
   });
@@ -2527,7 +2529,11 @@ describe("Express App Tests", () => {
           },
         });
 
-      expect(callRes.status).toBe(400);
+      // Was toBe(400). Changed by the fix for the expired-session report:
+      // an evicted session is the case the client CAN recover from, and 404
+      // is the status that tells it to. 400 was what left a clinician's
+      // conversation dead mid-question. See src/session-recovery.test.ts.
+      expect(callRes.status).toBe(404);
       expect(callRes.body.error.message).toContain("session");
     });
 
@@ -2580,7 +2586,9 @@ describe("Express App Tests", () => {
           params: { name: "fhir_read", arguments: arguments_ },
         });
 
-      expect(expiredRes.status).toBe(400);
+      // 400 -> 404: an ended session is recoverable, and 404 is the status
+      // that makes the client re-initialise instead of giving up.
+      expect(expiredRes.status).toBe(404);
       clock.mockRestore();
     });
 
