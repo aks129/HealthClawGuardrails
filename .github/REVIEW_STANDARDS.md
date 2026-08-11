@@ -107,6 +107,49 @@ in CI, on added lines only. The items below need judgment, so they are yours.
     `prefers-reduced-motion` honoured, WCAG AA. If a change needs a new token,
     it changes `design.md` in the same PR.
 
+## Regression of a known shape (hard gate)
+
+27. **Read the PR against `docs/defect-catalogue.md`.** That file lists the
+    mistakes this codebase has already paid for, each with the PR, the date
+    and what it cost. Most defects here are not new ideas; they are an old
+    shape wearing different code. A PR that reintroduces one is
+    REQUEST_CHANGES, and the review comment names the entry.
+
+    The four that recur most, in order of frequency:
+
+    - **§1 a reassuring word doing a check's job.** Any new comment,
+      docstring, response field or config note asserting *idempotent,
+      always, never, validated, safe, sanitized, isolated, audited* must
+      name the test that fails when it stops being true. No test, no word.
+      Six instances, one of which put "PASS: PHI leaked into audit" in front
+      of a clinician.
+    - **§0 a confident report from a check that did not run.** Every new
+      guard or scan must distinguish "examined nothing" from "found
+      nothing", in its own output. This has produced more wrong answers in
+      this repository than any product bug.
+    - **§4 guards blind to their own subject.** A guard written next to an
+      explanation of the bug tends to match its own prose. It must read code
+      rather than text, and it must be mutation-tested — actually run
+      against the reverted behaviour, not merely observed to pass.
+    - **§5 silence that cannot be told from success.** If a path can fail
+      and say nothing, that is a finding.
+
+28. **A new guard must be mutation-tested, and the PR must show the result.**
+    Constitution rule 20 requires the `MUTATION:` docstring line; this
+    requires the evidence. State the mutation, state that it went red. A
+    guard reported as passing but never seen failing is a word, not a check
+    — and four of them shipped green in one day before this rule existed.
+
+    Reporting a mutation as GREEN with an explanation is fine and often
+    right. Reporting five of five red when two were green is the thing this
+    gate exists to stop.
+
+29. **Say what was not done.** A PR that deliberately leaves part of its
+    stated scope undone states which part and why, in the description and at
+    the call site. "Three of the four gates, and here is why the fourth
+    stays" is a complete PR. A silent four-of-four that quietly did three is
+    not.
+
 ## Style & scope
 
 15. Match surrounding code: module pattern is pure engine + report builders +
