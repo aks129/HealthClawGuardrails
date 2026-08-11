@@ -300,3 +300,16 @@
   display: block; margin-top: var(--s2);
   font-size: 0.8125rem; color: var(--ink-faint);
 }
+
+/* ── Reduced motion ───────────────────────────────────────────────────────── */
+/* Two transitions on this page — the property name's colour on hover and the
+   re-run control's background. Both are affordance cues rather than
+   decoration, so the reduced-motion answer is to arrive instantly, not to
+   disappear: the hover state still changes, it just stops animating.
+   Enforced by scripts/check_table_stakes.py [reduced-motion]. */
+@media (prefers-reduced-motion: reduce) {
+  .cf-prop__name,
+  .cf-rerun {
+    transition: none;
+  }
+}
