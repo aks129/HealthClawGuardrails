@@ -1,0 +1,31 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "request": { "method": "PUT", "url": "Client/healthclaw" },
+      "resource": {
+        "resourceType": "Client",
+        "id": "healthclaw",
+        "secret": "healthclaw-secret",
+        "grant_types": ["basic"]
+      }
+    },
+    {
+      "request": { "method": "PUT", "url": "AccessPolicy/healthclaw-fhir-only" },
+      "resource": {
+        "resourceType": "AccessPolicy",
+        "id": "healthclaw-fhir-only",
+        "description": "The guardrail proxy reads and writes FHIR, and nothing else. It has no route to Aidbox's own admin surface, so an agent that gets past the proxy still cannot reach $sql, the console, or the Client that authorises it.",
+        "engine": "matcho",
+        "matcho": {
+          "uri": "#/fhir/.*",
+          "client": { "id": "healthclaw" }
+        },
+        "link": [
+          { "id": "healthclaw", "resourceType": "Client" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Build from a HealthClaw Guardrails checkout instead of the published images.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.build.yaml up -d
+#
+# The paths below are relative to THIS directory, so this override only works
+# inside the HealthClaw repo. Standalone copies of the example (in the Aidbox
+# examples repo, say) use docker-compose.yaml on its own and pull from ghcr.
+services:
+  healthclaw:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+
+  mcp:
+    build:
+      context: ../../services/agent-orchestrator
