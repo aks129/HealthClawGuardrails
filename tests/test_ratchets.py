@@ -202,7 +202,13 @@ def test_post_commit_audit_callsites_only_decrease():
 #: codebase for a system whose constitution says every FHIR resource access
 #: emits an AuditEvent. Playbook B1, B2. This ratchet counts blueprints
 #: that mutate without auditing; it goes to 0 and then becomes a tripwire.
-_UNAUDITED_MUTATOR_PACKAGES = {'r6/command_center', 'r6/agent_runs'}
+#: r6/command_center left this set on 2026-08-10 (playbook B1): its three
+#: step-up-gated writes now call add_audit_event inside their own
+#: transaction. r6/agent_runs stays, and stays deliberately — claim,
+#: heartbeat and transition fire on a timer, so auditing them would bury
+#: real access records under queue chatter. B2 is a decision about WHICH of
+#: its twelve endpoints deserve a trail, not a sweep.
+_UNAUDITED_MUTATOR_PACKAGES = {'r6/agent_runs'}
 
 
 def test_no_new_package_mutates_without_auditing():

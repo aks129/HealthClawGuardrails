@@ -572,7 +572,11 @@ BY_ID = {row.id: row for row in MATRIX}
 
 NON_CLINICAL_MUTATORS = {
     # Durable agent-run queue: execution bookkeeping, not patient data.
-    # NOTE: none of these emits an AuditEvent.
+    # NOTE: none of these emits an AuditEvent, and that is a decision rather
+    # than an oversight: claim/heartbeat/transition fire on a timer, so
+    # auditing them would bury real access records under queue chatter. The
+    # three command-centre writes below were the half of this note worth
+    # acting on, and they now audit.
     "agent_runs.create_agent_run": "queue: tenant session or step-up",
     "agent_runs.cancel_agent_run": "queue: tenant session or step-up",
     "agent_runs.claim_agent_run": "queue: internal secret",
@@ -585,9 +589,14 @@ NON_CLINICAL_MUTATORS = {
     "agent_runs.resume_agent_run": "queue: internal secret",
     "agent_runs.reconcile_agent_tool_call": "queue: reconciliation secret",
     # Command-center activity log: _authz_write = session or step-up.
-    "command_center.api_conversations_create": "activity log: session or step-up",
-    "command_center.api_tasks_create": "activity log: session or step-up",
-    "command_center.api_tasks_update": "activity log: session or step-up",
+    # These three DO emit AuditEvents now (the note above no longer covers
+    # them). They stay in this dict because they are non-clinical, not
+    # because they are unaudited — tests/test_command_center_writes_are_audited.py
+    # holds that line, including the PHI-free detail on the conversation
+    # write, whose `text` field is the chat turn itself.
+    "command_center.api_conversations_create": "activity log: session or step-up; audited",
+    "command_center.api_tasks_create": "activity log: session or step-up; audited",
+    "command_center.api_tasks_update": "activity log: session or step-up; audited",
     "command_center.api_generate_link": "mints a signed link; no store write",
     "command_center.logout": "clears the session cookie only",
     # Credential minting and non-store side effects.
