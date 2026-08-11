@@ -1,151 +1,105 @@
 import { test, expect } from '@playwright/test';
 
+/**
+ * /r6-dashboard — the live conformance report.
+ *
+ * This file was rewritten with the page. What it used to assert is worth
+ * recording, because the suite was green the whole time the page was broken:
+ *
+ *   - Eleven tests checked that panels existed by element id. Every panel
+ *     drove a POST to /r6/…, which the public host refuses with 405
+ *     (api/index.py). An element being visible says nothing about whether
+ *     clicking it does anything.
+ *   - One test, 'Security Posture panel shows all enforced controls', walked
+ *     nine hand-written rows — "Tenant Isolation", "PHI Redaction", "Audit
+ *     Trail" — and asserted each was visible beside its green check. Nothing
+ *     measured any of them. That test was enforcing the defect: it would have
+ *     failed if someone had removed the unbacked claims, and passed through a
+ *     total redaction failure.
+ *
+ * The page is server-rendered now, so most of its content is pinned in
+ * tests/test_dashboard_reports_what_it_measured.py, which can also simulate a
+ * failed measurement. What is left here is what only a browser can answer.
+ */
+
 test.describe('R6 Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/r6-dashboard');
   });
 
   test('has correct title', async ({ page }) => {
-    await expect(page).toHaveTitle(/Health Data Dashboard/);
+    await expect(page).toHaveTitle(/Guardrail conformance/);
   });
 
-  test('shows dashboard heading', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('MCP Guardrail Patterns for Healthcare AI');
+  test('renders the grade with no JavaScript at all', async ({ browser }) => {
+    // The point of server-rendering. The old page painted spinners first and
+    // filled them from fetch(), so a reader with a slow or blocked script saw
+    // an empty scorecard — indistinguishable from a deployment with nothing
+    // to report.
+    const ctx = await browser.newContext({ javaScriptEnabled: false });
+    const page = await ctx.newPage();
+    await page.goto('/r6-dashboard');
+    await expect(page.locator('.cf-grade')).toHaveText(/^[A-F]$/);
+    await expect(page.locator('.cf-figures')).toContainText('Properties passed');
+    await ctx.close();
   });
 
-  test('stat cards are rendered', async ({ page }) => {
-    for (const id of ['stat-status', 'stat-version', 'stat-fhir', 'stat-resources', 'stat-operations', 'stat-mode']) {
-      await expect(page.locator(`#${id}`)).toBeVisible();
-    }
+  test('every property row carries a check tape', async ({ page }) => {
+    const names = await page.locator('.cf-prop__name').count();
+    const tapes = await page.locator('.cf-tape').count();
+    expect(names).toBeGreaterThan(0);
+    expect(tapes).toBe(names);
+    // Each mark is one check, so the marks must outnumber the rows.
+    const marks = await page.locator('.cf-tape__m').count();
+    expect(marks).toBeGreaterThan(names);
   });
 
-  test('stat cards populate from API (spinner disappears)', async ({ page }) => {
-    // r6-spinner is the initial loading state; should be replaced once JS fires
-    await expect(page.locator('#stat-status .r6-spinner')).not.toBeAttached({ timeout: 5000 });
+  test('a property opens to reveal its individual checks', async ({ page }) => {
+    // Visibility, not count. A closed <details> keeps its children in the
+    // DOM — they are rendered and merely not shown, which is also why the
+    // check text is in the HTML source for search engines and for a reader
+    // who saves the page.
+    const first = page.locator('details.cf-prop').first();
+    const checks = first.locator('.cf-check');
+    await expect(checks.first()).toBeHidden();
+    await first.locator('summary').click();
+    await expect(checks.first()).toBeVisible();
+    await expect(checks.first()).toContainText(/PASS|FAIL/);
   });
 
-  test('Run Full Demo button is visible', async ({ page }) => {
-    await expect(page.getByRole('button', { name: /Run Full Demo/ })).toBeVisible();
+  test('the page ships no control that would 405 on the public host', async ({ page }) => {
+    // MUTATION: add a <button onclick="fetch('/r6/...', {method:'POST'})">
+    // to the template -> red. The read-only deployment refuses every write to
+    // a stateful path, so a control there is dead by construction.
+    const main = page.locator('#main');
+    await expect(main.locator('form[method="post" i]')).toHaveCount(0);
+    await expect(main.locator('button')).toHaveCount(0);
+    await expect(main.locator('[onclick]')).toHaveCount(0);
   });
 
-  test('Agent Guardrail Sequence panel shows 6-step tracker', async ({ page }) => {
-    await expect(page.locator('#demo-loop-panel')).toBeVisible();
-    await expect(page.locator('#btn-demo-loop')).toContainText('Run 6-Step Guardrail Demo');
-    // All 6 step labels are present (hidden until demo runs)
-    await expect(page.locator('.demo-step[data-step="1"]')).toBeAttached();
-    await expect(page.locator('.demo-step[data-step="6"]')).toBeAttached();
+  test('states what the grade does not cover', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'What this grade does not cover' }))
+      .toBeVisible();
+    await expect(page.locator('.cf-limit')).not.toHaveCount(0);
   });
 
-  test('Patient Explorer panel buttons are visible', async ({ page }) => {
-    await expect(page.locator('#patient-panel')).toBeVisible();
-    await expect(page.locator('#btn-load-patient')).toBeVisible();
-    await expect(page.locator('#btn-search-patients')).toBeVisible();
-    await expect(page.locator('#btn-patient-count')).toBeVisible();
+  test('names the host it is running on', async ({ page }) => {
+    await expect(page.locator('.cf-host')).toContainText(/stateful|read-only/);
   });
 
-  test('MCP Agent Tool Loop panel is visible', async ({ page }) => {
-    await expect(page.locator('#tools-panel')).toBeVisible();
-    await expect(page.locator('#tool-input')).toBeVisible();
-    await expect(page.locator('#btn-exec-tool')).toBeVisible();
+  test('renders without console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.reload({ waitUntil: 'networkidle' });
+    expect(errors).toEqual([]);
   });
 
-  test('Context Envelope Builder panel is visible', async ({ page }) => {
-    await expect(page.locator('#context-panel')).toBeVisible();
-    await expect(page.locator('#btn-ingest')).toBeVisible();
-    await expect(page.locator('#btn-get-context')).toBeVisible();
-  });
-
-  test('HIPAA De-identification panel is visible', async ({ page }) => {
-    await expect(page.locator('#deid-panel')).toBeVisible();
-    await expect(page.locator('#btn-deidentify')).toBeVisible();
-    // Side-by-side output containers exist
-    await expect(page.locator('#deid-raw')).toBeAttached();
-    await expect(page.locator('#deid-safe')).toBeAttached();
-  });
-
-  test('Human-in-the-Loop panel is visible', async ({ page }) => {
-    await expect(page.locator('#hitl-panel')).toBeVisible();
-    await expect(page.locator('#btn-hitl-demo')).toContainText('Run HITL Demo');
-  });
-
-  test('OAuth 2.1 + PKCE panel is visible', async ({ page }) => {
-    await expect(page.locator('#oauth-panel')).toBeVisible();
-    await expect(page.locator('#btn-oauth-demo')).toContainText('Run OAuth Flow');
-  });
-
-  test('R6 Ballot Resources section is visible', async ({ page }) => {
-    await expect(page.locator('#permission-panel')).toBeVisible();
-    await expect(page.locator('#stats-panel')).toBeVisible();
-    await expect(page.locator('#subscription-panel')).toBeVisible();
-    await expect(page.locator('#r6resources-panel')).toBeVisible();
-  });
-
-  test('Validate panel has pre-filled JSON textarea', async ({ page }) => {
-    await expect(page.locator('#validate-panel')).toBeVisible();
-    const value = await page.locator('#validate-input').inputValue();
-    expect(value).toContain('resourceType');
-    expect(value).toContain('Observation');
-  });
-
-  test('Live Audit Feed is visible with export button', async ({ page }) => {
-    await expect(page.locator('.audit-feed')).toBeVisible();
-    await expect(page.locator('#btn-export-audit')).toBeVisible();
-  });
-
-  test('Security Posture panel shows all enforced controls', async ({ page }) => {
-    // Scope to the Security Posture panel to avoid strict-mode conflicts with
-    // duplicate text elsewhere on the page (e.g. "Tenant Isolation" in the hero)
-    const panel = page.locator('.r6-panel').filter({ hasText: 'Security Posture' });
-    const controls = [
-      'Tenant Isolation',
-      'HMAC Step-up Tokens',
-      'PHI Redaction',
-      'Human-in-the-Loop',
-      'OAuth 2.1 + PKCE',
-      'Audit Trail',
-      'ETag Concurrency',
-      'Medical Disclaimer',
-    ];
-    for (const control of controls) {
-      await expect(panel.getByText(control, { exact: true })).toBeVisible();
-    }
-  });
-
-  test('Fasten Connect panel offers a real action, or says why it cannot', async ({ page }) => {
-    await expect(page.locator('#fasten-panel')).toBeVisible();
-    // Exactly one branch renders: the Stitch launch button when the deployment
-    // has a public key, otherwise the notice naming what is missing. Both are
-    // honest; a panel showing neither would be a dead control.
-    const launch = page.locator('#btn-stitch-launch');
-    const notice = page.locator('#fasten-panel').getByText('FASTEN_PUBLIC_KEY is not set');
-    await expect(launch.or(notice).first()).toBeVisible();
-    // The five-step tracker is markup only until a real connection fills it in.
-    await expect(page.locator('.demo-step[data-step="f1"]')).toBeAttached();
-    await expect(page.locator('.demo-step[data-step="f5"]')).toBeAttached();
-    await expect(page.locator('#fasten-steps')).not.toBeVisible();
-  });
-
-  test('no control fabricates an import that did not happen (#310a)', async ({ page }) => {
-    // #394 deleted the simulated-demo button, its /fasten/demo route, and the
-    // step-detail pane. This test is the pin: the page must not ship a control
-    // that marks steps 2-5 done without a webhook having arrived.
-    //
-    // MUTATION: restore #btn-fasten-demo (or any client-side call that adds
-    // .done to a step) and this reddens on the first two assertions.
-    await expect(page.locator('#btn-fasten-demo')).toHaveCount(0);
-    await expect(page.locator('#fasten-step-detail')).toHaveCount(0);
-    // Nothing is marked done on a page that has ingested nothing. Steps 2-5
-    // run asynchronously over 5-45 minutes; the copy says so rather than
-    // animating them.
-    await expect(page.locator('#fasten-panel')).toContainText('run asynchronously');
-    await expect(page.locator('#fasten-steps .demo-step.done')).toHaveCount(0);
-  });
-
-  test('Discovery endpoint links are present', async ({ page }) => {
-    await expect(page.locator('a[href="/r6/fhir/metadata"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/r6/fhir/.well-known/oauth-authorization-server"]')).toBeVisible();
-    await expect(page.locator('a[href="/r6/fhir/.well-known/smart-configuration"]')).toBeVisible();
-    // Use .first() — privacy link appears in both discovery panel and footer
-    await expect(page.locator('a[href="/privacy"]').first()).toBeVisible();
+  test('does not scroll sideways on a phone', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 });

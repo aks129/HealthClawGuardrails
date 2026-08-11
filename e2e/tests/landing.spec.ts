@@ -9,10 +9,10 @@ test.describe('Landing page', () => {
     await expect(page).toHaveTitle(/HealthClaw Guardrails/);
   });
 
-  test('navbar has Home and Health Data Dashboard links', async ({ page }) => {
+  test('navbar has Home and Conformance links', async ({ page }) => {
     const nav = page.locator('#main-nav');
     await expect(nav.getByRole('link', { name: 'Home' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Health Data Dashboard' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Conformance' })).toBeVisible();
   });
 
   test('hero title is visible', async ({ page }) => {

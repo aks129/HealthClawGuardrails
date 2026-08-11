@@ -1,0 +1,315 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   CONFORMANCE REPORT — /r6-dashboard
+
+   The genre is a certificate of analysis, not a dashboard: masthead, stated
+   provenance, tabulated results with the method beside each one, and scope
+   limits given the same weight as the verdict. That form is why a materials
+   test certificate is believed, and it is the form this page needed, because
+   what it replaced was nine hand-written green checkmarks.
+
+   Every colour, face and step here is a token from healthclaw.css. Nothing is
+   invented locally — this page joins the site's editorial ground
+   (surface-paper), which the operational dashboards were carved out of when
+   that ground was introduced (see the note at the top of base.html).
+
+   Namespaced cf-* throughout. base.html loads r6-dashboard.css on every page
+   for the console surfaces, so an un-prefixed .panel or .stat here would
+   collide with the styles this page is getting away from.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Masthead ─────────────────────────────────────────────────────────────── */
+
+.cf-mast {
+  border-top: 2px solid var(--rule-firm);
+  padding-top: var(--s4);
+  margin-bottom: var(--s6);
+}
+.cf-mast__eyebrow {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-faint);
+  display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline;
+}
+.cf-mast__title {
+  font-size: clamp(2rem, 5.2vw, 3.25rem); font-weight: 600;
+  letter-spacing: -0.028em; line-height: 1.02;
+  margin: var(--s3) 0 0; color: var(--ink); text-wrap: balance;
+}
+.cf-mast__deck {
+  margin-top: var(--s4); max-width: 60ch;
+  font-size: 1.0625rem; line-height: 1.62; color: var(--ink-soft);
+}
+.cf-mast__deck strong { color: var(--ink); font-weight: 600; }
+
+/* ── Provenance: what was measured, where, when ───────────────────────────── */
+
+.cf-prov {
+  margin-top: var(--s5);
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--paper-raise);
+  /* Three across at full width, so six cells fill two whole rows. auto-fit
+     with a smaller floor packed five into row one and left the sixth alone
+     beside a wide empty box. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+.cf-prov__cell {
+  padding: var(--s3) var(--s4);
+  border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+}
+.cf-prov__k {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.cf-prov__v {
+  font-family: var(--mono); font-size: 0.875rem; color: var(--ink);
+  margin-top: 4px; word-break: break-word;
+}
+
+/* ── Verdict ──────────────────────────────────────────────────────────────── */
+
+.cf-verdict {
+  display: grid; gap: var(--s5);
+  grid-template-columns: minmax(150px, auto) 1fr;
+  align-items: center;
+  border-top: 2px solid var(--rule-firm);
+  border-bottom: 1px solid var(--rule);
+  padding: var(--s5) 0;
+  margin-bottom: var(--s6);
+}
+@media (max-width: 700px) { .cf-verdict { grid-template-columns: 1fr; } }
+
+.cf-grade {
+  font-family: var(--mono); line-height: 0.86; letter-spacing: -0.05em;
+  font-size: clamp(4.5rem, 13vw, 7.5rem);
+  font-variant-numeric: tabular-nums;
+  color: var(--pass);
+}
+.cf-grade--fail { color: var(--fail); }
+.cf-grade--none { color: var(--ink-faint); font-size: clamp(2rem, 6vw, 3rem); }
+.cf-grade__cap {
+  display: block; font-size: 0.75rem; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-faint); margin-top: var(--s2);
+}
+
+.cf-figures {
+  display: grid; gap: var(--s4) var(--s5);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.cf-fig__n {
+  display: block; font-family: var(--mono);
+  font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.cf-fig__n--fail { color: var(--fail); }
+/* Partial coverage is a caveat, not a failure. Printing it in the failure
+   red said the deployment was broken when it was merely narrower than the
+   headline implies. */
+.cf-fig__n--warn { color: var(--warn); }
+.cf-fig__l {
+  margin-top: var(--s2); font-family: var(--mono); font-size: 0.75rem;
+  letter-spacing: 0.05em; color: var(--ink-faint); line-height: 1.4;
+}
+
+/* ── Could-not-measure state ──────────────────────────────────────────────── */
+/* Deliberately loud. The failure this page must never have is rendering an
+   empty report as a clean bill of health (docs/defect-catalogue.md §0). */
+
+.cf-unmeasured {
+  border: 1px solid var(--fail); border-left-width: 3px;
+  border-radius: var(--radius); background: var(--fail-wash);
+  padding: var(--s5); margin-bottom: var(--s6);
+}
+.cf-unmeasured__h {
+  font-size: 1.25rem; font-weight: 600; color: var(--fail);
+  margin-bottom: var(--s3); letter-spacing: -0.01em;
+}
+.cf-unmeasured__b { color: var(--ink); line-height: 1.6; max-width: 62ch; }
+.cf-unmeasured__d {
+  margin-top: var(--s4); font-family: var(--mono); font-size: 0.8125rem;
+  color: var(--ink-soft); background: var(--paper-raise);
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  padding: var(--s3); word-break: break-word;
+}
+
+/* ── Section heads ────────────────────────────────────────────────────────── */
+
+.cf-sec { margin: var(--s8) 0 0; }
+.cf-sec__n {
+  font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--signal);
+}
+.cf-sec__h {
+  font-size: clamp(1.375rem, 2.6vw, 1.75rem); font-weight: 600;
+  letter-spacing: -0.018em; color: var(--ink);
+  margin: var(--s2) 0 var(--s3);
+}
+.cf-sec__lede {
+  color: var(--ink-soft); line-height: 1.6; max-width: 62ch;
+  margin-bottom: var(--s5);
+}
+
+/* ── Property rows ────────────────────────────────────────────────────────── */
+
+.cf-props { border-top: 2px solid var(--rule-firm); }
+
+.cf-prop { border-bottom: 1px solid var(--rule); }
+.cf-prop__sum {
+  display: grid; gap: var(--s3) var(--s4);
+  grid-template-columns: 2.25rem 1fr auto;
+  align-items: baseline;
+  padding: var(--s4) 0;
+  cursor: pointer; list-style: none;
+}
+.cf-prop__sum::-webkit-details-marker { display: none; }
+.cf-prop__sum:hover .cf-prop__name { color: var(--signal); }
+.cf-prop__sum:focus-visible {
+  outline: 2px solid var(--signal); outline-offset: 3px;
+}
+.cf-prop__i {
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.cf-prop__name {
+  font-size: 1.125rem; font-weight: 600; color: var(--ink);
+  letter-spacing: -0.012em; transition: color 120ms ease-out;
+}
+.cf-prop__meta {
+  margin-top: var(--s2); display: flex; flex-wrap: wrap;
+  gap: var(--s2) var(--s3); align-items: center;
+}
+.cf-prop__count {
+  font-family: var(--mono); font-size: 0.75rem; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.cf-prop__more {
+  font-family: var(--mono); font-size: 0.75rem; color: var(--signal);
+  white-space: nowrap;
+}
+.cf-prop[open] .cf-prop__more::after { content: " ▲"; }
+.cf-prop:not([open]) .cf-prop__more::after { content: " ▼"; }
+
+/* The tape: one mark per check, coloured by what the probe found.
+
+   This is the page's one ornamental-looking device and it is not ornamental.
+   The mark count IS the check count, so a property resting on two probes
+   looks thin next to one resting on seventeen — which is true, and is the
+   sort of thing a page selling its own security normally hides. */
+.cf-tape { display: flex; gap: 2px; flex-wrap: wrap; align-items: center; }
+.cf-tape__m {
+  display: block; width: 3px; height: 15px; border-radius: 1px;
+  background: var(--pass);
+}
+.cf-tape__m--fail { background: var(--fail); width: 5px; }
+
+.cf-prop__body { padding: 0 0 var(--s5) calc(2.25rem + var(--s4)); }
+@media (max-width: 640px) {
+  .cf-prop__sum { grid-template-columns: 1.75rem 1fr; }
+  .cf-prop__more { grid-column: 2; }
+  .cf-prop__body { padding-left: 0; }
+}
+
+/* A note the harness itself attached — usually a limit on what it graded. */
+.cf-note {
+  border-left: 3px solid var(--warn);
+  background: var(--warn-wash);
+  padding: var(--s3) var(--s4); border-radius: var(--radius);
+  margin-bottom: var(--s4); max-width: 68ch;
+}
+.cf-note__k {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--warn); display: block;
+  margin-bottom: 4px;
+}
+.cf-note__t { color: var(--ink); font-size: 0.9375rem; line-height: 1.55; }
+
+/* Which synthetic record the probe worked on. Provenance, not a caveat —
+   the harness reports both through one `note` field. */
+.cf-ref {
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--ink-faint);
+  margin-bottom: var(--s3);
+}
+
+/* Individual checks */
+.cf-checks { list-style: none; margin: 0; padding: 0; }
+.cf-check {
+  display: grid; grid-template-columns: 1.25rem 1fr;
+  gap: var(--s3); align-items: baseline;
+  padding: var(--s2) 0; border-bottom: 1px solid var(--rule);
+  font-size: 0.9375rem;
+}
+.cf-check:last-child { border-bottom: 0; }
+.cf-check__mark {
+  font-family: var(--mono); font-size: 0.8125rem; color: var(--pass);
+}
+.cf-check--fail .cf-check__mark { color: var(--fail); }
+.cf-check--fail .cf-check__name { color: var(--fail); font-weight: 600; }
+.cf-check__name { color: var(--ink-soft); }
+.cf-check__obs {
+  display: block; font-family: var(--mono); font-size: 0.8125rem;
+  color: var(--ink-faint); margin-top: 2px; word-break: break-word;
+}
+.cf-check--fail .cf-check__obs { color: var(--fail); }
+
+/* ── Limits ───────────────────────────────────────────────────────────────── */
+
+/* No gap: each entry carries its own padding and rule, and the two together
+   read as a double space. */
+.cf-limits { border-top: 2px solid var(--rule-firm); }
+.cf-limit {
+  padding: var(--s4) 0 0; border-bottom: 1px solid var(--rule);
+  padding-bottom: var(--s4);
+}
+.cf-limit__h {
+  font-size: 1rem; font-weight: 600; color: var(--ink);
+  margin-bottom: var(--s2); letter-spacing: -0.008em;
+}
+.cf-limit__b { color: var(--ink-soft); line-height: 1.6; max-width: 66ch;
+               font-size: 0.9375rem; }
+.cf-limit__b code { font-size: 0.875em; }
+
+/* ── Host banner ──────────────────────────────────────────────────────────── */
+
+.cf-host {
+  border: 1px solid var(--rule); border-left: 3px solid var(--signal);
+  border-radius: var(--radius); background: var(--signal-wash);
+  padding: var(--s4) var(--s5); margin-top: var(--s6);
+}
+.cf-host__h {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--signal-deep); margin-bottom: var(--s2);
+}
+.cf-host__b { color: var(--ink); line-height: 1.6; max-width: 66ch; }
+.cf-host__b a { color: var(--signal-deep); }
+
+/* ── Re-run ───────────────────────────────────────────────────────────────── */
+/* Rendered only where a run can actually happen. A control that cannot do its
+   job is the defect this page was rebuilt to remove. */
+
+.cf-rerun {
+  display: inline-flex; align-items: center; min-height: var(--tap);
+  padding: 0 var(--s4); margin-top: var(--s4);
+  font-family: var(--mono); font-size: 0.8125rem;
+  color: var(--paper); background: var(--ink);
+  border: 1px solid var(--ink); border-radius: var(--radius);
+  text-decoration: none; transition: background 140ms ease-out;
+}
+.cf-rerun:hover { background: var(--signal-deep); border-color: var(--signal-deep);
+                  color: var(--paper); }
+.cf-rerun__note {
+  display: block; margin-top: var(--s2);
+  font-size: 0.8125rem; color: var(--ink-faint);
+}
+
+/* ── Reduced motion ───────────────────────────────────────────────────────── */
+/* Two transitions on this page — the property name's colour on hover and the
+   re-run control's background. Both are affordance cues rather than
+   decoration, so the reduced-motion answer is to arrive instantly, not to
+   disappear: the hover state still changes, it just stops animating.
+   Enforced by scripts/check_table_stakes.py [reduced-motion]. */
+@media (prefers-reduced-motion: reduce) {
+  .cf-prop__name,
+  .cf-rerun {
+    transition: none;
+  }
+}

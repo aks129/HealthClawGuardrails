@@ -54,7 +54,7 @@
              {% if request.path == url_for('index') %}aria-current="page"{% endif %}>Home</a>
           <a class="hc-nav__link"
              href="{{ url_for('r6_dashboard') }}"
-             {% if request.path == url_for('r6_dashboard') %}aria-current="page"{% endif %}>Health Data Dashboard</a>
+             {% if request.path == url_for('r6_dashboard') %}aria-current="page"{% endif %}>Conformance</a>
           <a class="hc-nav__link"
              href="/command-center"
              {% if request.path.startswith('/command-center') %}aria-current="page"{% endif %}>Command Center</a>

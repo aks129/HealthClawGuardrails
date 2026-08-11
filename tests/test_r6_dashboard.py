@@ -82,35 +82,53 @@ class TestInternalStepUpToken:
 # ===== Dashboard Page =====
 
 class TestDashboardPage:
-    """Test R6 Dashboard page rendering."""
+    """/r6-dashboard renders the conformance measurement.
+
+    These pins were rewritten wholesale when the page was. They used to assert
+    that eleven interactive panels existed by element id. Every one of those
+    panels drove a POST to /r6/…, which the read-only host refuses with 405
+    (api/index.py) — so the suite was green on a page whose controls were dead
+    wherever the public actually met them. Asserting an element exists says
+    nothing about whether it works.
+
+    What replaced them pins the page's real contract: it shows a measurement,
+    it says where the measurement came from, and it does not assert a security
+    property that no probe checked.
+    """
 
     def test_dashboard_returns_html(self, client):
         resp = client.get('/r6-dashboard')
         assert resp.status_code == 200
-        assert b'Health Data Dashboard' in resp.data
-
-    def test_dashboard_includes_js(self, client):
-        resp = client.get('/r6-dashboard')
-        assert b'r6-dashboard.js' in resp.data
+        # Asserted against the <h1>, not the page text. The old pin looked for
+        # "Health Data Dashboard" anywhere in the body and was satisfied by the
+        # navigation link on every page — it would have passed against an
+        # empty <main>.
+        assert b'What the guardrails actually did' in resp.data
 
     def test_dashboard_includes_css(self, client):
         resp = client.get('/r6-dashboard')
-        assert b'r6-dashboard.css' in resp.data
+        assert b'conformance.css' in resp.data
 
-    def test_dashboard_has_all_panels(self, client):
-        resp = client.get('/r6-dashboard')
-        html = resp.data.decode()
-        assert 'patient-panel' in html
-        assert 'tools-panel' in html
-        assert 'context-panel' in html
-        assert 'deid-panel' in html
-        assert 'hitl-panel' in html
-        assert 'oauth-panel' in html
-        assert 'validate-panel' in html
+    def test_dashboard_states_where_the_measurement_came_from(self, client):
+        """A grade with no provenance is a number someone typed."""
+        html = client.get('/r6-dashboard').data.decode()
+        assert 'Measured against' in html
+        assert 'Reported by' in html
+        assert '/r6/fhir/$conformance' in html
+
+    def test_dashboard_carries_no_client_side_demo_script(self, client):
+        """MUTATION: re-add the r6-dashboard.js <script> tag -> red.
+
+        The page is server-rendered. r6-dashboard.js drives the old panels and
+        every write path in it 405s on the public host; shipping it again
+        would reintroduce controls that cannot work where they are served.
+        """
+        html = client.get('/r6-dashboard').data.decode()
+        assert 'r6-dashboard.js' not in html
 
     def test_dashboard_linked_in_navbar(self, client):
         resp = client.get('/')
-        assert b'Health Data Dashboard' in resp.data
+        assert b'/r6-dashboard' in resp.data
 
 
 # ===== Full Agent Workflow =====
@@ -568,22 +586,27 @@ class TestImportStubWorkflow:
 # ===== Phase 2: Dashboard Integration Tests =====
 
 
-class TestPhase2DashboardPanels:
-    """Test Phase 2 dashboard panels are present."""
+class TestDashboardScope:
+    """The page states what its grade does not cover.
 
-    def test_dashboard_has_phase2_panels(self, client):
-        resp = client.get('/r6-dashboard')
-        html = resp.data.decode()
-        assert 'permission-panel' in html
-        assert 'stats-panel' in html
-        assert 'subscription-panel' in html
-        assert 'r6resources-panel' in html
-        assert 'phase2-header' in html
+    The panel-inventory tests that used to live here went with the panels.
+    Scope is the part worth pinning: a self-graded A that does not say what it
+    excluded is the most misleading thing this page could publish.
+    """
 
-    def test_dashboard_shows_honest_scope(self, client):
-        resp = client.get('/r6-dashboard')
-        html = resp.data.decode()
-        assert 'reference implementation' in html.lower() or 'ballot' in html.lower()
+    def test_dashboard_publishes_its_limits(self, client):
+        html = client.get('/r6-dashboard').data.decode()
+        assert 'What this grade does not cover' in html
+        # Two limits hold whatever the harness reports, so they are asserted
+        # by text rather than derived from the run.
+        assert 'not an audit' in html
+        assert 'conformance-selftest' in html
+
+    def test_dashboard_says_the_grade_is_self_awarded(self, client):
+        """MUTATION: delete the "grades itself" sentence -> red."""
+        html = client.get('/r6-dashboard').data.decode()
+        assert 'grades itself' in html
+        assert 'SOC 2' in html
 
 
 class TestPhase2VersionUpdate:

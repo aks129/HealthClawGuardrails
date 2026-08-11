@@ -18,11 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the fully-configured Flask app
 from main import app  # noqa: E402
+from deployment import STATEFUL_HOST as _STATEFUL_HOST  # noqa: E402
 
 _STATEFUL_PREFIXES = ('/r6/', '/fasten/', '/shc/', '/actions/', '/wearables/',
                       '/command-center', '/email/')
 _MUTATING = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
-_STATEFUL_HOST = 'https://app.healthclaw.io'
 
 
 def _is_state_mutating_get(path):
