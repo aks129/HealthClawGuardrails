@@ -293,7 +293,13 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: This is a CEILING, not a target. Lower it when Workstream B lands a module;
 #: raising it needs a reason in the diff.
 #: Playbook chunk B (docs/2026-08-05-healthclaw-2.0-playbook.md).
-_GOD_MODULE_LINES = 3930
+#: 3930 -> 3931: slice 10a swapped four raw tenant reads 1:1 and added the
+#: module's first `from r6.access import ...` line. A ratchet that only
+#: shrinks cannot tell decomposition from growth, and the honest move is to
+#: record the one line and why rather than to smuggle it in. The following
+#: batches remove code from this module; this is the only batch that adds a
+#: line to it.
+_GOD_MODULE_LINES = 3931
 
 
 def test_the_god_module_only_shrinks():
@@ -315,11 +321,69 @@ def test_the_god_module_only_shrinks():
 # The ratchets themselves
 # ---------------------------------------------------------------------------
 
+
+#: Call sites that read the tenant straight off the header instead of asking
+#: the access kernel, across all of r6/. 31 -> 27: slice 10a migrated create,
+#: read, update and search in r6/routes.py, which is also that module's first
+#: r6.access import.
+#:
+#: This counts the whole package, not just r6/routes.py. The first draft
+#: scanned only the god module and pinned 20; the scan then reported 27 and
+#: the pin was corrected to the measurement rather than the scan narrowed to
+#: the pin. r6/fasten/routes.py and r6/rate_limit.py each hold one, and they
+#: are real instances of the same thing.
+#:
+#: The floor is NOT zero. r6/routes.py:222 is `enforce_tenant_id` itself —
+#: the before_request hook that requires and validates the header for the
+#: whole blueprint. That read is the enforcement point; it is where the
+#: header is supposed to be read.
+#:
+#: Why this is safe to do in batches, and why the batches are small: every one
+#: of these sits behind `enforce_tenant_id`, the before_request hook that
+#: already requires the header and format-checks it with the SAME pattern the
+#: kernel uses (`[a-zA-Z0-9_-]{1,64}`, fullmatch, unstripped, compared before
+#: the swap). The hook also writes the synthesized SHARP tenant back into
+#: request.environ, so a downstream read sees it too. A migrated call
+#: therefore re-validates a value that cannot fail — inert by construction,
+#: which is what a migration slice should be.
+#:
+#: The exception is any handler on an EXEMPT discovery path, where the hook
+#: returns early and the header may legitimately be absent. There the kernel
+#: would raise TenantRejected where the old code got None, and that is a
+#: behaviour change, not a refactor. Check _is_exempt_discovery_path before
+#: moving a call site, per site — that is the whole reason this is 6 PRs and
+#: not one sed.
+_RAW_TENANT_READS = 27
+
+
+def test_raw_tenant_header_reads_only_decrease():
+    """MUTATION: add `request.headers.get('X-Tenant-Id')` to a handler -> red.
+
+    The kernel is meant to be the one tenant reader (spec §1.1). Without a
+    pin, the 24 that existed when the migration started would quietly become
+    25 the next time someone needed a tenant in a hurry.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    needle = "request.headers.get('X-Tenant-Id')"
+    sites = []
+    for path in sorted(root.glob('r6/**/*.py')):
+        rel = path.relative_to(root).as_posix()
+        if rel == 'r6/access.py':
+            continue  # the kernel is where this read is supposed to live
+        for n, line in enumerate(path.read_text(encoding='utf-8').split('\n'), 1):
+            if needle in line and not line.lstrip().startswith('#'):
+                sites.append(f'{rel}:{n}')
+    assert len(sites) <= _RAW_TENANT_READS, _report(
+        sites, _RAW_TENANT_READS,
+        'Read the tenant through r6.access.tenant_from_request.')
+
+
 def test_every_ratchet_names_its_playbook_chunk():
     """A pin without a migration plan is a number nobody will ever lower."""
     source = pathlib.Path(__file__).read_text(encoding='utf-8')
     assert 'docs/2026-08-05-healthclaw-2.0-playbook.md' in source
     for pin in ('_STEP_UP_CALLSITES', '_ROUTES_IMPORTERS',
+                '_RAW_TENANT_READS',
                 '_POST_COMMIT_AUDIT_CALLSITES',
                 '_FILES_QUERYING_WITHOUT_SOFT_DELETE',
                 '_GOD_MODULE_LINES'):
