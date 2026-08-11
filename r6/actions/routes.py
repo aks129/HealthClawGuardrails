@@ -20,12 +20,12 @@ import hmac
 import json
 import logging
 import os
-import re
 import uuid
 
 from flask import Blueprint, jsonify, request
 
 from models import db
+from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
@@ -50,7 +50,6 @@ actions_blueprint = Blueprint('actions', __name__, url_prefix='/r6/actions')
 # Register rate limiting (same pattern as r6_blueprint in r6/routes.py)
 rate_limit_middleware(actions_blueprint)
 
-_TENANT_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
 def _error(status, message):
@@ -58,10 +57,29 @@ def _error(status, message):
 
 
 def _tenant_or_none():
-    tenant_id = request.headers.get('X-Tenant-Id', '')
-    if not tenant_id or not _TENANT_PATTERN.match(tenant_id):
+    """Resolve X-Tenant-Id through the access kernel (spec §1.1, slice 10).
+
+    Returns a validated `Tenant`, or None when the header is ABSENT so every
+    handler keeps answering the 400 it always answered. A MALFORMED id now
+    raises out to the app-wide TenantRejected handler instead of collapsing
+    into the same None: the two failures were indistinguishable here, which
+    is how a blueprint ends up with one refusal message for two causes.
+
+    The accepted set does not move. The pattern this module used to keep
+    and the kernel's _TENANT_ID_PATTERN are both ``[a-zA-Z0-9_-]{1,64}``,
+    compared byte-for-byte before the swap; the local copy is deleted here
+    rather than left as a second definition of the same rule.
+
+    Returning the Tenant rather than the string is the point: require_grant
+    raises TypeError on a bare string, so the type is what proves the format
+    check ran. Handlers take ``.id`` where they need the string.
+    """
+    try:
+        return tenant_from_request(sources=(TenantSource.HEADER,))
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.MALFORMED:
+            raise
         return None
-    return tenant_id
 
 
 def _emergency_refusal_or_none(tenant_id, text):
@@ -213,9 +231,10 @@ def propose_rx_transfer():
     Schedule II medications are refused with an explanation (never
     transferable; see rx_transfer.py).
     """
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
     tenant_id = authorize_tenant_read(tenant_id)
     if tenant_id is None:
         return _error(401, 'authentication required for this tenant')
@@ -297,9 +316,10 @@ def propose_rx_transfer():
 
 @actions_blueprint.route('/propose', methods=['POST'])
 def propose_action():
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
 
     # propose has no step-up gate at all — the tenant header is the whole
     # credential — so this parse is reachable by anyone who can name a
@@ -352,9 +372,10 @@ def commit_action(action_id):
     patient's out-of-band channels. The old X-Human-Confirmed header gate is
     gone — any caller could spoof a header; nobody can spoof the patient
     tapping Approve in their own dashboard/Telegram."""
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
 
     # Gate: step-up token (ALWAYS destructure the tuple)
     step_up_token = request.headers.get('X-Step-Up-Token')
@@ -454,9 +475,10 @@ def confirm_action(action_id):
          (issued and consumed at the same instant, one transaction) is the
          CONSENT RECORD — the durable who/when/via artifact of the approval.
     """
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
 
     # Pure input validation FIRST: a 400 on a malformed body must not burn
     # the single-use credential consumed just below. Everything that touches
@@ -602,9 +624,10 @@ def issue_action_approval_token(action_id):
     an agent that can obtain a normal tenant write token cannot mint its own
     approval credential.
     """
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
 
     expected = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
     provided = request.headers.get('X-Internal-Secret', '')
@@ -638,9 +661,10 @@ def issue_action_approval_token(action_id):
 
 @actions_blueprint.route('/<action_id>', methods=['GET'])
 def action_status(action_id):
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
 
     # Read-auth: for non-public tenants (when the flag is on) require a
     # tenant-bound token/bearer, same posture as FHIR + SMBP reads.
