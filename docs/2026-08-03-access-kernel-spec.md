@@ -744,6 +744,33 @@ Protect it.
 - **Tenant filtering of queries.** See §3(e).
 - **Status-code normalization.** Open question 1. Founder's call, one PR,
   after every site is migrated.
+- **Refusal reasons. RULED, 2026-08-10: always tell why.** `require_grant`
+  now returns the validator's own reason to the caller — expired,
+  read-scoped, audience mismatch, operation mismatch, replay, and the
+  malformed/signature cases — instead of collapsing all eleven into
+  `Invalid step-up token` and logging the real one where the caller cannot
+  see it.
+
+  One carve-out, and the line is ownership rather than sensitivity. Every
+  published reason describes the token the caller is already holding, so it
+  discloses nothing they could not get by decoding it. `Token tenant
+  mismatch` describes a credential belonging to someone else: it confirms
+  the token is valid and merely issued elsewhere, which is the distinction a
+  caller probing with a token they should not have is trying to draw.
+  `r6/read_auth.py:262` withholds it for the same reason.
+
+  Implemented as an allowlist (`_PUBLIC_REASONS`) with the withheld case
+  documented beside it (`_WITHHELD_REASONS`), so a reason added to
+  `r6/stepup.py` stays private until someone decides otherwise.
+  `tests/test_step_up_states_why.py` reddens when a new reason appears in
+  neither list — it cannot become public by accident, and it cannot stay
+  silent by accident either.
+
+  This unblocks the actions `confirm` gate (slice 5's deliberate remainder),
+  whose contract pins `already used (replay)`, `audience mismatch` and
+  `operation mismatch`. Those three now survive the kernel. Its response
+  *envelope* still changes from `{"error": ...}` to an OperationOutcome, as
+  it did for the three gates slice 5 migrated, so that is its own slice.
 - **Seams.** No clock, no HTTP port, no settings object. Those are §8 of the
   plan and they are a different kind of change: they alter what a module
   depends on, not what a guard guarantees.

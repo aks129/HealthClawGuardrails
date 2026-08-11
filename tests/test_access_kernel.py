@@ -416,19 +416,46 @@ def test_a_grant_is_frozen_so_a_handler_cannot_widen_it(app, tenant_id):
         grant.tenant_id = 'someone-else'
 
 
-def test_a_denial_never_repeats_the_validators_reason_to_the_client(app,
-                                                                    tenant_id):
-    """r6/read_auth.py:262 refuses to say why a token failed; so does this.
+def test_a_denial_states_a_reason_about_the_callers_own_token(app, tenant_id):
+    """A step-up refusal tells the caller why (owner ruling, 2026-08-10).
 
-    A per-reason answer ('Token tenant mismatch' vs 'Step-up token expired')
-    is an oracle for a caller probing another tenant.
+    THIS PIN WAS INVERTED, DELIBERATELY. It previously asserted the opposite —
+    that a denial never repeats the validator's reason — on the grounds that a
+    per-reason answer is an oracle. That reasoning was right about one reason
+    and wrong about the other ten.
+
+    An expired token is the caller's own. Telling them it expired discloses
+    nothing they could not read out of the token they are holding, and
+    withholding it left them with four words and no way to act. The oracle
+    argument survives intact for the reason it actually applies to, which the
+    test below pins.
     """
     expired = generate_step_up_token(tenant_id, ttl_seconds=-10)
     tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
     with app.test_request_context(headers=_headers(expired)):
         with pytest.raises(StepUpDenied) as exc:
             require_grant(scope=Scope.WRITE, tenant=tenant)
+    assert exc.value.reason == 'Step-up token expired'
+
+
+def test_a_denial_never_reveals_that_a_token_belongs_to_another_tenant(
+        app, tenant_id):
+    """The carve-out, and the whole of it.
+
+    'Token tenant mismatch' is the one reason that describes a credential the
+    caller should not have. Saying it separates a real token issued elsewhere
+    from junk, which is precisely what a prober wants to learn.
+    r6/read_auth.py:262 withholds it for the same reason.
+
+    MUTATION: add 'Token tenant mismatch' to _PUBLIC_REASONS -> red.
+    """
+    other = generate_step_up_token('some-other-tenant')
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(other)):
+        with pytest.raises(StepUpDenied) as exc:
+            require_grant(scope=Scope.WRITE, tenant=tenant)
     assert exc.value.reason == 'Invalid step-up token'
+    assert 'tenant' not in exc.value.reason.lower()
 
 
 def test_step_up_denied_is_catchable_as_exception(app):
