@@ -46,6 +46,89 @@ R6_RESOURCE_TYPES = [
 _AVAILABILITY_TTL = 60
 
 
+# --- What the fallback validator actually checked -------------------------
+#
+# The success message used to read "Structural validation passed (R4/R6,
+# external validator unavailable)". A physician advisor running the launch
+# prompts read that, reasonably, as validation having passed — and it was
+# printed over an Observation with no effective[x], category, performer or
+# subject, because _validate_observation checks exactly two fields (#460).
+#
+# The parenthetical was true and did no work: it hung off a sentence that had
+# already asserted the resource passed, so it read as a footnote about
+# thoroughness rather than "almost nothing was examined". That is the
+# error_fidelity property the conformance grade claims, failing inside the
+# validator — a check that examined two fields printing the word a full
+# profile validation would print.
+#
+# The fields are DERIVED from each validator's own `expression` entries, not
+# listed by hand. A hand-kept list is a second source of truth, and it drifts
+# in the direction of claiming coverage that is not there.
+
+
+def _snake(resource_type):
+    out = []
+    for i, ch in enumerate(resource_type):
+        if ch.isupper() and i:
+            out.append('_')
+        out.append(ch.lower())
+    return ''.join(out)
+
+
+def _checked_expressions(resource_type):
+    """FHIRPath expressions the fallback validator has a check for.
+
+    Read out of the validator's own source. Every check in this module tags
+    its issue with `expression`, so the set of expressions a method can emit
+    IS the set of elements it inspects. Returns () for a type with no
+    per-type validator — which is itself worth saying out loud.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    method = getattr(R6Validator, f'_validate_{_snake(resource_type)}', None)
+    if method is None:
+        return ()
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+    except (OSError, SyntaxError, TypeError):  # pragma: no cover
+        return ()
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if (isinstance(key, ast.Constant) and key.value == 'expression'
+                    and isinstance(value, ast.List)):
+                for item in value.elts:
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                        found.add(item.value)
+    return tuple(sorted(found))
+
+
+def _coverage_note(resource_type):
+    """One sentence naming what ran and what did not.
+
+    Deliberately never says "validation passed". The caller still gets
+    `valid: true`; what changes is that the human-readable line can no longer
+    be mistaken for profile validation.
+    """
+    checked = _checked_expressions(resource_type)
+    if checked:
+        ran = 'Checked for presence: ' + ', '.join(checked) + '.'
+    else:
+        ran = (f'No {resource_type}-specific checks exist in this validator; '
+               'only the base resource shape was examined.')
+    return (
+        f'{ran} NOT checked: profile conformance (US Core or any other), '
+        'terminology bindings, cardinality, value domains, references, and '
+        'every element not named above. No StructureDefinition was consulted '
+        '— the external validator is unavailable, so this is a '
+        'required-field check, not FHIR validation.'
+    )
+
+
 class R6Validator:
     """Validates FHIR R6 resources."""
 
@@ -215,7 +298,7 @@ class R6Validator:
             issues.append({
                 'severity': 'information',
                 'code': 'informational',
-                'diagnostics': 'Structural validation passed (R4/R6, external validator unavailable)'
+                'diagnostics': _coverage_note(resource_type),
             })
 
         return {
