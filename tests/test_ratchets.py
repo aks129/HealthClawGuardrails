@@ -124,7 +124,12 @@ def _report(sites, pin, what):
 #: was to prove the MINORITY 403 dialect survives migration without being
 #: normalized, so require_grant carries absent_status=403 and
 #: rejected_status=403 and the wire behaviour is byte-identical.
-_STEP_UP_CALLSITES = 19
+#: 19 -> 16: kernel slice 5 migrated three of the four actions gates —
+#: rx-transfer propose (also_bearer), commit, and review's _require_step_up.
+#: The fourth, `confirm`, is deliberately NOT migrated: its wire contract
+#: includes the REASON a token was refused, and the kernel's uniform
+#: OperationOutcome does not carry it. See the comment at that call site.
+_STEP_UP_CALLSITES = 16
 
 
 def test_direct_step_up_validation_only_decreases():

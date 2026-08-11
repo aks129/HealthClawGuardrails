@@ -44,7 +44,7 @@ from r6.audit import record_audit_event
 from r6.models import R6Resource
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
-from r6.stepup import validate_step_up_token
+from r6.access import Scope, require_grant
 
 logger = logging.getLogger(__name__)
 
@@ -123,17 +123,29 @@ def _referenced_patient_id(reference):
     return None
 
 
-def _require_step_up(tenant_id):
-    """Return None if a valid tenant-bound step-up token is present, else an
-    (response, status) error tuple. Multi-use validation (no nonce consume) so
-    GET-then-POST with one token works."""
-    token = request.headers.get('X-Step-Up-Token')
-    if not token:
-        return _error(401, 'Review requires X-Step-Up-Token header')
-    valid, err = validate_step_up_token(token, tenant_id)
-    if not valid:
-        return _error(401, 'Step-up token rejected: %s' % err)
-    return None
+def _require_step_up(tenant):
+    """Require a write-capable step-up token for `tenant`, or raise.
+
+    Access kernel, slice 5. Multi-use validation (no nonce consume) so
+    GET-then-POST with one token works.
+
+    Scope.WRITE, not TENANT_BOUND, despite the wording this docstring used
+    to carry. `validate_step_up_token`'s `require_scope` defaults to
+    'write', so the two-argument call this replaces was already refusing a
+    read-scoped token. The old text said "tenant-bound" and the code
+    demanded write — the kind of gap between prose and behaviour that the
+    kernel exists to close, so it is fixed here rather than preserved.
+
+    Raises StepUpDenied rather than returning an error tuple. Callers no
+    longer branch on the result, so there is no `if err is not None` to
+    forget.
+    """
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        absent_status=401,
+        rejected_status=401,
+    )
 
 
 def _load_form_fill_action(action_id, tenant_id):
@@ -319,9 +331,7 @@ def review_form(action_id):
     if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
-    auth_err = _require_step_up(tenant_id)
-    if auth_err is not None:
-        return auth_err
+    _require_step_up(tenant)
 
     action = _load_form_fill_action(action_id, tenant_id)
     if action is None:
@@ -370,9 +380,7 @@ def review_submit(action_id):
     if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
-    auth_err = _require_step_up(tenant_id)
-    if auth_err is not None:
-        return auth_err
+    _require_step_up(tenant)
 
     action = _load_form_fill_action(action_id, tenant_id)
     if action is None:

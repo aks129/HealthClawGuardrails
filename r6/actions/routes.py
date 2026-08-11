@@ -25,7 +25,8 @@ import uuid
 from flask import Blueprint, jsonify, request
 
 from models import db
-from r6.access import TenantRejected, TenantSource, tenant_from_request
+from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
+                       tenant_from_request)
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
@@ -273,16 +274,16 @@ def propose_rx_transfer():
     # This endpoint becomes a write only when a transferable draft exists.
     # Read-scoped credentials may preview the no-action/refusal response above,
     # but persisting a ProposedAction requires an explicit write-capable token.
-    step_up_token = (request.headers.get('X-Step-Up-Token') or '').strip()
-    if not step_up_token:
-        auth = (request.headers.get('Authorization') or '').strip()
-        if auth.lower().startswith('bearer '):
-            step_up_token = auth[7:].strip()
-    if not step_up_token:
-        return _error(401, 'write-scoped X-Step-Up-Token required')
-    valid, _token_error = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _error(401, 'write-scoped token rejected')
+    # Access kernel, slice 5. also_bearer replaces the hand-rolled
+    # Authorization fallback above it: the kernel reads X-Step-Up-Token
+    # first, then Bearer, which is the order this site already used.
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        also_bearer=True,
+        absent_status=401,
+        rejected_status=401,
+    )
 
     refusal = _emergency_refusal_or_none(tenant_id,
                                          result['action_payload'].get('body'))
@@ -377,13 +378,15 @@ def commit_action(action_id):
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
 
-    # Gate: step-up token (ALWAYS destructure the tuple)
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _error(401, 'Action commit requires X-Step-Up-Token header')
-    valid, err = validate_step_up_token(step_up_token, tenant_id)
-    if not valid:
-        return _error(401, 'Step-up token rejected: %s' % err)
+    # Access kernel, slice 5. The "ALWAYS destructure the tuple" comment that
+    # stood here was a convention asking to be remembered; require_grant
+    # removes the tuple, so there is nothing left to remember.
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        absent_status=401,
+        rejected_status=401,
+    )
 
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
@@ -492,6 +495,20 @@ def confirm_action(action_id):
     step_up_token = request.headers.get('X-Step-Up-Token')
     if not step_up_token:
         return _error(401, 'Action confirm requires X-Step-Up-Token header')
+    # NOT MIGRATED, deliberately (kernel slice 5).
+    #
+    # This endpoint's wire contract includes the REASON a token was refused:
+    # tests/actions/test_confirm_is_commit.py pins 'already used (replay)',
+    # 'audience mismatch' and 'operation mismatch' in the response body. The
+    # kernel renders one uniform OperationOutcome and logs the specific
+    # reason rather than returning it, so migrating this site would drop
+    # three deliberately-pinned diagnostics.
+    #
+    # Protocol rule 4: a behaviour change is a failure, not a merge conflict,
+    # and the fix is never to edit the test to match. Whether a step-up
+    # refusal should tell the caller WHY is an owner decision (spec Open
+    # Question 1's neighbour), so it gets its own slice and its own ruling.
+    #
     # consume_nonce: the action-bound confirm token is a SINGLE-USE execution
     # credential (spec v3). Commit uses a separate generic write token;
     # only the human's Approve surface can mint this credential, and confirm
