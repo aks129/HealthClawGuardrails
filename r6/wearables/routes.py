@@ -20,10 +20,10 @@ from flask import Blueprint, Response, current_app, jsonify, redirect, request
 from markupsafe import escape
 
 from models import db
-from r6.access import TenantRejected, TenantSource, tenant_from_request
+from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
+                       tenant_from_request)
 from r6.audit import record_audit_event
 from r6.read_auth import authorize_tenant_read
-from r6.stepup import validate_step_up_token
 from r6.wearables.client import WearablesClient
 from r6.wearables.models import SUPPORTED_PROVIDERS, WearableConnection
 from r6.wearables.poller import run_once
@@ -258,27 +258,42 @@ def sync_now():
     # The absent-header 400 is unchanged; a MALFORMED id now raises out to the
     # app-wide handler instead of being carried into the sweep and the audit.
     try:
-        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+        tenant = tenant_from_request(sources=(TenantSource.HEADER,))
     except TenantRejected as exc:
         if exc.reason == TenantRejected.MALFORMED:
             raise
         return jsonify({'error': 'X-Tenant-Id required'}), 400
-    token = request.headers.get('X-Step-Up-Token')
-    if not token:
-        return jsonify({'error': 'X-Step-Up-Token required'}), 403
-    valid, err = validate_step_up_token(token, tenant_id)
-    if not valid:
-        return jsonify({'error': f'token rejected: {err}'}), 403
+
+    # Access kernel, slice 4 (docs/2026-08-03-access-kernel-spec.md §2.5).
+    # This site exists in the slice order to prove the MINORITY dialect
+    # survives migration: the same failure answers 401 at nine sites and 403
+    # at three, and normalizing that is the founder's call, not this
+    # migration's. So both statuses are passed explicitly and the wire
+    # behaviour is unchanged — 403 with no token, 403 with a bad one.
+    #
+    # Scope.WRITE, not TENANT_BOUND: validate_step_up_token's require_scope
+    # defaults to 'write', so the two-argument call this replaces was already
+    # demanding a write-scoped token. Reading the default rather than the
+    # call site is the difference between preserving behaviour and guessing
+    # at it.
+    grant = require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        absent_status=403,
+        rejected_status=403,
+    )
 
     # Scope the sweep to the authenticated tenant. run_once() defaults to a
-    # global sweep (the background poller relies on it); passing tenant_id
-    # here keeps this patient-triggered endpoint from touching other tenants
-    # (issue #311).
-    summary = run_once(current_app, tenant_id=tenant_id)
+    # global sweep (the background poller relies on it); passing the GRANT's
+    # tenant here keeps this patient-triggered endpoint from touching other
+    # tenants (issue #311). grant.tenant_id rather than the header: the
+    # handler must not be able to sweep a tenant the grant did not authorize
+    # (spec §3(e)).
+    summary = run_once(current_app, tenant_id=grant.tenant_id)
     record_audit_event(
         'update', 'WearableConnection', None,
         agent_id=request.headers.get('X-Agent-Id', 'wearable-manual-sync'),
-        tenant_id=tenant_id,
+        tenant_id=grant.tenant_id,
         detail=(
             f"manual sync: checked={summary.get('connections_checked')} "
             f"ingested={summary.get('observations_ingested')} "
