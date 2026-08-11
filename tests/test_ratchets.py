@@ -274,6 +274,38 @@ def test_soft_delete_blind_query_files_only_decrease():
         'A resource query that ignores is_deleted reads deleted rows.')
 
 
+#: r6/routes.py, in lines. The 08-02 audit's Workstream B is to decompose it
+#: into a package; that work is sequenced after the access kernel and has not
+#: started. In the meantime the file has been going the wrong way — 3,762
+#: lines at the audit, 3,905 at the 08-05 pattern review, 3,930 today, against
+#: a plan whose whole purpose is to shrink it.
+#:
+#: Nobody decided to grow it. Each PR added twenty lines to the only module
+#: where the thing they needed already lived, which is exactly how it reached
+#: 3,900 in the first place. A number that can only go down makes that visible
+#: in the PR that does it rather than in the next audit.
+#:
+#: This is a CEILING, not a target. Lower it when Workstream B lands a module;
+#: raising it needs a reason in the diff.
+#: Playbook chunk B (docs/2026-08-05-healthclaw-2.0-playbook.md).
+_GOD_MODULE_LINES = 3930
+
+
+def test_the_god_module_only_shrinks():
+    """MUTATION: add a line to r6/routes.py -> red.
+
+    The one ratchet that fires on ordinary feature work, deliberately. If a
+    change genuinely belongs in routes.py the pin moves up in the same PR
+    with the reason; the point is that it is a decision rather than a drift.
+    """
+    lines = len((REPO_ROOT / 'r6/routes.py').read_text(encoding='utf-8').splitlines())
+    assert lines <= _GOD_MODULE_LINES, (
+        f'r6/routes.py is {lines} lines, pinned at {_GOD_MODULE_LINES}.\n'
+        f'  Workstream B exists to shrink this file. If the change truly '
+        f'belongs here, raise the pin in this PR and say why; if it belongs '
+        f'in a new module, that is the refactor starting.')
+
+
 # ---------------------------------------------------------------------------
 # The ratchets themselves
 # ---------------------------------------------------------------------------
@@ -284,7 +316,8 @@ def test_every_ratchet_names_its_playbook_chunk():
     assert 'docs/2026-08-05-healthclaw-2.0-playbook.md' in source
     for pin in ('_STEP_UP_CALLSITES', '_ROUTES_IMPORTERS',
                 '_POST_COMMIT_AUDIT_CALLSITES',
-                '_FILES_QUERYING_WITHOUT_SOFT_DELETE'):
+                '_FILES_QUERYING_WITHOUT_SOFT_DELETE',
+                '_GOD_MODULE_LINES'):
         assert f'{pin} = ' in source, f'{pin} lost its pin'
 
 
@@ -293,6 +326,7 @@ def test_every_ratchet_names_its_playbook_chunk():
     ('routes.py importers', _ROUTES_IMPORTERS),
     ('post-commit audit callsites', _POST_COMMIT_AUDIT_CALLSITES),
     ('soft-delete-blind files', _FILES_QUERYING_WITHOUT_SOFT_DELETE),
+    ('god-module lines', _GOD_MODULE_LINES),
 ])
 def test_no_ratchet_is_already_at_zero(pin, value):
     """When one reaches 0, delete its ratchet and add the grep guard instead.
