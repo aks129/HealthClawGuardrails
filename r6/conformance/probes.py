@@ -49,6 +49,48 @@ PROPERTIES = (
     "error_fidelity",
 )
 
+#: Guardrails this harness does NOT grade, published beside the seven it does.
+#:
+#: The grade is read as a product claim. A reader who sees "7/7, 35 checks"
+#: and no list of exclusions will assume the seven are the whole surface, and
+#: the first thing a skeptical adopter checks — can a stranger read patient
+#: records — is not among them. Printing this list on /r6-dashboard costs a
+#: paragraph; letting someone discover it themselves costs the grade's
+#: credibility entirely.
+#:
+#: It lives HERE, next to PROPERTIES, rather than in the template, because
+#: this is the file you edit when you add a property. A list of exclusions
+#: kept anywhere else drifts into claiming we still do not measure something
+#: we started measuring last month, and a stale exclusion is as dishonest as
+#: a stale claim — it just fails in the safe-looking direction.
+#:
+#: tests/test_ungraded_is_published.py fails when a key appears in both
+#: tuples, so removing a probe's entry is part of adding the probe.
+#:
+#: Source: #401 (read auth, and the list it enumerates). Read auth cannot be
+#: graded by adding a probe — the harness has no way to tell "read auth is
+#: off because this is a public demo tenant" from "off because someone
+#: disabled it", so it needs a declared-posture design first. Until that
+#: lands, the honest move is to say so.
+UNGRADED = (
+    ("read authentication",
+     "whether an unauthenticated caller can read another tenant's records. "
+     "READ_AUTH_ENABLED defaults off and is off in this harness's fixture, "
+     "so a deployment serving records to strangers scores what a gated one "
+     "scores (#401)"),
+    ("the action rail's separation",
+     "that propose, commit and confirm cannot be collapsed into one step"),
+    ("step-up refusals beyond a forged token",
+     "expired, cross-tenant, read-scope-on-write and replayed-nonce are "
+     "each verified by unit tests, none by this harness"),
+    ("redaction on $lastn and SubscriptionTopic/$list",
+     "graded on reads and searches, not on these two operations"),
+    ("rate limiting, the mint gate, and purge",
+     "no probe exercises any of them, so this grade says nothing about "
+     "whether a caller can flood the API, mint a token they should not "
+     "have, or leave data behind after a delete"),
+)
+
 _ERROR_FIDELITY_GRADE_ORDER = {"F": 0, "C": 1, "A": 2}
 _MCP_INVALID_RESOURCE = "WidgetQuintaviousZzyzxbarton"
 _MCP_HOSTILE_URL = "https://db.internal.example/patient/secret"
