@@ -38,12 +38,17 @@ class _Resp:
         return self._payload
 
 
-def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A"):
+def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
+              demo_patients=1):
     def get(url, timeout, **kw):
         if url.endswith("/r6/fhir/health"):
             return _Resp(200)
         if "$conformance" in url:
             return _Resp(200, {"grade": grade})
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": f"p{i}"}}
+                for i in range(demo_patients)]})
         if "Condition" in url:
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
@@ -411,3 +416,47 @@ def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch,
     # The misdirection itself: no redeploy prescribed for an outage.
     out = capsys.readouterr().out
     assert "RELEASING.md" not in out and "auto-deploy" not in out
+
+
+# --- the demo tenant's shape (#457, catalogue §10) ---------------------------
+
+def test_a_single_patient_demo_tenant_passes():
+    """The state the demo is supposed to be in."""
+    prod_watch.run(timeout=1, expect_sha=[])
+    name = "healthclaw: the demo tenant is one patient"
+    assert _named(name) and _named(name)[0][1] is True, _named(name)
+
+
+def test_a_duplicated_demo_tenant_is_a_hard_failure(monkeypatch):
+    """19 Patients is what production actually held on 2026-08-10.
+
+    Every other check in this file passes just as well against that tenant,
+    which is why a physician advisor found it on camera instead of a machine
+    finding it a month earlier.
+
+    MUTATION: drop the demo-tenant check from run() -> red.
+    """
+    monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=19))
+    rc = prod_watch.run(timeout=1, expect_sha=[])
+
+    name = "healthclaw: the demo tenant is one patient"
+    entry = _named(name)
+    assert entry, "the demo-tenant check did not run"
+    assert entry[0][1] is False
+    assert "19" in entry[0][2]
+    assert rc == 1, "a duplicated demo tenant must be a hard failure, not a warning"
+
+
+def test_an_empty_demo_tenant_is_a_failure_not_a_pass(monkeypatch):
+    """Zero is a real failure, and a different one from "cannot read".
+
+    MUTATION: use `if patients:` instead of `is not None` -> red, because an
+    empty tenant would then be reported as an unreadable one.
+    """
+    monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=0))
+    prod_watch.run(timeout=1, expect_sha=[])
+
+    entry = _named("healthclaw: the demo tenant is one patient")
+    assert entry and entry[0][1] is False
+    assert "0 Patient(s)" in entry[0][2], (
+        f"an empty tenant must report as empty, not as unreadable: {entry}")

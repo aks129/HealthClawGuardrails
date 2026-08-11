@@ -272,6 +272,9 @@ def _prod_watch_with(payload, expect, demo_handshake=None):
     def get(url, timeout, **kw):
         if "$conformance" in url:
             return _Resp(200, {"grade": "A"})
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": "demo-1"}}]})
         if "Condition" in url:
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
@@ -310,15 +313,24 @@ TIP = "4f2a91cbeef1a9d3c05e7b21fd8460ac9e13d7f5"
 def test_a_current_build_is_counted_as_a_real_check():
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [TIP])
-    assert code == 0 and "all 11 checks passing" in out
+    # MOVED PIN 11 -> 12: prod_watch gained the demo-tenant shape check
+    # (#457, catalogue §10). The number is the point of this test — it
+    # asserts the script counts an asserted build as a real check rather
+    # than inflating the total — so it moves by exactly one here and the
+    # property is unchanged.
+    assert code == 0 and "all 12 checks passing" in out
 
 
 def test_an_unasserted_build_never_inflates_the_count():
-    # The script's honesty property. "all 10 checks passing" must stay
+    # The script's honesty property. "all 11 checks passing" must stay
     # literally true when nothing pinned the build.
+    #
+    # MOVED PIN 10 -> 11, same reason as above: one new check, and the gap
+    # between this number and the one above is still exactly one, which is
+    # the property being pinned.
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [])
-    assert code == 0 and "all 10 checks passing" in out
+    assert code == 0 and "all 11 checks passing" in out
 
 
 class _Refused:
@@ -343,7 +355,7 @@ def test_a_demo_server_that_stops_serving_keyless_callers_is_an_outage():
                                  demo_handshake=_Refused())
     assert code == 1, "a demo server refusing keyless callers must be an outage"
     assert "serves an unauthenticated handshake" in out
-    assert "all 11 checks passing" not in out
+    assert "all 12 checks passing" not in out
 
 
 @pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])
