@@ -214,6 +214,62 @@ def _fhir_get(path: str) -> dict:
     return resp.json()
 
 
+def tenant_is_world_readable(timeout: float = 5.0):
+    """Can an unauthenticated caller read this bot's tenant?
+
+    OBSERVED, not configured. The bot could mirror PUBLIC_TENANTS from its own
+    environment, but a mirror of a server-side setting is wrong exactly when
+    it matters: the bot's env says private, the server's says public, and the
+    bot cheerfully invites someone to publish their medical records. So this
+    asks the only authority — it makes the request an anonymous stranger would
+    make, and reads what comes back.
+
+    Returns True (anyone can read it), False (credentials required), or None
+    (could not tell). Callers must treat None like True. "I could not
+    determine whether your records would be public" is not a state in which
+    to pull someone's real medical history.
+    """
+    try:
+        resp = requests.get(
+            f'{FHIR_BASE_URL}/Patient',
+            params={'_count': 1},
+            headers={'X-Tenant-ID': TENANT_ID},   # no credentials, on purpose
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 — network, DNS, TLS, timeout
+        logger.warning('could not determine tenant readability: %s',
+                       type(exc).__name__)
+        return None
+    if resp.status_code == 200:
+        return True
+    if resp.status_code in (401, 403):
+        return False
+    logger.warning('unexpected status probing tenant readability: %s',
+                   resp.status_code)
+    return None
+
+
+#: Shown instead of the connect menu when the bound tenant is world-readable.
+#: Names the tenant, because "this deployment" is not something a user can act
+#: on and the tenant id is what they would quote to whoever runs it.
+CONNECT_REFUSED_PUBLIC = (
+    '🚫 *Not on this bot.*\n\n'
+    'This bot is bound to tenant `{tenant}`, and anyone can read that '
+    'tenant without signing in — I checked just now. Pulling your real '
+    'records into it would publish your medical history to whoever asks.\n\n'
+    'This is the demo bot. It is for exploring the guardrails against '
+    'synthetic records. To connect real records, use a bot bound to a '
+    'private tenant of your own.'
+)
+
+CONNECT_REFUSED_UNKNOWN = (
+    '🚫 *Not right now.*\n\n'
+    'I could not reach HealthClaw to check whether tenant `{tenant}` is '
+    'private, and I will not pull your real records into a tenant I cannot '
+    'confirm is private. Try again in a minute.'
+)
+
+
 def _get_step_up_token() -> str:
     """Fetch a fresh step-up token from the mint endpoint.
 
@@ -360,10 +416,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # the list that had just offered them. /curatr_fix now has its handler;
     # /summary is gone, because nothing implements it.
     # tests/test_bot_answers_what_it_advertises.py holds the two in sync.
+    # The second sentence here used to tell the user these were their own
+    # records, and ask them to accept the channel risk on that basis. Every
+    # clause of it was wrong on this bot: one tenant is shared by every user,
+    # and it is world-readable. Dr. Magan flagged it as reading oddly on the
+    # synthetic tenant (#459); it read oddly because it was false.
+    #
+    # The old wording is not quoted here on purpose — the test that bans it
+    # reads this file, and caught this very comment on the first draft.
+    #
+    # It was also doing consent work it could not support. /connect pulls real
+    # records into TENANT_ID, and a user who believed that sentence would have
+    # been agreeing on the strength of it. The rule three lines below —
+    # promise only controls that actually exist — applies to statements of
+    # fact just as much as to features.
     risk_line = (
         '⚠️ Heads up: chat apps aren’t encrypted medical channels. '
-        'You’re accessing your own records here; by continuing you accept '
-        'that for your own data.'
+        f'This bot reads and writes one tenant, `{TENANT_ID}`, which is '
+        'shared by everyone using it — not a private space of your own.'
     )
 
     text = (
@@ -388,8 +458,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_connect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show a menu of available health data connection options."""
+    """Show a menu of available health data connection options.
+
+    Refuses outright on a world-readable tenant. The banner tells the truth
+    now, but a banner is a sentence someone can skip; this is the half that
+    survives them skipping it (#459).
+    """
     await _log_incoming(update, 'connect')
+
+    readable = tenant_is_world_readable()
+    if readable is not False:
+        template = (CONNECT_REFUSED_PUBLIC if readable
+                    else CONNECT_REFUSED_UNKNOWN)
+        await update.message.reply_text(
+            template.format(tenant=TENANT_ID), parse_mode='Markdown')
+        return
 
     keyboard = [
         [InlineKeyboardButton(
