@@ -129,7 +129,11 @@ def _report(sites, pin, what):
 #: The fourth, `confirm`, is deliberately NOT migrated: its wire contract
 #: includes the REASON a token was refused, and the kernel's uniform
 #: OperationOutcome does not carry it. See the comment at that call site.
-_STEP_UP_CALLSITES = 16
+#: 16 -> 13: kernel slice 6 migrated the three r6/routes.py write gates —
+#: create, update and $share-bundle. Those three also carried the #478 leak:
+#: they interpolated the validator's raw reason into the response, including
+#: 'Token tenant mismatch', which the kernel withholds.
+_STEP_UP_CALLSITES = 13
 
 
 def test_direct_step_up_validation_only_decreases():
@@ -299,7 +303,10 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: record the one line and why rather than to smuggle it in. The following
 #: batches remove code from this module; this is the only batch that adds a
 #: line to it.
-_GOD_MODULE_LINES = 3931
+#: 3931 -> 3922: slice 6 replaced three nine-line hand-rolled step-up gates
+#: with a two-line require_grant call each. The module shrinks for the first
+#: time since the kernel migration began.
+_GOD_MODULE_LINES = 3922
 
 
 def test_the_god_module_only_shrinks():
