@@ -107,3 +107,67 @@ class TestProposeRoute:
                               "medication_names": ["Fentanyl patch 25 mcg"]})
         assert resp.status_code == 422
         assert resp.get_json()["refused"]
+
+
+class TestProposeStepUpGate:
+    """The step-up gate on rx-transfer propose (kernel slice 5).
+
+    Every assertion here failed to exist before the migration. Mutation
+    testing the slice found three gates whose behaviour nothing measured:
+    the Bearer fallback, and the write-scope requirement on both propose and
+    review. Each mutation left the whole suite green.
+
+    A gate nothing measures is a gate that can be removed by accident, which
+    is the defect class this refactor exists to end — so the pins land with
+    the migration rather than after it.
+    """
+
+    def _seed_med(self, client, auth_headers):
+        med = {**_med("Metformin 500 mg tablet"),
+               "subject": {"reference": "Patient/rx-test-pt"}}
+        return client.post(
+            "/r6/fhir/MedicationRequest",
+            headers={**auth_headers, "X-Human-Confirmed": "true",
+                     "Content-Type": "application/fhir+json"},
+            data=json.dumps(med))
+
+    def _body(self):
+        return json.dumps({"to_pharmacy": TO_PHARMACY,
+                           "from_pharmacy": FROM_PHARMACY})
+
+    def test_a_bearer_token_is_accepted_in_place_of_the_header(
+            self, client, auth_headers, tenant_id, step_up_token):
+        """The Authorization fallback this endpoint has always had.
+
+        MUTATION: drop also_bearer=True from require_grant -> red.
+        """
+        assert self._seed_med(client, auth_headers).status_code == 201
+        resp = client.post(
+            "/r6/actions/rx-transfer/propose",
+            headers={"X-Tenant-Id": tenant_id,
+                     "Authorization": f"Bearer {step_up_token}",
+                     "Content-Type": "application/json"},
+            data=self._body())
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_a_read_scoped_token_cannot_propose(self, client, auth_headers,
+                                                tenant_id):
+        """Persisting a ProposedAction is a write.
+
+        The endpoint's own comment says read-scoped credentials may preview
+        the refusal response but must not persist. `require_scope` defaulted
+        to 'write', so that held by accident; Scope.WRITE now says it.
+
+        MUTATION: scope=Scope.TENANT_BOUND in rx_transfer_propose -> red.
+        """
+        from r6.stepup import generate_step_up_token
+
+        assert self._seed_med(client, auth_headers).status_code == 201
+        resp = client.post(
+            "/r6/actions/rx-transfer/propose",
+            headers={"X-Tenant-Id": tenant_id,
+                     "X-Step-Up-Token": generate_step_up_token(
+                         tenant_id, scope="read"),
+                     "Content-Type": "application/json"},
+            data=self._body())
+        assert resp.status_code == 401, resp.get_data(as_text=True)

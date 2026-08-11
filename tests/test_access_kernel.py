@@ -1027,7 +1027,12 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # r6/actions/review.py imports that helper rather than
                      # the kernel, so it is not on this list — the blueprint
                      # has one tenant reader, which is the property.
-                     'r6/actions/routes.py'}
+                     'r6/actions/routes.py',
+                     # slice 5: three of the four step-up gates in this
+                     # blueprint. review.py imports the kernel directly for
+                     # _require_step_up rather than going through routes.py,
+                     # so it is named here in its own right.
+                     'r6/actions/review.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

@@ -458,3 +458,29 @@ def _nka_answer(qr):
                         if 'valueBoolean' in ans:
                             return ans['valueBoolean']
     return None
+
+
+def test_review_refuses_a_read_scoped_token(client, app, tenant_headers,
+                                            auth_headers):
+    """The review surface is where a human approves a clinical write.
+
+    `_require_step_up`'s docstring called the credential "tenant-bound",
+    but `validate_step_up_token`'s `require_scope` defaults to 'write', so
+    the code had always demanded more than the prose described. Kernel
+    slice 5 makes it Scope.WRITE and this pins the behaviour the default
+    was providing silently — swapping in Scope.TENANT_BOUND left the entire
+    suite green before this test existed.
+
+    MUTATION: scope=Scope.TENANT_BOUND in _require_step_up -> red.
+    """
+    from r6.stepup import generate_step_up_token
+
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    resp = _get(client, {
+        'X-Tenant-Id': tenant_headers['X-Tenant-Id'],
+        'X-Step-Up-Token': generate_step_up_token(
+            tenant_headers['X-Tenant-Id'], scope='read'),
+    }, action_id)
+    assert resp.status_code == 401, resp.get_data(as_text=True)
