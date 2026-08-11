@@ -346,13 +346,21 @@ class FHIRUpstreamProxy:
     """
 
     def __init__(self, upstream_url: str, local_base_url: str = '',
-                 caller_auth: bool = False):
+                 caller_auth: bool = False,
+                 basic_auth: tuple[str, str] | None = None):
         self.upstream_url = upstream_url.rstrip('/')
         self.local_base_url = local_base_url.rstrip('/')
         # True when the CALLER's own credential is forwarded upstream (SHARP
         # mode) — upstream 401/403 then belong to the caller and pass
         # through, instead of mapping to 502 (proxy-credential failure).
         self.caller_auth = caller_auth
+        # HTTP Basic to the upstream, when the upstream requires a credential
+        # of its own (Aidbox Client, HAPI behind basic auth, ...). This is the
+        # PROXY's credential, not the caller's, which is why caller_auth stays
+        # False: a 401 from upstream means OUR credential is wrong, and
+        # handing that to the caller as "re-authenticate" would send them
+        # round a loop they cannot exit. Never logged — see _redacted_auth.
+        self.basic_auth = basic_auth
         self._client = httpx.Client(
             base_url=self.upstream_url,
             timeout=_UPSTREAM_TIMEOUT,
@@ -360,6 +368,7 @@ class FHIRUpstreamProxy:
             # initial URL; following a 3xx would let a validated public host
             # redirect the server to cloud metadata / internal IPs.
             follow_redirects=False,
+            auth=basic_auth,
             headers={
                 'Accept': 'application/fhir+json, application/json',
                 'User-Agent': f'HealthClaw-Guardrails/{__version__}',
@@ -589,12 +598,51 @@ class MedplumProxy(FHIRUpstreamProxy):
 _proxy_instance: FHIRUpstreamProxy | None = None
 
 
+def _upstream_basic_auth() -> tuple[str, str] | None:
+    """The proxy's own HTTP Basic credential for the upstream, or None.
+
+    Aidbox, and most FHIR servers that are not public sandboxes, refuse an
+    anonymous request. Before this existed, `FHIR_UPSTREAM_URL` sent no
+    credential at all, so "a proxy in front of any FHIR server" was true only
+    of servers that needed no credential — the sandboxes it was tested
+    against. Every secured upstream answered 401, which the sanitizer then
+    correctly reported as a 502.
+
+    HALF-CONFIGURED IS AN ERROR, AND IT SAYS SO. A typo in one of the two
+    variable names would otherwise fall back to anonymous, and anonymous
+    against a secured upstream is a wall of 502s whose cause is nowhere in
+    the logs. Configuration that is half-present is more likely a mistake
+    than an intention, so it is named at ERROR and the credential is not
+    attached — the request still fails, but the reason is on the first line
+    of the log instead of being inferred from a status code.
+
+    The secret is never logged, here or anywhere else in this module.
+    """
+    client_id = os.environ.get('FHIR_UPSTREAM_CLIENT_ID', '').strip()
+    client_secret = os.environ.get('FHIR_UPSTREAM_CLIENT_SECRET', '').strip()
+    if client_id and client_secret:
+        logger.info('FHIR upstream proxy: authenticating as client %r',
+                    client_id)
+        return (client_id, client_secret)
+    if client_id or client_secret:
+        missing = ('FHIR_UPSTREAM_CLIENT_SECRET' if client_id
+                   else 'FHIR_UPSTREAM_CLIENT_ID')
+        logger.error(
+            'FHIR upstream proxy: %s is set but %s is not — connecting '
+            'ANONYMOUSLY. A secured upstream will refuse every request.',
+            'FHIR_UPSTREAM_CLIENT_ID' if client_id
+            else 'FHIR_UPSTREAM_CLIENT_SECRET',
+            missing)
+    return None
+
+
 def get_proxy() -> FHIRUpstreamProxy | None:
     """
     Return the proxy singleton, or None if no upstream is configured.
 
     Priority:
-      1. FHIR_UPSTREAM_URL — generic upstream proxy (no auth)
+      1. FHIR_UPSTREAM_URL — generic upstream proxy (optional HTTP Basic via
+         FHIR_UPSTREAM_CLIENT_ID + FHIR_UPSTREAM_CLIENT_SECRET)
       2. MEDPLUM_BASE_URL  — Medplum proxy (OAuth2 client-credentials)
     """
     global _proxy_instance
@@ -605,7 +653,8 @@ def get_proxy() -> FHIRUpstreamProxy | None:
 
     upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()
     if upstream_url:
-        _proxy_instance = FHIRUpstreamProxy(upstream_url, local_base)
+        _proxy_instance = FHIRUpstreamProxy(
+            upstream_url, local_base, basic_auth=_upstream_basic_auth())
         return _proxy_instance
 
     medplum_url = os.environ.get('MEDPLUM_BASE_URL', '').strip()
