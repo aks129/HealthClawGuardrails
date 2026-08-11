@@ -62,11 +62,6 @@ _UPLOAD_MIME_TYPES = frozenset({
     "application/json+fhir",
 })
 
-# In-memory conversation bounds. Each worker caches the chats it serves, so
-# these cap memory and keep a long-running process from degrading (#218).
-MAX_LIVE_CONVERSATIONS = 200
-CONVERSATION_IDLE_SECONDS = 6 * 3600
-
 _BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
 
 
