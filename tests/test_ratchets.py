@@ -133,7 +133,11 @@ def _report(sites, pin, what):
 #: create, update and $share-bundle. Those three also carried the #478 leak:
 #: they interpolated the validator's raw reason into the response, including
 #: 'Token tenant mismatch', which the kernel withholds.
-_STEP_UP_CALLSITES = 13
+#: 13 -> 12: slice 5d took the actions `confirm` gate, the one slice 5 left
+#: behind. It was blocked on whether a refusal may state its reason; the
+#: owner ruled yes (#475), so the three reasons its contract pins survive
+#: the kernel.
+_STEP_UP_CALLSITES = 12
 
 
 def test_direct_step_up_validation_only_decreases():

@@ -492,34 +492,29 @@ def confirm_action(action_id):
         return _error(400, 'approved_via must be one of: %s'
                       % ', '.join(APPROVED_VIA_VALUES))
 
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _error(401, 'Action confirm requires X-Step-Up-Token header')
-    # NOT MIGRATED, deliberately (kernel slice 5).
-    #
-    # This endpoint's wire contract includes the REASON a token was refused:
-    # tests/actions/test_confirm_is_commit.py pins 'already used (replay)',
-    # 'audience mismatch' and 'operation mismatch' in the response body. The
-    # kernel renders one uniform OperationOutcome and logs the specific
-    # reason rather than returning it, so migrating this site would drop
-    # three deliberately-pinned diagnostics.
-    #
-    # Protocol rule 4: a behaviour change is a failure, not a merge conflict,
-    # and the fix is never to edit the test to match. Whether a step-up
-    # refusal should tell the caller WHY is an owner decision (spec Open
-    # Question 1's neighbour), so it gets its own slice and its own ruling.
+    # Access kernel, slice 5d. Slice 5 left this gate behind because the
+    # kernel collapsed every refusal into 'Invalid step-up token' and this
+    # endpoint's contract names the cause. The owner ruled on 2026-08-10 —
+    # always tell why — so the three reasons this contract pins ('already
+    # used (replay)', 'audience mismatch', 'operation mismatch') now survive
+    # the kernel. The one reason it withholds, 'Token tenant mismatch', was
+    # never part of this contract.
     #
     # consume_nonce: the action-bound confirm token is a SINGLE-USE execution
     # credential (spec v3). Commit uses a separate generic write token;
     # only the human's Approve surface can mint this credential, and confirm
-    # spends it so a captured token cannot authorize another execution.
-    valid, err = validate_step_up_token(
-        step_up_token, tenant_id, consume_nonce=True,
-        require_audience=ACTION_APPROVAL_AUDIENCE,
-        require_operation=action_id,
+    # spends it so a captured token cannot authorize another execution. It
+    # stays behind the body validation above so a 400 on a malformed request
+    # does not burn the credential.
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        audience=ACTION_APPROVAL_AUDIENCE,
+        operation=action_id,
+        consume_nonce=True,
+        absent_status=401,
+        rejected_status=401,
     )
-    if not valid:
-        return _error(401, 'Step-up token rejected: %s' % err)
 
     # (a) Load, tenant-scoped.
     action = ProposedAction.query.filter_by(
