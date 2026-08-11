@@ -60,11 +60,16 @@
   <div class="cf-prov">
     <div class="cf-prov__cell">
       <div class="cf-prov__k">Measured against</div>
-      <div class="cf-prov__v">{{ report.target or snapshot.origin }}</div>
+      {# NOT report.target. That field says 'local(test-client)' because the
+         harness drives the app in-process, which is true and useless once the
+         report crosses a host boundary: healthclaw.io rendered "measured
+         against local(test-client)", local to a machine the reader cannot
+         identify. The deployment is the fact a reader needs. #}
+      <div class="cf-prov__v">{{ snapshot.origin if snapshot.remote else 'this deployment' }}</div>
     </div>
     <div class="cf-prov__cell">
-      <div class="cf-prov__k">Reported by</div>
-      <div class="cf-prov__v">{{ snapshot.origin }}</div>
+      <div class="cf-prov__k">This page</div>
+      <div class="cf-prov__v">{{ 'fetched that report' if snapshot.remote else 'ran the report itself' }}</div>
     </div>
     <div class="cf-prov__cell">
       <div class="cf-prov__k">Tenant</div>
