@@ -336,7 +336,10 @@ def test_the_god_module_only_shrinks():
 #: Call sites that read the tenant straight off the header instead of asking
 #: the access kernel, across all of r6/. 31 -> 27 -> 9: slice 10a took create,
 #: read, update and search; slice 10b took the remaining seventeen in
-#: r6/routes.py.
+#: r6/routes.py. 9 -> 5: slice 11a took the four MCP App pages, the first
+#: multi-source sites and the first ones NOT protected by the paragraph below
+#: — they sit on the exempt /mcp-apps/ prefix, so absence is real there and
+#: is caught rather than raised.
 #:
 #: Every one of the seventeen was checked against the exempt-path list before
 #: it moved, by walking each read back to the route decorator that owns it.
@@ -373,7 +376,7 @@ def test_the_god_module_only_shrinks():
 #: behaviour change, not a refactor. Check _is_exempt_discovery_path before
 #: moving a call site, per site — that is the whole reason this is 6 PRs and
 #: not one sed.
-_RAW_TENANT_READS = 9
+_RAW_TENANT_READS = 5
 
 
 def test_raw_tenant_header_reads_only_decrease():
