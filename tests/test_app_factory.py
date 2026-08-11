@@ -56,12 +56,10 @@ def test_import_and_factory_construction_do_not_run_lifecycle_actions():
 from unittest.mock import patch
 from models import db
 import r6.fasten.reaper
-import r6.schema_sync
 import r6.wearables.poller
 
 with (
     patch.object(db, 'create_all') as create_all,
-    patch.object(r6.schema_sync, 'reconcile_schema') as reconcile_schema,
     patch.object(r6.fasten.reaper, 'reap_zombie_jobs') as reap_zombie_jobs,
     patch.object(r6.wearables.poller, 'start_poller') as start_poller,
 ):
@@ -69,7 +67,7 @@ with (
     another_app = main.create_app({'TESTING': True})
 
 assert another_app is not main.app
-for mocked in (create_all, reconcile_schema, reap_zombie_jobs, start_poller):
+for mocked in (create_all, reap_zombie_jobs, start_poller):
     assert mocked.call_count == 0, mocked.mock_calls
 """
     result = _run_python(code)

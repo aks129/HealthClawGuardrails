@@ -12,9 +12,7 @@ length, so every column that stores an EXTERNAL id must be at least 255.
 tenant_id is internally generated and intentionally stays at 64 — it is NOT
 in the external-id set below.
 """
-from types import SimpleNamespace
 
-from sqlalchemy import Column, MetaData, String, Table
 
 from r6.fasten.models import FastenConnection, FastenJob
 
@@ -62,57 +60,4 @@ class _FakeConn:
         return False
 
 
-class _FakeEngine:
-    """Just enough engine for reconcile_schema's widen path."""
-    dialect = SimpleNamespace(name='postgresql')
 
-    def __init__(self):
-        self.executed = []
-
-    def begin(self):
-        return _FakeConn(self.executed)
-
-
-class _FakeInspector:
-    def __init__(self, tables):
-        self._tables = tables
-
-    def get_table_names(self):
-        return list(self._tables)
-
-    def get_columns(self, name):
-        return self._tables[name]
-
-
-def test_schema_sync_widens_primary_key_columns(monkeypatch):
-    """schema_sync's auto-widen must NOT exclude PK columns.
-
-    fasten_connections.org_connection_id is a PRIMARY KEY; widening a
-    varchar PK on Postgres is still a plain online type widen. If
-    reconcile_schema ever skipped PKs, the model widen would never reach
-    long-lived deployments and long Fasten ids would truncation-error.
-    """
-    import r6.schema_sync as schema_sync
-
-    md = MetaData()
-    Table('fasten_connections_pk_probe', md,
-          Column('org_connection_id', String(EXTERNAL_ID_MIN_WIDTH),
-                 primary_key=True))
-    live = {'fasten_connections_pk_probe': [
-        {'name': 'org_connection_id', 'type': String(64)},
-    ]}
-    monkeypatch.setattr(schema_sync, 'inspect',
-                        lambda engine: _FakeInspector(live))
-
-    engine = _FakeEngine()
-    added = schema_sync.reconcile_schema(engine, md)
-
-    expected = (
-        'ALTER TABLE fasten_connections_pk_probe '
-        f'ALTER COLUMN org_connection_id TYPE VARCHAR({EXTERNAL_ID_MIN_WIDTH})'
-    )
-    assert expected in added, (
-        'reconcile_schema did not widen a PRIMARY KEY column — PK columns '
-        f'must not be excluded from auto-widen. Executed: {added}'
-    )
-    assert expected in engine.executed
