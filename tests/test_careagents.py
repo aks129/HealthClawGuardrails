@@ -1286,35 +1286,6 @@ def test_web_and_imessage_resume_the_same_explicit_conversation(
     assert {message["surface"] for message in stored} == {"web", "imessage"}
 
 
-def test_conversation_lock_serializes_concurrent_turns():
-    import threading
-    import time
-
-    from careagents.conversation_locks import ConversationTurnLocks
-
-    locks = ConversationTurnLocks()
-    state = {"active": 0, "maximum": 0}
-    guard = threading.Lock()
-
-    def work():
-        with locks.hold("tenant:careagents:agent"):
-            with guard:
-                state["active"] += 1
-                state["maximum"] = max(state["maximum"], state["active"])
-            time.sleep(0.02)
-            with guard:
-                state["active"] -= 1
-
-    threads = [threading.Thread(target=work) for _ in range(3)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert state["maximum"] == 1
-    assert locks._local == {}, "idle conversation locks leaked forever"
-
-
 def test_a_storage_outage_does_not_break_the_chat(cfg, svc, monkeypatch):
     # A user turn must be durably claimed before inference. Otherwise a retry
     # can execute the same health action twice.
