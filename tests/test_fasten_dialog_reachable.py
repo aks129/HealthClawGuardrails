@@ -150,20 +150,33 @@ def test_the_close_control_meets_the_tap_target_minimum():
         'the close control is shorter than the 44px minimum in design.md')
 
 
-def test_the_dashboard_stitch_container_does_not_clip_its_dialog():
-    """MUTATION: put `overflow: hidden` back on .stitch-container -> red.
+def test_no_template_embeds_the_raw_stitch_web_component():
+    """MUTATION: add a live <fasten-stitch-element> to any template -> red.
 
-    <fasten-stitch-element> renders its consent dialog inside this element, so
-    clipping it for a rounded corner hides the checkbox and Continue button.
+    This pin MOVED rather than being deleted, and what it guards changed with
+    it. It used to check that /r6-dashboard's #stitch-container did not clip
+    its own consent dialog. That container is gone — /r6-dashboard is a
+    conformance report now — and the panel it lived in was the weaker of the
+    two Fasten embeds anyway: it was not bound to a tenant, while
+    /connect/<tenant_id> is.
+
+    The surviving embed does NOT use the web component. It renders the widget
+    in an iframe inside a scrolling wrapper, because iOS and iPadOS expand an
+    iframe to its content height and refuse to scroll it internally — the
+    reasoning is written up beside .fasten-modal-body, and the five tests
+    above pin it. The raw <fasten-stitch-element> is the shape that had the
+    clipping bug and has none of that handling, so bringing one back is a
+    regression even on a page nobody has looked at yet.
+
+    Escaped occurrences in documentation (wiki.html shows the tag as sample
+    markup with &lt;) are not embeds and do not match.
     """
-    css = DASHBOARD_CSS.read_text(encoding='utf-8')
-    match = re.search(r'\.stitch-container\s*\{(.*?)\}', css, re.S)
-    assert match, '.stitch-container rule not found in r6-dashboard.css'
-    assert 'overflow: hidden' not in match.group(1), (
-        '.stitch-container clips its own child dialog again')
-
-    html = DASHBOARD_HTML.read_text(encoding='utf-8')
-    container = re.search(r'<div id="stitch-container"[^>]*>', html)
-    assert container, 'stitch-container element not found'
-    assert 'overflow:hidden' not in container.group(0).replace(' ', ''), (
-        'the clip came back as an inline style, which beats the stylesheet')
+    offenders = sorted(
+        p.relative_to(REPO_ROOT).as_posix()
+        for p in (REPO_ROOT / 'templates').rglob('*.html')
+        if '<fasten-stitch-element' in p.read_text(encoding='utf-8')
+    )
+    assert offenders == [], (
+        'the Stitch web component is embedded live in '
+        f'{offenders}; the supported embed is the iframe on '
+        'templates/fasten_connect.html, which handles the iOS scroll case')

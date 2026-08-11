@@ -1,679 +1,299 @@
-{% extends "base.html" %}
+{# ═══════════════════════════════════════════════════════════════════════════
+   /r6-dashboard — the live guardrail measurement.
 
-{% block title %}Health Data Dashboard (FHIR) — HealthClaw Guardrails{% endblock %}
+   What this replaced: fifteen panels of buttons, each POSTing to /r6/… , plus
+   a "Security Posture" panel of nine hand-written rows reading Enforced /
+   Required / Immutable beside green checkmarks. Two things were wrong with
+   that page and only one of them was visible.
+
+   1. The nine rows were prose. No test could fail them. They are
+      docs/defect-catalogue.md §1 — a reassuring word doing a check's job —
+      on the most-linked page the project has.
+   2. Every button was dead where the page is served. healthclaw.io runs on
+      Vercel with ephemeral storage, and api/index.py refuses mutating
+      requests to /r6/ with 405. "Run 6-Step Guardrail Demo" POSTs to
+      /r6/demo/agent-loop. Anyone who clicked it on the public site got a 405.
+
+   So the page now shows the measurement instead of claiming the result, and
+   states plainly which host it is on and what that host can do.
+
+   Division of labour with /security: that page is the prose posture and
+   deliberately prints no grade, because a copied number goes stale and a
+   stale copy always reads as the better one. This page prints one because it
+   is not a copy — it renders the endpoint's own output at request time and
+   shows when the run happened and where it came from.
+   ═══════════════════════════════════════════════════════════════════════════ #}
+{% extends "base.html" %}
+{% block surface %}surface-paper{% endblock %}
+{% block bstheme %}light{% endblock %}
+
+{% block title %}Guardrail conformance — live report — HealthClaw{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/r6-dashboard.css') }}">
-{% if fasten_public_key %}
-<link rel="stylesheet" href="https://stitch.fastenhealth.com/v0.4/bundle.css">
-{% endif %}
+<meta name="description" content="The live guardrail conformance report for a running HealthClaw deployment: seven properties, every named check, what each probe observed, and what the grade does not cover.">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/conformance.css') }}">
 {% endblock %}
+
+{% block mainclass %}wrap{% endblock %}
 
 {% block content %}
-<!-- Hero -->
-<div class="r6-hero" style="margin: -1.5rem -12px 1.5rem; padding-left: 1.5rem; padding-right: 1.5rem;">
-  <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+{% set report = snapshot.report %}
+
+<header class="cf-mast">
+  <div class="cf-mast__eyebrow">
+    <span>Guardrail conformance</span>
+    <span>·</span>
+    <span>Live self-test</span>
+  </div>
+  {# No hard break. It set the desktop rag nicely and produced a four-line
+     heading with a one-word last line on a phone; text-wrap: balance handles
+     both widths. #}
+  <h1 class="cf-mast__title">What the guardrails actually did, the last time anyone checked</h1>
+  <p class="cf-mast__deck">
+    A probe creates a synthetic patient, drives real requests through the
+    running stack, and records what comes back. Every line below is something
+    it <strong>observed</strong>. Nothing here is asserted by hand, and the
+    failures are printed at the same weight as the passes.
+  </p>
+
+  {% if snapshot.measured %}
+  <div class="cf-prov">
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Measured against</div>
+      <div class="cf-prov__v">{{ report.target or snapshot.origin }}</div>
+    </div>
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Reported by</div>
+      <div class="cf-prov__v">{{ snapshot.origin }}</div>
+    </div>
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Tenant</div>
+      <div class="cf-prov__v">{{ report.tenant or '—' }}</div>
+    </div>
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Run at (UTC)</div>
+      {# Absent when the reporting deployment predates the measured_at stamp.
+         Saying so beats printing a plausible time nobody measured. #}
+      <div class="cf-prov__v">{{ report.measured_at or 'not stamped' }}</div>
+    </div>
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Served from</div>
+      <div class="cf-prov__v">{{ 'cache (10 min TTL)' if report.cached else 'a fresh run' }}</div>
+    </div>
+    <div class="cf-prov__cell">
+      <div class="cf-prov__k">Source</div>
+      <div class="cf-prov__v"><a href="/r6/fhir/$conformance">/r6/fhir/$conformance</a></div>
+    </div>
+  </div>
+  {% endif %}
+</header>
+
+{% if snapshot.measured %}
+<section class="cf-verdict" aria-label="Result">
+  <div>
+    <div class="cf-grade {{ '' if report.passed else 'cf-grade--fail' }}">{{ report.grade }}</div>
+    <span class="cf-grade__cap">Grade</span>
+  </div>
+  <div class="cf-figures">
     <div>
-      <h1><i class="fas fa-shield-alt me-2" style="color:var(--r6-primary)"></i>MCP Guardrail Patterns for Healthcare AI</h1>
-      <p class="lead mb-0">How tenant isolation, access control, audit trails, and human-in-the-loop work together when AI agents access clinical data through FHIR R6 + MCP</p>
+      <span class="cf-fig__n">{{ summary.properties_passed }}/{{ summary.properties_total }}</span>
+      <span class="cf-fig__l">Properties passed</span>
     </div>
-    <div class="d-flex gap-2">
-      <button class="r6-btn r6-btn-primary" onclick="startWalkthrough()">
-        <i class="fas fa-play"></i> Run Full Demo
-      </button>
-      <button class="r6-btn r6-btn-outline" onclick="loadSystemHealth()">
-        <i class="fas fa-sync"></i> Refresh
-      </button>
+    <div>
+      <span class="cf-fig__n">{{ summary.checks_total }}</span>
+      <span class="cf-fig__l">Individual checks run</span>
     </div>
-  </div>
-</div>
-
-<!-- Walkthrough Bar (hidden until activated) -->
-<div id="walkthrough-bar" class="r6-walkthrough-bar" style="display:none">
-  <i class="fas fa-magic"></i>
-  <span class="step-counter">1/6</span>
-  <span class="step-text">Loading...</span>
-  <button class="r6-btn r6-btn-sm r6-btn-outline" onclick="document.getElementById('walkthrough-bar').style.display='none'; walkthroughIdx=99;" style="border-color:white;color:white">Stop</button>
-</div>
-
-<!-- Stat Cards -->
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-status"><span class="r6-spinner"></span></div>
-      <div class="stat-label">Status</div>
+    <div>
+      <span class="cf-fig__n {{ 'cf-fig__n--fail' if summary.checks_failed }}">{{ summary.checks_failed }}</span>
+      <span class="cf-fig__l">Checks failed</span>
+    </div>
+    <div>
+      <span class="cf-fig__n {{ 'cf-fig__n--warn' if summary.partial_coverage }}">{{ summary.partial_coverage | length }}</span>
+      <span class="cf-fig__l">Properties graded on partial coverage</span>
     </div>
   </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-version">—</div>
-      <div class="stat-label">Version</div>
-    </div>
-  </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-fhir">—</div>
-      <div class="stat-label">FHIR Version</div>
-    </div>
-  </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-resources">—</div>
-      <div class="stat-label">Resource Types</div>
-    </div>
-  </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-operations">—</div>
-      <div class="stat-label">Operations</div>
-    </div>
-  </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-mode">—</div>
-      <div class="stat-label">Data Source</div>
-    </div>
-  </div>
-  <div class="col-6 col-md">
-    <div class="stat-card">
-      <div class="stat-value" id="stat-audits">0</div>
-      <div class="stat-label">Audit Events</div>
-    </div>
-  </div>
-</div>
+</section>
 
-<div class="row">
-  <!-- Left Column: Interactive Panels -->
-  <div class="col-lg-8">
+{% if writes_here %}
+{# The page's only control, and it exists only where it works. On the
+   read-only host a re-run button would return 405 — which is precisely the
+   defect this rebuild removed, so it is not rendered there at all. #}
+<p>
+  <a class="cf-rerun" href="{{ url_for('r6_dashboard', fresh=1) }}">Run a fresh check now</a>
+  <span class="cf-rerun__note">
+    Re-runs the harness against this deployment instead of serving the cached
+    result. Takes a second or two.
+  </span>
+</p>
+{% endif %}
+{% else %}
+{# The state this page exists to get right. An empty report rendered as a
+   blank scorecard reads as a clean bill of health — "examined nothing" and
+   "found nothing" have to look different (docs/defect-catalogue.md §0). #}
+<section class="cf-unmeasured" role="status">
+  <h2 class="cf-unmeasured__h">No measurement. This is not a pass.</h2>
+  <p class="cf-unmeasured__b">
+    The report could not be obtained, so this page has nothing to show you and
+    will not imply otherwise. An empty scorecard is not a clean one. Until
+    this section is replaced by a grade, treat every guardrail claim about
+    this deployment as unverified.
+  </p>
+  <p class="cf-unmeasured__d">{{ snapshot.error }}</p>
+</section>
+{% endif %}
 
-    <!-- Killer Demo Loop -->
-    <div class="r6-panel" id="demo-loop-panel" style="border-color: var(--r6-primary); box-shadow: 0 0 30px rgba(99, 102, 241, 0.2);">
-      <div class="r6-panel-header" style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); border-bottom-color: var(--r6-primary);">
-        <i class="fas fa-bolt" style="color: #fbbf24; font-size: 1.2rem;"></i>
-        <h3 style="color: #fbbf24;">Agent Guardrail Sequence</h3>
-        <span class="r6-tag r6-tag-write" style="margin-left: auto;">LIVE DEMO</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
-          Watch an AI agent attempt to write clinical data through <strong>6 security guardrails</strong> in 60 seconds.
-          Each step demonstrates a real pattern: PHI redaction, $validate, Permission $evaluate (deny then permit),
-          HMAC step-up auth, human-in-the-loop, and immutable audit trail.
-        </p>
-        <button class="r6-btn r6-btn-primary" id="btn-demo-loop" onclick="runDemoLoop()" style="font-size:0.9rem;padding:0.6rem 1.5rem;">
-          <i class="fas fa-play"></i> Run 6-Step Guardrail Demo
-        </button>
+{% if snapshot.measured %}
+<section class="cf-sec">
+  <div class="cf-sec__n">The results</div>
+  <h2 class="cf-sec__h">Seven properties, {{ summary.checks_total }} checks</h2>
+  <p class="cf-sec__lede">
+    Open a property to see every check inside it and what the probe observed.
+    The bars are one mark per check, so a property resting on two probes looks
+    thinner than one resting on seventeen. It is thinner.
+    <a href="{{ url_for('security') }}">What each property means →</a>
+  </p>
 
-        <!-- Step progress tracker -->
-        <div id="demo-steps" style="margin-top:1.25rem;display:none">
-          <div class="demo-step" data-step="1">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">1. Read Patient Record</div>
-              <div class="demo-step-subtitle">PHI redaction applied</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="2">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">2. Propose Clinical Observation</div>
-              <div class="demo-step-subtitle">$validate gate</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="3">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">3. Permission $evaluate</div>
-              <div class="demo-step-subtitle">Access DENIED (default deny)</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="4">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">4. Create Permit Rule + Re-evaluate</div>
-              <div class="demo-step-subtitle">Access GRANTED with reasoning</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="5">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">5. Step-up Auth + Human Gate</div>
-              <div class="demo-step-subtitle">HMAC token + X-Human-Confirmed</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="6">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">6. Commit Write + Audit Trail</div>
-              <div class="demo-step-subtitle">Immutable record of every step</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Step detail output -->
-        <div id="demo-step-detail" class="r6-json-output mt-3" style="display:none;max-height:500px"></div>
-      </div>
-    </div>
-
-    <!-- Patient Explorer -->
-    <div class="r6-panel" id="patient-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-user-injured"></i>
-        <h3>Patient Explorer</h3>
-        <span class="r6-tag r6-tag-read">Read/Write</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Create a sample patient, read it back with PHI redaction, and search. Identifiers are masked, addresses stripped, telecom redacted.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-load-patient" onclick="loadSamplePatient()">
-            <i class="fas fa-plus"></i> Create + Read Patient
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-search-patients" onclick="searchPatients()">
-            <i class="fas fa-search"></i> Search All
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-patient-count" onclick="searchPatientCount()">
-            <i class="fas fa-hashtag"></i> _summary=count
-          </button>
-          <span style="font-size:0.78rem;color:var(--r6-text-muted);align-self:center">ETag: <code id="patient-etag">—</code></span>
-        </div>
-        <div class="r6-json-output" id="patient-result"></div>
-      </div>
-    </div>
-
-    <!-- Agent Tool Loop -->
-    <div class="r6-panel" id="tools-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-robot"></i>
-        <h3>MCP Agent Tool Loop</h3>
-        <span class="r6-tag r6-tag-clinical">MCP</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Select a tool, provide input, and execute. Read tools require no step-up; write tools require HMAC authorization. All emit AuditEvents.
-        </p>
-        <div class="row">
-          <div class="col-md-4">
-            <div id="tool-cards"></div>
-          </div>
-          <div class="col-md-8">
-            <div class="mb-2">
-              <label style="font-size:0.78rem;color:var(--r6-text-muted)">Selected: <strong id="selected-tool">—</strong></label>
-            </div>
-            <textarea class="r6-input" id="tool-input" rows="6" placeholder="Tool input (JSON)...">{}</textarea>
-            <div class="d-flex gap-2 mt-2">
-              <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-exec-tool" onclick="executeSelectedTool()">
-                <i class="fas fa-play"></i> Execute Tool
-              </button>
-            </div>
-            <div class="r6-json-output mt-3" id="tool-result"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Context Builder -->
-    <div class="r6-panel" id="context-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-layer-group"></i>
-        <h3>Context Envelope Builder</h3>
-        <span class="r6-tag r6-tag-read">Bundle</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Ingest a patient-centric Bundle to build a bounded context envelope (TTL 30 min). The envelope provides a policy-stamped, time-limited view for agent context windows.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-success r6-btn-sm" id="btn-ingest" onclick="ingestDemoBundle()">
-            <i class="fas fa-file-import"></i> Ingest Demo Bundle
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-get-context" onclick="retrieveContext()">
-            <i class="fas fa-eye"></i> Retrieve Context
-          </button>
-          <span style="font-size:0.78rem;color:var(--r6-text-muted);align-self:center">Context: <code id="last-context-id">—</code></span>
-        </div>
-        <div class="r6-json-output" id="context-result"></div>
-      </div>
-    </div>
-
-    <!-- De-identification -->
-    <div class="r6-panel" id="deid-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-user-secret"></i>
-        <h3>De-identification Preview</h3>
-        <span class="r6-tag r6-tag-security">PHI</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Side-by-side comparison: standard redacted read vs. full Safe Harbor de-identification (45 CFR 164.514(b)). Names, IDs, addresses, dates generalized to year.
-        </p>
-        <button class="r6-btn r6-btn-danger r6-btn-sm mb-3" id="btn-deidentify" onclick="runDeidentify()">
-          <i class="fas fa-mask"></i> De-identify Patient
-        </button>
-        <div class="deid-compare">
-          <div class="deid-side">
-            <div class="deid-label deid-label-raw">Standard Redaction</div>
-            <div class="r6-json-output" id="deid-raw" style="max-height:300px"></div>
-          </div>
-          <div class="deid-side">
-            <div class="deid-label deid-label-safe">De-identified Preview</div>
-            <div class="r6-json-output" id="deid-safe" style="max-height:300px"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Human-in-the-Loop -->
-    <div class="r6-panel" id="hitl-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-hand-paper"></i>
-        <h3>Human-in-the-Loop Enforcement</h3>
-        <span class="r6-tag r6-tag-clinical">Clinical Safety</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Clinical writes (Observation, Condition, etc.) require <code>X-Human-Confirmed: true</code> header. Without it, the server returns HTTP 428 Precondition Required. This prevents autonomous agent writes to clinical data without human review.
-        </p>
-        <button class="r6-btn r6-btn-primary r6-btn-sm mb-3" id="btn-hitl-demo" onclick="demoHumanInLoop()">
-          <i class="fas fa-vial"></i> Run HITL Demo (2 steps)
-        </button>
-        <div class="r6-json-output" id="hitl-result"></div>
-      </div>
-    </div>
-
-    <!-- OAuth 2.1 + PKCE -->
-    <div class="r6-panel" id="oauth-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-shield-alt"></i>
-        <h3>OAuth 2.1 + PKCE Flow</h3>
-        <span class="r6-tag r6-tag-security">Security</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Full OAuth 2.1 flow: Dynamic client registration (RFC 7591), Authorization with PKCE S256, Token exchange, and Revocation (RFC 7009). SMART-on-FHIR v2 compatible.
-        </p>
-        <button class="r6-btn r6-btn-primary r6-btn-sm mb-3" id="btn-oauth-demo" onclick="demoOAuthFlow()">
-          <i class="fas fa-lock"></i> Run OAuth Flow (4 steps)
-        </button>
-        <div class="r6-json-output" id="oauth-result"></div>
-      </div>
-    </div>
-
-    <!-- R6 Ballot Resources & Operations -->
-    <div class="r6-panel" id="phase2-header" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 1px solid var(--r6-primary);">
-      <div class="r6-panel-header" style="border-bottom-color: var(--r6-primary);">
-        <i class="fas fa-flask" style="color: var(--r6-primary)"></i>
-        <h3 style="color: var(--r6-primary)">R6 Ballot Resources &amp; Operations</h3>
-        <span class="r6-tag r6-tag-write">BALLOT</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.5rem">
-          Resources new or restructured in R6 (v6.0.0-ballot3): <strong>Permission</strong> (access control, separate from Consent),
-          <strong>SubscriptionTopic</strong> (restructured pub/sub), <strong>NutritionIntake</strong>, <strong>DeviceAlert</strong>.
-          Operations <code>$stats</code> and <code>$lastn</code> are standard FHIR operations (available since R4) demonstrated here with stored data.
-        </p>
-        <p style="color:var(--r6-text-muted);font-size:0.78rem;margin-bottom:0">
-          <strong>Scope:</strong> This is a reference implementation for exploring R6 ballot resources and MCP guardrail patterns &mdash; not a production FHIR server.
-          Validation is structural only (required fields + value constraints). Search supports code, status, patient, and _lastUpdated parameters.
-        </p>
-      </div>
-    </div>
-
-    <!-- Phase 2: Permission (R6 Access Control) -->
-    <div class="r6-panel" id="permission-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-user-shield"></i>
-        <h3>R6 Permission — Access Control</h3>
-        <span class="r6-tag r6-tag-security">R6 NEW</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          R6 separates <strong>Permission</strong> (machine-readable access rules) from <strong>Consent</strong> (patient agreements).
-          Permission encodes attribute-based access control with deny-overrides/permit-overrides combining.
-          Create a Permission, then evaluate access decisions via <code>$evaluate</code>.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-create-permission" onclick="createDemoPermission()">
-            <i class="fas fa-plus"></i> Create Permission
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-eval-permission" onclick="evaluatePermission()">
-            <i class="fas fa-gavel"></i> $evaluate Access
-          </button>
-        </div>
-        <div class="r6-json-output" id="permission-result"></div>
-      </div>
-    </div>
-
-    <!-- Phase 2: Observation $stats / $lastn -->
-    <div class="r6-panel" id="stats-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-chart-bar"></i>
-        <h3>Observation $stats &amp; $lastn</h3>
-        <span class="r6-tag r6-tag-read">FHIR Std</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Standard FHIR operations (available since R4): <code>$stats</code> computes min/max/mean/count over stored numeric Observation values,
-          <code>$lastn</code> returns the most recent observations per code. Both support patient + code filtering.
-          Implementation limited to <code>valueQuantity</code> (numeric observations only).
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-success r6-btn-sm" id="btn-seed-obs" onclick="seedObservations()">
-            <i class="fas fa-database"></i> Seed Observations
-          </button>
-          <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-run-stats" onclick="runObsStats()">
-            <i class="fas fa-chart-bar"></i> $stats
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-run-lastn" onclick="runObsLastN()">
-            <i class="fas fa-history"></i> $lastn
-          </button>
-        </div>
-        <div class="r6-json-output" id="stats-result"></div>
-      </div>
-    </div>
-
-    <!-- Phase 2: SubscriptionTopic -->
-    <div class="r6-panel" id="subscription-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-bell"></i>
-        <h3>Topic-Based Subscriptions</h3>
-        <span class="r6-tag r6-tag-clinical">R6 Ballot</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          R6 restructures Subscription around <strong>SubscriptionTopic</strong> (introduced in R5, maturing in R6).
-          Topics define triggerable events. This demo stores topics and subscriptions but does <strong>not</strong> dispatch notifications &mdash;
-          it demonstrates the resource model and discovery pattern only.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-create-topic" onclick="createDemoTopic()">
-            <i class="fas fa-plus"></i> Create Topic
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-list-topics" onclick="listTopics()">
-            <i class="fas fa-list"></i> $list Topics
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-create-subscription" onclick="createDemoSubscription()">
-            <i class="fas fa-bell"></i> Subscribe
-          </button>
-        </div>
-        <div class="r6-json-output" id="subscription-result"></div>
-      </div>
-    </div>
-
-    <!-- Phase 2: NutritionIntake + DeviceAlert -->
-    <div class="r6-panel" id="r6resources-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-utensils"></i>
-        <h3>R6 New Resources</h3>
-        <span class="r6-tag r6-tag-write">R6 Core</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          <strong>NutritionIntake</strong>: Records food/liquid/supplement consumption (hospitals, meal tracking, school districts).
-          <strong>DeviceAlert</strong>: Medical device alert/alarm conditions aligned with ISO/IEEE 11073 and IEC 60601-1-8.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-primary r6-btn-sm" id="btn-create-nutrition" onclick="createNutritionIntake()">
-            <i class="fas fa-utensils"></i> Create NutritionIntake
-          </button>
-          <button class="r6-btn r6-btn-danger r6-btn-sm" id="btn-create-alert" onclick="createDeviceAlert()">
-            <i class="fas fa-exclamation-triangle"></i> Create DeviceAlert
-          </button>
-        </div>
-        <div class="r6-json-output" id="r6resources-result"></div>
-      </div>
-    </div>
-
-    <!-- Curatr: Patient Data Quality -->
-    <div class="r6-panel" id="curatr-panel" style="border-color: #7c3aed;">
-      <div class="r6-panel-header" style="border-bottom-color: #7c3aed;">
-        <i class="fas fa-microscope" style="color:#7c3aed"></i>
-        <h3 style="color:#7c3aed">Curatr — Patient Data Quality</h3>
-        <span class="r6-tag r6-tag-write" style="background:#7c3aed22;color:#7c3aed;border-color:#7c3aed">NEW v1.0</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.5rem">
-          Patient-owned data quality evaluation. Creates a Condition with a retired <strong>ICD-9-CM</strong> code,
-          evaluates it against live terminology APIs (<strong>NLM ICD-10-CM</strong>, <strong>tx.fhir.org</strong>),
-          presents issues in plain language, then applies patient-approved fixes with a linked <strong>Provenance</strong> record.
-        </p>
-        <p style="color:var(--r6-text-muted);font-size:0.78rem;margin-bottom:0.75rem">
-          Flow: Create ICD-9 Condition &rarr; <code>$curatr-evaluate</code> (live terminology check) &rarr; Review issues &rarr;
-          <code>$curatr-apply-fix</code> (update + Provenance). No black-box corrections &mdash; patient decides.
-        </p>
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          <button class="r6-btn r6-btn-sm" id="btn-curatr-create"
-                  style="background:#7c3aed;color:#fff;border-color:#7c3aed"
-                  onclick="curatrCreateCondition()">
-            <i class="fas fa-plus"></i> Create ICD-9 Condition
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-curatr-evaluate"
-                  style="border-color:#7c3aed;color:#7c3aed"
-                  onclick="curatrEvaluate()">
-            <i class="fas fa-microscope"></i> $curatr-evaluate
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-curatr-fix"
-                  style="border-color:#7c3aed;color:#7c3aed"
-                  onclick="curatrApplyFix()">
-            <i class="fas fa-wrench"></i> Apply Fix + Provenance
-          </button>
-        </div>
-        <div class="r6-json-output" id="curatr-result"></div>
-      </div>
-    </div>
-
-    <!-- Fasten Connect E2E Demo -->
-    <div class="r6-panel" id="fasten-panel" style="border-color: var(--r6-info); box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);">
-      <div class="r6-panel-header" style="background: linear-gradient(135deg, #0c2a3a 0%, #0f3d52 100%); border-bottom-color: var(--r6-info);">
-        <i class="fas fa-plug" style="color: var(--r6-info);"></i>
-        <h3 style="color: var(--r6-info);">Fasten Connect — Health Data Import</h3>
-        <span class="r6-tag r6-tag-read" style="margin-left:auto;background:rgba(6,182,212,0.15);color:var(--r6-info);border-color:var(--r6-info);">LIVE DEMO</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:1rem">
-          Patient authorizes EHR access via the <strong>Fasten Stitch widget</strong>. Step 1
-          finishes here. Steps 2-5 — EHI export webhook, ingestion, PHI redaction on read-back,
-          audit — run asynchronously over the next 5–45 minutes, so this page does not wait for
-          them and does not mark them done.
-        </p>
-
-        <div class="d-flex gap-2 flex-wrap mb-3">
-          {% if fasten_public_key %}
-          <button class="r6-btn r6-btn-sm" id="btn-stitch-launch" onclick="launchStitchWidget()"
-                  style="background:var(--r6-info);color:#000;border-color:var(--r6-info);font-size:0.9rem;padding:0.55rem 1.4rem;">
-            <i class="fas fa-hospital"></i> Connect Health Records
-          </button>
-          {% else %}
-          <p style="color:var(--r6-text-muted);font-size:0.85rem;margin:0">
-            <strong>FASTEN_PUBLIC_KEY is not set on this deployment.</strong><br>
-            Set it on the Railway service so the Stitch widget can render.
-          </p>
-          {% endif %}
-        </div>
-
-        {% if fasten_public_key %}
-        <!-- Stitch widget — shown inline when Connect is clicked -->
-        <div id="stitch-container" class="stitch-container" style="display:none;">
-          <fasten-stitch-element id="stitch-widget" public-id="{{ fasten_public_key }}"></fasten-stitch-element>
+  <div class="cf-props">
+    {% for row in summary.rows %}
+    {# Failing properties start open. A reader should not have to click to
+       find the thing that went wrong. #}
+    <details class="cf-prop" {{ 'open' if not row.passed }}>
+      <summary class="cf-prop__sum">
+        <span class="cf-prop__i">{{ '%02d' | format(loop.index) }}</span>
+        <span>
+          <span class="cf-prop__name">{{ row.name }}</span>
+          <span class="cf-prop__meta">
+            <span class="chip {{ 'chip--pass' if row.passed else 'chip--fail' }}">{{ 'pass' if row.passed else 'fail' }}</span>
+            {% if row.grade %}<span class="chip">grade {{ row.grade }}</span>{% endif %}
+            {% if row.partial %}
+            <span class="chip chip--warn">coverage: {{ row.coverage }}</span>
+            {% endif %}
+            <span class="cf-prop__count">
+              {{ row.checks | length }} check{{ '' if row.checks | length == 1 else 's' }}{% if row.checks_failed %}, {{ row.checks_failed }} failed{% endif %}
+            </span>
+            <span class="cf-tape">
+              {% for c in row.checks %}
+              <span class="cf-tape__m {{ '' if c.passed else 'cf-tape__m--fail' }}"></span>
+              {% endfor %}
+            </span>
+          </span>
+        </span>
+        <span class="cf-prop__more">detail</span>
+      </summary>
+      <div class="cf-prop__body">
+        {% if row.caveat %}
+        <div class="cf-note">
+          <span class="cf-note__k">Limit recorded by the harness</span>
+          <span class="cf-note__t">{{ row.caveat }}</span>
         </div>
         {% endif %}
-
-        <!-- 5-step tracker: step 1 fills in live, 2-5 stay unmarked (#310a) -->
-        <div id="fasten-steps" style="margin-top:1rem;display:none">
-          <div class="demo-step" data-step="f1">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">1. Patient Authorization</div>
-              <div class="demo-step-subtitle">Stitch widget → org_connection_id registered</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="f2">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">2. EHI Export Webhook</div>
-              <div class="demo-step-subtitle">patient.ehi_export_success received</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="f3">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">3. NDJSON Ingestion</div>
-              <div class="demo-step-subtitle">Patient · Observation · Condition · MedicationRequest</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="f4">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">4. PHI Redaction on Read</div>
-              <div class="demo-step-subtitle">Name → initials · identifiers masked · address stripped</div>
-            </div>
-          </div>
-          <div class="demo-step" data-step="f5">
-            <div class="demo-step-indicator"></div>
-            <div class="demo-step-content">
-              <div class="demo-step-title">5. Immutable Audit Trail</div>
-              <div class="demo-step-subtitle">Every step recorded in append-only AuditEvent log</div>
-            </div>
-          </div>
-        </div>
+        {% if row.reference %}
+        <p class="cf-ref">Probed <code>{{ row.reference }}</code> in the self-test tenant.</p>
+        {% endif %}
+        <ul class="cf-checks">
+          {% for c in row.checks %}
+          <li class="cf-check {{ '' if c.passed else 'cf-check--fail' }}">
+            <span class="cf-check__mark">{{ 'PASS' if c.passed else 'FAIL' }}</span>
+            <span>
+              <span class="cf-check__name">{{ c.name }}</span>
+              {# `detail` is the derived field: the observation on a pass, the
+                 observation plus the failure sentence on a fail. Reading it
+                 rather than `observed` is what keeps a failure's reason on the
+                 page instead of only in the JSON. #}
+              {% if c.detail %}<span class="cf-check__obs">{{ c.detail }}</span>{% endif %}
+            </span>
+          </li>
+          {% endfor %}
+        </ul>
       </div>
-    </div>
-
-    <!-- $validate -->
-    <div class="r6-panel" id="validate-panel">
-      <div class="r6-panel-header">
-        <i class="fas fa-check-circle"></i>
-        <h3>Resource Validation ($validate)</h3>
-        <span class="r6-tag r6-tag-read">Read-only</span>
-      </div>
-      <div class="r6-panel-body">
-        <p style="color:var(--r6-text-muted);font-size:0.85rem;margin-bottom:0.75rem">
-          Validate a FHIR R6 resource against structural rules. Agent proposals must pass validation before commit.
-        </p>
-        <textarea class="r6-input mb-2" id="validate-input" rows="5">{
-  "resourceType": "Observation",
-  "status": "final",
-  "code": {
-    "coding": [{"system": "http://loinc.org", "code": "2339-0"}]
-  }
-}</textarea>
-        <button class="r6-btn r6-btn-primary r6-btn-sm mb-3" id="btn-validate" onclick="validateDemo()">
-          <i class="fas fa-check"></i> Validate
-        </button>
-        <div class="r6-json-output" id="validate-result"></div>
-      </div>
-    </div>
-
+    </details>
+    {% endfor %}
   </div>
-
-  <!-- Right Column: Audit Feed + Info -->
-  <div class="col-lg-4">
-
-    <!-- Live Audit Feed -->
-    <div class="r6-panel" style="position:sticky;top:1rem">
-      <div class="r6-panel-header">
-        <i class="fas fa-stream"></i>
-        <h3>Live Audit Feed</h3>
-        <span class="r6-tag r6-tag-clinical">Append-Only</span>
-      </div>
-      <div class="r6-panel-body">
-        <div class="d-flex gap-2 mb-3">
-          <button class="r6-btn r6-btn-outline r6-btn-sm" onclick="refreshAuditFeed()">
-            <i class="fas fa-sync"></i> Refresh
-          </button>
-          <button class="r6-btn r6-btn-outline r6-btn-sm" id="btn-export-audit" onclick="exportAuditNDJSON()">
-            <i class="fas fa-download"></i> Export NDJSON
-          </button>
-        </div>
-        <div class="audit-feed" id="audit-feed">
-          <div class="text-muted" style="padding:1rem;font-size:0.85rem">No audit events yet. Interact with the panels to generate events.</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Security Summary -->
-    <div class="r6-panel mt-3">
-      <div class="r6-panel-header">
-        <i class="fas fa-lock"></i>
-        <h3>Security Posture</h3>
-      </div>
-      <div class="r6-panel-body" style="font-size:0.82rem">
-        <div class="d-flex justify-content-between mb-2">
-          <span>Tenant Isolation</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Enforced</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>HMAC Step-up Tokens</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Required</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>PHI Redaction</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> All Reads</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>Human-in-the-Loop</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Clinical</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>OAuth 2.1 + PKCE</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> S256</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>Audit Trail</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Immutable</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>ETag Concurrency</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> If-Match</span>
-        </div>
-        <div class="d-flex justify-content-between mb-2">
-          <span>Medical Disclaimer</span>
-          <span style="color:var(--r6-success)"><i class="fas fa-check-circle"></i> Injected</span>
-        </div>
-        <div class="d-flex justify-content-between">
-          <span>Curatr Data Quality</span>
-          <span style="color:#7c3aed"><i class="fas fa-microscope"></i> Patient-Owned</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Discovery Links -->
-    <div class="r6-panel mt-3">
-      <div class="r6-panel-header">
-        <i class="fas fa-globe"></i>
-        <h3>Discovery Endpoints</h3>
-      </div>
-      <div class="r6-panel-body" style="font-size:0.82rem">
-        <div class="mb-2">
-          <a href="/r6/fhir/metadata" target="_blank" class="text-decoration-none" style="color:var(--r6-info)">
-            <i class="fas fa-external-link-alt me-1"></i> /metadata (CapabilityStatement)
-          </a>
-        </div>
-        <div class="mb-2">
-          <a href="/r6/fhir/.well-known/oauth-authorization-server" target="_blank" class="text-decoration-none" style="color:var(--r6-info)">
-            <i class="fas fa-external-link-alt me-1"></i> /.well-known/oauth-authorization-server
-          </a>
-        </div>
-        <div class="mb-2">
-          <a href="/r6/fhir/.well-known/smart-configuration" target="_blank" class="text-decoration-none" style="color:var(--r6-info)">
-            <i class="fas fa-external-link-alt me-1"></i> /.well-known/smart-configuration
-          </a>
-        </div>
-        <div>
-          <a href="/privacy" target="_blank" class="text-decoration-none" style="color:var(--r6-info)">
-            <i class="fas fa-external-link-alt me-1"></i> /privacy
-          </a>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-{% if fasten_public_key %}
-<script src="https://stitch.fastenhealth.com/v0.4/bundle.js"></script>
+</section>
 {% endif %}
-<script src="{{ url_for('static', filename='js/r6-dashboard.js') }}"></script>
+
+<section class="cf-sec">
+  <div class="cf-sec__n">Scope</div>
+  <h2 class="cf-sec__h">What this grade does not cover</h2>
+  <p class="cf-sec__lede">
+    Listed at the same weight as the result, because you would find them
+    anyway and finding them yourself is worse.
+  </p>
+
+  <div class="cf-limits">
+    {% if snapshot.measured %}
+      {% for row in summary.partial_coverage %}
+      <div class="cf-limit">
+        <h3 class="cf-limit__h">{{ row.name }} was graded on partial coverage</h3>
+        <p class="cf-limit__b">
+          Coverage is <code>{{ row.coverage }}</code>, not <code>full</code>.
+          The grade for this property describes only the surface named there.
+        </p>
+      </div>
+      {% endfor %}
+      {% for row in summary.caveats %}
+      <div class="cf-limit">
+        <h3 class="cf-limit__h">{{ row.name }}</h3>
+        <p class="cf-limit__b">{{ row.caveat }}</p>
+      </div>
+      {% endfor %}
+    {% endif %}
+
+    <div class="cf-limit">
+      <h3 class="cf-limit__h">It is a self-test, not an audit</h3>
+      <p class="cf-limit__b">
+        The deployment grades itself. There is no SOC 2 and no HITRUST report
+        behind this number. It says the controls fired on a synthetic record a
+        moment ago; it says nothing about the organisation running the
+        deployment, its hosting, or its staff.
+        <a href="{{ url_for('security') }}">The full posture, including what is missing →</a>
+      </p>
+    </div>
+    <div class="cf-limit">
+      <h3 class="cf-limit__h">It ran against synthetic data only</h3>
+      <p class="cf-limit__b">
+        Writes land in a dedicated <code>conformance-selftest</code> tenant.
+        No real record is read or written to produce this page.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="cf-sec">
+  <div class="cf-sec__n">Verify</div>
+  <h2 class="cf-sec__h">Do not take this page's word for it</h2>
+  <p class="cf-sec__lede">
+    The endpoint is public and unauthenticated. Run it yourself; the harness
+    runs on request, so what you get is what is true when you ask.
+  </p>
+  <div class="code-block">
+    <pre class="code"><span class="c"># the same report this page rendered, as JSON</span>
+<span class="p">curl</span> <span class="v">{{ stateful_host }}/r6/fhir/$conformance</span>
+
+<span class="c"># a human-readable scorecard, and a fresh run rather than the cache</span>
+<span class="p">curl</span> <span class="v">'{{ stateful_host }}/r6/fhir/$conformance?format=text&amp;fresh=1'</span>
+
+<span class="c"># 200 at grade A, 503 below it — so an uptime check can watch the guardrails</span>
+<span class="p">curl</span> <span class="v">-o /dev/null -w '%{http_code}\n' {{ stateful_host }}/r6/fhir/$conformance</span></pre>
+  </div>
+</section>
+
+<div class="cf-host">
+  <div class="cf-host__h">About this host</div>
+  {% if writes_here %}
+  <p class="cf-host__b">
+    You are on the stateful deployment. It has a database, it accepts writes,
+    and it ran the report above itself.
+  </p>
+  {% else %}
+  <p class="cf-host__b">
+    You are on the read-only deployment. It serves the site from ephemeral
+    serverless storage and refuses every write to a clinical path with a
+    <code>405</code>, so it cannot run the harness — the report above was
+    fetched from <a href="{{ stateful_host }}">{{ stateful_host }}</a>, which
+    can. That is also where the interactive demo runs; buttons here would
+    return 405, so there are none.
+  </p>
+  {% endif %}
+</div>
 {% endblock %}
