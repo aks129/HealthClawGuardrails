@@ -315,9 +315,10 @@ def _view_rows(draft_qr):
 
 @actions_blueprint.route('/<action_id>/review', methods=['GET'])
 def review_form(action_id):
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
     auth_err = _require_step_up(tenant_id)
     if auth_err is not None:
         return auth_err
@@ -365,9 +366,10 @@ def _truthy(value):
 
 @actions_blueprint.route('/<action_id>/review', methods=['POST'])
 def review_submit(action_id):
-    tenant_id = _tenant_or_none()
-    if not tenant_id:
+    tenant = _tenant_or_none()
+    if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
     auth_err = _require_step_up(tenant_id)
     if auth_err is not None:
         return auth_err
