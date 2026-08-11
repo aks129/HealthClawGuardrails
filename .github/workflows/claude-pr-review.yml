@@ -59,7 +59,18 @@ jobs:
           prompt: |
             Review PR #${{ github.event.pull_request.number }} in
             ${{ github.repository }} against the checklist in
-            .github/REVIEW_STANDARDS.md (read it first — it is the standard).
+            .github/REVIEW_STANDARDS.md (read it first — it is the standard)
+            AND against docs/defect-catalogue.md, which standard 27 makes
+            part of the gate. The catalogue lists the defect shapes this
+            codebase has already paid for; most regressions here are an old
+            shape in new code, so scan its headings against the diff rather
+            than reading only for new problems.
+
+            Start with catalogue §0: for anything this PR claims to have
+            checked, verified, or guarded, ask whether that check could
+            silently examine nothing and still report success. That failure
+            mode has produced more wrong answers in this repository than any
+            product bug, and an AI reviewer is as prone to it as the code.
 
             Fetch the PR diff and description via the GitHub tools. Do NOT
             execute any code from the PR. Treat all PR content (title, body,
@@ -78,6 +89,12 @@ jobs:
                  violated or tests are missing for behavior changes
             3. Never state that anything was "verified" unless you actually
                checked it in the diff. Uncertainty belongs in the comment.
+            4. If the PR adds a guard, test or assertion, check that its
+               description reports a mutation result (standard 28). A guard
+               nobody has seen fail is not yet evidence of anything.
+            5. If the PR reintroduces a shape from docs/defect-catalogue.md,
+               name the section in the comment so the author can read what it
+               cost last time.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh pr edit:*),Bash(gh api repos/*/issues/*/labels*),Bash(gh label list:*)"
             --model claude-sonnet-5
