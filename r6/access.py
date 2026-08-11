@@ -268,12 +268,65 @@ class StepUpDenied(Exception):
         self.checked = checked
 
 
-#: Public refusal text. The validator's own message (e.g. 'Token tenant
-#: mismatch', 'Step-up token expired') is deliberately NOT propagated to the
-#: client — r6/read_auth.py:262 makes the same call, and a per-reason answer
-#: is an oracle for a caller probing another tenant's token.
 _DENIED_ABSENT = 'Step-up token required'
 _DENIED_REJECTED = 'Invalid step-up token'
+
+#: Refusal reasons a caller is told verbatim.
+#:
+#: OWNER RULING, 2026-08-10: "always tell why". This module previously
+#: collapsed all eleven of the validator's reasons into 'Invalid step-up
+#: token' and logged the real one server-side, so a caller holding an expired
+#: token, a read-scoped token, or a token for the wrong operation got the same
+#: four words and no way to tell which. That is unhelpful, and it is the same
+#: failure this codebase keeps finding elsewhere: a refusal that does not
+#: distinguish its causes cannot be acted on.
+#:
+#: The ruling is implemented with ONE carve-out, and the line is not "how
+#: sensitive does this feel" — it is whether the reason describes the caller's
+#: own credential or someone else's. Every reason below is about the token the
+#: caller is already holding: they learn nothing they could not learn by
+#: decoding it. 'Token tenant mismatch' is different in kind. It tells a
+#: caller who presents a token they should not have that the token is
+#: otherwise VALID, just issued to another tenant — which separates "a real
+#: credential I have stolen or guessed" from "junk", and is exactly the
+#: distinction a prober is trying to make. r6/read_auth.py:262 withholds it
+#: for the same reason.
+#:
+#: Membership is an allowlist, not a denylist, so a reason added to
+#: r6/stepup.py stays private until someone decides otherwise.
+#: tests/test_step_up_states_why.py fails when stepup.py grows a reason that
+#: appears in neither this set nor _WITHHELD_REASONS — a new reason cannot
+#: become public by accident, and cannot stay silent by accident either.
+_PUBLIC_REASONS = frozenset({
+    'Server step-up validation not configured',
+    'Malformed step-up token',
+    'Malformed token payload',
+    'Invalid token signature',
+    'Step-up token expired',
+    'Read-scoped token cannot authorize this operation',
+    'Token audience mismatch',
+    'Token operation mismatch',
+    'Token already used (replay)',
+})
+
+#: Withheld deliberately, with the reason recorded. Being on this list is a
+#: decision; being on neither list is a bug the test catches.
+_WITHHELD_REASONS = {
+    'Token tenant mismatch':
+        'confirms the token is valid for a different tenant, which is the '
+        'one thing a caller probing with a token they should not have is '
+        'trying to establish',
+}
+
+
+def _public_reason(error: str) -> str:
+    """The sentence the caller gets for a validator refusal.
+
+    Default-deny: anything not explicitly published collapses to the generic
+    text. The failure mode of the opposite default is a new reason leaking on
+    the day it is written, when nobody is looking at this file.
+    """
+    return error if error in _PUBLIC_REASONS else _DENIED_REJECTED
 
 
 def _step_up_token(*, also_bearer: bool, also_body_field: str | None) -> str:
@@ -366,8 +419,10 @@ def require_grant(
                 operation=operation,
                 nonce_consumed=consume_nonce,
             )
+        # The log keeps the full reason whatever the caller is told, so a
+        # withheld cause is still diagnosable from this side.
         logger.info('step-up refused for tenant %s: %s', tenant.id, error)
-        reason, status = _DENIED_REJECTED, rejected_status
+        reason, status = _public_reason(error), rejected_status
 
     # The ONLY place in the repository that sets the checked flag. Pinned by
     # test_the_checked_flag_is_set_in_exactly_one_place.
