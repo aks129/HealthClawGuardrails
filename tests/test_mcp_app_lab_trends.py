@@ -53,16 +53,46 @@ def test_both_trailing_slash_forms_work(client):
     assert client.get("/r6/fhir/mcp-apps/lab-trends/").status_code == 200
 
 
-def test_the_tenant_arrives_from_the_query_and_is_escaped(client):
-    """The tenant reaches the page as a value, never as markup.
+def test_the_tenant_arrives_from_the_query(client):
+    """The tenant named in the query string is the one the page renders."""
+    r = client.get("/r6/fhir/mcp-apps/lab-trends?tenant_id=desktop-demo")
+    assert r.status_code == 200
+    assert "desktop-demo" in r.get_data(as_text=True)
 
-    MUTATION: render tenant_id with |safe -> red.
+
+def test_a_tenant_that_is_not_a_tenant_never_reaches_the_page(client):
+    """Rewritten by access-kernel slice 11a, and the reason is recorded here
+    rather than in a commit message nobody reads at the failure.
+
+    This used to assert that `"><script>x` rendered ESCAPED at 200. That was
+    a true and useful pin while the handler passed any string through to the
+    template. The handler now reads its tenant through the access kernel,
+    which refuses anything failing [a-zA-Z0-9_-]{1,64} — the same pattern
+    enforce_tenant_id applies everywhere else — so the hostile value is
+    refused at 400 and never reaches a template at all.
+
+    The escaping is still there and still required; it is now the second line
+    rather than the only one. It is pinned by
+    test_the_template_escapes_the_tenant_it_is_given below, which reads the
+    template rather than the response, because no request can carry a value
+    that would demonstrate it end to end any more.
     """
     r = client.get("/r6/fhir/mcp-apps/lab-trends?tenant_id=%22%3E%3Cscript%3Ex")
-    body = r.get_data(as_text=True)
-    assert r.status_code == 200
-    assert "<script>x" not in body
-    assert "&#34;&gt;&lt;script&gt;x" in body or "&quot;&gt;&lt;script&gt;x" in body
+    assert r.status_code == 400
+    assert "<script>x" not in r.get_data(as_text=True)
+
+
+def test_the_template_escapes_the_tenant_it_is_given():
+    """MUTATION: render tenant_id with |safe -> red.
+
+    Asserted against the template source. The route can no longer deliver a
+    value that proves this at the HTTP boundary, and a guard that cannot fail
+    is not a guard.
+    """
+    code = _code_only()
+    assert "{{ tenant_id }}" in code, "the template stopped rendering the tenant"
+    assert "tenant_id | safe" not in code
+    assert "tenant_id|safe" not in code
 
 
 def test_the_page_renders_without_a_tenant_rather_than_erroring(client):

@@ -37,7 +37,7 @@ from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
-from r6.access import (Scope, TenantSource, require_grant,
+from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
                        tenant_from_request)
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
@@ -3353,6 +3353,24 @@ def compiled_truth(resource_type, resource_id):
 
 # --- MCP Apps (embedded HTML surfaces for MCP clients) ------------
 
+def _mcp_app_tenant():
+    """The tenant an MCP App page was opened with, or `''` if none was named.
+
+    Access kernel, slice 11a (spec §2.6). HEADER then QUERY: an MCP client
+    sends the header, a browser opening the same URI cannot. Absent is not an
+    error — `/mcp-apps/` is exempt and these pages render an input to type a
+    tenant into, so they must open cold. Malformed propagates to the kernel's
+    400. Both pinned in tests/test_mcp_app_tenant_goes_through_the_kernel.py.
+    """
+    try:
+        return tenant_from_request(
+            sources=(TenantSource.HEADER, TenantSource.QUERY)).id
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.ABSENT:
+            return ''
+        raise
+
+
 @r6_blueprint.route(
     '/mcp-apps/compiled-truth/<resource_type>/<resource_id>',
     methods=['GET']
@@ -3374,13 +3392,7 @@ def mcp_app_compiled_truth(resource_type, resource_id):
             f'Resource type {resource_type} is not supported',
         ), 400
 
-    # Tenant is required but arrives as either header or ?tenant_id= query.
-    # MCP clients that open resource URIs in a browser won't send headers.
-    tenant_id = (
-        request.headers.get('X-Tenant-Id')
-        or request.args.get('tenant_id')
-        or ''
-    )
+    tenant_id = _mcp_app_tenant()
 
     html = render_template(
         'mcp_apps/compiled_truth.html',
@@ -3406,11 +3418,7 @@ def mcp_app_care_gaps():
     SmartHealthConnect's care-gaps view (archived); data path rebuilt on
     the engine's own operation so redaction + audit apply by construction.
     """
-    tenant_id = (
-        request.headers.get('X-Tenant-Id')
-        or request.args.get('tenant_id')
-        or ''
-    )
+    tenant_id = _mcp_app_tenant()
     html = render_template(
         'mcp_apps/care_gaps.html',
         tenant_id=tenant_id,
@@ -3437,11 +3445,7 @@ def mcp_app_lab_trends():
     threshold re-implemented in a browser. Reference ranges live in exactly
     one place (r6/labs/interpret.py) and this view is not a second one.
     """
-    tenant_id = (
-        request.headers.get('X-Tenant-Id')
-        or request.args.get('tenant_id')
-        or ''
-    )
+    tenant_id = _mcp_app_tenant()
     html = render_template(
         'mcp_apps/lab_trends.html',
         tenant_id=tenant_id,
@@ -3462,11 +3466,7 @@ def mcp_app_wearables():
     sync, observation count, and Connect / Sync / Re-auth actions. Linked
     from the `wearables_sync_status` MCP tool via `_meta.ui.resourceUri`.
     """
-    tenant_id = (
-        request.headers.get('X-Tenant-Id')
-        or request.args.get('tenant_id')
-        or ''
-    )
+    tenant_id = _mcp_app_tenant()
     html = render_template(
         'mcp_apps/wearables.html',
         tenant_id=tenant_id,
