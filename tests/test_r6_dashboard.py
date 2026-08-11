@@ -113,8 +113,20 @@ class TestDashboardPage:
         """A grade with no provenance is a number someone typed."""
         html = client.get('/r6-dashboard').data.decode()
         assert 'Measured against' in html
-        assert 'Reported by' in html
+        assert 'This page' in html
         assert '/r6/fhir/$conformance' in html
+
+    def test_the_measured_host_is_never_reported_as_local(self, client):
+        """MUTATION: render report.target in the 'Measured against' cell -> red.
+
+        report.target is 'local(test-client)' because the harness drives the
+        app in-process. That is true and unusable once the report crosses a
+        host: healthclaw.io shipped "Measured against local(test-client)",
+        which names a machine the reader cannot identify. Verified against
+        production before it was changed.
+        """
+        html = client.get('/r6-dashboard').data.decode()
+        assert 'local(test-client)' not in html
 
     def test_dashboard_carries_no_client_side_demo_script(self, client):
         """MUTATION: re-add the r6-dashboard.js <script> tag -> red.
