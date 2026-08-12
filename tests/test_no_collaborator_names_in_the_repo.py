@@ -26,16 +26,30 @@ the person needs naming at all.
 """
 
 import pathlib
+import re
 import subprocess
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-#: Collaborators who have appeared in this repo. Surnames and handles only —
-#: a first name alone is too collision-prone to scan for ("ray" is a demo
-#: persona, "sally" is a bot).
+#: Collaborators who have appeared in this repo: the clinical advisor and
+#: two business contacts at a partner company. Surnames only — a first name
+#: alone is too collision-prone ("ray" is a demo persona, "bo" is a
+#: substring of half the dictionary).
+#:
+#: Matched on WORD BOUNDARIES. A plain substring scan for "choe" hits
+#: "echoes" and "echoed" fourteen times, and a guard with fourteen false
+#: positives is one somebody switches off.
+#:
+#: NOT here, deliberately: contributor handles credited in CHANGELOG.md.
+#: "thanks @aanishs" for a merged contribution is earned attribution given
+#: through a public handle — the opposite of a disclosure. The line this
+#: guard draws is between crediting public work and naming a private
+#: business or clinical relationship.
 _NAMES = (
     "magan",
     "yimdriuska",
+    "holland",
+    "choe",
 )
 
 #: This file necessarily contains the names it forbids.
@@ -69,11 +83,12 @@ def _tracked_text_files():
 
 def test_no_collaborator_name_appears_in_a_tracked_file():
     """MUTATION: put a collaborator's surname back in any comment -> red."""
+    patterns = [(name, re.compile(rf"\b{name}\b", re.IGNORECASE))
+                for name in _NAMES]
     hits = []
     for rel, text in _tracked_text_files():
-        lowered = text.lower()
-        for name in _NAMES:
-            if name in lowered:
+        for name, pattern in patterns:
+            if pattern.search(text):
                 hits.append(f"{rel}: {name}")
     assert not hits, (
         "a collaborator is named in a public repository:\n  "

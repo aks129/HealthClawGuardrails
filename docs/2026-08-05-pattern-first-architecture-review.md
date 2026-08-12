@@ -298,7 +298,7 @@ narrowly-scoped authorizations for the agent's key. Their phrase:
 *"authorization does not erase authorship."* That is this repo's
 step-up-token + human-confirmation + per-event AuditEvent design,
 restated by an unrelated team as the foundation of a whole product — and
-it is exactly the agent-trust extension Bo Holland proposed collaborating
+it is exactly the agent-trust extension Health Bank One proposed collaborating
 on. The market is converging on the thing the guardrail stack already
 does; the gap is that Buzz makes it *structural* (an event cannot exist
 unsigned) where ours is *conventional* (88 call sites remember to audit).

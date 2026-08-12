@@ -162,7 +162,7 @@ Not a moat: "agent in a minute" (incumbents do record-grounded chat for 300M wee
 health users) and raw connectivity (b.well's 1.7M providers dwarfs ours).
 
 Threats, in order: OpenAI/Anthropic adding actions; Amazon widening past its clinic;
-HMCP becoming the standard while we remain a project. The third makes the Bo Holland
+HMCP becoming the standard while we remain a project. The third makes the Health Bank One
 agent-identity thread and HL7/CARIN engagement **existential, not optional**.
 
 **First-1000 playbook** (from Solace, Guava, PicnicHealth, Ada): pick one population
@@ -201,7 +201,7 @@ Wiring: Sentinel, Warden, and Advocate are path-triggered additions to
 | Weekly | MCP spec + Anthropic platform changes | The MCP server *is* a product surface; transport auth fail-closed prod once |
 | Biweekly | FHIR R6 ballot progress | CI asserts the `6.0.0-ballot3` string — a bump is a breaking event |
 | Monthly | FTC HBNR + OCR enforcement vs consumer health apps | CareAgents is a non-covered-entity consumer app; **decision on #168 still open** |
-| Monthly | CARIN Alliance + agent-identity standards | Standard-setter thesis; Bo Holland thread live |
+| Monthly | CARIN Alliance + agent-identity standards | Standard-setter thesis; Health Bank One thread live |
 | Monthly | Connector drift: Open Wearables, Fasten, MEDENT/Epic | OW 0.6.3 already broke docs-vs-reality (#127) |
 | Monthly | Competitor scan | Feeds HIMSS Aug 18 and the ecosystem campaign |
 | Quarterly | Security posture; re-pin the security-baseline commit | Pinned to a July commit by design — someone must consciously re-pin |

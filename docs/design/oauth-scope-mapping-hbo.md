@@ -1,6 +1,6 @@
 # Design: HBO OAuth scope authorization for HealthClaw agents
 
-**Status:** Proposal for the Health Bank One technical discussion (Jason Choe).
+**Status:** Proposal for the Health Bank One technical discussion.
 **Goal:** an AI agent's authority to touch a member's records becomes **externally
 verifiable** — HBO issues the scoped credential, HealthClaw enforces it at every
 tool call and audits the result. Bo's "Open Banking for health": HBO owns the

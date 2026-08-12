@@ -362,7 +362,7 @@ respect we need. Health IT is a small world with long memories.
 
 **So: convert the pending nine rather than open a tenth.**
 
-- **Send the two drafted emails.** The HBO reply (Bo + Jason Choe) and the
+- **Send the two drafted emails.** The Health Bank One reply and the
   Fasten one. A direct human email to someone who knows you outperforms a cold
   PR comment by a wide margin, and both are already written.
 - **Health Samurai is warm and unblocked** — they *asked* for the joint blog

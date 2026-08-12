@@ -171,5 +171,5 @@ Re-read before each webinar; these are the claims we can defend:
 - **Do not claim** speed-to-agent or connectivity breadth as moats. Incumbents beat us on
   both.
 - **Existential thread:** if HMCP becomes the standard while we remain a project, the
-  standard-setter thesis inverts. Keep the Bo Holland agent-identity collaboration and
+  standard-setter thesis inverts. Keep the Health Bank One agent-identity collaboration and
   CARIN engagement warm through August.
