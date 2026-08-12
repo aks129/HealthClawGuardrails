@@ -179,6 +179,27 @@ def _register_lifecycle_cli(flask_app: Flask) -> None:
         count = seed_demo_tenant(flask_app, tenant_id)
         click.echo(f"Seeded {count} resource(s).")
 
+    @flask_app.cli.command("seed-demo-history")
+    @click.option("--tenant-id", default="desktop-demo",
+                  help="Tenant to load the history into.")
+    def seed_demo_history_command(tenant_id: str) -> None:
+        """Load the multi-year synthetic BP history into a demo tenant.
+
+        Separate from `seed-demo`, which loads the small built-in set that
+        runs before every deploy. This one is bulkier and is loaded on
+        demand: it exists so a demo, a screenshot or an acceptance test has
+        data with a shape worth looking at.
+
+        Idempotent — every resource carries a fixed id, so a second run
+        reports 0.
+        """
+        from r6.seed import seed_demo_data
+        from r6.smbp.demo_history import smbp_history_resources
+        with flask_app.app_context():
+            count = seed_demo_data(tenant_id,
+                                   resources=smbp_history_resources())
+        click.echo(f"Seeded {count} resource(s) into {tenant_id}.")
+
     @flask_app.cli.command("recover-zombies")
     def recover_zombies_command() -> None:
         """Retry eligible Fasten jobs stranded by a process restart."""

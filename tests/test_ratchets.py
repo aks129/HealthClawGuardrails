@@ -194,7 +194,14 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: `add_audit_event` flushes inside the caller's transaction and never
 #: commits — same transaction, genuinely fail-closed. Playbook B3-B9 moves
 #: these one blueprint per PR; B9 deletes the old primitive when this is 0.
-_POST_COMMIT_AUDIT_CALLSITES = 88
+#: 88 -> 89: the BP trend route (r6/smbp/trend_routes.py). A new READ
+#: route must audit — "every FHIR resource access emits an
+#: AuditEvent" — and the kernel's audit() is not usable on a read
+#: path yet: it never commits, and a GET that commits trips
+#: test_no_new_get_route_mutates_the_store. Slice 12 takes read
+#: audits as a group; adding one shim call site now is the honest
+#: cost of not shipping an unaudited read.
+_POST_COMMIT_AUDIT_CALLSITES = 89
 
 
 def test_post_commit_audit_callsites_only_decrease():

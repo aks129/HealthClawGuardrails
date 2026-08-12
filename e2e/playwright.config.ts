@@ -48,7 +48,12 @@ export default defineConfig({
       // The app factory no longer creates tables at boot (schema is managed by
       // explicit Alembic migrations). Initialize the DB, then serve — both
       // processes share one absolute SQLite path so the server sees the tables.
-      command: 'cd .. && uv run flask --app main init-db && uv run python main.py',
+      // seed-demo-history loads the multi-year BP data the demo-tenant
+      // walkthrough asserts. Without it that spec fails on a missing
+      // Condition, which reads as a broken guardrail rather than an
+      // unseeded fixture — the spec ran green locally against a hand-
+      // seeded server and red in CI for exactly that reason.
+      command: 'cd .. && uv run flask --app main init-db && uv run flask --app main seed-demo-history && uv run python main.py',
       url: `http://localhost:${PORT}/r6/fhir/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
