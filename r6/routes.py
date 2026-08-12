@@ -2294,9 +2294,14 @@ def seed_tenant():
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
 
-    # If caller supplied a full bundle, extract resources from it
+    # A caller-supplied bundle is INGESTION — the caller chooses what the
+    # records say — so it takes the ingest gate, which grants no public-tenant
+    # exemption. The mint gate above reasons about TOKENS; that does not
+    # transfer to content. tests/test_seed_bundle_requires_the_ingest_gate.py
     custom_bundle = body.get('bundle')
     if custom_bundle:
+        if not _internal_ingest_authorized(tenant_id):
+            return jsonify({'error': 'forbidden'}), 403
         entries = custom_bundle.get('entry', [])
         resources = [e.get('resource') for e in entries if e.get('resource')]
     else:
