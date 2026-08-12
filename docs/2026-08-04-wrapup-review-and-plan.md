@@ -173,7 +173,7 @@ defects found on Aug 18 get an audience.
 2. #334 kernel token strip — blocks slices 4–8.
 3. #310 — is `/r6-dashboard` in the Aug 18 demo? If yes it is stop-ship.
 4. CareAgents deploy authorization for #362 (standing rule: gated).
-5. Dr. Magan's review of the condition-grounding design (#355) — clinical
+5. Clinician review of the condition-grounding design (#355) — clinical
    content does not ship on engineering judgment.
 
 ## 7. Team execution orders
@@ -188,7 +188,7 @@ opens the PR → **Eugene merges**). Nothing here changes the human gates.
 A confirmation gate is a command plus its expected output, or it is not a
 gate. Three rules apply to every gate in this queue:
 
-- **Real data.** Gates run against the live tenants (`gene-1ff1ecf2` with
+- **Real data.** Gates run against the live tenants (`$OWNER_TENANT` with
   the MEDENT import, `ev-personal`), not fixtures. The audit trail is the
   scorecard: evidence is PHI-free by construction.
 - **UI evidence stays out of the repo.** Chat transcripts are PHI-adjacent
@@ -212,7 +212,7 @@ verbatim: "What do my labs say?", "What conditions do I have?", "What
 medications am I on?", "Do I have any allergies?", "Give me a timeline of
 my cholesterol results". Then QA runs `railway ssh --service
 HealthClawGuardrails "python scripts/shakeout_live.py --tenant
-gene-1ff1ecf2"`. Gate: exit 0; rows S1, S3, S5, S8 all PASS and none SKIP.
+$OWNER_TENANT"`. Gate: exit 0; rows S1, S3, S5, S8 all PASS and none SKIP.
 Per-question pass criteria: labs cite values; conditions named with no raw
 ICD-10; meds named; allergy wording is "recorded but not coded at the
 source"; the timeline renders a chart. Failure looks like: any SKIP, any
@@ -221,7 +221,7 @@ raw code, any absence claim. Each failure becomes an issue the same day.
 **E3 — Reconcile the observation counts.** QA. The audit trail says one
 tenant interpreted 56 observations on 2026-07-12; a prior report said 186.
 Gate: after E2, the newest `labs $interpret` audit row's `interpreted=` for
-`gene-1ff1ecf2` matches `_summary=count` for Observation on that tenant.
+`$OWNER_TENANT` matches `_summary=count` for Observation on that tenant.
 Failure looks like: the two numbers disagree, which is a real defect.
 
 **E4 — #157 identity brief.** Product drafts; Eugene decides. The brief

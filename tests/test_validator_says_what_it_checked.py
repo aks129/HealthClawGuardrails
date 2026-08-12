@@ -1,6 +1,6 @@
 """The validator names what it examined, and does not say "passed" (#460).
 
-Found by Dr. Magan on 2026-08-10, running the prompt sequence for the launch
+Found by a clinical reviewer running the prompt sequence for the launch
 video: the validator accepted an Observation with no effective[x], category,
 performer or subject, and reported
 
@@ -44,7 +44,7 @@ class TestTheClaimIsGone:
     def test_a_thin_observation_is_not_told_validation_passed(self, validator):
         """MUTATION: restore the old diagnostics string -> red.
 
-        This is Dr. Magan's exact resource: status and code, nothing else. It
+        This is the reviewer's exact resource: status and code, nothing else. It
         is still accepted — that is a separate decision (#460 item 3) — but
         the caller is no longer told it passed validation.
         """

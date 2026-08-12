@@ -1,6 +1,6 @@
 """The demo bot does not tell users a shared tenant is their own (#459).
 
-Raised by Dr. Magan on 2026-08-09 as a wording problem: the /start banner said
+Raised by a clinical reviewer as a wording problem: the /start banner said
 "You're accessing your own records here; by continuing you accept that for
 your own data." It reads oddly on the synthetic tenant, she said. It read
 oddly because every clause was false.

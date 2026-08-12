@@ -1,7 +1,7 @@
 /**
  * An expired session must be recoverable by the client.
  *
- * Reported live by Dr. Magan mid-conversation: "Give me a summary of the
+ * Reported live by a clinical reviewer mid-conversation: "Give me a summary of the
  * health record" produced three tool calls, all of which came back as
  * execution errors, while the tool list rendered fine. The model's own
  * reading was that the deployment was down. It was not: the demo endpoint

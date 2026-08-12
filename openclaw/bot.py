@@ -419,7 +419,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # The second sentence here used to tell the user these were their own
     # records, and ask them to accept the channel risk on that basis. Every
     # clause of it was wrong on this bot: one tenant is shared by every user,
-    # and it is world-readable. Dr. Magan flagged it as reading oddly on the
+    # and it is world-readable. A clinical reviewer flagged it as reading oddly on the
     # synthetic tenant (#459); it read oddly because it was false.
     #
     # The old wording is not quoted here on purpose — the test that bans it

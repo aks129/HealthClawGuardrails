@@ -1,6 +1,6 @@
 # Design note — guideline-grounded answers for a *diagnosed condition*
 
-**Status: design only. No clinical thresholds ship until Dr. Magan reviews
+**Status: design only. No clinical thresholds ship until a clinician reviews
 them**, the same gate `LOINC_RANGES` carries. Nothing here is implemented yet.
 
 ---
@@ -108,7 +108,7 @@ and some need a device/CDS regulatory analysis this note does not attempt.
 
 1. Engine + tests with **placeholder** content, so the structure can be
    reviewed independently of the clinical claims.
-2. Dr. Magan fills `discuss` / `monitoring` for the three conditions and
+2. The clinical advisor fills `discuss` / `monitoring` for the three conditions and
    confirms the citations.
 3. Wire the tool; add a shakeout row: *"what should I know about my
    cholesterol?"* → answer carries a citation, contains no directive phrasing.
