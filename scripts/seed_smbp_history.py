@@ -21,14 +21,10 @@ Synthetic composites only. Nothing here is traceable to a real person.
 import argparse
 import os
 import sys
-from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from r6.smbp.demo_history import (  # noqa: E402
-    DEFAULT_ANCHOR,
-    smbp_history_resources,
-)
+from r6.smbp.demo_history import smbp_history_resources  # noqa: E402
 
 
 def _bundle(resources):
@@ -42,20 +38,16 @@ def main() -> int:
     ap.add_argument("--tenant-id", default="desktop-demo")
     ap.add_argument("--internal-secret",
                     default=os.environ.get("INTERNAL_TOKEN_MINT_SECRET", ""))
-    ap.add_argument("--anchor", default=DEFAULT_ANCHOR.isoformat(),
-                    help=("most recent reading date, YYYY-MM-DD. The default "
-                          "is a constant so re-runs are byte-identical."))
     ap.add_argument("--dry-run", action="store_true",
                     help="print the summary and write nothing")
     args = ap.parse_args()
 
-    anchor = date.fromisoformat(args.anchor)
-    resources = smbp_history_resources(anchor=anchor)
+    resources = smbp_history_resources()
 
     patients = [r for r in resources if r["resourceType"] == "Patient"]
     obs = [r for r in resources if r["resourceType"] == "Observation"]
     print(f"{len(resources)} resources: {len(patients)} patients, "
-          f"{len(obs)} BP readings, anchored {anchor.isoformat()}")
+          f"{len(obs)} observations")
     for p in patients:
         name = p["name"][0]
         mine = [o for o in obs
