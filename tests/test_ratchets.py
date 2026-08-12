@@ -310,7 +310,11 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: 3931 -> 3922: slice 6 replaced three nine-line hand-rolled step-up gates
 #: with a two-line require_grant call each. The module shrinks for the first
 #: time since the kernel migration began.
-_GOD_MODULE_LINES = 3922
+#: 3922 -> 3927: the /internal/seed bundle gate. Raised deliberately, and the
+#: only kind of raise this file permits — the guard has to sit at that call
+#: site, and extracting seed_tenant into its own module is a refactor that
+#: should not ride along with a security fix that was exploitable in prod.
+_GOD_MODULE_LINES = 3927
 
 
 def test_the_god_module_only_shrinks():
