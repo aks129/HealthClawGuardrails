@@ -197,3 +197,14 @@ register_scheduler_routes(smbp_blueprint, {
     "operation_outcome": _oo,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
+
+
+# --- BP trend chart (GET /r6/smbp/trend) ---
+# Same registration pattern as the scheduler above, and in its own module so
+# the chart does not land in r6/routes.py.
+from r6.smbp.trend_routes import register_trend_routes  # noqa: E402
+
+register_trend_routes(smbp_blueprint, {
+    "operation_outcome": _oo,
+    "authenticate_tenant_read": authenticate_tenant_read,
+})

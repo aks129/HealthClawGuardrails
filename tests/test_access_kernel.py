@@ -1048,7 +1048,14 @@ def test_outcome_response_is_the_shipped_shape_with_a_status(app):
 #: Adoption is a reviewable list. Each entry names the slice that added it:
 #:   main.py            slice 2 — register_error_handlers/install_audit_assertions
 #:   r6/smbp/routes.py  slice 3 — reading()'s step-up gate -> require_grant
+#: r6/smbp/trend_routes.py is the BP trend chart, registered onto
+#: smbp_blueprint from r6/smbp/routes.py — already on this list. It is
+#: a separate module so the page does not land in r6/routes.py, and it
+#: reads its tenant through tenant_from_request(HEADER, QUERY) because
+#: a browser opening a chart cannot set a header. Deliberate adoption,
+#: which is what this pin asks for.
 _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
+                     'r6/smbp/trend_routes.py',
                      'r6/fasten/routes.py', 'r6/wearables/routes.py',
                      # slice 10: _tenant_or_none resolves through the kernel.
                      # r6/actions/review.py imports that helper rather than
