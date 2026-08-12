@@ -114,9 +114,9 @@ def register_caregaps_routes(blueprint, deps):
         # Patient we evaluate. #389 half two.
         #
         # An earlier version of this comment said the change was "released by
-        # Dr. Magan's ruling on the cadence table". No such ruling exists in
+        # the clinical advisor's ruling on the cadence table". No such ruling exists in
         # docs/, on #389, or on #423, and #389 asked for one in as many words:
-        # "it wants CTO sign-off and Dr. Magan's review, not an engineering
+        # "it wants CTO sign-off and clinical review, not an engineering
         # judgement call". What actually released it was the owner's approval
         # plus #428, which stopped the one rule that was demonstrably unsafe
         # (colorectal, blind to FIT and Cologuard) from claiming anything.

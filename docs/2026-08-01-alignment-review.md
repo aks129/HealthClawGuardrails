@@ -166,7 +166,7 @@ HMCP becoming the standard while we remain a project. The third makes the Bo Hol
 agent-identity thread and HL7/CARIN engagement **existential, not optional**.
 
 **First-1000 playbook** (from Solace, Guava, PicnicHealth, Ada): pick one population
-(Medicare + small practices like Dr. Magan's), make it free where a practice or sponsor
+(Medicare + small independent practices), make it free where a practice or sponsor
 pays, and publish the trust artifact — **"X actions completed, 100% human-approved, 0
 safety incidents."** That counter is the consumer analogue of the "115M interactions"
 stat that raised Hippocratic $126M. It also converges exactly with item 19: the approve

@@ -22,7 +22,7 @@ nowhere?"* — deserves a direct answer.
   `$interpret` + `$care-gaps`, all on prod.
 - CareAgents is live, the connector marketplace ships 7 sources, the MCP server
   is published in the registry, and 14 skills are live on ClawHub.
-- There is one real clinician user (Gigi) already onboarded.
+- There is one real clinician user already onboarded.
 
 **What's actually blocking users, from our own tracking:**
 
@@ -183,7 +183,7 @@ single thing that keeps early testers engaged.
 
 **Cohort 1 (~10, invited, synthetic-only).** Recruit now; no gates block this.
 People who will tell you the truth: clinician colleagues, health-IT peers, the
-HL7/FHIR connectathon contacts, Gigi's colleagues.
+HL7/FHIR connectathon contacts, clinical advisors' colleagues.
 
 **Cohort 2 (~10-15, invited, real records).** Only after the hard gates close.
 These are the people who prove the product, and the ones who carry the most risk
@@ -293,7 +293,7 @@ Paid recruitment was researched and is **not worth it yet**:
 
 | Channel | Cost (20-50) | Verdict |
 | --- | --- | --- |
-| Warm network (Gigi's colleagues, HL7 connectathon, HIMSS attendees) | $0 | **Start here** |
+| Warm network (advisor referrals, HL7 connectathon, HIMSS attendees) | $0 | **Start here** |
 | User Interviews | ~$3.5k-8.9k | Later, if warm runs dry |
 | Rare Patient Voice | ~$12.4k+ | Overkill now |
 | Inspire / PatientsLikeMe | ~$15k-50k (quote-only) | No |

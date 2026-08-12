@@ -8,7 +8,7 @@ LOINC or unit mismatch yields an indeterminate result — never a false 'normal'
 Standards: LOINC (analytes), UCUM (units), HL7 v3 ObservationInterpretation
 (flags). Every LOINC_RANGES entry carries a `source` key present in REFERENCES;
 a test enforces it. Values are adult defaults and should be clinician-reviewed
-(Dr. Magan) before a live demo.
+(a licensed clinician) before a live demo.
 
 Decision support, not diagnosis.
 """

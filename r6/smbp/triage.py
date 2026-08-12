@@ -6,7 +6,7 @@ and the clinician report flags all classify through here so they cannot drift.
 Administrative logic only: this classifies a reading into an action band; it
 never produces clinical advice text.
 
-Aligned to the 2025 AHA/ACC High Blood Pressure Guideline (Gigi Magan spec,
+Aligned to the 2025 AHA/ACC High Blood Pressure Guideline (clinical advisor spec,
 updated June 2026). Two INDEPENDENT axes:
 
   - BP number (how high): at_goal < 130/80, stage1 130-139/80-89 (log+flag),

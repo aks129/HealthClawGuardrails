@@ -21,7 +21,7 @@ queued.
 |---|---|---|
 | MEDENT ingest works | 698 ingested / 0 skipped / 0 failed, connect→data in 1m56s | Proven, closed |
 | `get_labs` interpreted **zero** observations, always | `json={}` matched no branch of `_observations_from_request` | **PR #342**, green |
-| Terminology covers 1 of 26 live condition codes; SNOMED has 0 entries | Measured against tenant `ca-f674235b99` | **#343**; **PR #344**, green |
+| Terminology covers 1 of 26 live condition codes; SNOMED has 0 entries | Measured against tenant `$CAREAGENTS_TENANT` | **#343**; **PR #344**, green |
 | Provider 429 shown as "Something went wrong on our side" | `agent_runs.error_class=LLMError`, traceback HTTP 429, no retry | **PR #345**, green |
 | Prod log retains ~11 min; worker poll is 100 % of volume; 24/43 worker lines are HealthClaw **502s** | 5000/5000 log lines = claim poll at 7.2 req/s | **#341** |
 | Records split across 3 tenants (698 + 194 + 315); agent sees one | DB counts | **#157**, now live |
@@ -145,7 +145,7 @@ into the generic `failed` edge because the taxonomy didn't distinguish it.
 
 ## 4. The live-data shakeout protocol
 
-Purpose: use the already-connected record (`ca-f674235b99`, 698 resources) to
+Purpose: use the already-connected record (`$CAREAGENTS_TENANT`, 698 resources) to
 exercise agent behavior, data use, and the end-to-end flow — **without PHI ever
 leaving the system.**
 
@@ -168,7 +168,7 @@ without looking at the data.
 | S4 | "Do I have any allergies?" | Wording = "recorded but not coded at the source"; **never** absence | tonight's PR |
 | S5 | "Give me a timeline of my cholesterol results" (the exact question that failed) | `completed`, or `error_class=LLMRateLimited` + honest text | #345 merged |
 | S6 | "What preventive care am I due for?" | care-gaps cites USPSTF/ACIP against real age/sex | already live |
-| S7 | Any question | Zero resources from `gene-1ff1ecf2` / `ev-personal` in the answer (isolation holds until #157 is *deliberately* unified) | always |
+| S7 | Any question | Zero resources from `$OWNER_TENANT` / `ev-personal` in the answer (isolation holds until #157 is *deliberately* unified) | always |
 | S8 | — (automated) | Every S1–S6 read has an AuditEvent; tool-rounds-per-question drops vs. today's 8 (loop inflation is the #345 root cause) | harness |
 
 `scripts/shakeout_live.py` (tonight) automates the server side: runs the
@@ -209,7 +209,7 @@ external calls from prod. Everything lands as green PRs awaiting review.
 **Stretch:** #339 (limiter keyed on client IP); design note for
 guideline-grounded condition advice (extend the labs `REFERENCES`/`source`
 pattern to ACC/AHA 2018 + USPSTF statin guidance) — *design only*; clinical
-thresholds get Dr. Magan's review before a live demo, same rule as
+thresholds get clinician review before a live demo, same rule as
 `LOINC_RANGES`.
 
 ---

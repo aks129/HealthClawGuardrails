@@ -67,11 +67,21 @@ def test_no_documented_example_points_at_a_demo_tenant():
     --help string or a comment gets copied just as readily.
     """
     src = _source()
-    for tenant in ("desktop-demo", "gigi-", "demo-tenant"):
+    for tenant in ("desktop-demo", "demo-tenant"):
         assert tenant not in src, (
             f"{tenant!r} appears in the conformance CLI. The probes write "
             "and do not clean up, so any tenant named here is one somebody "
             "will point them at (#463).")
+
+    # Any PRIVATE tenant, by shape rather than by name. The list above used
+    # to carry a real person's tenant prefix, which put someone's name in a
+    # public repo to guard against one id — and guarded only that one. A
+    # provisioned tenant is `<slug>-<hex>`, so this catches every one of
+    # them and names nobody.
+    private = re.findall(r"\b[a-z][a-z0-9]*-[0-9a-f]{6,}\b", src)
+    assert not private, (
+        f"a provisioned tenant id appears in the conformance CLI: {private}. "
+        "The probes write and do not clean up.")
 
 
 def test_the_help_text_says_the_probes_write():

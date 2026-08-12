@@ -17,7 +17,7 @@ Product: NO-GO without cuts → cuts applied. Architect: NO-GO on W0 arithmetic 
 
 - **Beachhead: the developer** who must gate an AI agent on clinical data ("gate my agent's actions behind human confirmation + audit in 15 minutes"). The webinar audience.
 - **Payload persona: the family caregiver** — the demo's protagonist. v1 ships no consumer onboarding; the roadmap names the bar (20-minute self-serve parent connect), the family/consent model, non-Telegram-first channels, standing approvals. **The webinar says "not yet self-serve" on stage** — the caregiver story without that label is retroactive bait-and-switch.
-- **Design partners: 3 named, warm** (Jason/HBO, Gigi, Aanish), onboarding **starts week 3** (not W5), each completing a real gated action **as their own patient** (v1 authorization is a stored attestation, not verified proxy authority — acting-for-others is excluded until the consent model exists). +2 community partners = stretch, not criterion. The BYO-key quickstart IS the partner path.
+- **Design partners: 3 named, warm** (identities held outside this repo), onboarding **starts week 3** (not W5), each completing a real gated action **as their own patient** (v1 authorization is a stored attestation, not verified proxy authority — acting-for-others is excluded until the consent model exists). +2 community partners = stretch, not criterion. The BYO-key quickstart IS the partner path.
 
 ## Scope (final)
 
