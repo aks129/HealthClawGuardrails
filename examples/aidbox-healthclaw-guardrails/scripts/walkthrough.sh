@@ -19,6 +19,66 @@ fail=0
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
+die()  { printf '\n\033[31m%s\033[0m\n' "$*"; exit 2; }
+
+# ---------------------------------------------------------------------------
+# Preflight. Two setup failures produce misleading symptoms further down, so
+# they are named here rather than left to surface as a puzzling 401 in step 1.
+step "0. Preflight"
+
+health=$(curl -sS "${HC}/r6/fhir/health" 2>/dev/null)
+[ -z "$health" ] && die "The guardrail proxy is not answering on ${HC}.
+Is it up?  docker compose ps
+On macOS, port 5000 belongs to AirPlay Receiver — set HEALTHCLAW_PORT=5099."
+
+python3 - "$health" <<'PY' || exit 2
+import json, sys
+h = json.loads(sys.argv[1])
+mode = h.get("mode")
+up = h.get("checks", {}).get("upstream")
+print(f"    proxy version {h.get('version')}, mode {mode}")
+
+if mode != "upstream":
+    print("""
+\033[31mThe proxy is running in LOCAL mode — it is not talking to Aidbox at all.\033[0m
+Everything below would pass against the proxy's own SQLite store and prove
+nothing about Aidbox. Check FHIR_UPSTREAM_URL reached the container:
+    docker compose exec healthclaw printenv FHIR_UPSTREAM_URL""")
+    sys.exit(1)
+
+status = up.get("status") if isinstance(up, dict) else up
+if status != "connected":
+    print(f"""
+\033[31mThe proxy cannot reach Aidbox (upstream status: {status}).\033[0m
+The two causes, in the order they actually happen:
+
+  1. Aidbox is not activated. It answers EVERY route with a 302 to
+     "Log in to activate Aidbox" — including /health, so this looks like a
+     network fault rather than a licence one. Open http://localhost:8080 and
+     click "Continue with Aidbox account", or set AIDBOX_LICENSE in .env.
+
+  2. The proxy image predates upstream authentication. Images published
+     before v1.10.0 ignore FHIR_UPSTREAM_CLIENT_ID and
+     FHIR_UPSTREAM_CLIENT_SECRET entirely, so the proxy calls Aidbox
+     anonymously and the AccessPolicy refuses it. Pull again, or build from
+     a checkout:
+       docker compose -f docker-compose.yaml -f docker-compose.build.yaml up -d --build""")
+    sys.exit(1)
+print("  \033[32mPASS\033[0m proxy is in upstream mode and connected to Aidbox")
+PY
+
+# The example claims the proxy needs its own credential. That claim is only
+# worth anything if Aidbox refuses callers who lack one — and Aidbox runs here
+# with BOX_SECURITY_DEV_MODE on, which is exactly the setting that could make
+# the AccessPolicy vacuous. Assert it rather than assume it.
+anon=$(curl -sS -o /dev/null -w '%{http_code}' "${AIDBOX_URL}/fhir/Patient/pt-demo")
+if [ "$anon" = "200" ]; then
+  bad "Aidbox served Patient/pt-demo to an ANONYMOUS caller (HTTP 200).
+       The AccessPolicy is not constraining anything, so 'the proxy holds its
+       own credential' is not demonstrated here. Check BOX_SECURITY_DEV_MODE."
+else
+  ok "Aidbox refuses anonymous callers (HTTP ${anon}) — the credential matters"
+fi
 
 # ---------------------------------------------------------------------------
 step "1. The same resource, both ways"
@@ -73,20 +133,45 @@ print('  \033[32mPASS\033[0m audit written, and PHI-free')
 [ $? -ne 0 ] && fail=1
 
 # ---------------------------------------------------------------------------
-step "3. A write, blocked twice"
+step "3. A write, and two gates that do not substitute for each other"
 
+# Four requests, not two. A sequence of two refusals only shows that SOME
+# refusal happened; it cannot tell you whether the second gate would have
+# accepted the first gate's credential. The matrix can: each gate is
+# presented on its own, and each one refuses on its own.
+#
+#   neither          -> 428   human confirmation is missing
+#   confirmed only   -> 401   a confirmation is not a credential
+#   token only       -> 428   a credential is not a confirmation
+#   both             -> 201   and only then
+#
+# The bare request reports 428 rather than 401 because the human-in-the-loop
+# check runs in a before_request hook, ahead of every handler's auth gate.
+# That ordering is deliberate — it is what stops an unauthenticated caller
+# reaching the handler — so a bare write reports the human gate, not the
+# credential one. An earlier version of this script asserted the reverse.
+#
+# tests/test_aidbox_example_tells_the_truth.py replays this exact matrix
+# against the app in CI, so these four numbers cannot drift from the server.
 body='{"resourceType":"Observation","status":"final",
        "subject":{"reference":"Patient/pt-demo"},
        "effectiveDateTime":"2026-08-11",
        "code":{"coding":[{"system":"http://loinc.org","code":"85354-9"}]},
        "valueQuantity":{"value":128,"unit":"mmHg"}}'
 
-code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-  -H "X-Tenant-Id: ${TENANT}" -H 'Content-Type: application/fhir+json' \
-  -d "$body" "${HC}/r6/fhir/Observation")
-echo "    no step-up token          -> HTTP ${code}"
-[ "$code" = "401" ] && ok "refused without a step-up credential" \
-                    || bad "expected 401 without a step-up token, got ${code}"
+write() {  # write <expected> <label> [extra curl args...]
+  local expected="$1" label="$2"; shift 2
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    -H "X-Tenant-Id: ${TENANT}" -H 'Content-Type: application/fhir+json' \
+    "$@" -d "$body" "${HC}/r6/fhir/Observation")
+  printf '    %-26s -> HTTP %s\n' "$label" "$code"
+  [ "$code" = "$expected" ] && ok "$label" \
+                            || bad "$label: expected ${expected}, got ${code}"
+}
+
+write 428 "neither gate"
+write 401 "confirmed, no credential" -H 'X-Human-Confirmed: true'
 
 token=$(curl -sS -X POST -H 'Content-Type: application/json' \
   -H "X-Tenant-Id: ${TENANT}" -d "{\"tenant_id\":\"${TENANT}\"}" \
@@ -96,13 +181,17 @@ token=$(curl -sS -X POST -H 'Content-Type: application/json' \
 if [ -z "$token" ]; then
   bad "could not mint a step-up token"
 else
-  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-    -H "X-Tenant-Id: ${TENANT}" -H "X-Step-Up-Token: ${token}" \
-    -H 'Content-Type: application/fhir+json' \
-    -d "$body" "${HC}/r6/fhir/Observation")
-  echo "    step-up, no human         -> HTTP ${code}"
-  [ "$code" = "428" ] && ok "held for human confirmation" \
-                      || bad "expected 428 pending confirmation, got ${code}"
+  write 428 "credential, no human" -H "X-Step-Up-Token: ${token}"
+  write 201 "both gates satisfied" -H "X-Step-Up-Token: ${token}" \
+                                   -H 'X-Human-Confirmed: true'
+
+  # The write is only real if Aidbox holds it. Ask Aidbox, going around the
+  # proxy — the proxy reporting its own 201 says nothing about storage.
+  landed=$(curl -sS -u "${AIDBOX_CLIENT}:${AIDBOX_SECRET}" \
+    "${AIDBOX_URL}/fhir/Observation?subject=Patient/pt-demo&code=85354-9" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin).get('total',0))" 2>/dev/null)
+  [ "${landed:-0}" -ge 1 ] && ok "the Observation reached Aidbox (${landed} found)" \
+                           || bad "the write returned 201 but Aidbox has no such Observation"
 fi
 
 # ---------------------------------------------------------------------------

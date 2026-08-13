@@ -29,11 +29,24 @@ services:
     volumes:
       - ./init-bundle:/app/init-bundle:ro
     environment:
-      # Without this, Aidbox boots but every API call 302s to a browser page
-      # reading "Log in to activate Aidbox", including the proxy's own
-      # /metadata probe — which surfaces as a degraded health check rather
-      # than as "you have no licence". Free key at https://aidbox.app.
-      BOX_LICENSE: ${AIDBOX_LICENSE:?get a free licence at https://aidbox.app and put it in .env}
+      # Aidbox needs activating, and until it is, it answers EVERY route with
+      # a 302 to a browser page reading "Log in to activate Aidbox" —
+      # including /health, so the symptom looks like a network fault rather
+      # than a licence one. There are two ways to clear it, and this file
+      # supports both:
+      #
+      #   leave AIDBOX_LICENSE empty  open http://localhost:8080 and click
+      #                               "Continue with Aidbox account". This is
+      #                               what Aidbox's own examples assume, and
+      #                               it needs no .env edit.
+      #   set AIDBOX_LICENSE          a self-hosted key from aidbox.app
+      #                               (account -> licenses). Unattended runs
+      #                               and CI want this one.
+      #
+      # Empty is passed through deliberately rather than made required: an
+      # unset variable should leave you one browser click from a working
+      # stack, not stop compose from starting.
+      BOX_LICENSE: ${AIDBOX_LICENSE:-}
       BOX_ADMIN_PASSWORD: uN6jhgu8eo
       BOX_BOOTSTRAP_FHIR_PACKAGES: hl7.fhir.r4.core#4.0.1
       BOX_DB_DATABASE: aidbox
@@ -52,15 +65,25 @@ services:
       BOX_WEB_PORT: 8080
       BOX_INIT_BUNDLE: file:///app/init-bundle/bundle.json
     healthcheck:
+      # /health 302s until Aidbox is activated, so this check is also the
+      # activation gate: with AIDBOX_LICENSE unset, compose waits here until
+      # you click through in the browser, then starts the proxy on its own.
+      # The window is generous for that reason — a 7-minute one turns a
+      # coffee refill into a failed `up`.
       test: curl -f http://localhost:8080/health || exit 1
       interval: 5s
       timeout: 5s
-      retries: 90
+      retries: 180
       start_period: 30s
 
   # The guardrail layer. Every agent-facing read and write goes through here.
   healthclaw:
-    image: ghcr.io/aks129/healthclaw-guardrails:latest
+    # PINNED, not :latest. `latest` is only republished when a release is cut,
+    # so for a while it pointed at 1.9.0 — an image that predates upstream
+    # authentication and therefore ignored the two FHIR_UPSTREAM_CLIENT_*
+    # variables set below. The example read as correct and could not work.
+    # A pin makes that class of drift a pull failure instead of a silent one.
+    image: ghcr.io/aks129/healthclaw-guardrails:1.10.0
     depends_on:
       aidbox:
         condition: service_healthy
@@ -103,7 +126,7 @@ services:
 
   # What the agent actually connects to.
   mcp:
-    image: ghcr.io/aks129/healthclaw-mcp-server:latest
+    image: ghcr.io/aks129/healthclaw-mcp-server:1.10.0
     depends_on:
       healthclaw:
         condition: service_healthy

@@ -1,3 +1,8 @@
+---
+features: [AI agents, MCP, PHI redaction, Audit trail, Step-up authorization, Human-in-the-loop, Multi-tenancy]
+languages: [Python, TypeScript, Shell]
+runtimes: [Docker]
+---
 # HealthClaw Guardrails in front of Aidbox
 
 Aidbox holds the record. An AI agent talks to a guardrail proxy in front of
@@ -23,28 +28,50 @@ server, and still holds the complete, fully-identified record.
 Companion to the article *"We standardized how to get health data. We never
 standardized what an agent may do with it."*
 
-## Run it
+## Prerequisites
 
-You need a free Aidbox licence from [aidbox.app](https://aidbox.app)
-(Aidbox account → licenses → new self-hosted licence).
+1. Docker
+2. Cloned repository
 
 ```bash
-cp .env.example .env     # paste AIDBOX_LICENSE, set STEP_UP_SECRET
-docker compose up -d
-./scripts/seed-aidbox.sh # 1 Patient, 1 Condition, 3 Observations
-./scripts/walkthrough.sh # the five steps below, asserted
+git clone https://github.com/aks129/HealthClawGuardrails.git
+cd HealthClawGuardrails/examples/aidbox-healthclaw-guardrails
 ```
 
-Two things that will bite you before anything interesting happens:
+## Run it
 
-- **No licence, no API.** Without `AIDBOX_LICENSE` Aidbox starts and looks
-  healthy, then answers every API call with a 302 to a browser page reading
-  "Log in to activate Aidbox". Through the proxy that surfaces as a degraded
-  upstream, which says nothing about licensing. Compose refuses to start
-  without the variable for exactly this reason.
+```bash
+cp .env.example .env      # set STEP_UP_SECRET; AIDBOX_LICENSE is optional
+docker compose up -d
+```
+
+**Activate Aidbox.** Open <http://localhost:8080> and click *Continue with
+Aidbox account*. Until you do, Aidbox answers **every** route with a 302 to
+"Log in to activate Aidbox" — including `/health`, so the symptom reads as a
+network fault rather than a licence one. Compose is waiting on that health
+check and starts the proxy by itself once you are through. To skip the click
+entirely, put a free self-hosted key from [aidbox.app](https://aidbox.app)
+(account → licenses) in `AIDBOX_LICENSE`; unattended runs need that path.
+
+```bash
+./scripts/seed-aidbox.sh  # 1 Patient, 1 Condition, 3 Observations
+./scripts/walkthrough.sh  # the steps below, asserted
+```
+
+`walkthrough.sh` opens with a preflight that separates "Aidbox is not
+activated" from "the proxy image is too old to authenticate", because both
+otherwise surface as the same unexplained failure several steps later.
+
+Two more things that will bite you:
+
 - **macOS holds port 5000.** AirPlay Receiver (ControlCenter) listens there,
   so `up` fails with "address already in use". Set `HEALTHCLAW_PORT=5099` in
   `.env` and read `:5099` for `:5000` throughout.
+- **The image tags are pinned, deliberately.** `:latest` is only republished
+  when a release is cut, and for a while it pointed at a build that predated
+  upstream authentication — so it ignored the two `FHIR_UPSTREAM_CLIENT_*`
+  variables this example depends on, and the wiring below was configured
+  correctly and did nothing. A pin turns that into a pull failure instead.
 
 One more, if you also develop HealthClaw itself: **running this example makes
 120 of HealthClaw's own tests fail.** `FHIR_VALIDATOR_URL` defaults to
@@ -104,20 +131,41 @@ curl -H "X-Tenant-Id: demo" "http://localhost:5000/r6/fhir/AuditEvent?_count=1"
 An AuditEvent naming the tenant, the agent, the resource and the time, with no
 PHI in the detail — so the record you hand a reviewer is safe to hand over.
 
-### 3. A write, blocked twice
+### 3. A write, and two gates that do not substitute for each other
 
-Recording a blood pressure, with no step-up token, returns **401**. Mint a
-token and retry: **428**, pending human confirmation. Only after confirmation
-does the Observation reach Aidbox, which you can verify by querying Aidbox
-directly, going around the proxy:
+Recording a blood pressure needs a machine credential *and* a human
+confirmation, and neither one stands in for the other. Four requests show
+that better than two, because a pair of refusals in sequence only proves that
+*some* refusal happened:
+
+| `X-Human-Confirmed` | `X-Step-Up-Token` | result |
+|---|---|---|
+| — | — | **428** confirmation missing |
+| `true` | — | **401** a confirmation is not a credential |
+| — | valid | **428** a credential is not a confirmation |
+| `true` | valid | **201** |
+
+The bare request reports **428** rather than 401 because the human-in-the-loop
+check runs in a `before_request` hook, ahead of every handler's auth gate —
+that ordering is what stops an unauthenticated caller reaching the handler at
+all. Worth knowing before you read a status code as evidence of which gate
+you tripped.
+
+Only after both does the Observation reach Aidbox, which the walkthrough
+verifies by asking Aidbox rather than the proxy — a proxy reporting its own
+201 says nothing about what was stored:
 
 ```bash
 curl -u "$AIDBOX_CLIENT:$AIDBOX_SECRET" \
   "http://localhost:8080/fhir/Observation?subject=Patient/pt-demo&code=85354-9"
 ```
 
-That sequence is the whole argument. The agent did useful work. It could not
+That matrix is the whole argument. The agent did useful work. It could not
 finish alone.
+
+One caveat the table cannot carry: `X-Human-Confirmed` is set by the caller,
+so it evidences a human the way a checkbox does. It is a compensating
+control, not proof. See *What this example does not show* below.
 
 ### 4. Grade the deployment
 
