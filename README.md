@@ -48,7 +48,13 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.10.0 · 1,490+ Python + 170 Node tests · 29 MCP tools · **[CareAgents](https://careagents.cloud)** hosted consumer app (passkey sign-in, advisors, web/Telegram/iMessage) · real-world action rail (provably out-of-band gate) · forms rail end-to-end (`$populate` → human review → provenance PDF) · FHIR R4 US Core v9 + R6 v6.0.0-ballot3 · HL7 SDC forms · NQF 0018 quality measure · lab interpreter (`$interpret`) · care-gaps reminders (`$care-gaps`) + embedded MCP-App view · ChatGPT-connector `search`/`fetch` · Fasten TEFCA · HealthEx · HBO · Flexpa · Epic · MEDENT · Open Wearables · SMART Health Links · Claude Code plugin · OpenAI/Gemini adapters
+**At a glance:** v1.10.0, with 1,490+ Python and 170 Node tests across 29 MCP tools.
+**[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and web/Telegram/iMessage.
+Two rails run end to end — real-world actions behind a provably out-of-band gate, and forms (`$populate` → human review → provenance PDF).
+Standards: FHIR R4 US Core v9 and R6 v6.0.0-ballot3, HL7 SDC forms, NQF 0018.
+Operations: lab interpreter (`$interpret`), care-gaps reminders (`$care-gaps`) with an embedded MCP-App view, and ChatGPT-connector `search`/`fetch`.
+Connectors: Fasten TEFCA, HealthEx, HBO, Flexpa, Epic, MEDENT, Open Wearables, SMART Health Links.
+Also a Claude Code plugin and OpenAI/Gemini adapters.
 
 ## Try it in 60 seconds — no clone, no keys
 
