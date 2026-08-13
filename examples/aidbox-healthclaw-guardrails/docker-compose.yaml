@@ -28,49 +28,59 @@ services:
       - 8080:8080
     volumes:
       - ./init-bundle:/app/init-bundle:ro
+    # LIST form, not the mapping form used elsewhere in this file, for the
+    # sake of the first entry. Aidbox needs activating, and until it is, it
+    # answers EVERY route with a 302 to a browser page reading "Log in to
+    # activate Aidbox" — including /health, so the symptom looks like a
+    # network fault rather than a licence one. Two ways to clear it:
+    #
+    #   set nothing     open http://localhost:8080 and click "Continue with
+    #                   Aidbox account". This is what Aidbox's own examples
+    #                   assume, and it needs no .env edit.
+    #   set BOX_LICENSE a self-hosted key from aidbox.app (account ->
+    #                   licenses). Unattended runs and CI want this one.
+    #
+    # A bare `- BOX_LICENSE` is the only form that expresses that choice.
+    # `BOX_LICENSE: ${BOX_LICENSE:-}` looks equivalent and is not: it sets
+    # the variable to the empty string, and Aidbox rejects an empty licence
+    # harder than a missing one — it refuses to boot at all with "License is
+    # invalid ... not in correct format". Unset and empty are different
+    # states here, and empty is the one that breaks. So: absent from .env
+    # means absent from the container.
     environment:
-      # Aidbox needs activating, and until it is, it answers EVERY route with
-      # a 302 to a browser page reading "Log in to activate Aidbox" —
-      # including /health, so the symptom looks like a network fault rather
-      # than a licence one. There are two ways to clear it, and this file
-      # supports both:
-      #
-      #   leave AIDBOX_LICENSE empty  open http://localhost:8080 and click
-      #                               "Continue with Aidbox account". This is
-      #                               what Aidbox's own examples assume, and
-      #                               it needs no .env edit.
-      #   set AIDBOX_LICENSE          a self-hosted key from aidbox.app
-      #                               (account -> licenses). Unattended runs
-      #                               and CI want this one.
-      #
-      # Empty is passed through deliberately rather than made required: an
-      # unset variable should leave you one browser click from a working
-      # stack, not stop compose from starting.
-      BOX_LICENSE: ${AIDBOX_LICENSE:-}
-      BOX_ADMIN_PASSWORD: uN6jhgu8eo
-      BOX_BOOTSTRAP_FHIR_PACKAGES: hl7.fhir.r4.core#4.0.1
-      BOX_DB_DATABASE: aidbox
-      BOX_DB_HOST: postgres
-      BOX_DB_PASSWORD: hb1NnSed7w
-      BOX_DB_PORT: "5432"
-      BOX_DB_USER: aidbox
-      BOX_FHIR_COMPLIANT_MODE: true
-      BOX_FHIR_CORRECT_AIDBOX_FORMAT: true
-      BOX_FHIR_SCHEMA_VALIDATION: true
-      BOX_ROOT_CLIENT_SECRET: qNbQS6sw82
-      BOX_SECURITY_AUDIT_LOG_ENABLED: true
-      BOX_SECURITY_DEV_MODE: true
-      BOX_SETTINGS_MODE: read-write
-      BOX_WEB_BASE_URL: http://localhost:8080
-      BOX_WEB_PORT: 8080
-      BOX_INIT_BUNDLE: file:///app/init-bundle/bundle.json
+      - BOX_LICENSE
+      - BOX_ADMIN_PASSWORD=uN6jhgu8eo
+      - BOX_BOOTSTRAP_FHIR_PACKAGES=hl7.fhir.r4.core#4.0.1
+      - BOX_DB_DATABASE=aidbox
+      - BOX_DB_HOST=postgres
+      - BOX_DB_PASSWORD=hb1NnSed7w
+      - BOX_DB_PORT=5432
+      - BOX_DB_USER=aidbox
+      - BOX_FHIR_COMPLIANT_MODE=true
+      - BOX_FHIR_CORRECT_AIDBOX_FORMAT=true
+      - BOX_FHIR_SCHEMA_VALIDATION=true
+      - BOX_ROOT_CLIENT_SECRET=qNbQS6sw82
+      - BOX_SECURITY_AUDIT_LOG_ENABLED=true
+      - BOX_SECURITY_DEV_MODE=true
+      - BOX_SETTINGS_MODE=read-write
+      - BOX_WEB_BASE_URL=http://localhost:8080
+      - BOX_WEB_PORT=8080
+      - BOX_INIT_BUNDLE=file:///app/init-bundle/bundle.json
     healthcheck:
-      # /health 302s until Aidbox is activated, so this check is also the
-      # activation gate: with AIDBOX_LICENSE unset, compose waits here until
-      # you click through in the browser, then starts the proxy on its own.
-      # The window is generous for that reason — a 7-minute one turns a
-      # coffee refill into a failed `up`.
-      test: curl -f http://localhost:8080/health || exit 1
+      # Explicitly 200, NOT `curl -f`. Until Aidbox is activated it answers
+      # /health with a 302 to the activation page, and `curl -f` only fails
+      # on 4xx/5xx — so the obvious `curl -f http://localhost:8080/health`
+      # reports an unactivated Aidbox as healthy, compose starts the proxy
+      # against a server that serves nothing, and the first real symptom
+      # arrives several steps later somewhere else entirely.
+      #
+      # Checking for 200 makes this the activation gate it was supposed to
+      # be: with BOX_LICENSE unset, compose waits here until you click
+      # through in the browser, then starts the proxy on its own. The window
+      # is generous for that reason — a 7-minute one turns a coffee refill
+      # into a failed `up`.
+      test: ["CMD-SHELL",
+             "curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/health | grep -q '^200$$'"]
       interval: 5s
       timeout: 5s
       retries: 180

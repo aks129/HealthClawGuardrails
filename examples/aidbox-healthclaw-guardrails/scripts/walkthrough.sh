@@ -55,7 +55,7 @@ The two causes, in the order they actually happen:
   1. Aidbox is not activated. It answers EVERY route with a 302 to
      "Log in to activate Aidbox" — including /health, so this looks like a
      network fault rather than a licence one. Open http://localhost:8080 and
-     click "Continue with Aidbox account", or set AIDBOX_LICENSE in .env.
+     click "Continue with Aidbox account", or set BOX_LICENSE in .env.
 
   2. The proxy image predates upstream authentication. Images published
      before v1.10.0 ignore FHIR_UPSTREAM_CLIENT_ID and

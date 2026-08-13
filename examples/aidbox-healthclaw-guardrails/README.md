@@ -41,7 +41,7 @@ cd HealthClawGuardrails/examples/aidbox-healthclaw-guardrails
 ## Run it
 
 ```bash
-cp .env.example .env      # set STEP_UP_SECRET; AIDBOX_LICENSE is optional
+cp .env.example .env      # set STEP_UP_SECRET; BOX_LICENSE stays commented out
 docker compose up -d
 ```
 
@@ -51,7 +51,9 @@ Aidbox account*. Until you do, Aidbox answers **every** route with a 302 to
 network fault rather than a licence one. Compose is waiting on that health
 check and starts the proxy by itself once you are through. To skip the click
 entirely, put a free self-hosted key from [aidbox.app](https://aidbox.app)
-(account → licenses) in `AIDBOX_LICENSE`; unattended runs need that path.
+(account → licenses) and uncomment `BOX_LICENSE` in `.env`; unattended runs
+need that path. Do not uncomment it and leave it blank — Aidbox rejects an
+empty licence harder than a missing one, and refuses to boot.
 
 ```bash
 ./scripts/seed-aidbox.sh  # 1 Patient, 1 Condition, 3 Observations

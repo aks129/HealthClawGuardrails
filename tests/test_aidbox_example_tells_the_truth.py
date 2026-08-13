@@ -67,6 +67,26 @@ def matrix():
     return rows
 
 
+@pytest.fixture
+def no_stray_validator(monkeypatch):
+    """Pin the profile validator to unavailable, as the container has it.
+
+    Without this the test fails for exactly the people most likely to run
+    it. `FHIR_VALIDATOR_URL` defaults to http://localhost:8080, and
+    availability is "GET /health answered under 400" — so an Aidbox running
+    on 8080, which is what this very example starts, is mistaken for a
+    validator and turns the 201 row into a 422. Issue #488.
+
+    Inside the compose network nothing listens on the proxy's own
+    localhost:8080 (Aidbox is at http://aidbox:8080), so unavailable is what
+    the example actually runs with. This makes the test agree with that
+    rather than with whatever happens to be bound on the developer's laptop.
+    """
+    from r6.validator import R6Validator
+    monkeypatch.setattr(R6Validator, "_is_validator_available",
+                        lambda self: False)
+
+
 class TestTheWalkthroughAssertsWhatTheServerReturns:
     """MUTATION: change any expected status in walkthrough.sh -> red.
 
@@ -74,7 +94,8 @@ class TestTheWalkthroughAssertsWhatTheServerReturns:
     the server returns 428.
     """
 
-    def test_every_row_matches(self, client, tenant_id, step_up_token, matrix):
+    def test_every_row_matches(self, client, tenant_id, step_up_token, matrix,
+                               no_stray_validator):
         body = {
             "resourceType": "Observation",
             "status": "final",
@@ -172,6 +193,32 @@ class TestTheComposeFileConfiguresThingsThatExist:
             f"the example sets {unread}, which no non-test Python reads. "
             "A setting the app ignores reads to a reviewer exactly like one "
             "it honours.")
+
+
+class TestTheActivationGateCanActuallyGate:
+    """MUTATION: restore `curl -f http://localhost:8080/health` -> red.
+
+    Aidbox answers /health with a 302 to its activation page until it is
+    activated, and `curl -f` fails only on 4xx and 5xx. The obvious health
+    check therefore reported an unactivated Aidbox as HEALTHY, compose
+    started the proxy against a server that serves nothing, and the first
+    symptom appeared several steps later somewhere else. Confirmed both ways
+    inside the running container: `curl -f` exits 0, an explicit 200 check
+    exits 1.
+
+    The catalogue's §12 — a control that cannot work where it is served.
+    """
+
+    def test_the_aidbox_check_requires_a_200(self):
+        import yaml
+        compose = yaml.safe_load(COMPOSE.read_text())
+        test = compose["services"]["aidbox"]["healthcheck"]["test"]
+        rendered = " ".join(test) if isinstance(test, list) else str(test)
+        assert "200" in rendered, (
+            "the Aidbox health check does not require a 200. A 302 to the "
+            '"Log in to activate Aidbox" page passes `curl -f`, so an '
+            "unactivated Aidbox reports healthy and the proxy starts against "
+            "a server that answers nothing.")
 
 
 class TestTheImagePinMatchesThisRepo:
