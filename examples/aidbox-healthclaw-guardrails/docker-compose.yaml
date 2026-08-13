@@ -28,39 +28,72 @@ services:
       - 8080:8080
     volumes:
       - ./init-bundle:/app/init-bundle:ro
+    # LIST form, not the mapping form used elsewhere in this file, for the
+    # sake of the first entry. Aidbox needs activating, and until it is, it
+    # answers EVERY route with a 302 to a browser page reading "Log in to
+    # activate Aidbox" — including /health, so the symptom looks like a
+    # network fault rather than a licence one. Two ways to clear it:
+    #
+    #   set nothing     open http://localhost:8080 and click "Continue with
+    #                   Aidbox account". This is what Aidbox's own examples
+    #                   assume, and it needs no .env edit.
+    #   set BOX_LICENSE a self-hosted key from aidbox.app (account ->
+    #                   licenses). Unattended runs and CI want this one.
+    #
+    # A bare `- BOX_LICENSE` is the only form that expresses that choice.
+    # `BOX_LICENSE: ${BOX_LICENSE:-}` looks equivalent and is not: it sets
+    # the variable to the empty string, and Aidbox rejects an empty licence
+    # harder than a missing one — it refuses to boot at all with "License is
+    # invalid ... not in correct format". Unset and empty are different
+    # states here, and empty is the one that breaks. So: absent from .env
+    # means absent from the container.
     environment:
-      # Without this, Aidbox boots but every API call 302s to a browser page
-      # reading "Log in to activate Aidbox", including the proxy's own
-      # /metadata probe — which surfaces as a degraded health check rather
-      # than as "you have no licence". Free key at https://aidbox.app.
-      BOX_LICENSE: ${AIDBOX_LICENSE:?get a free licence at https://aidbox.app and put it in .env}
-      BOX_ADMIN_PASSWORD: uN6jhgu8eo
-      BOX_BOOTSTRAP_FHIR_PACKAGES: hl7.fhir.r4.core#4.0.1
-      BOX_DB_DATABASE: aidbox
-      BOX_DB_HOST: postgres
-      BOX_DB_PASSWORD: hb1NnSed7w
-      BOX_DB_PORT: "5432"
-      BOX_DB_USER: aidbox
-      BOX_FHIR_COMPLIANT_MODE: true
-      BOX_FHIR_CORRECT_AIDBOX_FORMAT: true
-      BOX_FHIR_SCHEMA_VALIDATION: true
-      BOX_ROOT_CLIENT_SECRET: qNbQS6sw82
-      BOX_SECURITY_AUDIT_LOG_ENABLED: true
-      BOX_SECURITY_DEV_MODE: true
-      BOX_SETTINGS_MODE: read-write
-      BOX_WEB_BASE_URL: http://localhost:8080
-      BOX_WEB_PORT: 8080
-      BOX_INIT_BUNDLE: file:///app/init-bundle/bundle.json
+      - BOX_LICENSE
+      - BOX_ADMIN_PASSWORD=uN6jhgu8eo
+      - BOX_BOOTSTRAP_FHIR_PACKAGES=hl7.fhir.r4.core#4.0.1
+      - BOX_DB_DATABASE=aidbox
+      - BOX_DB_HOST=postgres
+      - BOX_DB_PASSWORD=hb1NnSed7w
+      - BOX_DB_PORT=5432
+      - BOX_DB_USER=aidbox
+      - BOX_FHIR_COMPLIANT_MODE=true
+      - BOX_FHIR_CORRECT_AIDBOX_FORMAT=true
+      - BOX_FHIR_SCHEMA_VALIDATION=true
+      - BOX_ROOT_CLIENT_SECRET=qNbQS6sw82
+      - BOX_SECURITY_AUDIT_LOG_ENABLED=true
+      - BOX_SECURITY_DEV_MODE=true
+      - BOX_SETTINGS_MODE=read-write
+      - BOX_WEB_BASE_URL=http://localhost:8080
+      - BOX_WEB_PORT=8080
+      - BOX_INIT_BUNDLE=file:///app/init-bundle/bundle.json
     healthcheck:
-      test: curl -f http://localhost:8080/health || exit 1
+      # Explicitly 200, NOT `curl -f`. Until Aidbox is activated it answers
+      # /health with a 302 to the activation page, and `curl -f` only fails
+      # on 4xx/5xx — so the obvious `curl -f http://localhost:8080/health`
+      # reports an unactivated Aidbox as healthy, compose starts the proxy
+      # against a server that serves nothing, and the first real symptom
+      # arrives several steps later somewhere else entirely.
+      #
+      # Checking for 200 makes this the activation gate it was supposed to
+      # be: with BOX_LICENSE unset, compose waits here until you click
+      # through in the browser, then starts the proxy on its own. The window
+      # is generous for that reason — a 7-minute one turns a coffee refill
+      # into a failed `up`.
+      test: ["CMD-SHELL",
+             "curl -sS -o /dev/null -w '%{http_code}' http://localhost:8080/health | grep -q '^200$$'"]
       interval: 5s
       timeout: 5s
-      retries: 90
+      retries: 180
       start_period: 30s
 
   # The guardrail layer. Every agent-facing read and write goes through here.
   healthclaw:
-    image: ghcr.io/aks129/healthclaw-guardrails:latest
+    # PINNED, not :latest. `latest` is only republished when a release is cut,
+    # so for a while it pointed at 1.9.0 — an image that predates upstream
+    # authentication and therefore ignored the two FHIR_UPSTREAM_CLIENT_*
+    # variables set below. The example read as correct and could not work.
+    # A pin makes that class of drift a pull failure instead of a silent one.
+    image: ghcr.io/aks129/healthclaw-guardrails:1.10.0
     depends_on:
       aidbox:
         condition: service_healthy
@@ -103,7 +136,7 @@ services:
 
   # What the agent actually connects to.
   mcp:
-    image: ghcr.io/aks129/healthclaw-mcp-server:latest
+    image: ghcr.io/aks129/healthclaw-mcp-server:1.10.0
     depends_on:
       healthclaw:
         condition: service_healthy
