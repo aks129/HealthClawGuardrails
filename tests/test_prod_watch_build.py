@@ -39,16 +39,21 @@ class _Resp:
 
 
 def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
-              demo_patients=1):
+              demo_patients=None):
     def get(url, timeout, **kw):
         if url.endswith("/r6/fhir/health"):
             return _Resp(200)
         if "$conformance" in url:
             return _Resp(200, {"grade": grade})
         if "Patient" in url:
+            # None means "the tenant is in the state it is supposed to be in".
+            # A number means "this many patients that are not the demo set",
+            # which is what duplication actually looked like.
+            ids = (list(prod_watch.DEMO_PATIENTS) if demo_patients is None
+                   else [f"p{i}" for i in range(demo_patients)])
             return _Resp(200, {"entry": [
-                {"resource": {"resourceType": "Patient", "id": f"p{i}"}}
-                for i in range(demo_patients)]})
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in ids]})
         if "Condition" in url:
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
@@ -420,10 +425,10 @@ def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch,
 
 # --- the demo tenant's shape (#457, catalogue §10) ---------------------------
 
-def test_a_single_patient_demo_tenant_passes():
+def test_the_expected_demo_patients_pass():
     """The state the demo is supposed to be in."""
     prod_watch.run(timeout=1, expect_sha=[])
-    name = "healthclaw: the demo tenant is one patient"
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
     assert _named(name) and _named(name)[0][1] is True, _named(name)
 
 
@@ -439,7 +444,7 @@ def test_a_duplicated_demo_tenant_is_a_hard_failure(monkeypatch):
     monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=19))
     rc = prod_watch.run(timeout=1, expect_sha=[])
 
-    name = "healthclaw: the demo tenant is one patient"
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
     entry = _named(name)
     assert entry, "the demo-tenant check did not run"
     assert entry[0][1] is False
@@ -450,13 +455,67 @@ def test_a_duplicated_demo_tenant_is_a_hard_failure(monkeypatch):
 def test_an_empty_demo_tenant_is_a_failure_not_a_pass(monkeypatch):
     """Zero is a real failure, and a different one from "cannot read".
 
-    MUTATION: use `if patients:` instead of `is not None` -> red, because an
+    MUTATION: use `if found:` instead of `is not None` -> red, because an
     empty tenant would then be reported as an unreadable one.
     """
     monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=0))
     prod_watch.run(timeout=1, expect_sha=[])
 
-    entry = _named("healthclaw: the demo tenant is one patient")
+    entry = _named("healthclaw: the demo tenant holds exactly its demo patients")
     assert entry and entry[0][1] is False
     assert "0 Patient(s)" in entry[0][2], (
         f"an empty tenant must report as empty, not as unreadable: {entry}")
+
+
+def test_a_missing_demo_persona_is_a_failure(monkeypatch):
+    """The failure a COUNT cannot see, and the one that costs a recording.
+
+    Three of four patients is not "nearly right" — it is a demo that opens on
+    a patient who is not there. The old check counted, so it read this as
+    healthy right up until the count happened to be one, and read the correct
+    four-patient tenant as broken for four days after the personas were
+    seeded.
+
+    MUTATION: compare len(found) to len(DEMO_PATIENTS) instead of the sets ->
+    red, because a substitution keeps the count.
+    """
+    kept = list(prod_watch.DEMO_PATIENTS)[:-1]
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in kept]})
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    rc = prod_watch.run(timeout=1, expect_sha=[])
+
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
+    entry = _named(name)
+    assert entry and entry[0][1] is False
+    assert "missing" in entry[0][2] and prod_watch.DEMO_PATIENTS[-1] in entry[0][2], (
+        f"the report must name the persona that vanished: {entry}")
+    assert rc == 1
+
+
+def test_a_substituted_patient_is_caught_though_the_count_is_right(monkeypatch):
+    """Four patients, one of them a stranger. A count says fine."""
+    swapped = list(prod_watch.DEMO_PATIENTS)[:-1] + ["demo-someone-else"]
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in swapped]})
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    rc = prod_watch.run(timeout=1, expect_sha=[])
+
+    entry = _named("healthclaw: the demo tenant holds exactly its demo patients")
+    assert entry and entry[0][1] is False
+    assert "unexpected demo-someone-else" in entry[0][2], entry
+    assert rc == 1
