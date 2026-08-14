@@ -58,3 +58,24 @@ def test_the_dry_run_refuses_to_write_without_a_credential():
         "expected a refusal for a missing internal secret, got "
         f"{result.returncode}")
     assert "internal-secret" in result.stderr
+
+
+def test_the_medplum_gate_check_sends_a_parseable_body():
+    """MUTATION: drop Content-Type from the no-step-up request -> red.
+
+    scripts/smoke_medplum.py's first check is named "write blocked without
+    step-up (401)" and for its whole life it asserted on a 400. Without a
+    Content-Type the body never parses, and the depth-bounded parse that
+    deliberately runs AHEAD of the auth gate (#312) refuses the request as
+    malformed — so the gate the check is named after was never reached.
+
+    It failed rather than passed, which is the only reason it was ever
+    noticed; written as "not 201" it would have passed forever while testing
+    nothing. Pinned here because CI cannot run the script itself: it needs a
+    live Medplum behind a live HealthClaw.
+    """
+    src = (ROOT / "scripts" / "smoke_medplum.py").read_text()
+    block = src.split("# 1. Write is gated")[1].split("check(")[0]
+    assert "Content-Type" in block, (
+        "the no-step-up write must send a parseable body, or it is refused "
+        "as malformed before the credential is ever considered")

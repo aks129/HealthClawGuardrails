@@ -114,11 +114,10 @@ exist, by different routes, and that is the actual problem:
 | how | `MEDPLUM_BASE_URL` + client credentials | `FHIR_UPSTREAM_URL` + HTTP Basic |
 | code | `MedplumProxy` subclass | base `FHIRUpstreamProxy` |
 | auth | OAuth2 client-credentials | HTTP Basic |
-| verified against a live server | no | yes (`examples/aidbox-healthclaw-guardrails`) |
+| verified against a live server | yes, self-hosted 5.1.30 ([runbook](runbooks/medplum-self-host-qa.md)) | yes ([example](../examples/aidbox-healthclaw-guardrails/)) |
 
 Two code paths, two naming conventions, no way for an operator to ask what is
-supported. Aidbox is the better-verified of the two and is the one with no
-name of its own.
+supported. Both are verified now. Aidbox is still the one with no name of its own.
 
 **Recommendation, not done here:** one connector registry keyed by a
 `FHIR_UPSTREAM_KIND` of `aidbox` / `medplum` / `hapi` / `generic`, each
@@ -128,7 +127,16 @@ breaks. That is a focused change, but it is a change to the one path every
 upstream read and write goes through, and it deserves its own PR rather than a
 ride along with a bug fix.
 
-The prerequisite is a live Medplum to verify against. Aidbox took a licence
-and a browser click, and it found five defects that reading the code had not.
-Nothing in this section should be believed about Medplum until the same thing
-has been done to it.
+The prerequisite was a live Medplum to verify against. That has since been
+done — see [the runbook](runbooks/medplum-self-host-qa.md). A self-hosted
+Medplum needs no credentials from anybody, and it is the configuration that
+matters: the hosted service exercises the one code path that already worked.
+
+The run confirmed the two fixes above against a real server and found a third
+defect, in the QA script rather than the product. `smoke_medplum.py`'s first
+check is named `write blocked without step-up (401)` and was asserting on a
+400: it sent no `Content-Type`, so the body never parsed and the request was
+refused as malformed before the credential was considered. It failed rather
+than passed, which is the only reason it was noticed.
+
+Final state: 8/8 guardrail checks against self-hosted Medplum 5.1.30.
