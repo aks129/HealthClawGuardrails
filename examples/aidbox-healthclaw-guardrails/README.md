@@ -78,6 +78,10 @@ re-enactment, and re-enactments drift from the system they depict. Here the
 assertions and the frames come from the same requests, so a video showing a
 pass cannot exist unless the pass happened.
 
+A 14-second recording of one such run is committed at
+[`static/videos/aidbox-guardrails-demo.mp4`](../../static/videos/aidbox-guardrails-demo.mp4).
+Every value in it is a live response from the published images.
+
 Two more things that will bite you:
 
 - **macOS holds port 5000.** AirPlay Receiver (ControlCenter) listens there,
