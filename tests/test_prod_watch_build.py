@@ -519,3 +519,64 @@ def test_a_substituted_patient_is_caught_though_the_count_is_right(monkeypatch):
     assert entry and entry[0][1] is False
     assert "unexpected demo-someone-else" in entry[0][2], entry
     assert rc == 1
+
+
+# --- repeat suppression: an alarm that repeats itself gets muted -------------
+#
+# #427 collected 35 identical comments at six-hour intervals and the
+# maintainer muted the thread, which is the rational response and also the end
+# of the alarm: the next real failure would have arrived in a muted thread.
+# These pin the mechanism that stops it. The semantic walk-through lives in
+# tests/tools/prod_watch_alarm_sim.js, which drives the real script body; CI
+# cannot run node, so what CI can hold is that the moving parts are still here.
+
+def test_the_firing_branch_refreshes_the_issue_body_every_run():
+    """An edit sends no notification, so the issue can stay current for free.
+
+    MUTATION: delete the issues.update call from the firing branch -> red.
+    A stale body is worse than none: it shows a failure that may have been
+    superseded, next to a comment thread that stopped when nothing changed.
+    """
+    firing = WORKFLOW.split("if (firing) {")[1].split("} else if (resolved)")[0]
+    assert "issues.update" in firing, (
+        "the firing branch no longer refreshes the issue body, so the issue "
+        "shows whatever was true the last time something changed")
+    assert "body: text" in firing
+
+
+def test_a_comment_is_posted_only_when_the_fingerprint_changes():
+    """MUTATION: drop the `previous !== fingerprint` guard -> red.
+
+    Without it the workflow is back to one notification every six hours for
+    as long as anything is wrong.
+    """
+    firing = WORKFLOW.split("if (firing) {")[1].split("} else if (resolved)")[0]
+    assert "previous !== fingerprint" in firing, (
+        "createComment is no longer guarded by a change in what is failing")
+    guard = firing.index("previous !== fingerprint")
+    comment = firing.index("issues.createComment")
+    assert guard < comment, (
+        "the comment must be inside the change guard, not beside it")
+
+
+def test_an_unprovable_state_still_speaks():
+    """Silence on a state we cannot verify is this workflow's own failure mode.
+
+    With no status.json there is no way to show the failure is unchanged, so
+    the fingerprint is seeded with the run id and can never match the stored
+    one. MUTATION: give the unknown case a constant -> the alarm goes quiet
+    for every run after the first, which is the failure #258 was about.
+    """
+    assert "unverified-run-${context.runId}" in WORKFLOW, (
+        "an unverifiable run must produce a fingerprint that cannot match")
+
+
+def test_the_fingerprint_is_the_failing_set_not_its_details():
+    """A count moving 4 -> 5 while the same check fails is not news.
+
+    Fingerprinting on details would re-notify on every run whose numbers
+    wobble, which is the noise this replaced.
+    """
+    assert "c.ok !== true).map(c => c.name)" in WORKFLOW, (
+        "the outage fingerprint should be built from failing check NAMES")
+    assert "checks:${failingNames}" in WORKFLOW
