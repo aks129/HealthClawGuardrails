@@ -133,6 +133,14 @@ def _synthetic_patient():
 def _synthetic_observation(subject_ref: str = "Patient/conformance-subject"):
     # A CLINICAL resource — human-in-the-loop and medical disclaimers apply to
     # clinical types (Observation/Condition/...), not to demographic Patient.
+    #
+    # PASS A REAL SUBJECT when one can be made. The default references a
+    # patient nobody creates, which the local SQLite store accepts because it
+    # validates no references — and a real FHIR server refuses. Against Aidbox
+    # every clinical-write probe returned 422 and the harness reported it as
+    # "the gate blocks confirmed writes too, so its 428s prove nothing": a
+    # true observation with the wrong cause attached. The gate was fine; the
+    # reference was dangling.
     return {
         "resourceType": "Observation",
         "status": "final",
@@ -522,6 +530,19 @@ def _create_synthetic(client, ctx) -> tuple[Optional[str], object]:
     return pid, status
 
 
+def _subject_ref(client, ctx) -> str:
+    """A subject reference for a clinical probe, real where one can be made.
+
+    Falls back to the placeholder when the Patient create fails, rather than
+    adding a check and returning early: a deployment that refuses writes
+    should still reach the clinical-write checks and fail THEM, which is the
+    report that names the actual property. A gate here would only change
+    which check reports the same failure.
+    """
+    pid, _ = _create_synthetic(client, ctx)
+    return f"Patient/{pid}" if pid else "Patient/conformance-subject"
+
+
 def _is_resource(body, resource_type: str, rid: str) -> bool:
     """The response IS the resource that was asked for."""
     return (isinstance(body, dict)
@@ -720,10 +741,11 @@ def probe_human_in_the_loop(client, ctx) -> ProbeResult:
     r = ProbeResult("human_in_the_loop", "Human-in-the-Loop")
     # A CLINICAL write with step-up present but human confirmation absent must
     # yield 428. (Demographic Patient writes are not gated by human-in-the-loop.)
+    subject = _subject_ref(client, ctx)
     headers = {"X-Tenant-Id": ctx.tenant, "X-Step-Up-Token": ctx.step_up_token,
                "Content-Type": "application/fhir+json"}
     status, _, _ = client.request("POST", "/Observation", headers,
-                                  _synthetic_observation())
+                                  _synthetic_observation(subject))
     r.checks.append(Check("clinical write without human confirmation is blocked (428)",
                           status == 428, f"status {status}"))
 
@@ -736,7 +758,7 @@ def probe_human_in_the_loop(client, ctx) -> ProbeResult:
     # mechanism. This grades the gate's behavior, not the attestation behind
     # it, and the report says so in the note.
     status, body, _ = client.request("POST", "/Observation", ctx.write_headers(),
-                                     _synthetic_observation())
+                                     _synthetic_observation(subject))
     oid = body.get("id") if isinstance(body, dict) else None
     r.checks.append(Check("confirmed clinical write is accepted",
                           bool(oid) and status in (200, 201),
@@ -780,7 +802,8 @@ def probe_medical_disclaimer(client, ctx) -> ProbeResult:
     r = ProbeResult("medical_disclaimer", "Medical Disclaimers")
     # Disclaimers attach to CLINICAL reads — create + read back an Observation.
     status, body, _ = client.request(
-        "POST", "/Observation", ctx.write_headers(), _synthetic_observation())
+        "POST", "/Observation", ctx.write_headers(),
+        _synthetic_observation(_subject_ref(client, ctx)))
     oid = body.get("id") if isinstance(body, dict) else None
     if not oid:
         r.checks.append(Check("synthetic observation created", False,

@@ -1,0 +1,13 @@
+{
+  "name": "aidbox-healthclaw-guardrails-qa",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Asserts the Aidbox example against the running stack, and records the run",
+  "scripts": {
+    "test": "playwright test",
+    "install:browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
