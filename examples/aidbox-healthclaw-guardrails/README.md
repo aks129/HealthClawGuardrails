@@ -41,7 +41,8 @@ cd HealthClawGuardrails/examples/aidbox-healthclaw-guardrails
 ## Run it
 
 ```bash
-cp .env.example .env      # set STEP_UP_SECRET; BOX_LICENSE stays commented out
+cp .env.example .env      # set STEP_UP_SECRET and MCP_AUTH_TOKEN;
+                          # BOX_LICENSE stays commented out
 docker compose up -d
 ```
 
@@ -236,6 +237,32 @@ references; Aidbox refuses it, every clinical-write probe returned 422, and
 the report concluded *"the gate blocks confirmed writes too, so its 428s
 prove nothing"* — a true measurement with the wrong cause attached. The gate
 was fine. The probes now create a subject first.
+
+### 5. What the agent actually connects to
+
+```bash
+curl -X POST http://localhost:3001/mcp/rpc -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# 401
+
+curl -X POST http://localhost:3001/mcp/rpc -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# 27 tools
+```
+
+The MCP server refuses to start at all without `MCP_AUTH_TOKEN` rather than
+serving an unauthenticated tool endpoint. `MCP_PUBLIC_DEMO=true` is the
+documented alternative and is deliberately not used here: an example about
+what an agent may do with health data should not open with an
+unauthenticated tool server.
+
+This step exists because for a long time the service never ran. The proxy's
+health check called `curl`, which is not in that image, so it exited 127 on
+every probe and reported unhealthy forever — and `mcp`, which waits on
+`condition: service_healthy`, never started. The diagram at the top of this
+file opens with the MCP server, and nothing had ever asked whether it was
+there. Both checks now run in `walkthrough.sh`.
 
 ## How the two servers are wired
 

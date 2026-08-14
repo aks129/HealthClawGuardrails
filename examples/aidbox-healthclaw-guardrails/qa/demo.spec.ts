@@ -18,6 +18,8 @@ const AIDBOX_AUTH = 'Basic ' + Buffer.from(
   `${process.env.AIDBOX_CLIENT || 'root'}:${process.env.AIDBOX_SECRET || 'qNbQS6sw82'}`
 ).toString('base64');
 const TENANT = process.env.TENANT || 'demo';
+const MCP = `http://localhost:${process.env.MCP_PORT || '3001'}`;
+const MCP_TOKEN = process.env.MCP_AUTH_TOKEN || '';
 
 /** Values that must never appear on the agent's side of the proxy. */
 const IDENTIFIERS = ['Alvarez', 'Maria', 'MRN-88214', '221 Baker St',
@@ -294,6 +296,36 @@ Tracked as #498.</pre></div>
     </div>
     <div class="note">The same harness runs in CI as a merge gate, so a regression shows up
     as a grade change rather than as an incident.</div>`);
+
+  // ---- 5. The tool surface the agent actually connects to ---------------
+  // The service this example's diagram opens with had never started: the
+  // proxy health check called curl, which is absent from that image, so mcp
+  // waited on a `service_healthy` that never arrived. Nothing asked.
+  const listBody = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
+  const mcpAnon = await request.post(`${MCP}/mcp/rpc`, { data: listBody });
+  expect(mcpAnon.status(), 'the MCP server must refuse unauthenticated callers').toBe(401);
+
+  const mcpAuthed = await request.post(`${MCP}/mcp/rpc`, {
+    headers: { Authorization: `Bearer ${MCP_TOKEN}` }, data: listBody,
+  });
+  expect(mcpAuthed.status()).toBe(200);
+  const tools = (await mcpAuthed.json()).result?.tools ?? [];
+  expect(tools.length, 'the authenticated tool surface must be served').toBeGreaterThan(0);
+
+  await render(page, head('05', 'What the agent actually connects to') + `
+    <div class="cols">
+      <div class="box"><div class="lbl">tools/list &middot; no credential</div><pre>HTTP ${mcpAnon.status()}
+
+the MCP server refuses to
+start without a token at all,
+rather than serve an
+unauthenticated tool surface</pre></div>
+      <div class="box guard"><div class="lbl">tools/list &middot; authenticated &middot; ${tools.length} tools</div><pre>${tools.slice(0, 7).map((t: any) => '&middot; ' + t.name).join('\n')}
+&hellip; and ${tools.length - 7} more</pre></div>
+    </div>
+    <div class="note">Every one of those tools reaches Aidbox only through the guardrail
+    proxy above &mdash; so the four properties hold for the agent's whole surface, not
+    just for the requests in this demo.</div>`);
 
   await page.waitForTimeout(3000);
 });
