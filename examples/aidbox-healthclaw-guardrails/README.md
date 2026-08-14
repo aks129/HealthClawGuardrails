@@ -64,6 +64,19 @@ empty licence harder than a missing one, and refuses to boot.
 activated" from "the proxy image is too old to authenticate", because both
 otherwise surface as the same unexplained failure several steps later.
 
+There is a second harness in [`qa/`](qa/) that asserts the same properties
+from a browser and records the run as a video:
+
+```bash
+cd qa && npm install && npx playwright install chromium
+HEALTHCLAW_PORT=5099 npx playwright test      # artifacts/**/video.webm
+```
+
+It exists because a recording made separately from the assertions is a
+re-enactment, and re-enactments drift from the system they depict. Here the
+assertions and the frames come from the same requests, so a video showing a
+pass cannot exist unless the pass happened.
+
 Two more things that will bite you:
 
 - **macOS holds port 5000.** AirPlay Receiver (ControlCenter) listens there,
