@@ -263,6 +263,30 @@ else:
 [ $? -ne 0 ] && fail=1
 
 # ---------------------------------------------------------------------------
+step "5. What the agent actually connects to"
+
+# The diagram at the top of the README opens with the MCP server, and for a
+# long time this example never started it: the proxy's health check called
+# curl, which is not in that image, so it reported unhealthy forever and the
+# mcp service — depends_on: service_healthy — never came up. Nothing noticed,
+# because nothing asked. This step asks.
+MCP="http://localhost:${MCP_PORT:-3001}"
+mcp_code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${MCP}/mcp/rpc" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+echo "    tools/list, no token      -> HTTP ${mcp_code}"
+[ "$mcp_code" = "401" ] && ok "the MCP server refuses unauthenticated callers" \
+                        || bad "expected 401 from an unauthenticated tools/list, got ${mcp_code}"
+
+tools=$(curl -sS -X POST "${MCP}/mcp/rpc" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${MCP_AUTH_TOKEN}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('result',{}).get('tools',[])))" 2>/dev/null)
+echo "    tools/list, with token    -> ${tools:-0} tools"
+[ "${tools:-0}" -gt 0 ] && ok "the agent's tool surface is served, and gated" \
+                        || bad "authenticated tools/list returned no tools"
+
+# ---------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then
   printf '\n\033[31mWalkthrough FAILED.\033[0m A guardrail this example claims did not hold.\n'
   exit 1
