@@ -40,18 +40,26 @@ function makeEnv({ exit, statusJson, resultTxt = 'RESULT', openIssues = [] }) {
       return files[key];
     },
   };
-  const issues = openIssues.map((t, i) => ({ number: 100 + i, title: t }));
+  // An open issue carries a BODY, because the body is where the fingerprint
+  // lives and the fingerprint is what decides whether anyone gets emailed.
+  // A fake without one made every row look like a first sighting.
+  const issues = openIssues.map((o, i) => (
+    typeof o === 'string' ? { number: 100 + i, title: o, body: '' }
+                          : { number: 100 + i, title: o.title, body: o.body ?? '' }));
   const github = {
     rest: {
       search: {
         issuesAndPullRequests: async ({ q }) => ({ data: { items: issues.slice() } }),
+        // NOTE: items carry `body`, which the script reads for the fingerprint.
       },
       issues: {
         create: async ({ title }) => { log.push(['create', title]); },
         createComment: async ({ issue_number, body }) => {
           log.push(['comment', issue_number, body.split('\n')[0].slice(0, 40)]);
         },
-        update: async ({ issue_number, state }) => { log.push(['update', issue_number, state]); },
+        update: async ({ issue_number, state, body }) => {
+          log.push(['update', issue_number, state ?? (body ? 'body' : undefined)]);
+        },
       },
     },
   };
@@ -87,6 +95,15 @@ function statusOf({ ok, asserted, buildOk, hardOk = ok }) {
                           build: { deployed: 'x', asserted, ok: buildOk } });
 }
 
+// The fingerprint the script writes for a given failing-check set. Kept as a
+// literal rather than computed, so a change to the marker format shows up here
+// as a failing expectation instead of as two agreeing implementations.
+const FP = (names) => `<!-- prod-watch-fingerprint: checks:${names} -->`;
+const FAILING = (names) => JSON.stringify({
+  ok: false, hard_ok: false,
+  checks: names.split('|').filter(Boolean).map(n => ({ name: n, ok: false, detail: '' })),
+  build: { deployed: 'x', asserted: true, ok: true } });
+
 const cases = [
   // name, exit, status.json content, pre-open issues
   ['healthy, nothing pinned (informational)', '0', statusOf({ ok: true, asserted: false, buildOk: null }), [OUTAGE, STALE]],
@@ -103,6 +120,20 @@ const cases = [
   // Both issues pre-opened, so every row below also answers "and can it ever
   // close again?". An alarm that fires forever with no path to closing is its
   // own failure mode — the reader learns to ignore it.
+  ['--- REPEAT SUPPRESSION: does an unchanged alarm stay quiet? ---'],
+  ['same failure as last run -> body refreshed, NO comment', '1',
+   FAILING('careagents: running the current build'),
+   [{ title: OUTAGE, body: 'old\n' + FP('careagents: running the current build') }]],
+  ['a DIFFERENT check starts failing -> comment', '1',
+   FAILING('careagents: running the current build|healthclaw: alive'),
+   [{ title: OUTAGE, body: 'old\n' + FP('careagents: running the current build') }]],
+  ['a check RECOVERS while another still fails -> comment', '1',
+   FAILING('healthclaw: alive'),
+   [{ title: OUTAGE, body: 'old\n' + FP('careagents: running the current build|healthclaw: alive') }]],
+  ['first sighting, issue open with no fingerprint -> comment', '1',
+   FAILING('healthclaw: alive'), [{ title: OUTAGE, body: 'legacy body' }]],
+  ['no verdict file -> speaks anyway, cannot prove unchanged', '1', undefined,
+   [{ title: OUTAGE, body: 'old\n' + FP('healthclaw: alive') }]],
   ['--- STUCK-OPEN PROBES ---'],
   ['schema drift: hard_ok renamed', '0', JSON.stringify({ ok: true, hardOk: true, checks: [], build: { asserted: true, ok: true } }), [OUTAGE, STALE]],
   ['schema drift: build.asserted renamed', '0', JSON.stringify({ ok: true, hard_ok: true, checks: [], build: { assert_: true, ok: true } }), [OUTAGE, STALE]],
@@ -133,16 +164,21 @@ const cases = [
     let log;
     try { log = await runScript(env); }
     catch (e) { console.log(`  ${name}\n      THREW: ${e.message}`); continue; }
-    const outage = log.filter(l => l[0] === 'create' && l[1] === OUTAGE).length
-      || log.filter(l => l[0] === 'comment' && l[1] === 100 + open.indexOf(OUTAGE)).length;
+    // Entries may be a title or {title, body}, so match on the title rather
+    // than on identity. The first version used indexOf on the array, which
+    // returned -1 for every object row and reported the whole repeat-
+    // suppression section as "untouched" — the harness agreeing with itself.
+    const titleAt = (o) => (typeof o === 'string' ? o : o.title);
     const summarize = (title) => {
-      const n = 100 + open.indexOf(title);
+      const n = 100 + open.findIndex(o => titleAt(o) === title);
       const created = log.some(l => l[0] === 'create' && l[1] === title);
       const commented = log.some(l => l[0] === 'comment' && l[1] === n);
+      const bodyOnly = log.some(l => l[0] === 'update' && l[1] === n && l[2] === 'body');
       const closed = log.some(l => l[0] === 'update' && l[1] === n && l[2] === 'closed');
       if (closed) return 'CLOSED';
       if (created) return 'FIRED(new issue)';
       if (commented) return 'FIRED(comment)';
+      if (bodyOnly) return 'quiet(body only)';
       return 'untouched';
     };
     console.log(`  ${name.padEnd(52)} exit=${String(exit).padEnd(4)} outage=${summarize(OUTAGE).padEnd(16)} stale=${summarize(STALE)}`);

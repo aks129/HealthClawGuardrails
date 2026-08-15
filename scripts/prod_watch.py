@@ -63,6 +63,21 @@ CAREAGENTS = "https://careagents-production.up.railway.app"
 MCP_LOCKED = "https://mcp-server-production-5112.up.railway.app"
 MCP_DEMO = "https://mcp-demo-production-ee2c.up.railway.app"
 DEMO_TENANT = "desktop-demo"
+
+#: Every Patient the demo tenant is supposed to hold, and no others.
+#:
+#: One original record plus the three blood-pressure personas seeded for the
+#: SMBP demo (a treated case, a white-coat case, and a phoned-in reading with
+#: no home series). Adding a persona means adding it here in the same change:
+#: the check below reads this as the whole truth about the tenant, so an
+#: omission reports real data as an intruder, and an addition nobody made is
+#: how the tenant duplicated itself into nineteen patients (#457).
+DEMO_PATIENTS = (
+    "demo-patient-rivera",
+    "demo-marisol",
+    "demo-elena",
+    "demo-ray",
+)
 BUILD_CHECK = "careagents: running the current build"
 # Same shape careagents/_build.py enforces on the way out. A "-dirty" marker
 # deliberately fails it: a build stamped from an uncommitted tree has no
@@ -211,23 +226,39 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # This watches the CONSEQUENCE rather than the mechanism. A count is
     # observable from outside; "did the pre-deploy step run" is not, and the
     # count is what a viewer of the demo actually sees.
+    # The SET, not the count. A count answers "has it duplicated" and nothing
+    # else; it cannot tell a duplicated tenant from one that lost a persona,
+    # and losing one is the failure that costs a recording. This check went
+    # red for four days after the SMBP demo patients were seeded — correct
+    # data, stale expectation — which is its own lesson: a guard that fires on
+    # intended work trains everyone to ignore it, and then it is not a guard.
     r = get(f"{HEALTHCLAW}/r6/fhir/Patient?_count=200", timeout,
             headers={"X-Tenant-Id": DEMO_TENANT})
-    patients = None
+    found = None
     if getattr(r, "status_code", None) == 200:
         try:
-            patients = len(r.json().get("entry") or [])
+            found = {(e.get("resource") or {}).get("id")
+                     for e in (r.json().get("entry") or [])}
         except ValueError:
-            patients = None
-    # `is not None` rather than a truthiness test: zero patients is a real
-    # failure (an empty demo), and `if patients:` would report it as
-    # unreadable instead. The read failing and the tenant being empty are
-    # different alarms.
-    check("healthclaw: the demo tenant is one patient",
-          patients == 1,
-          f"{patients} Patient(s) in {DEMO_TENANT}"
-          if patients is not None else
-          f"could not read the tenant ({getattr(r, 'status_code', r)})")
+            found = None
+    # `is not None` rather than a truthiness test: an EMPTY set is a real
+    # failure (an empty demo), and `if found:` would report it as unreadable
+    # instead. The read failing and the tenant being empty are different
+    # alarms.
+    if found is None:
+        detail = f"could not read the tenant ({getattr(r, 'status_code', r)})"
+    else:
+        missing = sorted(set(DEMO_PATIENTS) - found)
+        extra = sorted(str(x) for x in found - set(DEMO_PATIENTS))
+        parts = [f"{len(found)} Patient(s) in {DEMO_TENANT}"]
+        if missing:
+            parts.append(f"missing {', '.join(missing)}")
+        if extra:
+            parts.append(f"unexpected {', '.join(extra)}")
+        detail = "; ".join(parts)
+    check("healthclaw: the demo tenant holds exactly its demo patients",
+          found is not None and found == set(DEMO_PATIENTS),
+          detail)
 
     # --- the consumer app ----------------------------------------------------
     r = get(f"{CAREAGENTS}/healthz", timeout)

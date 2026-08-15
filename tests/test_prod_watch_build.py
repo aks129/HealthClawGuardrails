@@ -39,16 +39,21 @@ class _Resp:
 
 
 def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
-              demo_patients=1):
+              demo_patients=None):
     def get(url, timeout, **kw):
         if url.endswith("/r6/fhir/health"):
             return _Resp(200)
         if "$conformance" in url:
             return _Resp(200, {"grade": grade})
         if "Patient" in url:
+            # None means "the tenant is in the state it is supposed to be in".
+            # A number means "this many patients that are not the demo set",
+            # which is what duplication actually looked like.
+            ids = (list(prod_watch.DEMO_PATIENTS) if demo_patients is None
+                   else [f"p{i}" for i in range(demo_patients)])
             return _Resp(200, {"entry": [
-                {"resource": {"resourceType": "Patient", "id": f"p{i}"}}
-                for i in range(demo_patients)]})
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in ids]})
         if "Condition" in url:
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
@@ -420,10 +425,10 @@ def test_an_unreachable_endpoint_is_not_reported_as_a_stale_build(monkeypatch,
 
 # --- the demo tenant's shape (#457, catalogue §10) ---------------------------
 
-def test_a_single_patient_demo_tenant_passes():
+def test_the_expected_demo_patients_pass():
     """The state the demo is supposed to be in."""
     prod_watch.run(timeout=1, expect_sha=[])
-    name = "healthclaw: the demo tenant is one patient"
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
     assert _named(name) and _named(name)[0][1] is True, _named(name)
 
 
@@ -439,7 +444,7 @@ def test_a_duplicated_demo_tenant_is_a_hard_failure(monkeypatch):
     monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=19))
     rc = prod_watch.run(timeout=1, expect_sha=[])
 
-    name = "healthclaw: the demo tenant is one patient"
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
     entry = _named(name)
     assert entry, "the demo-tenant check did not run"
     assert entry[0][1] is False
@@ -450,13 +455,128 @@ def test_a_duplicated_demo_tenant_is_a_hard_failure(monkeypatch):
 def test_an_empty_demo_tenant_is_a_failure_not_a_pass(monkeypatch):
     """Zero is a real failure, and a different one from "cannot read".
 
-    MUTATION: use `if patients:` instead of `is not None` -> red, because an
+    MUTATION: use `if found:` instead of `is not None` -> red, because an
     empty tenant would then be reported as an unreadable one.
     """
     monkeypatch.setattr(prod_watch, "get", _fake_get(demo_patients=0))
     prod_watch.run(timeout=1, expect_sha=[])
 
-    entry = _named("healthclaw: the demo tenant is one patient")
+    entry = _named("healthclaw: the demo tenant holds exactly its demo patients")
     assert entry and entry[0][1] is False
     assert "0 Patient(s)" in entry[0][2], (
         f"an empty tenant must report as empty, not as unreadable: {entry}")
+
+
+def test_a_missing_demo_persona_is_a_failure(monkeypatch):
+    """The failure a COUNT cannot see, and the one that costs a recording.
+
+    Three of four patients is not "nearly right" — it is a demo that opens on
+    a patient who is not there. The old check counted, so it read this as
+    healthy right up until the count happened to be one, and read the correct
+    four-patient tenant as broken for four days after the personas were
+    seeded.
+
+    MUTATION: compare len(found) to len(DEMO_PATIENTS) instead of the sets ->
+    red, because a substitution keeps the count.
+    """
+    kept = list(prod_watch.DEMO_PATIENTS)[:-1]
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in kept]})
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    rc = prod_watch.run(timeout=1, expect_sha=[])
+
+    name = "healthclaw: the demo tenant holds exactly its demo patients"
+    entry = _named(name)
+    assert entry and entry[0][1] is False
+    assert "missing" in entry[0][2] and prod_watch.DEMO_PATIENTS[-1] in entry[0][2], (
+        f"the report must name the persona that vanished: {entry}")
+    assert rc == 1
+
+
+def test_a_substituted_patient_is_caught_though_the_count_is_right(monkeypatch):
+    """Four patients, one of them a stranger. A count says fine."""
+    swapped = list(prod_watch.DEMO_PATIENTS)[:-1] + ["demo-someone-else"]
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if "Patient" in url:
+            return _Resp(200, {"entry": [
+                {"resource": {"resourceType": "Patient", "id": i}}
+                for i in swapped]})
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    rc = prod_watch.run(timeout=1, expect_sha=[])
+
+    entry = _named("healthclaw: the demo tenant holds exactly its demo patients")
+    assert entry and entry[0][1] is False
+    assert "unexpected demo-someone-else" in entry[0][2], entry
+    assert rc == 1
+
+
+# --- repeat suppression: an alarm that repeats itself gets muted -------------
+#
+# #427 collected 35 identical comments at six-hour intervals and the
+# maintainer muted the thread, which is the rational response and also the end
+# of the alarm: the next real failure would have arrived in a muted thread.
+# These pin the mechanism that stops it. The semantic walk-through lives in
+# tests/tools/prod_watch_alarm_sim.js, which drives the real script body; CI
+# cannot run node, so what CI can hold is that the moving parts are still here.
+
+def test_the_firing_branch_refreshes_the_issue_body_every_run():
+    """An edit sends no notification, so the issue can stay current for free.
+
+    MUTATION: delete the issues.update call from the firing branch -> red.
+    A stale body is worse than none: it shows a failure that may have been
+    superseded, next to a comment thread that stopped when nothing changed.
+    """
+    firing = WORKFLOW.split("if (firing) {")[1].split("} else if (resolved)")[0]
+    assert "issues.update" in firing, (
+        "the firing branch no longer refreshes the issue body, so the issue "
+        "shows whatever was true the last time something changed")
+    assert "body: text" in firing
+
+
+def test_a_comment_is_posted_only_when_the_fingerprint_changes():
+    """MUTATION: drop the `previous !== fingerprint` guard -> red.
+
+    Without it the workflow is back to one notification every six hours for
+    as long as anything is wrong.
+    """
+    firing = WORKFLOW.split("if (firing) {")[1].split("} else if (resolved)")[0]
+    assert "previous !== fingerprint" in firing, (
+        "createComment is no longer guarded by a change in what is failing")
+    guard = firing.index("previous !== fingerprint")
+    comment = firing.index("issues.createComment")
+    assert guard < comment, (
+        "the comment must be inside the change guard, not beside it")
+
+
+def test_an_unprovable_state_still_speaks():
+    """Silence on a state we cannot verify is this workflow's own failure mode.
+
+    With no status.json there is no way to show the failure is unchanged, so
+    the fingerprint is seeded with the run id and can never match the stored
+    one. MUTATION: give the unknown case a constant -> the alarm goes quiet
+    for every run after the first, which is the failure #258 was about.
+    """
+    assert "unverified-run-${context.runId}" in WORKFLOW, (
+        "an unverifiable run must produce a fingerprint that cannot match")
+
+
+def test_the_fingerprint_is_the_failing_set_not_its_details():
+    """A count moving 4 -> 5 while the same check fails is not news.
+
+    Fingerprinting on details would re-notify on every run whose numbers
+    wobble, which is the noise this replaced.
+    """
+    assert "c.ok !== true).map(c => c.name)" in WORKFLOW, (
+        "the outage fingerprint should be built from failing check NAMES")
+    assert "checks:${failingNames}" in WORKFLOW
