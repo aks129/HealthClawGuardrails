@@ -132,26 +132,72 @@ jobs:
             // observed pass may close one.
             const buildResolved = status?.build?.asserted === true
                                   && status?.build?.ok === true;
+            // WHAT is wrong, reduced to a comparable value. A comment is a
+            // notification; an edit is not. So the issue body is refreshed
+            // every run (always current, silent) and a comment is posted only
+            // when this changes — which is the only moment a human learns
+            // something they did not already know.
+            //
+            // Before this, a firing alarm commented every six hours with
+            // identical text. #427 collected 35 of them and the maintainer
+            // muted the thread, which is the rational response and also the
+            // end of the alarm: the next real failure would have arrived in a
+            // muted thread. An alarm that repeats itself is an alarm being
+            // turned off.
+            //
+            // Failing check NAMES, not their details. A count moving 4 -> 5
+            // while the same check fails is not news; a different check
+            // failing is. The stale alarm fingerprints the deployed build
+            // instead, because a NEW stale build is genuinely new.
+            const failingNames = (status?.checks ?? [])
+              .filter(c => c.ok !== true).map(c => c.name).sort().join('|');
+            // No verdict file means we cannot prove the state is unchanged,
+            // and silence on an unprovable state is this workflow's own
+            // failure mode. Seeding with the run id makes the fingerprint
+            // never match, so it always speaks.
+            const unknown = `unverified-run-${context.runId}`;
+            const outageFp = status ? `checks:${failingNames}` : unknown;
+            const staleFp = status?.build?.deployed
+              ? `build:${status.build.deployed}` : unknown;
+
+            const MARK = (fp) => `<!-- prod-watch-fingerprint: ${fp} -->`;
+            const FP_RE = /<!-- prod-watch-fingerprint: (.*?) -->/;
+
             const alarms = [
               ['prod-watch: production checks failing', hardFailing, allPassed,
-               'Scheduled production check failed.'],
+               'Scheduled production check failed.', outageFp],
               ['prod-watch: deployed build is stale', staleFiring, buildResolved,
-               'Production is healthy, but it is not running the build we expect.'],
+               'Production is healthy, but it is not running the build we expect.',
+               staleFp],
             ];
-            for (const [title, firing, resolved, lead] of alarms) {
+            for (const [title, firing, resolved, lead, fingerprint] of alarms) {
               const { data: found } = await github.rest.search.issuesAndPullRequests({
                 q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
               });
               // Search is fuzzy and the two titles share words — match exactly.
               const open = found.items.filter(i => i.title === title);
               if (firing) {
-                const text = [lead, '', '```', body, '```', '', `Run: ${run}`, '',
-                  'This issue closes automatically when the check passes again.'].join('\n');
-                if (open.length) {
-                  await github.rest.issues.createComment({
-                    ...context.repo, issue_number: open[0].number, body: text });
-                } else {
+                const text = [lead, '', '```', body, '```', '', `Run: ${run}`,
+                  `Last checked: ${new Date().toISOString()}`, '',
+                  'This issue closes automatically when the check passes again.',
+                  'It is edited in place each run and only comments when what',
+                  'is failing changes.', '', MARK(fingerprint)].join('\n');
+                if (!open.length) {
                   await github.rest.issues.create({ ...context.repo, title, body: text });
+                  continue;
+                }
+                const issue = open[0];
+                const previous = (issue.body || '').match(FP_RE)?.[1] ?? null;
+                // Always refresh the body: an edit sends no notification, so
+                // the issue can stay current for free. Only the comment costs
+                // someone's attention, so only a change earns one.
+                await github.rest.issues.update({
+                  ...context.repo, issue_number: issue.number, body: text });
+                if (previous !== fingerprint) {
+                  await github.rest.issues.createComment({
+                    ...context.repo, issue_number: issue.number,
+                    body: [`What is failing has changed.`, '', '```', body, '```',
+                           '', `Run: ${run}`].join('\n') });
                 }
               } else if (resolved) {
                 // Only an observed pass closes an alarm. If the check was not
