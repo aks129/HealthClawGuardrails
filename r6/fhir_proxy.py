@@ -30,7 +30,7 @@ import logging
 import os
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -42,7 +42,35 @@ logger = logging.getLogger(__name__)
 # Medplum token cache (Redis-backed with in-process fallback)
 # ---------------------------------------------------------------------------
 
-_MEDPLUM_TOKEN_ENDPOINT = 'https://api.medplum.com/oauth2/token'
+_MEDPLUM_HOSTED_TOKEN_ENDPOINT = 'https://api.medplum.com/oauth2/token'
+
+
+def medplum_token_endpoint(base_url: str = '') -> str:
+    """Where to ask THIS Medplum for a token.
+
+    Derived from the server we are actually talking to, because the constant
+    it replaced was `https://api.medplum.com/oauth2/token` with no override.
+    Medplum's whole proposition is that you can self-host it, so pointing
+    MEDPLUM_BASE_URL at your own instance was the expected case — and it sent
+    your self-hosted client credentials to Medplum's hosted service, which
+    does not know them. The connector worked against exactly one deployment
+    of a product designed to be deployed anywhere.
+
+    MEDPLUM_BASE_URL is the FHIR base (`https://host/fhir/R4`); the token
+    endpoint hangs off the server root, so origin + /oauth2/token. An explicit
+    MEDPLUM_TOKEN_URL wins over both, for deployments that put the
+    authorization server somewhere else entirely.
+    """
+    explicit = os.environ.get('MEDPLUM_TOKEN_URL', '').strip()
+    if explicit:
+        return explicit
+    base = (base_url or os.environ.get('MEDPLUM_BASE_URL', '')).strip()
+    if base:
+        parts = urlsplit(base)
+        if parts.scheme and parts.netloc:
+            return urlunsplit((parts.scheme, parts.netloc, '/oauth2/token',
+                               '', ''))
+    return _MEDPLUM_HOSTED_TOKEN_ENDPOINT
 
 # In-process fallback cache: {'token': str|None, 'expires_at': float}
 _medplum_cache: dict = {'token': None, 'expires_at': 0.0}
@@ -66,7 +94,8 @@ def _get_redis():
         return None
 
 
-def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
+def _fetch_medplum_token(client_id: str, client_secret: str,
+                         token_endpoint: str = '') -> str:
     """
     Obtain a Medplum access token via OAuth2 client-credentials.
 
@@ -89,7 +118,7 @@ def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
 
     # 3. Fetch fresh token
     resp = httpx.post(
-        _MEDPLUM_TOKEN_ENDPOINT,
+        token_endpoint or medplum_token_endpoint(),
         data={
             'grant_type': 'client_credentials',
             'client_id': client_id,
@@ -578,19 +607,31 @@ class MedplumProxy(FHIRUpstreamProxy):
         super().__init__(medplum_base_url, local_base_url)
         self._client_id = client_id
         self._client_secret = client_secret
+        # Resolved once, from the server this proxy actually points at.
+        self._token_endpoint = medplum_token_endpoint(medplum_base_url)
         # Inject auth into every request via httpx event hook
         self._client.event_hooks['request'] = [self._inject_bearer]
-        logger.info('Medplum proxy initialized')
+        logger.info('Medplum proxy initialized (token endpoint %s)',
+                    self._token_endpoint)
 
     def _inject_bearer(self, request: httpx.Request) -> None:
-        """httpx event hook — adds Authorization header before each send."""
-        try:
-            token = _fetch_medplum_token(self._client_id, self._client_secret)
-            request.headers['Authorization'] = f'Bearer {token}'
-        except Exception as exc:
-            logger.error(
-                'Failed to obtain Medplum token (%s)', type(exc).__name__
-            )
+        """httpx event hook — adds Authorization header before each send.
+
+        RAISES when no token can be obtained. It used to log and return, which
+        let the request go out with NO Authorization header at all: a token
+        failure was silently downgraded to an anonymous request against the
+        record system. On a server that refuses anonymous callers that
+        surfaces as a confusing 502; on one that allows anonymous reads of
+        anything, it is a request we did not intend to make. Neither is a
+        thing to do quietly, and the difference between them is a setting on
+        somebody else's server.
+
+        httpx propagates this out of .send(), so the caller sees a failed
+        request rather than a successful unauthenticated one.
+        """
+        token = _fetch_medplum_token(self._client_id, self._client_secret,
+                                     self._token_endpoint)
+        request.headers['Authorization'] = f'Bearer {token}'
 
 
 # --- Module-level singleton ---

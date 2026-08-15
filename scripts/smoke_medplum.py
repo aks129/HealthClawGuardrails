@@ -48,7 +48,16 @@ def main():
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
     # 1. Write is gated: create without step-up must be refused before Medplum.
-    r = requests.post(f"{base}/r6/fhir/Patient", headers=read_hdr,
+    #
+    # Content-Type MATTERS here, and its absence is why this check spent its
+    # life testing something else. Without it the body never parses, the
+    # handler returns 400 ("Request body must be valid JSON") from the depth-
+    # bounded parse that deliberately runs ahead of the auth gate (#312), and
+    # the step-up gate this line is named after is never reached at all.
+    # A malformed body is refused before authentication on purpose; this
+    # check is about the credential, so it has to send a well-formed one.
+    no_step_up = {**read_hdr, "Content-Type": "application/fhir+json"}
+    r = requests.post(f"{base}/r6/fhir/Patient", headers=no_step_up,
                       data=json.dumps(SYNTHETIC_PATIENT))
     check("write blocked without step-up (401)", r.status_code == 401,
           f"got {r.status_code}")
