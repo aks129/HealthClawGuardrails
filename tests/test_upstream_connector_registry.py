@@ -80,12 +80,65 @@ class TestTheRegistryNamesWhatWeAreInFrontOf:
     @pytest.mark.parametrize("kind,auth", [
         ("aidbox", AUTH_BASIC),
         ("medplum", AUTH_OAUTH2),
-        ("hapi", AUTH_NONE),
+        # hapi was AUTH_NONE, and this row PINNED the defect. Its summary
+        # tells an operator to set FHIR_UPSTREAM_CLIENT_ID/_SECRET for a
+        # secured server, and AUTH_NONE made `basic_auth` drop them. Changing
+        # this row is changing a specification deliberately, with the reason
+        # recorded — not raising a ratchet to go green.
+        ("hapi", AUTH_BASIC),
         ("generic", AUTH_BASIC),
     ])
     def test_each_kind_declares_its_auth_style(self, kind, auth):
         c = _resolve(FHIR_UPSTREAM_KIND=kind, FHIR_UPSTREAM_URL=AIDBOX)
         assert c.kind == kind and c.auth == auth
+
+    def test_a_connector_that_offers_credentials_actually_sends_them(self):
+        """THE RULE, and the general form of the hapi defect: a summary that
+        names a credential must belong to an auth style that carries one.
+
+        The registry summary is not decoration — `supported_connectors()`
+        publishes it as the answer to "what does this build support and how do
+        I authenticate to it". A connector whose prose and whose behaviour
+        disagree is the retro's shape with an operator manual attached, and
+        the failure is silent: credentials accepted, dropped, 401 upstream,
+        502 that reads as the upstream's fault.
+
+        MUTATION: set hapi back to AUTH_NONE -> red.
+        """
+        offenders = []
+        for connector in CONNECTORS.values():
+            mentions_credential = (
+                "CLIENT_ID" in connector.summary
+                or "Basic" in connector.summary
+                or "credential" in connector.summary.lower())
+            if mentions_credential and connector.auth == AUTH_NONE:
+                offenders.append(f"{connector.name}: {connector.summary}")
+        assert not offenders, (
+            "a connector offers a credential its auth style cannot send:\n  "
+            + "\n  ".join(offenders))
+
+    def test_hapi_sends_a_credential_when_one_is_configured(self):
+        """The behaviour, measured rather than inferred from the enum.
+
+        MUTATION: set hapi back to AUTH_NONE -> red.
+        """
+        c = _resolve(FHIR_UPSTREAM_KIND="hapi", FHIR_UPSTREAM_URL=AIDBOX,
+                     FHIR_UPSTREAM_CLIENT_ID="hapi-user",
+                     FHIR_UPSTREAM_CLIENT_SECRET="hapi-pass")
+        assert c.basic_auth == ("hapi-user", "hapi-pass")
+
+    def test_hapi_stays_anonymous_when_none_is(self):
+        """The other side, and why this is not a breaking change: a public
+        sandbox takes no credential and must keep taking none.
+
+        MUTATION: make basic_auth return a pair when only one half is set,
+        or make AUTH_BASIC demand credentials -> red.
+        """
+        c = _resolve(FHIR_UPSTREAM_KIND="hapi", FHIR_UPSTREAM_URL=AIDBOX)
+        assert c.basic_auth is None
+        half = _resolve(FHIR_UPSTREAM_KIND="hapi", FHIR_UPSTREAM_URL=AIDBOX,
+                        FHIR_UPSTREAM_CLIENT_ID="hapi-user")
+        assert half.basic_auth is None
 
     def test_aidbox_is_first_class_now(self):
         """It was the better-verified connector and the one with no name."""
