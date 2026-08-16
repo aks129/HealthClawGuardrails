@@ -38,7 +38,7 @@ from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       tenant_from_request)
+                       public_step_up_reason, tenant_from_request)
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -2186,7 +2186,7 @@ def bind_telegram_chat():
         return jsonify({'error': 'valid step-up token required'}), 401
     valid, err = validate_step_up_token(token, tenant_id)
     if not valid:
-        return jsonify({'error': err or 'invalid step-up token'}), 401
+        return jsonify({'error': public_step_up_reason(err)}), 401
 
     from r6.telegram_push import bind as bind_chat
     try:
@@ -3107,7 +3107,7 @@ def curatr_apply_fix(resource_type, resource_id):
     if not valid:
         return _operation_outcome(
             'error', 'security',
-            f'Step-up token rejected: {err}'
+            f'Step-up token rejected: {public_step_up_reason(err)}'
         ), 403
 
     body = request.get_json(silent=True)
@@ -3136,8 +3136,8 @@ def curatr_apply_fix(resource_type, resource_id):
         )
         if not valid:
             return _operation_outcome(
-                'error', 'security', f'Step-up token rejected: {err}'
-            ), 403
+                'error', 'security',
+                f'Step-up token rejected: {public_step_up_reason(err)}'), 403
 
     try:
         result = _curatr_apply_fix(
