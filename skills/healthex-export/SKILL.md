@@ -79,7 +79,9 @@ Applied automatically (skip with `--no-deidentify`).
 - OID-namespaced identifiers (EHR-internal MRNs, Epic IDs, CEID, EID, EMPI, etc.)
 
 **Preserved:**
-- `birthDate` — full date (patient-controlled export; use `$deidentify` for Safe Harbor)
+- `birthDate` — full date (patient-controlled export; use `$deidentify` for the
+  de-identification preview, which strips it — that endpoint is not a legal
+  Safe Harbor determination either)
 - `gender`
 - `communication` — language preferences
 - A synthetic `urn:healthclaw:patient/<uuid>` identifier is injected
