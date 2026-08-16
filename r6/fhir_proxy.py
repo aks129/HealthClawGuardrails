@@ -32,6 +32,11 @@ import socket
 import time
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
+from r6.upstream_connectors import (
+    AUTH_OAUTH2,
+    resolve_upstream_config,
+)
+
 import httpx
 
 from r6.version import __version__
@@ -376,7 +381,13 @@ class FHIRUpstreamProxy:
 
     def __init__(self, upstream_url: str, local_base_url: str = '',
                  caller_auth: bool = False,
-                 basic_auth: tuple[str, str] | None = None):
+                 basic_auth: tuple[str, str] | None = None,
+                 kind: str = ''):
+        # The connector kind this proxy was BUILT as, reported by healthy()
+        # beside the `software` the server names itself. When those two
+        # disagree the deployment is pointed somewhere nobody meant, and that
+        # is otherwise invisible until a request fails naming neither.
+        self.kind = kind
         self.upstream_url = upstream_url.rstrip('/')
         self.local_base_url = local_base_url.rstrip('/')
         # True when the CALLER's own credential is forwarded upstream (SHARP
@@ -417,6 +428,7 @@ class FHIRUpstreamProxy:
                     'upstream_url': self.upstream_url,
                     'fhir_version': data.get('fhirVersion', 'unknown'),
                     'software': data.get('software', {}).get('name', 'unknown'),
+                    **({'kind': self.kind} if self.kind else {}),
                 }
             return {
                 'status': 'error',
@@ -588,30 +600,40 @@ class FHIRUpstreamProxy:
         }
 
 
-class MedplumProxy(FHIRUpstreamProxy):
+class OAuth2UpstreamProxy(FHIRUpstreamProxy):
     """
-    FHIRUpstreamProxy variant for Medplum.
+    FHIRUpstreamProxy variant for upstreams using OAuth2 client-credentials.
 
-    Injects a Bearer token (obtained via OAuth2 client-credentials) into every
-    outgoing request.  Tokens are cached in Redis when available; an in-process
-    dict provides fallback caching so the server stays functional without Redis.
+    Injects a Bearer token into every outgoing request. Tokens are cached in
+    Redis when available; an in-process dict provides fallback caching so the
+    server stays functional without Redis.
+
+    Named for the GRANT rather than for Medplum, because the grant is what
+    this implements and Medplum is one server that uses it. `MedplumProxy`
+    remains as an alias below: it is imported by name in several tests and in
+    scripts, and renaming a class is not worth breaking a caller over.
     """
 
     def __init__(
         self,
-        medplum_base_url: str,
+        base_url: str,
         client_id: str,
         client_secret: str,
         local_base_url: str = '',
+        token_endpoint: str = '',
+        kind: str = '',
     ):
-        super().__init__(medplum_base_url, local_base_url)
+        super().__init__(base_url, local_base_url, kind=kind)
         self._client_id = client_id
         self._client_secret = client_secret
-        # Resolved once, from the server this proxy actually points at.
-        self._token_endpoint = medplum_token_endpoint(medplum_base_url)
+        # Resolved once, from the server this proxy actually points at — not
+        # read from the environment at request time, which would let a proxy
+        # built for one server start authenticating against another after an
+        # unrelated env change.
+        self._token_endpoint = token_endpoint or medplum_token_endpoint(base_url)
         # Inject auth into every request via httpx event hook
         self._client.event_hooks['request'] = [self._inject_bearer]
-        logger.info('Medplum proxy initialized (token endpoint %s)',
+        logger.info('OAuth2 upstream proxy initialized (token endpoint %s)',
                     self._token_endpoint)
 
     def _inject_bearer(self, request: httpx.Request) -> None:
@@ -632,6 +654,10 @@ class MedplumProxy(FHIRUpstreamProxy):
         token = _fetch_medplum_token(self._client_id, self._client_secret,
                                      self._token_endpoint)
         request.headers['Authorization'] = f'Bearer {token}'
+
+
+#: Back-compat alias. Imported by name in tests and scripts.
+MedplumProxy = OAuth2UpstreamProxy
 
 
 # --- Module-level singleton ---
@@ -681,37 +707,44 @@ def get_proxy() -> FHIRUpstreamProxy | None:
     """
     Return the proxy singleton, or None if no upstream is configured.
 
-    Priority:
-      1. FHIR_UPSTREAM_URL — generic upstream proxy (optional HTTP Basic via
-         FHIR_UPSTREAM_CLIENT_ID + FHIR_UPSTREAM_CLIENT_SECRET)
-      2. MEDPLUM_BASE_URL  — Medplum proxy (OAuth2 client-credentials)
+    WHICH upstream, and how it authenticates, is answered by
+    r6.upstream_connectors rather than by branches here — see that module for
+    the registry and for why the SHARP per-request path is deliberately not
+    part of it. This function's remaining job is to turn a resolved config
+    into a client and hold the singleton.
+
+    Precedence is unchanged: FHIR_UPSTREAM_URL wins over MEDPLUM_BASE_URL.
     """
     global _proxy_instance
     if _proxy_instance is not None:
         return _proxy_instance
 
+    config = resolve_upstream_config()
+    if config is None:
+        return None
+
     local_base = os.environ.get('FHIR_LOCAL_BASE_URL', '').strip()
 
-    upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()
-    if upstream_url:
-        _proxy_instance = FHIRUpstreamProxy(
-            upstream_url, local_base, basic_auth=_upstream_basic_auth())
-        return _proxy_instance
-
-    medplum_url = os.environ.get('MEDPLUM_BASE_URL', '').strip()
-    if medplum_url:
-        client_id = os.environ.get('MEDPLUM_CLIENT_ID', '').strip()
-        client_secret = os.environ.get('MEDPLUM_CLIENT_SECRET', '').strip()
-        if not client_id or not client_secret:
+    if config.auth == AUTH_OAUTH2:
+        # Refusing beats proceeding: a client-credentials upstream with no
+        # credentials can only make anonymous requests, and an anonymous
+        # request at a record system is not a degraded mode worth having.
+        if not config.client_id or not config.client_secret:
             logger.warning(
-                'MEDPLUM_BASE_URL is set but MEDPLUM_CLIENT_ID / '
-                'MEDPLUM_CLIENT_SECRET are missing — Medplum proxy disabled'
-            )
+                'Upstream kind %r needs client credentials and none are set '
+                '(FHIR_UPSTREAM_CLIENT_ID/_SECRET) — upstream proxy disabled',
+                config.kind)
             return None
-        _proxy_instance = MedplumProxy(medplum_url, client_id, client_secret, local_base)
+        _proxy_instance = OAuth2UpstreamProxy(
+            config.base_url, config.client_id, config.client_secret,
+            local_base, token_endpoint=config.token_endpoint,
+            kind=config.kind)
         return _proxy_instance
 
-    return None
+    _proxy_instance = FHIRUpstreamProxy(
+        config.base_url, local_base, basic_auth=config.basic_auth,
+        kind=config.kind)
+    return _proxy_instance
 
 
 def reset_proxy():
