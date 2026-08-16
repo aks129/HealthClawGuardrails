@@ -93,14 +93,13 @@ Two more things that will bite you:
   variables this example depends on, and the wiring below was configured
   correctly and did nothing. A pin turns that into a pull failure instead.
 
-One more, if you also develop HealthClaw itself: **running this example makes
-120 of HealthClaw's own tests fail.** `FHIR_VALIDATOR_URL` defaults to
-`http://localhost:8080`, and the availability probe treats anything answering
-`/health` as a FHIR validator — which Aidbox, on that port, is not. The
-failures present as `assert 422 == 201` on ordinary writes and point nowhere
-near the cause. `docker compose stop aidbox` before running the suite, or set
-`FHIR_VALIDATOR_URL` to something unreachable. Tracked as
-[#488](https://github.com/aks129/HealthClawGuardrails/issues/488).
+Previously, running this example broke HealthClaw's own test suite: about 120
+tests failed with `assert 422 == 201` on ordinary writes, because
+`FHIR_VALIDATOR_URL` defaulted to `http://localhost:8080` and anything
+answering `/health` there was treated as a FHIR validator — which Aidbox, on
+that port, is not. That default is gone
+([#488](https://github.com/aks129/HealthClawGuardrails/issues/488)), and the
+suite now passes with this example running. No need to stop Aidbox first.
 
 From a HealthClaw checkout you can build the two images instead of pulling
 them:
