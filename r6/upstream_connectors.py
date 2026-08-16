@@ -88,7 +88,20 @@ CONNECTORS: dict[str, Connector] = {
     ),
     "hapi": Connector(
         name="hapi",
-        auth=AUTH_NONE,
+        # AUTH_BASIC, not AUTH_NONE. This entry shipped saying one thing and
+        # doing another: the summary tells an operator to set
+        # FHIR_UPSTREAM_CLIENT_ID/_SECRET for a secured HAPI, and AUTH_NONE
+        # made `basic_auth` return None, so those credentials were read,
+        # accepted, and dropped. Against a secured server that is an anonymous
+        # request, a 401, and a sanitized 502 that reads as the upstream's
+        # fault — the exact failure this module's own docstring says must not
+        # happen quietly.
+        #
+        # AUTH_BASIC does not make a credential mandatory. `basic_auth`
+        # returns None when either half is unset, so a public sandbox stays
+        # anonymous, which is why this is the same auth style as `generic`.
+        # What separates the two entries is the summary, not the behaviour.
+        auth=AUTH_BASIC,
         summary="HAPI FHIR. Public sandboxes take no credential; add "
                 "FHIR_UPSTREAM_CLIENT_ID/_SECRET for one behind HTTP Basic.",
     ),
