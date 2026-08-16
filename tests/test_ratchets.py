@@ -267,7 +267,20 @@ def test_no_new_package_mutates_without_auditing():
 #: at none of theirs. Nothing has detonated because no DELETE route exists and
 #: only Permission-revoke sets the flag — it is a loaded gun, not a fire.
 #: Playbook F5 introduces one shared live-resource selector and takes this to 0.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 12
+#:
+#: Re-verified 2026-08-16 while fixing #422, and the gun is even less loaded
+#: than this said: `is_deleted = True` is written on exactly ONE line in the
+#: repository (r6/routes.py:2824), inside the demo walkthrough, clearing
+#: Permission rows. No route accepts DELETE. So no Patient, Observation or
+#: Procedure row can carry a tombstone today by any path — which is why the
+#: #422 class has never been seen in production and is also why it will land
+#: silently the day a delete path ships. Fix the readers before the writer.
+#:
+#: 12 -> 11: #422 filtered all three queries in r6/caregaps/routes.py — the
+#: ambiguity count that decides whether $care-gaps may pick a subject, the
+#: demographics a supplied subject resolves to, and the clinical rows that
+#: CLOSE a gap.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 11
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
