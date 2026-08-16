@@ -758,12 +758,70 @@ def reset_proxy():
     _medplum_cache['expires_at'] = 0.0
 
 
-def is_proxy_enabled() -> bool:
-    """Check if any upstream proxy mode is configured."""
+def upstream_intended() -> bool:
+    """True when the environment NAMES an upstream, working or not.
+
+    This is the old `is_proxy_enabled` — an env-var presence check — under a
+    name that says what it actually measures. It answers "did the operator
+    mean to proxy", which is only useful next to the answer to "are we
+    proxying". Never use it alone to describe the running system.
+    """
     return bool(
         os.environ.get('FHIR_UPSTREAM_URL', '').strip()
         or os.environ.get('MEDPLUM_BASE_URL', '').strip()
     )
+
+
+def is_proxy_enabled() -> bool:
+    """True when a proxy EXISTS, not when one was asked for.
+
+    These were the same question until an upstream could refuse to be built.
+    Since #503 an OAuth2 upstream with no credentials returns None from
+    get_proxy() rather than making anonymous requests at a record system —
+    correct, and it split the question in two while this function kept
+    answering the old one.
+
+    The consequence, measured: with FHIR_UPSTREAM_URL set and the secret
+    missing, /r6/fhir/health reported mode 'upstream', status 'healthy',
+    HTTP 200 — and every write landed in the container's own SQLite. An
+    operator reading that page has no way to see it, and the data is in the
+    wrong store by the time anyone looks.
+
+    `upstream_intended()` is the other half. Health reports both, because
+    "local because nobody configured an upstream" and "local because the
+    upstream we configured could not be built" are different situations and
+    only one of them is fine.
+    """
+    return get_proxy() is not None
+
+
+def upstream_status() -> dict:
+    """What /health should say about the upstream, and whether it is degraded.
+
+    Three states, and the middle one is the reason this function exists:
+
+      not_configured   nobody asked for an upstream. Local mode by design.
+      misconfigured    one was NAMED and no client could be built for it.
+                       Writes are landing in local storage while the operator
+                       believes they are going to their FHIR server.
+      <health payload> a proxy exists; the proxy reports on itself.
+
+    'misconfigured' is degraded rather than a quiet 200, which is consistent
+    with an upstream that is configured and unreachable — that already
+    answers 503. The failure it makes loud is the one where a deploy succeeds
+    and the data goes somewhere nobody looks.
+
+    Returns a dict rather than a pair: a 2-tuple is always truthy, and this
+    codebase has a documented bypass built on exactly that shape.
+    """
+    proxy = get_proxy()
+    if proxy:
+        payload = proxy.healthy()
+        return {'check': payload,
+                'degraded': payload.get('status') != 'connected'}
+    if upstream_intended():
+        return {'check': 'misconfigured', 'degraded': True}
+    return {'check': 'not_configured', 'degraded': False}
 
 
 # ---------------------------------------------------------------------------

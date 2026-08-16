@@ -57,9 +57,9 @@ from r6.health_compliance import (
     export_audit_trail, MEDICAL_DISCLAIMER
 )
 from r6.fhir_proxy import (
-    get_proxy,
     get_proxy_for_request,
     is_proxy_enabled,
+    upstream_status,
     is_sharp_context_active,
     close_request_proxy,
     sanitize_operation_outcome_resource,
@@ -1990,15 +1990,12 @@ def health_check():
         health['checks']['database'] = 'error'
         logger.warning(f'Health check: database failed: {e}')
 
-    # Check upstream FHIR server connectivity
-    proxy = get_proxy()
-    if proxy:
-        upstream_health = proxy.healthy()
-        health['checks']['upstream'] = upstream_health
-        if upstream_health.get('status') != 'connected':
-            health['status'] = 'degraded'
-    else:
-        health['checks']['upstream'] = 'not_configured'
+    # Check upstream FHIR server connectivity. Three states, incl. an upstream
+    # that was named and could not be built — see r6.fhir_proxy.upstream_status.
+    upstream = upstream_status()
+    health['checks']['upstream'] = upstream['check']
+    if upstream['degraded']:
+        health['status'] = 'degraded'
 
     status_code = 200 if health['status'] == 'healthy' else 503
     return jsonify(health), status_code

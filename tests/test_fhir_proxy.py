@@ -12,6 +12,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from r6.fhir_proxy import (
+    upstream_intended,
+    upstream_status,
     FHIRUpstreamProxy, MedplumProxy, get_proxy, reset_proxy, is_proxy_enabled,
     _fetch_medplum_token, _medplum_cache,
     sanitize_upstream_error, upstream_unreachable_outcome,
@@ -601,7 +603,10 @@ class TestProxyRouteIntegration:
         """Health endpoint reports upstream connection status."""
         os.environ['FHIR_UPSTREAM_URL'] = 'https://hapi.fhir.org/baseR4'
 
-        with patch('r6.routes.get_proxy') as mock_get:
+        # Patched where it is LOOKED UP: /health now asks
+        # r6.fhir_proxy.upstream_status, which calls get_proxy itself, so
+        # r6.routes no longer holds that name.
+        with patch('r6.fhir_proxy.get_proxy') as mock_get:
             mock_proxy = MagicMock()
             mock_proxy.healthy.return_value = {
                 'status': 'connected',
@@ -807,10 +812,51 @@ class TestMedplumProxy:
         proxy = get_proxy()
         assert proxy is None
 
-    def test_is_proxy_enabled_with_medplum(self):
-        """is_proxy_enabled() returns True when MEDPLUM_BASE_URL is set."""
+    def test_a_base_url_alone_is_an_intention_not_a_proxy(self):
+        """THIS TEST ASSERTED THE DEFECT, and it is worth saying how.
+
+        It read "is_proxy_enabled() returns True when MEDPLUM_BASE_URL is
+        set", which was a true description of the code and stopped being a
+        true description of the system at #503 — after which an OAuth2
+        upstream with no credentials refuses to build rather than making
+        anonymous requests at a record system.
+
+        So the URL alone meant: /health says mode 'upstream', status
+        'healthy', HTTP 200, and every write lands in local SQLite. Measured,
+        not theorised.
+
+        MUTATION: revert is_proxy_enabled to the env-var check -> red.
+        """
         os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        assert upstream_intended() is True, (
+            'the environment names an upstream, which is the question this '
+            'half answers')
+        assert is_proxy_enabled() is False, (
+            'no client can be built without credentials, so nothing is being '
+            'proxied and the system must not say it is')
+
+    def test_credentials_turn_the_intention_into_a_proxy(self):
+        """The other side: this must stay True, or the fix has just disabled
+        every working Medplum deployment."""
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        os.environ['MEDPLUM_CLIENT_ID'] = 'cid'
+        os.environ['MEDPLUM_CLIENT_SECRET'] = 'csec'
         assert is_proxy_enabled() is True
+
+    def test_health_calls_a_misconfigured_upstream_degraded(self):
+        """The operator-visible half. 'not_configured' and 'misconfigured'
+        are different situations and only one of them is fine.
+
+        MUTATION: report 'not_configured' for a named-but-unbuildable
+        upstream, or drop the degraded flag -> red.
+        """
+        os.environ['MEDPLUM_BASE_URL'] = 'https://api.medplum.com/fhir/R4'
+        status = upstream_status()
+        assert status == {'check': 'misconfigured', 'degraded': True}
+
+        os.environ.pop('MEDPLUM_BASE_URL', None)
+        assert upstream_status() == {'check': 'not_configured',
+                                     'degraded': False}
 
     def test_fhir_upstream_takes_priority_over_medplum(self):
         """FHIR_UPSTREAM_URL takes priority; MedplumProxy is NOT created."""
