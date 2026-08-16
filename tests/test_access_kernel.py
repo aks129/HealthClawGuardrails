@@ -1363,7 +1363,16 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # kernel. This is the god module's FIRST kernel import
                      # and the remaining 20 raw reads in it are pinned by
                      # tests/test_ratchets.py::_RAW_TENANT_READS.
-                     'r6/routes.py'}
+                     'r6/routes.py',
+                     # #508, and NOT a migration slice. This blueprint imports
+                     # `public_step_up_reason` and nothing else: its two
+                     # step-up checks still call the validator directly and
+                     # are still counted by _STEP_UP_CALLSITES. What moved is
+                     # only which sentence a refusal is allowed to say, which
+                     # is a ruling rather than a gate. Migrating these two is
+                     # slice 17, and it stays blocked on their JSON wire
+                     # shape.
+                     'r6/command_center/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

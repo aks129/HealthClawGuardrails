@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'TenantSource', 'Tenant', 'TenantRejected', 'tenant_from_request',
     'Scope', 'Grant', 'StepUpDenied', 'require_grant', 'has_grant',
+    'public_step_up_reason',
     'register_error_handlers',
     'audit', 'AuditAssertionError',
     'install_audit_assertions', 'install_read_audit_assertion',
@@ -319,12 +320,23 @@ _WITHHELD_REASONS = {
 }
 
 
-def _public_reason(error: str) -> str:
+def public_step_up_reason(error: str) -> str:
     """The sentence the caller gets for a validator refusal.
 
     Default-deny: anything not explicitly published collapses to the generic
     text. The failure mode of the opposite default is a new reason leaking on
     the day it is written, when nobody is looking at this file.
+
+    PUBLIC (was `_public_reason`), because the owner's ruling is not a
+    property of `require_grant`. Two sites cannot use the kernel's gate and
+    still have to obey the ruling: `r6/command_center/routes.py` answers a
+    refusal in its own JSON shape, so it built the sentence itself and shipped
+    the raw reason — #478's leak, in a place #478's fix never reached (#508).
+
+    A site that publishes a refusal reason without going through this function
+    is publishing an unclassified string. That is the whole hazard, and it is
+    why this is a named export rather than something each caller can
+    reimplement with a set literal.
     """
     return error if error in _PUBLIC_REASONS else _DENIED_REJECTED
 
@@ -438,7 +450,7 @@ def _evaluate(
     # a predicate on a hot path (the rate limiter) would otherwise log once per
     # request.
     logger.info('step-up refused for tenant %s: %s', tenant.id, error)
-    return _Outcome(grant=None, reason=_public_reason(error), absent=False)
+    return _Outcome(grant=None, reason=public_step_up_reason(error), absent=False)
 
 
 def require_grant(
