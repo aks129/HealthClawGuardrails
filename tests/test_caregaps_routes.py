@@ -176,6 +176,179 @@ def test_care_gaps_with_a_supplied_subject_reports_that_state(
 
 
 # ─────────────────────────────────────────────
+# A tombstone is not a patient, and not evidence (#422)
+#
+# Every query in this module counted soft-deleted rows. Three consequences,
+# each worse than the last: a tenant that deleted its duplicate Patient still
+# reads as ambiguous and is told nothing (so the only apparent next move is a
+# hard delete against production); a supplied `?subject=` naming a deleted
+# Patient still hands its date of birth to the rules; and a deleted clinical
+# record still CLOSES a gap, which withholds a due screening rather than
+# repeating one.
+#
+# None of that is reachable TODAY, and the tests say so by writing the
+# tombstone themselves rather than through a product path. Verified while
+# fixing this: `is_deleted = True` appears on one line in the repository
+# (r6/routes.py:2824, the demo walkthrough, on Permission rows) and no route
+# accepts DELETE. #422's own text cites a `delete-my-records` flow; no such
+# flow exists yet.
+#
+# That is the argument for fixing the readers now rather than the argument
+# against. The day a delete path ships, every one of these three is live at
+# once, silently, in a clinical surface — and nothing in the diff that ships
+# it would look wrong.
+
+def _soft_delete(app, tenant_id, resource_type, resource_id):
+    """Tombstone one row, exactly as the delete paths do."""
+    with app.app_context():
+        row = db.session.get(R6Resource, (tenant_id, resource_type, resource_id))
+        assert row is not None, "nothing to soft-delete — check the seed"
+        row.is_deleted = True
+        db.session.commit()
+
+
+def test_a_soft_deleted_patient_no_longer_makes_the_match_ambiguous(
+        client, app, tenant_id, tenant_headers):
+    """#422, stated as the operator's experience: they deleted the duplicate,
+    and the symptom must move.
+
+    MUTATION: drop `is_deleted=False` from _resolve_subject -> red, and the
+    answer goes back to "ambiguous-patient" for a tenant with one live
+    Patient.
+    """
+    _seed_patient(app, tenant_id, pid="p-live")
+    _seed_patient(app, tenant_id, pid="p-gone")
+    _soft_delete(app, tenant_id, "Patient", "p-gone")
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    resolution = json.loads(
+        _resp_param(r.get_json(), "subjectResolution")["valueString"])
+    assert resolution == {"state": "tenant-default", "subject": "Patient/p-live"}
+
+
+def test_the_last_patient_being_deleted_reads_as_no_patient_not_a_default(
+        client, app, tenant_id, tenant_headers):
+    """The other side of the same filter. A tombstone must not be RESOLVED as
+    the tenant's own Patient either — that would evaluate a deleted person and
+    report a confident state while doing it.
+
+    MUTATION: filter `is_deleted=True` (an easy inversion to typo) -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-only")
+    _soft_delete(app, tenant_id, "Patient", "p-only")
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    body = r.get_json()
+    resolution = json.loads(_resp_param(body, "subjectResolution")["valueString"])
+    assert resolution == {"state": "no-patient", "subject": None}
+    consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
+    assert consumer["unevaluated"] == "no-patient"
+
+
+def test_a_supplied_subject_naming_a_deleted_patient_gets_no_demographics(
+        client, app, tenant_id, tenant_headers):
+    """The half `_resolve_subject` cannot cover: a supplied subject never
+    passes through the resolver, so `_patient_for` needs its own filter.
+
+    The route already knows what to do with a subject it cannot read — #417
+    made that `check-incomplete`, which tells the caller the answer is partial
+    instead of presenting it as a clean sheet. A deleted Patient must land
+    there, identically to one that was never stored.
+
+    Asserted against a live control of the same age and sex, so the test
+    cannot pass by the endpoint being broken for everyone.
+
+    MUTATION: drop `is_deleted=False` from _patient_for -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-erased", gender="female",
+                  birth=_birth_date_for_age(58))
+    _soft_delete(app, tenant_id, "Patient", "p-erased")
+    _seed_patient(app, tenant_id, pid="p-alive", gender="female",
+                  birth=_birth_date_for_age(58))
+
+    def _unevaluated(pid):
+        body = client.get(f"/r6/fhir/Patient/$care-gaps?subject=Patient/{pid}",
+                          headers=tenant_headers).get_json()
+        return json.loads(
+            _resp_param(body, "consumerSummary")["valueString"]).get(
+                "unevaluated")
+
+    # Not `is None`: a live patient with partial evidence reports
+    # 'evidence-not-read', which is a different sentence about a different
+    # gap. The property is that only the deleted one is unreadable.
+    assert _unevaluated("p-alive") != "check-incomplete", (
+        "the live control is already check-incomplete — this test would pass "
+        "for the wrong reason")
+    assert _unevaluated("p-erased") == "check-incomplete", (
+        "a deleted Patient was read as demographics and evaluated as though "
+        "the record were still there")
+
+
+def test_a_soft_deleted_observation_no_longer_closes_a_gap(
+        client, app, tenant_id, tenant_headers):
+    """The most consequential of the three, and the one that reaches a person.
+
+    `_seed_patient` stores a blood-pressure Observation, which is what closes
+    `bp-screening`. Delete it and the gap must REOPEN. If a tombstone still
+    counts as evidence, a patient who deleted a record is told they are up to
+    date on a screening the system no longer has.
+
+    MUTATION: drop `is_deleted=False` from _resources_for -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-bp")
+
+    before = client.post("/r6/fhir/Patient/$care-gaps?subject=Patient/p-bp",
+                         headers=tenant_headers).get_json()
+    open_before = [g["rule_id"] for g in
+                   json.loads(_resp_param(before, "summary")["valueString"])["gaps"]]
+    assert "bp-screening" not in open_before, (
+        "the seeded Observation should close bp-screening — if it does not, "
+        "this test is not exercising what it claims")
+
+    _soft_delete(app, tenant_id, "Observation", "o-p-bp")
+
+    after = client.post("/r6/fhir/Patient/$care-gaps?subject=Patient/p-bp",
+                        headers=tenant_headers).get_json()
+    open_after = [g["rule_id"] for g in
+                  json.loads(_resp_param(after, "summary")["valueString"])["gaps"]]
+    assert "bp-screening" in open_after, (
+        "a soft-deleted Observation still closed the gap")
+
+
+def test_a_resource_row_is_born_live_rather_than_null(app, tenant_id):
+    """The trap under every `is_deleted=False` filter in this repository.
+
+    The column is nullable with a PYTHON-side default. `is_deleted = 0` does
+    not match NULL in SQL, so a row written without that default would be
+    invisible to this module's three filters and to all 18 in r6/routes.py —
+    live data, silently unreadable, with no error anywhere.
+
+    Verified rather than assumed: the model's custom __init__ does not set the
+    field, and the row still lands as False because SQLAlchemy applies the
+    column default at INSERT.
+
+    MUTATION: remove `default=False` from R6Resource.is_deleted -> red, and
+    every newly written resource disappears from every read path.
+    """
+    with app.app_context():
+        db.session.add(R6Resource(
+            resource_type="Patient",
+            resource_json=json.dumps({"resourceType": "Patient", "id": "p-new"}),
+            resource_id="p-new", tenant_id=tenant_id))
+        db.session.commit()
+        stored = db.session.get(R6Resource, (tenant_id, "Patient", "p-new"))
+        assert stored.is_deleted is False, (
+            f"a new row was written with is_deleted={stored.is_deleted!r}; "
+            "NULL is invisible to every read filter in the codebase")
+        assert R6Resource.query.filter_by(
+            tenant_id=tenant_id, resource_type="Patient",
+            is_deleted=False).count() == 1
+
+
+# ─────────────────────────────────────────────
 # What we say when we did not look (#417)
 # ─────────────────────────────────────────────
 

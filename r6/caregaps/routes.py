@@ -65,12 +65,28 @@ def register_caregaps_routes(blueprint, deps):
         engine itself cannot tell the difference afterwards, because an
         unidentifiable patient produces exactly the rule results a healthy
         one does.
+
+        `is_deleted=False` is #422, and the honest version of it: this count
+        decides whether the operation may pick a subject at all, and a count
+        that includes tombstones decides on a set nobody can see. A tenant
+        that deleted its duplicate Patient would still read as ambiguous, the
+        symptom would not move, and the only apparent next move would be a
+        hard delete against production.
+
+        WOULD, not did. Verified 2026-08-16: `is_deleted = True` is written on
+        one line in this repository (r6/routes.py:2824, the demo walkthrough,
+        on Permission rows) and no route accepts DELETE, so no Patient row can
+        carry a tombstone today. This is a reader fixed ahead of its writer —
+        which is the only order in which it can be fixed quietly. Every read
+        path in r6/routes.py has filtered since the column existed; the
+        feature modules added later did not.
         """
         if supplied:
             return supplied, "supplied"
         # Two rows is all it takes to know the match is ambiguous.
         rows = R6Resource.query.filter_by(
-            resource_type="Patient", tenant_id=tenant_id).limit(2).all()
+            resource_type="Patient", tenant_id=tenant_id,
+            is_deleted=False).limit(2).all()
         if not rows:
             return None, "no-patient"
         if len(rows) > 1:
@@ -78,16 +94,33 @@ def register_caregaps_routes(blueprint, deps):
         return f"Patient/{rows[0].id}", "tenant-default"
 
     def _patient_for(subject, tenant_id):
+        """The demographics the rules read age and sex from.
+
+        Filtered for the same reason, and it is the half `_resolve_subject`
+        cannot cover: a caller may SUPPLY `?subject=Patient/<deleted-id>`,
+        which never passes through the resolver above. Without this, a deleted
+        patient's date of birth still selects which preventive rules fire.
+        """
         if not subject or not subject.startswith("Patient/"):
             return None
         row = R6Resource.query.filter_by(
             resource_type="Patient", id=subject.split("/", 1)[1],
-            tenant_id=tenant_id).first()
+            tenant_id=tenant_id, is_deleted=False).first()
         return row.to_fhir_json() if row else None
 
     def _resources_for(resource_type, subject, tenant_id):
+        """The clinical evidence a gap is evaluated against.
+
+        The most consequential of the three. These rows are what CLOSES a
+        gap — a Procedure closes a screening, an Immunization closes a
+        vaccine, an Observation closes A1c monitoring. Counting a
+        soft-deleted row here tells a patient they are covered by a record
+        the system considers deleted, which is the failure direction that
+        matters: it withholds a due item rather than repeating one.
+        """
         rows = R6Resource.query.filter_by(
-            resource_type=resource_type, tenant_id=tenant_id).all()
+            resource_type=resource_type, tenant_id=tenant_id,
+            is_deleted=False).all()
         out = []
         for row in rows:
             res = row.to_fhir_json()
