@@ -221,6 +221,20 @@ class TestTheActivationGateCanActuallyGate:
             "a server that answers nothing.")
 
 
+#: Floating tags that are allowed, each with a reason and a way out. An
+#: allowlist is where a defect class comes back, so this one is a single
+#: entry, dated, and pointed at the work that removes it.
+#:
+#: healthsamurai/aidboxone:edge — the example is verified end to end against
+#: `edge` as of 2026-08-16, and against nothing else. Aidbox publishes proper
+#: release tags (2607.0 is current, 2026-08-06), so the fix is one line. What
+#: is missing is the RUN: pinning the partner-facing example to a version
+#: nobody has started it on trades an unreproducible example for a possibly
+#: broken one, which is the worse trade. It needs a live Aidbox, and the
+#: local stack is down. Tracked so the exemption cannot become the answer.
+_FLOATING_EXEMPT = frozenset({"healthsamurai/aidboxone:edge"})
+
+
 class TestTheImagePinMatchesThisRepo:
     """MUTATION: bump pyproject's version without the compose file -> red.
 
@@ -245,9 +259,87 @@ class TestTheImagePinMatchesThisRepo:
             "up` with a manifest error.")
 
     def test_no_image_is_floating(self):
-        """`latest` is what went stale in the first place."""
+        """`latest` is what went stale in the first place.
+
+        THIS TEST WAS TOO NARROW AND SAID SO IN ITS OWN NAME. It read
+        "no image is floating" and matched `ghcr.io/...:latest` — our
+        registry, that one word. In the same file, three lines apart:
+
+            image: healthsamurai/aidboxone:edge
+            pull_policy: always
+
+        `edge` is Aidbox's rolling development build and `pull_policy: always`
+        guarantees a fresh one on every `up`, so two people running this
+        example a week apart get different servers. It is the example a
+        partner's article points at, and it is the one image in the file
+        nobody could reproduce.
+
+        The needle is now the CLASS of floating tag, across every image
+        rather than ours.
+
+        MUTATION: change either ghcr pin to :latest, or add a new service on
+        :edge / :main / :nightly -> red.
+        """
         text = COMPOSE.read_text()
-        assert not re.search(r"image:\s*ghcr\.io/\S+:latest", text), (
-            "a ghcr image is pinned to :latest. That tag is only "
-            "republished when a release is cut, so it silently served a "
-            "build that predated the upstream-auth code this example needs.")
+        floating = {"latest", "edge", "dev", "main", "master", "nightly",
+                    "stable", "rolling"}
+        offenders = []
+        for image in re.findall(r"image:\s*(\S+)", text):
+            tag = image.rsplit(":", 1)[1] if ":" in image else "latest"
+            if tag in floating and image not in _FLOATING_EXEMPT:
+                offenders.append(image)
+        assert not offenders, (
+            "a floating tag makes this example unreproducible — the same "
+            "compose file starts a different system tomorrow: "
+            + ", ".join(offenders))
+
+
+def test_the_floating_exemption_is_one_entry_and_stays_visible():
+    """An allowlist that can grow silently is the defect class coming back.
+
+    The exemption exists because the fix needs a live Aidbox to verify, not
+    because floating tags are acceptable. This pins the shape of that
+    admission: one entry, and the reason next to it.
+
+    MUTATION: add a second exemption -> red. The second one is where this
+    stops being a note and starts being a policy.
+    """
+    assert _FLOATING_EXEMPT == frozenset({"healthsamurai/aidboxone:edge"}), (
+        "the floating-tag exemption list changed. It is meant to shrink to "
+        "empty when the example is verified against a pinned Aidbox release, "
+        "not to grow")
+
+    source = Path(__file__).read_text()
+    block = source.split("_FLOATING_EXEMPT")[0].rsplit("#:", 1)[-1]
+    assert "2607" in source.split("_FLOATING_EXEMPT")[0], (
+        "the exemption must name the release it should move to, or nobody "
+        "reading it knows what removing it involves")
+    assert block.strip(), "the exemption lost its reason"
+
+
+def test_the_floating_detector_actually_detects(tmp_path):
+    """Proven on synthetic compose text before the real scan is trusted.
+
+    The previous version of this guard passed for months over an image it
+    could not see, so the detector gets its own evidence.
+    """
+    floating = {"latest", "edge", "dev", "main", "master", "nightly",
+                "stable", "rolling"}
+
+    def offenders(text, exempt=frozenset()):
+        found = []
+        for image in re.findall(r"image:\s*(\S+)", text):
+            tag = image.rsplit(":", 1)[1] if ":" in image else "latest"
+            if tag in floating and image not in exempt:
+                found.append(image)
+        return found
+
+    assert offenders("image: healthsamurai/aidboxone:edge") == [
+        "healthsamurai/aidboxone:edge"]
+    assert offenders("image: ghcr.io/x/y:latest") == ["ghcr.io/x/y:latest"]
+    # No tag at all is `latest` by definition, which is the sneakiest form.
+    assert offenders("image: postgres") == ["postgres"]
+    assert offenders("image: postgres:18") == []
+    assert offenders("image: ghcr.io/aks129/healthclaw-guardrails:1.10.0") == []
+    assert offenders("image: healthsamurai/aidboxone:edge",
+                     exempt=frozenset({"healthsamurai/aidboxone:edge"})) == []
