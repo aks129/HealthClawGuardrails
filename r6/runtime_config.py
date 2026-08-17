@@ -84,6 +84,21 @@ def validate_runtime_environment(
     """Validate fail-closed production settings and return the app env."""
     env = os.environ if environ is None else environ
     app_env = resolve_app_env(env)
+
+    # EVERY environment, not just production: an unknown FHIR_UPSTREAM_KIND is
+    # a typo, and a typo here produced a deployment that STARTED, reported
+    # itself started, and then answered 500 to every request including
+    # /health — an opaque HTML error page, while the registry's own excellent
+    # explanation went to a log nobody reads during a deploy.
+    #
+    # resolve_upstream_config raises with that explanation. Calling it here
+    # moves the failure to boot, where an orchestrator keeps the previous
+    # version running instead of rolling out a broken one. It reads the
+    # environment and returns a dataclass: no client is built and no network
+    # call is made, so this costs nothing when the config is right.
+    from r6.upstream_connectors import resolve_upstream_config
+    resolve_upstream_config(environ=env)
+
     if app_env != "production":
         return app_env
 

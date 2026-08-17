@@ -814,7 +814,14 @@ def upstream_status() -> dict:
     Returns a dict rather than a pair: a 2-tuple is always truthy, and this
     codebase has a documented bypass built on exactly that shape.
     """
-    proxy = get_proxy()
+    try:
+        proxy = get_proxy()
+    except ValueError as exc:
+        # An unknown connector kind. Startup validation refuses to boot on
+        # this, so reaching here means something bypassed it — and /health
+        # answering a 500 HTML page is the worst way to say so. Report it.
+        logger.error('upstream misconfigured: %s', exc)
+        return {'check': 'misconfigured', 'degraded': True}
     if proxy:
         payload = proxy.healthy()
         return {'check': payload,
