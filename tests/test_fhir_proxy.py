@@ -870,3 +870,62 @@ class TestMedplumProxy:
         assert not isinstance(proxy, MedplumProxy)
         proxy.close()
         os.environ.pop('FHIR_UPSTREAM_URL', None)
+
+
+class TestAnUnknownConnectorKindFailsAtBootNotPerRequest:
+    """A typo in FHIR_UPSTREAM_KIND used to produce a RUNNING deployment.
+
+    Measured before the fix: the app booted and reported itself booted,
+    `/health` answered **500 with an HTML error page**, and every read 500'd.
+    The registry's own explanation — naming the variable, the bad value and
+    the four valid kinds — went to a log nobody reads during a deploy.
+
+    An orchestrator handles "did not start" correctly: it keeps the previous
+    version serving. It handles "started and 500s" by rolling the broken one
+    out.
+    """
+
+    def test_the_environment_validator_refuses_an_unknown_kind(self):
+        """MUTATION: delete the resolve_upstream_config call from
+        validate_runtime_environment -> red."""
+        from r6.runtime_config import validate_runtime_environment
+
+        with pytest.raises(ValueError, match="not one of"):
+            validate_runtime_environment(environ={
+                "FHIR_UPSTREAM_KIND": "bogus",
+                "FHIR_UPSTREAM_URL": "https://x.example/fhir",
+            })
+
+    @pytest.mark.parametrize("kind", ["aidbox", "medplum", "hapi", "generic"])
+    def test_every_real_kind_still_boots(self, kind):
+        """The other side. A validator that refuses everything is not a
+        validator, and this one runs on every start in every environment."""
+        from r6.runtime_config import validate_runtime_environment
+
+        assert validate_runtime_environment(environ={
+            "FHIR_UPSTREAM_KIND": kind,
+            "FHIR_UPSTREAM_URL": "https://x.example/fhir",
+            "FHIR_UPSTREAM_CLIENT_ID": "cid",
+            "FHIR_UPSTREAM_CLIENT_SECRET": "csec",
+        }) != "production"
+
+    def test_no_upstream_at_all_still_boots(self):
+        """Local mode is the common case and must not need any of this."""
+        from r6.runtime_config import validate_runtime_environment
+
+        assert validate_runtime_environment(environ={}) != "production"
+
+    def test_health_reports_it_rather_than_raising_an_html_500(self, monkeypatch):
+        """Belt and braces: startup refuses, so reaching here means something
+        bypassed it. A 500 HTML page is the worst available way to say
+        "your connector kind is misspelt".
+
+        monkeypatch, not os.environ: a bogus kind left in the environment now
+        fails every LATER test at app construction, because the validator
+        this PR adds runs on every start. Found the hard way — 884 errors.
+
+        MUTATION: drop the ValueError catch in upstream_status -> red.
+        """
+        monkeypatch.setenv("FHIR_UPSTREAM_KIND", "bogus")
+        monkeypatch.setenv("FHIR_UPSTREAM_URL", "https://x.example/fhir")
+        assert upstream_status() == {'check': 'misconfigured', 'degraded': True}
