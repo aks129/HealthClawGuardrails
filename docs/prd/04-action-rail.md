@@ -38,7 +38,7 @@ Demonstrated means: a recording in which execution is blocked, a human acts some
 | # | Issue | Shape |
 |---|---|---|
 | 215 | no Tier-2 approve surface exists — nothing could execute even with vendor keys | **the set's headline** |
-| 214 | `X-Human-Confirmed` is the whole gate on direct clinical writes | known gap |
+| 214 | `X-Human-Confirmed` is the whole gate on direct clinical writes | known gap — **labelled `set: 1`**, see below |
 | 216 | allowlist + daily cap error codes are reserved but enforced nowhere | control that does nothing |
 | 161 | EPIC: comms rail — phone + SMS executors behind the human gate | epic |
 | 162 | route medication refill requests through the rail | product |
@@ -51,7 +51,18 @@ Demonstrated means: a recording in which execution is blocked, a human acts some
 | 413 | `$curatr-apply-fix` is unreachable in production | dead path |
 | 95 | make `action_policy.yaml` authoritative before exposing a describe contract | policy drift |
 | 485 | should propose-stage accept an Observation with no `effective[x]`? | decision |
+| 228 | meds-schedule and appointment-prep tools (no new connectors needed) | sibling of #163 |
 | 61 | SMBP phase 2: reminder scheduler + cuff photo OCR | enhancement |
+
+**#214 is listed here and labelled `set: 1 guardrail-core`, deliberately.**
+`set:` is *proof* ownership, and #214 surfaces in set 1's artifacts: the
+write-gate matrix is set 1's recording and `human_confirmation` is one of its
+seven conformance properties. This set's run — propose → commit → approve →
+execute through the separate approval endpoint — never touches the header, so
+the defect would not appear in its run log. What set 4 owns is the **closure
+design** in §6, which is a spec obligation rather than a proof one. The row
+stays here because a reader of this PRD needs to know the gap exists; it is
+the known hole in this set's own headline claim.
 
 ## 6. Specifications
 

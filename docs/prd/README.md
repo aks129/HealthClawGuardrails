@@ -29,3 +29,49 @@ The mapping was done by title on 2026-08-16 against 87 open issues, **52 of
 which carry no label at all** — so the tables are the current answer to "what
 is broken in this feature", and labelling the tracker to match is the first
 move in the process document.
+
+That move is now done, and the sentence above is the historical state: as of
+2026-08-16 all 87 open issues carry a `set:` label. The tracker, not this
+page, is the live answer.
+
+## Two axes: `area:` and `set:`
+
+The tracker carries two label families. They are not competing taxonomies and
+neither is derived from the other. An issue can carry both. `area:` is applied
+where someone thought to; **`set:` is applied to every open issue, without
+exception** — that is what makes the queries below a partition rather than a
+sample.
+
+| Family | Answers | Example |
+|---|---|---|
+| `area:` | which part of the **code** does this live in | `area: fhir`, `area: careagents` |
+| `set:` | which **PRD owns proving it works** | `set: 1 guardrail-core` |
+
+The distinction earns its keep where the two disagree, and they disagree
+often. #53 (broaden the labs analyte table) is `area: fhir` code but
+`set: 5 clinical-rails`, because a clinician reading the output is what
+proves it. #136 (iMessage) is `area: surfaces` but `set: 3 consumer-journey`,
+because the thing to demonstrate is a patient finishing, not a transport
+working. #56 (carve up `r6/routes.py`) is `area: fhir` and
+`set: cross-cutting`, because no feature set gets more provable when it
+lands. Fold either axis into the other and those issues sit in a bucket whose
+owner cannot close them.
+
+So: `area:` routes a fix to the code. `set:` routes an issue to the person who
+has to demonstrate the feature works, and to the evidence pack that
+demonstration lands in.
+
+### The query
+
+What is broken in feature *N*:
+
+```sh
+gh issue list --label "set: 3 consumer-journey" --state open
+```
+
+Every open issue carries exactly one `set:` label, so the seven queries
+partition the tracker with nothing double-counted and nothing dropped. Issues
+that no feature set owns are `set: cross-cutting` ([00](00-cross-cutting.md)).
+
+When you file an issue, add its `set:` label. An unlabelled issue is invisible
+to the only question this structure exists to answer.
