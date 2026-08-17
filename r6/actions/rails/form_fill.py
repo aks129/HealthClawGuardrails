@@ -59,9 +59,17 @@ class FormFillExecutor:
         # (3) Load the reviewed QR, tenant-scoped. If it vanished (deleted or
         # stale), the reviewed answers are gone: fail loud, never render a
         # blank/guessed form.
+        #
+        # `is_deleted=False` is what makes that comment true (#509). It named
+        # deletion as the case it handled and the query did not filter, so a
+        # soft-deleted QuestionnaireResponse was loaded and RENDERED into a
+        # form submitted on a patient's behalf — the exact "blank/guessed
+        # form" outcome the sentence above promises to prevent. A control
+        # that reads as one thing and does another, with a comment supplying
+        # the misreading.
         row = R6Resource.query.filter_by(
             resource_type='QuestionnaireResponse', id=reviewed_qr_id,
-            tenant_id=action.tenant_id).first()
+            tenant_id=action.tenant_id, is_deleted=False).first()
         if row is None:
             return ExecutionResult(status='failed',
                                    error=errors.STALE_SOURCE_DATA)
@@ -124,7 +132,7 @@ class FormFillExecutor:
                 q_id = q_id.rstrip('/').split('/')[-1]
                 row = R6Resource.query.filter_by(
                     resource_type='Questionnaire', id=q_id,
-                    tenant_id=tenant_id).first()
+                    tenant_id=tenant_id, is_deleted=False).first()
                 if row is not None:
                     return row.to_fhir_json()
         except Exception:  # noqa: BLE001 — non-fatal; fall through to canonical
@@ -145,9 +153,12 @@ class FormFillExecutor:
             return None
         try:
             patient_id = str(subject_ref).split('/', 1)[1]
+            # A deleted Patient's NAME would otherwise be printed on the
+            # title of a form that gets submitted. The renderer treats a
+            # missing label as "no name", which is the right answer here.
             row = R6Resource.query.filter_by(
                 resource_type='Patient', id=patient_id,
-                tenant_id=tenant_id).first()
+                tenant_id=tenant_id, is_deleted=False).first()
             if row is None:
                 return None
             names = (row.to_fhir_json().get('name') or [])

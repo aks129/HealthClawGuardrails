@@ -94,6 +94,46 @@ def test_execute_missing_qr_row_is_stale_source_data(app, tenant_id, monkeypatch
     assert result.error == errors.STALE_SOURCE_DATA
 
 
+def test_a_soft_deleted_reviewed_qr_fails_loud_like_a_missing_one(
+        app, tenant_id, monkeypatch):
+    """#509. The comment above this query names deletion as the case it
+    handles; the query did not filter `is_deleted`, so a tombstoned
+    QuestionnaireResponse was loaded and RENDERED into a form submitted on a
+    patient's behalf.
+
+    Asserted against a live control in the same test, because "it failed" is
+    only meaningful next to "and the identical live one succeeds". Without
+    that half this passes if execute() is broken for everyone.
+
+    MUTATION: drop `is_deleted=False` from the reviewed-QR query -> red, and
+    the deleted answers are rendered as a completed form.
+    """
+    monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
+    _seed(app, tenant_id, [PATIENT, MED_A, ALLERGY_A])
+    with app.app_context():
+        live_id = _persist_qr(tenant_id, _reviewed_qr())
+        live = FormFillExecutor().execute(_action(
+            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
+                        'reviewed_qr_id': live_id}))
+        assert live.status == 'completed', (
+            f'the live control did not complete ({live.error}); this test '
+            'would pass for the wrong reason')
+
+        gone_id = _persist_qr(tenant_id, _reviewed_qr())
+        row = db.session.get(
+            R6Resource, (tenant_id, 'QuestionnaireResponse', gone_id))
+        row.is_deleted = True
+        db.session.commit()
+
+        result = FormFillExecutor().execute(_action(
+            tenant_id, {'questionnaire': 'healthclaw-intake', 'body': 'x',
+                        'reviewed_qr_id': gone_id}))
+
+    assert result.status == 'failed', (
+        'a deleted QuestionnaireResponse was rendered into a form')
+    assert result.error == errors.STALE_SOURCE_DATA
+
+
 def test_execute_happy_path_renders_persists_and_links(app, tenant_id,
                                                        monkeypatch):
     monkeypatch.setenv('PUBLIC_BASE_URL', BASE_URL)
