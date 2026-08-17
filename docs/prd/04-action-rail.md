@@ -9,7 +9,10 @@
 
 ## 1. The problem, and whose it is
 
-The moment an agent can *do* something — refill a prescription, book an appointment, send a form — the guardrail question stops being about reading and starts being about consent. The user is **the patient whose name is on the action** and the clinician who receives it.
+An agent that can *do* something — refill a prescription, book an appointment,
+send a form — changes the guardrail question. It stops being about reading and
+starts being about consent. The user is **the patient whose name is on the
+action** and the clinician who receives it.
 
 ## 2. What "works" means
 
@@ -68,4 +71,8 @@ the known hole in this set's own headline claim.
 
 - `action_policy.yaml` — the policy file, **not yet authoritative** (#95).
 - `docs/2026-08-03-refactor-working-protocol.md` for per-PR rules.
-- **Missing, and a SOW item:** a written specification of the human gate itself — what counts as out-of-band, what a Tier-2 approval surface must do, and what the closure path for #214 is. Prior research points at MCP URL-mode elicitation (SEP-1036) as the standardized replacement; that has never been written down as our design.
+- **Missing, and a SOW item:** a written specification of the human gate
+  itself. It must define what counts as out-of-band, what a Tier-2 approval
+  surface must do, and what the closure path for #214 is. Prior research points
+  at MCP URL-mode elicitation (SEP-1036) as the standardized replacement; that
+  has never been written down as our design.

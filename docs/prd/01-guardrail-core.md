@@ -30,7 +30,9 @@ Conformance **Grade A (7/7)** locally and **Grade B (6/7)** through the proxy, *
 
 - **Grade A, 7/7, 35 checks** — measured today, twice.
 - **Proxy mode: not measured.** The pack does not report a grade it did not take. Blocked on the local stack.
-- The failing property in proxy mode is `error_fidelity` (#498); the local Grade A for it carries `coverage=local-fhir-only`, so the A and the proxy failure are measured over different profiles and do not contradict.
+- The failing property in proxy mode is `error_fidelity` (#498). The local
+  Grade A for it carries `coverage=local-fhir-only`. The A and the proxy
+  failure are measured over different profiles and do not contradict.
 - Pack: `docs/evidence/2026-08-16-set1-guardrail-core.md` — **EVIDENCE PARTIAL**.
 - Honest summary from that pack: *verified against the application code, unverified against the deployment*.
 

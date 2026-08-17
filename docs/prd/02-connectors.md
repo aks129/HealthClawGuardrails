@@ -34,7 +34,11 @@ Not a mock, and not one kind standing in for another. A connector proven only ag
 | `medplum` | **no** | server down; no credentials present |
 
 - Pack: `docs/evidence/2026-08-16-set2-connectors.md` — **EVIDENCE PARTIAL**, 2 of 4.
-- Four defects fixed today off this run: `hapi` dropping its credentials (#512), health lying about upstream mode (#513), `$conformance` colliding on a shared server (#514), and an unknown kind booting then 500-ing (#518).
+- Four defects fixed today off this run:
+  - `hapi` dropping its credentials (#512)
+  - health lying about upstream mode (#513)
+  - `$conformance` colliding on a shared server (#514)
+  - an unknown kind booting then 500-ing (#518)
 - The example's Aidbox image is **unpinned** (`:edge`, `pull_policy: always`) with a dated exemption recorded in `tests/test_aidbox_example_tells_the_truth.py`.
 
 ## 5. Known gaps — the open issues in this set

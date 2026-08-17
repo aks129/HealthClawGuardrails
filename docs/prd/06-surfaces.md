@@ -9,7 +9,9 @@
 
 ## 1. The problem, and whose it is
 
-The guardrails are only worth anything where someone can reach them. The user is **whoever is holding the agent** — a developer wiring an MCP client, a patient in a chat window, a partner evaluating whether this is real.
+The guardrails are only worth anything where someone can reach them. The user
+is **whoever is holding the agent**. That is a developer wiring an MCP client,
+a patient in a chat window, or a partner evaluating whether this is real.
 
 ## 2. What "works" means
 

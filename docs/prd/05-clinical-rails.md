@@ -15,7 +15,13 @@ A patient's records contain the answer to *is anything overdue, and is anything 
 
 > A clinician reads the output and does not have to correct it.
 
-This set's end-user sign-off is a clinician's, and it is the gate. Two clinical rules stand behind it and are not negotiable: **"no known allergies" is never inferred**, and **"could not look" must never arrive as "looked and found none"** — a shape this codebase has now found five separate times.
+This set's end-user sign-off is a clinician's, and it is the gate. Two clinical
+rules stand behind it and are not negotiable:
+
+- **"no known allergies" is never inferred**
+- **"could not look" must never arrive as "looked and found none"**
+
+The second is a shape this codebase has now found five separate times.
 
 ## 3. How it is proven
 
