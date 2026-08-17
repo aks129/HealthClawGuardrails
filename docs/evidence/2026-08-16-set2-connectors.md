@@ -2,6 +2,10 @@
 
 **Owner:** owner-connectors · **Date:** 2026-08-16 · **Verdict: EVIDENCE PARTIAL**
 
+**One redaction:** the operator's home-directory name in pasted shell output
+reads `<user>`. Nothing else in any transcript below is altered — the redaction
+is incidental to every claim the output supports.
+
 Two of the four connector kinds ran a full live walkthrough against a real
 server of that kind. Two did not run at all, because the servers they need
 were not running on this machine and starting them was out of scope for this
@@ -23,16 +27,16 @@ them was running when this pass started, and the Docker daemon itself was down.
 $ docker context ls
 NAME              DOCKER ENDPOINT                                      ERROR
 default           unix:///var/run/docker.sock
-desktop-linux *   unix:///Users/eugenevestel/.docker/run/docker.sock
+desktop-linux *   unix:///Users/<user>/.docker/run/docker.sock
 
 $ docker info --format '{{.ServerVersion}}'
-failed to connect to the docker API at unix:///Users/eugenevestel/.docker/run/docker.sock;
+failed to connect to the docker API at unix:///Users/<user>/.docker/run/docker.sock;
 check if the path is correct and if the daemon is running:
-dial unix /Users/eugenevestel/.docker/run/docker.sock: connect: no such file or directory
+dial unix /Users/<user>/.docker/run/docker.sock: connect: no such file or directory
 
 $ ls -la ~/.docker/run          # the socket file itself is gone
 total 0
-drwxr-xr-x@  2 eugenevestel  staff   64 Aug 16 17:16 .
+drwxr-xr-x@  2 <user>  staff   64 Aug 16 17:16 .
 
 $ pgrep -fl 'com.docker.backend|Docker Desktop|dockerd'
 (no output)
