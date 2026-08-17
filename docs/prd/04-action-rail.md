@@ -1,6 +1,6 @@
 # PRD 4 — Action rail
 
-> Owner brief: `.claude/agents/owner-action-rail.md` · Process:
+> Owner brief (local only — `.claude/` is gitignored): `.claude/agents/owner-action-rail.md` · Process:
 > `docs/2026-08-16-delivery-process.md` · Topology:
 > `docs/2026-08-16-system-topology.md`
 >

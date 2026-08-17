@@ -28,7 +28,7 @@ fourth overlapping protocol *is* the illegibility being complained about.
 | Document | Owns | Unchanged by this |
 |---|---|---|
 | `docs/2026-08-05-healthclaw-2.0-playbook.md` | the **architecture** half of 2.0 — eight ratchets to zero, by strangler | yes |
-| the 2.0 verification plan (artifact) + `.claude/agents/owner-*.md` | the **QA** half — six feature sets, four artifacts, two sign-offs | yes |
+| the 2.0 verification plan (artifact) + the owner briefs (local only) | the **QA** half — six feature sets, four artifacts, two sign-offs | yes |
 | `docs/2026-08-03-refactor-working-protocol.md` | **per-PR** rules inside a migration slice | yes |
 
 This document adds only the front of the pipeline — everything before a

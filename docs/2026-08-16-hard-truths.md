@@ -27,7 +27,10 @@ Two of those four are the ones a patient touches.
 
 ## 2. The test suite is large, and it is not the thing that finds defects
 
-**50,125 lines of test guard 29,446 lines of engine.** 3,151 tests pass.
+**50,429 lines of test guard 29,508 lines of engine.** 3,153 tests pass, at
+`4cb3771`. (First published as 50,125 / 29,446 / 3,151 — measured four merges
+earlier than the header claimed, with a collected count printed as a passing
+one. See the topology's note; the ratio and the point are unchanged.)
 
 All eight defects found on 2026-08-16 were found by **running the system**.
 Zero came from that suite. Three had passing tests sitting directly over them,

@@ -1,6 +1,6 @@
 # PRD 1 — Guardrail core
 
-> Owner brief: `.claude/agents/owner-guardrail-core.md` · Process:
+> Owner brief (local only — `.claude/` is gitignored): `.claude/agents/owner-guardrail-core.md` · Process:
 > `docs/2026-08-16-delivery-process.md` · Topology:
 > `docs/2026-08-16-system-topology.md`
 >
