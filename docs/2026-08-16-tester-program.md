@@ -94,9 +94,10 @@ the reward is professional rather than financial:
   scorecard. It cannot be honoured today and it fails twice. #525 — the probe
   requires the declared supported-parameter set to *equal ours*, `context-id`
   included, so a server that refuses a bad parameter perfectly correctively
-  still grades C, capping the deployment at B. And `scripts/guardrail_
-  conformance.py` puts the repo root on `sys.path` and imports
-  `r6.conformance`, so **a third party has to clone our application to grade
+  still grades C, capping the deployment at B. And the runner script
+  (`scripts/guardrail_conformance.py`) puts the repo root on `sys.path` and
+  imports `r6.conformance`, so **a third party has to clone our application to
+  grade
   their own server**. Every recruit would get a B for a reason that is our
   defect, not their server's. It returns when both close.
 - **A finding credited by name in the specification.** The stronger offer, and

@@ -58,10 +58,11 @@ Measured 2026-08-16 by the set-2 evidence run
 Six numbers that may only go down. `tests/test_ratchets.py` holds them, and
 the table below is all of them.
 
-The 2.0 playbook sets out eight ratchets. Two of the six here are pinned by a
-test; the playbook's other three have no pin, and `r6/routes.py` lines is a
-pin the playbook does not list. Saying "eight" here read as *eight numbers a
-test enforces*, which was never true.
+The 2.0 playbook sets out eight ratchets, and the two sets are not the same
+six. Five of the six pins below are playbook ratchets; the playbook's other
+three have no pin at all, and `r6/routes.py` lines is a sixth pin the playbook
+does not list. Saying "eight" here read as *eight numbers a test enforces*,
+which was never true of either set.
 
 | Ratchet | 05 Aug | Today | 2.0 |
 |---|---|---|---|
