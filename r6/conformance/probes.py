@@ -120,10 +120,39 @@ def _error_fidelity_grade(grades: list[str]) -> str:
 
 
 def _synthetic_patient():
+    """The probe subject. Distinct on every call, deliberately.
+
+    It used to be a constant body, and a constant body cannot be created
+    twice on a server that de-duplicates. Reproduced against hapi.fhir.org
+    directly:
+
+        create 1: 201
+        create 2: 412  HAPI-2840: Can not create resource duplicating
+                       existing resource: Patient/137354953
+
+    So the FIRST conformance run against a HAPI deployment passed and every
+    run after it failed — and failed in the worst possible way, because the
+    dependent Observation then 400s on a dangling subject reference and the
+    scorecard blames the GUARDRAILS. Measured: Grade F, 1/7, with four of the
+    six failures naming gates that were working. A report that accuses the
+    thing it is meant to certify is worse than no report.
+
+    The uniqueness lives in a marker identifier rather than in the five
+    values the redaction checks look for. Those stay constant on purpose: a
+    probe that randomised the SSN it then searches the response for would be
+    checking its own arithmetic, and the checks below name these constants
+    directly.
+    """
     return {
         "resourceType": "Patient",
         "name": [{"family": _FAMILY, "given": [_GIVEN]}],
-        "identifier": [{"system": "http://hl7.org/fhir/sid/us-ssn", "value": _SSN}],
+        "identifier": [
+            {"system": "http://hl7.org/fhir/sid/us-ssn", "value": _SSN},
+            # Not decoration: this is what makes the body unique. Redaction
+            # strips identifiers wholesale, so it never reaches a caller.
+            {"system": "urn:healthclaw:conformance-run",
+             "value": uuid.uuid4().hex},
+        ],
         "telecom": [{"system": "phone", "value": _PHONE}],
         "address": [{"line": [_STREET], "city": "Testville"}],
         "birthDate": "1980-01-01",
