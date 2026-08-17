@@ -1,0 +1,815 @@
+# MCP authorization — making the locked endpoint reachable without unlocking it
+
+**Status: proposed. Design only. No code in this branch.**
+
+| | |
+|---|---|
+| Closes | [#290](https://github.com/aks129/HealthClawGuardrails/issues/290) |
+| Feature set | 6 — Surfaces (`docs/prd/06-surfaces.md` §6 names this as the missing spec) |
+| Pipeline step | 3, architecture review (`docs/2026-08-16-delivery-process.md`) |
+| Author | owner-surfaces |
+| Decision required from | the founder, on §3.1 (the canonical resource URI) and §7 phase 3 (deploy authorization) |
+
+Everything asserted about live behaviour in this document was executed on
+2026-08-16/17 against the running deployments. The raw responses are quoted
+inline. Nothing here was inferred from reading code alone, and where a claim
+is an inference it says so.
+
+---
+
+## 1. The problem, measured
+
+The production MCP endpoint is correctly locked and unusable by the clients it
+exists for. Both halves are measured.
+
+**The lock works.** Unauthenticated `POST /mcp`, executed:
+
+```
+HTTP/2 401
+www-authenticate: Bearer
+{"error":"Unauthorized"}
+```
+
+**There is no way forward.** Every document a conformant client looks for
+after that 401, executed against the same host:
+
+```
+/.well-known/oauth-protected-resource       -> 404
+/.well-known/oauth-protected-resource/mcp   -> 404
+/.well-known/oauth-authorization-server     -> 404
+/.well-known/oauth-authorization-server/mcp -> 404
+/.well-known/openid-configuration           -> 404
+```
+
+The `WWW-Authenticate` header carries `Bearer` and nothing else — no
+`resource_metadata`, no `scope`. A client that follows the specification has
+exhausted its options at that point and falls back to asking the user for an
+OAuth Client ID that does not exist. That is the loop the design partner
+reported in #290.
+
+The failure is worse than a refusal because it is a refusal that lies about
+its own recoverability. A `401` is defined as the beginning of an
+authorization flow. Ours is the end of one.
+
+### 1.1 What is already correct and stays
+
+- `MCP_AUTH_TOKEN` is required at boot when `NODE_ENV=production` and the demo
+  flag is unset (`services/agent-orchestrator/src/index.ts`,
+  `assertMCPAuthConfigured`). The server fail-closes without it. That once
+  crash-looped production, which is the right failure.
+- The credential comparison is constant-time (`crypto.timingSafeEqual`).
+- The demo endpoint is a separate deployment, hard-pinned to a synthetic
+  tenant, and is not touched by this design.
+- Expired sessions return `404` so clients re-initialize (#490).
+
+**Production MCP stays token-locked.** This design adds a second credential
+type. It removes nothing. At no point in §7 does an unauthenticated call
+succeed.
+
+---
+
+## 2. Prior research, verified rather than trusted
+
+The note carried in `docs/prd/06-surfaces.md` §6 is dated 2026-08-05. Checked
+against the specifications on 2026-08-16:
+
+| Claim in the note | Verdict |
+|---|---|
+| RFC 9728 `/.well-known/oauth-protected-resource` + audience-validated tokens is the smallest fix keeping the existing issuer | **Holds.** MCP servers **MUST** implement RFC 9728; clients **MUST** use it for authorization-server discovery. |
+| "MCP spec 2025-11-25 is stable; the 2026-07-28 RC…" | **Stale.** 2026-07-28 is now **Current**, not a release candidate. 2025-11-25 is a past revision. |
+| the RC deprecates Sampling/Roots/Logging and makes protocol core stateless | Out of scope here, but note the consequence below. |
+
+Read both revisions. The authorization mechanism is **unchanged** between
+2025-11-25 and 2026-07-28 in every respect this design depends on: RFC 9728 is
+MUST, the `resource_metadata` challenge parameter is the primary discovery
+mechanism, the `scope` challenge parameter is SHOULD, RFC 8707 `resource` is a
+client MUST, and audience validation is a server MUST. Designing to
+2026-07-28 therefore costs nothing and is what this document does.
+
+Three things did move, and two of them change the design:
+
+1. **Dynamic Client Registration is deprecated** in 2026-07-28, "retained for
+   backwards compatibility with authorization servers that do not support
+   Client ID Metadata Documents." We are exactly that authorization server.
+   DCR remains spec-legal, clients fall back to it when
+   `client_id_metadata_document_supported` is absent from AS metadata, and
+   `r6/oauth.py` already implements it. **We use DCR and do not implement
+   CIMD** (§6).
+2. **RFC 9207 issuer identification is new.** Authorization servers SHOULD
+   return `iss` in the authorization response and advertise
+   `authorization_response_iss_parameter_supported: true`. Clients MUST
+   validate it when present. This is cheap to emit and is included in §3.4.
+3. Protected resources **SHOULD NOT** advertise `offline_access` in
+   `scopes_supported` or in the `WWW-Authenticate` scope. Noted; our
+   `scopes_supported` is read-only anyway.
+
+---
+
+## 3. The design
+
+### 3.1 The canonical resource URI — an owner decision, not an implementation detail
+
+RFC 8707 and RFC 9728 both key on one string: the canonical URI of this MCP
+server. It appears in four places that must agree exactly — the PRM
+`resource` field, the `resource` parameter the client sends to the
+authorization server, the `aud` recorded on the issued token, and the URL a
+partner pastes into their connector. A mismatch in any one of them is a
+rejection that reads to the partner as our bug.
+
+It also becomes a compatibility surface the moment a token is issued:
+changing it invalidates the audience of every outstanding token and every
+stored client configuration.
+
+Two candidates, both measured:
+
+| Candidate | Measured today |
+|---|---|
+| `https://mcp-server-production-5112.up.railway.app/mcp` | serves the locked server; `/health` returns `healthclaw-guardrails` v1.9.0 |
+| `https://mcp.healthclaw.io/mcp` | resolves (DoH: `216.150.16.129`, `216.150.1.193`) but points at **Vercel** and returns `DEPLOYMENT_NOT_FOUND` |
+
+Recommendation: **`https://mcp.healthclaw.io/mcp`**, with the DNS repointed to
+the Railway service *before* any of §7 phase 1 ships. A platform-generated
+hostname baked into a token audience and a partner's saved config is a
+migration we would have to run later under worse conditions. The dangling
+record is separately a risk and is logged in §9.6.
+
+This is the founder's call, and it blocks phase 1. The chosen value is pinned
+in one place, `MCP_CANONICAL_RESOURCE`, and the server refuses to start with
+OAuth acceptance enabled and that variable unset — the same fail-closed shape
+as `MCP_AUTH_TOKEN`.
+
+Throughout this document `<RESOURCE>` stands for the chosen value.
+
+### 3.2 The metadata document, and at what path
+
+Served by the MCP server itself, unauthenticated, at **both** paths — the
+specification requires clients to try the sub-path form first and the root
+form second, and requires servers to implement one; serving both costs one
+route and removes a whole class of client disagreement:
+
+- `/.well-known/oauth-protected-resource/mcp` (RFC 9728 path-insertion for a
+  resource whose path is `/mcp`)
+- `/.well-known/oauth-protected-resource` (root fallback)
+
+Both return, byte-identically:
+
+```json
+{
+  "resource": "<RESOURCE>",
+  "authorization_servers": ["https://app.healthclaw.io"],
+  "scopes_supported": ["fhir.read", "context.read"],
+  "bearer_methods_supported": ["header"],
+  "resource_name": "HealthClaw Guardrails",
+  "resource_documentation": "https://app.healthclaw.io/r6/fhir/docs/privacy-policy"
+}
+```
+
+Notes on each field, because each one has a way to be wrong:
+
+- `resource` is REQUIRED by RFC 9728 and must string-equal `<RESOURCE>`. It is
+  not derived from `request.host` — a proxy that rewrites Host would then
+  silently mint a different identity. It is read from the pinned constant.
+- `authorization_servers` is what makes the document useful; RFC 9728 marks it
+  OPTIONAL but the MCP specification requires at least one entry. Its value is
+  an **issuer identifier**, and §3.3 exists entirely because the issuer we
+  have today does not resolve from it.
+- `scopes_supported` is the minimal set for basic functionality, per the
+  specification's scope-minimization guidance. Read scopes only. Writes are
+  not an OAuth scope question here (§3.6).
+- `bearer_methods_supported: ["header"]` states what we already enforce.
+
+**These two paths sit outside the lock, and that does not weaken it.** They
+are matched by neither `isMCPTransportPath` branch (`/mcp`, `/sse`,
+`/messages`), so no change to the auth middleware's predicate is needed. The
+document contains no secret, identifies no tenant, and grants nothing. Its
+entire content is already public knowledge or is a URL. Refusing to serve it
+is what produces the dead end.
+
+They also need CORS that the transport endpoint does not have — see §8.4.
+
+### 3.3 The authorization server must become discoverable from its own issuer
+
+This is the part the prior research did not cover and the part most likely to
+be got wrong, because the metadata document exists and returns `200`, at a URL
+no conformant client will ever request.
+
+Measured. For an issuer with a path component, `https://app.healthclaw.io/r6/fhir`,
+the specification requires clients to try exactly three locations in order:
+
+```
+/.well-known/oauth-authorization-server/r6/fhir  -> 404
+/.well-known/openid-configuration/r6/fhir        -> 404
+/r6/fhir/.well-known/openid-configuration        -> 400
+```
+
+The document actually lives at a fourth location, which is **not** in the
+client's list:
+
+```
+/r6/fhir/.well-known/oauth-authorization-server  -> 200
+```
+
+And its contents, fetched live, fail validation twice over:
+
+```json
+{"issuer":"http://app.healthclaw.io",
+ "authorization_endpoint":"http://app.healthclaw.io/r6/fhir/oauth/authorize",
+ "token_endpoint":"http://app.healthclaw.io/r6/fhir/oauth/token",
+ "registration_endpoint":"http://app.healthclaw.io/r6/fhir/oauth/register", ...}
+```
+
+- Every URL is `http://`. OAuth 2.1 §1.5, which the MCP specification
+  incorporates by reference, requires all authorization server endpoints to be
+  served over HTTPS. A conformant client rejects this document on sight.
+- `issuer` is `http://app.healthclaw.io` while the document is served under
+  `/r6/fhir/`. Whatever we put in `authorization_servers`, the `issuer` inside
+  the returned document must string-equal it, or the client rejects the
+  document for issuer mismatch.
+
+The cause of the scheme is not an OAuth bug: `oauth_discovery` builds every
+URL from `request.host_url`, and behind Railway's TLS-terminating proxy that
+yields `http`. This is the same class of trap CLAUDE.md already records about
+Railway and ports.
+
+**Three required changes, all in `r6/oauth.py` and its config:**
+
+1. **Set `OAUTH_ISSUER=https://app.healthclaw.io`** and derive every endpoint
+   URL in `oauth_discovery` and `smart_configuration` from it instead of
+   `request.host_url`, falling back to `request.host_url` only when
+   `OAUTH_ISSUER` is unset. The variable already exists and is already read;
+   it is simply empty. This is preferred over installing Werkzeug's `ProxyFix`
+   because `ProxyFix` changes URL generation for every route in the app, and a
+   scheme change is not worth an app-wide behaviour change made in the same
+   week as a webinar. `ProxyFix` remains the better long-term fix and is a
+   separate item.
+2. **Serve the metadata at the host root**, `GET /.well-known/oauth-authorization-server`,
+   so that the issuer `https://app.healthclaw.io` (no path component) resolves
+   at the first location a client tries. Keep the existing `/r6/fhir/…`
+   location serving the same document so nothing that works today stops
+   working.
+3. **Set `authorization_servers: ["https://app.healthclaw.io"]`** in the PRM,
+   matching that issuer exactly.
+
+Choosing the path-less issuer is deliberate: it reduces the client's search
+from three locations to two, and both of those are then served. The
+alternative — issuer `https://app.healthclaw.io/r6/fhir` served via
+path-insertion — is equally correct and strictly more moving parts.
+
+Compatibility note: changing `issuer` from `http://app.healthclaw.io` to
+`https://app.healthclaw.io` will break any existing client that pinned the
+`http` value. None is known. The SMART surface is unaffected because SMART
+clients read `/r6/fhir/.well-known/smart-configuration`, which has no `issuer`
+field.
+
+### 3.4 What changes in the 401
+
+Two cases, and conflating them is how #290's own "option 1" sketch got it
+wrong. RFC 6750 does not permit an `error` parameter when no credential was
+presented, because there is no token to call invalid.
+
+**No credential presented** — the ordinary first contact:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="<RESOURCE_ROOT>/.well-known/oauth-protected-resource/mcp",
+                         scope="fhir.read context.read"
+Content-Type: application/json
+
+{"error":"Unauthorized"}
+```
+
+**A credential was presented and rejected** — wrong static token, expired
+OAuth token, wrong audience, random string:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer error="invalid_token",
+                         error_description="The access token is invalid, expired, or was not issued for this resource.",
+                         resource_metadata="<RESOURCE_ROOT>/.well-known/oauth-protected-resource/mcp",
+                         scope="fhir.read context.read"
+Content-Type: application/json
+
+{"error":"Unauthorized"}
+```
+
+What did **not** change: the status code, the body, and who gets in. The body
+stays exactly `{"error":"Unauthorized"}` so that no new information is
+introduced on the unauthenticated path. `error_description` deliberately does
+not distinguish "expired" from "wrong audience" from "not a token at all" —
+that distinction is an oracle for a caller who has no business getting one,
+and the client's recovery is identical in all three cases.
+
+`error_description` MUST NOT ever contain the presented credential, any part
+of it, or a tenant identifier.
+
+The **only** behavioural change in this section is that the refusal now says
+where to go. A caller who ignores the header is in exactly the position they
+are in today.
+
+### 3.5 Audience validation: what we validate, against what, and what happens when it fails
+
+Today the authorization server issues opaque tokens — `secrets.token_urlsafe(48)`,
+stored in Redis with `{client_id, scopes, tenant_id, exp}` (`r6/oauth.py`).
+There is no `aud`, no JWT, and no introspection endpoint. The `resource`
+parameter is not read at `/oauth/authorize` or `/oauth/token`; it is silently
+discarded. So "audience-validated tokens" is not a configuration change. It is
+three additions, and they are small.
+
+**At the authorization server (`r6/oauth.py`):**
+
+1. `authorize` and `token` read the RFC 8707 `resource` parameter and record it
+   on the stored token record as `aud`.
+2. `token` rejects a `resource` that is not in a configured allowlist of known
+   resource identifiers, with `{"error":"invalid_target"}` per RFC 8707 §2.2.
+   The allowlist is explicit config, not a pattern match. An unrecognised
+   audience must never be recorded as-is — that turns the audience field into
+   a caller-controlled string and the check into theatre.
+3. A new client-authenticated introspection endpoint,
+   `POST /r6/fhir/oauth/introspect` (RFC 7662), returning
+   `{active, aud, scope, tenant_id, exp, client_id}`. On any doubt it returns
+   `{"active": false}`.
+4. `authorize` returns `iss` in the redirect (RFC 9207) and the metadata
+   advertises `authorization_response_iss_parameter_supported: true`.
+
+**At the MCP server:**
+
+A bearer credential that is not `MCP_AUTH_TOKEN` is treated as a candidate
+OAuth access token and introspected. It is accepted only if **all** of:
+
+- `active === true`, and
+- `aud` string-equals `MCP_CANONICAL_RESOURCE`, and
+- `scope` intersects the read scopes in `scopes_supported`, and
+- `exp` is in the future.
+
+Any failure returns the `invalid_token` 401 of §3.4. **Not 403.** An audience
+mismatch is not insufficient scope; it is a token that was never for us, and
+403 would tell the caller their token is recognised here. That distinction is
+the difference between a boundary and a hint.
+
+Constant-time comparison for the audience string is unnecessary (it is not a
+secret) but the token itself is never logged, never written to an audit
+`detail`, and is cached only under its SHA-256, for a TTL strictly shorter
+than the token's own.
+
+**Introspection is a hard dependency, and it fails closed.** If Flask is
+unreachable, every OAuth-credentialed call returns 401. The static-token path
+does not touch Flask and is unaffected. Fail-closed is the correct direction
+and it is stated here so that nobody later reads the outage as a regression.
+
+### 3.6 Two rules that fall out of audience validation, and are easy to miss
+
+**The MCP server must stop forwarding the client's `Authorization` header when
+the credential is an MCP-audience token.** Today `extractHeaders` forwards
+`authorization` downstream to Flask whenever it is not the static MCP
+credential. Under this design that would hand Flask a token whose audience is
+`<RESOURCE>`, and Flask's `_oauth_authorizes` (`r6/read_auth.py`) checks
+`tenant_id` and scope but **not** audience — so it would accept it. That is
+precisely the token passthrough the MCP specification forbids, and we would
+have built it by leaving code alone.
+
+Required: on the OAuth path the MCP server drops the inbound `Authorization`
+header, resolves the tenant from the introspection response, and sets
+`X-Tenant-Id` itself. For the scope this design delivers (a public demo
+tenant, §6) that is sufficient, because `authorize_tenant_read` returns public
+tenants without a credential. The moment a protected tenant is in play, the
+MCP server needs its own downstream credential, and that is a named follow-on
+(§5, §6).
+
+**An OAuth scope is not a step-up token and never becomes one.** A token
+carrying `fhir.write` still does not authorize a write. Writes go through
+`validate_step_up_token` / `r6.access.require_grant`, and clinical writes
+additionally require the human confirmation in the action rail. Nothing in
+this design touches that chain, which is why `scopes_supported` is read-only:
+advertising a write scope would imply an authority the scope does not carry.
+
+---
+
+## 4. The four architecture-review questions
+
+### 4.1 Does this serve the vision, or is it adjacent work that feels productive?
+
+It serves it, and it serves a smaller part of it than the framing suggests.
+
+The thesis is an enforcement layer that lets an agent be useful on real health
+records without being trusted. An enforcement layer no client can reach
+enforces nothing, so distribution is not adjacent to the thesis — it is a
+precondition for it. Feature set 6 exists for that reason.
+
+The honest qualifier: what this design delivers, complete and deployed, is a
+standards-conformant authenticated path to the **synthetic demo tenant**. It
+does not reach real records (§6.1), and the reason is a consent surface that
+does not exist. So it serves the distribution half of the thesis and not the
+real-records half.
+
+That is still worth building, for three reasons that are checkable rather than
+rhetorical: it removes a refusal that actively misleads a partner; it exercises
+the entire OAuth chain end to end so that the consent screen, when it is
+built, drops into a pipeline that is known to work; and it is the difference
+between a documented feature that cannot work and one that works within a
+stated boundary. #290 makes the first point in the partner's own words.
+
+### 4.2 What is the honest failure mode, and who notices it first?
+
+There are two, and they have opposite visibility.
+
+**The loud one: metadata that is confidently wrong.** A PRM whose `resource`
+does not match the connect URL, or an `authorization_servers` value whose
+metadata does not resolve at a location the client tries, produces a client
+error that reads to the partner as our failure. It is strictly worse than
+today's 404, because today's dead end at least looks like an absent feature
+rather than a broken one. **Noticed first by: a partner, in a connector error
+dialogue** — the same way #290 was reported ("It keeps saying Couldn't
+register with HealthClaw's sign-in service"). §3.3 exists because today's
+authorization server already has three separate instances of this defect.
+
+**The quiet one, and the worse one: audience validation that is implemented
+and never exercised.** A SMART token minted for the FHIR resource, replayed at
+the MCP endpoint, is accepted. Nothing breaks. Nothing alerts. The lock has a
+second key that nobody knows about, and the code review passes because the
+audience check is right there in the diff. **Noticed first by: nobody.**
+
+This repository's own history is the argument. `docs/2026-08-16-hard-truths.md`
+§4 and §5 record five polished artifacts making false claims and three green
+guards written narrower than the property they were named after. The shape is
+always the same: the check exists, the check was never run against the case it
+was written for, and the green tick then certifies the gap. That is why the
+cross-audience replay in §8 is a **required** assertion and not a nice-to-have,
+and why it is written from the property ("a token for another audience is
+refused") rather than from the fix.
+
+### 4.3 What does it make harder later?
+
+Four things, stated so they are not surprises.
+
+1. **The canonical resource URI becomes load-bearing.** Once tokens carry it
+   as `aud` and partners have it saved, changing it invalidates both. This is
+   why §3.1 is an owner decision made before phase 1 rather than a default
+   picked by whoever writes the route.
+2. **Flask joins the hot path of every OAuth-credentialed MCP call.** A Flask
+   outage becomes an MCP outage for those clients. Two services now have to be
+   up for one surface to work, and #155 says MCP deploy drift is already
+   unobservable.
+3. **Two credential types double the auth matrix.** Every future change to
+   the MCP server has to be tested against the static-token path *and* the
+   OAuth path. Hard-truths §5 is a list of guards that covered one path and
+   certified the other. This is that risk, deliberately taken on.
+4. **It creates an expectation it does not satisfy.** "You can connect from
+   claude.ai" will be heard as "you can reach your records from claude.ai."
+   Unless this document, `docs/quickstarts/claude.md`, and the #290 closing
+   comment all state the demo-tenant boundary explicitly, we reproduce
+   hard-truths §4 with a new artifact.
+
+### 4.4 How will we prove it works, with what data, run by whom?
+
+§8. The gate blocks on that section, not this one.
+
+---
+
+## 5. What this design assumes, and where the assumption is verified
+
+| Assumption | Verified how |
+|---|---|
+| Production Flask requires tenant-bound credentials on protected reads | `r6/runtime_config.py:105` raises `READ_AUTH_ENABLED must be true in production` at boot. Read, not run — the production env is not readable from here. |
+| The authorization server cannot mint a token for a protected tenant | `r6/oauth.py:286` — `authorize` returns 403 `access_denied` when `read_auth_enabled()` and the tenant is not public. Combined with the row above, this is why §6.1 is the scope boundary. |
+| The demo tenant is reachable without a credential | `authorize_tenant_read` returns public tenants unconditionally (`r6/read_auth.py:63`). |
+| The hosted tool catalogue is 27 tools | `adapters/tools.manifest.json` advertises **29**; `PRIVILEGED_TOOL_NAMES` withholds 2 (`fhir_get_token`, `fhir_seed`) from hosted transports, leaving **27**. Both numbers are named in §8 because the count is evidence. |
+
+---
+
+## 6. What this does NOT do — the scope boundary
+
+Stated as a list because a boundary that is only implied is not a boundary.
+
+### 6.1 It does not give a hosted connector access to a real tenant
+
+This is the headline exclusion. Production Flask enforces
+`READ_AUTH_ENABLED=true` at boot, and `/r6/fhir/oauth/authorize` refuses to
+auto-approve any tenant that is not in `PUBLIC_TENANTS`. So the strongest
+token this design can produce, through a fully conformant OAuth flow, is one
+bound to a synthetic demo tenant.
+
+The blocker is not OAuth. It is that `authorize` **has no consent screen** —
+it auto-approves and takes the tenant from a request header. Pointing a
+standards-conformant discovery chain at an auto-approving authorization server
+that could bind any tenant would convert the lock into decoration. The 403 at
+`r6/oauth.py:286` is the only thing preventing that today, and this design
+depends on it rather than removing it.
+
+**A consent surface for protected tenants is the follow-on specification** and
+the thing that actually closes the distance to real records. It is out of
+scope here, deliberately, because it is a product and UX decision with a PHI
+boundary attached and it does not fit in the same PR as a metadata document.
+
+### 6.2 It does not weaken or replace `MCP_AUTH_TOKEN`
+
+The static credential stays required at boot and stays accepted. This design
+is strictly additive.
+
+### 6.3 It does not implement Client ID Metadata Documents
+
+CIMD is the 2026-07-28 preference. DCR is deprecated but spec-legal and
+retained precisely for authorization servers like ours, and clients fall back
+to it when `client_id_metadata_document_supported` is absent. CIMD also
+requires the authorization server to fetch attacker-supplied URLs, which is an
+SSRF surface we would have to design against. Not in this scope.
+
+### 6.4 It does not change the demo endpoint
+
+`mcp-demo-production-ee2c` keeps running unauthenticated and tenant-pinned.
+Measured working: unauthenticated `initialize` returns `200` with a session id.
+
+### 6.5 It does not add a write path
+
+No new write authority, no new step-up mechanism, no change to human
+confirmation. §3.6.
+
+### 6.6 It does not fix #155, #289, #427, or #57
+
+Deploy drift, prod-watch origin coverage, the stale build, and the 1.8k-line
+`tools.ts` are all real and all outside this diff. #289 becomes *more*
+relevant if §3.1 selects a custom origin, and that is noted in §9.
+
+### 6.7 It does not make the MCP server a token issuer
+
+The MCP server validates tokens. It never mints them. There is exactly one
+issuer.
+
+---
+
+## 7. Migration path — production is never unlocked, not even briefly
+
+Four phases. The invariant below is testable at every commit and every config
+state in every one of them.
+
+> **Invariant.** At no commit, and in no configuration state, does an
+> unauthenticated `initialize` or `tools/call` against the production origin
+> return anything other than `401`.
+
+**Phase 0 — decide the canonical resource URI (§3.1).** No code. If
+`mcp.healthclaw.io` is chosen, repoint DNS to the Railway service and verify
+before phase 1; the record currently answers from Vercel with
+`DEPLOYMENT_NOT_FOUND` (§9.6).
+
+**Phase 1 — serve the PRM and enrich the 401.** MCP server only. Two new
+unauthenticated routes and two extra `WWW-Authenticate` parameters. **No
+change to who is admitted**: unauthenticated calls still 401, non-matching
+bearers still 401, `MCP_AUTH_TOKEN` still required at boot. This phase alone
+closes the "no way forward" half of #290 — a client stops asking for a Client
+ID that does not exist and instead reports honestly that it cannot obtain a
+token. Independently shippable and independently valuable.
+
+**Phase 2 — authorization server work.** Flask only. Issuer scheme fix, root
+discovery route, `resource` recorded as `aud`, `invalid_target` rejection,
+introspection endpoint, RFC 9207 `iss`. **The MCP server's behaviour does not
+change at all in this phase.** Tokens gain an audience that nothing yet checks;
+no new caller is admitted anywhere.
+
+**Phase 3 — the MCP server accepts authorization-server tokens.** Behind
+`MCP_OAUTH_ENABLED`, default `false`. Enabled in staging first, where the §8
+walkthrough runs in full including the refusal assertions. Production
+enablement requires explicit founder authorization, as every MCP server deploy
+already does.
+
+**Rollback is `MCP_OAUTH_ENABLED=false`.** The static-token path is untouched
+in every phase, so rollback never involves removing a lock or restoring one.
+There is no state in which the endpoint is open while a fix is prepared.
+
+Phases 1 and 2 are commutative and can ship in either order. Phase 3 requires
+both.
+
+---
+
+## 8. How we prove it works — the artifact, the data, and the runner
+
+The architecture review blocks on this section. If it has no answer, the
+design is not finished.
+
+**Runner:** owner-surfaces writes and runs it. QA re-runs it adversarially and
+owns §8.3, whose job is to find a fourth way in that the author did not think
+of. Neither sign-off is the author's.
+
+**Data:** the synthetic public demo tenant, only. This is not a precaution, it
+is a property of §6.1 — no PHI is reachable through this design at all, by
+construction. The recording therefore needs no redaction and there is no
+"could not be recorded PHI-free" caveat to write.
+
+**Artifact:** `services/agent-orchestrator/qa/oauth-walkthrough.sh`, in the
+pattern of `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` — it
+asserts, it fails loudly, and each failure names the guarantee that broke.
+Plus a Playwright test in the pattern of
+`examples/aidbox-healthclaw-guardrails/qa/` that makes the same real calls and
+renders each result as it lands, so a video showing a pass cannot exist unless
+the pass happened.
+
+### 8.1 The positive chain — assert we received the thing, then assert its contents
+
+Ordered. Each step asserts receipt before it asserts anything about content,
+because "no PHI in the response" and "the audience is wrong" are both true of
+an error.
+
+| # | Assertion | Names the guarantee |
+|---|---|---|
+| A1 | Unauthenticated `POST /mcp` returns **401**, and `WWW-Authenticate` contains `resource_metadata=` **and** `scope=`, and contains **no** `error=` | the refusal offers a way forward |
+| A2 | `GET` the `resource_metadata` URL from A1 returns **200**, `content-type: application/json`, parseable, with `resource`, `authorization_servers`, `scopes_supported` present | the way forward exists |
+| A3 | PRM `resource` **string-equals** the URL used in A1 | the audience the client will request is the audience we will check |
+| A4 | AS metadata resolves at one of the locations the spec requires clients to try, derived from `authorization_servers[0]`; its `issuer` string-equals `authorization_servers[0]`; every endpoint URL begins `https://`; `code_challenge_methods_supported` contains `S256` | the authorization server is discoverable and usable |
+| A5 | DCR at `registration_endpoint` returns **201** with a `client_id` | a client with no prior relationship can register |
+| A6 | authorize + token, PKCE `S256`, `resource=<RESOURCE>` — assert an access token was **received**, then assert `token_type` is `Bearer` | a token can be obtained |
+| A7 | `initialize` with that token returns **200** with an `Mcp-Session-Id`; `tools/list` returns **200** with **27** tools — and the log prints both numbers, 29 advertised in the manifest and 27 exercised on this transport, with the 2 privileged names | every advertised tool is served, and the count is stated rather than implied |
+| A8 | every one of the 27 is called with valid arguments and returns a result | *answers* — the second half of the PRD's definition |
+
+A4 is the assertion most likely to fail today. It is the gate: if A4 fails,
+nothing deploys.
+
+A8 is where the run cost lives, and it is the one the PRD explicitly demands —
+"a tool listed and never called is the green check whose subject never ran,
+with a menu."
+
+### 8.2 The refusal chain — the half that goes unchecked
+
+| # | Assertion | Names the guarantee |
+|---|---|---|
+| R1 | No credential → **401** | the lock holds |
+| R2 | A random string as bearer → **401** with `error="invalid_token"` | garbage is not a credential |
+| R3 | **A token minted at the same issuer with `resource=https://app.healthclaw.io/r6/fhir`, replayed at the MCP endpoint → 401 `invalid_token`** | audience validation is real |
+| R4 | An expired token → **401** `invalid_token` | expiry is enforced at the resource, not only at the issuer |
+| R5 | `MCP_AUTH_TOKEN` still returns the full tool list | the lock was added to, not replaced |
+| R6 | Boot with neither `MCP_AUTH_TOKEN` nor the demo flag under `NODE_ENV=production` → **refuses to start** | fail-closed survived the change |
+| R7 | `MCP_OAUTH_ENABLED=false` → an otherwise valid OAuth token gets **401** | the rollback switch actually rolls back |
+
+**R3 is the assertion this whole design lives or dies by.** It is the only one
+that distinguishes "we wrote an audience check" from "the audience check
+works", and per §4.2 it is the failure nobody would otherwise notice. It is
+written from the property, not from the fix: any token whose audience is not
+`<RESOURCE>` is refused, regardless of how it was obtained.
+
+### 8.3 The adversarial pass — QA's, not the author's
+
+Not scripted in advance, by design. At minimum: audience string near-misses
+(trailing slash, case, `http` vs `https`, a percent-encoded variant), a token
+replayed after revocation, an introspection response that says `active: true`
+with no `aud` field at all, a `resource` parameter naming an unregistered
+target at `/oauth/token`, and a PRM fetched with a spoofed `Host` header to
+confirm `resource` does not follow it.
+
+### 8.4 Sign-offs
+
+- **QA (adversarial):** ran §8.2 and §8.3, tried to make it lie, found nothing
+  that admits an unauthenticated or wrong-audience caller.
+- **End-user (not us):** a partner adds the connector from claude.ai's own UI,
+  unaided, and reaches the demo tenant.
+
+The end-user run is **the only place any client's actual behaviour is
+measured.** This document asserts only what the specification requires of
+clients. It makes no claim about what claude.ai, ChatGPT, or Perplexity
+actually do, because nobody here has run them against this design — it does
+not exist yet. Writing "claude.ai will now connect" before that run is exactly
+the hard-truths §4 move, and it is not made here.
+
+---
+
+## 9. Failure modes and risks
+
+The first three are the ones the review asked for. The rest were measured
+while writing this and are recorded here rather than fixed, per the scope of
+this branch. Each is a candidate row for feature set 6's edge-case register.
+
+### 9.1 A client that ignores the metadata
+
+Behaviour is unchanged from today: it presents a static header and succeeds,
+or presents nothing and gets 401. No regression is possible, because nothing
+was removed. Machine-to-machine integrations using `MCP_AUTH_TOKEN` are in
+this category and are unaffected. Noticed first by: nobody, correctly.
+
+### 9.2 A token for another audience
+
+Refused with 401 `invalid_token` (§3.5), asserted by R3. The dangerous variant
+is not rejection but *silent acceptance*, which is what happens today at the
+Flask surface: `_oauth_authorizes` checks tenant and scope, not audience. That
+is not a defect today, because no MCP-audience token exists. It becomes one
+the moment phase 2 ships, which is why §3.6 forbids forwarding the header.
+
+### 9.3 The metadata endpoint itself is wrong
+
+The highest-severity mode, because it is confidently wrong and the client's
+error reads as ours. Four sub-modes, three of which are **already present** in
+the authorization server today and measured in §3.3:
+
+| Sub-mode | Status today | Detected by |
+|---|---|---|
+| `resource` ≠ the URL the client connected to | would be new | A3 |
+| AS metadata does not resolve at a location clients try | **present** (three 404/400s measured) | A4 |
+| `issuer` inside AS metadata ≠ the `authorization_servers` value | **present** (`http://app.healthclaw.io`) | A4 |
+| `http://` scheme on AS endpoints | **present** (every URL) | A4 |
+
+Mitigation beyond A3/A4: both documents are pinned as fixtures in a test that
+fetches the **live** documents and diffs them, so drift between the deployed
+document and the design fails CI rather than a partner's connector.
+
+### 9.4 CORS — measured, and it can make the whole design invisible
+
+The auth middleware is installed at `src/index.ts:97`; the CORS middleware at
+`src/index.ts:131`. The 401 is therefore returned **before** any CORS header is
+set. Measured, with `Origin: https://claude.ai`:
+
+```
+POST /mcp     -> 401, and NO access-control-allow-origin header
+OPTIONS /mcp  -> 204, and NO access-control-allow-origin header
+```
+
+`ALLOWED_ORIGINS` holds 2 entries (per live `/health`) and `claude.ai` is not
+among them. If any client fetches from a browser context, it cannot read the
+401 *or* the `WWW-Authenticate` header, and this entire design is invisible to
+it.
+
+**Required in phase 1:** the two PRM paths and the 401 response must carry
+`Access-Control-Allow-Origin: *` and `Access-Control-Expose-Headers: WWW-Authenticate`.
+This is safe and is not a widening of the lock: these responses contain no
+secret, identify no tenant, and grant nothing — a `401` readable by a browser
+is still a `401`. The transport endpoint's origin allowlist is untouched.
+
+Whether any given hosted connector fetches server-side (where CORS does not
+apply) is **not asserted here**. It is measured in the §8.4 end-user run.
+
+### 9.5 Protocol version
+
+Live `/health` reports `supportedProtocolVersions: ["2024-11-05"]`, and the
+demo endpoint negotiated `2024-11-05` when probed with `2025-06-18`.
+Authorization discovery is HTTP-level and version-independent, so this does
+not block the design. It is a risk note: a client that requires ≥2025-06-18
+before attempting authorization may never reach the 401 handling at all, and
+2026-07-28 replaces the initialize handshake with `server/discover` and an
+`MCP-Protocol-Version` header. Protocol-version currency belongs to feature
+set 6 but not to this specification. **Candidate issue, not filed in this
+branch.**
+
+### 9.6 `mcp.healthclaw.io` is a dangling DNS record
+
+Measured. It resolves (DoH: `216.150.16.129`, `216.150.1.193`), the response
+is served by **Vercel**, and it returns `x-vercel-error: DEPLOYMENT_NOT_FOUND`.
+
+Two consequences. It is the natural canonical resource URI (§3.1) and must be
+repointed before phase 1 if chosen. Independently, a hostname on our domain
+that resolves to a shared platform with no deployment attached is a
+subdomain-takeover surface, on a domain that appears in health-product
+documentation. **This is a real defect found while writing this document. It
+is recorded here with its evidence and is not fixed in this branch, per the
+scope. It should be filed and it is not this design's to close.**
+
+### 9.7 Introspection availability
+
+Every OAuth-credentialed call now depends on Flask. Flask down → those calls
+401 (fail-closed, correct). Mitigation is caching under the token's SHA-256
+with a TTL shorter than the token's own, which bounds the blast radius without
+extending any token's life. See also §4.3 item 2.
+
+### 9.8 The authorization server's auto-approve
+
+`authorize` auto-approves with no consent screen and takes the tenant from
+`X-Tenant-Id`. The **only** thing preventing a caller from minting a token for
+an arbitrary tenant is the 403 at `r6/oauth.py:286`, which is conditional on
+`read_auth_enabled()`. Production sets it at boot
+(`r6/runtime_config.py:105`), so the guard holds there.
+
+Two things follow, and both are stated rather than assumed. First, **a
+non-production deployment of the Flask app with `READ_AUTH_ENABLED` unset and
+this design's discovery chain in place would allow any caller to obtain a
+token for any tenant.** Any such environment must not serve the PRM. Second,
+this is a single conditional standing between a public discovery chain and
+arbitrary tenant binding — thin enough that the consent surface (§6.1) should
+not be deferred indefinitely on the grounds that the guard holds.
+
+I have **not** verified `READ_AUTH_ENABLED`'s value in the running production
+environment. The boot-time assertion is read from source, not observed. That
+verification belongs in phase 2's pre-deploy checklist and is listed in §10.
+
+---
+
+## 10. Open questions for the review
+
+1. **§3.1 — which canonical resource URI?** Blocks phase 1. Owner's.
+2. **Confirm `READ_AUTH_ENABLED=true` in the running production Flask**, by
+   observation and not by reading `runtime_config.py`. §9.8 explains why this
+   matters more than it looks. Pre-deploy checklist item for phase 2.
+3. **Which resource identifiers go in the `invalid_target` allowlist?** At
+   minimum `<RESOURCE>` and the FHIR resource. Anything else is a decision.
+4. **Does closing #290 require phase 3, or is phase 1 enough to close it?**
+   Phase 1 removes the dead end and the misleading prompt; it does not make a
+   hosted connector work. Recommendation: phase 1 closes #290 as filed
+   (the issue is titled "no way forward"), and reaching a real tenant becomes
+   the follow-on consent specification, filed separately with §6.1 as its
+   problem statement. Reviewer's call.
+
+---
+
+## 11. Related
+
+- `docs/prd/06-surfaces.md` — feature set 6, §6 of which is the SOW item this
+  document answers
+- `docs/2026-08-16-delivery-process.md` — step 3, the gate this document is
+  submitted to
+- `docs/2026-08-16-hard-truths.md` §4, §5 — the failure patterns §4.2 and §8
+  are written against
+- #290 (this design), #164 (distribution epic), #155, #289, #243, #427
+- MCP specification 2026-07-28 (Current), `basic/authorization`
+- RFC 9728, RFC 8707, RFC 8414, RFC 7591, RFC 7662, RFC 9207, RFC 6750
