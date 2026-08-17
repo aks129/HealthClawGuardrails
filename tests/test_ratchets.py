@@ -280,7 +280,11 @@ def test_no_new_package_mutates_without_auditing():
 #: ambiguity count that decides whether $care-gaps may pick a subject, the
 #: demographics a supplied subject resolves to, and the clinical rows that
 #: CLOSE a gap.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 11
+#: 11 -> 10: #509 filtered r6/actions/rails/form_fill.py. Its own comment
+#: named deletion as the case it handled and the query did not, so a
+#: tombstoned QuestionnaireResponse was rendered into a form submitted on a
+#: patient's behalf.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 10
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
