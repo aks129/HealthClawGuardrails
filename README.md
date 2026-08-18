@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/aks129-healthclawguardrails-badge.png)](https://mseep.ai/app/aks129-healthclawguardrails)
+
 <div align="center">
 
 <img src=".github/assets/healthclaw-logo.png" alt="HealthClaw — AI-Powered Healthcare Intelligence" width="440">
