@@ -164,6 +164,21 @@ not depend on the agent's word: who, when, via which channel. Our rail:
 `ActionConfirmation` (`r6/actions/confirmations.py`) plus an AuditEvent whose
 `detail` stays PHI-free.
 
+**H6 does not hold today, and the counter-example is a live route.**
+`POST /r6/actions/<id>/review` (`r6/actions/review.py:377`) is gated by
+`X-Tenant-Id` plus `_require_step_up(tenant)` — `Scope.WRITE`, which is inside
+`C_agent`. It then calls
+`issue_confirmation(action_id, approved_via='review-page')` at
+`review.py:445`. So an agent holding only its own credentials can write a
+consent record asserting that a human approved via the review page. The record
+depends on exactly the thing H6 says it must not: the agent's word.
+
+This is **not** an execution bypass — `/confirm` still requires a grant with
+`audience=ACTION_APPROVAL_AUDIENCE` and `consume_nonce=True`
+(`r6/actions/routes.py:509`), unmintable without `INTERNAL_TOKEN_MINT_SECRET`.
+H3 and H4 hold. What fails is the evidentiary layer this set's claim rests on,
+which is the half a reviewer would otherwise take on trust.
+
 ### 2.3 The in-band tells
 
 A step is in-band, and therefore worthless as evidence, if any of these is
@@ -216,8 +231,8 @@ Read from the code on `main` at `4cb3771`, not from the docs describing it.
 | mint | `POST /r6/actions/<id>/approval-token` (`routes.py:630`) | `X-Internal-Secret` | 403 without it, for public tenants too |
 | approve | `POST /r6/actions/<id>/confirm` (`routes.py:462`) | audience + operation + nonce | the only place an executor runs |
 
-Against §2.2 the engine side already satisfies H1, H3, H4 and H6. The four
-gaps are:
+Against §2.2 the engine side already satisfies H1, H3 and H4. **H6 it does
+not** — see §2.2 — which makes five gaps, not four:
 
 - **H2 has no surface.** The mint secret is held by CareAgents, which does
   have human sessions — but only the form-fill review relay
@@ -225,15 +240,18 @@ gaps are:
   it. Phone-call, SMS and webhook-poster actions have no page at all. This is
   #215, and it is why the commit response's *"approve in your HealthClaw
   dashboard"* names a dashboard that does not exist.
-- **H5 is unspecified.** No surface renders the verbatim payload for a
-  non-form-fill action, and nothing states that the payload is immutable
-  after commit. See §9, R2.
+- **H5 is unspecified, and its precondition is absent.** No surface renders
+  the verbatim payload for a non-form-fill action, and the payload is **not**
+  immutable after commit — verified, not merely unpinned. See §9, R2 and #528.
+- **H6 is satisfiable by the agent.** `POST /r6/actions/<id>/review` mints a
+  consent record on a write-scoped step-up token (§2.2). A record that the
+  agent can write is not independent of it.
 - **Decline is not representable.** `_TRANSITIONS` in
   `r6/actions/models.py` gives `awaiting_confirmation → {executing, expired}`.
   A human who reads the script and says no produces the same record as a
   human who never opened the page.
 - **Nothing tests the criterion itself.** §2.1 has no assertion anywhere in
-  the 3,151-test suite. §8.2.
+  the 3,153-test suite. §8.2.
 
 ---
 
@@ -585,7 +603,14 @@ in the normal flow: `X-Tenant-Id`, `X-Agent-Id`, a write-scoped step-up token
 as minted for commit, plus full knowledge of the action id and payload.
 
 **Claim.** For every route the application registers, no request
-constructible from `C_agent` moves an action out of `awaiting_confirmation`.
+constructible from `C_agent` **produces any artifact H1–H6 name** — no
+transition out of `awaiting_confirmation`, and no consent record.
+
+The claim was originally worded *"moves an action out of
+`awaiting_confirmation`"*. That wording is too narrow, and the review board
+showed why: `POST /<id>/review` does not move the action, so it satisfies the
+old claim while minting an `ActionConfirmation` (§2.2). A test that certifies
+the gap is the exact defect step 1 exists to prevent.
 
 **Mechanization**, and step 1 is the part that keeps this from becoming a
 guard written narrower than its property:
@@ -601,14 +626,37 @@ guard written narrower than its property:
    pre-execution state. Without this, every refusal below is also true of an
    action that was never created.
 3. For each enumerated route and method, issue the request with `C_agent`
-   only, and assert the refusal. Named expectations, not "not 200":
-   `POST /<id>/confirm` → 401 (audience/operation/nonce unmet);
-   `POST /<id>/approval-token` → 403 (internal secret unmet);
-   `POST /<id>/commit` → 409 (already `awaiting_confirmation`).
-4. **Assert state, not just status codes.** After the whole sweep, re-assert
-   `status == "awaiting_confirmation"` and that the `ActionEvent` ledger
-   contains no transition to `executing`. A 500 is a refusal too, and not one
-   we want to pass on.
+   only, and assert **its own expected disposition** — a per-route table, not
+   a blanket refusal. Some enumerated routes must *accept* `C_agent`; that is
+   correct behaviour, not a hole:
+
+   | Route | Expected status | Expected state effect |
+   |---|---|---|
+   | `POST /r6/actions/propose` | 201 | new action, `proposed` |
+   | `GET /r6/actions/<id>` | 200 | none |
+   | `POST /<id>/commit` | 409 | none (already `awaiting_confirmation`) |
+   | `POST /<id>/confirm` | 401 | none (audience/operation/nonce unmet) |
+   | `POST /<id>/approval-token` | 403 | none (internal secret unmet) |
+   | `GET`/`POST /<id>/review` | 200 | **must be none** — see below |
+   | `POST /r6/actions/callback/<provider>` | 403 | none (webhook secret unmet) |
+
+   Every route the enumeration finds gets a row; a route with no row fails the
+   test. **`/review` is the row that matters**: it answers 200 on a
+   write-scoped step-up today and mints a consent record while doing so, so
+   its state effect is currently non-empty and this row is red until #528 and
+   the H6 gap close. A red row is the correct output — narrowing the
+   enumeration to make it green is the failure mode.
+
+   A blanket "assert the refusal" cannot be written against this route set:
+   `propose` returns 201 by design. Instructed literally it yields a
+   permanently red test; narrowed to three routes it becomes a guard narrower
+   than its property. The table is what makes step 1's enumeration usable.
+4. **Assert state, not just status codes — this is where the property
+   lives.** After the whole sweep, re-assert `status ==
+   "awaiting_confirmation"`, that the `ActionEvent` ledger contains no
+   transition to `executing`, **and that no `ActionConfirmation` row exists
+   for the action**. Step 3's table is the diagnosis; step 4 is the claim. A
+   500 is a refusal too, and not one we want to pass on.
 
 This test is cheap, has no browser, and belongs in the suite. It is the thing
 that would notice Q2's first three failure shapes.
@@ -714,16 +762,30 @@ here rather than fixed.
 `r6/actions/models.py` gives `awaiting_confirmation → {executing, expired}`.
 A human refusal and a human who never looked produce the same record today.
 Evidence: read directly from the transition map. §4.4 designs the fix. No
-issue number yet; this document is the first place it is written down.
+issue number yet; this document is the first place it is written down. Filed as **#520** since this document was drafted.
 
-**R2 — Payload immutability after commit is a requirement, and I did not
-verify it is pinned.** H5 depends on the payload not changing between the
-approve card rendering and the executor reading it. `transition_action`
-refuses `status` in `**fields` but does not restrict `payload_json`, and I
-did not find a test asserting the payload is immutable after
-`awaiting_confirmation`. I did **not** audit every write path to the column —
-that is the hunt this task excludes. Treated as an unverified requirement:
-the implementing PR states it and pins it, and §8.6's last item probes it.
+**R2 — Payload immutability after commit is required, and it is verifiably
+absent.** Filed as **#528**. This entry originally said *"I did not verify it
+is pinned"*; the review board reproduced it against the real models, so the
+honest word is absent, not unverified:
+
+```
+transition_action(aid, ['awaiting_confirmation'], 'executing',
+                  actor='agent', payload_json=<new bytes>)   -> True
+{"to": "+1555...", "script": "ORIGINAL TEXT SHOWN TO HUMAN"}
+   ->  {"to": "+1999...", "script": "SWAPPED AFTER APPROVAL"}
+```
+
+No exception, and a single `ActionEvent` recording **only** the status change.
+`r6/actions/state.py:36` is `updates = dict(fields)` — everything except
+`status` goes straight into the guarded UPDATE.
+
+A live path already does it in the benign direction: `review.py:449` sets
+`action.payload_json` **after** the confirmation is minted at `:445`. Today it
+appends `reviewed_qr_id`; the ordering is wrong regardless of the contents.
+
+H5 rests on this, so H5 cannot be claimed until #528 closes. The implementing
+PR pins immutability, and §8.6's probe stays.
 
 **R3 — `CONTACT_NOT_ALLOWLISTED` and `DAILY_CAP_REACHED` are reserved and
 enforced nowhere** (#216). §6. Until §6.1 lands, an agent can propose a call
