@@ -586,7 +586,7 @@ conformance**
 
 | Divergence | Consequence |
 |---|---|
-| **The local A contract requires the implementation's declared supported-parameter set to equal HealthClaw's exact eight** — `patient, code, status, _lastUpdated, _count, _sort, _summary, context-id` — including the HealthClaw-specific `context-id`. Executed evidence in §7, **G-A**. | A third-party server that refuses `datetime` just as correctively but supports a different parameter set caps at C on that check, which caps the property, which caps the deployment at Grade B. **No external implementation can currently score A on this property.** |
+| **The local A contract requires the implementation's declared supported-parameter set to equal HealthClaw's exact eight** — `patient, code, status, _lastUpdated, _count, _sort, _summary, context-id` — including the HealthClaw-specific `context-id`. Executed evidence in §7, **G-A**. | **Fixed in #525.** This row records what `0.1.0-draft` shipped with: a third-party server refusing `datetime` just as correctively but supporting a different parameter set capped at C, which capped the property, which capped the deployment at Grade B. The requirement is now shape-based and names no parameter of ours. See §7 G-A for the second mechanism that had to move with it. |
 | Requirement 5 is **[A]** and known-false in proxy mode. | HealthClaw scores B through the proxy. Cited from [#498](https://github.com/aks129/HealthClawGuardrails/issues/498); **not measured by the author of this document**. |
 | `proxy` and `mcp` default to `not_run`. | A local Grade A for this property is measured over one profile and says nothing about a deployment with an upstream configured. The report states `coverage=local-fhir-only`; a reader who stops at "A" will over-read it. |
 
@@ -884,10 +884,42 @@ healthclaw minus context-id        corrective=False grade=C
 
 The second row is a server whose refusal is equally corrective and whose
 supported set is `patient, code, status, category, date, _lastUpdated, _count,
-_sort, _summary, _include`. It grades C, which caps `error_fidelity`, which caps
-the deployment at Grade B. **An external implementation cannot currently score A
-on this property**, which makes §8 a statement of intent rather than of fact.
-Severity: high for the standard-setter thesis, none for our own deployment.
+_sort, _summary, _include`. It graded C, which capped `error_fidelity`, which
+capped the deployment at Grade B.
+
+**FIXED, #525.** The normative requirement is now what §3 P7 always said it
+was: the refusal **names the offending parameter and declares a non-empty,
+well-formed supported-parameter set that does not contain it.** Which
+parameters those are is the implementing server's business. No comparison to
+our set remains anywhere in the suite.
+
+**A second mechanism was found during the fix, and it is the reason a
+one-line change would not have worked.** `_outcome_has_unsafe_last_updated_
+suggestion` strips the declared-set sentence before scanning for
+`_lastUpdated` — because naming it among what you support is a fact, not a
+suggestion to use it in place of a clinical date. That strip *also* applied
+only when the set was exactly ours. `_lastUpdated` is one of ours, so the
+strip existed purely to let our own declaration through: every other server
+that truthfully listed `_lastUpdated` tripped the heuristic on its own
+legitimate sentence and was forced to C by a **second, independent path**.
+Relaxing set equality alone would have looked complete and changed nothing.
+
+Both moved together, each pinned by a two-way mutation
+(`tests/test_guardrail_conformance.py`). Restoring either one alone turns the
+tests red, which is what makes them independent rather than redundant.
+
+**What the fix deliberately does not do.** It cannot tell an unusual-but-real
+parameter from a plausible fake — `patiently, barcode` now grades as a
+declaration. That is accepted rather than overlooked: `context-id` looks
+invented from anyone else's side too, and the alternative is a whitelist of
+"real" FHIR parameters, which recreates this defect with more steps. A
+US Core-anchored family requirement is a candidate `0.2.0` tightening. The
+anti-vacuity checks that do not depend on resemblance all survive, including
+the one that matters most — `_lastUpdated` offered as a substitute for a
+clinical date is still refused.
+
+Severity was high for the standard-setter thesis, none for our own
+deployment. Our own grade is unchanged: A, 7/7.
 
 **G-B — "Immutable Audit Trail" is not tested for immutability.** No probe in
 `r6/conformance/probes.py` attempts to modify or delete an AuditEvent. The word
