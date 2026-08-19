@@ -24,7 +24,13 @@ a named tester and real data between "merged" and "done".
 
 ## How to read a gap table
 
-Every open issue in the tracker appears in exactly one of these seven pages.
+Every open issue in the tracker carries exactly one `set:` label, and appears
+on the page that owns it. **One issue is listed twice on purpose:** #214 is
+labelled `set: 1` and appears in both [01](01-guardrail-core.md) and
+[04](04-action-rail.md), because set 1 owns proving it and set 4 owns
+designing its closure. Page 04 explains that at the foot of its gap table.
+The label is the partition; a page listing is a reading aid and may
+cross-reference.
 The mapping was done by title on 2026-08-16 against 87 open issues, **52 of
 which carry no label at all** — so the tables are the current answer to "what
 is broken in this feature", and labelling the tracker to match is the first

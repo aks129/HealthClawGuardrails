@@ -55,7 +55,14 @@ Measured 2026-08-16 by the set-2 evidence run
 
 ## Architecture ratchets
 
-Eight numbers that may only go down. `tests/test_ratchets.py` holds them.
+Six numbers that may only go down. `tests/test_ratchets.py` holds them, and
+the table below is all of them.
+
+The 2.0 playbook sets out eight ratchets, and the two sets are not the same
+six. Five of the six pins below are playbook ratchets; the playbook's other
+three have no pin at all, and `r6/routes.py` lines is a sixth pin the playbook
+does not list. Saying "eight" here read as *eight numbers a test enforces*,
+which was never true of either set.
 
 | Ratchet | 05 Aug | Today | 2.0 |
 |---|---|---|---|
@@ -68,8 +75,17 @@ Eight numbers that may only go down. `tests/test_ratchets.py` holds them.
 
 ## The two numbers that explain why this document exists
 
-**50,125 lines of test code guard 29,446 lines of engine — 1.7 to 1.**
-`3,151` tests pass on `main`.
+**50,429 lines of test code guard 29,508 lines of engine — 1.7 to 1.**
+**3,153** tests pass, 13 skip, 1 xfails.
+
+Measured at `4cb3771`, which is this document's branch point, with
+`git ls-files 'r6/**/*.py' 'r6/*.py' | xargs wc -l` and the same over
+`tests/*.py`. The first published version of this block carried 50,125 /
+29,446 / 3,151 — figures exact at `4ce28c3`, four merges earlier, under a
+header claiming they were measured on `main`. Worse, `3,151` was the
+*collected* count reported as a *passing* count. Corrected here, with the
+commit and the command stated so the next reader can re-run rather than
+trust.
 
 **All eight defects found on 2026-08-16 were found by running the system.
 Zero were found by that suite.** Three of the eight had passing tests sitting
