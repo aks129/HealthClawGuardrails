@@ -44,6 +44,7 @@ from r6.command_center.models import (
     default_conversation_id,
 )
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
+from r6.access import public_step_up_reason
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 from r6.stepup import validate_step_up_token
 
@@ -321,7 +322,15 @@ def _authz_write(tenant_id: str) -> tuple | None:
         valid, err = validate_step_up_token(step_up, tenant_id)
         if valid:
             return None
-        return jsonify({"error": f"step-up token rejected: {err}"}), 401
+        # `public_step_up_reason`, never `err` (#508). One of the eleven
+        # values err can take is 'Token tenant mismatch', which tells a caller
+        # holding a token they should not have that it is VALID and merely
+        # issued elsewhere — the distinction a prober is trying to draw. The
+        # other ten describe the caller's own token and are published
+        # verbatim, per the owner's 2026-08-10 ruling.
+        return jsonify({
+            "error": f"step-up token rejected: {public_step_up_reason(err)}"
+        }), 401
     if session.get(SESSION_KEY) == tenant_id:
         return None
     return jsonify({
@@ -608,7 +617,10 @@ def api_generate_link():
             }), 401
         valid, err = validate_step_up_token(step_up, tenant_id)
         if not valid:
-            return jsonify({"error": f"step-up token rejected: {err}"}), 401
+            # Classified, not raw (#508). See _authz_write above.
+            return jsonify({
+                "error": f"step-up token rejected: {public_step_up_reason(err)}"
+            }), 401
 
     import os
     base_url = (

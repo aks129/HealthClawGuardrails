@@ -13,8 +13,30 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Validator service URL (HL7 validator-wrapper)
-VALIDATOR_URL = os.environ.get('FHIR_VALIDATOR_URL', 'http://localhost:8080')
+
+class ValidatorUnavailable(RuntimeError):
+    """The external validator did not answer as a validator.
+
+    Distinct from a resource being invalid, and handled the same way as
+    an unreachable one: fall back to structural validation.
+    """
+
+# Validator service URL (HL7 validator-wrapper). NO DEFAULT, on purpose.
+#
+# This used to default to http://localhost:8080, which asserts that a FHIR
+# validator is listening on one of the most contended ports on a developer's
+# machine. Anything answering /health there was treated as a validator: the
+# Aidbox example in this repo binds exactly that port, and running it turned
+# every write in the suite into a 422 reading "Validator returned HTTP 404".
+#
+# That cost an hour three separate times in one day, and each time it looked
+# like the change under test. Twice it was nearly diagnosed as a guardrail
+# regression; once a correct fix was nearly reverted because of it. Issue #488.
+#
+# Unset now means "no external validator", which is the honest reading of an
+# unset variable and leaves structural validation doing the work it already
+# did. A deployment that wants the validator-wrapper says so.
+VALIDATOR_URL = os.environ.get('FHIR_VALIDATOR_URL', '').strip()
 
 # Supported FHIR resource types (R4 stable + R6 experimental ballot3)
 R6_RESOURCE_TYPES = [
@@ -171,6 +193,13 @@ class R6Validator:
                 and (now - self._last_availability_check) < _AVAILABILITY_TTL):
             return self._validator_available
 
+        # No URL configured is not a failure to reach one — it is a
+        # deployment that has not asked for an external validator.
+        if not self.validator_url:
+            self._validator_available = False
+            self._last_availability_check = now
+            return False
+
         try:
             resp = requests.get(f'{self.validator_url}/health', timeout=2)
             self._validator_available = resp.status_code < 400
@@ -203,18 +232,22 @@ class R6Validator:
                 'operation_outcome': outcome
             }
 
-        # Non-200 response from validator
-        return {
-            'valid': False,
-            'operation_outcome': {
-                'resourceType': 'OperationOutcome',
-                'issue': [{
-                    'severity': 'error',
-                    'code': 'exception',
-                    'diagnostics': f'Validator returned HTTP {resp.status_code}'
-                }]
-            }
-        }
+        # A non-200 is the VALIDATOR failing, not the resource being invalid.
+        # A real validator-wrapper answers 200 and puts the problems in an
+        # OperationOutcome; anything else means we asked something that does
+        # not validate, or one that is broken. Rejecting the caller's resource
+        # on that basis rejects valid data and blames it on validation, which
+        # is what a 404 from a mis-identified service did to every write in
+        # this repo's own suite (#488).
+        #
+        # So it raises, and validate_resource's existing handler marks the
+        # validator unavailable and falls back to structural validation —
+        # exactly what it already does when the request throws. Consistency
+        # with that path is the point: "the validator is unreachable" and
+        # "the validator answered something that is not a validation" are the
+        # same situation from the caller's side.
+        raise ValidatorUnavailable(
+            f'Validator returned HTTP {resp.status_code} from {url}')
 
     def _validate_structural(self, resource):
         """

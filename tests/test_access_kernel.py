@@ -17,6 +17,7 @@ because they cannot honestly ship later:
 import ast
 import dataclasses
 import json
+import logging
 import pathlib
 import re
 
@@ -35,6 +36,7 @@ from r6.access import (
     TenantSource,
     audit,
     fhir_response,
+    has_grant,
     install_audit_assertions,
     install_read_audit_assertion,
     outcome_response,
@@ -466,6 +468,295 @@ def test_step_up_denied_is_catchable_as_exception(app):
     """
     assert issubclass(StepUpDenied, Exception)
     assert StepUpDenied.__bases__ == (Exception,)
+
+
+# ---------------------------------------------------------------------------
+# §1.2b has_grant — the same decision, returned instead of raised
+# ---------------------------------------------------------------------------
+#
+# Four step-up call sites are predicates, not gates: a rate limiter that must
+# never fail a request, two boolean helpers that also accept a session cookie,
+# and one refusal whose wire contract names `dryRun=true`. They cannot call
+# require_grant, so they kept calling validate_step_up_token and its tuple.
+#
+# The property that makes has_grant safe to add is EQUIVALENCE, and it is the
+# only thing worth testing hard: `has_grant(...) is None` in exactly the cases
+# `require_grant(...)` raises. Two functions that answer the same question
+# differently would be worse than the tuple.
+
+#: (label, headers, kwargs) — every way the kernel refuses.
+_REFUSALS = [
+    ('no token at all', {}, {}),
+    ('junk', {'X-Step-Up-Token': 'not-a-token'}, {}),
+    ('a token for another tenant', 'other-tenant-token', {}),
+    ('an expired token', 'expired-token', {}),
+    ('a read-scoped token asked for write', 'read-token', {}),
+    ('a bearer the endpoint did not opt into', 'bearer-only', {}),
+    ('the wrong audience', 'valid-token', {'audience': 'someone-else'}),
+    ('the wrong operation', 'valid-token', {'operation': 'not-this-one'}),
+]
+
+
+def _refusal_headers(marker, tenant_id):
+    """Build the headers for one row of _REFUSALS."""
+    if isinstance(marker, dict):
+        return marker
+    if marker == 'other-tenant-token':
+        return _headers(generate_step_up_token('some-other-tenant'))
+    if marker == 'expired-token':
+        return _headers(generate_step_up_token(tenant_id, ttl_seconds=-10))
+    if marker == 'read-token':
+        return _headers(generate_step_up_token(tenant_id, scope='read'))
+    if marker == 'bearer-only':
+        # Valid, but presented on a header neither call opted into reading.
+        return {'Authorization': f'Bearer {generate_step_up_token(tenant_id)}'}
+    if marker == 'valid-token':
+        return _headers(generate_step_up_token(tenant_id))
+    raise AssertionError(f'unknown refusal marker {marker!r}')
+
+
+@pytest.mark.parametrize('label,marker,kwargs', _REFUSALS,
+                         ids=[row[0] for row in _REFUSALS])
+def test_has_grant_answers_none_wherever_require_grant_refuses(
+        app, tenant_id, label, marker, kwargs):
+    """THE ONE PROPERTY, both sides in one request context.
+
+    MUTATION: make has_grant skip any check require_grant makes — drop the
+    audience binding, accept a read token for write, read the bearer without
+    being asked — and the row for it goes red on the has_grant half while
+    require_grant still refuses.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    headers = _refusal_headers(marker, tenant_id)
+
+    with app.test_request_context(headers=headers):
+        assert has_grant(scope=Scope.WRITE, tenant=tenant, **kwargs) is None
+        with pytest.raises(StepUpDenied):
+            require_grant(scope=Scope.WRITE, tenant=tenant, **kwargs)
+
+
+@pytest.mark.parametrize('scope', [Scope.WRITE, Scope.TENANT_BOUND])
+def test_has_grant_returns_the_same_grant_require_grant_returns(
+        app, tenant_id, scope):
+    """Equivalence on the other side: where one grants, so does the other.
+
+    A predicate that were merely stricter would pass every refusal test above
+    and quietly deny real callers. This is the half that catches it.
+    """
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(token)):
+        assert has_grant(scope=scope, tenant=tenant) == require_grant(
+            scope=scope, tenant=tenant)
+
+
+def test_has_grant_reads_the_opted_in_sources_the_same_way(app, tenant_id):
+    """also_bearer / also_body_field mean the same thing in both.
+
+    MUTATION: hardcode also_bearer=False in has_grant's delegation -> red.
+    """
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers={'Authorization': f'Bearer {token}'}):
+        assert has_grant(scope=Scope.WRITE, tenant=tenant) is None
+        grant = has_grant(scope=Scope.WRITE, tenant=tenant, also_bearer=True)
+    assert grant is not None and grant.tenant_id == tenant_id
+
+
+def test_the_grant_it_returns_names_the_tenant_it_proved(app, tenant_id):
+    """Why it is not a bool. A caller scopes its next query to
+    grant.tenant_id rather than re-reading the header it just checked."""
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(token)):
+        grant = has_grant(scope=Scope.WRITE, tenant=tenant)
+    assert grant.tenant_id == tenant_id
+    assert grant.nonce_consumed is False
+
+
+def test_has_grant_cannot_be_asked_to_consume_a_nonce(app, tenant_id):
+    """Asking is not spending.
+
+    A predicate that burned a single-use token as a side effect of being
+    consulted is the retro's defect shape — a control that looks like one
+    thing and quietly does two. The rate limiter consults this on every
+    request; if it could consume, it would eat the caller's token before the
+    handler that needed it ever ran.
+
+    MUTATION: add consume_nonce to the signature -> red.
+    """
+    import inspect
+    from r6 import access as access_mod
+
+    params = inspect.signature(access_mod.has_grant).parameters
+    assert 'consume_nonce' not in params
+    assert 'absent_status' not in params and 'rejected_status' not in params, (
+        'has_grant makes no HTTP decision — that is why it is not '
+        'require_grant')
+
+    # And behaviorally: consulting it twice does not spend the token.
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(token)):
+        assert has_grant(scope=Scope.WRITE, tenant=tenant) is not None
+        assert has_grant(scope=Scope.WRITE, tenant=tenant) is not None
+
+
+def test_has_grant_refuses_a_raw_string_tenant_and_says_which_call(
+        app, tenant_id):
+    """Same type check as require_grant, and the message names the caller
+    rather than the shared helper the traceback actually died in."""
+    with app.test_request_context(headers=_headers(
+            generate_step_up_token(tenant_id))):
+        with pytest.raises(TypeError, match='has_grant'):
+            has_grant(scope=Scope.WRITE, tenant=tenant_id)
+
+
+def test_a_validator_failure_propagates_rather_than_reading_as_a_denial(
+        app, tenant_id, monkeypatch):
+    """An outage is not an authorization answer.
+
+    If the nonce store is unreachable the validator has decided NOTHING.
+    Returning None there would file the outage as "this caller has no grant",
+    which is indistinguishable at every call site from a bad token — and on
+    r6/read_auth.py's path it would turn a 500 into a silent denial, changing
+    behaviour in the slice that adopts it.
+
+    r6/rate_limit.py catches this itself, at the site that has a reason to,
+    where the catch is visible to a reviewer.
+
+    MUTATION: wrap the validator call in try/except and return None -> red.
+    """
+    from r6 import access as access_mod
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError('nonce store unreachable')
+
+    monkeypatch.setattr(access_mod._stepup_mod, 'validate_step_up_token',
+                        _explode)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers('any-token')):
+        with pytest.raises(RuntimeError):
+            has_grant(scope=Scope.WRITE, tenant=tenant)
+        with pytest.raises(RuntimeError):
+            require_grant(scope=Scope.WRITE, tenant=tenant)
+
+
+def test_an_absent_token_is_not_logged_but_a_rejected_one_is(
+        app, tenant_id, caplog):
+    """The limiter consults this on every request. An anonymous request is
+    not an event; a presented-and-invalid token is.
+
+    MUTATION: log unconditionally -> red, and the rate limiter emits one INFO
+    line per unauthenticated request on the internet.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with caplog.at_level(logging.INFO, logger='r6.access'):
+        with app.test_request_context():
+            assert has_grant(scope=Scope.WRITE, tenant=tenant) is None
+        assert caplog.records == []
+
+        with app.test_request_context(headers=_headers('not-a-token')):
+            assert has_grant(scope=Scope.WRITE, tenant=tenant) is None
+        assert [r for r in caplog.records if 'step-up refused' in r.message]
+
+
+def test_a_grant_is_constructed_in_exactly_one_place():
+    """Two entry points, one decision. The equivalence tests above check the
+    behaviour; this checks it stays structural rather than duplicated, which
+    is what would let the two drift later.
+
+    MUTATION: give has_grant its own Grant(...) -> red.
+    """
+    source = (REPO_ROOT / 'r6' / 'access.py').read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    built = [node.lineno for node in ast.walk(tree)
+             if isinstance(node, ast.Call)
+             and getattr(node.func, 'id', None) == 'Grant']
+    assert len(built) == 1, f'Grant is constructed on lines {built}'
+    enclosing = [node.name for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef)
+                 and node.lineno <= built[0] <= (node.end_lineno or 0)]
+    assert enclosing == ['_evaluate']
+
+
+# --- the hazard has_grant introduces, and the two tests that hold it -------
+#
+# `has_grant` where `require_grant` was meant does not refuse. It returns None
+# and the handler falls through into the write. The broad-except guard cannot
+# see it, because nothing was raised to swallow.
+
+#: Production call sites of has_grant. EMPTY: this slice is the pure addition,
+#: adopted by nothing, exactly as the kernel itself landed. A migration slice
+#: adds its site here in the same PR that writes it — adoption is a reviewable
+#: list, not a thing that happens quietly.
+_HAS_GRANT_CALLSITES: frozenset[str] = frozenset()
+
+
+def _has_grant_calls():
+    """(path:lineno, is_discarded) for every production call to has_grant."""
+    for path in _production_python_files():
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        discarded = {node.value.lineno for node in ast.walk(tree)
+                     if isinstance(node, ast.Expr)
+                     and isinstance(node.value, ast.Call)}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (getattr(node.func, 'id', None)
+                    or getattr(node.func, 'attr', None))
+            if name == 'has_grant':
+                yield (f'{path.relative_to(REPO_ROOT)}:{node.lineno}',
+                       node.lineno in discarded)
+
+
+def test_has_grant_is_adopted_by_nothing_yet():
+    """MUTATION: call has_grant from any production module -> red."""
+    sites = sorted(site for site, _ in _has_grant_calls())
+    unexpected = [s for s in sites if s not in _HAS_GRANT_CALLSITES]
+    assert not unexpected, (
+        'has_grant is a non-raising check: a call site that forgets to act on '
+        'the answer is a silent bypass, so each one is listed deliberately in '
+        '_HAS_GRANT_CALLSITES by the PR that adopts it. Unlisted: '
+        + ', '.join(unexpected))
+
+
+def test_a_has_grant_call_may_never_have_its_answer_thrown_away():
+    """`has_grant(...)` on a line by itself gates nothing at all.
+
+    With require_grant that shape is safe — the refusal is the raise. Here it
+    is the whole bypass, and it looks exactly like a guard to a reader.
+
+    MUTATION: write a bare `has_grant(...)` statement anywhere -> red.
+    """
+    thrown_away = [site for site, discarded in _has_grant_calls() if discarded]
+    assert not thrown_away, (
+        'the answer is the only thing has_grant does; discarding it is a '
+        'guard that checks nothing: ' + ', '.join(thrown_away))
+
+
+def test_the_discarded_answer_guard_actually_detects_the_shape(tmp_path):
+    """A guard that cannot fail is the defect it was written to catch.
+
+    This suite has shipped a check whose subject never ran; this one proves
+    its own detector on a synthetic file before trusting the real scan.
+    """
+    tree = ast.parse(
+        'def handler():\n'
+        '    has_grant(scope=1, tenant=2)\n'          # thrown away
+        '    grant = has_grant(scope=1, tenant=2)\n'  # kept
+        '    if has_grant(scope=1, tenant=2):\n'      # kept
+        '        pass\n'
+        '    return grant\n')
+    discarded = {node.value.lineno for node in ast.walk(tree)
+                 if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call)}
+    calls = [node.lineno for node in ast.walk(tree)
+             if isinstance(node, ast.Call)
+             and getattr(node.func, 'id', None) == 'has_grant']
+    assert sorted(calls) == [2, 3, 4]
+    assert [lineno in discarded for lineno in sorted(calls)] == [
+        True, False, False]
 
 
 # ---------------------------------------------------------------------------
@@ -1072,7 +1363,16 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # kernel. This is the god module's FIRST kernel import
                      # and the remaining 20 raw reads in it are pinned by
                      # tests/test_ratchets.py::_RAW_TENANT_READS.
-                     'r6/routes.py'}
+                     'r6/routes.py',
+                     # #508, and NOT a migration slice. This blueprint imports
+                     # `public_step_up_reason` and nothing else: its two
+                     # step-up checks still call the validator directly and
+                     # are still counted by _STEP_UP_CALLSITES. What moved is
+                     # only which sentence a refusal is allowed to say, which
+                     # is a ruling rather than a gate. Migrating these two is
+                     # slice 17, and it stays blocked on their JSON wire
+                     # shape.
+                     'r6/command_center/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

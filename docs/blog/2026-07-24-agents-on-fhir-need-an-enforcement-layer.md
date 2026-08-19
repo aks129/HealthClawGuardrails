@@ -45,8 +45,10 @@ flowchart LR
 store. Reads come back redacted; writes and actions require server-enforced
 controls the agent cannot mint or bypass.*
 
-**Redaction on reads.** Identifiers are stripped using HIPAA Safe Harbor rules
-before a resource reaches the agent. A patient-controlled variant also exists,
+**Redaction on reads.** Demographics are stripped and identifier values are
+truncated with Safe-Harbor-*style* field redaction before a resource reaches
+the agent. It is a compensating control, not a legal de-identification
+determination. A patient-controlled variant also exists,
 so redaction policy belongs to the person, not the integrator.
 
 **Audit on everything.** Every resource access emits an AuditEvent. The server

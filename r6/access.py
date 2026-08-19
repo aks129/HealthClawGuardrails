@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'TenantSource', 'Tenant', 'TenantRejected', 'tenant_from_request',
-    'Scope', 'Grant', 'StepUpDenied', 'require_grant',
+    'Scope', 'Grant', 'StepUpDenied', 'require_grant', 'has_grant',
+    'public_step_up_reason',
     'register_error_handlers',
     'audit', 'AuditAssertionError',
     'install_audit_assertions', 'install_read_audit_assertion',
@@ -319,12 +320,23 @@ _WITHHELD_REASONS = {
 }
 
 
-def _public_reason(error: str) -> str:
+def public_step_up_reason(error: str) -> str:
     """The sentence the caller gets for a validator refusal.
 
     Default-deny: anything not explicitly published collapses to the generic
     text. The failure mode of the opposite default is a new reason leaking on
     the day it is written, when nobody is looking at this file.
+
+    PUBLIC (was `_public_reason`), because the owner's ruling is not a
+    property of `require_grant`. Two sites cannot use the kernel's gate and
+    still have to obey the ruling: `r6/command_center/routes.py` answers a
+    refusal in its own JSON shape, so it built the sentence itself and shipped
+    the raw reason — #478's leak, in a place #478's fix never reached (#508).
+
+    A site that publishes a refusal reason without going through this function
+    is publishing an unclassified string. That is the whole hazard, and it is
+    why this is a named export rather than something each caller can
+    reimplement with a set literal.
     """
     return error if error in _PUBLIC_REASONS else _DENIED_REJECTED
 
@@ -356,6 +368,89 @@ def _step_up_token(*, also_bearer: bool, also_body_field: str | None) -> str:
                 return value.strip()
 
     return ''
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """What ONE step-up evaluation decided. Private on purpose.
+
+    The public surface is a Grant or a refusal. This type is the shared
+    middle so that `require_grant` and `has_grant` cannot drift into two
+    different answers to the same question — which is the whole reason the
+    kernel exists. It never leaves this module, so there is no two-field
+    result for a caller to mis-destructure.
+    """
+
+    grant: Grant | None
+    reason: str      # public-safe; '' when granted
+    absent: bool     # the request presented no token at all
+
+
+def _evaluate(
+    *,
+    scope: Scope,
+    tenant: Tenant,
+    audience: str | None,
+    operation: str | None,
+    consume_nonce: bool,
+    also_bearer: bool,
+    also_body_field: str | None,
+    caller: str,
+) -> _Outcome:
+    """The single step-up decision. Both public entry points route here.
+
+    THE ONE PROPERTY: a Grant is constructed on exactly one line in this
+    repository, and only after validate_step_up_token returned True for this
+    tenant, scope, audience and operation.
+
+    Does NOT catch exceptions from the validator. A validator that cannot
+    reach its nonce store has not decided anything, and answering "no grant"
+    would file an infrastructure outage as an authorization result — which
+    reads, at every call site, exactly like a caller who presented a bad
+    token. Callers that must survive that (r6/rate_limit.py) catch it
+    themselves, visibly, at the site that has a reason to.
+    """
+    if not isinstance(tenant, Tenant):
+        # A raw string here would mean the caller skipped format validation.
+        raise TypeError(
+            f'{caller} needs a Tenant from tenant_from_request, '
+            f'not {type(tenant).__name__}')
+
+    token = _step_up_token(also_bearer=also_bearer,
+                           also_body_field=also_body_field)
+    if not token:
+        return _Outcome(grant=None, reason=_DENIED_ABSENT, absent=True)
+
+    # Destructure both halves. A truthiness test on the tuple is a silent
+    # auth bypass — this module exists so that idiom has one home.
+    valid, error = _stepup_mod.validate_step_up_token(
+        token,
+        tenant.id,
+        consume_nonce=consume_nonce,
+        require_scope=_SCOPE_REQUIREMENT[scope],
+        require_audience=audience,
+        require_operation=operation,
+    )
+    if valid:
+        return _Outcome(
+            grant=Grant(
+                tenant_id=tenant.id,
+                scope=scope,
+                audience=audience,
+                operation=operation,
+                nonce_consumed=consume_nonce,
+            ),
+            reason='',
+            absent=False,
+        )
+
+    # The log keeps the full reason whatever the caller is told, so a withheld
+    # cause is still diagnosable from this side. It fires for a REJECTED token
+    # only, never for an absent one: an anonymous request is not an event, and
+    # a predicate on a hot path (the rate limiter) would otherwise log once per
+    # request.
+    logger.info('step-up refused for tenant %s: %s', tenant.id, error)
+    return _Outcome(grant=None, reason=public_step_up_reason(error), absent=False)
 
 
 def require_grant(
@@ -390,43 +485,80 @@ def require_grant(
     Raises StepUpDenied with the checked flag set. Never returns None, never
     returns False, never returns a tuple.
     """
-    if not isinstance(tenant, Tenant):
-        # A raw string here would mean the caller skipped format validation.
-        raise TypeError(
-            'require_grant needs a Tenant from tenant_from_request, '
-            f'not {type(tenant).__name__}')
+    outcome = _evaluate(
+        scope=scope, tenant=tenant, audience=audience, operation=operation,
+        consume_nonce=consume_nonce, also_bearer=also_bearer,
+        also_body_field=also_body_field, caller='require_grant',
+    )
+    if outcome.grant is not None:
+        return outcome.grant
 
-    token = _step_up_token(also_bearer=also_bearer,
-                           also_body_field=also_body_field)
-    if not token:
-        reason, status = _DENIED_ABSENT, absent_status
-    else:
-        # Destructure both halves. A truthiness test on the tuple is a silent
-        # auth bypass — this module exists so that idiom has one home.
-        valid, error = _stepup_mod.validate_step_up_token(
-            token,
-            tenant.id,
-            consume_nonce=consume_nonce,
-            require_scope=_SCOPE_REQUIREMENT[scope],
-            require_audience=audience,
-            require_operation=operation,
-        )
-        if valid:
-            return Grant(
-                tenant_id=tenant.id,
-                scope=scope,
-                audience=audience,
-                operation=operation,
-                nonce_consumed=consume_nonce,
-            )
-        # The log keeps the full reason whatever the caller is told, so a
-        # withheld cause is still diagnosable from this side.
-        logger.info('step-up refused for tenant %s: %s', tenant.id, error)
-        reason, status = _public_reason(error), rejected_status
-
+    status = absent_status if outcome.absent else rejected_status
     # The ONLY place in the repository that sets the checked flag. Pinned by
     # test_the_checked_flag_is_set_in_exactly_one_place.
-    raise StepUpDenied(reason, http_status=status, checked=True)
+    raise StepUpDenied(outcome.reason, http_status=status, checked=True)
+
+
+def has_grant(
+    *,
+    scope: Scope,
+    tenant: Tenant,
+    audience: str | None = None,
+    operation: str | None = None,
+    also_bearer: bool = False,
+    also_body_field: str | None = None,
+) -> Grant | None:
+    """Ask whether this request holds a step-up grant. Answer, do not refuse.
+
+    THE ONE PROPERTY: identical to require_grant's, with the refusal returned
+    instead of raised — `has_grant(...) is None` is true in exactly the cases
+    `require_grant(...)` would raise StepUpDenied.
+
+    WHY THIS EXISTS. Four step-up call sites are not authorization gates and
+    cannot become one:
+
+      r6/rate_limit.py:161      picks a bucket key, inside a try/except that
+                                must never fail a request
+      r6/read_auth.py:77        one branch of a predicate that also accepts a
+                                session cookie and an OAuth bearer
+      r6/agent_runs/routes.py:63  the same shape, returning bool
+      r6/sdc/routes.py:104      refuses with a message naming `dryRun=true`,
+                                which the kernel's uniform outcome cannot say
+
+    Migrating them to require_grant would make a rate limiter fail requests
+    and would rewrite three wire contracts. They kept calling
+    validate_step_up_token directly instead, which is the tuple this module
+    exists to delete. This is the missing half of the kernel, not a relaxation
+    of it.
+
+    Returns the Grant, or None. Not a bool: the Grant carries the tenant it
+    was proved for, so a caller scopes its next query to grant.tenant_id
+    rather than re-reading a header, and None is unambiguously falsy in a way
+    a 2-tuple never was.
+
+    NO ``consume_nonce``, deliberately. Asking is not spending. A predicate
+    that burned a single-use token as a side effect of being consulted is the
+    retro's defect shape exactly — a control that looks like one thing and
+    quietly does two. A caller that must consume wants require_grant.
+
+    NO status parameters, deliberately. This function makes no HTTP decision;
+    the caller does, which is the entire reason it is not require_grant.
+
+    Raises nothing this kernel defines. It DOES propagate an exception from
+    the validator — see _evaluate.
+
+    THE HAZARD, named so it is reviewable: `has_grant` where `require_grant`
+    was meant does not refuse. It returns None and the handler falls through
+    into the write, and the broad-except guard in
+    tests/test_access_kernel.py cannot see it because nothing was raised to
+    swallow. Two tests hold that line: the result may never be discarded, and
+    every call site is an allowlist entry added by the PR that adopts it.
+    """
+    return _evaluate(
+        scope=scope, tenant=tenant, audience=audience, operation=operation,
+        consume_nonce=False, also_bearer=also_bearer,
+        also_body_field=also_body_field, caller='has_grant',
+    ).grant
 
 
 def register_error_handlers(app) -> None:

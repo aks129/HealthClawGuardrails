@@ -88,20 +88,20 @@ class TestTheCallerIsTold:
     ])
     def test_a_reason_about_the_callers_own_token_is_published(
             self, error, expected):
-        assert access._public_reason(error) == expected
+        assert access.public_step_up_reason(error) == expected
 
     def test_the_cross_tenant_reason_is_never_published(self):
         """The one carve-out. This is the oracle: it separates a valid token
         issued elsewhere from junk."""
-        assert access._public_reason('Token tenant mismatch') == \
+        assert access.public_step_up_reason('Token tenant mismatch') == \
             access._DENIED_REJECTED
 
     def test_an_unknown_reason_defaults_to_silence(self):
         """Default-deny. A reason nobody classified must not leak on the day
         it is written."""
-        assert access._public_reason('Token issuer is evil.example') == \
+        assert access.public_step_up_reason('Token issuer is evil.example') == \
             access._DENIED_REJECTED
-        assert access._public_reason('') == access._DENIED_REJECTED
+        assert access.public_step_up_reason('') == access._DENIED_REJECTED
 
     def test_the_absent_case_is_unchanged(self):
         """No token at all is not a validator refusal and has no reason to

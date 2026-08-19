@@ -38,7 +38,7 @@ from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       tenant_from_request)
+                       public_step_up_reason, tenant_from_request)
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -57,9 +57,9 @@ from r6.health_compliance import (
     export_audit_trail, MEDICAL_DISCLAIMER
 )
 from r6.fhir_proxy import (
-    get_proxy,
     get_proxy_for_request,
     is_proxy_enabled,
+    upstream_status,
     is_sharp_context_active,
     close_request_proxy,
     sanitize_operation_outcome_resource,
@@ -1990,15 +1990,12 @@ def health_check():
         health['checks']['database'] = 'error'
         logger.warning(f'Health check: database failed: {e}')
 
-    # Check upstream FHIR server connectivity
-    proxy = get_proxy()
-    if proxy:
-        upstream_health = proxy.healthy()
-        health['checks']['upstream'] = upstream_health
-        if upstream_health.get('status') != 'connected':
-            health['status'] = 'degraded'
-    else:
-        health['checks']['upstream'] = 'not_configured'
+    # Check upstream FHIR server connectivity. Three states, incl. an upstream
+    # that was named and could not be built — see r6.fhir_proxy.upstream_status.
+    upstream = upstream_status()
+    health['checks']['upstream'] = upstream['check']
+    if upstream['degraded']:
+        health['status'] = 'degraded'
 
     status_code = 200 if health['status'] == 'healthy' else 503
     return jsonify(health), status_code
@@ -2186,7 +2183,7 @@ def bind_telegram_chat():
         return jsonify({'error': 'valid step-up token required'}), 401
     valid, err = validate_step_up_token(token, tenant_id)
     if not valid:
-        return jsonify({'error': err or 'invalid step-up token'}), 401
+        return jsonify({'error': public_step_up_reason(err)}), 401
 
     from r6.telegram_push import bind as bind_chat
     try:
@@ -3107,7 +3104,7 @@ def curatr_apply_fix(resource_type, resource_id):
     if not valid:
         return _operation_outcome(
             'error', 'security',
-            f'Step-up token rejected: {err}'
+            f'Step-up token rejected: {public_step_up_reason(err)}'
         ), 403
 
     body = request.get_json(silent=True)
@@ -3136,8 +3133,8 @@ def curatr_apply_fix(resource_type, resource_id):
         )
         if not valid:
             return _operation_outcome(
-                'error', 'security', f'Step-up token rejected: {err}'
-            ), 403
+                'error', 'security',
+                f'Step-up token rejected: {public_step_up_reason(err)}'), 403
 
     try:
         result = _curatr_apply_fix(

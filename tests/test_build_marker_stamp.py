@@ -273,8 +273,13 @@ def _prod_watch_with(payload, expect, demo_handshake=None):
         if "$conformance" in url:
             return _Resp(200, {"grade": "A"})
         if "Patient" in url:
+            # The demo tenant in the state it is supposed to be in. Sourced
+            # from prod_watch rather than restated, so adding a persona does
+            # not silently turn these build-marker tests red for a reason
+            # that has nothing to do with build markers.
             return _Resp(200, {"entry": [
-                {"resource": {"resourceType": "Patient", "id": "demo-1"}}]})
+                {"resource": {"resourceType": "Patient", "id": pid}}
+                for pid in prod_watch.DEMO_PATIENTS]})
         if "Condition" in url:
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})

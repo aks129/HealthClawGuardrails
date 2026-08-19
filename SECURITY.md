@@ -17,7 +17,7 @@ The guardrail stack runs on every request:
 
 | Control | What it does |
 | --- | --- |
-| **PHI redaction** | Reads pass through HIPAA Safe Harbor or patient-controlled redaction before leaving the store. |
+| **PHI redaction** | Reads pass through Safe-Harbor-*style* field redaction (demographics stripped; identifier values truncated to their last four characters) or patient-controlled redaction before leaving the store. It is a compensating control, **not a legal de-identification determination** — see [README](README.md#redaction) and [#112](../../issues/112). |
 | **Tenant isolation** | Every database query is scoped to the requested tenant at the query layer; cross-tenant access is blocked. |
 | **Tenant-authenticated reads** | Hosted deployments handling real records require a tenant-bound token on reads (config: `READ_AUTH_ENABLED`); synthetic/demo tenants remain open. |
 | **Step-up authorization** | Writes require an HMAC-signed, tenant-bound, expiring token. |

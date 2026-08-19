@@ -30,7 +30,12 @@ import logging
 import os
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
+
+from r6.upstream_connectors import (
+    AUTH_OAUTH2,
+    resolve_upstream_config,
+)
 
 import httpx
 
@@ -42,7 +47,35 @@ logger = logging.getLogger(__name__)
 # Medplum token cache (Redis-backed with in-process fallback)
 # ---------------------------------------------------------------------------
 
-_MEDPLUM_TOKEN_ENDPOINT = 'https://api.medplum.com/oauth2/token'
+_MEDPLUM_HOSTED_TOKEN_ENDPOINT = 'https://api.medplum.com/oauth2/token'
+
+
+def medplum_token_endpoint(base_url: str = '') -> str:
+    """Where to ask THIS Medplum for a token.
+
+    Derived from the server we are actually talking to, because the constant
+    it replaced was `https://api.medplum.com/oauth2/token` with no override.
+    Medplum's whole proposition is that you can self-host it, so pointing
+    MEDPLUM_BASE_URL at your own instance was the expected case — and it sent
+    your self-hosted client credentials to Medplum's hosted service, which
+    does not know them. The connector worked against exactly one deployment
+    of a product designed to be deployed anywhere.
+
+    MEDPLUM_BASE_URL is the FHIR base (`https://host/fhir/R4`); the token
+    endpoint hangs off the server root, so origin + /oauth2/token. An explicit
+    MEDPLUM_TOKEN_URL wins over both, for deployments that put the
+    authorization server somewhere else entirely.
+    """
+    explicit = os.environ.get('MEDPLUM_TOKEN_URL', '').strip()
+    if explicit:
+        return explicit
+    base = (base_url or os.environ.get('MEDPLUM_BASE_URL', '')).strip()
+    if base:
+        parts = urlsplit(base)
+        if parts.scheme and parts.netloc:
+            return urlunsplit((parts.scheme, parts.netloc, '/oauth2/token',
+                               '', ''))
+    return _MEDPLUM_HOSTED_TOKEN_ENDPOINT
 
 # In-process fallback cache: {'token': str|None, 'expires_at': float}
 _medplum_cache: dict = {'token': None, 'expires_at': 0.0}
@@ -66,7 +99,8 @@ def _get_redis():
         return None
 
 
-def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
+def _fetch_medplum_token(client_id: str, client_secret: str,
+                         token_endpoint: str = '') -> str:
     """
     Obtain a Medplum access token via OAuth2 client-credentials.
 
@@ -89,7 +123,7 @@ def _fetch_medplum_token(client_id: str, client_secret: str) -> str:
 
     # 3. Fetch fresh token
     resp = httpx.post(
-        _MEDPLUM_TOKEN_ENDPOINT,
+        token_endpoint or medplum_token_endpoint(),
         data={
             'grant_type': 'client_credentials',
             'client_id': client_id,
@@ -347,7 +381,13 @@ class FHIRUpstreamProxy:
 
     def __init__(self, upstream_url: str, local_base_url: str = '',
                  caller_auth: bool = False,
-                 basic_auth: tuple[str, str] | None = None):
+                 basic_auth: tuple[str, str] | None = None,
+                 kind: str = ''):
+        # The connector kind this proxy was BUILT as, reported by healthy()
+        # beside the `software` the server names itself. When those two
+        # disagree the deployment is pointed somewhere nobody meant, and that
+        # is otherwise invisible until a request fails naming neither.
+        self.kind = kind
         self.upstream_url = upstream_url.rstrip('/')
         self.local_base_url = local_base_url.rstrip('/')
         # True when the CALLER's own credential is forwarded upstream (SHARP
@@ -388,6 +428,7 @@ class FHIRUpstreamProxy:
                     'upstream_url': self.upstream_url,
                     'fhir_version': data.get('fhirVersion', 'unknown'),
                     'software': data.get('software', {}).get('name', 'unknown'),
+                    **({'kind': self.kind} if self.kind else {}),
                 }
             return {
                 'status': 'error',
@@ -559,38 +600,64 @@ class FHIRUpstreamProxy:
         }
 
 
-class MedplumProxy(FHIRUpstreamProxy):
+class OAuth2UpstreamProxy(FHIRUpstreamProxy):
     """
-    FHIRUpstreamProxy variant for Medplum.
+    FHIRUpstreamProxy variant for upstreams using OAuth2 client-credentials.
 
-    Injects a Bearer token (obtained via OAuth2 client-credentials) into every
-    outgoing request.  Tokens are cached in Redis when available; an in-process
-    dict provides fallback caching so the server stays functional without Redis.
+    Injects a Bearer token into every outgoing request. Tokens are cached in
+    Redis when available; an in-process dict provides fallback caching so the
+    server stays functional without Redis.
+
+    Named for the GRANT rather than for Medplum, because the grant is what
+    this implements and Medplum is one server that uses it. `MedplumProxy`
+    remains as an alias below: it is imported by name in several tests and in
+    scripts, and renaming a class is not worth breaking a caller over.
     """
 
     def __init__(
         self,
-        medplum_base_url: str,
+        base_url: str,
         client_id: str,
         client_secret: str,
         local_base_url: str = '',
+        token_endpoint: str = '',
+        kind: str = '',
     ):
-        super().__init__(medplum_base_url, local_base_url)
+        super().__init__(base_url, local_base_url, kind=kind)
         self._client_id = client_id
         self._client_secret = client_secret
+        # Resolved once, from the server this proxy actually points at — not
+        # read from the environment at request time, which would let a proxy
+        # built for one server start authenticating against another after an
+        # unrelated env change.
+        self._token_endpoint = token_endpoint or medplum_token_endpoint(base_url)
         # Inject auth into every request via httpx event hook
         self._client.event_hooks['request'] = [self._inject_bearer]
-        logger.info('Medplum proxy initialized')
+        logger.info('OAuth2 upstream proxy initialized (token endpoint %s)',
+                    self._token_endpoint)
 
     def _inject_bearer(self, request: httpx.Request) -> None:
-        """httpx event hook — adds Authorization header before each send."""
-        try:
-            token = _fetch_medplum_token(self._client_id, self._client_secret)
-            request.headers['Authorization'] = f'Bearer {token}'
-        except Exception as exc:
-            logger.error(
-                'Failed to obtain Medplum token (%s)', type(exc).__name__
-            )
+        """httpx event hook — adds Authorization header before each send.
+
+        RAISES when no token can be obtained. It used to log and return, which
+        let the request go out with NO Authorization header at all: a token
+        failure was silently downgraded to an anonymous request against the
+        record system. On a server that refuses anonymous callers that
+        surfaces as a confusing 502; on one that allows anonymous reads of
+        anything, it is a request we did not intend to make. Neither is a
+        thing to do quietly, and the difference between them is a setting on
+        somebody else's server.
+
+        httpx propagates this out of .send(), so the caller sees a failed
+        request rather than a successful unauthenticated one.
+        """
+        token = _fetch_medplum_token(self._client_id, self._client_secret,
+                                     self._token_endpoint)
+        request.headers['Authorization'] = f'Bearer {token}'
+
+
+#: Back-compat alias. Imported by name in tests and scripts.
+MedplumProxy = OAuth2UpstreamProxy
 
 
 # --- Module-level singleton ---
@@ -640,37 +707,44 @@ def get_proxy() -> FHIRUpstreamProxy | None:
     """
     Return the proxy singleton, or None if no upstream is configured.
 
-    Priority:
-      1. FHIR_UPSTREAM_URL — generic upstream proxy (optional HTTP Basic via
-         FHIR_UPSTREAM_CLIENT_ID + FHIR_UPSTREAM_CLIENT_SECRET)
-      2. MEDPLUM_BASE_URL  — Medplum proxy (OAuth2 client-credentials)
+    WHICH upstream, and how it authenticates, is answered by
+    r6.upstream_connectors rather than by branches here — see that module for
+    the registry and for why the SHARP per-request path is deliberately not
+    part of it. This function's remaining job is to turn a resolved config
+    into a client and hold the singleton.
+
+    Precedence is unchanged: FHIR_UPSTREAM_URL wins over MEDPLUM_BASE_URL.
     """
     global _proxy_instance
     if _proxy_instance is not None:
         return _proxy_instance
 
+    config = resolve_upstream_config()
+    if config is None:
+        return None
+
     local_base = os.environ.get('FHIR_LOCAL_BASE_URL', '').strip()
 
-    upstream_url = os.environ.get('FHIR_UPSTREAM_URL', '').strip()
-    if upstream_url:
-        _proxy_instance = FHIRUpstreamProxy(
-            upstream_url, local_base, basic_auth=_upstream_basic_auth())
-        return _proxy_instance
-
-    medplum_url = os.environ.get('MEDPLUM_BASE_URL', '').strip()
-    if medplum_url:
-        client_id = os.environ.get('MEDPLUM_CLIENT_ID', '').strip()
-        client_secret = os.environ.get('MEDPLUM_CLIENT_SECRET', '').strip()
-        if not client_id or not client_secret:
+    if config.auth == AUTH_OAUTH2:
+        # Refusing beats proceeding: a client-credentials upstream with no
+        # credentials can only make anonymous requests, and an anonymous
+        # request at a record system is not a degraded mode worth having.
+        if not config.client_id or not config.client_secret:
             logger.warning(
-                'MEDPLUM_BASE_URL is set but MEDPLUM_CLIENT_ID / '
-                'MEDPLUM_CLIENT_SECRET are missing — Medplum proxy disabled'
-            )
+                'Upstream kind %r needs client credentials and none are set '
+                '(FHIR_UPSTREAM_CLIENT_ID/_SECRET) — upstream proxy disabled',
+                config.kind)
             return None
-        _proxy_instance = MedplumProxy(medplum_url, client_id, client_secret, local_base)
+        _proxy_instance = OAuth2UpstreamProxy(
+            config.base_url, config.client_id, config.client_secret,
+            local_base, token_endpoint=config.token_endpoint,
+            kind=config.kind)
         return _proxy_instance
 
-    return None
+    _proxy_instance = FHIRUpstreamProxy(
+        config.base_url, local_base, basic_auth=config.basic_auth,
+        kind=config.kind)
+    return _proxy_instance
 
 
 def reset_proxy():
@@ -684,12 +758,77 @@ def reset_proxy():
     _medplum_cache['expires_at'] = 0.0
 
 
-def is_proxy_enabled() -> bool:
-    """Check if any upstream proxy mode is configured."""
+def upstream_intended() -> bool:
+    """True when the environment NAMES an upstream, working or not.
+
+    This is the old `is_proxy_enabled` — an env-var presence check — under a
+    name that says what it actually measures. It answers "did the operator
+    mean to proxy", which is only useful next to the answer to "are we
+    proxying". Never use it alone to describe the running system.
+    """
     return bool(
         os.environ.get('FHIR_UPSTREAM_URL', '').strip()
         or os.environ.get('MEDPLUM_BASE_URL', '').strip()
     )
+
+
+def is_proxy_enabled() -> bool:
+    """True when a proxy EXISTS, not when one was asked for.
+
+    These were the same question until an upstream could refuse to be built.
+    Since #503 an OAuth2 upstream with no credentials returns None from
+    get_proxy() rather than making anonymous requests at a record system —
+    correct, and it split the question in two while this function kept
+    answering the old one.
+
+    The consequence, measured: with FHIR_UPSTREAM_URL set and the secret
+    missing, /r6/fhir/health reported mode 'upstream', status 'healthy',
+    HTTP 200 — and every write landed in the container's own SQLite. An
+    operator reading that page has no way to see it, and the data is in the
+    wrong store by the time anyone looks.
+
+    `upstream_intended()` is the other half. Health reports both, because
+    "local because nobody configured an upstream" and "local because the
+    upstream we configured could not be built" are different situations and
+    only one of them is fine.
+    """
+    return get_proxy() is not None
+
+
+def upstream_status() -> dict:
+    """What /health should say about the upstream, and whether it is degraded.
+
+    Three states, and the middle one is the reason this function exists:
+
+      not_configured   nobody asked for an upstream. Local mode by design.
+      misconfigured    one was NAMED and no client could be built for it.
+                       Writes are landing in local storage while the operator
+                       believes they are going to their FHIR server.
+      <health payload> a proxy exists; the proxy reports on itself.
+
+    'misconfigured' is degraded rather than a quiet 200, which is consistent
+    with an upstream that is configured and unreachable — that already
+    answers 503. The failure it makes loud is the one where a deploy succeeds
+    and the data goes somewhere nobody looks.
+
+    Returns a dict rather than a pair: a 2-tuple is always truthy, and this
+    codebase has a documented bypass built on exactly that shape.
+    """
+    try:
+        proxy = get_proxy()
+    except ValueError as exc:
+        # An unknown connector kind. Startup validation refuses to boot on
+        # this, so reaching here means something bypassed it — and /health
+        # answering a 500 HTML page is the worst way to say so. Report it.
+        logger.error('upstream misconfigured: %s', exc)
+        return {'check': 'misconfigured', 'degraded': True}
+    if proxy:
+        payload = proxy.healthy()
+        return {'check': payload,
+                'degraded': payload.get('status') != 'connected'}
+    if upstream_intended():
+        return {'check': 'misconfigured', 'degraded': True}
+    return {'check': 'not_configured', 'degraded': False}
 
 
 # ---------------------------------------------------------------------------

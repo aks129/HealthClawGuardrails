@@ -251,6 +251,98 @@ def register_error_handlers(app) -> None:
     """
 ```
 
+### 1.2b `has_grant` — the same decision, returned instead of raised
+
+**Added 2026-08-16, after reading all twelve remaining step-up call sites.**
+The original spec assumed every one of them was a gate that could become a
+`require_grant`. Four are not gates at all, and no amount of migration makes
+them into one:
+
+| Site | What it is | Why `require_grant` cannot go there |
+|---|---|---|
+| `r6/rate_limit.py:161` | picks a bucket key | wrapped in a `try/except` that must **never fail a request**; a raising gate here throttles or 500s on an auth question nobody asked |
+| `r6/read_auth.py:77` | one branch of a predicate | also accepts a session cookie and an OAuth bearer; the step-up branch is not allowed to decide the request |
+| `r6/agent_runs/routes.py:63` | the same shape, returning `bool` | caller composes it with two shared-secret checks |
+| `r6/command_center/routes.py:271` | session **or** token | refuses with `{"error": ...}`, not an OperationOutcome |
+
+The kernel offered only `require_grant`, which raises. So these four kept
+calling `validate_step_up_token` and destructuring its tuple — the exact idiom
+this module exists to delete — and the step-up ratchet could not reach zero by
+migration alone. `has_grant` is the missing half of the kernel, not a
+relaxation of it.
+
+```python
+def has_grant(
+    *,
+    scope: Scope,
+    tenant: Tenant,
+    audience: str | None = None,
+    operation: str | None = None,
+    also_bearer: bool = False,
+    also_body_field: str | None = None,
+) -> Grant | None:
+    """Ask whether this request holds a step-up grant. Answer, do not refuse.
+
+    THE ONE PROPERTY: identical to require_grant's, with the refusal returned
+    instead of raised — `has_grant(...) is None` is true in exactly the cases
+    `require_grant(...)` would raise StepUpDenied.
+    """
+```
+
+Four deliberate differences from `require_grant`, each one a design decision
+rather than an omission:
+
+- **Returns `Grant | None`, not `bool`.** The Grant carries the tenant it was
+  proved for, so a caller scopes its next query to `grant.tenant_id` rather
+  than re-reading the header it just checked. `None` is unambiguously falsy in
+  a way the 2-tuple never was.
+- **No `consume_nonce`.** Asking is not spending. A predicate that burned a
+  single-use token as a side effect of being consulted is the retro's defect
+  shape exactly — a control that looks like one thing and quietly does two.
+  The rate limiter consults this on every request; if it could consume, it
+  would eat the caller's token before the handler that needed it ever ran. A
+  caller that must consume wants `require_grant`.
+- **No status parameters.** This function makes no HTTP decision. That is the
+  entire reason it is not `require_grant`, and giving it `absent_status` would
+  blur the two back together.
+- **It does not catch the validator's exceptions.** A validator that cannot
+  reach its nonce store has decided *nothing*; answering "no grant" would file
+  an infrastructure outage as an authorization result, indistinguishable at
+  every call site from a caller with a bad token. `r6/rate_limit.py` catches
+  it itself, at the site that has a reason to, where a reviewer can see the
+  catch. This also keeps `r6/read_auth.py`'s current 500 a 500, so adopting it
+  there is not a behaviour change.
+
+Both entry points route through one private `_evaluate`, which is the only
+place in the repository that calls the validator or constructs a `Grant`. Two
+functions answering the same question differently would be worse than the
+tuple; `test_a_grant_is_constructed_in_exactly_one_place` holds that
+structurally, and the parametrized equivalence tests hold it behaviorally from
+both sides — every refusal, and every grant.
+
+#### The hazard it introduces, named
+
+`has_grant` where `require_grant` was meant **does not refuse**. It returns
+`None`, the handler falls through into the write, and the broad-except guard
+in §4.1 cannot see it because nothing was raised to swallow. It reads like a
+guard and is not one — which is the defect shape this project keeps finding.
+
+Two tests hold that line, and both must survive any future edit here:
+
+1. **The answer may never be discarded.** A bare `has_grant(...)` expression
+   statement gates nothing at all. Safe with `require_grant` (the refusal *is*
+   the raise); the whole bypass here. Detected by AST, and the detector is
+   proven against a synthetic file before the real scan is trusted.
+2. **Every production call site is an allowlist entry**
+   (`_HAS_GRANT_CALLSITES`), added by the PR that adopts it. It ships empty:
+   this slice is the pure addition, adopted by nothing, exactly as the kernel
+   itself landed.
+
+`has_grant` is deliberately **not** in `_GUARD_CALLS` (§4.1). That list is
+"names whose refusal must never be swallowed", and this one has no refusal to
+swallow; adding it would fail `r6/rate_limit.py`'s adoption, where the catch
+is correct.
+
 ### 1.3 Audit
 
 ```python
@@ -521,6 +613,41 @@ also turn a boolean helper into an exception, which changes control flow.
 They need a characterization test first. Their current pin is
 `test_no_write_path_indexes_the_step_up_tuple:1307`, which stops the idiom
 spreading but does not describe these two handlers' behavior.
+
+**Update, 2026-08-16.** "Turn a boolean helper into an exception" was the
+right diagnosis and the wrong prescription: those two do not need a
+characterization test so they can become gates, because they should not become
+gates. §1.2b adds `has_grant`, which is the same decision returned rather than
+raised, and they adopt *that*. Slices 15–18 below.
+
+### 2.5b Slices 15–18 — `has_grant`, the four predicates
+
+Landed first as a pure addition adopted by nothing (§1.2b). Then, one site per
+PR, each a characterization test followed by the swap:
+
+| # | Site | Notes |
+|---|---|---|
+| 15 | `r6/read_auth.py:77` → `Scope.TENANT_BOUND`, `also_bearer=True` | Widest blast radius of the four — it runs on every GET through the `before_request` hook. `require_scope=None` is load-bearing; `tests/test_patient_connect_token.py:126-130` goes red if a write scope replaces it. |
+| 16 | `r6/agent_runs/routes.py:63` | Keeps its own `logger.info`, or drops it because `_evaluate` now logs the same refusal. Decide in the PR; do not do both and double-log. |
+| 17 | `r6/command_center/routes.py:271` | Session-**or**-token. The JSON error body is unchanged; only the token branch moves. |
+| 18 | `r6/rate_limit.py:161` | **Last.** The only site that keeps a broad `except` around a kernel call, and the only one where that is correct. Its `_tenant_claim_is_authenticated` takes a raw `str`, so this PR also needs a non-raising tenant read or a `Tenant` built from the id the limiter already holds — settle that in the PR, not here. |
+
+Not in this group, and not for the reason the others were:
+`r6/command_center/routes.py:321` and `:609` interpolate the validator's raw
+reason into the response body — `{"error": f"step-up token rejected: {err}"}`.
+That is the **#478 leak**, which was closed after slice 6 fixed the three
+`r6/routes.py` write gates; these two were never in that diff and still carry
+it. `has_grant` returns no reason, so adopting it here silently changes a wire
+contract *and* fixes a disclosure in the same PR. Two things, one diff. The
+leak gets its own issue and its own fix; the migration follows it.
+
+`r6/sdc/routes.py:104` is the twelfth site and belongs to neither group. It is
+a real gate, so it wants `require_grant` — but its absent-token refusal names
+`dryRun=true`, and the kernel's uniform OperationOutcome cannot say that.
+Either the message becomes generic (a wire change, and a worse one: that
+sentence is the only place a caller learns the preview mode exists) or
+`require_grant` grows a caller-supplied absent message. The second is a spec
+change and belongs to a CTO gate, not a migration PR.
 
 ### 2.6 Slices 9–11 — `tenant_from_request`
 

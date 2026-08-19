@@ -128,7 +128,17 @@ services:
       APP_ENV: development
       DATABASE_URL: sqlite:////tmp/healthclaw.db
     healthcheck:
-      test: curl -f http://localhost:5000/r6/fhir/health || exit 1
+      # python, NOT curl — the guardrails image does not ship curl, so
+      # `curl -f ...` exited 127 ("not found") on every probe. The proxy was
+      # healthy the whole time and reported unhealthy forever, which meant
+      # the mcp service below — `condition: service_healthy` — never started
+      # at all. The example's own diagram opens with the MCP server, and it
+      # had never once come up.
+      #
+      # urlopen raises on any non-2xx, so a degraded 503 fails the probe the
+      # same way a refused connection does.
+      test: ["CMD-SHELL",
+             "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/r6/fhir/health', timeout=4)\""]
       interval: 5s
       timeout: 5s
       retries: 40
@@ -146,3 +156,14 @@ services:
       PORT: "3001"
       FHIR_BASE_URL: http://healthclaw:5000/r6/fhir
       TENANT_ID: demo
+
+      # REQUIRED, and the server refuses to start without it — it fail-closes
+      # rather than serving an unauthenticated MCP endpoint, which is the
+      # behaviour you want and also the reason this service crash-looped
+      # unnoticed for as long as the proxy's health check was broken: nothing
+      # depending on it ever got far enough to start it.
+      #
+      # MCP_PUBLIC_DEMO=true is the documented alternative and is deliberately
+      # not used here. An example about what an agent may do with health data
+      # should not open with an unauthenticated tool server.
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?set MCP_AUTH_TOKEN in .env}
