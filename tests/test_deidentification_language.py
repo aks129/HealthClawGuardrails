@@ -51,7 +51,14 @@ PUBLIC_SURFACES = (
 #: Published, and therefore public whatever directory they live in. Globbed,
 #: not listed: a post added next month is a public surface on the day it is
 #: written, and a list would have to be remembered.
-_PUBLISHED_GLOBS = ("docs/blog/*.md", "docs/recipes/*.md")
+_PUBLISHED_GLOBS = ("docs/blog/*.md", "docs/recipes/*.md",
+                    # Added with the first spec that lives here. A
+                    # specification is the MOST public surface we have —
+                    # it is written for other implementers to build to —
+                    # and this guard did not open the directory. Same
+                    # shape as the gap it was widened to close earlier
+                    # today: the scan was only as wide as its file list.
+                    "docs/specs/*.md")
 
 #: The ways the repository disclaims the legal standard. A sentence carrying
 #: one of these may name Safe Harbor; nothing else may. `r6/routes.py:3519`
