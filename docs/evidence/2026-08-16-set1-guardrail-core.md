@@ -4,6 +4,9 @@
 - **Owner:** owner-guardrail-core
 - **Repo HEAD:** `2b7872d` (`feat(kernel): four step-up sites are predicates, not gates — has_grant is the half that fits (#506)`)
 - **Working tree:** clean at start of run; this document is the only file added.
+- **One redaction:** the operator's home-directory name in pasted shell output
+  reads `<user>`. Nothing else in any transcript below is altered — the
+  redaction is incidental to every claim the output supports.
 - **Verdict: EVIDENCE PARTIAL.** Local half complete. Live-proxy half **BLOCKED** —
   the stack described in the task was not running when the run began, and
   starting it was outside the granted scope.
@@ -32,14 +35,14 @@ Confirmed three independent ways rather than trusting one failed `curl`:
 
 ```
 $ docker ps
-failed to connect to the docker API at unix:///Users/eugenevestel/.docker/run/docker.sock;
+failed to connect to the docker API at unix:///Users/<user>/.docker/run/docker.sock;
 check if the path is correct and if the daemon is running: dial unix
-/Users/eugenevestel/.docker/run/docker.sock: connect: no such file or directory
+/Users/<user>/.docker/run/docker.sock: connect: no such file or directory
 
 $ ls -la ~/.docker/run/
 total 0
-drwxr-xr-x@  2 eugenevestel  staff   64 Aug 16 17:16 .
-drwxr-xr-x@ 22 eugenevestel  staff  704 Aug 16 17:06 ..
+drwxr-xr-x@  2 <user>  staff   64 Aug 16 17:16 .
+drwxr-xr-x@ 22 <user>  staff  704 Aug 16 17:06 ..
         # the socket file is gone; the directory mtime is 17:16 today
 
 $ lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(5099|8080|3001)\b'
