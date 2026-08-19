@@ -99,10 +99,6 @@ _HOSTILE_VALUE_TOKENS = (
 )
 _URL_SCHEME_TOKENS = ("http://", "https://")
 _REQUEST_ERROR_CODES = {"invalid", "structure", "value", "not-supported"}
-_LOCAL_SUPPORTED_PARAMETER_EVIDENCE = {
-    "patient", "code", "status", "_lastupdated",
-    "_count", "_sort", "_summary", "context-id",
-}
 _SUPPORTED_SET_RE = re.compile(
     r"(?:^|[.!?]\s+)supported parameters?\s*:\s*([^.!?]+)",
     re.IGNORECASE,
@@ -872,24 +868,51 @@ def _rejection_grade(status, body, expected_status=400) -> str:
     return "C"
 
 
+_PARAMETER_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+
+
+def _declared_supported_set(match: re.Match) -> set[str]:
+    """The parameters a server declares it supports, or empty if what follows
+    "supported parameters:" is not a well-formed declaration.
+
+    A declaration is a **list**: comma-separated items, each one parameter
+    token. Prose in that position — "use _lastUpdated instead of datetime" —
+    is a suggestion wearing a declaration's clothes, and treating it as a
+    declaration would strip the very sentence
+    `_outcome_has_unsafe_last_updated_suggestion` exists to catch.
+
+    Deliberately not a check against our own parameter names: which
+    parameters a server supports is its own business (#525). Only the
+    *shape* is checked.
+    """
+    items = [item.strip(" \t`'\"") for item in match.group(1).split(",")]
+    if not all(_PARAMETER_TOKEN_RE.fullmatch(item) for item in items):
+        return set()
+    return {item.lower() for item in items}
+
+
 def _outcome_has_unsafe_last_updated_suggestion(body) -> bool:
     """Reject `_lastUpdated` as a proposed substitute for clinical datetime.
 
-    A supported-parameter list may name `_lastUpdated` factually. Any mention
-    elsewhere in any issue is ambiguous or unsafe correction evidence.
+    A supported-parameter list may name `_lastUpdated` factually — **any**
+    server's list, not only ours. A mention outside such a declaration is
+    ambiguous or unsafe correction evidence.
+
+    This used to strip the declaration only when it was byte-for-byte our own
+    eight parameters. `_lastUpdated` is one of ours, so the strip existed
+    purely to let *our* declaration past this check: every other server that
+    truthfully listed `_lastUpdated` tripped this heuristic on its own
+    legitimate sentence and was forced to C. See #525.
     """
     if not _is_operation_outcome(body):
         return False
 
-    def strip_exact_supported_set(match: re.Match) -> str:
-        declared = {
-            token.lower()
-            for token in re.findall(
-                r"[A-Za-z_][A-Za-z0-9_-]*", match.group(1))
-        }
-        if declared == _LOCAL_SUPPORTED_PARAMETER_EVIDENCE:
-            return ""
-        return match.group(0)
+    def strip_declared_supported_set(match: re.Match) -> str:
+        # A well-formed declaration names at least one parameter. Naming
+        # `_lastUpdated` among what you support is a statement of fact; the
+        # unsafe pattern is offering it as a substitute for a clinical date,
+        # which happens outside a declaration.
+        return "" if _declared_supported_set(match) else match.group(0)
 
     for issue in body.get("issue", []):
         if not isinstance(issue, dict):
@@ -898,14 +921,21 @@ def _outcome_has_unsafe_last_updated_suggestion(body) -> bool:
         text = details.get("text", "") if isinstance(details, dict) else ""
         if (isinstance(text, str)
                 and "_lastupdated" in _SUPPORTED_SET_RE.sub(
-                    strip_exact_supported_set, text).lower()):
+                    strip_declared_supported_set, text).lower()):
             return True
     return False
 
 
 def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
-    """A local rejection is corrective only if it identifies the bad key and
-    tells the caller which search parameters are supported."""
+    """A rejection is corrective if it identifies the bad key and tells the
+    caller which search parameters *this server* supports.
+
+    Which parameters those are is the implementing server's business. This
+    used to require the declared set to EQUAL ours — including `context-id`,
+    which no other FHIR server has — so no external implementation could score
+    A on error fidelity, and the grade measured resemblance to our
+    implementation rather than conformance to a contract. See #525.
+    """
     if not _is_operation_outcome(body):
         return False
     if _outcome_has_unsafe_last_updated_suggestion(body):
@@ -918,11 +948,7 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
         match = _SUPPORTED_SET_RE.search(text)
         if match is None:
             continue
-        declared = {
-            token.lower()
-            for token in re.findall(
-                r"[A-Za-z_][A-Za-z0-9_-]*", match.group(1))
-        }
+        declared = _declared_supported_set(match)
         parameter_lower = parameter.lower()
         remaining = text[:match.start()] + text[match.end():]
         parameter_token = re.escape(parameter_lower)
@@ -936,9 +962,12 @@ def _outcome_names_parameter_and_supported_set(body, parameter: str) -> bool:
             rf")\s*(?=[.!?]|$)",
             remaining.lower(),
         )
-        if (parameter_lower not in declared
-                and rejection is not None
-                and declared == _LOCAL_SUPPORTED_PARAMETER_EVIDENCE):
+        # Non-empty (the server actually named something), well-formed (the
+        # regex matched a declaration), and it does not list the parameter it
+        # just rejected — which would be self-contradictory.
+        if (declared
+                and parameter_lower not in declared
+                and rejection is not None):
             return True
     return False
 
