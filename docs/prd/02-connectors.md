@@ -1,6 +1,6 @@
 # PRD 2 — Upstream connectors
 
-> Owner brief: `.claude/agents/owner-connectors.md` · Process:
+> Owner brief (local only — `.claude/` is gitignored): `.claude/agents/owner-connectors.md` · Process:
 > `docs/2026-08-16-delivery-process.md` · Topology:
 > `docs/2026-08-16-system-topology.md`
 >

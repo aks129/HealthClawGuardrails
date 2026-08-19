@@ -1,6 +1,6 @@
 # PRD 3 — CareAgents consumer journey
 
-> Owner brief: `.claude/agents/owner-consumer-journey.md` · Process:
+> Owner brief (local only — `.claude/` is gitignored): `.claude/agents/owner-consumer-journey.md` · Process:
 > `docs/2026-08-16-delivery-process.md` · Topology:
 > `docs/2026-08-16-system-topology.md`
 >

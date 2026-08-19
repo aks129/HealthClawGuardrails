@@ -89,9 +89,24 @@ the reward is professional rather than financial:
   a spec other people implement is a real career artifact.
 - **A security hall of fame.** `SECURITY.md` exists; a "found this" list costs
   nothing and is the standard currency in this field.
-- **Conformance badge for their own server.** They run `$conformance` against
-  their FHIR deployment and get a scorecard they can publish. That is a carrot
-  *and* it is the set-2 evidence we need — the tester's reward is the artifact.
+- **~~Conformance badge for their own server.~~ Withdrawn, and this is why.**
+  The offer was: run `$conformance` against your FHIR deployment, publish the
+  scorecard. It cannot be honoured today and it fails twice. #525 — the probe
+  requires the declared supported-parameter set to *equal ours*, `context-id`
+  included, so a server that refuses a bad parameter perfectly correctively
+  still grades C, capping the deployment at B. And the runner script
+  (`scripts/guardrail_conformance.py`) puts the repo root on `sys.path` and
+  imports `r6.conformance`, so **a third party has to clone our application to
+  grade
+  their own server**. Every recruit would get a B for a reason that is our
+  defect, not their server's. It returns when both close.
+- **A finding credited by name in the specification.** The stronger offer, and
+  it is already real: `docs/specs/guardrail-spec-0.1.0-draft.md` publishes a
+  Credits section before anyone is in it, and says that *a finding that a
+  check passed without its subject ever running is worth more to us than a
+  feature.* So the invitation is: run the harness against your own server and
+  tell us where it grades you wrongly. The first external run is a finding we
+  credit — and #525 is the one we already know about.
 - **Fast, real review of first PRs.** #184 already promises this. Honouring it
   visibly is the retention mechanism.
 
@@ -114,9 +129,12 @@ Hire individually rather than through a managed crowd-testing service. The
 enterprise platforms in this space price on a platform fee plus an annual
 consumption commitment, which is the wrong weight for a six-set pilot. Each
 contractor gets one feature set and the charter that already exists for it in
-`.claude/agents/owner-*.md` — those briefs are the statement of work: the
-standing orders, the four artifacts, and the PHI constraints are already
-written.
+`.claude/agents/owner-*.md`. **Those briefs are not in the repository** —
+`.claude/` is gitignored on purpose, and `git ls-files .claude` returns
+nothing. They read like a statement of work and no contractor can open one.
+Publishing the six under `docs/`, or writing a contractor-facing SOW that does
+not depend on them, is a prerequisite to hiring anyone and is tracked
+separately.
 
 Run one set end to end first (**set 2, connectors** — smallest, two of four
 kinds already proven, a real deadline attached) to find out what the gate
