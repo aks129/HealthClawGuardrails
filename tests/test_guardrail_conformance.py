@@ -140,8 +140,6 @@ def test_local_contract_rejects_false_a_evidence():
         "Unsupported parameters: datetime, patient, code.",
         "The unsupported parameter datetime conflicts with patient and code.",
         "datetime is not a supported parameter; patient and code are examples.",
-        "datetime rejected. Supported parameters: patiently, barcode.",
-        "datetime rejected. Supported parameters: status-code, patientish.",
         "Supported parameters: patient, datetime, code.",
         "datetime is not invalid. Supported parameters: patient, code, status.",
         "datetime is not unsupported. Supported parameters: patient, code, status.",
@@ -150,8 +148,6 @@ def test_local_contract_rejects_false_a_evidence():
         "patient, code, status.",
         "datetime is unsupported. Use _lastUpdated instead. Supported parameters: "
         "patient, code, status, _lastUpdated, _count, _sort, _summary, context-id.",
-        "datetime is unsupported. Supported parameters: patient, code, status, "
-        "_lastUpdated, _count, _sort, _summary, context-id, invented-filter.",
     ):
         body = {
             "resourceType": "OperationOutcome",
@@ -162,6 +158,13 @@ def test_local_contract_rejects_false_a_evidence():
             }],
         }
         assert not _outcome_names_parameter_and_supported_set(body, "datetime")
+
+    # Three rows left this list in #525, and they are pinned as A in
+    # test_a_supported_set_that_is_not_ours_is_still_corrective below:
+    # "patiently, barcode", "status-code, patientish", and our own eight plus
+    # "invented-filter". Every one of them failed here for a single reason —
+    # the declared set was not byte-for-byte ours — which is the defect #525
+    # is about, not a property. What remains above is resemblance-independent.
 
     unrelated_warning = {
         "resourceType": "Bundle",
@@ -206,7 +209,12 @@ def test_local_contract_rejects_false_a_evidence():
             }],
         },
     }
-    assert not _has_outcome_warning({
+    # #525: this warning names the ignored parameter and declares the set the
+    # server supports, so it IS corrective. It used to fail here for one
+    # reason — {patient, code} is not our eight — which measured resemblance,
+    # not conformance. The hostile-sibling case below is the property this
+    # fixture was really guarding, and it still holds.
+    assert _has_outcome_warning({
         "resourceType": "Bundle",
         "entry": [safe_warning],
     }, "datetime")
@@ -1221,3 +1229,84 @@ def test_a_deployment_that_answers_nothing_scores_f(tenant_id, step_up_token):
                              _ctx(None, tenant_id, step_up_token))
     assert report.grade == "F"
     assert [r.key for r in report.results if r.passed] == []
+
+
+def test_a_supported_set_that_is_not_ours_is_still_corrective():
+    """#525. The property is that the refusal NAMES the supported parameters.
+
+    Which parameters those are is the implementing server's business. Until
+    this landed, `_outcome_names_parameter_and_supported_set` demanded the
+    declared set EQUAL ours — `context-id` included, which no other FHIR
+    server has — so no external implementation could score A on error
+    fidelity, and the grade measured resemblance to our implementation rather
+    than conformance to a contract.
+
+    These three are the cases that flipped. Each one is a server refusing
+    `datetime` correctively and declaring a set we do not share.
+    """
+    from r6.conformance.probes import (
+        _outcome_names_parameter_and_supported_set,
+    )
+
+    for corrective in (
+        # Names we cannot tell from real ones. We should not try: `context-id`
+        # looks invented from anyone else's side too.
+        "datetime rejected. Supported parameters: patiently, barcode.",
+        "datetime rejected. Supported parameters: status-code, patientish.",
+        # Our own eight plus one more. A superset used to fail.
+        "datetime is unsupported. Supported parameters: patient, code, status, "
+        "_lastUpdated, _count, _sort, _summary, context-id, invented-filter.",
+    ):
+        body = {
+            "resourceType": "OperationOutcome",
+            "issue": [{
+                "severity": "error",
+                "code": "invalid",
+                "details": {"text": corrective},
+            }],
+        }
+        assert _outcome_names_parameter_and_supported_set(body, "datetime"), (
+            "a server that names the bad parameter and declares its own "
+            "supported set is corrective: %s" % corrective)
+
+
+def test_a_declaration_must_be_a_list_not_a_suggestion():
+    """The second #525 mechanism, and the one the issue did not name.
+
+    `_outcome_has_unsafe_last_updated_suggestion` strips the declared-set
+    sentence before scanning for `_lastUpdated`, because listing it among
+    what you support is a fact rather than a suggestion. That strip used to
+    apply only when the set was exactly ours — so every other server that
+    truthfully listed `_lastUpdated` tripped the heuristic on its own
+    legitimate sentence and was forced to C by a second, independent path.
+
+    Generalising the strip must not swallow the thing it exists to catch:
+    prose in the declaration position is a suggestion wearing a
+    declaration's clothes.
+    """
+    from r6.conformance.probes import (
+        _outcome_has_unsafe_last_updated_suggestion,
+    )
+
+    def outcome(text):
+        return {
+            "resourceType": "OperationOutcome",
+            "issue": [{
+                "severity": "error",
+                "code": "invalid",
+                "details": {"text": text},
+            }],
+        }
+
+    # A list, from a server that is not us. Factual, so it does not trip.
+    assert not _outcome_has_unsafe_last_updated_suggestion(outcome(
+        "datetime rejected. Supported parameters: subject, _lastUpdated, "
+        "onset-date."))
+
+    # Prose in the same position, offering _lastUpdated as a substitute for a
+    # clinical date. Must still trip, and it is why the shape is checked.
+    assert _outcome_has_unsafe_last_updated_suggestion(outcome(
+        "Supported parameters: use _lastUpdated instead of datetime"))
+    assert _outcome_has_unsafe_last_updated_suggestion(outcome(
+        "datetime is unsupported. Use _lastUpdated instead. Supported "
+        "parameters: subject, _lastUpdated."))
