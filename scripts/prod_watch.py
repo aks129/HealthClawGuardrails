@@ -43,6 +43,13 @@ The build check (#258) closes a different blind spot with the same honesty
 limit: every other check here is equally satisfied by a months-old build, and
 this one proves WHICH ARTIFACT is deployed. It does not prove the code in that
 artifact works — a broken build carrying the right sha still passes it.
+
+The Telegram check (#537) has the same limit one layer down. It reads what an
+unauthenticated visitor reads — the landing page, and the home page only if
+that ever answers without a session — and fails on any live Telegram link or
+call to action there. The "connect →" tile #536 describes lives on /home
+behind sign-in, where this script cannot see it; what this guards is the
+public promise, and its detail says which pages it actually read.
 """
 from __future__ import annotations
 
@@ -51,13 +58,22 @@ import json
 import re
 import sys
 from datetime import datetime, timezone
+from html import unescape
 
 import requests
 
 G, R, Y, D, X = "\033[92m", "\033[91m", "\033[93m", "\033[2m", "\033[0m"
 
 HEALTHCLAW = "https://app.healthclaw.io"
-CAREAGENTS = "https://careagents-production.up.railway.app"
+# The origin people actually visit. Until #537 this was the Railway hostname,
+# which nobody visits, so a divergence between the two — DNS, routing, a
+# custom domain pinned to the wrong target — was invisible by construction
+# (#289): a green board said nothing about what a patient saw.
+CAREAGENTS = "https://careagents.cloud"
+# The Railway-issued hostname behind it. About to 308 everything except
+# /healthz to the origin, but /healthz there is what Railway's own health
+# check hits, so that one path stays watched under its own name.
+CAREAGENTS_RAILWAY = "https://careagents-production.up.railway.app"
 # Two MCP deployments by design: the real one is token-locked, the demo one is
 # unauthenticated but hard-pinned to a synthetic tenant.
 MCP_LOCKED = "https://mcp-server-production-5112.up.railway.app"
@@ -79,10 +95,45 @@ DEMO_PATIENTS = (
     "demo-ray",
 )
 BUILD_CHECK = "careagents: running the current build"
+TELEGRAM_CHECK = "careagents: telegram not advertised as live"
 # Same shape careagents/_build.py enforces on the way out. A "-dirty" marker
 # deliberately fails it: a build stamped from an uncommitted tree has no
 # provenance to assert.
 _SHA_RE = re.compile(r"[0-9a-f]{7,40}")
+
+# How a page advertises Telegram. A t.me (or tg://) link anywhere is a link,
+# full stop. Short of one, a call to action is the surface's name and an
+# inviting verb in the SAME piece of copy: "Telegram — connect →" on a tile,
+# "Open in Telegram" on a button. The piece of copy is what sits between two
+# block-closing tags, so a neighbouring tile's "connect →" cannot vouch for
+# or against Telegram, and "coming soon" on the Telegram tile means exactly
+# that. Script and style bodies are not copy anyone reads.
+_TG_LINK_RE = re.compile(r"(?i)\bt\.me/|\btg://")
+_TG_NAME_RE = re.compile(r"(?i)\btelegram\b")
+_TG_CTA_RE = re.compile(r"(?i)\b(?:open|connect|start|chat|join|pair|launch)\b")
+_BLOCK_END_RE = re.compile(
+    r"(?i)</(?:div|li|p|td|th|tr|a|button|h[1-6]|section|article|label|dt|dd)\s*>")
+_TAG_RE = re.compile(r"<[^>]*>")
+_SCRIPT_RE = re.compile(r"(?is)<(script|style)\b.*?</\1\s*>")
+
+
+def _telegram_advertised(html: str) -> str:
+    """How `html` presents Telegram as a live surface, or "" if it does not."""
+    if _TG_LINK_RE.search(html):
+        return "a t.me link"
+    # Source newlines are formatting, not boundaries: the real tile puts
+    # "Telegram" and "connect →" on different lines of the template. Collapse
+    # them first, then let only a block-closing tag end a piece of copy.
+    text = " ".join(_SCRIPT_RE.sub(" ", html).split())
+    text = _TAG_RE.sub(" ", _BLOCK_END_RE.sub("\n", text))
+    for line in unescape(text).splitlines():
+        line = " ".join(line.split())
+        if not _TG_NAME_RE.search(line) or "coming soon" in line.lower():
+            continue
+        if _TG_CTA_RE.search(line):
+            return f"a live call to action ({line[:60]!r})"
+    return ""
+
 
 results: list[tuple[str, bool, str]] = []
 
@@ -328,11 +379,67 @@ def run(timeout: float, expect_sha: list[str]) -> int:
                 "auto-deploy — redeploy per RELEASING.md §4.")
             build_info.update(asserted=True, ok=ok)
 
+    # The Railway hostname, readiness only: everything user-facing above and
+    # below is asked of the origin, because the origin is what a user gets.
+    # Its build marker rides along in the detail — shown, not asserted — so a
+    # deployment split between the two hosts is visible in the report rather
+    # than assumed away.
+    r = get(f"{CAREAGENTS_RAILWAY}/healthz", timeout)
+    rbody = {}
+    if getattr(r, "status_code", None) in (200, 503):
+        try:
+            rbody = r.json() or {}
+        except ValueError:
+            pass
+    check("careagents (railway host): ready (db reachable)",
+          getattr(r, "status_code", None) == 200 and rbody.get("accounts") is True,
+          f"status={getattr(r, 'status_code', r)} accounts={rbody.get('accounts')}"
+          f" build={str(rbody.get('build') or 'unknown').lower()}")
+
     r = get(f"{CAREAGENTS}/", timeout)
     html = getattr(r, "text", "") or ""
-    check("careagents: landing renders",
-          getattr(r, "status_code", None) == 200 and "/auth" in html,
-          str(getattr(r, "status_code", r)))
+    landing_status = getattr(r, "status_code", r)
+    landing_read = landing_status == 200
+    check("careagents: landing renders", landing_read and "/auth" in html,
+          str(landing_status))
+
+    # --- Telegram (#537) ------------------------------------------------------
+    # Twelve checks were green while the Telegram surface had been dead since
+    # June (#536): every check asked whether a process answers, and none asked
+    # whether a promise made to a user could be kept. This one cannot see the
+    # bot either — there is no token here, and a getMe would only prove a bot
+    # exists, not that anything services it — so it watches the promise
+    # instead: no live Telegram link or call to action on any page an
+    # unauthenticated visitor can read. A tile marked "coming soon" passes.
+    #
+    # The landing body is the one already fetched; a landing that was not
+    # read is not scanned, and not scanned is a failure, not a pass. /home is
+    # fetched without following its redirect: without a session it answers
+    # 302 to /auth, and following that would scan the sign-in page under
+    # /home's name.
+    pages = {"/": html} if landing_read else {}
+    r = get(f"{CAREAGENTS}/home", timeout, allow_redirects=False)
+    home_code = getattr(r, "status_code", None)
+    if home_code == 200:
+        pages["/home"] = getattr(r, "text", "") or ""
+    live = ""
+    for path, page in pages.items():
+        how = _telegram_advertised(page)
+        if how:
+            live = f"{path} shows {how}"
+            break
+    if not pages:
+        detail = f"landing not readable ({landing_status}), nothing was scanned"
+    elif live:
+        detail = (f"{live} — Telegram pairing is a dead end (#536) until its "
+                  "fix deploys; a tile marked coming soon passes")
+    else:
+        detail = ("no live Telegram link or call to action on "
+                  + ", ".join(pages)
+                  + ("" if "/home" in pages else
+                     f"; /home not scanned ({getattr(r, 'status_code', r)} "
+                     "without a session)"))
+    check(TELEGRAM_CHECK, bool(pages) and not live, detail)
 
     # The sign-in page is the front door; #181 broke exactly this and nothing
     # noticed. Codes are 8 digits — an input that cannot hold 8 is a dead door.
