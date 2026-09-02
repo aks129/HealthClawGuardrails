@@ -129,7 +129,7 @@
     const tile = (cls, label, n) => `
         <div class="stat ${cls}"><div class="num"${notEvaluated
           ? ' aria-label="not evaluated" title="not evaluated"' : ''}>${
-          notEvaluated ? '—' : (n || 0)}</div>
+          notEvaluated ? '—' : esc(n || 0)}</div>
           <div class="label">${label}</div></div>`;
     const stats = `
       <div class="stats${notEvaluated ? ' unevaluated' : ''}">

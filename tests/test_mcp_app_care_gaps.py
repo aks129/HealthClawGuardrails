@@ -132,6 +132,7 @@ def test_every_interpolated_string_is_still_escaped():
     assert "esc(consumer.unevaluated_note)" in body
     assert "${consumer.note}" not in body
     assert "esc(consumer.note)" in body
+    assert "esc(n || 0)" in body  # the tile counts (engine ints, still escaped)
 
 
 # --- #535, the client half --------------------------------------------------

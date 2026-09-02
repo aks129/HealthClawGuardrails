@@ -3420,16 +3420,12 @@ def mcp_app_care_gaps():
     `care_gaps` MCP tool via `_meta.ui.resourceUri`. Layout ported from
     SmartHealthConnect's care-gaps view (archived); data path rebuilt on
     the engine's own operation so redaction + audit apply by construction.
-
-    `not_evaluated_reasons` is the engine's own list of the `unevaluated`
-    values that mean no record was read (r6/caregaps/report.py). The page
-    branches on that family — placeholders, no cards — and must not keep a
-    copy of it (#538).
     """
     tenant_id = _mcp_app_tenant()
     html = render_template(
         'mcp_apps/care_gaps.html',
         tenant_id=tenant_id,
+        # The engine's own "nothing was read" list; the page must not copy it (#538).
         not_evaluated_reasons=_caregaps_caller_reasons(),
     )
     resp = Response(html, mimetype='text/html')
