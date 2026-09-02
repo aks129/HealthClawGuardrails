@@ -415,6 +415,40 @@ def test_post_confirming_real_allergy_succeeds(client, app, tenant_headers,
         assert _nka_answer(qr) is not True   # NKA never inferred
 
 
+def test_post_payload_is_final_before_the_confirmation_is_issued(
+        client, app, tenant_headers, auth_headers, monkeypatch):
+    """The confirmation is the human's signature over the payload; the
+    payload must not move after it is minted (human-gate spec §9 R2, #528).
+
+    Snapshot payload_json at the instant issue_confirmation() runs and
+    compare it with what is stored after the request. Before the fix the
+    review route appended reviewed_qr_id AFTER minting, so the two differed
+    and the ledger could not say what was approved."""
+    import r6.actions.review as review
+    from r6.actions import confirmations
+
+    tenant = tenant_headers['X-Tenant-Id']
+    _seed(app, tenant, [PATIENT, MED_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    seen = {}
+
+    def _snapshotting_issue(aid, approved_via, ttl_minutes):
+        seen['payload_json'] = db.session.get(ProposedAction, aid).payload_json
+        return confirmations.issue_confirmation(aid, approved_via, ttl_minutes)
+
+    monkeypatch.setattr(review, 'issue_confirmation', _snapshotting_issue)
+
+    resp = _post(client, auth_headers, action_id,
+                 {'med-0': 'yes', 'nka': 'true'})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        assert action.payload['reviewed_qr_id']           # hand-off kept
+        assert seen['payload_json'] == action.payload_json
+
+
 def test_post_requires_step_up(client, app, tenant_headers, auth_headers):
     _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)

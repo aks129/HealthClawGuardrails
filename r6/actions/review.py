@@ -442,11 +442,14 @@ def review_submit(action_id):
     db.session.add(qr_row)
     db.session.flush()          # assign qr_row.id
 
-    # (6) Consent record for the review approval + hand-off marker for Task 8.
-    issue_confirmation(action_id, approved_via='review-page', ttl_minutes=15)
+    # (6) Hand-off marker for Task 8 goes into the payload FIRST, then the
+    # consent record. The confirmation is the human's signature over the
+    # payload as it stands, and payload_json is sealed once it exists (#528)
+    # — the other order minted the signature and then changed what it signed.
     payload = action.payload
     payload['reviewed_qr_id'] = qr_row.id
     action.payload_json = json.dumps(payload)
+    issue_confirmation(action_id, approved_via='review-page', ttl_minutes=15)
     db.session.commit()
 
     record_audit_event(
