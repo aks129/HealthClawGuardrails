@@ -157,9 +157,12 @@ guide's "on the web, or by text" becomes "on the web". careagents.cloud is the s
 
 ### D8 — Blank resource ids (unanimous, H)
 
-Refuse a blank id and a non-string id as `invalid_id` (`r6/fasten/ingester.py:401-405`);
-an absent id gets a UUID. Pin all three. Fabricating an id for a blank one turns an upsert
-into an append and makes every re-ingest a duplicate row: the #509 defect shape.
+Refuse a blank id as `invalid_id` (`r6/fasten/ingester.py:401-405`, already the case);
+an absent id gets a UUID (already the case); an integer id keeps coercing to a string
+(pre-existing, live on the Fasten connector; CTO's dissent-risk); any other non-string
+id (bool, float, object, list) is `invalid_id`, since `str()` of a bool or float passes
+the id pattern today. Pin all four. Fabricating an id for a blank one turns an upsert into
+an append and makes every re-ingest a duplicate row: the #509 defect shape.
 
 ### D9 — Vital-signs without `effective[x]` (Interop + Clinical, H)
 
