@@ -2082,6 +2082,9 @@ def cfg():
                        "OPENAI_API_KEY": "k",
                        "HEALTHCLAW_MINT_SECRET": "mint-secret",
                        "FASTEN_PUBLIC_KEY": "pub123",
+                       # Real-record sources are closed by default (D3);
+                       # the connector tests exercise the open flows.
+                       "CARE_REAL_RECORDS": "on",
                        "CARE_TELEGRAM_BOT": "carebot",
                        "CARE_IMESSAGE_HANDLE": "im-test-handle"})
 
@@ -2742,12 +2745,13 @@ def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
     from careagents.app import create_app
     from careagents.config import Config
     # default (no CARE_WEARABLES_ENABLED) → soon, no client call
-    assert connectors.start("wearable", "apple", svc.cfg, FakeClient()) == {
-        "soon": True}
+    assert connectors.start("wearable", "apple", svc.cfg, FakeClient(),
+                            real_records=True) == {"soon": True}
     # enabled → live connect URL routed through HealthClaw wearables OAuth
     cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
                        "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
-                       "CARE_WEARABLES_ENABLED": "1"})
+                       "CARE_WEARABLES_ENABLED": "1",
+                       "CARE_REAL_RECORDS": "on"})
     a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
     a.config["TESTING"] = True
     c = a.test_client()
@@ -4116,12 +4120,16 @@ def test_delete_confirmation_is_not_a_form_or_native_dialog():
 
 def test_hub_dialog_selector_contract():
     """home.js addresses these by id; a template rename would break the flow at
-    runtime only, with no server-side signal."""
+    runtime only, with no server-side signal.
+
+    `tg-surface` / `tg-state` are deliberately absent: the Telegram tile is
+    "coming soon" for the beta (#536, D6) and home.js guards its handler with
+    `if (tg)`. Put them back here when the surface is serviced again."""
     for sel in ('id="provider-picker"', 'id="picker-cancel"', 'id="picker-rows"',
                 'id="connect-msg"', 'id="surfaces-msg"', 'id="agents"',
                 'id="code-card"', 'id="pair-code"', 'id="copy-code"',
                 'id="copy-state"', 'id="code-instructions"', 'id="code-done"',
-                'id="tg-state"', 'id="im-state"', 'id="delete-modal"',
+                'id="im-state"', 'id="delete-modal"',
                 'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
                 'id="delete-cancel"'):
         assert sel in _HOME_HTML, sel
@@ -4499,3 +4507,268 @@ def test_show_lab_timeline_with_no_match_emits_no_card_and_forbids_absence(
     assert events == []
     assert out["chart_shown"] is False
     assert "not the same as" in out["note"]
+
+
+# --- beta posture (council ruling 2026-09-02, D3 / D6 / D7) -------------------
+# The beta admits strangers. Real-record sources are closed by default, the
+# Telegram surface is not serviced, the hub says it is a beta, and the Railway
+# hostname is not a second front door.
+
+def _beta_app(svc, **env):
+    """An app whose Config carries only what the test names — so the DEFAULTS
+    of the new switches are what get exercised, not the fixture's `on`."""
+    from careagents.app import create_app
+    cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                       "CARE_RP_ID": "localhost",
+                       "CARE_ORIGIN": "http://localhost",
+                       "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
+                       "FASTEN_PUBLIC_KEY": "pub123",
+                       "CARE_WEARABLES_ENABLED": "1",
+                       **env})
+    a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
+    a.config["TESTING"] = True
+    return a
+
+
+_REAL_RECORD_TILES = ("fasten", "wearable", "direct")
+
+
+def test_real_records_switch_defaults_to_off_and_parses_the_allowlist():
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    # Unset is closed. A deployment that forgets the variable must not open
+    # real records to strangers.
+    assert Config(env=base).real_records == "off"
+    assert Config(env=base).real_records_allowlist == frozenset()
+    for raw, expected in (("off", "off"), ("ALLOWLIST", "allowlist"),
+                          (" on ", "on")):
+        assert Config(env={**base, "CARE_REAL_RECORDS": raw}
+                      ).real_records == expected
+    # Emails are case-folded and whitespace-trimmed; empty entries vanish.
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                      "CARE_REAL_RECORDS_ALLOWLIST":
+                          " Dr.Who@Example.org ,, second@example.org,"})
+    assert cfg.real_records_allowlist == frozenset(
+        {"dr.who@example.org", "second@example.org"})
+    # A misspelling must not fall through to some default. Refuse to boot.
+    for bad in ("yes", "1", "open", "true"):
+        with pytest.raises(ConfigError):
+            Config(env={**base, "CARE_REAL_RECORDS": bad})
+
+
+def test_real_records_open_for_follows_the_switch():
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    off = Config(env={**base, "CARE_REAL_RECORDS": "off",
+                      "CARE_REAL_RECORDS_ALLOWLIST": "a@example.org"})
+    # `off` is off for everyone, including an address on the list: the list
+    # is consulted only in allowlist mode, never as a back door.
+    assert off.real_records_open_for("a@example.org") is False
+    on = Config(env={**base, "CARE_REAL_RECORDS": "on"})
+    assert on.real_records_open_for("anyone@example.org") is True
+    listed = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                         "CARE_REAL_RECORDS_ALLOWLIST": "Dr.Who@Example.org"})
+    assert listed.real_records_open_for("dr.who@example.org") is True
+    assert listed.real_records_open_for("DR.WHO@EXAMPLE.ORG") is True
+    assert listed.real_records_open_for(" dr.who@example.org ") is True
+    assert listed.real_records_open_for("someone.else@example.org") is False
+    assert listed.real_records_open_for("") is False
+    assert listed.real_records_open_for(None) is False
+
+
+def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
+        svc, monkeypatch):
+    # Fasten key set and wearables enabled, so without the switch every
+    # real-record tile would be live. The switch is unset -> off.
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile]["tier"] == "soon", tile
+        assert "requires_consent" not in cat[tile], tile
+        assert cat[tile]["note"] == "coming soon", tile
+    # Sample records are the beta's whole track; they stay live.
+    assert cat["sample"]["tier"] == "live"
+    body = c.get("/home").get_data(as_text=True)
+    for tile in _REAL_RECORD_TILES:
+        start = body.index(f'data-connector="{tile}"')
+        opening = body[body.rindex("<button", 0, start):body.index(">", start)]
+        assert 'data-soon="1"' in opening, tile
+        assert "data-consent" not in opening, tile
+        assert "tier-soon" in opening, tile
+    assert "Not open in this beta" in body
+
+
+def test_real_record_connect_posts_are_refused_with_503_when_off(
+        svc, monkeypatch):
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    for tile, payload in (("fasten", {"consent": True}),
+                          ("wearable", {"provider": "apple", "consent": True}),
+                          ("direct", {"consent": True})):
+        r = c.post(f"/api/connections/{tile}", json=payload)
+        assert r.status_code == 503, tile
+        assert "beta" in r.get_json()["error"], tile
+    with svc.session() as s:
+        from careagents.models import Connection
+        assert s.query(Connection).count() == 0
+    # The synthetic track is untouched by the switch.
+    assert c.post("/api/connections/sample").status_code == 200
+
+
+def test_allowlisted_account_sees_and_can_use_real_record_tiles(
+        svc, monkeypatch):
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="Dr.Who@Example.org")
+    # Listed, in a different case from the list entry.
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="dr.who@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    assert cat["fasten"]["tier"] == "live"
+    assert cat["wearable"]["tier"] == "live"
+    assert cat["direct"]["tier"] == "import"
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile].get("requires_consent") is True, tile
+    r = c.post("/api/connections/fasten", json={"consent": True})
+    assert r.status_code == 200 and r.get_json()["status"] == "pending"
+    # Not listed: same deployment, tiles closed, POST refused.
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="stranger@example.org")
+    cat = {m["id"]: m for m in
+           other.get("/api/connections/catalog").get_json()["connectors"]}
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile]["tier"] == "soon", tile
+    assert other.post("/api/connections/fasten",
+                      json={"consent": True}).status_code == 503
+
+
+def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
+    c = _beta_app(svc, CARE_REAL_RECORDS="on").test_client()
+    _login(c, svc, monkeypatch, email="anyone@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    assert cat["fasten"]["tier"] == "live"
+    assert c.post("/api/connections/direct",
+                  json={"consent": True}).status_code == 200
+
+
+def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
+    # The one clinician already onboarded keeps working when production runs
+    # `allowlist`: refresh, poll, upload and delete on an EXISTING connection
+    # never consult the switch.
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    fasten = c.post("/api/connections/fasten",
+                    json={"consent": True}).get_json()
+    direct = c.post("/api/connections/direct",
+                    json={"consent": True}).get_json()["id"]
+    tenant = fasten["connect_url"].rsplit("/connect/", 1)[1]
+
+    monkeypatch.setattr(cfg, "real_records", "off")
+
+    assert c.post("/api/connections/fasten",
+                  json={"consent": True}).status_code == 503
+    r = c.post(f"/api/connections/{fasten['id']}/refresh")
+    assert r.status_code == 200 and r.get_json()["status"] == "reauth"
+    assert c.get(f"/api/connections/{tenant}/poll").status_code == 200
+    r = c.post(f"/api/connections/{direct}/upload", data=json.dumps(
+        {"resourceType": "Bundle", "type": "collection", "entry": []}),
+        content_type="application/fhir+json")
+    assert r.status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+
+
+def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,
+                                                          monkeypatch):
+    # #536: no webhook and no poller since June, so the tile was a dead end
+    # for a stranger. It stays visible so nobody wonders where it went, but it
+    # is not a control: no id for home.js to bind, no "connect" affordance.
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    body = c.get("/home").get_data(as_text=True)
+    assert 'id="tg-surface"' not in body
+    assert 'id="tg-state"' not in body
+    start = body.index("<b>Telegram</b>")
+    tile = body[body.rindex("<div", 0, start):body.index("</div>", start)]
+    assert "soon" in tile and "coming soon" in tile
+    assert "connect" not in tile
+
+
+def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
+                                                            monkeypatch):
+    c = app.test_client()
+    landing = c.get("/").get_data(as_text=True)
+    assert 'class="beta-banner"' in landing
+    _login(c, svc, monkeypatch)
+    home = c.get("/home").get_data(as_text=True)
+    assert 'class="beta-banner"' in home
+    # One sentence, under fifteen words, and it says the two things a
+    # stranger needs: what the records are, and that it will break.
+    sentence = re.search(r'class="beta-banner"[^>]*>(.*?)</p>', home,
+                         re.S).group(1)
+    words = re.sub(r"<[^>]+>", "", sentence).split()
+    assert len(words) < 15, words
+    assert "Beta" in sentence and "synthetic" in sentence
+
+
+def test_no_canonical_host_means_no_redirect(app):
+    # Local, dev and this suite: unset is a no-op, whatever the Host header.
+    c = app.test_client()
+    r = c.get("/", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code == 200
+    r = c.get("/healthz", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code in (200, 503)
+
+
+def test_the_railway_hostname_308s_to_the_canonical_host(svc):
+    # #264 / D7: careagents.cloud is the sole origin. 308, not 301, so a POST
+    # that lands on the wrong host is replayed as a POST, not downgraded.
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    internal = "https://careagents-production.up.railway.app"
+    r = c.get("/home?x=1&y=two", base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/home?x=1&y=two"
+    r = c.get("/auth", base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/auth"
+    r = c.post("/api/auth/email", json={"email": "x@example.org"},
+               base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/api/auth/email"
+    # Hostnames are case-insensitive; the canonical host itself is served.
+    assert c.get("/", base_url="https://careagents.cloud").status_code == 200
+    assert c.get("/", base_url="https://CareAgents.Cloud").status_code == 200
+    # The Location is built from config, never from the request. Deliberately
+    # a hostname with a port: nothing of it may survive into the redirect.
+    r = c.get("/home", base_url="http://evil.example:8080")
+    assert r.headers["Location"] == "https://careagents.cloud/home"
+
+
+def test_healthz_is_exempt_from_the_canonical_host_redirect(svc):
+    # Railway's health check reaches the container on its internal hostname.
+    # A 308 there would mark every deploy unhealthy.
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    r = c.get("/healthz", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code in (200, 503)
+    assert "Location" not in r.headers
+
+
+def test_the_tester_guide_no_longer_offers_text_as_a_surface():
+    # D6: the guide's "on the web, or by text" became "on the web". Telegram
+    # is not serviced in the beta, and the guide is what a tester reads first.
+    import pathlib
+    guide = pathlib.Path(__file__).resolve().parents[1] / "docs" / (
+        "beta-tester-guide.md")
+    text = guide.read_text(encoding="utf-8")
+    assert "on the web, or by text" not in text
+    assert "on the web." in text
+    assert "Telegram" not in text.split("## Where your data goes")[0], (
+        "the guide's opening must not offer Telegram as a way in")

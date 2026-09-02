@@ -11,7 +11,7 @@ to. So this document is blunt about the limits.
 ## What this is
 
 CareAgents lets you connect your own health records and talk to an AI agent
-about them — on the web, or by text.
+about them — on the web.
 
 Underneath it sits **HealthClaw Guardrails**, an open-source safety layer
 between AI agents and health data. The guardrails run on the server, not in
@@ -90,11 +90,14 @@ your whole file, not continuously.
 
 ### A real limitation, stated plainly
 
-If you use the **Telegram or iMessage** surfaces: consumer chat apps are not
-encrypted medical channels. Messages pass through Apple's or Telegram's
-infrastructure under their terms, not under a healthcare agreement. You're
+If you use the **iMessage** surface (where it's offered): consumer chat apps
+are not encrypted medical channels. Messages pass through Apple's
+infrastructure under its terms, not under a healthcare agreement. You're
 choosing to reach your own data over a consumer channel. That's a legitimate
 choice — but make it knowingly. The web app doesn't have this exposure.
+
+The **Telegram** tile in the hub says "coming soon" and means it: that surface
+is not serviced in this beta.
 
 ---
 

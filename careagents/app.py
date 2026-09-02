@@ -166,6 +166,27 @@ def create_app(config: Config | None = None,
 
     turns: dict[str, deque] = defaultdict(deque)
 
+    # --- canonical host (#264, D7) -------------------------------------------
+
+    @app.before_request
+    def _enforce_canonical_host():
+        # careagents.cloud is the sole origin. A request arriving under any
+        # other Host header (the platform's own *.up.railway.app name) is
+        # sent to the same path and query on the canonical host — 308, so a
+        # POST is replayed as a POST rather than downgraded to a GET. The
+        # target is built from config, never from the request, so a spoofed
+        # Host cannot steer it. `/healthz` is exempt: the platform's health
+        # check arrives on the internal hostname, and a 308 there would mark
+        # every deploy unhealthy. Unset means no redirect (local, CI).
+        if not cfg.canonical_host or request.path == "/healthz":
+            return None
+        if request.host.lower() == cfg.canonical_host:
+            return None
+        target = f"https://{cfg.canonical_host}{request.path}"
+        if request.query_string:
+            target += "?" + request.query_string.decode("utf-8", "replace")
+        return redirect(target, code=308)
+
     # --- auth plumbing -------------------------------------------------------
 
     def current_account():
@@ -232,7 +253,8 @@ def create_app(config: Config | None = None,
             terms_url=f"{cfg.healthclaw_base}/terms",
             privacy_url=f"{cfg.healthclaw_base}/privacy",
             advisors=advisors.catalog(),
-            catalog=connectors.catalog(cfg))
+            catalog=connectors.catalog(
+                cfg, real_records=cfg.real_records_open_for(acct.email)))
 
     @app.post("/logout")
     def logout():
@@ -341,14 +363,20 @@ def create_app(config: Config | None = None,
     @app.get("/api/connections/catalog")
     @login_required
     def connections_catalog():
-        return jsonify({"connectors": connectors.catalog(cfg)})
+        acct = current_account()
+        return jsonify({"connectors": connectors.catalog(
+            cfg, real_records=cfg.real_records_open_for(acct.email))})
 
     @app.post("/api/connections/<connector_id>")
     @login_required
     def add_connection(connector_id):
         acct = current_account()
         body = request.get_json(silent=True) or {}
-        plan = connectors.start(connector_id, body.get("provider"), cfg, hc)
+        # New connections only (D3): refresh, poll, upload and delete on an
+        # existing connection never consult the real-records switch.
+        plan = connectors.start(
+            connector_id, body.get("provider"), cfg, hc,
+            real_records=cfg.real_records_open_for(acct.email))
         if plan.get("error"):
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):

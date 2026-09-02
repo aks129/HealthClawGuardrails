@@ -68,6 +68,32 @@ class Config:
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # Real-record sources (Fasten, wearables, direct FHIR) for the beta
+        # (council ruling 2026-09-02, D3). Gates NEW connections only: an
+        # existing connection keeps refreshing, polling and deleting whatever
+        # this says. `off` renders those tiles "coming soon" and refuses the
+        # connect POST; `allowlist` opens them to the account emails in
+        # CARE_REAL_RECORDS_ALLOWLIST (comma-separated, case-insensitive);
+        # `on` opens them to everyone. Unset is `off`: a deployment that
+        # forgets the variable must not open real records to strangers.
+        self.real_records = (
+            e.get("CARE_REAL_RECORDS") or "off").strip().lower()
+        if self.real_records not in ("off", "allowlist", "on"):
+            raise ConfigError(
+                "CARE_REAL_RECORDS must be one of off, allowlist, on "
+                f"(got {self.real_records!r})")
+        self.real_records_allowlist = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_REAL_RECORDS_ALLOWLIST") or "").split(",")
+            if x.strip())
+        # Sole public hostname (#264, D7). When set, a request whose Host
+        # header differs is answered 308 to the same path and query on this
+        # host, so the platform's own *.up.railway.app name is not a second
+        # front door with its own passkey origin. `/healthz` is exempt (the
+        # platform's health check arrives on the internal hostname). Unset
+        # means no redirect, which is what local and CI want.
+        self.canonical_host = (
+            e.get("CAREAGENTS_CANONICAL_HOST") or "").strip().lower()
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
@@ -176,3 +202,13 @@ class Config:
         if self.anthropic_api_key or self.anthropic_oauth_token:
             return "anthropic"
         return "openai"
+
+    def real_records_open_for(self, email) -> bool:
+        """May this account START a real-record connection? See
+        CARE_REAL_RECORDS above. The allowlist is consulted only in
+        `allowlist` mode — never as a back door around `off`."""
+        if self.real_records == "on":
+            return True
+        if self.real_records == "allowlist":
+            return (email or "").strip().lower() in self.real_records_allowlist
+        return False

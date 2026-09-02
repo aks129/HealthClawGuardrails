@@ -108,6 +108,19 @@ class TestPrivacyReconciliation:
         # Honest comparative point.
         assert 'exceeds the security posture of typical consumer health' in body
 
+    def test_careagents_beta_tester_tenant_and_deletion_stated(self, client):
+        # Council ruling 2026-09-02 (D3): two sentences, derived from what the
+        # code does, not from what we would like it to do. The synthetic
+        # tenant is r6/seed.py's built-in set; deletion is careagents'
+        # DELETE /api/connections/<id> -> /internal/purge-tenant, which purges
+        # and commits in the same request and keeps the PHI-free audit rows.
+        body = client.get('/privacy').get_data(as_text=True)
+        assert 'CareAgents beta testers' in body
+        assert 'one fictional sample patient' in body
+        assert 'nothing else about you' in body
+        assert 'purges those records immediately' in body
+        assert 'audit trail' in body
+
 
 # ---------------------------------------------------------------------------
 # 3. Bot /start risk disclosure (source-content check)

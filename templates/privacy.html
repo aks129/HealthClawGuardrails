@@ -126,6 +126,13 @@
         You control all retention. The software does not phone home. No data leaves your infrastructure unless
         you configure an upstream FHIR server or external service.
       </p>
+      <h3>CareAgents beta testers</h3>
+      <p>
+        A beta tester's tenant holds one fictional sample patient &mdash; one condition, three observations, one
+        medication and an intake questionnaire &mdash; plus your chat with the agent and anything you approve there, and nothing else about you.
+        Deleting it from the CareAgents hub purges those records immediately, in the same request, and reports the
+        row count back; the PHI-free audit trail, including the deletion itself, is retained.
+      </p>
 
       <h2 id="third-party">5. Third-Party Services</h2>
       <p>The software may connect to the following external services, depending on configuration:</p>
