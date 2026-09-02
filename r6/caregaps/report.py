@@ -56,6 +56,19 @@ _UNKNOWN_DEMOGRAPHICS = (
     "your date of birth and sex were not available to this check")
 
 
+def caller_reasons():
+    """The `unevaluated` values that mean the rules never read a record.
+
+    For a caller that must branch on the family rather than the reason. The
+    MCP App page draws these with no counts and no cards, because every
+    number on this path is an artefact of the call (#538) — and it must not
+    keep its own copy of the list, or the engine adds a reason and the page
+    goes back to drawing "0 Due" for it. Sorted so the injected list is
+    stable.
+    """
+    return sorted(_NOT_EVALUATED_NOTES)
+
+
 def build_caregaps_summary(results):
     buckets = {"due": 0, "up_to_date": 0, "not_applicable": 0, "indeterminate": 0}
     gaps = []

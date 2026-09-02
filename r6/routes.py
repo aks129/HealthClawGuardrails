@@ -71,6 +71,7 @@ from r6.curatr import (
     persist_curation_state as _persist_curation_state,
 )
 from r6.health_context import get as _hc_get
+from r6.caregaps.report import caller_reasons as _caregaps_caller_reasons
 
 _curatr_engine = CuratrEngine()
 
@@ -3419,11 +3420,17 @@ def mcp_app_care_gaps():
     `care_gaps` MCP tool via `_meta.ui.resourceUri`. Layout ported from
     SmartHealthConnect's care-gaps view (archived); data path rebuilt on
     the engine's own operation so redaction + audit apply by construction.
+
+    `not_evaluated_reasons` is the engine's own list of the `unevaluated`
+    values that mean no record was read (r6/caregaps/report.py). The page
+    branches on that family — placeholders, no cards — and must not keep a
+    copy of it (#538).
     """
     tenant_id = _mcp_app_tenant()
     html = render_template(
         'mcp_apps/care_gaps.html',
         tenant_id=tenant_id,
+        not_evaluated_reasons=_caregaps_caller_reasons(),
     )
     resp = Response(html, mimetype='text/html')
     resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
