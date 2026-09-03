@@ -1038,6 +1038,17 @@ def create_app(config: Config | None = None,
                            "records. Nothing has been approved — please open "
                            "the form again to check before approving, because "
                            "approving twice could send it twice.")
+    #: Distinct from BOTH of the above, and the reason it is a third string
+    #: rather than a reuse of either: something answered the review POST and
+    #: nobody could read the answer. That POST is what records the approval
+    #: (#528), so "nothing has been approved" is a claim this path cannot
+    #: make — and neither is "your review was saved". Say the one thing that
+    #: is true, and leave the way back open: a second approval cannot send
+    #: the request twice, because the review route refuses a resubmit once a
+    #: confirmation exists (409) and the claim transition has a single winner.
+    _REVIEW_UNRESOLVED = ("We couldn't tell whether your review was saved. "
+                          "Reload this page to see where this request stands "
+                          "before approving again.")
 
     @app.get("/review/<agent_id>/<action_id>")
     @login_required
@@ -1090,6 +1101,20 @@ def create_app(config: Config | None = None,
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
+        except HealthClawUnconfirmed:
+            # Something answered the review POST and the answer was not
+            # readable. Caught FIRST because it is a subclass: the arm below
+            # says nothing was approved, which this path cannot know — the
+            # review route mints the confirmation, so if the engine did
+            # receive this, the approval exists. `confirmed: null` is the
+            # answer the page already has a branch for (#220), and it is the
+            # honest one here: not saved, not unsaved.
+            logger.exception("review submit unreadable for %s", action_id)
+            return jsonify({
+                "error": "review_unavailable",
+                "confirmed": None,
+                "message": _REVIEW_UNRESOLVED,
+            }), 502
         except HealthClawError:
             # The decisions are gone and nobody told the patient. Ownership
             # was already confirmed, so this is not a permission answer.

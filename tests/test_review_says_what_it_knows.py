@@ -402,20 +402,40 @@ def test_awaiting_confirmation_is_not_reported_as_an_unknown_outcome(page):
         "recorded approval as an outcome nobody can determine")
 
 
-def test_the_awaiting_confirmation_arm_never_invites_a_second_approval(page):
-    """MUTATION: drop the "will not resend" clause -> red.
+def test_the_awaiting_confirmation_arm_says_only_what_the_status_carries(page):
+    """Rewritten from `..._never_invites_a_second_approval`, which pinned
+    "recorded" and "will not resend" — the copy #566 shipped.
 
-    The state is reachable precisely when a patient has been sent to check on
-    an approval they already gave. Saying it is not finished, without saying
-    that re-approving cannot help, is what produced the double-tap.
+    Both clauses were true of the callers that existed when it was written
+    and false of the caller added since (an unreadable answer to the review
+    POST, where nothing may have been saved). `awaiting_confirmation` is set
+    at COMMIT, before any human approval (r6/actions/models.py), so the
+    status does not carry a recorded approval, and `/api/form/` returns the
+    status alone — the poll cannot recover what the status does not say.
+    Telling that patient their approval is on file is the HIGH of QA #566;
+    telling them re-approving cannot help strands them mid-approval.
+
+    So: the arm states the state, and leaves the way back open.
+
+    MUTATION: restore either clause -> red.
     """
     block = _block(_code_only(_submit_handler(page)), "'awaiting_confirmation'")
-    assert "will not resend" in block, (
-        "the awaiting_confirmation arm says the request is unfinished but "
-        "not that approving again cannot resend it")
-    assert "recorded" in block, (
-        "the awaiting_confirmation arm does not say the approval is on file, "
-        "which is the whole reason it is not an unknown outcome")
+    assert "recorded" not in block, (
+        "the awaiting_confirmation arm claims an approval is on file. The "
+        "status does not establish that, and one caller reaches here with no "
+        "confirmation anywhere")
+    assert "will not resend" not in block and "not resend" not in block, (
+        "the arm tells the patient re-approving cannot help. On the "
+        "unreadable-answer path nothing may have been saved, and that "
+        "instruction is the one thing standing between them and a request "
+        "that never gets made")
+    assert "carried out yet" in block, (
+        "the arm no longer says the thing the status DOES establish: this "
+        "request has not run")
+    assert "reload" in block.lower(), (
+        "every branch that reaches this arm has disabled Approve, so an arm "
+        "that leaves re-approval open must say how (#419: an instruction "
+        "needs a destination)")
 
 
 def test_the_relay_confirm_failure_gets_the_destination_it_points_at(page):
@@ -480,15 +500,28 @@ def _checkstatus_call_sites(body: str) -> list[int]:
             if not body[:m.start()].rstrip().endswith("function")]
 
 
-def test_check_status_is_only_called_where_an_approval_is_established(page):
-    """The comment's invariant, made a check.
+def test_check_status_is_only_called_where_the_relay_answered(page):
+    """The comment's invariant, made a check. Renamed, and the invariant
+    restated, because the copy it protected has changed.
+
+    As written (QA #566) this guard protected the sentence "Your approval is
+    recorded" in the `awaiting_confirmation` arm: every caller had
+    established that a confirmation EXISTS. That is no longer true of the
+    `confirmed: null` branch — the relay now also answers null when nobody
+    could read the engine's answer to the review POST, where no confirmation
+    may exist. Rather than keep a caller-conditioned claim alive by passing
+    the fact into the poll, the fix removed the claim: every arm of
+    checkStatus now says only what the status itself carries, so the poll is
+    honest for any caller.
+
+    What the call-site restriction still protects, and why it stays: the
+    three branches below are the ones where SOMETHING answered the submit, so
+    a status lookup describes the same request the patient just acted on. The
+    two branches deliberately outside it — the unreachable service, and a
+    gateway 5xx that is not the relay's — have no evidence the submit reached
+    CareAgents at all, and both send the patient to a reload instead.
 
     MUTATION: add `checkStatus();` to the `!res.reached` branch -> red.
-
-    Every caller must sit inside one of the three answers that establish a
-    confirmation EXISTS: the 409 (fires only when one is present), the
-    relay's 502 confirm-failure, and the 502 `confirmed: null`. All three
-    follow a review the engine answered 200, which is what mints it.
     """
     body = _code_only(_submit_handler(page))
     anchors = ("res.r.status === 409",
@@ -525,20 +558,29 @@ def test_the_forbidden_claims_guard_is_not_defeated_by_capitalisation(page):
     """
     body = _code_only(_submit_handler(page)).lower()
     for claim in ("submission rejected", "was rejected", "did not go through",
-                  "nothing was sent"):
+                  "nothing was sent",
+                  # Added with the QA #566 fix. This is the HIGH's own
+                  # sentence: it was printed from the page's own text, off a
+                  # status that is set at commit, for a caller that may have
+                  # no confirmation anywhere. The relay may still send it in
+                  # `message` on the one branch that observed the mint; the
+                  # page may never assert it on its own authority.
+                  "approval is recorded"):
         assert claim not in body, (
             f"the page can print {claim!r} without knowing it")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #566: checkStatus handles 'sent', 'pending' and 'approved', none of "
-    "which _TRANSITIONS can produce, and handles none of 'executing', "
-    "'failed', 'needs_review', 'expired' or 'unknown', all of which it can. "
-    "A form-fill confirm reaches 'failed' on a deployment with no provider "
-    "configured — verified against a running engine — so the #220 third "
-    "answer, the case checkStatus exists for, terminates at 'we still cannot "
-    "tell whether your approval went through' while the status says it ran. "
-    "Fixing this reddens the pin: update it in the same PR."))
+# QA #566 (MEDIUM), filed as a strict xfail and fixed here, so the marker is
+# gone and the reason is kept as the record of what it caught:
+#
+#   checkStatus handled 'sent', 'pending' and 'approved', none of which
+#   _TRANSITIONS can produce, and none of 'executing', 'failed',
+#   'needs_review', 'expired' or 'unknown', all of which it can. A form-fill
+#   confirm reaches 'failed' on a deployment with no provider configured —
+#   verified against a running engine — so the #220 third answer, the case
+#   checkStatus exists for, terminated at "we still cannot tell whether your
+#   approval went through" while the status said it ran.
+
 def test_the_poll_reads_statuses_the_state_machine_can_actually_produce(page):
     """The poll's vocabulary against the state machine's, both read from source.
 
@@ -570,3 +612,140 @@ def test_the_poll_reads_statuses_the_state_machine_can_actually_produce(page):
         f"checkStatus has no arm for {unhandled}, so each falls through to "
         f"the terminal 'we still cannot tell whether your approval went "
         f"through' — an unknown outcome reported for a status that is known.")
+
+
+# --- QA #566 MEDIUM 2: a gateway that spoke for a service that said nothing --
+#
+# `_upstream_answered` (careagents/healthclaw.py) is the project's rule for
+# this on the server side: a 4xx other than 408/429 is somebody's decision
+# about the request; a 5xx is a gateway speaking for an upstream that may
+# already have run the thing. The page had no such rule. It keyed its honest
+# arms on bodies the RELAY writes, so a gateway 502 carrying JSON — no
+# `confirmed` key, nothing the relay would ever send — fell to the red arm
+# with a machine string as the message and Approve still armed. That is the
+# #416 shape, one body shape over from the unreadable branch that handles it.
+
+
+def _poll_body(page: str) -> str:
+    """checkStatus only, comment-stripped."""
+    body = _code_only(_submit_handler(page))
+    return body[body.index("function checkStatus"):]
+
+
+def _answered_predicate(page: str) -> str:
+    """The body of the page's own `answeredAboutRequest`.
+
+    It is defined outside the submit handler, so `_submit_handler` does not
+    reach it.
+    """
+    m = re.search(r"function answeredAboutRequest\(status\) \{(.*?)\n    \}",
+                  page, re.S)
+    assert m, "the page's status predicate moved or was renamed"
+    return m.group(1)
+
+
+def test_the_page_classifies_a_status_exactly_as_the_relay_does(page):
+    """Equivalence, not resemblance.
+
+    The page now answers the same question `_upstream_answered` answers — did
+    anyone actually decide about this request — and two implementations of one
+    rule drift. So evaluate the page's expression and the relay's predicate
+    over the statuses that reach this handler and require the same answer,
+    rather than checking that the JS looks about right.
+
+    MUTATION: drop `status !== 408` from the page's predicate -> red.
+    """
+    from careagents.healthclaw import HealthClawClient
+
+    src = _answered_predicate(page).strip()
+    expr = src.removeprefix("return").rstrip(";").strip()
+    py = expr.replace("&&", "and").replace("!==", "!=")
+    assert "||" not in py and "===" not in py, (
+        "the predicate was re-expressed in a form this guard cannot "
+        "translate; re-express the guard with it rather than deleting it")
+
+    for status in (200, 400, 401, 403, 404, 408, 409, 422, 429,
+                   500, 502, 503, 504):
+        assert eval(py, {"status": status}) is \
+            HealthClawClient._upstream_answered(status), (
+            f"the page and the relay disagree about {status}: one calls it "
+            f"an answer about the request and the other calls it silence")
+
+
+def test_a_5xx_the_relay_did_not_write_is_not_rendered_as_a_refusal(page):
+    """MUTATION: delete the `!relayAnswered` branch -> red.
+
+    Every answer the relay writes on this route carries `confirmed` (its two
+    502s) or the `review_unavailable` code (its 503s). A 5xx with neither is
+    a gateway's, and nothing about it says the relay did not run the whole
+    submit — so it must not be painted as a definite failure, and Approve
+    must not be left armed under it.
+    """
+    body = _code_only(_submit_handler(page))
+    assert "relayAnswered" in body, (
+        "nothing distinguishes an answer the relay wrote from one a gateway "
+        "wrote, so a gateway 5xx renders as a refusal of the approval")
+    block = _block(body, "!relayAnswered")
+    assert "alert-danger" not in block, (
+        "a gateway 5xx is silence with a status code on it; painting it red "
+        "tells the patient their approval was refused, which nobody observed")
+    assert re.search(r"btn\.disabled\s*=\s*true", block), (
+        "the branch leaves Approve armed on a request that may already have "
+        "been submitted and confirmed")
+    assert "reload" in block.lower(), (
+        "the branch states an uncertainty and offers nothing to resolve it "
+        "(#419); it cannot poll, because it has not established that the "
+        "relay ran at all")
+    assert body.index("!relayAnswered") < body.index("alert alert-danger"), (
+        "the branch sits below the generic failure arm and can never run")
+
+
+def test_the_branch_that_cannot_poll_does_not_poll(page):
+    """The other half of the call-site guard, from the new branch's side.
+
+    MUTATION: add `checkStatus();` to the `!relayAnswered` branch -> red here
+    AND in the call-site guard above.
+    """
+    assert "checkStatus()" not in _block(_code_only(_submit_handler(page)),
+                                         "!relayAnswered"), (
+        "a branch with no evidence the relay ran polls for the status of the "
+        "request it may never have made")
+
+
+# --- the instruction that strands a patient mid-approval --------------------
+
+
+def test_the_poll_never_tells_the_patient_not_to_approve_again(page):
+    """The terminus ended "Please do not approve a second time."
+
+    Reachable now from a caller whose review may never have been saved (the
+    unreadable answer to the review POST, QA #566 HIGH). Obeyed there, the
+    request is never made at all. The page may say a second approval cannot
+    send it twice — the review route answers 409 once a confirmation exists —
+    but it may not forbid one, because on that path re-approving is the whole
+    recovery.
+
+    MUTATION: restore the clause in either terminal arm -> red.
+    """
+    body = _poll_body(page).lower()
+    for instruction in ("do not approve", "don't approve", "not approve a"):
+        assert instruction not in body, (
+            f"the poll tells the patient {instruction!r}. On the "
+            f"unreadable-answer path that instruction is the difference "
+            f"between a request that gets made and one that does not")
+
+
+def test_every_terminal_arm_of_the_poll_offers_a_way_forward(page):
+    """A terminus that says "we cannot tell" and stops is where #419 started.
+
+    MUTATION: drop the reload sentence from either terminal arm -> red.
+    """
+    body = _poll_body(page)
+    ends = [m.start() for m in re.finditer("still cannot tell", body)]
+    assert len(ends) == 2, (
+        f"expected the two terminal arms (the poll's own and its .catch), "
+        f"found {len(ends)}")
+    for at in ends:
+        assert "Reload this page" in body[at:at + 400], (
+            "a terminal arm reports an unknown outcome and offers nothing "
+            "the patient can do about it")
