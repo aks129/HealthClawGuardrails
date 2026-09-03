@@ -138,6 +138,22 @@ class TestPrivacyReconciliation:
         assert 'support@healthclaw.io' in body
 
 
+class TestCareAgentsSurfaceCopy:
+    """The site's CareAgents card is landing copy for a product whose Telegram
+    surface is out of service for the beta (#536, D6). D6 hid the tile and
+    rewrote the tester guide; this bullet kept promising the surface from the
+    page a stranger reads before either of those. Documentation is part of the
+    product surface (docs/2026-08-02-retro.md, "reality drifted")."""
+
+    def test_landing_card_does_not_offer_telegram_as_a_careagents_surface(
+            self, client):
+        body = client.get('/').get_data(as_text=True)
+        card = body.split('<div class="card__title">careagents</div>')[1]
+        card = card.split('</a>')[0]
+        assert 'Passkey sign-in' in card, "the surface bullet moved or was renamed"
+        assert 'Telegram' not in card
+
+
 # ---------------------------------------------------------------------------
 # 3. Bot /start risk disclosure (source-content check)
 # ---------------------------------------------------------------------------
