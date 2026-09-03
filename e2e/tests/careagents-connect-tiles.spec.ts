@@ -48,10 +48,10 @@ const PHONE = {
 /** The three sources that take a person's OWN records (connectors.py:74). */
 const REAL_RECORD_TILES = ['fasten', 'wearable', 'direct'] as const;
 
-/** connectors.py:75 — verbatim. This is the sentence a tester reads. */
+/** connectors.py:78-79 — verbatim. This is the sentence a tester reads. */
 const REFUSED =
-  "real-records connect isn't open on this beta deployment yet — " +
-  'start with the sample records';
+  "Connecting your own records isn't open in this beta yet. " +
+  'Start with the sample records.';
 
 /** connectors.py:94 — the blurb that replaces the live one when closed. */
 const CLOSED_BLURB = 'Not open in this beta — start with the sample records.';
