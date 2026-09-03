@@ -190,3 +190,122 @@ def test_every_class_the_javascript_assigns_is_defined_by_the_shell(page, shell)
         f"the script assigns classes the shell never defines: {missing}. "
         f"The relayed page loads no other stylesheet, so these render as "
         f"nothing at all.")
+
+
+# --- #528 follow-on: the answers the page could receive but never rendered --
+#
+# PR #550 sealed the payload once a confirmation exists, and its QA follow-up
+# made a resubmitted review answer 409 instead of raising the seal out of the
+# handler as a Werkzeug HTML 500. That fixed the server half. The page still
+# had two holes on the client half:
+#
+#   - `r.json()` had no `.catch`, so ANY non-JSON body — the HTML 500 that
+#     started this, a gateway's own 502 page — rejected the promise and the
+#     whole chain went silent. Nothing rendered and the button stayed
+#     enabled, which is the invitation to double-tap that produced the error.
+#     The 409 closed one cause of an unreadable body; it did not close the
+#     branch.
+#   - the 409 itself fell into the generic failure arm and rendered red, with
+#     the button still enabled. A red failure for a request that WAS approved
+#     is the #416 shape one status code over: told it failed, a reasonable
+#     person approves again.
+#
+# The same template is what a CareAgents patient sees — careagents/app.py
+# review() proxies it and rewrites only the submit URL, and review_submit()
+# relays a 409 verbatim because _answered_about_data(409) is true. So these
+# guard both surfaces.
+
+
+def _block(js: str, anchor: str) -> str:
+    """The brace-matched `{...}` block following `anchor`.
+
+    Run this over COMMENT-STRIPPED code: a `{` inside the paragraph
+    explaining a branch would otherwise unbalance the count. No string
+    literal in this handler contains a brace.
+    """
+    start = js.index(anchor)
+    open_at = js.index("{", start)
+    depth = 0
+    for i in range(open_at, len(js)):
+        if js[i] == "{":
+            depth += 1
+        elif js[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return js[open_at:i + 1]
+    raise AssertionError(f"unbalanced block after {anchor!r}")
+
+
+def test_the_json_parse_has_a_catch(page):
+    """MUTATION: delete the `.catch` after `r.json()` -> red.
+
+    Scoped to the parse itself. `checkStatus` has its own `.catch` further
+    down the same handler, and a guard that searched the whole body stayed
+    green with this one deleted.
+    """
+    body = _code_only(_submit_handler(page))
+    parse = body[body.index("r.json()"):body.index(".then(function (res)")]
+    assert ".catch(" in parse, (
+        "the response parse has no .catch, so a body that is not JSON "
+        "rejects the promise and nothing renders at all — the button stays "
+        "enabled on a request that may already have run")
+
+
+def test_an_unreadable_body_leaves_the_button_disabled(page):
+    """MUTATION: drop `btn.disabled = true` from the unreadable branch -> red.
+
+    We could not read the answer, so we do not know whether the approval ran.
+    Re-arming Approve there is exactly the double-send #416 exists to prevent.
+    """
+    block = _block(_code_only(_submit_handler(page)), "!res.readable")
+    assert re.search(r"btn\.disabled\s*=\s*true", block), (
+        "the unreadable-body branch leaves Approve enabled on an outcome "
+        "nobody observed")
+
+
+def test_a_409_is_handled_as_its_own_answer(page):
+    """MUTATION: delete the `res.r.status === 409` branch -> red."""
+    body = _code_only(_submit_handler(page))
+    assert re.search(r"res\.r\.status\s*===\s*409", body), (
+        "no branch distinguishes 409 — already approved — from an ordinary "
+        "failure, so a successful approval renders to the patient as one")
+
+
+def test_the_409_branch_disables_the_button_and_checks_the_status(page):
+    """The two things the 409 branch exists to do.
+
+    MUTATION: remove either `btn.disabled = true` or `checkStatus()` -> red.
+    Leaving Approve enabled invites the second tap that produced the 409;
+    without the status call the page states a fact and then abandons it,
+    which is the #419 shape.
+    """
+    block = _block(_code_only(_submit_handler(page)), "res.r.status === 409")
+    assert re.search(r"btn\.disabled\s*=\s*true", block), (
+        "the 409 branch leaves Approve enabled, which invites the double-tap "
+        "that produced the 409")
+    assert "checkStatus()" in block, (
+        "the 409 branch never resolves where the request actually stands")
+
+
+def test_the_409_branch_does_not_render_as_a_failure(page):
+    """MUTATION: set `alert alert-danger` in the 409 branch -> red.
+
+    The action carries a confirmation. Painting that red is a claim the page
+    did not observe, and the person's reasonable response to it is to
+    approve again.
+    """
+    block = _block(_code_only(_submit_handler(page)), "res.r.status === 409")
+    assert "alert-danger" not in block, (
+        "a 409 means the request was already approved; rendering it as an "
+        "error tells the patient their approval failed when it did not")
+
+
+def test_the_409_branch_runs_before_the_generic_failure_message(page):
+    """MUTATION: move the 409 branch below the fallback -> red.
+
+    The fallback assigns `alert alert-danger` and returns nothing, so a 409
+    check placed after it is dead code that still reads as handled.
+    """
+    body = _code_only(_submit_handler(page))
+    assert body.index("res.r.status === 409") < body.index("alert alert-danger"), (
+        "the 409 branch sits below the generic failure arm and can never run")

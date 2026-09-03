@@ -247,12 +247,59 @@
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload)
-      }).then(function (r) { return r.json().then(function (b) { return { r: r, b: b }; }); })
+      }).then(function (r) {
+        // An unreadable body is an OUTCOME, not the absence of one. A body
+        // that is not JSON — a Werkzeug HTML error page, a gateway's own 502
+        // — rejects here, and with no .catch the entire chain went silent:
+        // the screen did not move and the button stayed enabled, which is an
+        // invitation to tap Approve again on a request that may have run.
+        // Resolve into a shape the renderer below can branch on instead.
+        return r.json()
+          .then(function (b) { return { r: r, b: b, readable: true }; })
+          .catch(function () { return { r: r, b: {}, readable: false }; });
+      })
         .then(function (res) {
+          // Say only that we could not read it. NOT what became of the
+          // request: on an unreadable 200 the relay has already confirmed
+          // the action, on an unreadable 502 it may or may not have, and
+          // neither is observable from here. Claim neither, and do not
+          // re-arm the button on an outcome nobody established.
+          if (!res.readable) {
+            btn.disabled = true;             // never invite a second send here
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not read the answer to your approval, so we cannot ' +
+              'tell you whether it went through. We have not sent it again. ' +
+              'Reload this page to see where this request stands.';
+            return;
+          }
+
           if (res.r.ok) {
             gateMsg.className = 'alert alert-success';
             gateMsg.textContent = 'Review recorded. ' + (res.b.next_step || '');
             btn.disabled = true;
+            return;
+          }
+
+          // 409: this action already carries a confirmation, so the review
+          // was submitted before (#528 follow-on). The server refuses at the
+          // pre-check, and the seal behind it refuses the double-tap that
+          // races that pre-check; both answers arrive here.
+          //
+          // It must not render as an error. A red failure for a request that
+          // WAS approved is the #416 shape — told it failed, a reasonable
+          // person approves again, which is the double-tap that produced the
+          // 409 in the first place. It must also not say nothing was sent: a
+          // confirmation exists, so that is a claim this page never observed.
+          // State what the 409 does establish — the person already approved
+          // it — and let the status resolve the rest.
+          if (res.r.status === 409) {
+            btn.disabled = true;             // never invite a second send here
+            gateMsg.className = 'alert alert-secondary';
+            gateMsg.textContent =
+              'You have already approved this request. We are checking ' +
+              'where it stands.';
+            checkStatus();
             return;
           }
 

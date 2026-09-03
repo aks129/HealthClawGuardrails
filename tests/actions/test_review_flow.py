@@ -497,7 +497,29 @@ def test_second_submit_answers_409_instead_of_raising_the_seal(
                    {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
     monkeypatch.undo()
     assert second.status_code == 409, second.get_data(as_text=True)
-    assert 'already been submitted' in second.get_json()['error']
+
+    # The BODY SHAPE the approve page reads, not just the status.
+    # templates/action_review.html branches on `res.r.status === 409` AFTER
+    # parsing the body; an unparseable one takes its `.catch` arm instead,
+    # which can only say "we could not read the answer". A JSON object here
+    # is what lets the page say the specific, true thing. Asserted before the
+    # `['error']` read below, which already fails on a non-JSON body but as a
+    # bare TypeError that names nothing.
+    #
+    # This travels to the other surface unchanged: careagents/app.py
+    # review_submit relays body and status verbatim, because
+    # _answered_about_data(409) is true, so the CareAgents patient's copy of
+    # this page branches off the same answer.
+    assert second.mimetype == 'application/json', (
+        'a non-JSON 409 lands in the page unreadable-body branch, which '
+        'cannot tell the patient their approval already went through')
+    parsed = second.get_json()
+    assert isinstance(parsed, dict), parsed
+    # A 409 is a DEFINITE answer. `confirmed: null` is the #416 third-answer
+    # shape, and the page keys a neighbouring branch on it.
+    assert parsed.get('confirmed', False) is not None, (
+        'a 409 must not carry the unknown-outcome shape')
+    assert 'already been submitted' in parsed['error']
 
     with app.app_context():
         action = db.session.get(ProposedAction, action_id)
