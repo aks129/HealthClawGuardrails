@@ -112,3 +112,47 @@ class TestContextBuilder:
         assert row.is_deleted is False
         assert row.version_id == 2
         assert json.loads(row.resource_json)['status'] == 'final'
+
+    def test_a_revived_row_is_readable_again_through_the_read_path(
+            self, client, sample_bundle, sample_observation, tenant_id,
+            tenant_headers, step_up_token):
+        """#509 defect 2, stated as the symptom rather than the column.
+
+        The sibling test asserts `is_deleted is False`. That is the fix's
+        mechanism; THIS is the thing a patient notices — the record was
+        unreadable, and after the re-ingest it reads. Asserting the symptom
+        is what keeps the pin honest if the read path ever stops filtering
+        `is_deleted` (then the 404 below fails and someone has to think),
+        and it is the half that would have caught the original bug: the
+        ingest reported success while every read still returned 404.
+
+        MUTATION: drop `existing.is_deleted = False` in
+        r6/context_builder.py -> the final GET returns 404, red.
+        """
+        stale = dict(sample_observation, status='preliminary')
+        row = R6Resource(
+            resource_type='Observation',
+            resource_json=json.dumps(stale, separators=(',', ':'), sort_keys=True),
+            resource_id=sample_observation['id'],
+            tenant_id=tenant_id,
+        )
+        row.is_deleted = True
+        db.session.add(row)
+        db.session.commit()
+
+        url = f"/r6/fhir/Observation/{sample_observation['id']}"
+        read_headers = dict(tenant_headers, **{'X-Step-Up-Token': step_up_token})
+
+        # The tombstone is invisible: this is the state the bug left behind.
+        before = client.get(url, headers=read_headers)
+        assert before.status_code == 404, before.get_data(as_text=True)
+
+        resp = client.post('/r6/fhir/Bundle/$ingest-context',
+                           data=json.dumps(sample_bundle),
+                           content_type='application/json',
+                           headers=tenant_headers)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+        after = client.get(url, headers=read_headers)
+        assert after.status_code == 200, after.get_data(as_text=True)
+        assert after.get_json()['status'] == 'final'
