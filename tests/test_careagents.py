@@ -3726,7 +3726,13 @@ def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(
                     json={"med-0": "yes", "nka": "true"})
     assert posted.status_code == 503
     assert posted.get_json().get("confirmed") is not True
-    assert "Nothing has been approved" in posted.get_json()["message"]
+    # This assertion used to require "Nothing has been approved" here too,
+    # and the GET above still does — correctly, because a GET has no side
+    # effect. The submit does: `_send` raises this same HealthClawError for a
+    # read timeout as readily as for a refused connection, so the POST may
+    # have been delivered and minted the confirmation (#528) before the
+    # answer was lost. Nothing observed on this path can say it did not.
+    assert "Nothing has been approved" not in posted.get_json()["message"]
 
 
 def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
@@ -3735,9 +3741,17 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
 
     A 5xx here was passed straight through as the response status with the
     engine's body, which tells the patient nothing about whether their
-    decisions were recorded. What we DO know is that `confirm_action` is
-    only reached on a 200, so nothing was approved — that half is sayable,
-    and it is the half that stops a second approval sending twice.
+    decisions were recorded.
+
+    This test used to also require the message to say "Nothing has been
+    approved", on the reasoning that `confirm_action` is only reached on a
+    200. That reasoning holds for EXECUTION and was written as if it held for
+    the approval: the review POST itself mints the ActionConfirmation (#528),
+    and a gateway 5xx is delivered-or-not, so an approval may exist for the
+    request the patient was told had none. Same defect as the unreadable-200
+    one, one branch over. `confirmed: False` still carries the half that is
+    known — nothing was carried out — which is the half that keeps Approve
+    armed for the retry that is this path's recovery.
 
     MUTATION: return `jsonify(body), status` unconditionally -> red.
     Ran it, saw red.
@@ -3759,7 +3773,9 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
     assert posted.status_code == 503
     payload = posted.get_json()
     assert payload.get("confirmed") is not True
-    assert "Nothing has been approved" in payload["message"]
+    assert "Nothing has been approved" not in payload["message"]
+    assert "could send it twice" not in payload["message"], (
+        "the old copy deterred the retry with a claim the seal makes false")
 
     # A 422 is the engine's own answer — attestation missing — and must
     # still reach the patient as the engine's answer, unchanged.
@@ -3833,6 +3849,72 @@ def test_an_unreadable_answer_to_the_review_is_neither_saved_nor_unsaved(
     assert "couldn't tell" in msg or "could not tell" in msg
     # And the way back stays open: no instruction not to approve again.
     assert "approving again" in msg or "before approving" in msg
+
+
+def test_no_review_submit_failure_claims_an_approval_does_not_exist(
+        cfg, svc, monkeypatch):
+    """The property, over every way the submit can fail, in one place.
+
+    Each of these was fixed one at a time and each time the sibling survived:
+    the unreadable 200 was found by review while the gateway 5xx and the
+    transport loss went on asserting the same thing next to it. The three
+    share a cause — the review POST is what mints the ActionConfirmation
+    (#528), so none of them can say whether an approval exists — so pin them
+    together rather than as three unrelated strings.
+
+    What each MAY still say, and does, is that nothing was carried out:
+    `confirm_action` is reached only on a decodable 200, and `confirmed`
+    carries that. This guard is about the words the patient reads.
+
+    MUTATION: put "Nothing has been approved" back in `_REVIEW_UNRESOLVED`
+    -> red on all three. Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _timeout(*_a, **_kw):
+        # What `_send` raises for a read timeout — which is delivered, then
+        # lost — and for a refused connection alike. Indistinguishable here.
+        raise HealthClawError("review submit failed", 0)
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    modes = {
+        "transport lost after possible delivery": _timeout,
+        "gateway 502, engine silent": lambda t, a, d: (502, {"error": "bad"}),
+        "gateway 504, engine silent": lambda t, a, d: (504, {"error": "bad"}),
+        "200 nobody could decode": _unreadable,
+    }
+
+    for name, impl in modes.items():
+        fake = FakeClient()
+        fake.submit_review = impl
+        app = create_app(config=cfg, client=fake, accounts=svc)
+        app.config["TESTING"] = True
+        c = app.test_client()
+        _login(c, svc, monkeypatch, email=f"gene+{len(name)}@example.com")
+        conn = c.post("/api/connections/sample").get_json()["id"]
+        agent = c.post("/api/agents",
+                       json={"name": "A", "persona": "calm",
+                             "connection_id": conn}).get_json()["id"]
+        posted = c.post(f"/review/{agent}/act-1/submit",
+                        json={"med-0": "yes", "nka": "true"})
+        msg = (posted.get_json() or {}).get("message", "").lower()
+        assert msg, f"{name}: no message at all"
+        assert "nothing has been approved" not in msg, (
+            f"{name}: the patient is told no approval exists. The review POST "
+            f"mints the confirmation, so on this path one may")
+        # The opposite claim, allowed only as the thing we could not tell —
+        # the message contains these words, inside "whether".
+        for claim in ("your review was saved", "your approval is recorded"):
+            at = msg.find(claim)
+            assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+                f"{name}: {claim!r} is stated as a fact")
+        assert "twice" not in msg or "cannot" in msg, (
+            f"{name}: the copy warns that approving twice could send twice. "
+            f"Once a confirmation exists the review route answers 409")
+        assert posted.get_json().get("confirmed") is not True
 
 
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
