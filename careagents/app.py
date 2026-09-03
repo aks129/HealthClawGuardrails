@@ -1137,15 +1137,37 @@ def create_app(config: Config | None = None,
                 # The review was recorded but the confirmation didn't land, so
                 # the action is still sitting unexecuted. Swallowing this told
                 # the person they'd approved something that would never happen.
-                # Say so plainly and let them retry — same posture as the
-                # delete flow, which never claims an outcome it didn't get.
+                #
+                # `confirmed` stays False, and that is not a formality: what
+                # reaches THIS branch is a failed approval-token mint (the
+                # confirm never went out) or a 4xx the engine itself answered.
+                # Every ambiguous case — transport loss on the confirm POST, a
+                # gateway 5xx/408/429, an undecodable 200 — is routed to
+                # HealthClawUnconfirmed above and answers `null` instead
+                # (careagents/healthclaw.py:352-357, :387-397). The action did
+                # not execute, and that is KNOWN, so `null` here would assert
+                # an uncertainty that does not exist — #220's third answer
+                # collapsed from the other side.
+                #
+                # The INSTRUCTION was the defect. This said "Nothing has been
+                # sent — please try approving again". Since #528 sealed the
+                # payload, the review route mints a confirmation on the first
+                # submit, so that retry answers 409 and the page tells them
+                # they have already approved: the patient was directed into a
+                # loop the page itself creates. "Nothing has been sent" also
+                # reads as "start over" when an approval IS on file.
+                #
+                # So: say what is known — saved, recorded, not completed — say
+                # plainly that re-approving here will not resend it, and point
+                # at the status rather than back at the button.
                 logger.exception("confirm failed after review for %s", action_id)
                 body = dict(body) if isinstance(body, dict) else {}
                 body.update({
                     "confirmed": False,
-                    "message": ("Your review was saved, but we couldn't submit "
-                                "the approval. Nothing has been sent — please "
-                                "try approving again."),
+                    "message": ("Your review was saved and your approval is "
+                                "recorded, but we could not complete it just "
+                                "now. Approving again here will not resend "
+                                "it. Check where this request stands."),
                 })
                 return jsonify(body), 502
             body = dict(body) if isinstance(body, dict) else {}

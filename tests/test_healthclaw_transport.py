@@ -424,8 +424,15 @@ def test_a_confirm_the_engine_declined_stays_a_refusal(status, stub_base,
                                                        reset_mode):
     """The other half, and the half that made the old bug invisible: a 4xx is
     an answer. Either the engine declined or an edge rejected the request
-    before delivering it — nothing ran either way, so "nothing has been sent,
-    try approving again" is true and must keep being said.
+    before delivering it — nothing ran either way, so this stays a refusal and
+    the route keeps answering `confirmed: False`.
+
+    What this test pins is the TYPE, and only the type. It used to add that
+    "nothing has been sent, try approving again" must keep being said; since
+    #528 sealed the payload that instruction is dead — the review route mints
+    a confirmation on the first submit, so the retry answers 409. The refusal
+    is still a refusal; the copy that acted on it moved on
+    (careagents/app.py, and tests/test_careagents.py pins the new wording).
     """
     _set(status=status, body=b'{"error": "not awaiting confirmation"}',
          mint_ok=True)
@@ -446,6 +453,37 @@ def test_a_confirm_answered_200_but_unreadable_is_not_a_refusal(stub_base,
     _set(status=200, body=NON_JSON_BODY, ctype="text/html", mint_ok=True)
     with pytest.raises(HealthClawUnconfirmed):
         _client(stub_base).confirm_action("t", "a1")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "QA #566 (HIGH). `submit_review` is the one method that opts out of the "
+    "rule `_json_object` exists to state: it substitutes "
+    "{'error': 'unexpected response'} for an unreadable body and returns the "
+    "status unchanged. On a 200 that means the relay believes the engine "
+    "saved the review and minted a confirmation when nothing reached the "
+    "engine at all. careagents/app.py:1116 then calls confirm_action, and a "
+    "mint refusal lands in the HealthClawError branch, which since this PR "
+    "tells the patient 'your review was saved and your approval is recorded' "
+    "and disables Approve. Reproduced against a running HealthClaw: "
+    "ActionConfirmation rows [] and QuestionnaireResponse rows 0 for the "
+    "action the patient was told carried their approval. Fixing this reddens "
+    "the pin: update it in the same PR."))
+def test_an_unreadable_200_review_is_not_a_saved_review(stub_base,
+                                                        reset_mode):
+    """A 200 nobody can decode is not the engine saying "saved".
+
+    Same rule the confirm path above already follows, one method over. This
+    is the seam a captive portal, an auth interstitial or a misrouted edge
+    sits on, and the repo has a documented history of the two services
+    drifting apart in exactly that way.
+
+    The engine's real answer here always carries `reviewed_qr_id` and
+    `approved_via: 'review-page'` — verified against a running instance — so
+    there is evidence available to require rather than a shape to guess at.
+    """
+    _set(status=200, body=NON_JSON_BODY, ctype="text/html")
+    with pytest.raises(HealthClawError):
+        _client(stub_base).submit_review("t", "a1", {"nka": "true"})
 
 
 def test_a_confirm_answered_by_nobody_stays_unconfirmed(stub_base,
