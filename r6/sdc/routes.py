@@ -323,9 +323,15 @@ def _commit_bundle(bundle, tenant_id):
 
 
 def _issues_outcome(issues):
+    # severity=information, NOT warning. Under unconditional emission
+    # (r6/sdc/populate.py:_report_unpopulated) an ordinary form with one
+    # empty optional field carries an issue, and a conformant client reading
+    # `warning` treats that as a failed operation. Nothing here is a
+    # failure — every issue says "this leaf resolved no value", which is a
+    # restatement of the response's own missing `answer`.
     return {
         "resourceType": "OperationOutcome",
-        "issue": [{"severity": "warning", "code": "incomplete",
+        "issue": [{"severity": "information", "code": "incomplete",
                    "diagnostics": f"{i['linkId']}: {i['detail']}"}
                   for i in issues],
     }

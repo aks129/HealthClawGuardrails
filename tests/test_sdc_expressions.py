@@ -1,5 +1,5 @@
-from r6.sdc.expressions import (build_context, evaluate, patient_projection,
-                                resolves_outside_projection)
+from r6.sdc.expressions import (build_context, evaluate,
+                                patient_projection)
 
 
 def test_evaluate_simple_path():
@@ -92,94 +92,26 @@ def test_build_context_with_no_subject_is_empty():
     assert patient_projection("not a resource") is None
 
 
-def test_resolves_outside_projection_names_the_paths_the_allowlist_withholds():
-    """Withheld -> True; allowlisted -> False. A property of the ALLOWLIST.
-
-    `identifier` and `name.text` are on a Patient and off the allowlist, so
-    an item asking for either is refused and says so. The allowlisted paths
-    are not, or every intake form would warn about its own demographics.
-    """
-    for withheld in ("%patient.identifier.value", "%patient.name.text",
-                     "%patient.photo.url", "%patient.contact.name.family",
-                     "%patient.maritalStatus.text",
-                     "%patient.telecom.where(system='sms').value",
-                     "%subject.identifier.value", "Patient.identifier.value",
-                     "%resources.where(resourceType='Observation').code.text"):
-        assert resolves_outside_projection(withheld) is True, withheld
-    for allowed in ("%patient.name.family", "%patient.name.given.first()",
-                    "%patient.birthDate", "%patient.gender",
-                    "%patient.telecom.where(system='phone').value",
-                    "%patient.telecom.where(system='email').value",
-                    "%patient.address.line.first()",
-                    "%patient.address.city.first()",
-                    "%patient.address.state.first()",
-                    "%patient.address.postalCode.first()",
-                    "Patient.name.family"):
-        assert resolves_outside_projection(allowed) is False, allowed
-    assert resolves_outside_projection("") is False
-    assert resolves_outside_projection(None) is False
-
-
-def test_resolves_outside_projection_never_looks_at_a_patient():
-    """THE ONE PROPERTY, and the reason the signature takes no record.
-
-    The answer is a pure function of the expression text. It has to be: the
-    version that evaluated the caller's expression against the REAL record
-    and reported whether it was non-empty made the issue list a one-bit
-    oracle over exactly the data the projection withholds — eleven HTTP
-    requests recovered a withheld SSN through it, character by character,
-    with the value never appearing in an answer.
-
-    MUTATION: pass the real subject back into the probe -> `walked` becomes
-    the SSN and this goes red on the first character.
-    """
-    victim = dict(_FULL_PATIENT)
-    victim["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-ssn",
-                             "value": "123-45-6789"}]
-
-    walked = ""
-    for _ in range(len("123-45-6789")):
-        for ch in "0123456789-":
-            probe = ("%patient.identifier.value.where($this.startsWith('"
-                     + walked + ch + "'))")
-            # The signature admits no record, so nothing about `victim` can
-            # steer this. Both a right and a wrong guess answer the same way.
-            if resolves_outside_projection(probe):
-                walked += ch
-                break
-        else:
-            break
-    assert walked == "", (
-        f"the withheld identifier leaked through the issue channel: {walked!r}")
-
-    # And the two halves of the guess are indistinguishable, which is what
-    # "no oracle" means.
-    right = "%patient.identifier.value.where($this='123-45-6789')"
-    wrong = "%patient.identifier.value.where($this='999-99-9999')"
-    assert resolves_outside_projection(right) == \
-        resolves_outside_projection(wrong)
-
-
-def test_resolves_outside_projection_admits_no_record_to_evaluate_against():
-    """The signature IS the guard, so pin the signature.
-
-    Everything else in this file can be satisfied by an implementation that
-    still takes a patient and merely happens not to leak today. A function
-    that cannot be handed the record cannot evaluate against it, and it
-    cannot be handed the tenant's content either — which is also what stops
-    a caller buying work with `%resources.descendants().descendants()`
-    (measured at 32s for 50 items over 500 stored resources before this
-    changed, against 0.01s after).
-
-    MUTATION: add `subject` back to the signature -> red here, and red in
-    both oracle tests, before anyone has to notice the leak.
-    """
-    import inspect
-    params = inspect.signature(
-        resolves_outside_projection.__wrapped__).parameters
-    assert list(params) == ["expression"], (
-        "resolves_outside_projection grew a parameter. If it is a record, "
-        "the withheld-item issue is an oracle again — see its docstring.")
+# The three `resolves_outside_projection` tests that stood here are gone with
+# the function (CTO ruling on PR #562). They pinned real properties and those
+# properties still hold — they moved rather than lapsed:
+#
+#   - the oracle test (a right guess and a wrong guess must be
+#     indistinguishable) is now
+#     tests/test_populate_issue_property.py::
+#     test_a_right_guess_and_a_wrong_guess_are_indistinguishable, and over
+#     HTTP in tests/test_sdc_populate_bounded.py::
+#     test_the_withheld_issue_cannot_be_used_to_guess_the_withheld_value;
+#   - the signature pin (the classifier must not be able to see a record)
+#     is subsumed by there being no classifier: the issue is emitted for
+#     every attempted leaf that resolved nothing, which is a fact the
+#     response already carries. tests/test_populate_issue_property.py states
+#     that as `answer present <=> no issue`, per item, so a reintroduced
+#     classifier of ANY shape — record-driven or probe-driven — reddens on
+#     the first leaf it silences, which the signature pin could not catch;
+#   - the allowlist-membership list is what the projection tests above
+#     already assert directly, on the projection itself rather than through
+#     a function that guessed at it.
 
 
 def test_the_resource_root_form_still_evaluates_against_the_projection():

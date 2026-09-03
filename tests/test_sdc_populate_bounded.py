@@ -11,8 +11,13 @@ route with real store rows — not against the pure engine, because the engine
 cannot tell you what left the boundary:
 
   1. An expression outside the %patient allowlist yields NO answer, and an
-     OperationOutcome issue naming the linkId, so the refusal is visible
-     rather than indistinguishable from "the patient has no phone number".
+     OperationOutcome issue naming the linkId, so an item that was not
+     filled says so rather than looking like a completed form. The issue
+     does NOT say which of the two causes applied — "the projection
+     withheld it" and "the patient has no phone number" report identically,
+     because telling them apart means answering a question about the
+     patient, and the first version of that was a working exfiltration
+     channel (CTO ruling on PR #562; see §5 below).
   2. The allowlisted expressions still populate. A bound that also breaks the
      intake form is not a fix.
   3. A tombstoned row is not read.
@@ -279,10 +284,15 @@ def test_a_withheld_expression_is_reported_as_an_issue_naming_its_link_id(
     body = _populate(client, tenant_headers).get_json()
 
     assert sorted(_issue_link_ids(body)) == sorted(WITHHELD)
-    diagnostics = _param(body, "issues")["issue"][0]["diagnostics"]
+    outcome = _param(body, "issues")
+    diagnostics = outcome["issue"][0]["diagnostics"]
     assert "%patient projection" in diagnostics
     for expression in WITHHELD.values():
         assert expression not in diagnostics
+    # One sentence for every leaf, at `information` severity — see
+    # test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words
+    # for why the wording may not distinguish withheld from absent.
+    assert {i["severity"] for i in outcome["issue"]} == {"information"}
 
 
 def test_allowlisted_expressions_still_populate(
@@ -304,14 +314,25 @@ def test_allowlisted_expressions_still_populate(
     }
 
 
-def test_no_issue_is_raised_when_the_record_simply_has_no_value(
+def test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words(
         client, app, tenant_id, tenant_headers):
-    """An allowlisted element the patient does not have is NOT a refusal.
+    """The ruling's one-absent-demographic row, over the wire.
 
-    This is the line between the two causes above. A patient with no telecom
-    gets an empty item and no issue; conflating that with a withheld path
-    would put an OperationOutcome on every sparse record and make the issue
-    list meaningless.
+    This test used to assert the OPPOSITE — that a merely-absent value is
+    silent while a withheld one is reported. That distinction is what the
+    CTO ruling on PR #562 removed, and removed deliberately: drawing it
+    requires the server to answer a question about the patient, and however
+    narrow the answer looks it is still a read (eleven HTTP requests walked
+    an identifier out through the first version of it).
+
+    So both causes report, in one sentence that is true of both, and the
+    caller compares the published allowlist against their own expression to
+    tell them apart. That matters most in the model-facing tier: the old
+    text would have a model tell a patient their record was withheld when
+    they simply have no email address.
+
+    MUTATION: reintroduce any classifier -> `email` goes silent and this
+    goes red on the issue list.
     """
     bare = {"resourceType": "Patient", "id": PATIENT_ID,
             "name": [{"given": ["Ada"]}]}
@@ -324,7 +345,18 @@ def test_no_issue_is_raised_when_the_record_simply_has_no_value(
     body = _populate(client, tenant_headers, "sparse-q").get_json()
 
     assert _answers(_param(body, "response")) == {"given": "Ada"}
-    assert _param(body, "issues") is None
+    # Exactly one issue: the one leaf that got no answer. Not two.
+    assert _issue_link_ids(body) == ["email"]
+
+    issue = _param(body, "issues")["issue"][0]
+    # information, not warning: a form with one empty optional field is an
+    # ordinary result, and a conformant client reading `warning` would treat
+    # it as a failed operation.
+    assert issue["severity"] == "information"
+    diagnostics = issue["diagnostics"]
+    assert "%patient projection" in diagnostics
+    for claim in ("withheld", "refused", "denied"):
+        assert claim not in diagnostics.lower(), claim
 
 
 # ---------------------------------------------------------------------------
@@ -607,12 +639,17 @@ def test_the_withheld_issue_cannot_be_used_to_guess_the_withheld_value(
     identifier that way during the review of PR #562, and the value never
     once appeared in an answer.
 
-    So the issue has to depend on the EXPRESSION and nothing else: a right
-    guess and a wrong guess must be indistinguishable from outside.
+    So the issue must depend on neither: EVERY attempted leaf that resolved
+    nothing is reported, so a right guess and a wrong guess are named alike
+    and the list carries no bits at all. The classifier that replaced the
+    oracle answered from a constant probe, which was safe but silenced six
+    of the ruling's twelve withheld expressions — including this very walk's
+    `where($this.startsWith(...))` shape, which came back with no issue at
+    all. There is no classifier now.
 
-    MUTATION: pass the real subject back into resolves_outside_projection ->
-    `recovered` becomes the stored MRN and this goes red on the first
-    character.
+    MUTATION: gate the issue on anything — the real subject, a probe, the
+    expression text — and `named` stops being the whole alphabet on the
+    first round.
     """
     _seed(app, tenant_id)
     secret = _patient()["identifier"][0]["value"]
@@ -631,13 +668,18 @@ def test_the_withheld_issue_cannot_be_used_to_guess_the_withheld_value(
         body = _populate(client, tenant_headers,
                          questionnaire_id="oracle-q").get_json()
         named = set(_issue_link_ids(body))
+        # Every guess is named. Not "all or none" — ALL, which is the
+        # stronger statement and the one unconditional emission makes: the
+        # issue list is the unanswered-leaf list, and every guess in this
+        # questionnaire is unanswered whatever the identifier says.
+        assert named == {f"guess-{n}" for n in range(len(alphabet))}, (
+            f"the issue list singled out {sorted(named)} out of {alphabet}: "
+            f"the report is a function of the patient's data, not of what "
+            f"the response already shows")
         hits = [ch for n, ch in enumerate(alphabet) if f"guess-{n}" in named]
-        # All refused or none refused. Anything between is the oracle.
-        assert len(hits) in (0, len(alphabet)), (
-            f"the issue list singled out {hits} out of {alphabet}: the "
-            f"refusal is a function of the patient's data, not of the "
-            f"expression")
-        if not hits:
+        # Every character answers the same, so no guess is distinguishable
+        # and there is nothing to walk. (An oracle picks out exactly one.)
+        if len(hits) != 1:
             break
         recovered += hits[0]
 
@@ -652,9 +694,10 @@ def test_a_refused_item_still_names_itself_after_the_oracle_is_closed(
 
     D10 asks for an OperationOutcome issue naming the linkId on
     `%patient.identifier`, `%patient.photo` and `%resources...code.text`.
-    Answering from a constant probe keeps all of them — those paths are
-    outside the allowlist for every patient, which is a fact about the
-    allowlist and not about anyone's record.
+    Reporting every unresolved leaf keeps all of them, and keeps the six the
+    constant probe silently dropped as well — completeness is the half the
+    probe could not deliver, since its inventory of placeholder paths was
+    never going to cover the expression classes an author actually writes.
     """
     _seed(app, tenant_id)
     items = [_expr_item(link_id, expr) for link_id, expr in WITHHELD.items()]
