@@ -35,9 +35,11 @@
     <li>
       <span class="step-n">1</span>
       <h3>Sign in with your face</h3>
+      {# The provider-login clause is gone rather than made conditional: this
+         page is public, gets no account, and so cannot resolve the
+         CARE_REAL_RECORDS switch that decides whether those logins are open. #}
       <p>A passkey — Face ID, Touch ID, or your security key — is your login.
-      No password to phish or forget. Then connect your records through your
-      provider’s own verified login.</p>
+      No password to phish or forget. Then connect your records.</p>
     </li>
     <li>
       <span class="step-n">2</span>
