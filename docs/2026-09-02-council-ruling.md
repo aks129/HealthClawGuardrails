@@ -142,9 +142,12 @@ flag, and does not deploy until DNS. Phase 2 waits.
 
 ### D5 — Step-up token whitespace (unanimous, H)
 
-Strip uniformly, ASCII whitespace only. The kernel already does (`r6/access.py:352-368`)
-and six merged slices depend on it, so the ruling is retroactive and there is no behaviour
-change. Close #334 with one pin test in `tests/test_access_kernel.py` (padded valid token
+Strip uniformly. The kernel already does (`r6/access.py:352-368`) and six merged slices
+depend on it, so the ruling is retroactive and there is no behaviour change. The strip is
+Python's `str.strip()`, which is Unicode-wide, not ASCII-only: a token padded with U+00A0,
+U+2003 or U+3000 is admitted. That was measured, not assumed (review of PR #545). It is the
+right behaviour for an authority-neutral token, and the pin records what ships rather than
+what an earlier draft of this ruling wrongly claimed. Close #334 with one pin test in `tests/test_access_kernel.py` (padded valid token
 admitted; padded garbage refused), a one-line comment at the strip citing #334, and a
 §2.5 note in `docs/2026-08-03-access-kernel-spec.md`. The tenant header stays unstripped:
 it is an identifier compared against a stored value, not an authority-neutral token.
