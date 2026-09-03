@@ -111,6 +111,47 @@ def test_every_cadence_is_stated_in_the_months_the_code_uses():
                 f"{band['min_age']}-{band['max_age']} is not stated")
 
 
+def test_every_age_band_is_stated_against_the_cadence_it_actually_carries():
+    """A banded rule states TWO cadences, and which one goes with which age is
+    the whole of the change. The test above asserts both numbers and both age
+    spans appear in the section; it never asserts they appear *together*.
+
+    So the register could read "18–39: every 12 months. 40 and over: every 36
+    months" — the pairing inverted, every individual value still correct — and
+    the guard stayed green. That is precisely this file's own docstring
+    warning ("a check that a number appeared *somewhere*") surviving one level
+    down, and docs/2026-08-02-retro.md's pattern reproduced inside the guard
+    written against it. The clinician does not initial a set of numbers; they
+    initial the pairing.
+
+    The window `[^.|\\n]*` cannot cross a sentence, a table-cell boundary or a
+    line, so the band's cadence has to sit in the same clause as the band's
+    ages. Either order, because the register is free to write "every 36 months
+    for ages 18–39".
+
+    MUTATION (verified 2026-09-03): swap the two cadences in the bp-screening
+    Cadence row -> red here, green everywhere else in this file.
+    """
+    sections = _sections()
+    banded = [r for r in CARE_GAP_RULES if r.get("cadence_bands")]
+    assert banded, (
+        "no rule carries cadence_bands — this test would assert nothing; "
+        "delete it, or the band it was written for has been lost")
+    for rule in banded:
+        section = sections[rule["id"]][1]
+        for band in rule["cadence_bands"]:
+            span = f"{band['min_age']}–{band['max_age']}"
+            cadence = rf"\b{band['cadence_months']} months\b"
+            together = (rf"{re.escape(span)}[^.|\n]*{cadence}"
+                        rf"|{cadence}[^.|\n]*{re.escape(span)}")
+            assert re.search(together, section), (
+                f"{rule['id']}: the register states ages {span} and "
+                f"{band['cadence_months']} months somewhere in the section, "
+                "but never in the same clause — a reader cannot tell which "
+                "cadence belongs to which age, and an inverted pairing reads "
+                "as correct")
+
+
 def test_no_cadence_is_claimed_that_the_rule_does_not_have():
     """The reverse: a stale month figure left behind after a cadence moved.
 
