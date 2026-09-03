@@ -1027,25 +1027,34 @@ def create_app(config: Config | None = None,
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
-    # statement about ownership; saying nothing was approved is true in every
-    # failure mode here, because nothing was.
+    # statement about ownership.
+    #
+    # "Nothing has been approved" survives here and ONLY here, because every
+    # site that uses this string failed BEFORE any review POST went out: the
+    # ownership pre-check on either route, and the review GET, which has no
+    # side effect at all. Nothing was submitted, so nothing could have been
+    # recorded. The paragraph this replaced said the claim was "true in every
+    # failure mode here" and the submit route used it too — see below.
     _REVIEW_UNCHECKABLE = ("We couldn't check this form right now. Nothing "
                            "has been approved — please try again in a moment.")
-    #: Distinct from the above: the review was SENT and the engine never
-    #: answered, so whether the decisions were recorded is unknown. What is
-    #: known is that the approval step below was never reached.
-    _REVIEW_UNSUBMITTED = ("We couldn't confirm your review reached your "
-                           "records. Nothing has been approved — please open "
-                           "the form again to check before approving, because "
-                           "approving twice could send it twice.")
-    #: Distinct from BOTH of the above, and the reason it is a third string
-    #: rather than a reuse of either: something answered the review POST and
-    #: nobody could read the answer. That POST is what records the approval
-    #: (#528), so "nothing has been approved" is a claim this path cannot
-    #: make — and neither is "your review was saved". Say the one thing that
-    #: is true, and leave the way back open: a second approval cannot send
-    #: the request twice, because the review route refuses a resubmit once a
-    #: confirmation exists (409) and the claim transition has a single winner.
+    #: Every way the review POST can fail to produce a readable answer, in one
+    #: sentence, because the patient is in the same position in all three:
+    #: transport loss, a gateway status the engine never wrote, and a 200
+    #: nobody could decode. This POST is what MINTS the ActionConfirmation
+    #: (#528) — the approval record — so none of the three can say whether an
+    #: approval now exists, in either direction.
+    #:
+    #: It replaces `_REVIEW_UNSUBMITTED`, which asserted "Nothing has been
+    #: approved" on the first two. That sentence answered a question the
+    #: `confirmed` field answers ("was it carried out": no, and knowably so —
+    #: `confirm_action` is reached only on a decodable 200) with words that
+    #: state a different one ("is your approval on file": unknown). One
+    #: control, two meanings, which is the shape docs/2026-08-02-retro.md is
+    #: about. It also warned that "approving twice could send it twice",
+    #: deterring the recovery with a claim that is false: once a confirmation
+    #: exists the review route answers 409, the payload seal refuses the
+    #: resubmit that races that pre-check, and the claim transition into
+    #: `executing` has a single winner. Verified against a running engine.
     _REVIEW_UNRESOLVED = ("We couldn't tell whether your review was saved. "
                           "Reload this page to see where this request stands "
                           "before approving again.")
@@ -1103,12 +1112,17 @@ def create_app(config: Config | None = None,
             status, body = hc.submit_review(tenant, action_id, decisions)
         except HealthClawUnconfirmed:
             # Something answered the review POST and the answer was not
-            # readable. Caught FIRST because it is a subclass: the arm below
-            # says nothing was approved, which this path cannot know — the
-            # review route mints the confirmation, so if the engine did
-            # receive this, the approval exists. `confirmed: null` is the
-            # answer the page already has a branch for (#220), and it is the
-            # honest one here: not saved, not unsaved.
+            # readable. Caught FIRST because it is a subclass.
+            #
+            # `null` rather than the `false` below, and the difference is not
+            # about what was executed — no confirm went out on any of these
+            # three paths. It is about which answer the page should act on: a
+            # 200 means the submit reached something that accepted it, so a
+            # status lookup describes the request the patient just acted on,
+            # and null is the value that routes to the branch which performs
+            # one (#220). The two below have no evidence anything was
+            # delivered; polling there would report on a request that may
+            # never have been made, so they keep Approve armed instead.
             logger.exception("review submit unreadable for %s", action_id)
             return jsonify({
                 "error": "review_unavailable",
@@ -1118,24 +1132,38 @@ def create_app(config: Config | None = None,
         except HealthClawError:
             # The decisions are gone and nobody told the patient. Ownership
             # was already confirmed, so this is not a permission answer.
+            #
+            # `confirmed: False` is right and stays: the confirm is only
+            # reached on a decodable 200, so the action was not carried out,
+            # and False is what leaves Approve armed — which on this path is
+            # the recovery, not a hazard. What was wrong was the SENTENCE:
+            # `_send` raises this for a read timeout as readily as for a
+            # refused connection, so the POST may have been delivered,
+            # recorded and minted before the answer was lost.
             logger.exception("review submit failed for %s", action_id)
             return jsonify({
                 "error": "review_unavailable",
                 "confirmed": False,
-                "message": _REVIEW_UNSUBMITTED,
+                "message": _REVIEW_UNRESOLVED,
             }), 503
         if status and not HealthClawClient._answered_about_data(status) \
                 and status != 200:
-            # The engine never answered, so we cannot say the review was
-            # saved. We CAN say nothing was approved: confirm_action is only
-            # reached on a 200 below, and that is the half that keeps a
-            # second approval from sending the request twice.
+            # A gateway spoke for an engine that said nothing. This arm used
+            # to reason: "we cannot say the review was saved, but we CAN say
+            # nothing was approved, because confirm_action is only reached on
+            # a 200 below". The first half of that is right and the second
+            # half is the same defect as the unreadable-200 one above, one
+            # branch over: what confirm_action reaches is EXECUTION. The
+            # approval record is minted by the review POST itself (#528), and
+            # a 5xx is delivered-or-not — so an approval may exist for a
+            # request this arm told the patient had none. `confirmed: False`
+            # still states the half that is known.
             logger.warning("review submit unanswered (%s) for %s",
                            status, action_id)
             return jsonify({
                 "error": "review_unavailable",
                 "confirmed": False,
-                "message": _REVIEW_UNSUBMITTED,
+                "message": _REVIEW_UNRESOLVED,
             }), 503
         if status == 200:
             try:
