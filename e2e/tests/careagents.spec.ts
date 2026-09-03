@@ -17,9 +17,10 @@ import {
  * NOT covered here, on purpose: chat/LLM turns, any HealthClaw call, and
  *          passkey registration or passkey sign-in (WebAuthn is not driven —
  *          only the enrolment *prompt* is asserted, then skipped). The
- *          connect tiles, the beta banner and the Telegram surface moved to
- *          careagents-connect-tiles.spec.ts, which covers what a beta tester
- *          sees under CARE_REAL_RECORDS.
+ *          connect tiles, the beta banner and the Telegram surface are
+ *          covered in careagents-connect-tiles.spec.ts, which asserts what a
+ *          beta tester sees under CARE_REAL_RECORDS. Only the four sign-in
+ *          helpers moved out of this file (careagents-fixtures.ts).
  *
  * The app is booted by the second webServer entry in playwright.config.ts
  * with HEALTHCLAW_BASE pointed at a dead local port, so the server cannot
