@@ -160,21 +160,26 @@ def test_resolves_outside_projection_never_looks_at_a_patient():
         resolves_outside_projection(wrong)
 
 
-def test_resolves_outside_projection_is_not_a_lever_on_the_tenants_content():
-    """The probe is a constant, so a caller cannot buy work with an
-    expression that walks the whole record.
+def test_resolves_outside_projection_admits_no_record_to_evaluate_against():
+    """The signature IS the guard, so pin the signature.
 
-    MUTATION: evaluate against the real content_resources -> this exceeds the
-    budget by orders of magnitude (measured at 32s for 50 items over 500
-    resources during the PR #562 review).
+    Everything else in this file can be satisfied by an implementation that
+    still takes a patient and merely happens not to leak today. A function
+    that cannot be handed the record cannot evaluate against it, and it
+    cannot be handed the tenant's content either — which is also what stops
+    a caller buying work with `%resources.descendants().descendants()`
+    (measured at 32s for 50 items over 500 stored resources before this
+    changed, against 0.01s after).
+
+    MUTATION: add `subject` back to the signature -> red here, and red in
+    both oracle tests, before anyone has to notice the leak.
     """
-    import time
-    expr = "%resources.descendants().descendants()"
-    resolves_outside_projection.cache_clear()
-    start = time.perf_counter()
-    for _ in range(200):
-        resolves_outside_projection(expr)
-    assert time.perf_counter() - start < 2.0
+    import inspect
+    params = inspect.signature(
+        resolves_outside_projection.__wrapped__).parameters
+    assert list(params) == ["expression"], (
+        "resolves_outside_projection grew a parameter. If it is a record, "
+        "the withheld-item issue is an oracle again — see its docstring.")
 
 
 def test_the_resource_root_form_still_evaluates_against_the_projection():

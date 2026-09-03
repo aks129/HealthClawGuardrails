@@ -249,6 +249,14 @@ def resolves_outside_projection(expression):
     on a patient with no email) from being reported as withheld: it resolves
     against the probe on both sides, so it is not "outside".
 
+    WHAT THIS IS NOT: exhaustive. A withheld path `_PROBE_PATIENT` happens
+    not to populate — `%patient.deceasedDateTime`, `%patient.name.period`,
+    `%patient.telecom.rank` today — answers False, so that item comes back
+    silently empty instead of naming itself. That is a gap in the REPORTING,
+    never in the bound: the projection still withholds it, and nothing about
+    the patient reaches the caller either way. Widen the probe to close one;
+    do not widen it with anything but placeholders.
+
     Cached because the answer depends only on `expression`, which also caps
     the work a caller can buy per request.
     """
