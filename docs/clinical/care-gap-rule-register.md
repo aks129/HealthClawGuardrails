@@ -11,9 +11,10 @@ reviewer would want, the entry says **not encoded** rather than filling it in.
 That is deliberate: an unencoded value written here would become the thing the
 next reader trusts.
 
-Generated against the rule table as of this document's commit. If the rules
-move, this page is stale and the tests that pin the cadences
-(`tests/test_caregaps_evaluate.py`) are the source of truth.
+Generated against the rule table as of this document's commit. The code is the
+source of truth: `tests/test_caregaps_evaluate.py` pins the cadences and bands,
+and `tests/test_care_gap_register_drift.py` fails if this page stops matching
+them.
 
 ---
 
@@ -190,10 +191,12 @@ what a verdict above means.
   a false "up to date".
 - A matching record **older than the cadence** is treated exactly as if it were
   absent.
-- A partial `birthDate` is padded to the earliest day — `YYYY` becomes 1 January,
-  `YYYY-MM` becomes the 1st. HealthClaw's own redaction truncates birth dates to
-  the year, so this is the ordinary case, and it carries **up to a year of age
-  error** at band boundaries.
+- A partial `birthDate` is padded to the earliest day: `YYYY` becomes 1 January,
+  `YYYY-MM` becomes the 1st, which carries **up to a year of age error** at band
+  boundaries. How often that happens depends on the source, not on us: this
+  check reads the stored Patient directly (`r6/caregaps/routes.py:106-109`), so
+  the redaction that truncates birth dates elsewhere does not apply here. A
+  partial date reaches this rule only if the record arrived that way.
 
 **Resource status**
 
@@ -275,6 +278,8 @@ and is released on that basis.
 - Name: ______________________________
 - Date: ______________________________
 - Confirms the values on this page were transcribed from
-  `r6/caregaps/evaluate.py` and are pinned by
-  `tests/test_caregaps_evaluate.py`: ______________________________
+  `r6/caregaps/evaluate.py`, that the cadences and bands are pinned by
+  `tests/test_caregaps_evaluate.py`, and that this page is held to those
+  values by `tests/test_care_gap_register_drift.py`:
+  ______________________________
 - Signature: ______________________________
