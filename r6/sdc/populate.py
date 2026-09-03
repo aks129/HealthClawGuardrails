@@ -27,16 +27,29 @@ test_zero_allergies_never_infers_no_known_allergies (the load-bearing one)
 and test_zero_medications_never_infers_no_current_medications.
 """
 
-from r6.sdc.expressions import (build_context, evaluate,
-                                resolves_outside_projection)
+from r6.sdc.expressions import build_context, evaluate
 
-#: What an item's issue says when the %patient projection is the reason it has
-#: no answer. Fixed text: a Questionnaire author controls the expression, and
-#: echoing it back would put an author-supplied literal (`where(value='...')`)
-#: into an OperationOutcome that leaves the boundary.
-WITHHELD_BY_PROJECTION = (
-    'not populated: the expression resolves outside the %patient projection '
-    'this operation permits (name, birthDate, gender, telecom, address)'
+#: What an attempted-but-unresolved leaf reports. ONE sentence for both
+#: causes, because the server does not tell the two apart and must not appear
+#: to: "the projection withheld it" and "the patient has no email address"
+#: read identically here on purpose. `questionnaire_populate` is in the
+#: model-facing read tier, and text naming a refusal would have a model tell
+#: a patient their record was held back when it is simply empty.
+#:
+#: What the caller gets instead is the allowlist, which is public — they can
+#: compare it against their own expression without the server answering a
+#: question about a patient to do it. (The constant this replaced was called
+#: WITHHELD_BY_PROJECTION and said so; it was true for only some of the
+#: leaves it was attached to, which is retro pattern 1 living in a name.)
+#:
+#: The expression is deliberately NOT echoed: a Questionnaire author controls
+#: it, and a `where(value='...')` clause is a place to park a literal that
+#: would then ride out on an OperationOutcome.
+NOT_POPULATED = (
+    'not populated: no value resolved. $populate reads only the %patient '
+    'projection (name, birthDate, gender, telecom phone/email, address '
+    'line/city/state/postalCode) and coded content this server recognises; '
+    'anything else is not read.'
 )
 
 INITIAL_EXPRESSION_URL = (
@@ -213,7 +226,7 @@ def _populate_item(item, subject, context, observations, issues, content_resourc
         list_resource_type = _list_group_resource_type(item)
         if item.get("repeats") and list_resource_type:
             return _populate_list_group(item, list_resource_type, subject,
-                                        content_resources)
+                                        content_resources, issues)
         # Ordinary group: recurse, keep the group only if it produced
         # child answers.
         children = []
@@ -260,11 +273,29 @@ def _parse_definition(definition):
     return parts[0], parts[1]
 
 
-def _populate_list_group(item, resource_type, subject, content_resources):
+def _populate_list_group(item, resource_type, subject, content_resources,
+                         issues):
     """Emit one repeat of `item` per matching, currently-relevant resource of
     `resource_type` for `subject`. Returns [] when there are none — an empty
     repeating group, never a default answer for a sibling item (see module
     docstring's safety invariant).
+
+    ROW COUNT EQUALS RECORD COUNT, always. A repeat is emitted for every
+    matching resource even when not one of its leaves resolves — an
+    unlabelled allergen is a row with no answer and an issue, never a
+    dropped row. A patient with three allergies seeing two is a false
+    negative on an allergy list, and an allergy section that renders empty
+    is one click from someone ticking "no known allergies". Pinned by
+    tests/test_populate_lists.py::
+    test_three_unlabelled_allergies_still_produce_three_repeats.
+
+    Leaves report through the same mechanism as everything else: a leaf
+    carrying a `definition` is an attempted population, so one that resolves
+    nothing gets an issue naming its linkId. A leaf with no `definition` is
+    not attempted and is left alone — that is the same exclusion
+    `_resolve_answer` applies to the attestation booleans, and it is why a
+    future patient-entered leaf inside a repeating group will not be
+    reported as something the server failed to fill.
     """
     config = _LIST_RESOURCE_CONFIG[resource_type]
     subject_ref = _reference(subject)
@@ -289,6 +320,8 @@ def _populate_list_group(item, resource_type, subject, content_resources):
             if value is not None:
                 value_key = _ANSWER_KEY_BY_TYPE.get(child.get("type"), "valueString")
                 child_item["answer"] = [{value_key: value}]
+            elif child.get("definition"):
+                _report_unpopulated(issues, child.get("linkId"))
             children.append(child_item)
         repeats.append({"linkId": item.get("linkId"), "item": children})
     return repeats
@@ -317,24 +350,56 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id):
         value = evaluate(expr, context.get("patient"), context)
         if value is not None:
             return _coerce(value, item_type), value_key
-        # An empty answer has two very different causes and a caller cannot
-        # tell them apart from the response, so say which one it was.
-        #
-        # This asks about the EXPRESSION, not about this patient, and it must
-        # keep doing so. resolves_outside_projection takes no record for that
-        # reason: answering it from the real one turns this issue list into a
-        # one-bit oracle a caller walks the withheld data out through, one
-        # `where($this.startsWith(...))` per item. See its docstring.
-        if resolves_outside_projection(expr):
-            issues.append({"linkId": link_id, "detail": WITHHELD_BY_PROJECTION})
+        _report_unpopulated(issues, link_id)
         return None, value_key
 
     codes = item.get("code") or []
     if codes:
+        # A code-matched item that found no Observation is an attempted
+        # population that resolved nothing, exactly like the expression above.
+        # The intake Questionnaire has no item.code items, so this is
+        # invisible today — another Questionnaire will have them.
         value = _observation_answer(codes, observations)
         if value is not None:
             return value, value_key
+        _report_unpopulated(issues, link_id)
+
+    # No initialExpression and no code: NOTHING WAS ATTEMPTED, so nothing is
+    # reported. THIS IS THE EXCLUSION AND IT IS LOAD-BEARING —
+    # `allergies.no-known-allergies` and `medications.no-current-medications`
+    # reach exactly here. They carry no code and no expression precisely so
+    # that no mechanism ever touches them (r6/sdc/intake.py). An issue
+    # reading "not populated: no value resolved" against `no-known-allergies`
+    # tells a model-facing reader that the system tried to determine NKA and
+    # could not — which is a hair from inferring it, and inferring it is the
+    # non-negotiable. Pinned by tests/test_populate_lists.py::
+    # test_the_attestation_items_never_appear_in_the_issue_list.
     return None, value_key
+
+
+def _report_unpopulated(issues, link_id):
+    """Record that `link_id` was attempted and resolved nothing.
+
+    UNCONDITIONAL, and that is the design rather than an omission. The
+    response already says which leaves have no answer — `_populate_item`
+    attaches `answer` only on success — so an issue per unanswered attempted
+    leaf is a redundant encoding of what the caller is holding, and carries
+    no information about the patient BY CONSTRUCTION. There is nothing here
+    to verify does not leak.
+
+    Do not add a condition. Every predicate that has stood here was a
+    question about the record or about the expression, and both shapes have
+    already failed in this file: one evaluated the caller's expression
+    against the unbounded Patient (a one-bit oracle — eleven HTTP requests
+    recovered a stored identifier), and its replacement asked a constant
+    probe instead, which was safe but reported only six of twelve withheld
+    expressions, so the other six came back silent and a caller reads silence
+    as "this patient has no such value". Both are `docs/2026-08-02-retro.md`
+    pattern 1. Pinned by tests/test_populate_issue_property.py, which asserts
+    the biconditional per item; any classifier reddens on the first leaf it
+    silences.
+    """
+    issues.append({"linkId": link_id, "detail": NOT_POPULATED})
 
 
 def _observation_answer(item_codes, observations):
