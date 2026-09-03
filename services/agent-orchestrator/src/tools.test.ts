@@ -644,6 +644,16 @@ describe("Tool Execution Tests", () => {
     expect((summary.next_steps as string[]).join(" ")).toContain(
       "curatr.apply_fix"
     );
+    // QA addition (review of PR #555). The issues branch also gained the
+    // scope ("in this one Condition record"), and nothing pinned it: the
+    // assertion above passes against the pre-change string
+    // `Found 2 issue(s). Present each issue...` too, so reverting just the
+    // scope on this branch left the suite green. A count without a scope is
+    // the same defect as a verdict without one — "found 2 issues" reads as
+    // 2 issues in the record when 2 is all one resource could yield.
+    // MUTATION: drop `in this one ${resourceType} record` from the
+    // issue_count > 0 note in tools.ts -> red.
+    expect(summary.note as string).toContain("in this one Condition record");
   });
 
   it("fhir.search preserves a bounded backend OperationOutcome and HTTP status", async () => {

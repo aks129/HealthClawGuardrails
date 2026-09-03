@@ -21,10 +21,12 @@ say what it actually checked. Two strings carry that:
      route ($curatr-evaluate) returns `summary` verbatim, so pinning it at
      the engine covers the route too.
 
-     NOT covered here: services/agent-orchestrator/src/tools.ts holds its
-     own second copy of the old sentence in `_mcp_summary.note`, which a
-     direct MCP consumer reads instead of `summary`. Out of scope for this
-     PR (TypeScript build lane); reported as a concern, not fixed silently.
+     services/agent-orchestrator/src/tools.ts holds a second copy of the
+     sentence in `_mcp_summary.note`, which a direct MCP consumer reads
+     instead of `summary`. That copy was fixed in the same PR (commit
+     9ff27eb) and is pinned in `tools.test.ts`, not here — this file's
+     first commit described it as out of scope, which stopped being true
+     one commit later.
   2. The bot's headline says "Checked 1 of N <Type>s (most recent)" with N
      from the search Bundle's `total`, and the score sits on the SAME line
      as that scope so "good" can never be read alone. When the Bundle
@@ -224,3 +226,84 @@ def test_bot_passes_the_engine_summary_through():
     sent = _curatr(total=12)
     body = "\n".join(sent)
     assert "This checked one resource, not your record" in body, body
+
+
+# --- "(most recent)" is a contract, not a lucky default ---------------------
+#
+# QA addition (review of PR #555). The bot never sends `_sort`, and its
+# `_count: 1` does not survive the MCP bridge: the tool handler reads
+# `input._count` while `cmd_curatr` nests it under `arguments.params`, so the
+# search runs at the handler's default of 20. Verified live on 2026-09-03
+# against a seeded tenant — the bot's exact JSON-RPC payload came back with
+# `total: 25` and 20 entries, and `entry[0]` was the newest row.
+#
+# So "Checked 1 of N ... (most recent)" is true only because an unsorted
+# search defaults to `-_lastUpdated` (`r6/routes.py`). Nothing pinned that
+# default, which left a patient-facing claim resting on a line any refactor
+# could flip. Pin it beside the claim that depends on it.
+
+def _seed_observations(ids):
+    import json as _json
+    from datetime import datetime, timedelta, timezone as _tz
+
+    from models import db
+    from r6.models import R6Resource
+
+    base = datetime(2026, 4, 1, tzinfo=_tz.utc)
+    for offset, rid in enumerate(ids):
+        row = R6Resource(
+            resource_type='Observation',
+            resource_json=_json.dumps({
+                'resourceType': 'Observation', 'id': rid, 'status': 'final',
+                'code': {'coding': [{'system': 'http://loinc.org',
+                                     'code': '2339-0'}]},
+            }),
+            resource_id=rid,
+            tenant_id='test-tenant',
+        )
+        # The model stamps `last_updated` at construction, so every row would
+        # otherwise share a timestamp and the ordering under test would be
+        # decided by insertion order rather than by the sort.
+        row.last_updated = base + timedelta(days=offset)
+        db.session.add(row)
+    db.session.commit()
+
+
+def test_search_without_sort_returns_the_most_recent_first(
+        app, client, tenant_headers):
+    """MUTATION: flip the `_sort` default in `r6/routes.py` to ascending (or
+    make the else-branch `.asc()`) -> red.
+
+    The bot's headline calls the graded resource "(most recent)" while
+    sending no `_sort` and grading `entry[0]`. That word is true only while
+    an unsorted search answers newest-first.
+    """
+    with app.app_context():
+        _seed_observations(['obs-oldest', 'obs-middle', 'obs-newest'])
+        resp = client.get('/r6/fhir/Observation', headers=tenant_headers)
+        assert resp.status_code == 200
+        ids = [e['resource']['id'] for e in resp.get_json().get('entry', [])]
+        assert ids and ids[0] == 'obs-newest', (
+            "an unsorted search no longer answers newest-first, so the bot's "
+            f'"(most recent)" is now false: {ids}')
+
+
+def test_search_total_is_the_tenant_count_not_the_page_size(
+        app, client, tenant_headers):
+    """MUTATION: set `'total': len(entries)` in the local search branch of
+    `r6/routes.py` -> red.
+
+    The bot prints this number as "Checked 1 of N", a claim about how many
+    records of that type the tenant holds. If `total` ever tracked the page
+    instead, the headline would under-report the record by exactly the amount
+    that makes the caveat pointless — and it would still read as measured.
+    """
+    with app.app_context():
+        _seed_observations([f'obs-t{i:02d}' for i in range(7)])
+        resp = client.get('/r6/fhir/Observation?_count=2',
+                          headers=tenant_headers)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert len(body.get('entry', [])) == 2
+        assert body['total'] == 7, (
+            f"total tracked the page, not the tenant: {body['total']}")
