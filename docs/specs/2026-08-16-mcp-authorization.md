@@ -4,11 +4,14 @@
 
 | | |
 |---|---|
-| Closes | [#290](https://github.com/aks129/HealthClawGuardrails/issues/290) |
+| Closes | phase 1 closes [#523](https://github.com/aks129/HealthClawGuardrails/issues/523) |
+| Also open | [#290](https://github.com/aks129/HealthClawGuardrails/issues/290) closes on the §8.4 end-user run. [#568](https://github.com/aks129/HealthClawGuardrails/issues/568) tracks what remains after it |
+| Canonical resource | `https://mcp.healthclaw.io/mcp` (council ruling D4, `docs/2026-09-02-council-ruling.md`) |
+| Issuer | `https://app.healthclaw.io` (same ruling) |
 | Feature set | 6 — Surfaces (`docs/prd/06-surfaces.md` §6 names this as the missing spec) |
 | Pipeline step | 3, architecture review (`docs/2026-08-16-delivery-process.md`) |
 | Author | owner-surfaces |
-| Decision required from | the founder, on §3.1 (the canonical resource URI) and §7 phase 3 (deploy authorization) |
+| Decision required from | the founder, on §7 phase 3 (deploy authorization). §3.1 is settled by D4 |
 
 Everything asserted about live behaviour in this document was executed on
 2026-08-16/17 against the running deployments. The raw responses are quoted
@@ -133,10 +136,34 @@ hostname baked into a token audience and a partner's saved config is a
 migration we would have to run later under worse conditions. The dangling
 record is separately a risk and is logged in §9.6.
 
-This is the founder's call, and it blocks phase 1. The chosen value is pinned
-in one place, `MCP_CANONICAL_RESOURCE`, and the server refuses to start with
-OAuth acceptance enabled and that variable unset — the same fail-closed shape
-as `MCP_AUTH_TOKEN`.
+This was the founder's call and it blocked phase 1. Council ruling D4 settled
+it: `https://mcp.healthclaw.io/mcp`. The chosen value is pinned in one place,
+`MCP_CANONICAL_RESOURCE`.
+
+**The flag rule, replacing the fail-closed sentence this paragraph used to
+carry (amendment P1-b).** The old rule was that the server refuses to start
+with OAuth acceptance enabled and the variable unset. That rule cannot work
+for phase 1, because phase 1 serves the metadata before OAuth acceptance
+exists to be enabled. There is nothing for the boot check to key on. The rule
+is now:
+
+- **Unset.** The two well-known routes return 404 and the challenge stays a
+  bare `Bearer`. That is today's behaviour, unchanged, and it is what merges
+  before DNS moves.
+- **Set.** Both routes serve the document and the challenge carries
+  `resource_metadata` and `scope`.
+- **Set, but malformed** — not absolute, or not `https:`. The server refuses
+  to start. A value that cannot be an audience would otherwise turn phase 1
+  off in silence, which looks the same from outside as a deploy that worked.
+- **Host gate.** The document and the enriched challenge are served only when
+  the request `Host` equals the canonical host. The Railway hostname keeps
+  `/health` and the static-token path exactly as they are.
+
+The host gate is not defence in depth, it is conformance. RFC 9728 §3.3 has a
+client reject a document whose `resource` is not the identifier it inserted
+into the well-known path. Serving our document on the platform hostname would
+hand that client a rejection where it currently gets a 404, and the rejection
+reads to a partner as our bug.
 
 Throughout this document `<RESOURCE>` stands for the chosen value.
 
@@ -151,7 +178,7 @@ route and removes a whole class of client disagreement:
   resource whose path is `/mcp`)
 - `/.well-known/oauth-protected-resource` (root fallback)
 
-Both return, byte-identically:
+Both return the same document:
 
 ```json
 {
@@ -164,11 +191,34 @@ Both return, byte-identically:
 }
 ```
 
+**Serving the same bytes at the root path is not conformant, and we do it
+anyway (amendment P1-d).** Under RFC 9728 §3.3, root-form insertion implies
+the resource identifier `https://mcp.healthclaw.io`. Our document says
+`https://mcp.healthclaw.io/mcp`. A client that fetched the root form and
+checked would be right to reject it. MCP 2026-07-28 lists the root form as the
+fallback to try second, so a client that reaches it has already missed the
+sub-path form, and a 404 there helps nobody. We keep serving both. The
+consequence for the test plan is §8.1: A2 and A3 assert against the sub-path
+URL the challenge points at, never the root.
+
 Notes on each field, because each one has a way to be wrong:
 
 - `resource` is REQUIRED by RFC 9728 and must string-equal `<RESOURCE>`. It is
   not derived from `request.host` — a proxy that rewrites Host would then
   silently mint a different identity. It is read from the pinned constant.
+  **The same rule binds the `resource_metadata` URL in the 401 (amendment
+  P1-a).** That URL is built from `MCP_CANONICAL_RESOURCE` and never from
+  `req.hostname`. The reason is not that a proxy is known to rewrite Host.
+  Railway preserves it: production answers with
+  `fullUrl: http://app.healthclaw.io/r6/fhir/Condition/…`, built from
+  `request.host_url` (`r6/routes.py:1128`), and that is the public custom
+  domain. Measured 2026-09-03 against `GET /r6/fhir/Condition?_count=1`.
+  The reason is RFC 9728 §3.3. A client rejects a document whose `resource` is
+  not the identifier it inserted into the well-known path. What we advertise
+  therefore comes from the constant, whatever the request carries.
+  Building a URL from the request is not a hypothetical cost. The same
+  measurement shows every production authorization-server URL as `http://`,
+  because `request.host_url` loses the scheme behind the proxy (§3.3, #567).
 - `authorization_servers` is what makes the document useful; RFC 9728 marks it
   OPTIONAL but the MCP specification requires at least one entry. Its value is
   an **issuer identifier**, and §3.3 exists entirely because the issuer we
@@ -185,7 +235,7 @@ document contains no secret, identifies no tenant, and grants nothing. Its
 entire content is already public knowledge or is a URL. Refusing to serve it
 is what produces the dead end.
 
-They also need CORS that the transport endpoint does not have — see §8.4.
+They also need CORS that the transport endpoint does not have — see §9.4.
 
 ### 3.3 The authorization server must become discoverable from its own issuer
 
@@ -228,7 +278,8 @@ And its contents, fetched live, fail validation twice over:
 
 The cause of the scheme is not an OAuth bug: `oauth_discovery` builds every
 URL from `request.host_url`, and behind Railway's TLS-terminating proxy that
-yields `http`. This is the same class of trap CLAUDE.md already records about
+yields `http`. Re-measured on 2026-09-03 and filed as #567: the proxy loses
+the scheme, and preserves Host. This is the same class of trap CLAUDE.md already records about
 Railway and ports.
 
 **Three required changes, all in `r6/oauth.py` and its config:**
@@ -264,8 +315,14 @@ field.
 ### 3.4 What changes in the 401
 
 Two cases, and conflating them is how #290's own "option 1" sketch got it
-wrong. RFC 6750 does not permit an `error` parameter when no credential was
-presented, because there is no token to call invalid.
+wrong. RFC 6750 §3.1 says a server SHOULD NOT include `error` when no
+credential was presented, because there is no token to call invalid. This
+document said "does not permit", which overstates the requirement; the
+behaviour it asks for is unchanged (amendment P1-c).
+
+`<RESOURCE_ROOT>` below is the origin of `MCP_CANONICAL_RESOURCE`, and the
+whole URL is built from that constant. Never from `req.hostname` — see §3.2,
+amendment P1-a.
 
 **No credential presented** — the ordinary first contact:
 
@@ -313,7 +370,7 @@ stored in Redis with `{client_id, scopes, tenant_id, exp}` (`r6/oauth.py`).
 There is no `aud`, no JWT, and no introspection endpoint. The `resource`
 parameter is not read at `/oauth/authorize` or `/oauth/token`; it is silently
 discarded. So "audience-validated tokens" is not a configuration change. It is
-three additions, and they are small.
+the five additions below, and they are small.
 
 **At the authorization server (`r6/oauth.py`):**
 
@@ -324,12 +381,74 @@ three additions, and they are small.
    The allowlist is explicit config, not a pattern match. An unrecognised
    audience must never be recorded as-is — that turns the audience field into
    a caller-controlled string and the check into theatre.
+   **Both endpoints reject, not just `token` (amendment P2-c).** Neither
+   endpoint reads `resource` today — `r6/oauth.py` contains no read of it, so
+   there is nothing to reject and nothing to record. The `resource`
+   at `/oauth/token` MUST equal the one recorded on the code at
+   `/oauth/authorize`. It may be absent, and then it inherits that value. A
+   `resource` at the token endpoint that names a different target is
+   `invalid_target`, because a code issued for one audience must not be
+   redeemed for another.
+   **The allowlist is a map, not a set (amendment P2-b).** Each entry maps a
+   resource identifier to a tenant policy, and §3.5.1 says what that means.
 3. A new client-authenticated introspection endpoint,
    `POST /r6/fhir/oauth/introspect` (RFC 7662), returning
    `{active, aud, scope, tenant_id, exp, client_id}`. On any doubt it returns
    `{"active": false}`.
+   **Protected, per RFC 7662 §2.1, and the credential is named now (amendment
+   P2-e).** There is no client authentication anywhere in `r6/oauth.py` today:
+   `token` never checks a `client_secret`, so "client-authenticated" is a new
+   mechanism and not a reuse of one.
+   `MCP_INTROSPECTION_CLIENT_ID` and `MCP_INTROSPECTION_CLIENT_SECRET`,
+   a pre-registered confidential client, compared with `hmac.compare_digest`.
+   An unprotected introspection endpoint is an oracle: it turns any captured
+   token into a lookup of the tenant and scopes behind it. The MCP server is
+   the only caller, and it is the only client that needs this credential.
 4. `authorize` returns `iss` in the redirect (RFC 9207) and the metadata
    advertises `authorization_response_iss_parameter_supported: true`.
+   **The redirect is a redirect (amendment P2-a).** `/oauth/authorize` today
+   builds the redirect URL and then returns it in a JSON body
+   (`r6/oauth.py:307-313`: `{"redirect": …, "code": …, "state": …}`), with no
+   `iss`. OAuth 2.1 §4.1.2 requires a `302` with
+   `Location: <redirect_uri>?code=…&state=…&iss=…`, and RFC 9207 §2 puts `iss`
+   in that same query. A browser cannot complete a flow that ends in JSON, so
+   no hosted connector can either. §8.1's A6 follows the `Location` header.
+5. **Registration, per RFC 7591 (amendment P2-d).** Four changes at
+   `/oauth/register`, all of them things a conformant client already expects:
+   include `client_secret_expires_at` in the response (absent today,
+   `r6/oauth.py:237-244`); honour `token_endpoint_auth_method: none` and treat
+   that client as public (the request's value is ignored and the response is
+   always `client_secret_post`, `r6/oauth.py:243`, while discovery advertises
+   both methods at `r6/oauth.py:186`); reject any `redirect_uri` that is
+   neither a `localhost` URL nor `https://` (stored unvalidated today,
+   `r6/oauth.py:225`); and require `client_id` in the `/oauth/token` request
+   for public clients, per RFC 6749 §4.1.3 — today it is checked only when the
+   client sends it (`r6/oauth.py:343`). A public client sends no secret, so
+   `client_id` is the only thing binding the code to the client it was issued
+   to.
+
+#### 3.5.1 Which tenant a browser-initiated authorize binds (amendment P2-b)
+
+The tenant is config, not a header. Today it is the header:
+`requested_tenant = request.headers.get('X-Tenant-Id', 'default')`
+(`r6/oauth.py:284`), and that value is what the code and then the token carry.
+When the `resource` parameter string-equals `MCP_CANONICAL_RESOURCE`, the
+tenant is `MCP_OAUTH_DEMO_TENANT`, and `X-Tenant-Id` on that request is
+ignored.
+
+`MCP_OAUTH_DEMO_TENANT` MUST be listed in `PUBLIC_TENANTS`. That is what keeps
+§6.1's boundary true: the strongest token this flow can mint is one bound to a
+synthetic tenant. A browser flow has no trusted place to put a tenant header —
+whoever controls the page controls it — so taking the tenant from the request
+is the same defect as §9.8, arriving by a new road.
+
+Pre-deploy check for phase 2, run against the environment rather than the
+source: `APP_ENV=production` (`r6/runtime_config.py:49`),
+`READ_AUTH_ENABLED=true` (`r6/runtime_config.py:105`), and
+`MCP_OAUTH_DEMO_TENANT` present in `PUBLIC_TENANTS`
+(`r6/command_center/access.py:95`). If the demo tenant is not
+public, `authorize` refuses at `r6/oauth.py:286` and the flow fails closed,
+which is the correct direction and a confusing one to debug.
 
 **At the MCP server:**
 
@@ -356,13 +475,13 @@ unreachable, every OAuth-credentialed call returns 401. The static-token path
 does not touch Flask and is unaffected. Fail-closed is the correct direction
 and it is stated here so that nobody later reads the outage as a regression.
 
-### 3.6 Two rules that fall out of audience validation, and are easy to miss
+### 3.6 Three rules that fall out of audience validation, and are easy to miss
 
 **The MCP server must stop forwarding the client's `Authorization` header when
 the credential is an MCP-audience token.** Today `extractHeaders` forwards
 `authorization` downstream to Flask whenever it is not the static MCP
 credential. Under this design that would hand Flask a token whose audience is
-`<RESOURCE>`, and Flask's `_oauth_authorizes` (`r6/read_auth.py`) checks
+`<RESOURCE>`, and Flask's `_oauth_authorizes` (`r6/read_auth.py:35-41`) checks
 `tenant_id` and scope but **not** audience — so it would accept it. That is
 precisely the token passthrough the MCP specification forbids, and we would
 have built it by leaving code alone.
@@ -374,6 +493,20 @@ tenant, §6) that is sufficient, because `authorize_tenant_read` returns public
 tenants without a credential. The moment a protected tenant is in play, the
 MCP server needs its own downstream credential, and that is a named follow-on
 (§5, §6).
+
+**`extractHeaders` is not the only way in (amendment P3-a).** The paragraph
+above stops the HTTP header. The JSON-RPC tool arguments `_tenantId`,
+`_stepUpToken` and `_authorization` set the same three downstream headers, in
+the `CallToolRequestSchema` handler in
+`services/agent-orchestrator/src/index.ts`, and a rule written against
+`extractHeaders` alone leaves them open. Stopping one of two
+doors is the defect shape `docs/2026-08-02-retro.md` is about.
+
+Required: on the OAuth path those three arguments are discarded, exactly as
+`isPublicDemo()` already discards them when it pins the demo tenant. The
+tenant comes from introspection and from nowhere else. §8.2 asserts this as
+R8, because a credential arriving in a tool argument is invisible to every
+test that inspects headers.
 
 **An OAuth scope is not a step-up token and never becomes one.** A token
 carrying `fhir.write` still does not authorize a write. Writes go through
@@ -495,10 +628,12 @@ that could bind any tenant would convert the lock into decoration. The 403 at
 `r6/oauth.py:286` is the only thing preventing that today, and this design
 depends on it rather than removing it.
 
-**A consent surface for protected tenants is the follow-on specification** and
-the thing that actually closes the distance to real records. It is out of
-scope here, deliberately, because it is a product and UX decision with a PHI
-boundary attached and it does not fit in the same PR as a metadata document.
+**A consent surface for protected tenants is the follow-on specification**
+(#568, "MCP authorization phases 2 and 3: a hosted connector still cannot
+reach a tenant") and the thing that actually closes the distance to real
+records. It is out of scope here, deliberately, because it is a product and
+UX decision with a PHI boundary attached, and it does not fit in the same PR
+as a metadata document.
 
 ### 6.2 It does not weaken or replace `MCP_AUTH_TOKEN`
 
@@ -534,6 +669,26 @@ relevant if §3.1 selects a custom origin, and that is noted in §9.
 The MCP server validates tokens. It never mints them. There is exactly one
 issuer.
 
+### 6.8 It does not issue refresh tokens (amendment P2-f)
+
+State it rather than leave it to be discovered. There are no refresh tokens:
+`token` returns `access_token`, `token_type`, `expires_in` and `scope`, and
+`refresh_token` appears nowhere in `r6/oauth.py`. `OAUTH_TOKEN_TTL` defaults to
+3600 (`r6/oauth.py:33`), so an access token lives an hour, and a hosted
+connector re-consents when it expires. That is spec-legal under MCP 2026-07-28
+and it is a real cost to the person using the connector.
+
+The consequence is worth naming because it lands on a patient, not on us: a
+connector that worked an hour ago asks for consent again, with no explanation
+that anything expired. Hourly re-consent is acceptable for a synthetic demo
+tenant and is not a shape to carry into real records.
+
+If refresh tokens are added later for public clients, rotation is a **MUST**
+per OAuth 2.1 §4.3.1: each refresh returns a new refresh token and invalidates
+the old one, and reuse of a rotated token revokes the chain. A non-rotating
+refresh token issued to a public client is a long-lived bearer credential
+stored on someone else's machine.
+
 ---
 
 ## 7. Migration path — production is never unlocked, not even briefly
@@ -545,10 +700,10 @@ state in every one of them.
 > unauthenticated `initialize` or `tools/call` against the production origin
 > return anything other than `401`.
 
-**Phase 0 — decide the canonical resource URI (§3.1).** No code. If
-`mcp.healthclaw.io` is chosen, repoint DNS to the Railway service and verify
-before phase 1; the record currently answers from Vercel with
-`DEPLOYMENT_NOT_FOUND` (§9.6).
+**Phase 0 — decide the canonical resource URI (§3.1).** No code. Ruled by D4:
+`https://mcp.healthclaw.io/mcp`. Repoint DNS to the Railway service and verify
+over DoH before phase 1 deploys; the record currently answers from Vercel with
+`DEPLOYMENT_NOT_FOUND` (§9.6, #522).
 
 **Phase 1 — serve the PRM and enrich the 401.** MCP server only. Two new
 unauthenticated routes and two extra `WWW-Authenticate` parameters. **No
@@ -557,6 +712,11 @@ bearers still 401, `MCP_AUTH_TOKEN` still required at boot. This phase alone
 closes the "no way forward" half of #290 — a client stops asking for a Client
 ID that does not exist and instead reports honestly that it cannot obtain a
 token. Independently shippable and independently valuable.
+
+Phase 1 merges behind `MCP_CANONICAL_RESOURCE` and ships inert: unset, the
+routes 404 and the challenge stays bare (§3.1, amendment P1-b). Merging is
+therefore not deploying, and the constant is set only after DNS answers from
+Railway. Phase 1 closes #523. #290 stays open until the §8.4 end-user run.
 
 **Phase 2 — authorization server work.** Flask only. Issuer scheme fix, root
 discovery route, `resource` recorded as `aud`, `invalid_target` rejection,
@@ -610,11 +770,11 @@ an error.
 | # | Assertion | Names the guarantee |
 |---|---|---|
 | A1 | Unauthenticated `POST /mcp` returns **401**, and `WWW-Authenticate` contains `resource_metadata=` **and** `scope=`, and contains **no** `error=` | the refusal offers a way forward |
-| A2 | `GET` the `resource_metadata` URL from A1 returns **200**, `content-type: application/json`, parseable, with `resource`, `authorization_servers`, `scopes_supported` present | the way forward exists |
-| A3 | PRM `resource` **string-equals** the URL used in A1 | the audience the client will request is the audience we will check |
+| A2 | `GET` the `resource_metadata` URL **from the A1 header** — the sub-path form, never the root form — returns **200**, `content-type: application/json`, parseable, with `resource`, `authorization_servers`, `scopes_supported` present | the way forward exists |
+| A3 | PRM `resource` at that same sub-path URL **string-equals** the URL used in A1 | the audience the client will request is the audience we will check |
 | A4 | AS metadata resolves at one of the locations the spec requires clients to try, derived from `authorization_servers[0]`; its `issuer` string-equals `authorization_servers[0]`; every endpoint URL begins `https://`; `code_challenge_methods_supported` contains `S256` | the authorization server is discoverable and usable |
 | A5 | DCR at `registration_endpoint` returns **201** with a `client_id` | a client with no prior relationship can register |
-| A6 | authorize + token, PKCE `S256`, `resource=<RESOURCE>` — assert an access token was **received**, then assert `token_type` is `Bearer` | a token can be obtained |
+| A6 | authorize + token, PKCE `S256`, `resource=<RESOURCE>` — **follow the `302` `Location` header** from `/oauth/authorize` and read `code`, `state` and `iss` from its query, never from a JSON body; then assert an access token was **received**, then assert `token_type` is `Bearer` | a token can be obtained the way a browser would obtain it |
 | A7 | `initialize` with that token returns **200** with an `Mcp-Session-Id`; `tools/list` returns **200** with **27** tools — and the log prints both numbers, 29 advertised in the manifest and 27 exercised on this transport, with the 2 privileged names | every advertised tool is served, and the count is stated rather than implied |
 | A8 | every one of the 27 is called with valid arguments and returns a result | *answers* — the second half of the PRD's definition |
 
@@ -636,6 +796,7 @@ with a menu."
 | R5 | `MCP_AUTH_TOKEN` still returns the full tool list | the lock was added to, not replaced |
 | R6 | Boot with neither `MCP_AUTH_TOKEN` nor the demo flag under `NODE_ENV=production` → **refuses to start** | fail-closed survived the change |
 | R7 | `MCP_OAUTH_ENABLED=false` → an otherwise valid OAuth token gets **401** | the rollback switch actually rolls back |
+| R8 | On the OAuth path, `_tenantId`, `_stepUpToken` and `_authorization` passed as **tool arguments** reach Flask in no form: no credential carried in a tool argument reaches Flask on the OAuth path | the header rule is not the only door (§3.6, amendment P3-a) |
 
 **R3 is the assertion this whole design lives or dies by.** It is the only one
 that distinguishes "we wrote an audience check" from "the audience check
@@ -787,18 +948,21 @@ verification belongs in phase 2's pre-deploy checklist and is listed in §10.
 
 ## 10. Open questions for the review
 
-1. **§3.1 — which canonical resource URI?** Blocks phase 1. Owner's.
+1. ~~**§3.1 — which canonical resource URI?**~~ **Ruled** by D4:
+   `https://mcp.healthclaw.io/mcp`, issuer `https://app.healthclaw.io`.
 2. **Confirm `READ_AUTH_ENABLED=true` in the running production Flask**, by
    observation and not by reading `runtime_config.py`. §9.8 explains why this
-   matters more than it looks. Pre-deploy checklist item for phase 2.
+   matters more than it looks. Pre-deploy checklist item for phase 2, now
+   alongside `APP_ENV=production` and the demo tenant's membership of
+   `PUBLIC_TENANTS` (§3.5.1).
 3. **Which resource identifiers go in the `invalid_target` allowlist?** At
    minimum `<RESOURCE>` and the FHIR resource. Anything else is a decision.
-4. **Does closing #290 require phase 3, or is phase 1 enough to close it?**
-   Phase 1 removes the dead end and the misleading prompt; it does not make a
-   hosted connector work. Recommendation: phase 1 closes #290 as filed
-   (the issue is titled "no way forward"), and reaching a real tenant becomes
-   the follow-on consent specification, filed separately with §6.1 as its
-   problem statement. Reviewer's call.
+   Amendment P2-b makes each entry carry a tenant policy, so adding one is a
+   decision about which tenant it binds, not only about which audience is
+   known.
+4. ~~**Does closing #290 require phase 3?**~~ **Ruled** by D4: phase 1 closes
+   #523. #290 closes on the §8.4 end-user run, and #568 tracks the consent
+   work that reaches a real tenant.
 
 ---
 
@@ -810,6 +974,85 @@ verification belongs in phase 2's pre-deploy checklist and is listed in §10.
   submitted to
 - `docs/2026-08-16-hard-truths.md` §4, §5 — the failure patterns §4.2 and §8
   are written against
-- #290 (this design), #164 (distribution epic), #155, #289, #243, #427
+- #523 (what phase 1 closes), #290 (this design), #522 (the dangling record
+  phase 1 waits on), #164 (distribution epic), #155, #289, #243, #427
+- `docs/2026-09-02-council-ruling.md` §D4 — the ruling these amendments carry
+- #567 — URLs built from `request.host_url` lose the scheme behind the proxy
+- #568 — the successor to #290: a hosted connector reaching a tenant, which
+  is phase 3 plus the consent surface of §6.1
 - MCP specification 2026-07-28 (Current), `basic/authorization`
 - RFC 9728, RFC 8707, RFC 8414, RFC 7591, RFC 7662, RFC 9207, RFC 6750
+
+---
+
+## 12. Amendments 2026-09-02
+
+Adopted by the council on 2026-09-02 (Interop seat, ruling D4). Each is edited
+into the section it belongs to; this list is the index, not the content. Where
+an amendment corrects the document rather than the design, it says so.
+
+Every claim the P2 amendments make about what `r6/oauth.py` and
+`r6/read_auth.py` do today was checked against the source on 2026-09-03, and
+each now carries a `file:line`. **Read, not run** — this is source reading, not
+a measurement against a deployment, and it is dated because line numbers move.
+All seven held: the JSON authorize response, the tenant taken from
+`X-Tenant-Id`, the absent client authentication, the absent `resource`
+handling, the absent introspection endpoint, the 3600-second token with no
+refresh, and the missing `aud` check in `_oauth_authorizes`.
+
+**Phase 1 — merged behind `MCP_CANONICAL_RESOURCE`.**
+
+- **P1-a — §3.2, §3.4.** The `resource_metadata` URL in the 401 is built from
+  `MCP_CANONICAL_RESOURCE`, never from `req.hostname`. The document already
+  said this for the PRM `resource`, and the header needs the same rule. The
+  reason is RFC 9728 §3.3, not a proxy rewriting Host — Railway preserves
+  Host, measured 2026-09-03. The scheme is what the proxy loses (#567).
+- **P1-b — §3.1, §7.** The fail-closed rule as written could not work for
+  phase 1: it keys on OAuth acceptance, which phase 1 predates. Replaced by
+  the flag rule — unset means 404 and a bare challenge, set means both ship,
+  malformed refuses to boot, and either is served only on the canonical Host.
+  The reason for the Host gate is RFC 9728 §3.3.
+- **P1-c — §3.4.** Citation fix. RFC 6750 §3.1 says a server SHOULD NOT send
+  `error` on a credential-less 401. The document said "does not permit". The
+  behaviour is unchanged.
+- **P1-d — §3.2, §8.1.** "Byte-identically at both paths" is not conformant
+  for the root form: root-form insertion implies the resource identifier
+  `https://mcp.healthclaw.io`, and the document says `…/mcp`. MCP 2026-07-28
+  tolerates it as the listed fallback, so both keep being served, and A2/A3
+  now assert against the header-pointed sub-path URL.
+
+**Phase 2 — authorization server, not yet built.**
+
+- **P2-a — §3.5, §8.1.** `/oauth/authorize` MUST answer `302` with
+  `Location: <redirect_uri>?code=…&state=…&iss=…` (OAuth 2.1 §4.1.2, RFC 9207
+  §2). Today it returns JSON, which no browser flow can complete. A6 follows
+  the `Location` header.
+- **P2-b — §3.5.1.** Tenant binding for a browser-initiated authorize is
+  config: when `resource` string-equals `MCP_CANONICAL_RESOURCE`, the tenant
+  is `MCP_OAUTH_DEMO_TENANT` and `X-Tenant-Id` is ignored. The demo tenant
+  must be in `PUBLIC_TENANTS`, and the `invalid_target` allowlist becomes a
+  map from resource to tenant policy rather than a set.
+- **P2-c — §3.5.** RFC 8707: the `resource` at `/oauth/token` MUST equal the
+  one recorded on the code at `/oauth/authorize`, or be absent and inherit it.
+  `invalid_target` applies at both endpoints.
+- **P2-d — §3.5.** RFC 7591 at `/oauth/register`: add
+  `client_secret_expires_at`, honour `token_endpoint_auth_method: none`,
+  reject a `redirect_uri` that is neither `localhost` nor `https://`, and
+  require `client_id` at `/oauth/token` for public clients (RFC 6749 §4.1.3).
+- **P2-e — §3.5.** RFC 7662 §2.1: introspection must be protected. The
+  credential is named now — `MCP_INTROSPECTION_CLIENT_ID` and
+  `MCP_INTROSPECTION_CLIENT_SECRET`, a pre-registered confidential client,
+  compared with `hmac.compare_digest`.
+- **P2-f — §6.8.** State the token lifetime: no refresh tokens,
+  `OAUTH_TOKEN_TTL=3600`, and a hosted connector re-consents hourly. If
+  refresh is added later for public clients, rotation is a MUST (OAuth 2.1
+  §4.3.1).
+
+**Phase 3 — MCP server accepts those tokens, not yet built.**
+
+- **P3-a — §3.6, §8.2.** §3.6 stopped header passthrough in `extractHeaders`
+  and left the JSON-RPC tool-argument overrides open (the
+  `CallToolRequestSchema` handler in
+  `services/agent-orchestrator/src/index.ts`). On the
+  OAuth path `_tenantId`, `_stepUpToken` and `_authorization` are discarded,
+  exactly as `isPublicDemo()` pins them. Asserted as R8.
