@@ -2901,7 +2901,9 @@ def test_the_poll_says_documents_are_not_readable_when_some_arrived(
     assert d["new_records"] == 5
     note = d.get("uncounted_note", "")
     assert "not yet readable" in note, d
-    assert "notes and documents" in note, d
+    assert "Notes and documents" in note, d
+    # A statement, not a hedge — here we know they arrived.
+    assert "could not check" not in note, d
 
 
 def test_the_poll_adds_no_clause_when_no_documents_arrived(
@@ -2916,14 +2918,15 @@ def test_the_poll_adds_no_clause_when_no_documents_arrived(
     assert "uncounted_note" not in d, d
 
 
-def test_no_count_at_all_when_the_document_probe_could_not_answer(
+def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
         cfg, svc, monkeypatch):
-    """MUTATION: catch the probe separately and default it to 0 -> red.
+    """MUTATION: default the failed probe to 0 -> red (the clause vanishes and
+    the count is published as though complete).
 
-    A count whose "and there are notes missing from this" could not be
-    established would be published as if complete — the same silent omission
-    the clause exists to end, and #403's "unknown is never zero" applied to
-    the clause rather than the number.
+    #403's "unknown is never zero" applies to the clause, not only the number:
+    a silent count would imply nothing was left out. But suppressing the count
+    trades one silence for another — the growth is a fact we did measure. So
+    the known part is stated and the unknown is named.
     """
     from careagents.app import create_app
     fake = FakeClient()
@@ -2945,8 +2948,15 @@ def test_no_count_at_all_when_the_document_probe_could_not_answer(
 
     d = c.get(f"/api/connections/{tenant}/poll").get_json()
     assert d["status"] == "active"
-    assert "record_count" not in d and "new_records" not in d, d
-    assert "uncounted_note" not in d, d
+    # The count we did measure is still reported ...
+    assert d["record_count"] == 105
+    assert d["new_records"] == 5
+    # ... and the sentence says what could not be established, rather than
+    # the "not yet readable" claim, which would assert documents exist.
+    note = d["uncounted_note"]
+    assert "could not check" in note, note
+    assert "notes or documents" in note, note
+    assert "not yet readable" not in note, note
 
 
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(

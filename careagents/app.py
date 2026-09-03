@@ -636,24 +636,32 @@ def create_app(config: Config | None = None,
             # of decaying to zero while the patient is still reading it.
             baseline = conns[conn_tenant].get("last_count")
             if baseline is not None:
-                # The count covers what the patient can actually reach;
-                # DocumentReferences are ingested but unreadable, so they are
-                # out of it and the clause below says so (#226). The two are
-                # fetched together and reported together: a number whose
-                # "and there are notes missing from this" could not be
-                # established is the same silent omission the clause exists to
-                # end, so it is either both or neither.
                 try:
                     current = hc.record_count(conn_tenant)
+                except HealthClawError:
+                    current = None
+                # The count covers what the patient can actually reach;
+                # DocumentReferences are ingested but unreadable, so they are
+                # out of it and the sentence below says so (#226). When the
+                # probe itself fails we hedge rather than suppress: the count
+                # is a fact we did measure, and hiding it would trade one
+                # silence for another. State the known part, name the unknown
+                # — the posture the review relay already takes on an
+                # unestablished `confirmed`.
+                try:
                     uncounted = hc.uncounted_record_count(conn_tenant)
                 except HealthClawError:
-                    current = uncounted = None
+                    uncounted = None
                 if current is not None:
                     out["record_count"] = current
                     out["new_records"] = max(0, current - int(baseline))
-                    if uncounted:
+                    if uncounted is None:
                         out["uncounted_note"] = (
-                            "notes and documents are not yet readable here")
+                            "We could not check whether notes or documents "
+                            "were left out.")
+                    elif uncounted > 0:
+                        out["uncounted_note"] = (
+                            "Notes and documents are not yet readable here.")
             return jsonify(out)
         return jsonify({"status": "pending"})
 
