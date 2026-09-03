@@ -363,6 +363,7 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id):
         if value is not None:
             return value, value_key
         _report_unpopulated(issues, link_id)
+        return None, value_key
 
     # No initialExpression and no code: NOTHING WAS ATTEMPTED, so nothing is
     # reported. THIS IS THE EXCLUSION AND IT IS LOAD-BEARING —
