@@ -104,7 +104,7 @@ SEED_RESP=$(curl -sf -X POST "$FHIR_BASE/internal/seed" \
   -H "X-Tenant-ID: $TENANT_ID" \
   -H "X-Step-Up-Token: $STEP_UP_TOKEN" \
   -d "{\"tenant_id\":\"$TENANT_ID\"}" 2>/dev/null || echo '{}')
-check "Seed created resources" '"created"' "$SEED_RESP"
+check "Seed created resources" '"created_count"' "$SEED_RESP"
 
 # Extract seeded token if provided (seed returns a fresh token)
 SEED_TOKEN=$(echo "$SEED_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('step_up_token', ''))" 2>/dev/null || echo "")
@@ -112,16 +112,15 @@ if [ -n "$SEED_TOKEN" ]; then
   STEP_UP_TOKEN="$SEED_TOKEN"
 fi
 
-PATIENT_ID=$(echo "$SEED_RESP" | python3 -c "
+PATIENT_ID=$(curl -sf "$FHIR_BASE/Patient?_count=1" \
+  -H "X-Tenant-ID: $TENANT_ID" 2>/dev/null | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-created = d.get('created', [])
-for r in created:
-  if isinstance(r, dict) and r.get('resourceType') == 'Patient':
-    print(r.get('id',''))
-    break
+entries = d.get('entry', [])
+print(entries[0].get('resource', {}).get('id', '') if entries else '')
 " 2>/dev/null || echo "")
-check "Seeded patient ID extracted" "." "${PATIENT_ID:-none}"
+# Sentinel starts with '!' so an empty id can never satisfy the pattern.
+check "Seeded patient ID extracted" "^[A-Za-z0-9][A-Za-z0-9._-]*$" "${PATIENT_ID:-!none}"
 
 # ─────────────────────────────────────────────────────
 # GATE 6: Read with PHI redaction
@@ -175,7 +174,9 @@ fi
 # ─────────────────────────────────────────────────────
 _blue "Gate 9: Curatr evaluation"
 
-CONDITION_RESP=$(curl -sf "$FHIR_BASE/Condition?patient=$PATIENT_ID" \
+# The `patient` search param matches subject.reference, so it needs the
+# full "Patient/{id}" form — a bare id matches nothing.
+CONDITION_RESP=$(curl -sf "$FHIR_BASE/Condition?patient=Patient/$PATIENT_ID" \
   -H "X-Tenant-ID: $TENANT_ID" 2>/dev/null || echo '{}')
 CONDITION_ID=$(echo "$CONDITION_RESP" | python3 -c "
 import sys, json
@@ -186,10 +187,8 @@ if entries:
 " 2>/dev/null || echo "")
 
 if [ -n "$CONDITION_ID" ]; then
-  CURATR_RESP=$(curl -sf -X POST "$FHIR_BASE/Condition/$CONDITION_ID/\$curatr-evaluate" \
-    -H "Content-Type: application/json" \
-    -H "X-Tenant-ID: $TENANT_ID" \
-    -d '{}' 2>/dev/null || echo '{}')
+  CURATR_RESP=$(curl -sf "$FHIR_BASE/Condition/$CONDITION_ID/\$curatr-evaluate" \
+    -H "X-Tenant-ID: $TENANT_ID" 2>/dev/null || echo '{}')
   check "Curatr evaluation returns result" '"issues"\|"quality_score"\|"resourceType"' "$CURATR_RESP"
 else
   _blue "  (skip — no Condition found in seeded data)"
@@ -241,7 +240,9 @@ ACTION_ID=$(echo "$PROPOSE_RESP" | python3 -c "import sys,json; print(json.load(
 check "Action proposed — id returned" "^[0-9a-f-]\{36\}$" "${ACTION_ID:-none}"
 
 if [ -n "$ACTION_ID" ]; then
-  # Commit the action (simulation mode — no provider keys → completes synchronously)
+  # Commit submits the action; the human gate holds it at awaiting_confirmation
+  # until an out-of-band approval claims it (proposed -> awaiting_confirmation
+  # -> executing). See STATUS_TRANSITIONS in r6/actions/models.py.
   COMMIT_RESP=$(curl -s -X POST "$APP_BASE/r6/actions/$ACTION_ID/commit" \
     -H "Content-Type: application/json" \
     -H "X-Tenant-Id: $TENANT_ID" \
@@ -249,7 +250,7 @@ if [ -n "$ACTION_ID" ]; then
     -H "X-Human-Confirmed: true" \
     2>/dev/null || echo '{}')
   COMMIT_STATUS=$(echo "$COMMIT_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
-  check "Action commit returns status=completed" "completed" "$COMMIT_STATUS"
+  check "Action commit parks at the human gate" "awaiting_confirmation" "$COMMIT_STATUS"
 
   # Verify audit trail recorded ProposedAction events (propose + commit = ≥ 2)
   AUDIT_ACTIONS=$(curl -s "$FHIR_BASE/AuditEvent?_count=50" \
