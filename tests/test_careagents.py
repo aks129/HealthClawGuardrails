@@ -5238,3 +5238,88 @@ def test_the_tester_guide_matches_what_the_switch_actually_does():
     assert "Delete the account" in leaving
     assert "no self-serve" in leaving
     assert "support@healthclaw.io" in leaving
+
+
+# --- browser pass over the beta batch (#553) ---------------------------------
+# Three defects a screen reader and a pair of eyes found on the hub that no
+# server-side assertion could see.
+
+def test_the_connect_refusal_is_announced_to_a_screen_reader():
+    """`#connect-msg` is the ONLY channel for a refusal: tap a closed tile and
+    this paragraph is the whole of what the deployment says back. Without the
+    live-region attributes a blind tester taps and is told nothing at all.
+
+    Its sibling `.conn-refresh-msg` has carried `role="status"` +
+    `aria-live="polite"` since the refresh flow landed; this is the same
+    treatment on the same kind of element.
+    """
+    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="connect-msg"'):]
+    tag = tag[:tag.index(">") + 1]
+    assert 'role="status"' in tag, tag
+    assert 'aria-live="polite"' in tag, tag
+
+    # ...and the attributes alone are not the fix. A live region announces a
+    # change made while it is IN the accessibility tree; `hidden` is
+    # display:none, and say() also MOVES the element (a remove-then-insert).
+    # Writing the text in the same task as either one is a change nothing is
+    # listening for. So the region is shown first and written into after.
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function say(")[1].split("\n  }")[0])
+    assert body.index("el.hidden = false") < body.index("el.textContent = text")
+    assert "requestAnimationFrame" in body
+
+
+def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
+        svc, monkeypatch):
+    """"Verified provider & wearable logins happen on the provider's own site"
+    rendered directly beneath three tiles saying those logins are not open in
+    this beta. The sentence is true and stays — for the deployment where the
+    tiles it describes are live."""
+    closed = _beta_app(svc).test_client()
+    _login(closed, svc, monkeypatch, email="tester@example.org")
+    body = closed.get("/home").get_data(as_text=True)
+    assert "never see your password" not in body
+    # The tiles it contradicted are the ones on screen.
+    assert "Not open in this beta" in body
+
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")
+    listed = app.test_client()
+    _login(listed, svc, monkeypatch, email="dr.who@example.org")
+    body = listed.get("/home").get_data(as_text=True)
+    assert "never see your password" in body
+    # Same deployment, an account that is not on the list: no sentence.
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="stranger@example.org")
+    assert "never see your password" not in other.get("/home").get_data(
+        as_text=True)
+
+
+def test_the_landing_page_does_not_promise_a_provider_login_the_beta_closes(
+        app):
+    """Step 1 sent a stranger to "your provider's own verified login", which
+    the switch closes for all but an allowlisted account. The landing page is
+    public and gets no account, so it cannot resolve the switch — the clause
+    goes rather than being made conditional."""
+    body = app.test_client().get("/").get_data(as_text=True)
+    assert "verified login" not in body
+    assert "connect your records" in body
+
+
+def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
+    """It read `real-records connect isn't open on this beta deployment yet —
+    start with the sample records`: lowercase start, no full stop, an em dash
+    this repo does not use in patient-facing copy. It is the one sentence a
+    refused tester gets."""
+    from careagents.connectors import _REAL_RECORDS_CLOSED as msg
+    assert msg == ("Connecting your own records isn't open in this beta yet. "
+                   "Start with the sample records.")
+    assert "—" not in msg and "--" not in msg
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    for tile, payload in (("fasten", {"consent": True}),
+                          ("wearable", {"provider": "apple", "consent": True}),
+                          ("direct", {"consent": True})):
+        r = c.post(f"/api/connections/{tile}", json=payload)
+        assert r.status_code == 503, tile
+        assert r.get_json()["error"] == msg, tile

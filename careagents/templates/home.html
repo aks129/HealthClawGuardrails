@@ -92,9 +92,19 @@
       </button>
       {% endfor %}
     </div>
-    <p class="inline-msg" id="connect-msg" hidden></p>
+    {# The only channel for a refusal: tap a closed tile and this paragraph is
+       the whole of what the deployment says back. Same live-region treatment
+       as .conn-refresh-msg above; say() shows it before writing into it. #}
+    <p class="inline-msg" id="connect-msg" role="status" aria-live="polite"
+       hidden></p>
+    {# True, and worth keeping — but only where the logins it describes are
+       open. Under three "not open in this beta" tiles it contradicted the
+       screen it sat on. #}
+    {% if catalog | selectattr('id', 'in', ['fasten', 'wearable'])
+                  | rejectattr('tier', 'equalto', 'soon') | list %}
     <p class="add-note">Verified provider &amp; wearable logins happen on the
       provider’s own site — we never see your password.</p>
+    {% endif %}
   </section>
 
   <!-- SURFACES -->
