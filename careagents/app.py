@@ -45,6 +45,16 @@ logger = logging.getLogger(__name__)
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
 
+# `/healthz` asks HealthClaw whether a run worker is present. That call gets
+# its own budget rather than the client's 25s chat timeout: as a
+# `(connect, read)` pair the worst case is 2.0s of network wait, which fits
+# inside the 4s the container probe allows (`careagents/healthcheck.py`) and
+# the Dockerfile's `HEALTHCHECK --timeout=5s`. The probe measured the old
+# shape taking 25.01s to answer at zero load, purely because it inherited the
+# chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
+# PR #573).
+_HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
 # ceiling stops an oversized (or chunked / no-Content-Length) request
@@ -811,9 +821,10 @@ def create_app(config: Config | None = None,
     WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN = (
         "ready", "not_ready", "unknown")
 
-    def _worker_state() -> str:
+    def _worker_state(timeout=None) -> str:
         try:
-            status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
+            status = hc.agent_worker_health(cfg.run_worker_stale_seconds,
+                                            timeout=timeout)
         except HealthClawError:
             return WORKERS_UNKNOWN
         return WORKERS_READY if status.get("available") else WORKERS_NOT_READY
@@ -838,7 +849,21 @@ def create_app(config: Config | None = None,
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
-            page = hc.agent_run_events(tenant, run_id, after=cursor, limit=100)
+            try:
+                page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                           limit=100)
+            except HealthClawError:
+                # Without this the generator dies inside an open response and
+                # the browser is left with a stream that stopped for no stated
+                # reason (#219). Only this projection ends: the run is durable
+                # and keeps going, and a reconnect resumes at `cursor`. The
+                # text is the same generic sentence every other failure uses —
+                # an exception message here would be the first place engine
+                # internals reached a patient's screen.
+                logger.warning("run event stream failed for tenant %s", tenant)
+                yield "data: " + json.dumps({
+                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                return
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -1356,11 +1381,29 @@ def create_app(config: Config | None = None,
         load balancer would route real sign-ins straight into failure. It now
         round-trips a trivial query so the answer reflects reality.
 
-        Readiness has two inputs, and both gate the status code: the account
-        store must answer, and a fresh agent-run worker must be present. A
-        deployment with no worker can serve pages but cannot complete a chat
-        turn, so advertising it as ready would route people into failure the
-        same way the hard-coded accounts=True once did.
+        Readiness has two inputs and they are NOT symmetric (#219). The
+        account store is ours, so it gates the status code outright. The run
+        workers are HealthClaw's, so what gates the status code is their
+        ANSWER, not our ability to get one:
+
+        - Confirmed absent — HealthClaw answered, and no worker presence is
+          fresh. That deployment serves pages and cannot finish a chat turn.
+          It is the web-only deployment the durable-worker runbook tells
+          operators to expect a 503 for, and it stays a 503 deliberately: on
+          Railway the health check runs at the start of a deploy, and this is
+          a deploy that must not go live.
+        - Could not ask, inside `_HEALTHZ_WORKER_TIMEOUT` — that is a fact
+          about HealthClaw, not about this container. Reported as
+          `run_workers_state: "unknown"`; it does not fail the endpoint.
+          Failing it would block a CareAgents deploy on someone else's
+          outage, including the deploy that fixes it, while traffic stays on
+          a previous version with exactly the same dependency. The probe
+          measured the old shape taking 25.01s to answer 503 with nothing
+          running at all (evidence §8, PR #573).
+
+        Admission is unchanged, and it is the gate that protects people:
+        `POST /api/chat` still refuses a turn in BOTH states, so nothing
+        routes anyone into a turn no worker can run.
 
         It also reports which build is running (#258). That is telemetry, not
         a gate: an absent marker reports "unknown" and changes nothing about
@@ -1371,14 +1414,18 @@ def create_app(config: Config | None = None,
         including dependencies it does not control.
         """
         accounts_ok = svc.ping()
+        workers_state = _worker_state(timeout=_HEALTHZ_WORKER_TIMEOUT)
         # `run_workers` stays a boolean readiness VERDICT, not a claim about
         # the workers: false is correct when we could not confirm them, and
         # two runbooks plus the container-roles test read it as a bool.
-        workers_ok = _worker_state() == WORKERS_READY
-        ready = accounts_ok and workers_ok
+        # `run_workers_state` carries the claim the bool cannot make (#410) —
+        # and now also the difference the status code turns on.
+        workers_ok = workers_state == WORKERS_READY
+        ready = accounts_ok and workers_state != WORKERS_NOT_READY
         body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
                 "run_workers": workers_ok,
+                "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
 
