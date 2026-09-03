@@ -3768,6 +3768,73 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
     assert refused.status_code == 422
 
 
+def test_an_unreadable_answer_to_the_review_is_neither_saved_nor_unsaved(
+        cfg, svc, monkeypatch):
+    """QA #566 (HIGH), the route half.
+
+    Something answered the review POST and nobody could read the answer. The
+    client now raises `HealthClawUnconfirmed` there (the transport half is in
+    tests/test_healthclaw_transport.py, over a real socket). This route must
+    catch it BEFORE `HealthClawError`, because that arm says "Nothing has
+    been approved" — and this POST is what mints the confirmation (#528), so
+    if the engine received it an approval exists. Neither half is knowable,
+    which is what `confirmed: null` is for (#220).
+
+    What must NOT happen is what shipped: the status passed through as 200,
+    `confirm_action` called on the strength of it, and the patient told
+    "your review was saved and your approval is recorded" with no
+    confirmation row anywhere.
+
+    MUTATION: delete the `except HealthClawUnconfirmed` arm -> red, the
+    subclass falls into the HealthClawError arm and answers 503 with
+    "Nothing has been approved". Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    confirms = []
+
+    fake = FakeClient()
+    fake.submit_review = _unreadable
+    fake.confirm_action = lambda t, a: confirms.append(a)
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    assert not confirms, "an unreadable answer must not be confirmed on"
+    msg = payload["message"].lower()
+    # Both directions. Each of these is false on one of the two ways this
+    # path can have happened, so neither of the two neighbouring messages
+    # can be reused here — which is why this is a third string.
+    assert "nothing has been approved" not in msg, \
+        "the review may have been saved, and this POST is what records it"
+    # The other direction, and a substring test alone cannot see it: this
+    # message contains "your review was saved" — inside "whether". What is
+    # forbidden is ASSERTING it, so require the qualifier rather than the
+    # absence of the words.
+    for claim in ("your review was saved", "your approval is recorded"):
+        at = msg.find(claim)
+        assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+            f"{claim!r} is stated here as a fact; nothing on this path "
+            f"observed it")
+    # What it may say, and does: that we could not tell.
+    assert "couldn't tell" in msg or "could not tell" in msg
+    # And the way back stays open: no instruction not to approve again.
+    assert "approving again" in msg or "before approving" in msg
+
+
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
         cfg, svc, monkeypatch):
     """"Unknown run" and "unknown form" are claims about what exists (#410).

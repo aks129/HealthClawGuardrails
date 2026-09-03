@@ -233,6 +233,14 @@
     }
     form.addEventListener('change', evaluate);
 
+    // The server-side rule, on this side of the relay: a 4xx other than 408
+    // or 429 is somebody's decision about this request, and nothing ran that
+    // was not meant to. Everything else — 5xx, 408, 429 — is a gateway
+    // speaking for a service that said nothing (#416).
+    function answeredAboutRequest(status) {
+      return status >= 400 && status < 500 && status !== 408 && status !== 429;
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       if (!evaluate()) { return; }
@@ -372,6 +380,31 @@
             return;
           }
 
+          // Everything the relay itself answers on this route carries either
+          // `confirmed` (its two 502s) or the `review_unavailable` code (its
+          // 503s). A 5xx carrying neither was not written by it: a gateway
+          // spoke for a service that said nothing, and by this project's own
+          // rule (`_upstream_answered`, careagents/healthclaw.py) that is
+          // silence with a status code on it, not a refusal. It reached the
+          // red arm below with Approve armed — the #416 shape, one body
+          // shape over from the unreadable branch that handles it honestly.
+          //
+          // No checkStatus: nothing here establishes that the relay ran at
+          // all, let alone that a confirmation exists, and a poll from a
+          // branch that has established neither is what the guard on
+          // checkStatus's callers exists to forbid.
+          var relayAnswered = res.b.confirmed !== undefined
+            || res.b.error === 'review_unavailable';
+          if (!relayAnswered && !answeredAboutRequest(res.r.status)) {
+            btn.disabled = true;             // it may already have run
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not tell what happened to your approval, so we ' +
+              'cannot say whether it went through. We have not sent it ' +
+              'again. Reload this page to see where this request stands.';
+            return;
+          }
+
           gateMsg.className = 'alert alert-danger';
           // `message` first: it is the field the server uses when it has
           // something specific to say. `error` is a machine code.
@@ -405,57 +438,113 @@
             return { ok: r.ok, b: b }; }); })
           .then(function (res) {
             var status = res.ok ? (res.b.status || '') : '';
-            if (status === 'completed' || status === 'sent') {
+            // ONE SENTENCE PER STATE, saying only what that state
+            // establishes — read off `_TRANSITIONS` (r6/actions/models.py),
+            // not off who called this. The three arms that were here read
+            // 'sent', 'pending' and 'approved', which this system cannot
+            // produce, and none of the five it can, so a form-fill that
+            // really did run and fail arrived at the terminal "we cannot
+            // tell" while the status said otherwise. A test compares the two
+            // vocabularies so a new state cannot be added without an arm.
+            //
+            // What changed with them: the caller-conditioned clause. The
+            // previous `awaiting_confirmation` copy said "your approval is
+            // recorded", which that status does not carry — it is set at
+            // COMMIT, before any human approval — and was true only of the
+            // callers there were then. There is now a caller with no
+            // confirmation established (an unreadable answer to the review
+            // POST, QA #566), and a claim that depends on the caller is the
+            // shape docs/2026-08-02-retro.md is about. Every sentence below
+            // is true for every caller.
+            if (status === 'completed') {
               gateMsg.className = 'alert alert-success';
               // "and nothing was sent twice" was in this string. A status
               // of completed says the action completed; it says nothing
               // about how many times it ran. Claim only what was observed.
-              gateMsg.textContent = 'Confirmed. Your approval went through.';
+              gateMsg.textContent =
+                'Confirmed. Your approval went through and this request was ' +
+                'carried out.';
               return;
             }
-            if (status === 'pending' || status === 'approved') {
+            // executing, failed, needs_review and unknown are reachable only
+            // THROUGH executing, and the claim into executing spends an
+            // approval grant. So each of them does establish that the
+            // approval went through, on the status alone.
+            if (status === 'executing') {
               gateMsg.className = 'alert alert-success';
               gateMsg.textContent =
-                'Confirmed. Your approval was recorded and is being sent.';
+                'Confirmed. Your approval went through and this request is ' +
+                'being carried out now.';
               return;
             }
-            // The action is committed and not yet claimed. This used to fall
-            // through to the terminal "we cannot tell" below — which is
-            // weaker than what is on file, and is the loop this change
-            // closes: the copy sends the patient to check the status, and
-            // the status check then told them nothing was knowable.
-            //
-            // PRECONDITION, and it is load-bearing for the first clause:
-            // every caller of checkStatus has already established that a
-            // confirmation EXISTS — a 200 review mints one, and the 409
-            // fires only when one is present. The status alone does not
-            // carry that. `awaiting_confirmation` is set at COMMIT, before
-            // any human approval (r6/actions/models.py:35), so read off a
-            // caller that had not approved yet this sentence would be false.
-            // The unreachable-service branch deliberately does not call
-            // this, and a test pins that it does not.
+            if (status === 'needs_review') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'Your approval went through. This request needs a person to ' +
+                'look at it before it can be completed.';
+              return;
+            }
+            if (status === 'failed') {
+              gateMsg.className = 'alert alert-danger';
+              // Red, and that is not the #416 shape: #416 is a definite
+              // failure printed for an outcome nobody observed. Here the
+              // engine observed it. Naming what failed matters — the
+              // approval landed, the work after it did not.
+              gateMsg.textContent =
+                'Your approval went through and this request could not be ' +
+                'completed. Approving again will not retry it.';
+              return;
+            }
+            if (status === 'unknown') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'We cannot tell whether this request went out. We have not ' +
+                'sent it again, because it may already have gone.';
+              return;
+            }
+            // The action is committed and not yet claimed: nothing has run.
+            // The route back is a reload, because every branch that reaches
+            // here has disabled Approve — and it has to be offered, since on
+            // one of those branches the review may never have been saved and
+            // "do not approve again" would strand the patient mid-approval.
+            // Offering it is safe on all of them: once a confirmation exists
+            // the review route answers 409 (and the payload seal refuses the
+            // resubmit that races it), and the claim transition has a single
+            // winner, so a second approval cannot produce a second send.
             if (status === 'awaiting_confirmation') {
               gateMsg.className = 'alert alert-warning';
               gateMsg.textContent =
-                'Your approval is recorded and this request has not been ' +
-                'carried out yet. Approving again will not resend it.';
+                'This request has not been carried out yet. If you need to ' +
+                'approve it again, reload this page first — a second ' +
+                'approval cannot send it twice.';
+              return;
+            }
+            if (status === 'expired') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'This request expired before it was carried out, and it ' +
+                'cannot be approved now.';
               return;
             }
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
-            // Still unknown after four tries. Say that, and say what we will
-            // do about it. Do NOT invite a retry: the first one may have run.
+            // Still unknown after four tries. Say that, and point at the one
+            // thing that can still resolve it. This used to end "Please do
+            // not approve a second time", which is an instruction we cannot
+            // support: on the unreadable-answer path nothing may have been
+            // saved, and obeying it strands the patient mid-approval.
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent =
               'We still cannot tell whether your approval went through, so ' +
-              'we have not sent it again. Your care team will see this ' +
-              'request either way. Please do not approve a second time.';
+              'we have not sent it again. Reload this page to see where ' +
+              'this request stands.';
           })
           .catch(function () {
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent =
               'We still cannot tell whether your approval went through, so ' +
-              'we have not sent it again. Please do not approve a second time.';
+              'we have not sent it again. Reload this page to see where ' +
+              'this request stands.';
           });
       })();
     }
