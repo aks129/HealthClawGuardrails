@@ -250,10 +250,13 @@ def _read_text(tmp_path, text):
 
 # --- the monitor: open defects ----------------------------------------------
 
-def _prod_watch_with(payload, expect, demo_handshake=None):
+def _prod_watch_with(payload, expect, demo_handshake=None,
+                     healthz_status=200):
     """Run prod_watch against a fully-healthy fake, varying only /healthz.
 
     `demo_handshake` overrides the public demo's keyless `initialize` reply.
+    `healthz_status` is the code `/healthz` answers with, which since #219 no
+    longer moves in lockstep with what its body says about the run workers.
     Both `get` and `post` are stubbed: leaving `post` real let the demo
     handshake check reach the live server from inside a unit test, which is
     exactly the kind of green-for-the-wrong-reason this file exists to stop.
@@ -284,7 +287,7 @@ def _prod_watch_with(payload, expect, demo_handshake=None):
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
         if url.endswith("/healthz"):
-            return _Resp(200, payload)
+            return _Resp(healthz_status, payload)
         if url.endswith("/auth"):
             return _Resp(200, text='<input maxlength="8">')
         if url.endswith("/mcp"):
@@ -311,31 +314,75 @@ def _prod_watch_with(payload, expect, demo_handshake=None):
         prod_watch.results.clear()
 
 
-HEALTHY = {"status": "ok", "provider": "openai", "accounts": True}
+HEALTHY = {"status": "ok", "provider": "openai", "accounts": True,
+           # #219 split readiness in two: the status code answers for this
+           # container, and the worker state is published as a field. A
+           # deployment is only healthy when both say so.
+           "run_workers": True, "run_workers_state": "ready"}
 TIP = "4f2a91cbeef1a9d3c05e7b21fd8460ac9e13d7f5"
 
 
 def test_a_current_build_is_counted_as_a_real_check():
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [TIP])
-    # MOVED PIN 11 -> 12: prod_watch gained the demo-tenant shape check
-    # (#457, catalogue §10). The number is the point of this test — it
-    # asserts the script counts an asserted build as a real check rather
-    # than inflating the total — so it moves by exactly one here and the
-    # property is unchanged.
-    assert code == 0 and "all 12 checks passing" in out
+    # MOVED PIN 12 -> 13: prod_watch gained the run-worker check (#219),
+    # because /healthz stopped folding that state into its status code and
+    # the readiness check above never read the field. Previously 11 -> 12 for
+    # the demo-tenant shape check (#457, catalogue §10). The number is the
+    # point of this test — it asserts the script counts an asserted build as
+    # a real check rather than inflating the total — so it moves by exactly
+    # one here and the property is unchanged.
+    assert code == 0 and "all 13 checks passing" in out
+
+
+def test_a_deployment_with_no_run_worker_is_an_outage_at_either_status_code():
+    """The blind spot #219 would have opened, closed (#410, 2026-08-06).
+
+    `/healthz` used to fail closed on both worker failures, so the readiness
+    check's `status_code == 200` caught them for free. #219 stopped that for
+    the unreachable case — a 503 there blocked the deploy that would fix the
+    outage — which left a 200 whose body says no worker is claiming runs. The
+    readiness check never reads that field, and the "healthclaw: alive" check
+    cannot cover it: on 2026-08-06 the edge was blocked from CareAgents while
+    HealthClaw itself answered this script perfectly.
+
+    So both states must still be an outage, and the line must say WHICH one,
+    because `not_ready` sends an operator to the worker service and `unknown`
+    sends them to the engine.
+
+    MUTATION: delete the `check("careagents: a run worker ...")` call in
+    scripts/prod_watch.py and both halves of this test fail — exit 0 instead
+    of 1, and the state never appears in the output.
+    """
+    absent = {**HEALTHY, "status": "degraded", "run_workers": False,
+              "run_workers_state": "not_ready",
+              "build": "4f2a91cbeef1", "built_at": 1754056800}
+    code, out = _prod_watch_with(absent, [TIP], healthz_status=503)
+    assert code == 1, "no worker draining the queue is an outage"
+    assert "careagents: a run worker is draining the queue" in out
+    assert "not_ready" in out and "careagents-worker service" in out
+
+    # The case the status code no longer carries: 200, and still an outage.
+    unreachable = {**HEALTHY, "run_workers": False,
+                   "run_workers_state": "unknown",
+                   "build": "4f2a91cbeef1", "built_at": 1754056800}
+    code, out = _prod_watch_with(unreachable, [TIP])
+    assert code == 1, (
+        "a 200 whose body says no worker was confirmed must not read green")
+    assert "unknown" in out and "could not reach HealthClaw" in out
+    assert "all 13 checks passing" not in out
 
 
 def test_an_unasserted_build_never_inflates_the_count():
-    # The script's honesty property. "all 11 checks passing" must stay
+    # The script's honesty property. "all 12 checks passing" must stay
     # literally true when nothing pinned the build.
     #
-    # MOVED PIN 10 -> 11, same reason as above: one new check, and the gap
+    # MOVED PIN 11 -> 12, same reason as above: one new check, and the gap
     # between this number and the one above is still exactly one, which is
     # the property being pinned.
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [])
-    assert code == 0 and "all 11 checks passing" in out
+    assert code == 0 and "all 12 checks passing" in out
 
 
 class _Refused:
@@ -360,7 +407,7 @@ def test_a_demo_server_that_stops_serving_keyless_callers_is_an_outage():
                                  demo_handshake=_Refused())
     assert code == 1, "a demo server refusing keyless callers must be an outage"
     assert "serves an unauthenticated handshake" in out
-    assert "all 12 checks passing" not in out
+    assert "all 13 checks passing" not in out
 
 
 @pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])
