@@ -358,6 +358,177 @@ def test_an_unreadable_landing_is_not_reported_as_telegram_free(monkeypatch):
     assert "nothing was scanned" in detail and "ConnectionError" in detail
 
 
+def test_the_telegram_line_names_an_unreadable_landing_too(monkeypatch):
+    """Both gaps, not only the expected one.
+
+    A run that reads /home but not the landing used to report "no live
+    Telegram link or call to action on /home" and say nothing about the page
+    a stranger actually opens — a measurement quietly covering less than its
+    name, which is #537's own shape. MUTATION: drop the "/" gap clause ->
+    this goes green with the landing unread.
+    """
+    real = _fake_get(home=SOON_TILE)
+
+    def get(url, timeout, **kw):
+        if url == f"{prod_watch.CAREAGENTS}/":
+            return "ConnectionError"
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    prod_watch.run(1.0, [TIP])
+    (_, ok, detail), = _named(prod_watch.TELEGRAM_CHECK)
+    assert ok is True, detail
+    assert "/home" in detail
+    assert "/ not scanned (ConnectionError)" in detail, detail
+
+
+# --- which host answered (#289 one layer down) ------------------------------
+#
+# `requests` follows redirects, so a check named for one origin will measure
+# whichever host the chain ends at and print the result under the first one's
+# name. Every fake below is faithful to that: a followed redirect sets `url`
+# to where the response actually came from, an unfollowed one carries
+# `Location`, exactly as `requests` does.
+
+def _resp_from(status, url, text="", payload=None):
+    r = _Resp(status, payload, text)
+    r.url = url
+    return r
+
+
+def test_an_origin_that_redirects_to_the_railway_host_is_not_a_reading(
+        monkeypatch):
+    """#289 is not "watch careagents.cloud", it is "measure what a user gets".
+
+    Retargeting the constant while still following redirects re-creates the
+    exact blindness: careagents.cloud 308ing to the Railway hostname would
+    keep every check on this origin green, the build marker would assert the
+    OTHER host's build under this host's name, and the two hosts would agree
+    by construction — which is the one thing the pair of checks exists to
+    disprove. MUTATION: drop `_answered_elsewhere` from the /healthz and
+    landing checks -> all green under a fully redirected origin.
+    """
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if url.startswith(prod_watch.CAREAGENTS):
+            target = url.replace(prod_watch.CAREAGENTS,
+                                 prod_watch.CAREAGENTS_RAILWAY)
+            if kw.get("allow_redirects") is False:
+                r = _Resp(308)
+                r.headers = {"Location": target}
+                return r
+            inner = real(target, timeout, **kw)
+            return _resp_from(inner.status_code, target, inner.text,
+                              inner._payload)
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    assert prod_watch.run(1.0, [TIP]) == 1
+
+    (_, ok, detail), = _named("careagents: ready (db reachable)")
+    assert ok is False
+    assert prod_watch.CAREAGENTS_RAILWAY in detail and "not the origin" in detail
+
+    (_, ok, detail), = _named("careagents: landing renders")
+    assert ok is False, "a landing served by another host is not this origin's"
+
+    # And the build check may not speak for a host it never read (#272).
+    assert _named(prod_watch.BUILD_CHECK) == []
+    assert prod_watch.build_info["asserted"] is False
+
+
+def test_an_origin_pointed_at_a_healthy_looking_wrong_host_is_not_a_reading(
+        monkeypatch):
+    """The DNS half of #289, as it actually happened.
+
+    careagents.cloud resolved to a VPS that answered everything perfectly
+    while serving pre-#241 code, and a green board said nothing about what a
+    patient saw. A host that fails the other checks needs no guard — this one
+    passes all of them, so only the landed URL can tell the difference.
+    MUTATION: drop the off-host guard -> all 14 checks green while nothing on
+    the origin was read.
+    """
+    real = _fake_get()
+    other = "https://cloud-vps.example.net"
+
+    def get(url, timeout, **kw):
+        if url.startswith(prod_watch.CAREAGENTS):
+            target = url.replace(prod_watch.CAREAGENTS, other)
+            inner = real(target, timeout, **kw)
+            return _resp_from(inner.status_code, target, inner.text,
+                              inner._payload)
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    assert prod_watch.run(1.0, [TIP]) == 1
+    (_, ok, detail), = _named("careagents: ready (db reachable)")
+    assert ok is False
+    assert other in detail and "not the origin" in detail, detail
+
+
+def test_the_railway_healthz_is_read_without_following_a_redirect(monkeypatch):
+    """D7 sends every path but /healthz to the origin. If /healthz joins them,
+    following it reads the ORIGIN's health and build and prints them beside
+    the Railway host's name — the split deployment this check exists to
+    expose becomes invisible, and Railway's own health check is broken too.
+    MUTATION: drop `allow_redirects=False` -> green on a 308.
+    """
+    seen = {}
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        seen[url] = kw
+        if url == f"{prod_watch.CAREAGENTS_RAILWAY}/healthz":
+            r = _Resp(308)
+            r.headers = {"Location": f"{prod_watch.CAREAGENTS}/healthz"}
+            return r
+        return real(url, timeout, **kw)
+
+    monkeypatch.setattr(prod_watch, "get", get)
+    assert prod_watch.run(1.0, [TIP]) == 1
+    assert seen[f"{prod_watch.CAREAGENTS_RAILWAY}/healthz"].get(
+        "allow_redirects") is False
+    (_, ok, detail), = _named("careagents (railway host): ready (db reachable)")
+    assert ok is False
+    assert "308" in detail and f"{prod_watch.CAREAGENTS}/healthz" in detail
+    assert "this host was not read" in detail, detail
+
+
+# --- copy that names Telegram without inviting anyone onto it ---------------
+
+@pytest.mark.parametrize("copy", [
+    # The beta batch queued behind this one adds a banner, refreshed landing
+    # copy and privacy sentences. Every line here names the surface and
+    # contains a verb from the CTA list, and every one is the honest opposite
+    # of a promise. A monitor that reddens on these trains its reader to
+    # ignore it — the failure this script warns about in the demo-tenant
+    # check — and the red would be indistinguishable from a real one.
+    '<p>Chat with your agent on the web today. Telegram and iMessage are not'
+    ' available in the beta.</p>',
+    '<p>We never share your chat transcript with Telegram or any third'
+    ' party.</p>',
+    '<p>We will not start a Telegram conversation without your consent.</p>',
+    '<p>Open source. Telegram support is planned for a later release.</p>',
+])
+def test_prose_that_merely_names_telegram_is_not_a_call_to_action(
+        monkeypatch, copy):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(landing=START + copy))
+    assert prod_watch.run(1.0, [TIP]) == 0
+    (_, ok, detail), = _named(prod_watch.TELEGRAM_CHECK)
+    assert ok is True, detail
+
+
+def test_a_tile_sized_invitation_is_still_a_call_to_action():
+    """The bound above is a length, so it has to be pinned from both sides:
+    tiles and buttons are short, sentences of prose are not."""
+    for live in ('<div class="surface"><b>Telegram</b><span>connect →</span>'
+                 '</div>',
+                 '<a class="btn" href="/tg">Open in Telegram</a>',
+                 '<p>Chat with your agent on Telegram.</p>'):
+        assert prod_watch._telegram_advertised(live), live
+
+
 def test_a_stale_build_exits_2_and_names_the_remedy():
     # Exit 2, not 1: production is up. Whoever reads this at 03:00 should not
     # have to go looking for what to do about it.

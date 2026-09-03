@@ -49,7 +49,16 @@ unauthenticated visitor reads — the landing page, and the home page only if
 that ever answers without a session — and fails on any live Telegram link or
 call to action there. The "connect →" tile #536 describes lives on /home
 behind sign-in, where this script cannot see it; what this guards is the
-public promise, and its detail says which pages it actually read.
+public promise, and its detail says which pages it actually read. It reads
+`/` and `/home` only — a Telegram invitation added to `/auth` would pass —
+and `_telegram_advertised` documents the wordings it cannot see.
+
+Which HOST answered is part of every CareAgents reading (#289). `requests`
+follows redirects, so a check named for one origin will happily measure
+another and report it under the first one's name; the origin's /healthz and
+landing therefore fail if the response came from anywhere else, and the
+Railway host's /healthz is fetched without following redirects at all. Two
+hosts that agree because one is the other are not two readings.
 """
 from __future__ import annotations
 
@@ -108,6 +117,16 @@ _SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 # block-closing tags, so a neighbouring tile's "connect →" cannot vouch for
 # or against Telegram, and "coming soon" on the Telegram tile means exactly
 # that. Script and style bodies are not copy anyone reads.
+#
+# A CTA is also SHORT: a tile label or a button, not a sentence. Without that
+# bound the verb list matches ordinary prose that merely names the surface —
+# "Chat with your agent on the web today. Telegram and iMessage are not
+# available in the beta" contains `chat` and `Telegram` and is the opposite of
+# a promise. A monitor that reddens on the honest sentence trains its reader
+# to ignore it, which is the failure this file warns about two checks down.
+# Long copy carrying a real invitation almost always carries the link too, and
+# the link rule above has no length bound.
+_TG_COPY_MAX = 48
 _TG_LINK_RE = re.compile(r"(?i)\bt\.me/|\btg://")
 _TG_NAME_RE = re.compile(r"(?i)\btelegram\b")
 _TG_CTA_RE = re.compile(r"(?i)\b(?:open|connect|start|chat|join|pair|launch)\b")
@@ -118,7 +137,14 @@ _SCRIPT_RE = re.compile(r"(?is)<(script|style)\b.*?</\1\s*>")
 
 
 def _telegram_advertised(html: str) -> str:
-    """How `html` presents Telegram as a live surface, or "" if it does not."""
+    """How `html` presents Telegram as a live surface, or "" if it does not.
+
+    What it does NOT see, so the check's name is not read as more than it is:
+    text a script writes after load (the tile's own state is server-rendered,
+    so the one that matters is visible), an invitation worded outside the verb
+    list above, and a live call to action sharing one block with the words
+    "coming soon". Each of those is a green this returns without proof.
+    """
     if _TG_LINK_RE.search(html):
         return "a t.me link"
     # Source newlines are formatting, not boundaries: the real tile puts
@@ -130,9 +156,24 @@ def _telegram_advertised(html: str) -> str:
         line = " ".join(line.split())
         if not _TG_NAME_RE.search(line) or "coming soon" in line.lower():
             continue
-        if _TG_CTA_RE.search(line):
+        if len(line) <= _TG_COPY_MAX and _TG_CTA_RE.search(line):
             return f"a live call to action ({line[:60]!r})"
     return ""
+
+
+def _answered_elsewhere(r, url: str) -> str:
+    """Where `r` actually came from, if that is not the origin of `url`.
+
+    `requests` follows redirects, so a check NAMED for one host measures
+    whichever host the chain ends at. That is #289's blindness restated one
+    layer down: careagents.cloud 308ing to the Railway hostname would keep
+    every check here green while nothing verified what a user is served —
+    and the build marker, read from this origin's /healthz, would assert the
+    other host's build under this host's name. A response from somewhere else
+    is not a worse reading of the origin; it is no reading of it.
+    """
+    landed = str(getattr(r, "url", "") or url)
+    return "" if landed.startswith("/".join(url.split("/", 3)[:3])) else landed
 
 
 results: list[tuple[str, bool, str]] = []
@@ -313,12 +354,16 @@ def run(timeout: float, expect_sha: list[str]) -> int:
 
     # --- the consumer app ----------------------------------------------------
     r = get(f"{CAREAGENTS}/healthz", timeout)
+    # Off-origin is not a reading of this origin, so nothing downstream may
+    # speak for it: `healthz_read` stays False and the build check reports
+    # that it asserted nothing, exactly as it does for an unreadable /healthz.
+    elsewhere = _answered_elsewhere(r, f"{CAREAGENTS}/healthz")
     body = {}
     # Whether the deployment actually told us anything, as opposed to us
     # defaulting on its behalf. The build check below reads its one field from
     # this body and may only speak when this is True — see #272.
     healthz_read = False
-    if getattr(r, "status_code", None) in (200, 503):
+    if not elsewhere and getattr(r, "status_code", None) in (200, 503):
         try:
             body = r.json() or {}
             healthz_read = True
@@ -327,8 +372,10 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # /healthz round-trips the database, so this catches an app that booted but
     # cannot reach its store — the state a load balancer must not route into.
     check("careagents: ready (db reachable)",
-          getattr(r, "status_code", None) == 200 and body.get("accounts") is True,
-          f"status={getattr(r, 'status_code', r)} accounts={body.get('accounts')}")
+          not elsewhere and getattr(r, "status_code", None) == 200
+          and body.get("accounts") is True,
+          f"status={getattr(r, 'status_code', r)} accounts={body.get('accounts')}"
+          + (f" — answered by {elsewhere}, not the origin" if elsewhere else ""))
 
     # Same body, no second request. Every other check on this deployment is
     # satisfied just as well by a months-old build — in #258 both CareAgents
@@ -344,8 +391,10 @@ def run(timeout: float, expect_sha: list[str]) -> int:
         # which is the exact thing #258 exists to prevent. The readiness check
         # above already reports the outage, and its remedy is the right one.
         report(BUILD_CHECK,
-               f"not asserted — /healthz was not readable "
-               f"({getattr(r, 'status_code', r)}), so no build marker was read")
+               "not asserted — /healthz was "
+               + (f"answered by {elsewhere}, not the origin" if elsewhere else
+                  f"not readable ({getattr(r, 'status_code', r)})")
+               + ", so no build marker was read")
     else:
         deployed = str(body.get("build") or "unknown").lower()
         built = _stamp(body.get("built_at"))
@@ -384,24 +433,42 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # Its build marker rides along in the detail — shown, not asserted — so a
     # deployment split between the two hosts is visible in the report rather
     # than assumed away.
-    r = get(f"{CAREAGENTS_RAILWAY}/healthz", timeout)
+    #
+    # Not following the redirect is the whole point here. This host is about
+    # to 308 every other path to the origin; if /healthz joins them, following
+    # it would read the ORIGIN's health and build and print them beside the
+    # Railway host's name — the two hosts would agree by construction, which
+    # is the one thing this check exists to disprove. A 3xx is therefore a
+    # failure: it means this host no longer answers for itself, which is also
+    # what Railway's own health check would find.
+    r = get(f"{CAREAGENTS_RAILWAY}/healthz", timeout, allow_redirects=False)
+    rcode = getattr(r, "status_code", None)
     rbody = {}
-    if getattr(r, "status_code", None) in (200, 503):
+    if rcode in (200, 503):
         try:
             rbody = r.json() or {}
         except ValueError:
             pass
+    moved = ""
+    if isinstance(rcode, int) and 300 <= rcode < 400:
+        moved = str((getattr(r, "headers", None) or {}).get("Location") or
+                    "an undisclosed target")
     check("careagents (railway host): ready (db reachable)",
-          getattr(r, "status_code", None) == 200 and rbody.get("accounts") is True,
+          rcode == 200 and rbody.get("accounts") is True,
           f"status={getattr(r, 'status_code', r)} accounts={rbody.get('accounts')}"
-          f" build={str(rbody.get('build') or 'unknown').lower()}")
+          f" build={str(rbody.get('build') or 'unknown').lower()}"
+          + (f" — redirects to {moved}, so this host was not read; Railway's "
+             "own health check hits this path" if moved else ""))
 
     r = get(f"{CAREAGENTS}/", timeout)
     html = getattr(r, "text", "") or ""
     landing_status = getattr(r, "status_code", r)
-    landing_read = landing_status == 200
+    landing_elsewhere = _answered_elsewhere(r, f"{CAREAGENTS}/")
+    landing_read = landing_status == 200 and not landing_elsewhere
     check("careagents: landing renders", landing_read and "/auth" in html,
-          str(landing_status))
+          str(landing_status)
+          + (f" — served by {landing_elsewhere}, not the origin"
+             if landing_elsewhere else ""))
 
     # --- Telegram (#537) ------------------------------------------------------
     # Twelve checks were green while the Telegram surface had been dead since
@@ -420,6 +487,7 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     pages = {"/": html} if landing_read else {}
     r = get(f"{CAREAGENTS}/home", timeout, allow_redirects=False)
     home_code = getattr(r, "status_code", None)
+    home_status = getattr(r, "status_code", r)
     if home_code == 200:
         pages["/home"] = getattr(r, "text", "") or ""
     live = ""
@@ -428,17 +496,26 @@ def run(timeout: float, expect_sha: list[str]) -> int:
         if how:
             live = f"{path} shows {how}"
             break
+    # A 200 from the wrong host is not a readable landing, and saying only
+    # "(200)" would read as a contradiction on the line under a failing
+    # landing check. Name the host that answered instead.
+    landing_why = (f"{landing_status} from {landing_elsewhere}"
+                   if landing_elsewhere else str(landing_status))
     if not pages:
-        detail = f"landing not readable ({landing_status}), nothing was scanned"
+        detail = f"landing not readable ({landing_why}), nothing was scanned"
     elif live:
         detail = (f"{live} — Telegram pairing is a dead end (#536) until its "
                   "fix deploys; a tile marked coming soon passes")
     else:
+        # Both gaps, not just the expected one. A run that read /home but not
+        # the landing would otherwise report the pages it managed to read and
+        # say nothing about the one a stranger actually opens.
+        gaps = ([] if "/" in pages else [f"/ not scanned ({landing_why})"])
+        if "/home" not in pages:
+            gaps.append(f"/home not scanned ({home_status} without a session)")
         detail = ("no live Telegram link or call to action on "
                   + ", ".join(pages)
-                  + ("" if "/home" in pages else
-                     f"; /home not scanned ({getattr(r, 'status_code', r)} "
-                     "without a session)"))
+                  + ("; " + "; ".join(gaps) if gaps else ""))
     check(TELEGRAM_CHECK, bool(pages) and not live, detail)
 
     # The sign-in page is the front door; #181 broke exactly this and nothing
