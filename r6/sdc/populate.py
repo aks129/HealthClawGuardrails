@@ -1,7 +1,10 @@
 """SDC $populate engine — Questionnaire + subject + content -> QuestionnaireResponse.
 
 Pure function (no DB, no Flask). Supports three SDC population mechanisms:
-  - Expression-based: items carrying an initialExpression (FHIRPath).
+  - Expression-based: items carrying an initialExpression (FHIRPath). These
+    evaluate against a BOUNDED projection of the subject, never the stored
+    Patient — see r6/sdc/expressions.py, which is where the allowlist lives
+    and where the reasoning for a projection over a filter is written down.
   - Observation-based: items with an item.code (LOINC) matched against
     Observations in the supplied content.
   - List-resource-based: a `repeats: true` group whose leaves carry a
@@ -24,7 +27,17 @@ test_zero_allergies_never_infers_no_known_allergies (the load-bearing one)
 and test_zero_medications_never_infers_no_current_medications.
 """
 
-from r6.sdc.expressions import build_context, evaluate
+from r6.sdc.expressions import (build_context, evaluate,
+                                resolves_outside_projection)
+
+#: What an item's issue says when the %patient projection is the reason it has
+#: no answer. Fixed text: a Questionnaire author controls the expression, and
+#: echoing it back would put an author-supplied literal (`where(value='...')`)
+#: into an OperationOutcome that leaves the boundary.
+WITHHELD_BY_PROJECTION = (
+    'not populated: the expression resolves outside the %patient projection '
+    'this operation permits (name, birthDate, gender, telecom, address)'
+)
 
 INITIAL_EXPRESSION_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
@@ -162,7 +175,12 @@ def populate_questionnaire(questionnaire, subject, content_resources):
         items that simply had no data).
     """
     issues = []
-    context = build_context(subject=subject, resources=content_resources)
+    # The context carries a BOUNDED projection of `subject`, never the stored
+    # Patient (r6/sdc/expressions.py). `subject` itself stays whole here
+    # because the list-group and reference paths below match on it; only the
+    # FHIRPath environment is projected, which is where a questionnaire
+    # author's expression can reach.
+    context = build_context(subject=subject)
     observations = [r for r in (content_resources or [])
                     if r.get("resourceType") == "Observation"]
 
@@ -208,7 +226,8 @@ def _populate_item(item, subject, context, observations, issues, content_resourc
         return [{"linkId": link_id, "item": children}]
 
     answer_value, value_key = _resolve_answer(
-        item, item_type, context, observations, issues, link_id)
+        item, item_type, context, observations, issues, link_id,
+        subject, content_resources)
     # Leaf items are always emitted so the response mirrors the questionnaire's
     # structure; the answer array is attached only when a value resolved.
     answer_item = {"linkId": link_id}
@@ -288,14 +307,24 @@ def _references_subject(resource, subject_field, subject_ref):
     return ref == subject_ref.get("reference")
 
 
-def _resolve_answer(item, item_type, context, observations, issues, link_id):
+def _resolve_answer(item, item_type, context, observations, issues, link_id,
+                    subject=None, content_resources=None):
     value_key = _ANSWER_KEY_BY_TYPE.get(item_type, "valueString")
 
     expr = _initial_expression(item)
     if expr:
+        # The resource root is `context["patient"]` — the bounded projection,
+        # not the stored Patient — so the allowlist applies to the
+        # resource-root form (`Patient.name.family`) as well as to `%patient`.
         value = evaluate(expr, context.get("patient"), context)
         if value is not None:
             return _coerce(value, item_type), value_key
+        # An empty answer has two very different causes and a caller cannot
+        # tell them apart from the response. Measure which one it was rather
+        # than parsing the expression to guess (see the projection note in
+        # r6/sdc/expressions.py).
+        if resolves_outside_projection(expr, subject, content_resources):
+            issues.append({"linkId": link_id, "detail": WITHHELD_BY_PROJECTION})
         return None, value_key
 
     codes = item.get("code") or []
