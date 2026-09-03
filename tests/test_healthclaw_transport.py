@@ -152,7 +152,7 @@ def test_record_count_zero_must_not_be_how_an_outage_is_reported(
         stub_base, reset_mode):
     """A 503 from the engine must not read as "you have no records".
 
-    `record_count` sums six `_summary=count` searches. It used to swallow
+    `record_count` sums five `_summary=count` searches. It used to swallow
     `HealthClawError` per type and carry on, so a total outage returned 0 —
     the same value as a genuinely empty tenant.
 

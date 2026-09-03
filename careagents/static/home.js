@@ -470,8 +470,12 @@
       if (!r.ok) return;
       if (typeof d.new_records === "number" && d.new_records > 0) {
         clearInterval(iv);
+        // The server appends this only when documents arrived that the count
+        // deliberately excludes (#226) — the number covers what can actually
+        // be opened, and says so rather than quietly absorbing the rest.
+        const aside = d.uncounted_note ? ` — ${d.uncounted_note}` : "";
         msg.textContent = `${d.new_records} new record` +
-          (d.new_records === 1 ? "" : "s") + " added.";
+          (d.new_records === 1 ? "" : "s") + " added" + aside + ".";
       }
     }, 5000);
   }

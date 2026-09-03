@@ -1883,6 +1883,13 @@ class FakeClient:
     def record_count(self, tenant):
         return self.counted
 
+    # DocumentReferences that landed but are deliberately not in `counted`
+    # (#226). Settable the same way.
+    uncounted = 0
+
+    def uncounted_record_count(self, tenant):
+        return self.uncounted
+
     purge_fails = False
 
     def purge_tenant(self, tenant):
@@ -1941,7 +1948,7 @@ class FakeClient:
 # for a proven client:
 #   * Behaviour. Signature parity says a call is *accepted*, never that it does
 #     the same thing. `FakeClient.record_count` returns a settable int;
-#     `HealthClawClient.record_count` sums six `_summary=count` searches and
+#     `HealthClawClient.record_count` sums five `_summary=count` searches and
 #     raises if any of them could not be asked. Both signatures are
 #     `(tenant)`.
 #   * Wire format. Nothing here talks to a running HealthClaw, so a body or
@@ -2853,6 +2860,93 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["status"] == "active"
     assert d["record_count"] == 112
     assert d["new_records"] == 12
+
+
+# --- #226: the count says what it leaves out ---------------------------------
+#
+# DocumentReferences are ingested but nothing can open one, so they are out of
+# the counted set (careagents/healthclaw.py COUNTED_TYPES). This poll is the
+# one place a count derived from `record_count` reaches a person — home.js
+# renders it as "N new records added." The unit-level half of this lives in
+# tests/test_uncounted_documents.py.
+
+def _poll_after_sync(cfg, svc, monkeypatch, documents):
+    """Refresh, land five readable records plus `documents`, return the poll."""
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.uncounted = documents
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = 105
+    return c.get(f"/api/connections/{tenant}/poll").get_json()
+
+
+def test_the_poll_says_documents_are_not_readable_when_some_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: drop the clause from `poll_connection` -> red.
+
+    The number is true about what the patient can reach and silent about what
+    it omits. Without this there is nothing anywhere telling them the notes
+    are not in it (#226).
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["new_records"] == 5
+    note = d.get("uncounted_note", "")
+    assert "not yet readable" in note, d
+    assert "notes and documents" in note, d
+
+
+def test_the_poll_adds_no_clause_when_no_documents_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: emit the clause unconditionally -> red.
+
+    A standing disclaimer would be noise, and would imply documents exist for
+    someone who has none.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=0)
+    assert d["new_records"] == 5
+    assert "uncounted_note" not in d, d
+
+
+def test_no_count_at_all_when_the_document_probe_could_not_answer(
+        cfg, svc, monkeypatch):
+    """MUTATION: catch the probe separately and default it to 0 -> red.
+
+    A count whose "and there are notes missing from this" could not be
+    established would be published as if complete — the same silent omission
+    the clause exists to end, and #403's "unknown is never zero" applied to
+    the clause rather than the number.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    fake.counted = 105
+    # The readable count answers; only the document probe is down.
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["status"] == "active"
+    assert "record_count" not in d and "new_records" not in d, d
+    assert "uncounted_note" not in d, d
 
 
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
