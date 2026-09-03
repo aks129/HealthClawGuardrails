@@ -204,6 +204,7 @@ def _call(client, name):
         "interpret_labs": lambda: client.interpret_labs("t"),
         "care_gaps": lambda: client.care_gaps("t"),
         "record_count": lambda: client.record_count("t"),
+        "uncounted_record_count": lambda: client.uncounted_record_count("t"),
         "tenant_has_records": lambda: client.tenant_has_records("t"),
         "purge_tenant": lambda: client.purge_tenant("t"),
         "action_status": lambda: client.action_status("t", "a1"),
@@ -235,6 +236,13 @@ EVERY_SEAM_METHOD = [
     "ingest_bundle", "create_agent_run", "get_agent_run", "agent_run_events",
     "claim_agent_run", "agent_worker_health", "finalize_agent_run",
     "search", "read", "interpret_labs", "care_gaps", "record_count",
+    # QA addition (review of PR #561). The document probe is a seam method the
+    # poll catches BY EXCEPTION TYPE (`careagents/app.py` catches
+    # HealthClawError and only that). Left off this list, its typed-failure
+    # promise held by construction and was exercised by nothing — the #287
+    # ensemble gap. A raw requests exception here 500s the poll, and the
+    # patient gets neither the count nor the hedge this PR added.
+    "uncounted_record_count",
     "tenant_has_records", "purge_tenant", "action_status", "start_form_action",
     "confirm_action", "fetch_review_page", "submit_review", "seed",
     "mint_token", "bind_telegram", "conformance_badge",
@@ -365,6 +373,26 @@ def test_a_wrongly_shaped_count_body_is_a_typed_failure(body, stub_base,
     _set(status=200, body=body)
     with pytest.raises(HealthClawError):
         _client(stub_base).record_count("t")
+
+
+@pytest.mark.parametrize("body", WRONG_SHAPE)
+def test_a_wrongly_shaped_uncounted_body_is_a_typed_failure(body, stub_base,
+                                                            reset_mode):
+    """QA addition (review of PR #561). The sibling of the `record_count` case
+    above, for the probe added beside it.
+
+    `uncounted_record_count` calls `.get("total")` on whatever the 200 body
+    decoded to. A bare AttributeError is not a HealthClawError, and
+    `poll_connection` catches only HealthClawError — so the poll would 500 and
+    the patient would see neither the number nor the sentence naming what
+    could not be checked. The property comes from the boundary check inside
+    `search`, one layer down; this pins that the new caller inherits it.
+
+    MUTATION: drop the `isinstance(body, dict)` arm from `_json_object` -> red.
+    """
+    _set(status=200, body=body)
+    with pytest.raises(HealthClawError):
+        _client(stub_base).uncounted_record_count("t")
 
 
 def test_worker_health_type_checks_its_200_body(stub_base, reset_mode):

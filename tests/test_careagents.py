@@ -2959,6 +2959,63 @@ def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
     assert "not yet readable" not in note, note
 
 
+# QA addition (review of PR #561). `home.js` renders the clause as
+# `"... added." + " " + uncounted_note`, and the author verified that by
+# inspection only — there is no JS harness in this repo. What makes the join
+# safe here, and on the next surface to carry it (a notification, an email,
+# the worker), is the sentence's own shape. Assert it on the string the poll
+# actually emitted, not on a copy: a fragment appended to "5 new records
+# added." reads as one run-on claim, and a clause with its own leading space
+# doubles the caller's.
+
+def _assert_joins_cleanly(note):
+    assert note == note.strip(), f"padded, so the join doubles a space: {note!r}"
+    assert note.endswith("."), f"a fragment, not a sentence: {note!r}"
+    assert not note.endswith(".."), f"doubled full stop: {note!r}"
+    assert note[0].isupper(), f"does not open a sentence: {note!r}"
+    assert note.count(".") == 1, f"more than one sentence: {note!r}"
+    # The rendered line, per careagents/static/home.js.
+    line = "5 new records added." + " " + note
+    assert ".." not in line and "  " not in line, line
+
+
+def test_the_documents_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """MUTATION: drop the trailing period from either sentence in
+    `poll_connection`, or pad one with a leading space -> red.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["uncounted_note"] == "Notes and documents are not yet readable here."
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """Same property for the sentence a failed probe produces, which is the
+    one a patient sees during an incident — the worst time for the copy to
+    render as a fragment.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = 105
+
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["uncounted_note"] == (
+        "We could not check whether notes or documents were left out.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
         cfg, svc, monkeypatch):
     """The patient-visible half of #403.
