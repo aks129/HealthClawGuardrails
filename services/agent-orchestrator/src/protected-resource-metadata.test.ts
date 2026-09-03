@@ -276,4 +276,87 @@ describe("a malformed constant refuses to boot", () => {
   ])("starts with the constant %s", (_label, env) => {
     expect(() => assertMCPCanonicalResourceConfigured(env)).not.toThrow();
   });
+
+  // Each of these parses as an https URL, so "absolute and https" admits it.
+  // Each also boots a server whose challenge advertises a metadata URL at which
+  // the served document's `resource` is NOT the identifier the client derived
+  // from that URL — RFC 9728 §3.3, the client refuses, and the partner reads
+  // the refusal as our bug (spec §9.3). Measured by starting the server on each
+  // value and fetching the document at the URL its own challenge named.
+  it.each([
+    ["a mixed-case host, which the URL parser lowercases", "https://MCP.healthclaw.io/mcp"],
+    ["a mixed-case scheme, likewise", "HTTPS://mcp.healthclaw.io/mcp"],
+    ["an explicit default port, which is dropped", "https://mcp.healthclaw.io:443/mcp"],
+    ["a query string, which is not part of the path", "https://mcp.healthclaw.io/mcp?x=1"],
+    ["a fragment, likewise", "https://mcp.healthclaw.io/mcp#frag"],
+    ["userinfo, which we would then publish", "https://user:pass@mcp.healthclaw.io/mcp"],
+    ["a trailing slash on a root path", "https://mcp.healthclaw.io/"],
+    ["dot segments, which resolve away", "https://mcp.healthclaw.io/mcp/../admin"],
+    ["an empty authority", "https:///mcp"],
+  ])("refuses to boot on %s", (_label, value) => {
+    expect(() =>
+      assertMCPCanonicalResourceConfigured({ MCP_CANONICAL_RESOURCE: value })
+    ).toThrow(/MCP_CANONICAL_RESOURCE/);
+  });
+
+  it("never puts the rejected value in the boot error", () => {
+    // The shapes rejected above include one that carries a credential. A boot
+    // crash is logged, shipped to the platform's log drain, and pasted into
+    // support threads.
+    let message = "";
+    try {
+      assertMCPCanonicalResourceConfigured({
+        MCP_CANONICAL_RESOURCE: "https://user:s3cr3t-abc123@mcp.healthclaw.io/mcp",
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain("MCP_CANONICAL_RESOURCE");
+    expect(message).not.toContain("s3cr3t-abc123");
+  });
+
+  // Self-consistent values that are not the chosen one still have to boot:
+  // the check rejects documents that would be refused, not values it dislikes.
+  it.each([
+    ["a non-default port", "https://mcp.healthclaw.io:8443/mcp"],
+    ["a trailing slash on a non-root path", "https://mcp.healthclaw.io/mcp/"],
+    ["an uppercase path segment", "https://mcp.healthclaw.io/MCP"],
+    ["a bare origin with no path", "https://mcp.healthclaw.io"],
+    ["surrounding whitespace", "  https://mcp.healthclaw.io/mcp  "],
+  ])("still starts on %s", (_label, value) => {
+    expect(() =>
+      assertMCPCanonicalResourceConfigured({ MCP_CANONICAL_RESOURCE: value })
+    ).not.toThrow();
+  });
+});
+
+describe("whatever boots, the document agrees with the URL that named it", () => {
+  // The property behind the boot check, asserted end to end rather than as a
+  // parser unit test: take the challenge, follow its resource_metadata URL,
+  // derive the identifier the way RFC 9728 §3.3 has the client derive it, and
+  // require the served `resource` to equal it.
+  it.each([
+    ["the canonical value", CANONICAL],
+    ["a non-default port", "https://mcp.healthclaw.io:8443/mcp"],
+    ["a trailing slash on a non-root path", "https://mcp.healthclaw.io/mcp/"],
+    ["a bare origin with no path", "https://mcp.healthclaw.io"],
+  ])("agrees for %s", async (_label, value) => {
+    process.env.MCP_CANONICAL_RESOURCE = value;
+    const configured = new URL(value);
+
+    const challenge = (await initialize(configured.host)).headers["www-authenticate"];
+    const advertised = /resource_metadata="([^"]+)"/.exec(challenge)?.[1];
+    expect(advertised).toBeDefined();
+
+    const advertisedURL = new URL(advertised as string);
+    const res = await request(app)
+      .get(advertisedURL.pathname)
+      .set("Host", advertisedURL.host);
+    expect(res.status).toBe(200);
+
+    const derived =
+      advertisedURL.origin +
+      advertisedURL.pathname.replace("/.well-known/oauth-protected-resource", "");
+    expect(res.body.resource).toBe(derived);
+  });
 });

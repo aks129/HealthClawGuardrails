@@ -109,15 +109,40 @@ const AUTHORIZATION_SERVER_ISSUER = "https://app.healthclaw.io";
 const RESOURCE_SCOPES = ["fhir.read", "context.read"];
 const PRM_BASE_PATH = "/.well-known/oauth-protected-resource";
 
+// The check that matters is not "is this a URL" but "will the document we serve
+// survive RFC 9728 §3.3". A client derives the resource identifier by removing
+// the well-known segment from the URL it fetched, and rejects the document if
+// `resource` is not that string. So the configured value must already BE the
+// identifier a client derives, character for character — the constant is
+// advertised verbatim as `resource`, while the URL that carries it is built
+// from the parsed origin and path.
+//
+// Nine shapes parse as https URLs and fail that: a host or scheme in mixed case
+// (the URL parser lowercases both), an explicit `:443` (dropped), a `?query` or
+// `#fragment` (not in the path), `user:pass@` userinfo (also a credential we
+// would then publish in an unauthenticated, CORS-open document), a bare
+// trailing slash, and dot segments (resolved). Each one boots a server whose
+// own challenge points at a document the challenge's reader will refuse — the
+// §9.3 "confidently wrong" mode, which is the failure this check exists to
+// catch. Verified by starting the server on each value and fetching the
+// document at the URL its own challenge advertises.
 function parseCanonicalResource(raw: string | undefined): URL | null {
   if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
   let parsed: URL;
   try {
-    parsed = new URL(raw.trim());
+    parsed = new URL(trimmed);
   } catch {
     return null;
   }
   if (parsed.protocol !== "https:" || !parsed.hostname) return null;
+  // `origin` re-serializes: lowercased scheme and host, no userinfo, no default
+  // port. `pathname` is normalized and excludes query and fragment. A root path
+  // contributes nothing, because protectedResourceMetadataURL appends nothing
+  // for it and the identifier a client derives therefore has no trailing slash.
+  const canonicalForm =
+    parsed.pathname === "/" ? parsed.origin : `${parsed.origin}${parsed.pathname}`;
+  if (trimmed !== canonicalForm) return null;
   return parsed;
 }
 
@@ -857,8 +882,13 @@ function assertMCPCanonicalResourceConfigured(
   const raw = env.MCP_CANONICAL_RESOURCE;
   if (!raw || !raw.trim()) return; // Unset is the supported off state.
   if (!parseCanonicalResource(raw)) {
+    // Names the variable and the shape, never the value: the rejected value may
+    // be the reason it was rejected (userinfo credentials), and a boot crash is
+    // the loudest place in the system to print one.
     throw new Error(
-      "MCP_CANONICAL_RESOURCE must be an absolute https:// URL " +
+      "MCP_CANONICAL_RESOURCE must be an absolute https:// URL in canonical " +
+        "form — lowercase scheme and host, no userinfo, no default port, no " +
+        "query, no fragment, no trailing slash on a root path " +
         "(e.g. https://mcp.healthclaw.io/mcp)"
     );
   }
