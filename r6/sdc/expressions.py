@@ -30,14 +30,23 @@ own structure.
 
 AND NOTHING IN THIS MODULE MAY EVALUATE A CALLER'S EXPRESSION AGAINST THE
 REAL RECORD. Not to answer a yes/no question, not to decide whether to warn.
-`resolves_outside_projection` reads a constant probe for exactly that reason
-— its docstring has the reproduction. A bool derived from a patient's data
-and handed to the caller is a read of that data; repeat it once per
-questionnaire item and it is a fast one.
+A bool derived from a patient's data and handed to the caller is a read of
+that data; repeat it once per questionnaire item and it is a fast one. That
+is not a hypothetical: a `resolves_outside_projection` classifier lived here
+and decided whether to report an unpopulated item by evaluating the caller's
+own expression against the unbounded record, and eleven HTTP requests walked
+a stored identifier out through the issue list one character at a time (QA
+review of PR #562).
+
+There is no classifier here now, in any shape. `r6/sdc/populate.py` reports
+every leaf that resolved no value, which depends on nothing but whether an
+answer was produced — a fact the caller already holds, because the response
+carries `answer` only on the leaves that got one. Nothing to leak, by
+construction, and nobody has to re-verify that the next time this file is
+touched.
 """
 
 import logging
-from functools import lru_cache
 
 import fhirpathpy
 
@@ -140,139 +149,6 @@ def build_context(subject=None):
     if projection is None:
         return {}
     return {'patient': projection, 'subject': projection}
-
-
-#: The record `resolves_outside_projection` probes. It is a CONSTANT, and it
-#: has to stay one — see that function's docstring. Every element the
-#: projection withholds is populated here with a placeholder, so an
-#: expression reaching for one resolves against this and not against a
-#: patient. Nothing here is anybody's data.
-_PROBE_PATIENT = {
-    'resourceType': 'Patient',
-    'id': 'projection-probe',
-    'name': [{'given': ['Probe'], 'family': 'Probe', 'text': 'Probe Probe',
-              'prefix': ['Probe'], 'suffix': ['Probe'], 'use': 'official'}],
-    'birthDate': '2000-01-01',
-    'gender': 'unknown',
-    'deceasedBoolean': False,
-    'multipleBirthInteger': 1,
-    'active': True,
-    'telecom': [{'system': s, 'value': 'probe', 'use': 'home'}
-                for s in ('phone', 'email', 'sms', 'fax', 'pager', 'url',
-                          'other')],
-    'address': [{'line': ['probe'], 'city': 'probe', 'state': 'probe',
-                 'postalCode': 'probe', 'district': 'probe',
-                 'country': 'probe', 'text': 'probe', 'use': 'home'}],
-    'identifier': [{'system': 'urn:probe', 'value': 'probe', 'use': 'usual',
-                    'type': {'text': 'probe'}}],
-    'photo': [{'url': 'probe', 'contentType': 'image/png', 'title': 'probe',
-               'data': 'cHJvYmU='}],
-    'contact': [{'name': {'given': ['Probe'], 'family': 'Probe'},
-                 'telecom': [{'system': 'phone', 'value': 'probe'}],
-                 'address': {'line': ['probe'], 'city': 'probe'},
-                 'relationship': [{'text': 'probe'}]}],
-    'communication': [{'language': {'text': 'probe'}, 'preferred': True}],
-    'maritalStatus': {'text': 'probe', 'coding': [{'code': 'probe'}]},
-    'generalPractitioner': [{'reference': 'Practitioner/probe',
-                             'display': 'probe'}],
-    'managingOrganization': {'reference': 'Organization/probe',
-                             'display': 'probe'},
-    'link': [{'other': {'reference': 'Patient/probe'}, 'type': 'seealso'}],
-    'extension': [{'url': 'urn:probe', 'valueString': 'probe'}],
-    'modifierExtension': [{'url': 'urn:probe', 'valueString': 'probe'}],
-    'meta': {'tag': [{'code': 'probe'}], 'security': [{'code': 'probe'}],
-             'profile': ['urn:probe'], 'source': 'probe'},
-    'text': {'status': 'generated', 'div': 'probe'},
-    'implicitRules': 'urn:probe',
-    'language': 'en',
-}
-
-#: One placeholder per resource type $populate auto-loads, so an expression
-#: reaching for `%resources` is reported rather than silently empty. Constant,
-#: for the same reason as _PROBE_PATIENT.
-_PROBE_RESOURCES = [
-    {'resourceType': 'Observation', 'id': 'probe', 'status': 'final',
-     'subject': {'reference': 'Patient/probe', 'display': 'probe'},
-     'code': {'text': 'probe', 'coding': [{'code': 'probe',
-                                           'display': 'probe'}]},
-     'valueString': 'probe',
-     'valueCodeableConcept': {'text': 'probe'},
-     'note': [{'text': 'probe'}],
-     'performer': [{'reference': 'Practitioner/probe', 'display': 'probe'}]},
-    {'resourceType': 'MedicationRequest', 'id': 'probe', 'status': 'active',
-     'subject': {'reference': 'Patient/probe', 'display': 'probe'},
-     'medicationCodeableConcept': {'text': 'probe'},
-     'dosageInstruction': [{'text': 'probe'}]},
-    {'resourceType': 'AllergyIntolerance', 'id': 'probe',
-     'patient': {'reference': 'Patient/probe', 'display': 'probe'},
-     'code': {'text': 'probe'},
-     'reaction': [{'manifestation': [{'text': 'probe'}]}]},
-    {'resourceType': 'Condition', 'id': 'probe',
-     'subject': {'reference': 'Patient/probe', 'display': 'probe'},
-     'code': {'text': 'probe'}},
-]
-
-
-@lru_cache(maxsize=512)
-def resolves_outside_projection(expression):
-    """Does `expression` reach for something the projection does not carry?
-
-    THE ONE PROPERTY: **this is a pure function of the expression text.** It
-    never sees a patient. It evaluates `expression` twice against the
-    CONSTANT `_PROBE_PATIENT` — once through the projection and once around
-    it — and reports "outside" when the unbounded form resolves and the
-    bounded form does not.
-
-    It reads a constant because the obvious implementation does not, and the
-    obvious implementation is a PHI exfiltration channel. Evaluating the
-    caller's expression against the REAL record and returning whether it was
-    non-empty makes the issue list a one-bit oracle over exactly the data the
-    projection withholds: a caller sends
-
-        %patient.identifier.value.where($this.startsWith('123'))
-
-    on one item, reads whether an issue named that linkId, and walks the
-    withheld SSN out one character at a time — measured at eleven HTTP
-    requests, with the value never once appearing in an answer (QA review of
-    PR #562, council ruling D10). A bool is a value. Any function of the
-    record whose output reaches the caller is a read of the record, however
-    narrow the output looks.
-
-    Answering from a constant keeps what the ruling asked for — an item that
-    was refused says so, naming its linkId, instead of looking like a patient
-    with no phone number — while telling the caller nothing whatsoever about
-    this patient. `%patient.identifier` is outside the projection for
-    everyone; that is a property of the allowlist, not of a record.
-
-    The bounded half of the comparison is what keeps an ALLOWLISTED path that
-    the real patient simply lacks (`%patient.telecom.where(system='email')`
-    on a patient with no email) from being reported as withheld: it resolves
-    against the probe on both sides, so it is not "outside".
-
-    WHAT THIS IS NOT: exhaustive. A withheld path `_PROBE_PATIENT` happens
-    not to populate — `%patient.deceasedDateTime`, `%patient.name.period`,
-    `%patient.telecom.rank` today — answers False, so that item comes back
-    silently empty instead of naming itself. That is a gap in the REPORTING,
-    never in the bound: the projection still withholds it, and nothing about
-    the patient reaches the caller either way. Widen the probe to close one;
-    do not widen it with anything but placeholders.
-
-    Cached because the answer depends only on `expression`, which also caps
-    the work a caller can buy per request.
-    """
-    if not expression:
-        return False
-    projected = patient_projection(_PROBE_PATIENT)
-    bounded = {'patient': projected, 'subject': projected}
-    unbounded = {
-        'patient': _PROBE_PATIENT,
-        'subject': _PROBE_PATIENT,
-        # The name the projection withholds entirely.
-        'resources': _PROBE_RESOURCES,
-    }
-    if evaluate(expression, _PROBE_PATIENT, unbounded) is None:
-        return False
-    return evaluate(expression, projected, bounded) is None
 
 
 def evaluate(expression, resource, context=None):
