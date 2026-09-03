@@ -583,6 +583,69 @@ describe("Tool Execution Tests", () => {
     expect(summary.note).toContain("No Observation resources found");
   });
 
+  // -- curatr.evaluate: the rollup must not out-claim the evaluation (#458) --
+  //
+  // `curatr_evaluate` grades ONE resource. Duplication is a property of a set,
+  // so no single-resource pass can see it. This rollup is what a direct MCP
+  // consumer reads instead of the engine's `summary`, and it carried its own
+  // copy of the record-level verdict — the demo path is Claude talking to the
+  // MCP server, so this is the string a clinician actually sees.
+
+  it("curatr.evaluate says it checked one resource, not the record", async () => {
+    // MUTATION: restore `No data quality issues found in this X record.` -> red.
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({
+        resource_type: "Observation",
+        resource_id: "obs-1",
+        issue_count: 0,
+        overall_quality: "good",
+        summary: "engine summary",
+      })
+    );
+
+    const result = await tools.executeTool("curatr_evaluate", {
+      resource_type: "Observation",
+      resource_id: "obs-1",
+    });
+
+    const summary = (result as Record<string, unknown>)._mcp_summary as Record<
+      string,
+      unknown
+    >;
+    const note = summary.note as string;
+    expect(note).toContain("this one Observation record");
+    expect(note).toContain("checked one resource");
+    expect(note).toContain("not examined");
+    expect(note).not.toContain("No data quality issues found");
+
+    // "No action needed" is a claim about the record too — a clean single
+    // resource is not evidence that nothing needs attention.
+    const steps = summary.next_steps as string[];
+    expect(steps.join(" ")).not.toMatch(/no action needed/i);
+    expect(steps.join(" ")).toMatch(/one resource|duplicate/i);
+  });
+
+  it("curatr.evaluate still tells the agent what to do when issues exist", async () => {
+    // The scope caveat must not displace the issue workflow.
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({ issue_count: 2, overall_quality: "needs-review" })
+    );
+
+    const result = await tools.executeTool("curatr_evaluate", {
+      resource_type: "Condition",
+      resource_id: "c-1",
+    });
+
+    const summary = (result as Record<string, unknown>)._mcp_summary as Record<
+      string,
+      unknown
+    >;
+    expect(summary.note as string).toContain("2 issue(s)");
+    expect((summary.next_steps as string[]).join(" ")).toContain(
+      "curatr.apply_fix"
+    );
+  });
+
   it("fhir.search preserves a bounded backend OperationOutcome and HTTP status", async () => {
     const hostileText = "Patient Jane Doe https://internal.example?token=secret";
     const issue = {
