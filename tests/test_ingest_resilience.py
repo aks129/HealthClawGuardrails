@@ -244,6 +244,36 @@ def test_any_other_non_string_resource_id_is_refused(client, tenant_id):
         tenant_id=tenant_id, resource_type="Observation").count() == 0
 
 
+def test_an_explicit_json_null_id_mints_a_uuid_rather_than_being_refused(
+        client, tenant_id):
+    """The fifth falsy id, which D8's four cases do not name: `"id": null`.
+
+    `resource.get('id')` cannot tell an absent key from a present `null`,
+    so a null id takes the absent branch and is MINTED, while `""` — the
+    other empty id — is refused. That divergence is the behaviour today and
+    this pins it as-is; it is not an endorsement. If null should instead be
+    refused (the argument: a UUID for an id the feed did send, but sent
+    empty, turns the next re-ingest into a duplicate row — the same
+    append-not-upsert shape #286 exists to stop), that is a product call,
+    and this test is what makes changing it deliberate rather than silent.
+
+    MUTATION: `if resource_id is not None:` -> `if resource_id:` makes the
+    blank-id test red while this one stays green, which is precisely the
+    asymmetry being recorded.
+    """
+    from r6.fasten.ingester import _ingest_one
+
+    result, rid = _ingest_one(
+        {"resourceType": "Observation", "id": None, "status": "final"},
+        tenant_id)
+
+    assert result == "ok"
+    assert uuid.UUID(rid)  # minted, not "" and not the string "None"
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation", id=rid
+    ).first() is not None
+
+
 # ---------------------------------------------------------------------------
 # #293 / #306: a record we REFUSED is not a record we chose to skip, and the
 # SHC path never got the rollback the Fasten path was patched for on
