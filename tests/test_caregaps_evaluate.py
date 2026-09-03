@@ -298,8 +298,17 @@ def test_every_age_the_rule_applies_to_gets_a_cadence_somebody_chose():
     a hole reports the fallback, which looks like an answer.
     """
     rule = next(r for r in CARE_GAP_RULES if r["id"] == "bp-screening")
-    for age in range(rule["applies"]["min_age"], 90):
+    # To max_age inclusive, not to 90. The sweep stopped 31 years short of the
+    # ages the rule claims, so a band leaving a hole anywhere in 90-120 would
+    # have reported the fallback and the sweep would never have looked. The
+    # rule's own bounds are the only defensible end point for a test whose
+    # subject is "every age the rule applies to".
+    lo, hi = rule["applies"]["min_age"], rule["applies"]["max_age"]
+    for age in range(lo, hi + 1):
         bp = _bp_result(age=age, months_ago=0)
+        assert bp["status"] != "not_applicable", (
+            f"age {age} is inside the rule's own {lo}-{hi} range and was "
+            "dismissed as not applicable")
         assert bp["cadence"] == ("every 3 years" if age < 40 else "yearly"), age
 
 
