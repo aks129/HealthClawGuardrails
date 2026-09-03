@@ -4772,3 +4772,108 @@ def test_the_tester_guide_no_longer_offers_text_as_a_surface():
     assert "on the web." in text
     assert "Telegram" not in text.split("## Where your data goes")[0], (
         "the guide's opening must not offer Telegram as a way in")
+
+
+# --- QA hardening for the beta batch (review of PR #553) ---------------------
+# Each of these pins a property the batch's own tests left open, and each was
+# reproduced against a running CareAgents before it was written.
+
+def test_canonical_host_refuses_a_value_that_is_not_a_bare_hostname():
+    """`https://careagents.cloud` is what an operator types by reflex, and it
+    is not a harmless no-op: the host comparison never matches, so every
+    request — including one already on the real site — is answered 308 to
+    `https://https//careagents.cloud/...`, and a trailing slash loops forever,
+    one slash longer per hop. `/healthz` is exempt, so the platform keeps
+    reporting the deploy healthy while the site is dead. Reproduced on
+    0931974 before the guard: Config accepted "https://careagents.cloud" and
+    GET https://careagents.cloud/home answered 308 with
+    Location: https://https//careagents.cloud/home."""
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    for bad in ("https://careagents.cloud", "http://careagents.cloud",
+                "careagents.cloud/", "careagents.cloud/home",
+                "careagents.cloud:8080", "care agents.cloud"):
+        with pytest.raises(ConfigError):
+            Config(env={**base, "CAREAGENTS_CANONICAL_HOST": bad})
+    # Surrounding whitespace is still trimmed, not refused, and unset is unset.
+    assert Config(env={**base,
+                       "CAREAGENTS_CANONICAL_HOST": " CareAgents.Cloud "}
+                  ).canonical_host == "careagents.cloud"
+    assert Config(env=base).canonical_host == ""
+
+
+def test_canonical_host_compares_hostnames_not_host_and_port(svc):
+    """A proxy that appends the default port is still the canonical host.
+    `test_the_railway_hostname_308s_to_the_canonical_host` cannot see this:
+    the Werkzeug test client normalises `:443` out of `base_url`, so the
+    header has to be set by hand. On a running server
+    (`curl -H 'Host: careagents.cloud:443'`) 0931974 answered 308, costing
+    every such request a round trip."""
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    r = c.get("/", headers={"Host": "careagents.cloud:443"})
+    assert r.status_code == 200
+    assert "Location" not in r.headers
+    # A different host with a port is still redirected, port dropped.
+    r = c.get("/home",
+              headers={"Host": "careagents-production.up.railway.app:8080"})
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/home"
+
+
+def test_canonical_redirect_survives_a_path_that_cannot_go_in_a_header(svc):
+    """`request.path` arrives percent-DECODED, so a target built from it can
+    carry bytes that are illegal in a header. On 0931974 `/%0d%0aX` raised
+    ValueError("Header values must not contain newline characters") inside
+    `redirect()` and the Railway hostname answered 500 instead of 308."""
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    internal = "https://careagents-production.up.railway.app"
+    r = c.get("/%0d%0aSet-Cookie:%20a=b", base_url=internal)
+    assert r.status_code == 308
+    loc = r.headers["Location"]
+    assert loc.startswith("https://careagents.cloud/")
+    assert "\r" not in loc and "\n" not in loc
+    # An ordinary path is unchanged byte for byte by the re-encoding.
+    assert c.get("/api/connections/catalog", base_url=internal).headers[
+        "Location"] == "https://careagents.cloud/api/connections/catalog"
+
+
+def test_allowlist_mode_with_an_empty_list_is_closed_to_everyone(svc,
+                                                                 monkeypatch):
+    """`allowlist` with the address variable unset is the state a
+    half-finished deploy lands in. It must be closed, not open."""
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist"})
+    assert cfg.real_records_allowlist == frozenset()
+    assert cfg.real_records_open_for("anyone@example.org") is False
+    # Only separators, no addresses, is the same state.
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                      "CARE_REAL_RECORDS_ALLOWLIST": " , ,, "})
+    assert cfg.real_records_open_for("anyone@example.org") is False
+    c = _beta_app(svc, CARE_REAL_RECORDS="allowlist").test_client()
+    _login(c, svc, monkeypatch, email="anyone@example.org")
+    assert c.post("/api/connections/fasten",
+                  json={"consent": True}).status_code == 503
+
+
+def test_the_tester_guide_matches_what_the_switch_actually_does():
+    """The guide is the first thing a tester reads, and D3 closed the door it
+    was sending them through. `Track 2` told ten testers to connect a real
+    provider; the connect POST answers 503. The `Leaving` section told them to
+    email us to delete, while the hub has had a self-serve Delete since #203 —
+    and it did not say the account row outlives it."""
+    import pathlib
+    guide = (pathlib.Path(__file__).resolve().parents[1] / "docs"
+             / "beta-tester-guide.md").read_text(encoding="utf-8")
+    track2 = guide.split("### Track 2")[1].split("---")[0]
+    assert "closed for this cohort" in track2
+    assert "not open in this beta" in track2
+    leaving = guide.split("## Leaving")[1].split("---")[0]
+    # The hub's own Delete, not a support ticket, is how records go.
+    assert "**Delete** button" in leaving
+    # ...and the account is named as a separate thing that survives it.
+    assert "Delete the account" in leaving
+    assert "no self-serve" in leaving
+    assert "support@healthclaw.io" in leaving

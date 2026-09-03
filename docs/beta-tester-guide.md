@@ -56,12 +56,16 @@ every feature, break things freely, and screenshot anything.
 **Start here even if you intend to connect your own records.** It costs you ten
 minutes and tells you whether this is worth your real data.
 
-### Track 2: your own records (real data)
+### Track 2: your own records (real data) — not open in this cohort
 
-Connect a real provider, wearable, or health record source. This is where the
-product actually proves itself — and where you should be deliberate.
+Connecting a real provider, a wearable, or a record file you export yourself is
+**closed for this cohort**. Those tiles read "coming soon" in the hub, and if
+you press one the server answers "not open in this beta" rather than starting a
+connection. That is deliberate: this cohort runs on synthetic records only, and
+we would rather tell you up front than let you discover it mid-connect.
 
-Before you do:
+When it opens, this is where the product actually proves itself — and where you
+should be deliberate:
 
 - Understand where your data goes (next section).
 - Know you can disconnect and delete.
@@ -110,10 +114,12 @@ is not serviced in this beta.
    or Sunny Coach — this is tone only; capability is identical).
 4. **Ask it something.** Try "what are my recent labs?" or "am I due for
    anything?"
-5. **When you're ready**, connect a real source from the connect menu.
+5. **Tell us what you found.** Connecting a real source is not part of this
+   cohort (see Track 2 above).
 
-Sources marked **coming soon** aren't wired yet — that label is honest, not
-sandbagging. Please don't spend time trying to make them work.
+Sources marked **coming soon** are either not wired yet or not open in this
+beta — the tile says which. Either way the label is honest, not sandbagging.
+Please don't spend time trying to make them work.
 
 ---
 
@@ -161,8 +167,13 @@ publicly — see [SECURITY.md](../SECURITY.md).
 You can stop at any time and you don't owe us an explanation.
 
 - **Disconnect a source** — stops new data flowing in.
-- **Delete your data** — email support@healthclaw.io and we'll remove your
-  tenant and confirm when it's done.
+- **Delete the records** — the **Delete** button on a connection in the hub
+  purges that connection's records straight away and tells you how many rows
+  went. You don't have to ask us, and you don't have to wait.
+- **Delete the account** — your account is a separate record (email, passkey,
+  and which sources you connected; no health data). There's no self-serve
+  button for it yet. Email support@healthclaw.io and we'll remove it and
+  confirm when it's done.
 - **Just stop using it** — nothing will contact you.
 
 If deleting is ever harder than connecting was, that's a bug. Tell us.

@@ -129,9 +129,17 @@
       <h3>CareAgents beta testers</h3>
       <p>
         A beta tester's tenant holds one fictional sample patient &mdash; one condition, three observations, one
-        medication and an intake questionnaire &mdash; plus your chat with the agent and anything you approve there, and nothing else about you.
-        Deleting it from the CareAgents hub purges those records immediately, in the same request, and reports the
-        row count back; the PHI-free audit trail, including the deletion itself, is retained.
+        medication and an intake questionnaire &mdash; plus your chat with the agent and anything you approve there,
+        and no other health data about you.
+        Deleting a connection from the CareAgents hub purges that tenant's records immediately, in the same
+        request, and reports the row count back.
+      </p>
+      <p>
+        Two things outlive that deletion, and neither holds health data. The PHI-free audit trail is retained,
+        including the deletion itself. Your CareAgents account &mdash; your email address, your passkey credential
+        and which sources you connected &mdash; is a separate record in CareAgents' own database, and deleting your
+        records does not delete it. There is no self-serve button for the account yet: email support@healthclaw.io
+        and we will remove it and confirm when it is done.
       </p>
 
       <h2 id="third-party">5. Third-Party Services</h2>

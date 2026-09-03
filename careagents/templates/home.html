@@ -243,6 +243,9 @@
      current owner before triggering the picker. -->
 <input type="file" id="upload-file" accept=".json,application/json,application/fhir+json" hidden>
 
-<script>window.CARE = { telegramBot: {{ (telegram_bot or '')|tojson }} };</script>
+{# `window.CARE = {telegramBot: ...}` used to be emitted here. Nothing reads
+   it (home.js builds the deep link from the server response), and with the
+   Telegram tile out of service for the beta (#536, D6) it only put the bot
+   handle in the page source. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
 {% endblock %}

@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from functools import wraps
+from urllib.parse import quote
 
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
@@ -180,9 +181,23 @@ def create_app(config: Config | None = None,
         # every deploy unhealthy. Unset means no redirect (local, CI).
         if not cfg.canonical_host or request.path == "/healthz":
             return None
-        if request.host.lower() == cfg.canonical_host:
+        # Hostname only. A proxy that appends the default port
+        # (`careagents.cloud:443`) is on the canonical host and must not be
+        # bounced — the Werkzeug test client normalises that port away, a
+        # real request does not, so the strip has to be explicit or every
+        # such request pays a redirect. Config forbids a port in
+        # canonical_host, so the only `:` here is the request's own.
+        host = request.host.lower()
+        if ":" in host and not host.endswith("]"):   # not a bare IPv6 literal
+            host = host.rsplit(":", 1)[0]
+        if host == cfg.canonical_host:
             return None
-        target = f"https://{cfg.canonical_host}{request.path}"
+        # `request.path` arrives percent-DECODED, so it can carry bytes that
+        # are illegal in a header — `/%0d%0a...` produced a 500 rather than a
+        # redirect. Re-encode it; `safe` is RFC 3986's pchar set, so an
+        # ordinary path is unchanged byte for byte.
+        target = f"https://{cfg.canonical_host}" + quote(
+            request.path, safe="/:@-._~!$&'()*+,;=")
         if request.query_string:
             target += "?" + request.query_string.decode("utf-8", "replace")
         return redirect(target, code=308)

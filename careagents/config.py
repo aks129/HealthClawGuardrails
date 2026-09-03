@@ -94,6 +94,22 @@ class Config:
         # means no redirect, which is what local and CI want.
         self.canonical_host = (
             e.get("CAREAGENTS_CANONICAL_HOST") or "").strip().lower()
+        # A bare hostname and nothing else. `https://careagents.cloud` is what
+        # an operator types by reflex, and it is not a harmless no-op: the
+        # comparison below never matches, so EVERY request — including one
+        # already on the real site — is answered 308 to a malformed
+        # `https://https//careagents.cloud/...`, and a trailing slash loops
+        # forever, one slash longer each hop. `/healthz` is exempt, so the
+        # platform keeps reporting the deploy healthy while the site is dead.
+        # Refuse to boot, exactly as CARE_REAL_RECORDS does above.
+        if self.canonical_host and (
+                "/" in self.canonical_host
+                or ":" in self.canonical_host
+                or any(c.isspace() for c in self.canonical_host)):
+            raise ConfigError(
+                "CAREAGENTS_CANONICAL_HOST must be a bare hostname — no "
+                "scheme, port, path or whitespace (got "
+                f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
