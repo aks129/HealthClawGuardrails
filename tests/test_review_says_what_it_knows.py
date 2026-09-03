@@ -544,6 +544,12 @@ def test_the_poll_reads_statuses_the_state_machine_can_actually_produce(page):
 
     Reported per-status so a failure names the missing arm rather than just
     saying two sets differ.
+
+    Accepts either quoting style: pinned on single quotes alone, a fix written
+    with double quotes would leave this xfailed instead of turning it red, and
+    nobody would come back to it. It still reads `status === '...'` only — a
+    rewrite to `switch (status)` defeats it, so re-express this guard if the
+    poll is ever restructured that way.
     """
     table = re.search(r"_TRANSITIONS = \{(.*?)\n\}",
                       (ROOT / "r6/actions/models.py").read_text(), re.S)
@@ -552,7 +558,8 @@ def test_the_poll_reads_statuses_the_state_machine_can_actually_produce(page):
     real = set(re.findall(r"'([a-z_]+)'", table.group(1))) - {"proposed"}
 
     body = _code_only(_submit_handler(page))
-    handled = set(re.findall(r"status === '([a-z_]+)'", body))
+    handled = set(re.findall(r"""status === ["']([a-z_]+)["']""", body))
+    assert handled, "no status comparisons found; this guard reads nothing"
 
     impossible = sorted(handled - real)
     unhandled = sorted(real - handled)
