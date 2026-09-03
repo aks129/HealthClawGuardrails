@@ -144,10 +144,13 @@ def test_a_failing_expression_is_not_echoed_into_the_log(caplog):
 
     Asserted on the LogRecord rather than on `caplog.text`, because the two
     disagree in exactly the way that matters. `%r` escapes the newline when
-    the record is formatted, so a text assertion passes while the raw
-    expression still travels in `record.args` to every handler — and this
-    app installs a JSONFormatter in production (main.py), which serialises
-    args of its own accord.
+    the record is formatted, so a text assertion goes green on a forged log
+    line while the raw expression is still sitting in `record.args`, where
+    any handler or formatter that reads it — a structured one, a shipper —
+    gets the unescaped string. (This app's own JSONFormatter, main.py:36,
+    happens to use `getMessage()` and would not; the record is still where
+    the untrusted text is, and the assertion should not depend on which
+    formatter is installed.)
 
     Driven through `populate_questionnaire` rather than `evaluate` directly,
     so the linkId plumbing is part of what is pinned: an item whose
