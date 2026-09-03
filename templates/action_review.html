@@ -350,6 +350,28 @@
             return;
           }
 
+          // The relay's confirm-failure: the review WAS saved and the
+          // approval IS recorded (the review route mints it), and only the
+          // completion failed. Its message points the patient at the status,
+          // so that instruction needs a destination (#419) — and the button
+          // must not be left armed, because since #528 the retry it invites
+          // answers 409.
+          //
+          // Keyed on the STATUS as well as the value, not on
+          // `confirmed === false` alone: the two 503s carry that same value
+          // for a review that never reached the engine, where there is no
+          // approval on file, nothing to look up, and the poll would report
+          // on a request that was never made.
+          if (res.r.status === 502 && res.b.confirmed === false) {
+            btn.disabled = true;             // its retry now answers 409
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'Your review was saved, but we could not complete your ' +
+              'approval. We are checking where this request stands.';
+            checkStatus();
+            return;
+          }
+
           gateMsg.className = 'alert alert-danger';
           // `message` first: it is the field the server uses when it has
           // something specific to say. `error` is a machine code.
@@ -395,6 +417,28 @@
               gateMsg.className = 'alert alert-success';
               gateMsg.textContent =
                 'Confirmed. Your approval was recorded and is being sent.';
+              return;
+            }
+            // The action is committed and not yet claimed. This used to fall
+            // through to the terminal "we cannot tell" below — which is
+            // weaker than what is on file, and is the loop this change
+            // closes: the copy sends the patient to check the status, and
+            // the status check then told them nothing was knowable.
+            //
+            // PRECONDITION, and it is load-bearing for the first clause:
+            // every caller of checkStatus has already established that a
+            // confirmation EXISTS — a 200 review mints one, and the 409
+            // fires only when one is present. The status alone does not
+            // carry that. `awaiting_confirmation` is set at COMMIT, before
+            // any human approval (r6/actions/models.py:35), so read off a
+            // caller that had not approved yet this sentence would be false.
+            // The unreachable-service branch deliberately does not call
+            // this, and a test pins that it does not.
+            if (status === 'awaiting_confirmation') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'Your approval is recorded and this request has not been ' +
+                'carried out yet. Approving again will not resend it.';
               return;
             }
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }

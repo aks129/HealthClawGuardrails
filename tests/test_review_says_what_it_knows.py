@@ -353,6 +353,16 @@ def test_an_unreachable_service_leaves_the_button_enabled(page):
         "the unreachable-service branch disables Approve. A dropped "
         "connection usually means the request never left the device; "
         "disabling the only way forward strands the patient mid-approval")
+    # Two reasons, and the second is the one that bites quietly.
+    # checkStatus's terminal message says "Please do not approve a second
+    # time", which would countermand the enabled button above. And its
+    # awaiting_confirmation arm says "Your approval is recorded" — true for
+    # every OTHER caller, false here, where nothing is known about whether
+    # the request even left the device.
+    assert "checkStatus()" not in block, (
+        "the unreachable-service branch polls the status. Its terminal copy "
+        "contradicts the enabled button, and its awaiting_confirmation arm "
+        "would claim an approval this branch never established")
 
 
 def test_the_unreachable_branch_claims_nothing_about_the_request(page):
@@ -366,3 +376,82 @@ def test_the_unreachable_branch_claims_nothing_about_the_request(page):
     block = _block(_code_only(_submit_handler(page)), "!res.reached")
     assert "could not reach" in block, (
         "the unreachable-service branch does not say what actually happened")
+
+
+# --- the terminus: a recorded approval is not an unknown outcome -----------
+#
+# The loop this PR closes ended here. The 409 branch and the relay's
+# confirm-failure both point the patient at the status; checkStatus handled
+# completed/sent/pending/approved and nothing else, so `awaiting_confirmation`
+# — exactly where the action sits in both cases — fell to the terminal "we
+# still cannot tell whether your approval went through". That is weaker than
+# what is on file: the approval IS recorded.
+
+
+def test_awaiting_confirmation_is_not_reported_as_an_unknown_outcome(page):
+    """MUTATION: delete the `awaiting_confirmation` arm -> red.
+
+    Without it the status the action actually holds falls through to the
+    terminal unknown, and the instruction to go and check the status returns
+    less than the branch that issued it already knew.
+    """
+    body = _code_only(_submit_handler(page))
+    assert "awaiting_confirmation" in body, (
+        "checkStatus does not handle awaiting_confirmation, which is the "
+        "status the action holds after a review is submitted; it reports a "
+        "recorded approval as an outcome nobody can determine")
+
+
+def test_the_awaiting_confirmation_arm_never_invites_a_second_approval(page):
+    """MUTATION: drop the "will not resend" clause -> red.
+
+    The state is reachable precisely when a patient has been sent to check on
+    an approval they already gave. Saying it is not finished, without saying
+    that re-approving cannot help, is what produced the double-tap.
+    """
+    block = _block(_code_only(_submit_handler(page)), "'awaiting_confirmation'")
+    assert "will not resend" in block, (
+        "the awaiting_confirmation arm says the request is unfinished but "
+        "not that approving again cannot resend it")
+    assert "recorded" in block, (
+        "the awaiting_confirmation arm does not say the approval is on file, "
+        "which is the whole reason it is not an unknown outcome")
+
+
+def test_the_relay_confirm_failure_gets_the_destination_it_points_at(page):
+    """The other half of the loop.
+
+    The relay's 502 tells the patient to check where the request stands. The
+    page rendered that in the generic failure arm, which polls nothing and
+    leaves Approve armed for a retry that now answers 409.
+
+    MUTATION: remove the `status === 502` branch, or its `checkStatus()`,
+    or its `btn.disabled` -> red.
+    """
+    body = _code_only(_submit_handler(page))
+    assert re.search(r"res\.r\.status\s*===\s*502", body), (
+        "no branch handles the relay's confirm-failure, so its instruction "
+        "to check the status has nothing behind it")
+    block = _block(body, "res.r.status === 502")
+    assert "checkStatus()" in block, (
+        "the confirm-failure branch points at the status and never reads it")
+    assert re.search(r"btn\.disabled\s*=\s*true", block), (
+        "the confirm-failure branch leaves Approve armed for a retry that "
+        "answers 409")
+
+
+def test_the_confirm_failure_branch_is_not_keyed_on_confirmed_alone(page):
+    """`confirmed: false` is also sent by two 503s, for a review that never
+    reached the engine. Polling the status there reports on a request that
+    was never made.
+
+    MUTATION: drop the status test and key on `confirmed === false` alone
+    -> red.
+    """
+    body = _code_only(_submit_handler(page))
+    assert re.search(
+        r"res\.r\.status\s*===\s*502\s*&&\s*res\.b\.confirmed\s*===\s*false",
+        body), (
+        "the confirm-failure branch does not test BOTH the 502 and "
+        "`confirmed === false`, so it cannot distinguish the answer that has "
+        "an approval on file from the 503s that do not")
