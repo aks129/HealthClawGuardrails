@@ -587,3 +587,81 @@ def test_the_audit_detail_carries_counts_and_no_patient_data(
         for phi in ("Lovelace", "Ada", "1815-12-10", "MRN-000-1234",
                     "ada@example.org", OBS_TEXT_NAME_MARKER):
             assert phi not in detail
+
+
+# ---------------------------------------------------------------------------
+# 5. The issue channel is not a read of the record it refuses to show
+# ---------------------------------------------------------------------------
+
+def test_the_withheld_issue_cannot_be_used_to_guess_the_withheld_value(
+        client, app, tenant_id, tenant_headers):
+    """A refusal that depends on the data is a read of the data.
+
+    The first cut of this bound decided whether to emit the issue by
+    evaluating the caller's own expression against the UNBOUNDED record and
+    reporting whether it came back non-empty. That is a one-bit oracle over
+    exactly what the projection withholds: send
+    `%patient.identifier.value.where($this.startsWith('M'))` on one item,
+    read whether an issue named that linkId, and walk the identifier out one
+    character at a time. Eleven HTTP requests recovered a nine-digit
+    identifier that way during the review of PR #562, and the value never
+    once appeared in an answer.
+
+    So the issue has to depend on the EXPRESSION and nothing else: a right
+    guess and a wrong guess must be indistinguishable from outside.
+
+    MUTATION: pass the real subject back into resolves_outside_projection ->
+    `recovered` becomes the stored MRN and this goes red on the first
+    character.
+    """
+    _seed(app, tenant_id)
+    secret = _patient()["identifier"][0]["value"]
+    alphabet = sorted(set(secret))
+
+    recovered = ""
+    for _ in range(len(secret)):
+        items = [
+            _expr_item(f"guess-{n}",
+                       "%patient.identifier.value.where($this.startsWith('"
+                       + recovered + ch + "'))")
+            for n, ch in enumerate(alphabet)
+        ]
+        _store(app, {"resourceType": "Questionnaire", "id": "oracle-q",
+                     "status": "active", "item": items}, tenant_id)
+        body = _populate(client, tenant_headers,
+                         questionnaire_id="oracle-q").get_json()
+        named = set(_issue_link_ids(body))
+        hits = [ch for n, ch in enumerate(alphabet) if f"guess-{n}" in named]
+        # All refused or none refused. Anything between is the oracle.
+        assert len(hits) in (0, len(alphabet)), (
+            f"the issue list singled out {hits} out of {alphabet}: the "
+            f"refusal is a function of the patient's data, not of the "
+            f"expression")
+        if not hits:
+            break
+        recovered += hits[0]
+
+    assert recovered == "", (
+        f"the withheld identifier leaked through the issue channel: "
+        f"{recovered!r} of {secret!r}")
+
+
+def test_a_refused_item_still_names_itself_after_the_oracle_is_closed(
+        client, app, tenant_id, tenant_headers):
+    """Closing the oracle must not cost the ruling's UX.
+
+    D10 asks for an OperationOutcome issue naming the linkId on
+    `%patient.identifier`, `%patient.photo` and `%resources...code.text`.
+    Answering from a constant probe keeps all of them — those paths are
+    outside the allowlist for every patient, which is a fact about the
+    allowlist and not about anyone's record.
+    """
+    _seed(app, tenant_id)
+    items = [_expr_item(link_id, expr) for link_id, expr in WITHHELD.items()]
+    _store(app, {"resourceType": "Questionnaire", "id": "after-q",
+                 "status": "active", "item": items}, tenant_id)
+
+    body = _populate(client, tenant_headers,
+                     questionnaire_id="after-q").get_json()
+
+    assert sorted(_issue_link_ids(body)) == sorted(WITHHELD)

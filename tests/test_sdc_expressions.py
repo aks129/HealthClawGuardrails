@@ -92,41 +92,89 @@ def test_build_context_with_no_subject_is_empty():
     assert patient_projection("not a resource") is None
 
 
-def test_resolves_outside_projection_tells_withheld_from_absent():
-    """THE ONE PROPERTY: True only when something WOULD have resolved.
+def test_resolves_outside_projection_names_the_paths_the_allowlist_withholds():
+    """Withheld -> True; allowlisted -> False. A property of the ALLOWLIST.
 
-    `identifier` is on the record and withheld by the projection -> True, and
-    the caller (which only asks after its own bounded evaluation came back
-    empty) turns that into an issue. `maritalStatus` is on neither the record
-    nor the allowlist -> False: nothing was withheld, the record simply does
-    not have it, and an issue there would be noise on every sparse record.
+    `identifier` and `name.text` are on a Patient and off the allowlist, so
+    an item asking for either is refused and says so. The allowlisted paths
+    are not, or every intake form would warn about its own demographics.
     """
-    assert resolves_outside_projection("%patient.identifier.value",
-                                       _FULL_PATIENT) is True
-    assert resolves_outside_projection("%patient.name.text",
-                                       _FULL_PATIENT) is True
-    assert resolves_outside_projection("%patient.maritalStatus.text",
-                                       _FULL_PATIENT) is False
+    for withheld in ("%patient.identifier.value", "%patient.name.text",
+                     "%patient.photo.url", "%patient.contact.name.family",
+                     "%patient.maritalStatus.text",
+                     "%patient.telecom.where(system='sms').value",
+                     "%subject.identifier.value", "Patient.identifier.value",
+                     "%resources.where(resourceType='Observation').code.text"):
+        assert resolves_outside_projection(withheld) is True, withheld
+    for allowed in ("%patient.name.family", "%patient.name.given.first()",
+                    "%patient.birthDate", "%patient.gender",
+                    "%patient.telecom.where(system='phone').value",
+                    "%patient.telecom.where(system='email').value",
+                    "%patient.address.line.first()",
+                    "%patient.address.city.first()",
+                    "%patient.address.state.first()",
+                    "%patient.address.postalCode.first()",
+                    "Patient.name.family"):
+        assert resolves_outside_projection(allowed) is False, allowed
+    assert resolves_outside_projection("") is False
+    assert resolves_outside_projection(None) is False
 
 
-def test_resolves_outside_projection_returns_a_bool_and_never_the_value():
-    """The unbounded evaluation exists to answer a yes/no question. If it
-    could hand its value back, the projection would have a bypass with a
-    helpful name."""
-    result = resolves_outside_projection("%patient.identifier.value",
-                                         _FULL_PATIENT)
-    assert result is True
-    assert not isinstance(result, str)
+def test_resolves_outside_projection_never_looks_at_a_patient():
+    """THE ONE PROPERTY, and the reason the signature takes no record.
+
+    The answer is a pure function of the expression text. It has to be: the
+    version that evaluated the caller's expression against the REAL record
+    and reported whether it was non-empty made the issue list a one-bit
+    oracle over exactly the data the projection withholds — eleven HTTP
+    requests recovered a withheld SSN through it, character by character,
+    with the value never appearing in an answer.
+
+    MUTATION: pass the real subject back into the probe -> `walked` becomes
+    the SSN and this goes red on the first character.
+    """
+    victim = dict(_FULL_PATIENT)
+    victim["identifier"] = [{"system": "http://hl7.org/fhir/sid/us-ssn",
+                             "value": "123-45-6789"}]
+
+    walked = ""
+    for _ in range(len("123-45-6789")):
+        for ch in "0123456789-":
+            probe = ("%patient.identifier.value.where($this.startsWith('"
+                     + walked + ch + "'))")
+            # The signature admits no record, so nothing about `victim` can
+            # steer this. Both a right and a wrong guess answer the same way.
+            if resolves_outside_projection(probe):
+                walked += ch
+                break
+        else:
+            break
+    assert walked == "", (
+        f"the withheld identifier leaked through the issue channel: {walked!r}")
+
+    # And the two halves of the guess are indistinguishable, which is what
+    # "no oracle" means.
+    right = "%patient.identifier.value.where($this='123-45-6789')"
+    wrong = "%patient.identifier.value.where($this='999-99-9999')"
+    assert resolves_outside_projection(right) == \
+        resolves_outside_projection(wrong)
 
 
-def test_resolves_outside_projection_sees_the_content_resources():
-    """%resources is absent from the bounded environment, so an expression
-    reaching for it is REPORTED rather than silently empty."""
-    obs = {"resourceType": "Observation",
-           "code": {"text": "Cholesterol (total)"}}
-    expr = "%resources.where(resourceType='Observation').code.text"
-    assert resolves_outside_projection(expr, _FULL_PATIENT, [obs]) is True
-    assert resolves_outside_projection(expr, _FULL_PATIENT, []) is False
+def test_resolves_outside_projection_is_not_a_lever_on_the_tenants_content():
+    """The probe is a constant, so a caller cannot buy work with an
+    expression that walks the whole record.
+
+    MUTATION: evaluate against the real content_resources -> this exceeds the
+    budget by orders of magnitude (measured at 32s for 50 items over 500
+    resources during the PR #562 review).
+    """
+    import time
+    expr = "%resources.descendants().descendants()"
+    resolves_outside_projection.cache_clear()
+    start = time.perf_counter()
+    for _ in range(200):
+        resolves_outside_projection(expr)
+    assert time.perf_counter() - start < 2.0
 
 
 def test_the_resource_root_form_still_evaluates_against_the_projection():

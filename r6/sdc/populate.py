@@ -226,8 +226,7 @@ def _populate_item(item, subject, context, observations, issues, content_resourc
         return [{"linkId": link_id, "item": children}]
 
     answer_value, value_key = _resolve_answer(
-        item, item_type, context, observations, issues, link_id,
-        subject, content_resources)
+        item, item_type, context, observations, issues, link_id)
     # Leaf items are always emitted so the response mirrors the questionnaire's
     # structure; the answer array is attached only when a value resolved.
     answer_item = {"linkId": link_id}
@@ -307,8 +306,7 @@ def _references_subject(resource, subject_field, subject_ref):
     return ref == subject_ref.get("reference")
 
 
-def _resolve_answer(item, item_type, context, observations, issues, link_id,
-                    subject=None, content_resources=None):
+def _resolve_answer(item, item_type, context, observations, issues, link_id):
     value_key = _ANSWER_KEY_BY_TYPE.get(item_type, "valueString")
 
     expr = _initial_expression(item)
@@ -320,10 +318,14 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
         if value is not None:
             return _coerce(value, item_type), value_key
         # An empty answer has two very different causes and a caller cannot
-        # tell them apart from the response. Measure which one it was rather
-        # than parsing the expression to guess (see the projection note in
-        # r6/sdc/expressions.py).
-        if resolves_outside_projection(expr, subject, content_resources):
+        # tell them apart from the response, so say which one it was.
+        #
+        # This asks about the EXPRESSION, not about this patient, and it must
+        # keep doing so. resolves_outside_projection takes no record for that
+        # reason: answering it from the real one turns this issue list into a
+        # one-bit oracle a caller walks the withheld data out through, one
+        # `where($this.startsWith(...))` per item. See its docstring.
+        if resolves_outside_projection(expr):
             issues.append({"linkId": link_id, "detail": WITHHELD_BY_PROJECTION})
         return None, value_key
 
