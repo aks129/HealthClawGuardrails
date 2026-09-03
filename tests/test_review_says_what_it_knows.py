@@ -455,3 +455,111 @@ def test_the_confirm_failure_branch_is_not_keyed_on_confirmed_alone(page):
         "the confirm-failure branch does not test BOTH the 502 and "
         "`confirmed === false`, so it cannot distinguish the answer that has "
         "an approval on file from the 503s that do not")
+
+
+# --- QA #566: the precondition that is a comment, and the vocabulary gap ----
+#
+# The `awaiting_confirmation` arm says "Your approval is recorded". The status
+# alone does not carry that: `awaiting_confirmation` is set at COMMIT
+# (r6/actions/routes.py:415), before any human approval. The sentence is true
+# only because of WHO calls `checkStatus` — a 200 review mints a confirmation,
+# and the 409 fires only when one is present.
+#
+# That precondition was enforced by a paragraph. docs/2026-08-02-retro.md is
+# about controls that look like one thing and quietly do another; a
+# load-bearing invariant whose only enforcement is a comment is the same
+# category. One `checkStatus()` added to the unreachable branch — the tidy-up
+# a reviewer would call consistency, and which the author had to write a
+# separate test to forbid — makes this page tell a patient their approval is
+# recorded when nothing left the device.
+
+
+def _checkstatus_call_sites(body: str) -> list[int]:
+    """Offsets of every CALL to checkStatus, excluding its definition."""
+    return [m.start() for m in re.finditer(r"checkStatus\(\)", body)
+            if not body[:m.start()].rstrip().endswith("function")]
+
+
+def test_check_status_is_only_called_where_an_approval_is_established(page):
+    """The comment's invariant, made a check.
+
+    MUTATION: add `checkStatus();` to the `!res.reached` branch -> red.
+
+    Every caller must sit inside one of the three answers that establish a
+    confirmation EXISTS: the 409 (fires only when one is present), the
+    relay's 502 confirm-failure, and the 502 `confirmed: null`. All three
+    follow a review the engine answered 200, which is what mints it.
+    """
+    body = _code_only(_submit_handler(page))
+    anchors = ("res.r.status === 409",
+               "res.b.confirmed === null",
+               "res.r.status === 502 &&")
+    allowed = []
+    for anchor in anchors:
+        block = _block(body, anchor)
+        allowed.append((body.index(block, body.index(anchor)), len(block)))
+
+    sites = _checkstatus_call_sites(body)
+    assert sites, "no call to checkStatus at all; this guard reads nothing"
+
+    for site in sites:
+        assert any(off <= site < off + length for off, length in allowed), (
+            "checkStatus is called from a branch that has NOT established a "
+            "confirmation. Its awaiting_confirmation arm says 'Your approval "
+            "is recorded' — a false statement about the human gate whenever "
+            "the caller has not approved yet, because that status is set at "
+            "commit, before any approval exists.")
+
+
+def test_the_forbidden_claims_guard_is_not_defeated_by_capitalisation(page):
+    """The claims the page must never print, matched case-INSENSITIVELY.
+
+    The sibling guard compares with `in` against the raw source, so "Nothing
+    was sent" at the start of a sentence walks straight past a list written
+    in lower case — and every one of these reads most naturally capitalised,
+    which is exactly how the copy it was written against did:
+    "Nothing has been sent — please try approving again."
+
+    MUTATION: set any branch's text to 'Nothing was sent.' -> red here,
+    green on the original guard.
+    """
+    body = _code_only(_submit_handler(page)).lower()
+    for claim in ("submission rejected", "was rejected", "did not go through",
+                  "nothing was sent"):
+        assert claim not in body, (
+            f"the page can print {claim!r} without knowing it")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "QA #566: checkStatus handles 'sent', 'pending' and 'approved', none of "
+    "which _TRANSITIONS can produce, and handles none of 'executing', "
+    "'failed', 'needs_review', 'expired' or 'unknown', all of which it can. "
+    "A form-fill confirm reaches 'failed' on a deployment with no provider "
+    "configured — verified against a running engine — so the #220 third "
+    "answer, the case checkStatus exists for, terminates at 'we still cannot "
+    "tell whether your approval went through' while the status says it ran. "
+    "Fixing this reddens the pin: update it in the same PR."))
+def test_the_poll_reads_statuses_the_state_machine_can_actually_produce(page):
+    """The poll's vocabulary against the state machine's, both read from source.
+
+    Reported per-status so a failure names the missing arm rather than just
+    saying two sets differ.
+    """
+    table = re.search(r"_TRANSITIONS = \{(.*?)\n\}",
+                      (ROOT / "r6/actions/models.py").read_text(), re.S)
+    # 'proposed' is unreachable from this page: the review route 404s unless
+    # the action is already awaiting_confirmation.
+    real = set(re.findall(r"'([a-z_]+)'", table.group(1))) - {"proposed"}
+
+    body = _code_only(_submit_handler(page))
+    handled = set(re.findall(r"status === '([a-z_]+)'", body))
+
+    impossible = sorted(handled - real)
+    unhandled = sorted(real - handled)
+    assert not impossible, (
+        f"checkStatus branches on statuses this system cannot produce: "
+        f"{impossible}. Dead arms read as coverage.")
+    assert not unhandled, (
+        f"checkStatus has no arm for {unhandled}, so each falls through to "
+        f"the terminal 'we still cannot tell whether your approval went "
+        f"through' — an unknown outcome reported for a status that is known.")
