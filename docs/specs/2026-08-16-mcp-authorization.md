@@ -152,12 +152,26 @@ is now:
   before DNS moves.
 - **Set.** Both routes serve the document and the challenge carries
   `resource_metadata` and `scope`.
-- **Set, but malformed** — not absolute, or not `https:`. The server refuses
-  to start. A value that cannot be an audience would otherwise turn phase 1
-  off in silence, which looks the same from outside as a deploy that worked.
+- **Set, but malformed.** The server refuses to start. A value that cannot be
+  an audience would otherwise turn phase 1 off in silence, which looks the same
+  from outside as a deploy that worked. The rule is stated as the property, not
+  as a list: the configured value must already be, character for character, the
+  identifier a client derives by removing the well-known segment from the URL
+  we advertise — `origin + pathname`, or `origin` alone when the path is root.
+  "Absolute and `https:`" is necessary and not sufficient. Mixed case in scheme
+  or host, an explicit `:443`, a `?query`, a `#fragment`, `user:pass@` userinfo,
+  a bare trailing slash and dot segments all parse as https URLs, and each one
+  boots a server whose challenge points at a document the challenge's own reader
+  refuses (RFC 9728 §3.3 — the §9.3 mode). Userinfo does one thing more: the
+  configured string is served verbatim as `resource`, so the credential lands
+  in an unauthenticated, CORS-open document. The boot error names the variable
+  and the shape and never the value, for that reason.
 - **Host gate.** The document and the enriched challenge are served only when
-  the request `Host` equals the canonical host. The Railway hostname keeps
-  `/health` and the static-token path exactly as they are.
+  the request `Host` names the canonical host. The comparison is on hostname:
+  the port, the case, and any userinfo in the header are not part of it, and no
+  spelling of the header changes what is advertised, which always comes from the
+  constant. `X-Forwarded-Host` is not read. The Railway hostname keeps `/health`
+  and the static-token path exactly as they are.
 
 The host gate is not defence in depth, it is conformance. RFC 9728 §3.3 has a
 client reject a document whose `resource` is not the identifier it inserted
@@ -862,16 +876,34 @@ the authorization server today and measured in §3.3:
 | AS metadata does not resolve at a location clients try | **present** (three 404/400s measured) | A4 |
 | `issuer` inside AS metadata ≠ the `authorization_servers` value | **present** (`http://app.healthclaw.io`) | A4 |
 | `http://` scheme on AS endpoints | **present** (every URL) | A4 |
+| `resource_documentation` points at a URL that errors | **present** | not detected — A2 stops at the PRM |
 
 Mitigation beyond A3/A4: both documents are pinned as fixtures in a test that
 fetches the **live** documents and diffs them, so drift between the deployed
 document and the design fails CI rather than a partner's connector.
 
+**The fifth row is ours, and it is measured.** §3.2's document sends a partner
+to `https://app.healthclaw.io/r6/fhir/docs/privacy-policy`. Fetched
+unauthenticated on 2026-09-03, that returns `400` with
+`{"issue":[{"code":"security","diagnostics":"X-Tenant-Id header is required"…`
+— the tenant gate stands in front of the page, and the caller reading it has no
+tenant yet by construction. So the one human-readable pointer in an otherwise
+machine-facing document is the §9.3 mode in miniature: a URL we publish, that
+errors, in the document that exists to stop a partner hitting a dead end.
+`resource_documentation` is OPTIONAL in RFC 9728 §2, so the choices are to
+exempt that route from the tenant requirement, point the field at a page that
+answers unauthenticated, or drop the field. Not decided here, and not phase
+1's to decide — phase 1 serves the value this section specifies. Whichever is
+chosen belongs in the pre-deploy checks alongside the four curls, because the
+document is inert until `MCP_CANONICAL_RESOURCE` is set.
+
 ### 9.4 CORS — measured, and it can make the whole design invisible
 
-The auth middleware is installed at `src/index.ts:97`; the CORS middleware at
-`src/index.ts:131`. The 401 is therefore returned **before** any CORS header is
-set. Measured, with `Origin: https://claude.ai`:
+In `services/agent-orchestrator/src/index.ts` the auth middleware is installed
+before the CORS middleware — named by position rather than by line, because
+phase 1 inserts code above both and a line number here would go stale the way
+P3-a's did. The 401 is therefore returned **before** any CORS header is set.
+Measured, with `Origin: https://claude.ai`:
 
 ```
 POST /mcp     -> 401, and NO access-control-allow-origin header
@@ -883,14 +915,28 @@ among them. If any client fetches from a browser context, it cannot read the
 401 *or* the `WWW-Authenticate` header, and this entire design is invisible to
 it.
 
-**Required in phase 1:** the two PRM paths and the 401 response must carry
+**Required:** the two PRM paths and the 401 response must carry
 `Access-Control-Allow-Origin: *` and `Access-Control-Expose-Headers: WWW-Authenticate`.
 This is safe and is not a widening of the lock: these responses contain no
 secret, identify no tenant, and grant nothing — a `401` readable by a browser
 is still a `401`. The transport endpoint's origin allowlist is untouched.
 
+**Half of that shipped in phase 1, and the half that did not needs more than
+one header.** The two PRM paths carry `Access-Control-Allow-Origin: *`, so the
+metadata document itself is readable from a browser context. The 401 does not,
+so the challenge that points at it is not. Adding the header to the 401 alone
+would not fix that: a browser's `POST /mcp` with `content-type: application/json`
+is preflighted, and `OPTIONS /mcp` also answers without
+`Access-Control-Allow-Origin` — measured on the phase 1 build, 2026-09-03 — so
+the browser never reaches the 401 to read a header on it. The refusal and its
+preflight have to be fixed together, which is why phase 1 did not do either.
+Tracked as part 2 of #523. A control that carried the header without the
+preflight would look like the fix and not be one.
+
 Whether any given hosted connector fetches server-side (where CORS does not
-apply) is **not asserted here**. It is measured in the §8.4 end-user run.
+apply) is **not asserted here**. It is measured in the §8.4 end-user run. Phase
+1's reachability claim therefore covers a server-side fetcher, not a
+browser-context one.
 
 ### 9.5 Protocol version
 
