@@ -247,18 +247,48 @@
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload)
-      }).then(function (r) {
-        // An unreadable body is an OUTCOME, not the absence of one. A body
-        // that is not JSON — a Werkzeug HTML error page, a gateway's own 502
-        // — rejects here, and with no .catch the entire chain went silent:
-        // the screen did not move and the button stayed enabled, which is an
-        // invitation to tap Approve again on a request that may have run.
-        // Resolve into a shape the renderer below can branch on instead.
-        return r.json()
-          .then(function (b) { return { r: r, b: b, readable: true }; })
-          .catch(function () { return { r: r, b: {}, readable: false }; });
       })
+        // A rejection HERE is not an answer of any kind — the request never
+        // got one. Resolved to a sentinel rather than handled in place, for
+        // two reasons: the renderer below then owns every outcome in one
+        // place, and a .catch attached after the renderer would also swallow
+        // a throw from the rendering itself and report it as a network
+        // failure.
+        .catch(function () { return null; })
+        .then(function (r) {
+          if (r === null) { return { reached: false }; }
+          // An unreadable body is an OUTCOME, not the absence of one. A body
+          // that is not JSON — a Werkzeug HTML error page, a gateway's own
+          // 502 — rejects here, and with no .catch the entire chain went
+          // silent: the screen did not move and the button stayed enabled,
+          // which is an invitation to tap Approve again on a request that
+          // may have run. Resolve into a shape the renderer can branch on.
+          return r.json()
+            .then(function (b) {
+              return { r: r, b: b, reached: true, readable: true }; })
+            .catch(function () {
+              return { r: r, b: {}, reached: true, readable: false }; });
+        })
         .then(function (res) {
+          // Nothing was reached, so nothing about the request is known here
+          // — including whether it arrived at all.
+          //
+          // RULED: leave Approve ENABLED, alone among these branches. A
+          // dropped connection most often means the request never left the
+          // device, and a disabled button with no way forward strands a
+          // patient mid-approval. Name the uncertainty, point at the check,
+          // and let them act on it. The option ruled out is the silent
+          // failure this branch used to be.
+          if (!res.reached) {
+            btn.disabled = false;
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not reach the service, so we cannot tell you ' +
+              'whether your approval was sent. Reload this page to see ' +
+              'where this request stands before approving again.';
+            return;
+          }
+
           // Say only that we could not read it. NOT what became of the
           // request: on an unreadable 200 the relay has already confirmed
           // the action, on an unreadable 502 it may or may not have, and

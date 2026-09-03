@@ -424,8 +424,15 @@ def test_a_confirm_the_engine_declined_stays_a_refusal(status, stub_base,
                                                        reset_mode):
     """The other half, and the half that made the old bug invisible: a 4xx is
     an answer. Either the engine declined or an edge rejected the request
-    before delivering it — nothing ran either way, so "nothing has been sent,
-    try approving again" is true and must keep being said.
+    before delivering it — nothing ran either way, so this stays a refusal and
+    the route keeps answering `confirmed: False`.
+
+    What this test pins is the TYPE, and only the type. It used to add that
+    "nothing has been sent, try approving again" must keep being said; since
+    #528 sealed the payload that instruction is dead — the review route mints
+    a confirmation on the first submit, so the retry answers 409. The refusal
+    is still a refusal; the copy that acted on it moved on
+    (careagents/app.py, and tests/test_careagents.py pins the new wording).
     """
     _set(status=status, body=b'{"error": "not awaiting confirmation"}',
          mint_ok=True)

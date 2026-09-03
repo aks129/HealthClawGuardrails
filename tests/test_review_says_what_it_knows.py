@@ -309,3 +309,60 @@ def test_the_409_branch_runs_before_the_generic_failure_message(page):
     body = _code_only(_submit_handler(page))
     assert body.index("res.r.status === 409") < body.index("alert alert-danger"), (
         "the 409 branch sits below the generic failure arm and can never run")
+
+
+# --- the outer fetch rejection ---------------------------------------------
+#
+# The parse `.catch` above covers a body that will not decode. A rejection of
+# the fetch ITSELF — the connection dropped, the service unreachable — never
+# produces a response to parse, and that path was silent too: nothing
+# rendered and Approve stayed enabled with no explanation.
+#
+# RULED (coordinator, this PR): this branch alone leaves Approve ENABLED. A
+# dropped connection most often means the request never left the device, and
+# a disabled button with no way forward strands a patient mid-approval. Name
+# the uncertainty, point at the check, let them act. The option ruled out is
+# the silent failure it used to be.
+
+
+def test_the_fetch_itself_has_a_catch(page):
+    """MUTATION: delete the `.catch` between fetch() and the parse -> red.
+
+    Scoped to the segment between the fetch call and the parse `then`, so the
+    parse's own catch and checkStatus's cannot stand in for a missing one.
+    """
+    body = _code_only(_submit_handler(page))
+    outer = body[body.index("fetch("):body.index(".then(function (r)")]
+    assert ".catch(" in outer, (
+        "a rejected fetch — a dropped connection — is unhandled, so the "
+        "chain goes silent and Approve stays enabled with nothing said")
+
+
+def test_an_unreachable_service_leaves_the_button_enabled(page):
+    """The ruling, pinned. MUTATION: set `btn.disabled = true` here -> red.
+
+    Deliberately the opposite of every sibling branch, which is exactly why
+    it needs a guard: the next person to tidy these into one shape would
+    disable it for consistency and strand the patient.
+    """
+    block = _block(_code_only(_submit_handler(page)), "!res.reached")
+    assert "btn.disabled = false" in block, (
+        "the unreachable-service branch does not explicitly leave Approve "
+        "enabled")
+    assert "btn.disabled = true" not in block, (
+        "the unreachable-service branch disables Approve. A dropped "
+        "connection usually means the request never left the device; "
+        "disabling the only way forward strands the patient mid-approval")
+
+
+def test_the_unreachable_branch_claims_nothing_about_the_request(page):
+    """It reached nothing, so it knows nothing — including whether the
+    request arrived.
+
+    The global forbidden-claims guard above already scans this branch. This
+    pins the positive half: it must say we could not reach the service, not
+    invent an outcome for the approval.
+    """
+    block = _block(_code_only(_submit_handler(page)), "!res.reached")
+    assert "could not reach" in block, (
+        "the unreachable-service branch does not say what actually happened")
