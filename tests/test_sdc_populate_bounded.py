@@ -34,6 +34,7 @@ filled in correctly is what stops that.
 import json
 
 from r6.models import R6Resource, db
+from r6.sdc import routes as sdc_routes
 
 INITIAL_EXPR_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
@@ -708,3 +709,75 @@ def test_a_refused_item_still_names_itself_after_the_oracle_is_closed(
                      questionnaire_id="after-q").get_json()
 
     assert sorted(_issue_link_ids(body)) == sorted(WITHHELD)
+
+
+# ---------------------------------------------------------------------------
+# 6. What the engine is handed
+# ---------------------------------------------------------------------------
+
+def test_the_content_list_handed_to_the_engine_carries_no_subject(
+        client, app, tenant_id, tenant_headers, monkeypatch):
+    """The subject reaches the engine as the `subject` ARGUMENT, never inside
+    the content list.
+
+    `_gather_content` used to append the unredacted stored Patient to
+    `content` as well. Nothing read it — `populate_questionnaire` filters
+    that list to Observations and to the three list-resource types, and
+    `_references_subject` takes what it matches on from the `subject`
+    argument — but it was the second door to the identifier oracle QA walked
+    an SSN through during the review of PR #562
+    (`%resources.where(resourceType='Patient').identifier.value...`), and a
+    `%resources` environment variable is one context change away from
+    existing again.
+
+    So this asserts the LIST, not the response. A leak through that append
+    is invisible in the response today and would stop being invisible
+    without anything in this directory going red, which is why the boundary
+    is measured where it is rather than where its effects happen to show.
+
+    Every negative is paired with a positive on the same request: an empty
+    content list, or a 404, would satisfy all four "not present" assertions
+    while measuring nothing.
+
+    MUTATION: restore `content.append(subject)` in
+    r6/sdc/routes.py::_gather_content -> red on the first assertion.
+    """
+    _seed(app, tenant_id)
+    calls = []
+    real_populate = sdc_routes.populate_questionnaire
+
+    def spy(questionnaire, subject, content_resources):
+        calls.append((subject, content_resources))
+        return real_populate(questionnaire, subject, content_resources)
+
+    monkeypatch.setattr(sdc_routes, "populate_questionnaire", spy)
+
+    resp = _populate(client, tenant_headers)
+
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert len(calls) == 1
+    subject, content = calls[0]
+
+    for resource in content:
+        assert resource.get("resourceType") != "Patient", (
+            "the subject is in the content list: an unredacted Patient is "
+            "reachable by anything that walks content, which is what the "
+            "oracle did")
+        assert resource.get("id") != PATIENT_ID
+    withheld = _patient()["identifier"][0]["value"]
+    assert withheld not in json.dumps(content), (
+        f"{withheld} reached the engine's content list")
+
+    # The positives, same request. Auto-loaded content IS there and IS
+    # redacted, so "no Patient in the list" cannot pass by the list being
+    # empty...
+    assert [r for r in content if r.get("resourceType") == "Observation"], (
+        "no auto-loaded content at all — the negatives above measure nothing")
+    assert OBS_TEXT_NAME_MARKER not in json.dumps(content)
+    # ...the subject still reaches the engine whole, through the argument
+    # that carries it, which is what the reference matching and the %patient
+    # projection are both built from...
+    assert subject["id"] == PATIENT_ID
+    assert subject["identifier"] == _patient()["identifier"]
+    # ...and the form still fills in.
+    assert set(PERMITTED) <= set(_answers(_param(resp.get_json(), "response")))

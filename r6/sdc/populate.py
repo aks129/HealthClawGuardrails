@@ -182,8 +182,11 @@ def populate_questionnaire(questionnaire, subject, content_resources):
 
     questionnaire: Questionnaire dict.
     subject: Patient dict (or None).
-    content_resources: list of resource dicts available for population
-        (should include the subject and any Observations).
+    content_resources: list of resource dicts available for population —
+        Observations, and the MedicationRequest / AllergyIntolerance /
+        Condition rows the list groups match. NOT the subject: that arrives
+        as `subject` above, and putting it here as well left an unredacted
+        Patient reachable by anything walking this list (PR #562 review).
     issues: list of {'linkId', 'detail'} for items that errored (not for
         items that simply had no data).
     """
@@ -347,7 +350,8 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id):
         # The resource root is `context["patient"]` — the bounded projection,
         # not the stored Patient — so the allowlist applies to the
         # resource-root form (`Patient.name.family`) as well as to `%patient`.
-        value = evaluate(expr, context.get("patient"), context)
+        value = evaluate(expr, context.get("patient"), context,
+                         link_id=link_id)
         if value is not None:
             return _coerce(value, item_type), value_key
         _report_unpopulated(issues, link_id)
