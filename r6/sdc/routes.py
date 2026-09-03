@@ -3,6 +3,22 @@
 Attached to the existing r6_blueprint so the tenant-enforcement before_request
 hook applies. Owns all store I/O, audit, and step-up; the transform
 logic lives in the pure engines (populate.py, extract.py).
+
+What $populate is allowed to read (council ruling D10). Three seats called
+the old behaviour an unbounded PHI read, and it was: any expression a caller
+put in a Questionnaire evaluated against the whole stored Patient, and every
+Observation / MedicationRequest / AllergyIntolerance / Condition the tenant
+held for that subject was loaded verbatim into the answer set. Three bounds
+now apply, each in the place that owns it:
+
+  1. Expressions see a BOUNDED PROJECTION of the subject, never the stored
+     Patient (r6/sdc/expressions.py).
+  2. Auto-loaded clinical content goes through apply_redaction before the
+     engine sees it (_redacted_for_populate below), so an upstream `display`
+     or `CodeableConcept.text` carrying a patient name cannot transit. The
+     inline `content` Bundle a caller supplies is the caller's own data and
+     is passed through unchanged.
+  3. Tombstoned rows are not read at all (is_deleted=False, #422).
 """
 
 import json
@@ -10,8 +26,10 @@ import logging
 
 from flask import request, jsonify
 
+from r6.access import Profile, TenantSource, fhir_response, tenant_from_request
 from r6.models import R6Resource
 from r6.audit import record_audit_event
+from r6.redaction import apply_redaction
 from r6.sdc.populate import populate_questionnaire
 from r6.sdc.extract import extract_resources
 
@@ -39,7 +57,7 @@ def register_sdc_routes(blueprint, deps):
     @blueprint.route("/Questionnaire/<questionnaire_id>/$populate",
                      methods=["POST"])
     def sdc_populate(questionnaire_id=None):
-        tenant_id = request.headers.get("X-Tenant-Id")
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -70,13 +88,20 @@ def register_sdc_routes(blueprint, deps):
         if issues:
             response_params["parameter"].append(
                 {"name": "issues", "resource": _issues_outcome(issues)})
-        return jsonify(response_params), 200
+        # Exit through the kernel so this operation is COUNTED as a shaped
+        # FHIR exit rather than a bare jsonify (spec §1.4). Say plainly what
+        # that buys and what it does not: Profile.INTAKE runs _intake_profile,
+        # which pops top-level note/text/SSN-identifiers and does not recurse,
+        # so on this Parameters wrapper it changes nothing. What actually
+        # bounds the payload is upstream — the %patient projection in
+        # r6/sdc/expressions.py and apply_redaction in _gather_content below.
+        return fhir_response(response_params, profile=Profile.INTAKE)
 
     @blueprint.route("/QuestionnaireResponse/$extract", methods=["POST"])
     @blueprint.route("/QuestionnaireResponse/<qr_id>/$extract",
                      methods=["POST"])
     def sdc_extract(qr_id=None):
-        tenant_id = request.headers.get("X-Tenant-Id")
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -172,11 +197,23 @@ def register_sdc_routes(blueprint, deps):
     def _gather_content(params, subject, tenant_id):
         content = []
         if subject:
+            # The subject is NOT redacted: an intake form exists to carry the
+            # patient's own name, DOB and address, and apply_redaction would
+            # truncate all three. What bounds the subject is the %patient
+            # projection in r6/sdc/expressions.py, which is an allowlist of
+            # exactly those elements.
             content.append(subject)
         if subject and subject.get("id"):
             for resource_type, subject_field in _AUTO_LOADED_RESOURCE_TYPES:
-                content.extend(_load_resources_for_patient(
-                    resource_type, subject_field, subject["id"], tenant_id))
+                content.extend(_redacted_for_populate(
+                    _load_resources_for_patient(resource_type, subject_field,
+                                                subject["id"], tenant_id)))
+        # The inline `content` Bundle is the CALLER'S OWN data — they just
+        # sent it in the request body — so it is passed through as it always
+        # has been. Redacting it would strip what the caller supplied and
+        # hand it back unusable, and it reveals nothing the caller did not
+        # already hold. Only the resources this route loaded from the tenant
+        # store on the caller's behalf go through apply_redaction.
         bundle = _param_resource(params, "content")
         if bundle and bundle.get("resourceType") == "Bundle":
             content.extend(e["resource"] for e in bundle.get("entry", [])
@@ -208,9 +245,14 @@ def _param_value(params, name, value_key):
 
 
 def _load_stored(resource_type, resource_id, tenant_id):
+    # is_deleted=False is #422: a tombstoned row must not be read back into a
+    # form. `tenant_id` is the kernel's (tenant_from_request), so the scope
+    # this filters by is the one the gate authorized. The kernel has no
+    # resource selector yet — that is playbook F5, unlanded — so the query
+    # itself stays here.
     row = R6Resource.query.filter_by(
         resource_type=resource_type, id=resource_id,
-        tenant_id=tenant_id).first()
+        tenant_id=tenant_id, is_deleted=False).first()
     return row.to_fhir_json() if row else None
 
 
@@ -230,7 +272,8 @@ _AUTO_LOADED_RESOURCE_TYPES = [
 
 def _load_resources_for_patient(resource_type, subject_field, patient_id, tenant_id):
     rows = R6Resource.query.filter_by(
-        resource_type=resource_type, tenant_id=tenant_id).all()
+        resource_type=resource_type, tenant_id=tenant_id,
+        is_deleted=False).all()
     out = []
     ref = f"Patient/{patient_id}"
     for row in rows:
@@ -238,6 +281,32 @@ def _load_resources_for_patient(resource_type, subject_field, patient_id, tenant
         if resource.get(subject_field, {}).get("reference") == ref:
             out.append(resource)
     return out
+
+
+def _redacted_for_populate(resources):
+    """Auto-loaded clinical content, redacted before the engine sees it.
+
+    apply_redaction strips every upstream `display` and `CodeableConcept.text`
+    — the two fields real feeds put patient names in — and then re-applies
+    labels from r6/terminology.py keyed by code (r6/redaction.py:22-38). That
+    is the profile the ruling's own words name ("apply_redaction, then
+    terminology labels by code"). Profile.INTAKE is NOT usable here: its
+    _intake_strip pops note/text/SSN identifiers at the top level only and
+    leaves `code.text` untouched, which is the leak rather than the fix.
+
+    Redacting BEFORE population, not after, is what makes this bound hold for
+    every mechanism at once. The engine copies free text into answers from
+    four different resolvers and from Observation.valueCodeableConcept; a
+    redaction pass over the response afterwards would have to know which
+    answers came from a record and which the caller typed.
+
+    What this costs, deliberately: an upstream free-text name survives only
+    if the server recognises the code beside it. `dosageInstruction[].text`
+    and any label for a code r6/terminology.py has no entry for (SNOMED
+    allergens, today) do not come back. See the PR body — that is the ruled
+    trade, not an oversight.
+    """
+    return [apply_redaction(resource) for resource in resources]
 
 
 def _commit_bundle(bundle, tenant_id):
