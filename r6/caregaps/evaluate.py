@@ -42,7 +42,20 @@ CARE_GAP_RULES = [
     {
         "id": "bp-screening", "title": "Blood pressure check",
         "applies": {"sex": None, "min_age": 18, "max_age": 120},
+        # The 40+ cadence, and the fallback for any age no band claims.
         "cadence_months": 12,
+        # USPSTF screens adults 18-39 with normal readings every 3-5 years and
+        # 40+ annually. One yearly figure from 18 told an under-40 patient
+        # with a normal reading two years ago that they were due — a gap the
+        # guideline does not describe. 36 months is the conservative end of
+        # the 3-5 year range.
+        #
+        # The band lives inside this rule rather than in a second rule
+        # because `summary.total` and the rule ids are read by the MCP App
+        # page, the brief and the eCQM crosswalk; a cadence correction should
+        # not move any of them.
+        "cadence_bands": [{"min_age": 18, "max_age": 39,
+                           "cadence_months": 36}],
         "satisfied_by": {"resource": "Observation",
                          "codes": {"8480-6", "85354-9", "55284-4"}},
         "source": "uspstf",
@@ -202,6 +215,21 @@ def _most_recent(resources, wanted_codes, as_of_date, cadence_months):
     return None  # found, but stale — treat as due (returns None = not satisfied)
 
 
+def _cadence_for(rule, age):
+    """Months between screenings for a patient of `age` under this rule.
+
+    A cadence may depend on age (USPSTF blood pressure: every 3-5 years at
+    18-39, annually at 40+). Only callable once the age gate has passed, since
+    without an age there is no band to pick — the rows that never get that far
+    report the rule's own `cadence_months`, which is also the fallback for any
+    age no band claims.
+    """
+    for band in rule.get("cadence_bands") or ():
+        if band["min_age"] <= age <= band["max_age"]:
+            return band["cadence_months"]
+    return rule["cadence_months"]
+
+
 def _cadence_desc(months):
     if months % 12 == 0:
         yrs = months // 12
@@ -238,11 +266,19 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
                             "status": "not_applicable",
                             "note": f"applies to {applies['sex']} patients"})
             continue
-        # Condition gate (e.g. A1c only for known diabetes)
+        # Condition gate (e.g. A1c only for known diabetes).
+        #
+        # The note is a claim about the DATA, not about the person. "Applies
+        # to patients with a diabetes diagnosis" reads, next to a screening
+        # that has been set aside, as a finding that this person does not have
+        # diabetes — which this gate never established. All it saw was the
+        # Conditions in the connected records, and those are routinely
+        # incomplete.
         if applies.get("requires_condition") and not diabetic:
             results.append({**base, "applicable": False,
                             "status": "not_applicable",
-                            "note": "applies to patients with a diabetes diagnosis"})
+                            "note": ("no diabetes diagnosis found in your "
+                                     "connected records")})
             continue
         # Age gate — unknown age on an age-gated rule is indeterminate, never a false due
         if age is None:
@@ -260,10 +296,19 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
                             "note": "sex not recorded — cannot determine eligibility"})
             continue
 
-        # Applicable — is there a satisfying record in the connected data?
+        # Applicable, and now old enough to have a cadence chosen for them.
+        # Resolved here rather than with `base` above because it needs an age:
+        # the not-applicable and indeterminate rows built before this point
+        # report the rule's default, which is the most that can be said when
+        # no age picked a band.
+        cadence_months = _cadence_for(rule, age)
+        cadence = _cadence_desc(cadence_months)
+        base = {**base, "cadence": cadence}
+
+        # Is there a satisfying record in the connected data?
         last = _most_recent(by_resource[rule["satisfied_by"]["resource"]],
                             rule["satisfied_by"]["codes"], as_of_date,
-                            rule["cadence_months"])
+                            cadence_months)
         if last is not None:
             results.append({**base, "applicable": True, "status": "up_to_date",
                             "last_done": last.isoformat(),
