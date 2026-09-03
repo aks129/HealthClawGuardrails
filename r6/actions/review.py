@@ -37,8 +37,8 @@ from dataclasses import dataclass, field
 from flask import render_template, request
 
 from models import db
-from r6.actions.confirmations import issue_confirmation
-from r6.actions.models import ProposedAction
+from r6.actions.confirmations import has_confirmation, issue_confirmation
+from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import record_audit_event
 from r6.models import R6Resource
@@ -386,6 +386,20 @@ def review_submit(action_id):
     if action is None:
         return _error(404, 'Unknown action')
 
+    # A submitted review is final. This route does NOT transition the action
+    # (the confirm route's claim does), so the loader above keeps accepting an
+    # action that has already been reviewed — and the payload is sealed the
+    # moment the first submit mints a confirmation (#528). Without this the
+    # second submit reaches the sealed assignment below and raises out of the
+    # handler as a 500; the review page calls r.json() on every response, so a
+    # Werkzeug HTML 500 rejects the promise and the patient sees nothing move
+    # at all. A phone double-tap is the ordinary way to reach that. Answer
+    # instead, before any FHIR work or QuestionnaireResponse row is created.
+    if has_confirmation(action_id):
+        return _error(409, 'This review has already been submitted. Your '
+                           'answers were recorded and approved; nothing '
+                           'further is needed.')
+
     # RE-POPULATE from FHIR: the server, not the client, decides which rows
     # exist and must be acted on. This is what makes the gate un-craftable.
     _questionnaire, patient, draft_qr, _content = _draft_qr(action, tenant_id)
@@ -446,11 +460,23 @@ def review_submit(action_id):
     # consent record. The confirmation is the human's signature over the
     # payload as it stands, and payload_json is sealed once it exists (#528)
     # — the other order minted the signature and then changed what it signed.
-    payload = action.payload
-    payload['reviewed_qr_id'] = qr_row.id
-    action.payload_json = json.dumps(payload)
-    issue_confirmation(action_id, approved_via='review-page', ttl_minutes=15)
-    db.session.commit()
+    # The pre-check above is not a lock: two submits milliseconds apart both
+    # pass it, and the loser reaches the seal here with the winner's
+    # confirmation already committed. Same answer as the pre-check — this is
+    # the branch that made it a 500, and the FHIR re-population between the
+    # two is exactly wide enough for a double-tap to land in it.
+    try:
+        payload = action.payload
+        payload['reviewed_qr_id'] = qr_row.id
+        action.payload_json = json.dumps(payload)
+        issue_confirmation(action_id, approved_via='review-page',
+                           ttl_minutes=15)
+        db.session.commit()
+    except PayloadSealed:
+        db.session.rollback()
+        return _error(409, 'This review has already been submitted. Your '
+                           'answers were recorded and approved; nothing '
+                           'further is needed.')
 
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,

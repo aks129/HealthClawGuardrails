@@ -116,3 +116,49 @@ def test_constructing_a_new_action_is_not_sealed(app):
         db.session.add(a)
         db.session.commit()
         assert _stored_payload(a.id) == ORIGINAL
+
+
+# ---------------------------------------------------------------------------
+# The seal is an ORM-layer control. It fires on attribute assignment, and a
+# bulk UPDATE, raw SQL, or set_committed_value writes straight past it —
+# verified, not assumed. transition_action() is refused because it is the one
+# bulk writer that exists; nothing structural stops the NEXT one, and there is
+# no payload digest on ActionConfirmation that would make a bypass visible
+# after the fact. So pin the writer set.
+#
+# Blind spot, stated rather than discovered later: this is a file-level
+# allowlist. A NEW write added inside a file already on the list does not trip
+# it, and neither would a writer outside r6/ (there is none today). It catches
+# the realistic drift — another module starting to touch the executable
+# payload — in the PR that does it, which is what the ratchets exist for.
+# ---------------------------------------------------------------------------
+
+PAYLOAD_JSON_WRITER_ALLOWLIST = {
+    # __init__ assigns it on a row that has no id yet (construction).
+    'r6/actions/models.py',
+    # Annotates reviewed_qr_id BEFORE the confirmation is minted; sealed after.
+    'r6/actions/review.py',
+    # Does not write it — REFUSES it in **fields, which is the #528 guard.
+    'r6/actions/state.py',
+}
+
+
+def test_only_the_allowlisted_files_touch_the_executable_payload():
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    found = set()
+    for path in sorted((root / 'r6').rglob('*.py')):
+        source = path.read_text(encoding='utf-8')
+        # The ProposedAction co-mention scopes this to the action rail's
+        # column; r6/agent_runs has its own unrelated payload_json.
+        if 'payload_json' in source and 'ProposedAction' in source:
+            found.add(path.relative_to(root).as_posix())
+
+    assert found == PAYLOAD_JSON_WRITER_ALLOWLIST, (
+        'The set of files touching ProposedAction.payload_json changed.\n'
+        'Added: %s\nRemoved: %s\n'
+        'A new writer must be sealed (ORM assignment) or refused (bulk '
+        'UPDATE) before it goes on this list — see #528.'
+        % (sorted(found - PAYLOAD_JSON_WRITER_ALLOWLIST),
+           sorted(PAYLOAD_JSON_WRITER_ALLOWLIST - found)))
