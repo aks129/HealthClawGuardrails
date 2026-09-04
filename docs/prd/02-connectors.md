@@ -26,14 +26,23 @@ Not a mock, and not one kind standing in for another. A connector proven only ag
 
 ## 4. Current state, measured
 
-| Kind | Proven live | Against |
-|---|---|---|
-| `hapi` | **yes** | HAPI FHIR 8.11.16 |
-| `generic` | **yes** | Firely Server 6.9.1 |
-| `aidbox` | **no** | server down 2026-08-16 |
-| `medplum` | **no** | server down; no credentials present |
+| Kind | Proven live | Against | Re-run by a second person |
+|---|---|---|---|
+| `hapi` | **yes** | HAPI FHIR 8.11.16 | **yes** — 2026-09-04, reproduced |
+| `generic` | **yes** | Firely Server 6.9.1 | **yes** — 2026-09-04, reproduced |
+| `aidbox` | **no** | server down 2026-08-16 | still down 2026-09-04 |
+| `medplum` | **no** | server down; no credentials present | unchanged |
 
 - Pack: `docs/evidence/2026-08-16-set2-connectors.md` — **EVIDENCE PARTIAL**, 2 of 4.
+- Re-run: `docs/evidence/2026-09-04-set2-connectors-rerun.md` (#530). The
+  2026-08-16 runs came from an uncommitted script, so nobody but the author
+  could check them. The walkthrough is now `scripts/walkthrough-upstream.sh`,
+  the transcripts are in `docs/evidence/2026-09-04-set2-rerun/`, and QA re-ran
+  both kinds against the same two public servers. Every guardrail assertion
+  held again. One line changed: `$conformance` against HAPI graded **B 6/7**,
+  not the 2026-08-16 **F 1/7**, because #514 fixed the probe collision the pack
+  diagnosed. Still not proven: either kind with a credential (both sandboxes
+  are anonymous), and the MCP step, which needs Docker.
 - Four defects fixed today off this run:
   - `hapi` dropping its credentials (#512)
   - health lying about upstream mode (#513)

@@ -2,6 +2,17 @@
 
 **Owner:** owner-connectors · **Date:** 2026-08-16 · **Verdict: EVIDENCE PARTIAL**
 
+> **2026-09-04 (#530):** §3 and §4 — the two live runs, and the "2 of 4" claim
+> the process documents carry — were **re-run by someone other than this pack's
+> author and reproduced**, against the same two public servers, from a script
+> now committed as `scripts/walkthrough-upstream.sh`. One line differs and is
+> better: `$conformance` against HAPI graded **B 6/7**, not the F 1/7 in §3,
+> because #514 fixed the probe collision §3 diagnosed. See
+> `docs/evidence/2026-09-04-set2-connectors-rerun.md`. Sections 5, 6 and 7 have
+> **not** been independently re-run — their scripts are still uncommitted and
+> the scratch directory is gone. Nothing below is rewritten; 2026-08-16's
+> findings stand as 2026-08-16's findings.
+
 **One redaction:** the operator's home-directory name in pasted shell output
 reads `<user>`. Nothing else in any transcript below is altered — the redaction
 is incidental to every claim the output supports.
@@ -559,7 +570,11 @@ the fallback is `sqlite:///mcp_server.db`, so the container writes to
 `instance/mcp_server.db`, not to the path the compose file names. Harmless today
 and misleading to anyone reasoning about where the example's data lives.
 
-**R8 — There is no `hapi` or `generic` walkthrough in the repo. No issue yet.**
+**R8 — There is no `hapi` or `generic` walkthrough in the repo. CLOSED
+2026-09-04 by `scripts/walkthrough-upstream.sh` (#530).** Both kinds were
+re-run from it by someone other than this pack's author and reproduced; see
+`docs/evidence/2026-09-04-set2-connectors-rerun.md`. The finding as written on
+2026-08-16 was:
 The evidence in §3 and §4 was produced by a re-pointed copy of
 `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` living in a
 scratch directory, which means it is not runnable by anyone else and will not
@@ -636,7 +651,20 @@ corrected.
 
 ## Reproducing this
 
-Scratch directory for this pass (scripts and raw run logs):
-`…/scratchpad/set2/` — `walkthrough-hapi.sh`, `registry-contract.sh`,
-`auth_probe.py`, `halfconfig.sh`, `medplum-qa.sh`, and the `*-run.txt` capture
-of each. Not committed; R8 covers what should be.
+**Updated 2026-09-04 (#530).** The scratch directory this section named is
+gone, and nothing was recovered from it. The two live walkthroughs are now
+reproducible from the repository:
+
+- `scripts/walkthrough-upstream.sh hapi` and `… generic`
+- transcripts of a second person's run: `docs/evidence/2026-09-04-set2-rerun/`
+- what that run found: `docs/evidence/2026-09-04-set2-connectors-rerun.md`
+
+The four other scripts of this pass — `registry-contract.sh`, `auth_probe.py`,
+`halfconfig.sh`, `medplum-qa.sh` — are still uncommitted and still gone. §5, §6
+and R1 rest on them and have **not** been independently re-run. What this
+section said on 2026-08-16:
+
+> Scratch directory for this pass (scripts and raw run logs):
+> `…/scratchpad/set2/` — `walkthrough-hapi.sh`, `registry-contract.sh`,
+> `auth_probe.py`, `halfconfig.sh`, `medplum-qa.sh`, and the `*-run.txt` capture
+> of each. Not committed; R8 covers what should be.

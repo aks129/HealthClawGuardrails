@@ -17,7 +17,7 @@ found wanting" — never run.
 | Set | Measured state |
 |---|---|
 | Guardrail core | Grade A local; **proxy mode unmeasured** |
-| Connectors | **2 of 4** kinds proven live |
+| Connectors | **2 of 4** kinds proven live — reproduced by a second person 2026-09-04 |
 | Consumer journey | **unmeasured** |
 | Action rail | **unmeasured** |
 | Clinical rails | **unmeasured** |
@@ -65,6 +65,13 @@ This is the uncomfortable pattern, and it is consistent:
 
 The polish is the risk. A rough edge invites inspection; a confident sentence
 next to a passing test does not.
+
+Row 1 and row 3 have since been fixed (#514, #512). The 2026-09-04 re-run of
+the same walkthrough grades that same HAPI **B 6/7** — the pack's diagnosis
+that the F came from the probe and not from the guardrails, confirmed by
+changing only the probe. The rows stay as written because they are what was
+true on 2026-08-16, and the pattern they illustrate is not repealed by fixing
+two instances of it.
 
 ## 5. Guards are written narrower than the property they are named after
 
