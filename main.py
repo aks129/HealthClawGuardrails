@@ -402,21 +402,32 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
     # nobody has written yet — the alternative, a helper applied per site,
     # is only ever as complete as the last person to remember it.
     #
-    # Trusting X-Forwarded-* is a proxy-trust decision. It is safe here
+    # Trusting X-Forwarded-Proto is a proxy-trust decision. It is safe here
     # because the platform's edge is the only route to the container (the
-    # container publishes no port of its own), because each header is
-    # trusted for exactly one hop so the value the edge appends is the one
-    # that wins over anything a client sends, and because nothing in this
-    # app keys a security decision on the request scheme —
-    # SESSION_COOKIE_SECURE above is static config, not derived from it. A
-    # deployment that ever exposes this container directly must drop this.
+    # container publishes no port of its own), because the header is trusted
+    # for exactly one hop so the value the edge appends is the one that wins
+    # over anything a client sends, and because nothing in this app keys a
+    # security decision on the request scheme — SESSION_COOKIE_SECURE above
+    # is static config, not derived from it. A deployment that ever exposes
+    # this container directly must drop this.
     #
-    # x_for stays 0 deliberately: r6/rate_limit.py does its own hop-counted
-    # X-Forwarded-For parse, and letting ProxyFix rewrite REMOTE_ADDR would
-    # give the limiter a second, differently-trusted answer for the same
-    # question.
+    # EVERY OTHER FORWARDED HEADER IS UNTRUSTED, and the reason is evidence
+    # rather than taste. Both x_proto and x_host fail the same way when they
+    # are wrong — by publishing something a partner cannot use — so the
+    # tiebreaker is which one we have measured. The protocol is measurably
+    # wrong without the fix; the hostname was measured as already correct
+    # (production returns the custom domain, not an internal name), and what
+    # X-Forwarded-Host contains here has never been measured at all.
+    # Trusting an unmeasured header in preference to a measured one is the
+    # wrong direction, so x_host stays 0: it would buy nothing we do not
+    # already have, at the risk of publishing an internal hostname.
+    #
+    # x_for stays 0 for a different reason: r6/rate_limit.py does its own
+    # hop-counted X-Forwarded-For parse, and letting ProxyFix rewrite
+    # REMOTE_ADDR would give the limiter a second, differently-trusted
+    # answer to the same question.
     flask_app.wsgi_app = ProxyFix(
-        flask_app.wsgi_app, x_for=0, x_proto=1, x_host=1, x_port=0, x_prefix=0
+        flask_app.wsgi_app, x_for=0, x_proto=1, x_host=0, x_port=0, x_prefix=0
     )
 
     db_uri = flask_app.config["SQLALCHEMY_DATABASE_URI"]

@@ -175,6 +175,23 @@ def test_local_development_without_the_header_stays_http(
     assert bundle['link'][0]['url'].startswith('http://localhost/')
 
 
+def test_the_forwarded_host_is_not_trusted(client):
+    """Protocol only. The hostname was measured as already correct in
+    production — the custom domain, not an internal name — and what the
+    platform puts in X-Forwarded-Host has never been measured at all.
+    Both settings fail the same way when wrong, by publishing something a
+    partner cannot use, so the one with evidence behind it is the one that
+    ships. Re-widening this is a decision, not a default.
+    """
+    config = client.get(
+        '/r6/fhir/.well-known/smart-configuration',
+        headers={**FORWARDED_HTTPS,
+                 'X-Forwarded-Host': 'container.internal:8080'}).get_json()
+
+    assert config['authorization_endpoint'] == (
+        'https://localhost/r6/fhir/oauth/authorize')
+
+
 # --- #574: the policy link its own reader could not open -------------------
 
 
