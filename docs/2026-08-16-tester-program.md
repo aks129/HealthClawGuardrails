@@ -137,8 +137,9 @@ not depend on them, is a prerequisite to hiring anyone and is tracked
 separately.
 
 Run one set end to end first (**set 2, connectors** — smallest, two of four
-kinds already proven, a real deadline attached) to find out what the gate
-actually costs before committing five more.
+kinds already proven and re-proven by a second person on 2026-09-04, a real
+deadline attached) to find out what the gate actually costs before committing
+five more.
 
 **Phase 3 — real-record beta, gated.**
 A **waitlist can open now**; a *connect* cannot. Collecting an email and an
