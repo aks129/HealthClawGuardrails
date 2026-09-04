@@ -165,6 +165,12 @@ def test_nothing_that_runs_on_a_pull_request_can_write_anything():
                 # No declaration at a job means it inherits the workflow's,
                 # which this same loop has already checked.
                 continue
+            if permissions == "read-all":
+                # The string form GitHub also accepts at this position.
+                # `read-all` is read-only and passes; `write-all` is caught
+                # by the assertion below, which is why this only whitelists
+                # the one value rather than every string.
+                continue
             assert isinstance(permissions, dict), (
                 f"{path.name} ({where}) grants permissions wholesale: "
                 f"{permissions!r}")
