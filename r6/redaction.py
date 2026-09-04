@@ -5,10 +5,19 @@ Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
 - Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
-- Identifiers: Remove the value; keep system and type (Safe Harbor
-  §164.514(b)(2)(i)(G)/(H)/(I)/(J) list SSNs, medical record numbers, health
-  plan and account numbers as identifiers to REMOVE — a last-four suffix is
-  a re-identification vector, not a redaction)
+- Identifiers: Remove the value from every entry in a resource's
+  `identifier` array; keep `system` and `type`. Safe Harbor
+  §164.514(b)(2)(i)(G)/(H)/(I)/(J) list SSNs, medical record numbers,
+  health plan and account numbers among the identifiers to REMOVE — a
+  last-four suffix is a re-identification vector, not a redaction. This
+  covers those categories WHEN they appear as `identifier` array entries.
+  A category-J account number or a category-I health plan number carried
+  in a different field shape (e.g. `Coverage.subscriberId`, a plain string
+  rather than an `Identifier`) is a distinct field this function does not
+  inspect — see #112. Do not read "Safe Harbor §…(G)/(H)/(I)/(J)" above as
+  a claim that every field shape those categories can appear in is
+  covered; it names which categories this specific array is redacted
+  against, not the codebase's total Safe Harbor posture.
 - Addresses: Remove line/text, keep city/state/country
 - Telecom: Replace values with [Redacted]
 - Birth dates: Truncate to year only
