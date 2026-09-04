@@ -98,9 +98,11 @@ def test_watched_set_is_observed_rather_than_read():
     hosts = {surface_inventory.host_of(u) for u in urls}
     assert "careagents-production.up.railway.app" in hosts, (
         "the observed set lost the CareAgents platform host")
-    assert "careagents.cloud" not in hosts, (
-        "prod_watch does not request careagents.cloud; if it now does, the "
-        "inventory's finding 3 is fixed and this test should say so")
+    # Deliberately no assertion that careagents.cloud is absent. It is absent
+    # today and that is finding 3 of the 2026-09-04 inventory, but pinning it
+    # here would turn CI red the moment somebody fixes #625 by adding the
+    # consumer domain. A test that fails on the fix is a test that argues for
+    # the defect.
 
 
 def test_the_stub_run_prints_nothing():

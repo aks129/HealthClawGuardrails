@@ -29,7 +29,7 @@ constant named `CAREAGENTS` proves nothing about which host a check named
 the domain users type. Reading names would have reproduced that error.
 
 **DNS on a developer machine is not evidence.** This LAN answers port 53 from
-a stale cache (`docs/development.md`, CLAUDE.md). Every name here is resolved
+a stale cache (operator notes, not published here). Every name here is resolved
 over DoH *and* through the system resolver, and a disagreement is reported
 rather than silently picked. It matters most for the one host where a wrong
 answer flips the finding: if `careagents.cloud` still pointed at the retired

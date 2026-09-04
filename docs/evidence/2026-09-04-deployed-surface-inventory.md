@@ -8,6 +8,10 @@ repository names as deployed, read-only. `scripts/prod_watch.py` requests 4 of
 them. 16 answer and nothing checks them (4 ours, 12 third-party). 5 are named
 here and do not answer.
 
+Those are endpoint rows, and one host can carry two of them. Counted as
+distinct live hosts we own: 6, of which the monitor requests 4. The retired box
+in #624 is a 7th that no name resolves to.
+
 #624 (an abandoned CareAgents instance on an old VPS) was found by accident,
 when somebody asked whether a deploy script was still used. This exercise asks
 the question that accident raised: what else is out there? The answer includes
@@ -29,7 +33,8 @@ output directly.
 ### On the DNS answers
 
 Every name resolved twice, over DoH and through the system resolver, because
-this network answers port 53 from a stale cache (`CLAUDE.md`). The two agreed
+this network answers port 53 from a stale cache (operator notes, not published
+in this repository). The two agreed
 for every host except `healthclaw.io`, `mcp.healthclaw.io` and
 `shl.healthclaw.io`, where the address sets differ. All three sit behind
 Vercel, and both answers reached Vercel, so the likeliest cause is anycast or
@@ -159,10 +164,11 @@ decide what happens to the account data.
 `1.10.0`. Both deployments are therefore behind the source, by at least the
 change that raised the version.
 
-Three checks in `prod_watch` speak for these two hosts. All three pass. Two ask
-whether `/health` returns 200 and one asks whether the demo server answers an
-unauthenticated handshake. None reads the version field the response already
-carries, so all three are satisfied by any build at all. This is the #258 shape
+Four checks in `prod_watch` speak for these two hosts, and all four pass. Two
+ask whether `/health` returns 200. One asks whether the token-locked server
+refuses an unauthenticated caller with 401. One asks whether the demo server
+answers an unauthenticated handshake. None reads the version field the response
+already carries, so all four are satisfied by any build at all. This is the #258 shape
 exactly: the CareAgents build check exists because every other check was
 equally satisfied by a months-old build, and the same hole is still open on the
 MCP servers.
@@ -192,13 +198,16 @@ request from any check.
 Today the two return the same `build` and `built_at`, so `careagents.cloud` is
 a custom domain in front of the same Railway service rather than a second
 instance. That makes the gap narrow but not empty. This repository already
-records a Railway failure that breaks a custom domain while the container stays
-healthy. A domain pinned to the wrong target port answers "Application failed
-to respond" while the service serves normally (`CLAUDE.md`,
-`docs/2026-08-06-two-generators-three-laws.md`). Under that failure all four
+records a domain-level failure that a service-level check cannot see. On
+2026-08-06 a Vercel domain list omitted the hostname the project served, the
+serving project was deleted, and production went down
+(`docs/2026-08-06-two-generators-three-laws.md:41`). Operator notes carry a
+second one specific to Railway, where a custom domain pinned to the wrong
+target port answers "Application failed to respond" while the container serves
+normally; that note is not published here. Under either failure all four
 `careagents:` checks pass, the workflow stays green, and no user can sign in.
 
-`scripts/prod_watch.py:64` names the constant `CAREAGENTS` and sets it to the
+`scripts/prod_watch.py:60` names the constant `CAREAGENTS` and sets it to the
 platform hostname. Reading the constant name would have reproduced the error
 this inventory exists to catch.
 
@@ -255,11 +264,11 @@ dereference the URL. Both are claims our servers make that no longer resolve.
 Reported, not patched. QA does not edit production code.
 
 **6a. "all N checks passing" counts what ran, not what exists.**
-`scripts/prod_watch.py:396` prints `f"all {len(results)} checks passing"`, and
+`scripts/prod_watch.py:404` prints `f"all {len(results)} checks passing"`, and
 `results` is appended to at run time. The build check is only recorded when
 `--expect-sha` is given; in informational mode it prints through `report()` and
-is never counted. The same fully-healthy production therefore reports two
-different totals:
+is never counted. The same stubbed deployment therefore reports two different
+totals:
 
 ```
 RESULT no --expect-sha        -> len(results) = 11
