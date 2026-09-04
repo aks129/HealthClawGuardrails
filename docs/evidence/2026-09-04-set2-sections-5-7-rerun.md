@@ -12,9 +12,11 @@ committed; one section turned out never to have had a script at all.
 
 **Every measurement §5 and §6 recorded reproduces exactly**, against the tree
 the pack measured. Run against `2b7872d`, the new scripts print §5's three
-cases and §6's two rows as the pack prints them — including R1's four lines
-verbatim, down to `checks.upstream = 'not_configured'` and
-`r6_resources Patient rows = 1`.
+cases and §6's two rows with the same values the pack records — including R1's
+four lines value for value, down to `checks.upstream` reading `not_configured`
+and `r6_resources Patient rows = 1`. Not character for character: this script
+also prints the HTTP status of the write and the read, which the pack's
+transcript does not show.
 
 At `89b42fb` three of those measurements differ. The same script against both
 trees is what says each difference is a fix rather than drift:
@@ -147,18 +149,35 @@ hard-coding them, so a change to the compose file changes what is measured; the
 baseline digests are hard-coded, because they are a record of one day and must
 not follow anything.
 
-| image | pinned? | §7 digest, 2026-08-16 | today | |
-|---|---|---|---|---|
-| `ghcr.io/aks129/healthclaw-guardrails:1.10.0` | version tag | `sha256:57b345e0…c4c0e225b` | identical | **not re-pushed** |
-| `ghcr.io/aks129/healthclaw-mcp-server:1.10.0` | version tag | `sha256:d37c997e…d8d012cd53` | identical | **not re-pushed** |
-| `healthsamurai/aidboxone:edge` | **no** — moving tag, `pull_policy: always` | `sha256:42e4e8e1…4bdb5e58b3` | `sha256:90c4e728…cf6b3c3952` | **moved** |
-| `postgres:18` | partial — floating patch | `sha256:06cad38a…576dedcd941` | `sha256:4ef4dbc9…3ea3c2280` | **moved** |
+Digests are written out in full. An abbreviated one is a place for a
+transcription error to hide, in a document whose subject is measurements being
+restated wrongly.
 
-The full digests are in the transcript. A manifest digest depends on the
-`Accept` header the request sends — a multi-arch index and a single-platform
-manifest have different digests — so the script prints the header it used, and
-the two identical rows confirm the header matches what 2026-08-16 must have
-sent.
+`ghcr.io/aks129/healthclaw-guardrails:1.10.0` — a version tag. **Not
+re-pushed:** identical to 2026-08-16.
+
+    sha256:57b345e0c8f6a6bf88690084f57fe863bd02882ade0e2c7b70002baa4c0e225b
+
+`ghcr.io/aks129/healthclaw-mcp-server:1.10.0` — a version tag. **Not
+re-pushed:** identical to 2026-08-16.
+
+    sha256:d37c997ea15c73c715cdc2b90ea01aa6a49dc34cb6897913ce1691d8d012cd53
+
+`healthsamurai/aidboxone:edge` — not pinned; a moving tag with
+`pull_policy: always`. **Moved.**
+
+    2026-08-16  sha256:42e4e8e10d9d42b54bf3f4602b3f584e06acc70738cdcf280ce7634bdb5e58b3
+    today       sha256:90c4e72811765b6c420387d79f6033069fd0b045281e7f491be7b8cf6b3c3952
+
+`postgres:18` — floating at the patch level. **Moved.**
+
+    2026-08-16  sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
+    today       sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+
+A manifest digest depends on the `Accept` header the request sends — a
+multi-arch index and a single-platform manifest have different digests — so the
+script prints the header it used, and the two identical rows confirm the header
+matches what 2026-08-16 must have sent.
 
 **R9 is no longer a prediction.** The compose file's comment explains why the
 guardrails image is pinned, in the same file that runs Aidbox off a moving tag

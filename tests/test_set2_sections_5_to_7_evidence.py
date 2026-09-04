@@ -189,6 +189,27 @@ class TestTheBaselinesStillMatchThePack:
             f"pack does not record: {missing}. One of the two moved."
         )
 
+    def test_every_digest_the_write_up_prints_was_actually_measured(self):
+        """A digest in the prose must appear in the transcript it cites.
+
+        Written after an abbreviated digest in the write-up's §7 was off by
+        one character — in the document whose subject is measurements being
+        restated wrongly. The abbreviation is gone; this is what stops the
+        next one.
+
+        MUTATION: change one hex digit in the write-up -> red.
+        """
+        transcript = (TRANSCRIPTS / "image-pins-run.txt").read_text()
+        quoted = set(re.findall(r"sha256:[0-9a-f]{64}", RERUN.read_text()))
+        assert len(quoted) == 6, (
+            f"expected §7's six digests in the write-up, found {len(quoted)}"
+        )
+        unmeasured = sorted(d for d in quoted if d not in transcript)
+        assert not unmeasured, (
+            "the write-up prints digests the run did not produce: "
+            f"{unmeasured}"
+        )
+
     def test_the_auth_probe_compares_against_what_section_6_recorded(self):
         """MUTATION: flip the script's baseline to {'hapi': 'Basic'} -> red."""
         script = AUTH_PROBE.read_text()

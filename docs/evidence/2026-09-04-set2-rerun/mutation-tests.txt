@@ -50,3 +50,14 @@ $ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_the_transcripts_
 
 $ pytest tests/test_set2_sections_5_to_7_evidence.py -q     (after restoring every file)
   35 passed in 0.20s
+
+# one hex digit of a digest quoted in the write-up drifts from the transcript
+#   file: docs/evidence/2026-09-04-set2-sections-5-7-rerun.md
+#   Added after an abbreviated digest in the write-up's §7 was off by one
+#   character. The abbreviation is gone; this is the guard that replaces it.
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_every_digest_the_write_up_prints_was_actually_measured
+  1 failed, 35 deselected in 0.04s
+  -> RED (correct)
+
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q     (after restoring the write-up)
+  36 passed in 0.22s

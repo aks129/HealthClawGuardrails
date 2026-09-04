@@ -349,8 +349,8 @@ section 6 — but not end to end against a server that requires it.
 > reproduced.** `registry-contract.sh` and `halfconfig.sh` are still gone;
 > `scripts/connector-registry-contract.py` is one script written from the
 > three transcripts below and committed. Run against `2b7872d` — the tree this
-> pack measured — it prints all three cases as they are written here,
-> including case 3's four lines verbatim. Run against `89b42fb` two of them
+> pack measured — it prints all three cases with the values written here,
+> including case 3's four lines value for value. Run against `89b42fb` two of them
 > differ, both because a defect this section found has since been fixed: case
 > 2 now refuses to boot (#518, register entry R6) and case 3 now reports
 > degraded rather than healthy (#513, register entry R1). Transcripts and the
