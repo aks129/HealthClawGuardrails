@@ -298,8 +298,8 @@ Three different deploy models, and two are manual:
 
 - HealthClaw Flask app — auto-deploys on `main` (Railway)
 - MCP server — **manual** staging-dir deploy
-- CareAgents — **independent** VPS deploy; shared prod host, needs explicit
-  authorization
+- CareAgents — **independent** manual staged `railway up` (web and worker),
+  needs explicit authorization; the VPS path it once used is retired
 
 A change to MCP tools is live in the repo but not in Claude until the manual
 deploy runs. That gap has already bitten this project once.
