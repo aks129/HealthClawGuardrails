@@ -165,8 +165,9 @@ auditor.
 - **The MCP server does not auto-deploy.** Pushing `main` deploys the Flask app
   (Railway) and site (Vercel), but MCP tool changes are live in the repo and
   *not* in Claude until a manual deploy runs.
-- **CareAgents deploys independently** to a shared prod VPS. That deploy needs
-  explicit authorization — don't roll it into unrelated work.
+- **CareAgents deploys independently** — a manual staged `railway up`, web and
+  worker. That deploy needs explicit authorization — don't roll it into
+  unrelated work. The VPS script it used before is retired and refuses to run.
 - **Playwright e2e is currently red on `main`** for environment reasons, so it
   gives no signal. Don't read a green/red Playwright result as evidence either
   way until that's fixed.

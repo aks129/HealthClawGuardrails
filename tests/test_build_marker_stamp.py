@@ -105,8 +105,8 @@ def test_an_uncommitted_tree_is_stamped_dirty(repo):
 
 
 def test_the_marker_itself_never_makes_the_tree_look_dirty(repo):
-    # deploy.sh stamps into the repo root and then rsyncs it. If the marker
-    # were not gitignored, the *second* deploy of an otherwise clean tree would
+    # A deploy stamps the tree it ships. If the marker were not gitignored,
+    # the *second* deploy of an otherwise clean tree would
     # stamp itself "-dirty" and the monitor would alarm on a correct release.
     _stamp(repo, repo)
     r = _stamp(repo, repo)
