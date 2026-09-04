@@ -426,3 +426,70 @@ def test_the_attestation_items_never_appear_in_the_issue_list():
             assert attestation not in named, f"{label}: {attestation} reported"
             item = _by_link_id(qr, attestation)
             assert item is not None and "answer" not in item, label
+
+
+ALLERGEN_DEF = ("http://hl7.org/fhir/StructureDefinition/AllergyIntolerance"
+                "#AllergyIntolerance.code.text")
+
+
+def _row_with_attestation():
+    """A supported list group carrying an attestation-shaped leaf INSIDE it.
+
+    `allergies.no-known-allergies` is a sibling of the repeating group on the
+    real intake form, so nothing there exercises a mechanism-less boolean
+    reaching the list-row path. This puts one exactly there.
+    """
+    return {
+        "resourceType": "Questionnaire", "id": "attestation-in-row",
+        "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "allergies.item.allergen", "type": "string",
+                 "definition": ALLERGEN_DEF},
+                {"linkId": "allergies.item.no-known-allergies",
+                 "type": "boolean"},
+            ],
+        }],
+    }
+
+
+def test_a_mechanism_less_boolean_inside_a_list_row_is_neither_answered_nor_reported():
+    """THE EXCLUSION, ON THE ROW PATH.
+
+    A row's leaves now resolve through `_resolve_answer` rather than by
+    `definition` alone, so a leaf with no mechanism at all reaches the
+    "NOTHING WAS ATTEMPTED" branch by a route it never took before. That
+    branch is what keeps `allergies.no-known-allergies` out of the issue
+    list, and an issue reading "not populated: no value resolved" against an
+    NKA-shaped boolean tells a model-facing reader the server TRIED to
+    determine no-known-allergies and failed — one step from inferring it,
+    which is the non-negotiable (CLAUDE.md).
+
+    Asserted with allergies on file and with none, because zero rows and
+    unlabelled rows are the two shapes where a helpful-sounding answer or
+    issue would be tempting. Zero rows emits no repeat at all, so the leaf
+    cannot be answered there either.
+
+    MUTATION: report any unresolved leaf in a row regardless of mechanism ->
+    the boolean is named and this goes red.
+    """
+    q = _row_with_attestation()
+    shapes = {
+        "nothing on file": [],
+        "one labelled": [_allergy("a1", "Penicillin")],
+        "two unlabelled": [_snomed_allergy("a1", "91936005"),
+                           _snomed_allergy("a2", "300916003")],
+    }
+
+    for label, allergies in shapes.items():
+        qr, issues = populate_questionnaire(q, PATIENT, [PATIENT] + allergies)
+
+        rows = _all_by_link_id(qr, "allergies.item")
+        assert len(rows) == len(allergies), (
+            f"{label}: row count must equal record count")
+        assert "allergies.item.no-known-allergies" not in _issue_ids(issues), (
+            f"{label}: a mechanism-less boolean inside a row was reported")
+        for item in _all_by_link_id(qr, "allergies.item.no-known-allergies"):
+            assert "answer" not in item, (
+                f"{label}: absent allergy data is not an attestation")
