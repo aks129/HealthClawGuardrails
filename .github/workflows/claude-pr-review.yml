@@ -26,6 +26,15 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  # One run at a time per PR. Two pushes minutes apart produce two runs, and
+  # the notification dedupe below reads back a comment the other run may not
+  # have posted yet — so both would see "nothing said yet" and both would say
+  # it. Queue instead of racing. `false`, not `true`: cancelling a run
+  # mid-flight would abandon the arming step half-done.
+  group: claude-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 env:
   AUTO_MERGE_EXTERNAL: "false"
 
@@ -126,30 +135,93 @@ jobs:
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -e
+          # This block decides ONE thing — the state the PR is in — and then
+          # reports it twice, differently. GitHub mails every comment; it
+          # mails nothing about a job summary. So the state always goes to the
+          # summary, and only a state the maintainer must know about or act on
+          # is allowed to become a comment.
+          #
+          # Keep this free of Actions expression syntax — every value it
+          # needs arrives through `env:` above — because
+          # tests/test_pr_review_notifications.py executes this block verbatim
+          # against a stub `gh`, and that is the only place the logic runs
+          # anywhere but a live PR.
+          STATE=""; HEADLINE=""
           # Tier 1: dependabot minor/patch -> full auto (merges when checks pass)
           if [ "$AUTHOR" = "dependabot[bot]" ]; then
             TITLE=$(gh pr view "$PR" --repo "$REPO" --json title --jq .title)
             # minor/patch = the MAJOR version component is unchanged
             FROM_MAJ=$(printf '%s' "$TITLE" | sed -nE 's/.* from ([0-9]+)\..* to [0-9]+\..*/\1/p')
             TO_MAJ=$(printf '%s' "$TITLE" | sed -nE 's/.* from [0-9]+\..* to ([0-9]+)\..*/\1/p')
-            if [ -n "$FROM_MAJ" ] && [ "$FROM_MAJ" = "$TO_MAJ" ]; then
+            if [ -z "$FROM_MAJ" ]; then
+              # Half of this repo's dependabot PRs are grouped or multi-package
+              # bumps with no single "from X to Y" in the title. They are held
+              # for the same reason a major is, but for a different reason than
+              # a major, so they say so in their own words.
+              STATE="held-unparsed-bump"
+              HEADLINE="Not armed. This title carries no single from-X-to-Y version, so the minor/patch rule cannot be applied to it and nothing will merge on its own. A human has to review and merge it."
+            elif [ "$FROM_MAJ" = "$TO_MAJ" ]; then
               gh pr merge "$PR" --repo "$REPO" --squash --auto
-              echo "dependabot minor/patch: auto-merge armed"
+              STATE="armed-dependabot"
+              HEADLINE="Auto-merge is ARMED. Minor/patch bump, so it squash-merges by itself once the required checks are green, and no approval is asked for. To stop it: gh pr merge $PR -R $REPO --disable-auto"
             else
-              echo "dependabot MAJOR (or unparsable) bump — leaving for human review"
+              STATE="held-dependabot-major"
+              HEADLINE="Not armed. This is a MAJOR version bump ($FROM_MAJ to $TO_MAJ), which never merges on its own here. A human has to read the changelog and merge it."
             fi
+          else
+            # Tier 2: external/human code — arm only if a maintainer approved
+            # (or AUTO_MERGE_EXTERNAL flips the policy)
+            APPROVED=$(gh pr view "$PR" --repo "$REPO" --json reviews \
+              --jq '[.reviews[] | select(.state=="APPROVED") | select(.authorAssociation=="OWNER" or .authorAssociation=="MEMBER" or .authorAssociation=="COLLABORATOR")] | length')
+            if [ "$APPROVED" -gt 0 ] || [ "${AUTO_MERGE_EXTERNAL}" = "true" ]; then
+              gh pr merge "$PR" --repo "$REPO" --squash --auto
+              STATE="armed-approved"
+              HEADLINE="Auto-merge is ARMED. This PR squash-merges by itself the moment the last required check goes green — including a check that is red now and gets fixed later, and including mid-review. To stop it: gh pr merge $PR -R $REPO --disable-auto"
+            else
+              STATE="waiting-approval"
+              # The wording this replaced said the PR would merge "the moment a
+              # maintainer approves". It cannot: this workflow has no trigger
+              # on reviews, so an approval on its own runs nothing. The trigger
+              # list quoted here is pinned by
+              # test_the_wording_matches_the_triggers_it_describes.
+              HEADLINE="Not armed. Waiting for a maintainer approval. Approving alone arms nothing, because this workflow runs on opened, synchronize, reopened and ready_for_review and has no trigger on reviews — it arms on the next push, reopen or ready-for-review that happens after an approval exists."
+            fi
+          fi
+
+          # Always. A job summary notifies nobody, which is precisely why the
+          # states that need no action end here and nowhere else.
+          printf '### auto-merge: %s\n\n%s\n' "$STATE" "$HEADLINE" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "$STATE: $HEADLINE"
+
+          # Only a state the maintainer must know about or act on is mailed.
+          # "Everything passed, waiting for you" is not one — they can see the
+          # PR is waiting. This job runs on every push, and that sentence was
+          # mailed 65 times across the 25 most recent PRs, six times on one of
+          # them, four minutes apart on another.
+          case "$STATE" in
+            armed-*|held-*) ;;
+            *) exit 0 ;;
+          esac
+
+          # ...and only when it CHANGES, or five pushes send five identical
+          # mails. The previous state is read back out of the marker in our own
+          # last comment: no external storage, and it survives a re-run. The
+          # alternative — editing one comment in place — is silent, but it is
+          # silent at the state change too, and the state change is the only
+          # moment worth a mail. So: post on change, say nothing otherwise.
+          #
+          # `grep` matching nothing does not trip `set -e` here: a pipeline's
+          # status is its LAST command's, and `sed` succeeds on empty input.
+          PREV=$(gh pr view "$PR" --repo "$REPO" --json comments \
+                   --jq '.comments[].body' \
+                 | grep -o 'automerge-state: [a-z-]*' | tail -n1 | sed 's/.*: //')
+          if [ "$PREV" = "$STATE" ]; then
+            echo "state unchanged since the last comment — not mailing it again"
             exit 0
           fi
-          # Tier 2: external/human code — arm only if a maintainer approved
-          # (or AUTO_MERGE_EXTERNAL flips the policy)
-          APPROVED=$(gh pr view "$PR" --repo "$REPO" --json reviews \
-            --jq '[.reviews[] | select(.state=="APPROVED") | select(.authorAssociation=="OWNER" or .authorAssociation=="MEMBER" or .authorAssociation=="COLLABORATOR")] | length')
-          if [ "$APPROVED" -gt 0 ] || [ "${AUTO_MERGE_EXTERNAL}" = "true" ]; then
-            gh pr merge "$PR" --repo "$REPO" --squash --auto
-            echo "auto-merge armed (maintainer-approved)"
-          else
-            gh pr comment "$PR" --repo "$REPO" --body \
-              "✅ Standards review passed (claude:approve) and auto-merge is staged — this PR will merge automatically the moment a maintainer approves and CI is green." \
-              || true
-            echo "awaiting maintainer approval before arming auto-merge"
-          fi
+          # No `|| true`: a comment that failed to post is a notification that
+          # did not happen, and this repository has paid for silence that
+          # cannot be told from success (defect catalogue section 5).
+          gh pr comment "$PR" --repo "$REPO" --body \
+            "$(printf '%s\n\n<!-- automerge-state: %s -->\n' "$HEADLINE" "$STATE")"
