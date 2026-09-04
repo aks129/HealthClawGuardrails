@@ -264,6 +264,16 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     why #416 survived a suite that looked like it covered this. The other half
     is in tests/test_healthclaw_transport.py, where the real client meets a
     real 504 over a real socket.
+
+    The assertion below used to require `"twice" in msg`, which froze the
+    deterrent "approving twice could send it twice" into place as though it
+    were the fix. It was true of #220's world and false since #550: a second
+    approval reaches the review route, which answers 409 while the action is
+    awaiting confirmation and 404 once it has moved on, so `confirm_action`
+    is never reached twice. A guard that pins a sentence rather than the
+    property behind it keeps the sentence after the property has gone —
+    which is how this survived two rounds of fixing its siblings. Pin the
+    property: the uncertainty is stated, and no false deterrent rides along.
     """
     from careagents.app import create_app
     from careagents.healthclaw import HealthClawUnconfirmed
@@ -293,7 +303,13 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     assert body["confirmed"] is None, "unknown is not false"
     msg = body["message"].lower()
     assert "nothing has been sent" not in msg
-    assert "couldn't confirm" in msg and "twice" in msg
+    assert "couldn't tell" in msg or "could not tell" in msg, (
+        "the message no longer states the uncertainty, which is the whole "
+        "of #220's third answer")
+    assert "twice" not in msg or "cannot" in msg, (
+        "the message warns that approving twice could send it twice; since "
+        "#550 a second approval answers 409 or 404 and never reaches the "
+        "confirm")
 
 
 def test_confirm_action_separates_a_refusal_from_an_unanswered_confirm():
@@ -3009,6 +3025,23 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     # connection survives, so the patient can retry
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
 
+    # ...and the sentence may not say more than that. "Nothing was changed"
+    # was here, which is the same claim the review arms made, on the
+    # destructive route: `purge_tenant` raises on ANY non-200 and on a read
+    # timeout, so a gateway 5xx or a lost answer can follow a purge that ran.
+    # Found by inventorying this file for claims about what was sent,
+    # approved, recorded or retried, not by a report about this route.
+    #
+    # MUTATION: restore "Your records were not deleted. Nothing was changed"
+    # -> red. Ran it, saw red.
+    msg = r.get_json()["message"].lower()
+    assert "nothing was changed" not in msg, (
+        "the purge may have run and lost its answer; nothing observed here "
+        "says the records are still there")
+    assert "were not deleted" not in msg, (
+        "same claim, shorter: this path cannot tell whether they were")
+    assert "couldn't confirm" in msg or "could not confirm" in msg
+
 
 def test_delete_and_disconnect_reject_other_peoples_connections(app, svc,
                                                                 monkeypatch):
@@ -3917,11 +3950,15 @@ def test_no_review_submit_failure_claims_an_approval_does_not_exist(
         assert posted.get_json().get("confirmed") is not True
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA on the finished stack (#550 -> #566 -> #579). The identical false "
-    "deterrent the stack removed from the review-submit arms survives on the "
-    "CONFIRM arm, careagents/app.py:1182-1186, and nothing guarded it. "
-    "Fix is one sentence and belongs to Dev/Product, not QA."))
+# QA on the finished stack (#550 -> #566 -> #579), filed as a strict xfail and
+# fixed here, so the marker is gone and the reason is kept as the record:
+#
+#   The identical false deterrent the stack removed from the review-submit
+#   arms survived on the CONFIRM arm, careagents/app.py:1182-1186, and nothing
+#   guarded it. Two rounds fixed the sentence in front of them and left the
+#   twin. It is what an ordinary form-fill approval reaches on any deployment
+#   with no provider configured, which is every deployment today.
+
 def test_the_confirm_arm_does_not_deter_a_recovery_the_seal_makes_safe(
         cfg, svc, monkeypatch):
     """The review POST landed; the CONFIRM answer was lost.
