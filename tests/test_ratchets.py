@@ -404,26 +404,64 @@ def test_the_god_module_only_shrinks():
 #: behaviour change, not a refactor. Check _is_exempt_discovery_path before
 #: moving a call site, per site — that is the whole reason this is 6 PRs and
 #: not one sed.
-_RAW_TENANT_READS = 5
+#:
+#: Corrected 2026-09-04: this was a single-quote, no-default-arg substring
+#: needle (`"request.headers.get('X-Tenant-Id')"` matched against the raw
+#: line) on a codebase where most call sites are double-quoted or carry a
+#: default — `request.headers.get("X-Tenant-Id")` and
+#: `request.headers.get('X-Tenant-Id', 'default')` both evaded it. The pin
+#: read 5; an AST-based recount (any quote style, with or without a
+#: default, plus the subscript form `request.headers['X-Tenant-Id']`) found
+#: 27, including r6/agent_runs/routes.py:98 — the kernel spec's own open
+#: slice 11j — and r6/wearables/routes.py:233, a call split across two
+#: lines that no single-line text needle could ever have matched regardless
+#: of quoting. This was decoration, not a ratchet: a migration touching
+#: only double-quoted single-line call sites could have lowered the count
+#: while the true number stayed flat.
+_RAW_TENANT_READS = 27
+
+
+def _is_tenant_header_read(node):
+    """`request.headers.get('X-Tenant-Id', ...)` or `request.headers['X-Tenant-Id']`.
+
+    Structural match, not source text: quote style and a default argument
+    are call-site style choices with no bearing on the property this pin
+    exists to hold — a handler reading the tenant header directly instead
+    of through the kernel. A needle that requires exact source text is a
+    guard that certifies whatever shape happened to exist when the needle
+    was written, and nothing else — see the correction above.
+    """
+    def is_request_headers(expr):
+        return (isinstance(expr, ast.Attribute) and expr.attr == 'headers'
+                and isinstance(expr.value, ast.Name) and expr.value.id == 'request')
+
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr == 'get'
+                and is_request_headers(func.value) and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 'X-Tenant-Id'):
+            return True
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+        if is_request_headers(node.value):
+            key = node.slice
+            if isinstance(key, ast.Constant) and key.value == 'X-Tenant-Id':
+                return True
+    return False
 
 
 def test_raw_tenant_header_reads_only_decrease():
-    """MUTATION: add `request.headers.get('X-Tenant-Id')` to a handler -> red.
+    """MUTATION: add `request.headers.get("X-Tenant-Id")` to a handler -> red.
 
     The kernel is meant to be the one tenant reader (spec §1.1). Without a
-    pin, the 24 that existed when the migration started would quietly become
-    25 the next time someone needed a tenant in a hurry.
+    pin, the 27 that exist today would quietly become 28 the next time
+    someone needed a tenant in a hurry.
     """
-    root = pathlib.Path(__file__).resolve().parents[1]
-    needle = "request.headers.get('X-Tenant-Id')"
-    sites = []
-    for path in sorted(root.glob('r6/**/*.py')):
-        rel = path.relative_to(root).as_posix()
-        if rel == 'r6/access.py':
-            continue  # the kernel is where this read is supposed to live
-        for n, line in enumerate(path.read_text(encoding='utf-8').split('\n'), 1):
-            if needle in line and not line.lstrip().startswith('#'):
-                sites.append(f'{rel}:{n}')
+    def collect(tree, path):
+        return [f'{_rel(path)}:{node.lineno}' for node in ast.walk(tree)
+                if _is_tenant_header_read(node)]
+
+    sites, scanned = _scan(collect, skip=('r6/access.py',))
     assert len(sites) <= _RAW_TENANT_READS, _report(
         sites, _RAW_TENANT_READS,
         'Read the tenant through r6.access.tenant_from_request.')
