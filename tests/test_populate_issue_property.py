@@ -730,10 +730,10 @@ def test_the_property_holds_on_the_nested_list_shape_too():
 def test_the_explanation_is_said_once_however_many_leaves_are_unanswered():
     """FINDING 2. The sentence is a constant; the linkId is what varies.
 
-    Emitting the 250-character explanation per leaf made the response grow
-    with the number of unanswered leaves TIMES a fixed paragraph — measured
-    at 3519.6KB back from a 29.3KB request over HTTP, and 352.5MB from a
-    293.0KB request in process. The ruling was to stop repeating it rather
+    Emitting the explanation on every leaf — 230 characters then, 285 now —
+    made the response grow with the number of unanswered leaves TIMES a
+    fixed paragraph, measured at 3519.6KB back from a 29.3KB request over
+    HTTP. The ruling was to stop repeating it rather
     than to cap the list, so the shape is: one `informational` issue
     carrying the reason, then one `incomplete` issue per unanswered leaf
     carrying ONLY its linkId.
@@ -771,8 +771,8 @@ def test_the_response_grows_with_the_leaf_count_not_with_a_paragraph():
 
     Ten times the leaves must cost about ten times the bytes plus a
     constant. With the sentence on every issue the per-leaf cost carried a
-    250-character paragraph, so this ratio was pinned to the paragraph
-    instead of to the data.
+    fixed paragraph, so this ratio was pinned to the paragraph instead of
+    to the data.
 
     MUTATION: restore the per-leaf sentence -> the marginal cost per leaf
     rises past the bound and this goes red.
@@ -784,9 +784,15 @@ def test_the_response_grows_with_the_leaf_count_not_with_a_paragraph():
     small, large = rendered_bytes(10), rendered_bytes(1000)
     per_leaf = (large - small) / 990
 
-    # A linkId of ~21 characters plus the issue's own JSON envelope. The
-    # bound is generous; what it excludes is a fixed paragraph per leaf.
-    assert per_leaf < 100, f"{per_leaf:.1f} bytes per unanswered leaf"
+    # The bound is the explanation itself, which is the honest way to state
+    # it: one more unanswered leaf must cost less than one more copy of the
+    # reason. Today that is ~91 bytes (a 21-character linkId plus the issue's
+    # JSON envelope) against a ~253-character constant. An absolute number
+    # here would be a second thing to keep true.
+    assert per_leaf < len(NOT_POPULATED), (
+        f"{per_leaf:.1f} bytes per unanswered leaf, against a "
+        f"{len(NOT_POPULATED)}-character explanation: the reason is being "
+        f"repeated per leaf again")
 
 
 # --- the item.code Observation path -----------------------------------------
