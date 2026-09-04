@@ -192,6 +192,86 @@ def test_the_forwarded_host_is_not_trusted(client):
         'https://localhost/r6/fhir/oauth/authorize')
 
 
+@pytest.mark.parametrize("injected", [
+    'https://evil.example/?',      # publishes an attacker's host in our docs
+    'https://evil.example',
+    'javascript',                  # javascript://host/path
+    'http" onload="x',
+    'ftp',
+    'ws',                          # also 405s every route in the app
+    'wss',
+    '',
+    '   ',
+    # A CRLF payload is deliberately absent: werkzeug refuses to construct a
+    # header value containing a newline, so the case cannot be expressed
+    # through the stack at all and a test for it would assert on the test
+    # client rather than on this app.
+])
+def test_a_forwarded_protocol_we_do_not_serve_is_ignored(client, injected):
+    """ProxyFix copies this header into the scheme with NO validation.
+
+    Every published URL is `scheme + "://" + host`, so a value that is not a
+    scheme is a URL prefix. Measured on a running app before the allowlist:
+
+        X-Forwarded-Proto: https://evil.example/?
+        -> "authorization_endpoint":
+           "https://evil.example/?://127.0.0.1:5511/r6/fhir/oauth/authorize"
+
+    That is a URL we publish, pointing at somebody else's host. The same
+    value reaches `request.url_root` in `app.py:485`, which builds the link
+    inside the welcome email we send to a third party, and the `redirect_uri`
+    `r6/wearables/routes.py:138` hands to an external OAuth provider.
+
+    Whether a caller can set the header at all depends on the platform edge
+    overwriting or appending it, which nobody has measured — the same
+    unmeasured-header standard that keeps `x_host` at 0. This makes the
+    answer not matter.
+
+    MUTATION: delete the `_drop_untrusted_forwarded_proto` wrapper in
+    `main.create_app` -> red.
+    """
+    config = client.get('/r6/fhir/.well-known/smart-configuration',
+                        headers={'X-Forwarded-Proto': injected}).get_json()
+
+    assert config['authorization_endpoint'] == (
+        'http://localhost/r6/fhir/oauth/authorize'), (
+        f'X-Forwarded-Proto: {injected!r} reached the published URL. Only '
+        f'the schemes in _SERVED_URL_SCHEMES may set wsgi.url_scheme.')
+
+
+def test_a_websocket_scheme_does_not_405_the_whole_application(client):
+    """`ws` is the same defect with a different blast radius.
+
+    Werkzeug's router treats a `ws`/`wss` `wsgi.url_scheme` as a websocket
+    request, and no HTTP rule matches one, so EVERY route answered 405 —
+    measured across /r6/fhir/health, /metadata, the privacy policy and a
+    resource read. One header, one request, the whole app unreachable for
+    that caller.
+    """
+    for path in ('/r6/fhir/health', *DISCOVERY_PATHS, PRIVACY_POLICY):
+        for scheme in ('ws', 'wss'):
+            response = client.get(path,
+                                  headers={'X-Forwarded-Proto': scheme})
+            assert response.status_code == 200, (
+                f'{path} answered {response.status_code} for a forwarded '
+                f'scheme of {scheme!r}')
+
+
+def test_a_legitimate_forwarded_protocol_still_wins(client):
+    """The allowlist must not undo #567. Case and the rightmost-value rule
+    are both part of the contract ProxyFix implements."""
+    for header, expected in (('https', 'https://'),
+                             ('HTTPS', 'https://'),
+                             ('  https  ', 'https://'),
+                             ('http,https', 'https://'),
+                             # trust depth 1 reads the RIGHTMOST value, which
+                             # is the one the edge appends.
+                             ('https,http', 'http://')):
+        config = client.get('/r6/fhir/.well-known/smart-configuration',
+                            headers={'X-Forwarded-Proto': header}).get_json()
+        assert config['authorization_endpoint'].startswith(expected), header
+
+
 # --- #574: the policy link its own reader could not open -------------------
 
 
