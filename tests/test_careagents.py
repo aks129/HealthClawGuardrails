@@ -5266,7 +5266,13 @@ def test_the_connect_refusal_is_announced_to_a_screen_reader():
     body = re.sub(r"//[^\n]*", "",
                   _HOME_JS.split("function say(")[1].split("\n  }")[0])
     assert body.index("el.hidden = false") < body.index("el.textContent = text")
-    assert "requestAnimationFrame" in body
+    # MUTATION (QA review): `"requestAnimationFrame" in body` passed with a
+    # SINGLE rAF — the case say()'s own comment says does not announce, because
+    # one frame's callback runs BEFORE the paint that puts the region in the
+    # accessibility tree. The count is the property, so the count is pinned.
+    assert body.count("requestAnimationFrame") == 2, body
+    assert re.search(
+        r"requestAnimationFrame\(\(\)\s*=>\s*requestAnimationFrame\(", body), body
 
 
 def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
@@ -5274,11 +5280,18 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     """"Verified provider & wearable logins happen on the provider's own site"
     rendered directly beneath three tiles saying those logins are not open in
     this beta. The sentence is true and stays — for the deployment where the
-    tiles it describes are live."""
+    tiles it describes are live.
+
+    Keyed on the `add-note` element, not on the words in it (QA review): the
+    live Fasten tile's own blurb ends "we never see your password", so a
+    phrase match is satisfied by the tile whether or not the note rendered,
+    and deleting the note outright left the assertion green.
+    """
+    note = 'class="add-note"'
     closed = _beta_app(svc).test_client()
     _login(closed, svc, monkeypatch, email="tester@example.org")
     body = closed.get("/home").get_data(as_text=True)
-    assert "never see your password" not in body
+    assert note not in body
     # The tiles it contradicted are the ones on screen.
     assert "Not open in this beta" in body
 
@@ -5287,12 +5300,47 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     listed = app.test_client()
     _login(listed, svc, monkeypatch, email="dr.who@example.org")
     body = listed.get("/home").get_data(as_text=True)
+    assert note in body
     assert "never see your password" in body
     # Same deployment, an account that is not on the list: no sentence.
     other = app.test_client()
     _login(other, svc, monkeypatch, email="stranger@example.org")
-    assert "never see your password" not in other.get("/home").get_data(
-        as_text=True)
+    assert note not in other.get("/home").get_data(as_text=True)
+
+
+def test_the_password_reassurance_needs_a_login_tile_not_just_an_open_switch(
+        svc, monkeypatch):
+    """The gate is `fasten`/`wearable`, not "any real-record source is open".
+
+    A deployment can have the switch fully ON and still have neither login:
+    `catalog()` marks Fasten "soon" without a `FASTEN_PUBLIC_KEY` and the
+    wearable tile "soon" without the Open Wearables sidecar, while `direct`
+    (upload a bundle) stays live — it needs no provider login. Widening the
+    gate to include `direct` would put "Verified provider & wearable logins
+    happen on the provider's own site" back under two tiles that say those
+    logins are not configured here. MUTATION (QA review): that widening left
+    the whole suite green, so the distinction is pinned here.
+    """
+    note = 'class="add-note"'
+    open_no_logins = _beta_app(svc, CARE_REAL_RECORDS="on",
+                               FASTEN_PUBLIC_KEY="",
+                               CARE_WEARABLES_ENABLED="")
+    c = open_no_logins.test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    body = c.get("/home").get_data(as_text=True)
+    tiers = {t["id"]: t["tier"] for t in
+             c.get("/api/connections/catalog").get_json()["connectors"]}
+    # The arrangement this pins: switch open, both logins unconfigured, upload
+    # live. Assert it, or a future default change makes the test vacuous.
+    assert tiers["fasten"] == "soon" and tiers["wearable"] == "soon", tiers
+    assert tiers["direct"] == "import", tiers
+    assert note not in body
+
+    # ...and one configured login is enough to bring it back.
+    one = _beta_app(svc, CARE_REAL_RECORDS="on", CARE_WEARABLES_ENABLED="")
+    c2 = one.test_client()
+    _login(c2, svc, monkeypatch, email="tester2@example.org")
+    assert note in c2.get("/home").get_data(as_text=True)
 
 
 def test_the_landing_page_does_not_promise_a_provider_login_the_beta_closes(
