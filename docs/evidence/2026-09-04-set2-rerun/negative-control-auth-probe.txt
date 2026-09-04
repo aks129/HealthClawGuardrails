@@ -1,0 +1,32 @@
+# Negative controls for scripts/connector-auth-probe.py
+# Run 2026-09-04 at HEAD (89b42fb).
+
+# 1. No credential configured. Neither kind may send a header — a Basic
+#    here would mean the script reads a credential from somewhere other
+#    than the environment it sets.
+$ uv run python scripts/connector-auth-probe.py --no-credential
+connector-auth-probe.py
+date      2026-09-04T10:18:55Z
+repo      .
+recorder  http://127.0.0.1:55724
+request   GET /r6/fhir/health -> proxy GET http://127.0.0.1:55724/metadata
+
+Identical env for both cases:
+  FHIR_UPSTREAM_CLIENT_ID     = <unset>   (negative control)
+  FHIR_UPSTREAM_CLIENT_SECRET = <unset>   (negative control)
+Question: what Authorization header reaches the upstream?
+
+  kind=hapi     -> Authorization: None (NO credential sent)
+  kind=generic  -> Authorization: None (NO credential sent)
+
+Negative control. With no credentials set, both kinds must send
+nothing: AUTH_BASIC degrades to anonymous rather than inventing a
+header. A 'Basic' here would mean this script reads a credential
+from somewhere other than the environment it sets.
+  PASS neither kind sent an Authorization header
+(exit 0)
+
+# 2. A checkout that cannot be booted. Must refuse, not report a result.
+$ uv run python scripts/connector-auth-probe.py --repo /nonexistent
+no main.py under ../../../../../../../nonexistent — nothing to boot
+(exit 2)

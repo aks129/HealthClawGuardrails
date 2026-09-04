@@ -1,0 +1,42 @@
+# §5 re-run against the tree the 2026-08-16 pack measured (2b7872d),
+# exported with git archive and booted with THIS checkout's interpreter,
+# so the only variable between the two runs is source code.
+$ uv run python scripts/connector-registry-contract.py --repo /tmp/hc-qa-602/at-2b7872d
+connector-registry-contract.py
+date  2026-09-04T10:18:48Z
+repo  ../../../../../../../private/tmp/hc-qa-602/at-2b7872d
+cases [1, 2, 3]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 1 — FHIR_UPSTREAM_URL takes precedence over MEDPLUM_BASE_URL
+  FHIR_UPSTREAM_URL = https://server.fire.ly/R4
+  MEDPLUM_BASE_URL  = https://hapi.fhir.org/baseR4   (must be IGNORED)
+  MEDPLUM_CLIENT_ID / _SECRET = must-not-be-used
+
+  resolved -> mode='upstream' upstream={'fhir_version': '4.0.1', 'kind': 'generic', 'software': 'Firely Server', 'status': 'connected', 'upstream_url': 'https://server.fire.ly/R4'}
+  PASS FHIR_UPSTREAM_URL won; MEDPLUM_BASE_URL was not used
+  PASS kind is 'generic' — the MEDPLUM_* names did not imply the kind
+  PASS the upstream names itself 'Firely Server' in its CapabilityStatement
+
+Case 2 — an unknown kind is refused rather than guessed at
+  FHIR_UPSTREAM_KIND = totally-made-up
+  /r6/fhir/health -> HTTP 500
+  ValueError: FHIR_UPSTREAM_KIND='totally-made-up' is not one of ['aidbox', 'generic', 'hapi', 'medplum']. Refusing to guess: an unknown kind means an unknown aut
+  PASS the app boots and raises per request, as §5 recorded (R6); in the app's log
+
+Case 3 — MEDPLUM_BASE_URL with no credentials  (register entry R1)
+  MEDPLUM_BASE_URL  = https://medplum.example.invalid/fhir
+  MEDPLUM_CLIENT_ID = set
+  MEDPLUM_CLIENT_SECRET = MISSING
+
+  GET /r6/fhir/health -> HTTP 200
+  status = 'healthy' | mode = 'upstream' | checks.upstream = 'not_configured'
+  POST /r6/fhir/Patient -> HTTP 201, id 66f4fe4b-82e8-4e14-b000-9215f0226870
+  GET  /r6/fhir/Patient/66f4fe4b-82e8-4e14-b000-9215f0226870 -> HTTP 200, _source = None
+    r6_resources Patient rows = 1
+  NOTE the write landed in the proxy's own SQLite, not in a Medplum — unchanged from 2026-08-16, and the correct fallback.
+  FAIL R1 STILL OPEN: /r6/fhir/health reports mode 'upstream' and status 'healthy' while the write landed locally. A container healthcheck and any orchestrator probe both report this deployment fine.
+
+Result
+  at least one assertion failed
+(exit 1)
