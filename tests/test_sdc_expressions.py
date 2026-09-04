@@ -198,3 +198,66 @@ def test_the_resource_root_form_still_evaluates_against_the_projection():
     ctx = build_context(subject=_FULL_PATIENT)
     assert evaluate("Patient.name.family", ctx["patient"], ctx) == "Lovelace"
     assert evaluate("Patient.identifier.value", ctx["patient"], ctx) is None
+
+
+def test_a_failing_expression_in_a_list_row_logs_once_not_once_per_record(
+        caplog):
+    """LOG VOLUME DOES NOT SCALE WITH THE CALLER'S RECORD COUNT.
+
+    A leaf inside a `repeats: true` list group is evaluated once per row —
+    that is what makes an expression leaf answer there at all, and it is
+    deliberate. The failure LOG is a different matter: the line is identical
+    for every row (a linkId and an exception class name), so 100 records
+    meant 100 identical warnings, and the records arrive in the caller's own
+    inline `content` Bundle. Cost that scales with attacker-supplied input
+    is worth removing while it is one small change.
+
+    Deduped at the log site (r6/sdc/expressions.py's `warned`), NOT by
+    evaluating once per group: evaluating once per group would rebuild a
+    second resolution path beside the one _populate_list_children was just
+    collapsed into, which is the divergence this branch exists to remove.
+    Resolution is untouched — every row still evaluates, and every row still
+    gets its own issue.
+
+    MUTATION: drop the `warned` guard -> the 10-record case logs 10 lines.
+    """
+    questionnaire = {
+        "resourceType": "Questionnaire", "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "a.allergen", "type": "string",
+                 "definition": ("http://hl7.org/fhir/StructureDefinition/"
+                                "AllergyIntolerance#AllergyIntolerance."
+                                "code.text")},
+                {"linkId": "a.bad", "type": "string", "extension": [{
+                    "url": INITIAL_EXPRESSION_URL,
+                    "valueExpression": {"language": "text/fhirpath",
+                                        "expression": "notAFunction()"}}]},
+            ],
+        }],
+    }
+    patient = {"resourceType": "Patient", "id": "p1"}
+
+    for record_count in (1, 10, 100):
+        allergies = [
+            {"resourceType": "AllergyIntolerance", "id": f"a{i}",
+             "patient": {"reference": "Patient/p1"},
+             "code": {"text": f"Allergen {i}"}}
+            for i in range(record_count)
+        ]
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="r6.sdc.expressions"):
+            qr, issues = populate_questionnaire(questionnaire, patient,
+                                                allergies)
+
+        records = [r for r in caplog.records if r.name == "r6.sdc.expressions"]
+        assert len(records) == 1, (
+            f"{record_count} records produced {len(records)} log lines; the "
+            f"caller supplies the records, so this must not scale with them")
+
+        # Resolution is unchanged: still one row per record, and still one
+        # issue per unresolved leaf occurrence — the dedupe is the log only.
+        rows = [x for x in qr["item"] if x["linkId"] == "allergies.item"]
+        assert len(rows) == record_count
+        assert sum(1 for i in issues if i["linkId"] == "a.bad") == record_count
