@@ -238,9 +238,26 @@ def _answers(qr):
 
 
 def _issue_link_ids(params):
+    """The linkIds the OperationOutcome names, one per unanswered leaf.
+
+    `incomplete` issues are the per-leaf ones and their `diagnostics` is the
+    linkId alone. The reason they share is said once, in the single
+    `informational` issue this deliberately skips — see
+    r6/sdc/routes.py:_issues_outcome, and
+    test_the_explanation_is_said_once_in_the_response below for the pin on
+    that split.
+    """
     outcome = _param(params, "issues") or {}
-    return [issue["diagnostics"].split(":")[0]
-            for issue in outcome.get("issue", [])]
+    return [issue["diagnostics"] for issue in outcome.get("issue", [])
+            if issue["code"] == "incomplete"]
+
+
+def _issue_explanation(params):
+    outcome = _param(params, "issues") or {}
+    summary = [issue for issue in outcome.get("issue", [])
+               if issue["code"] == "informational"]
+    assert len(summary) == 1, summary
+    return summary[0]["diagnostics"]
 
 
 # ---------------------------------------------------------------------------
@@ -276,9 +293,10 @@ def test_a_withheld_expression_is_reported_as_an_issue_naming_its_link_id(
     operation refused to look. A caller told nothing would read the first
     from the second, so every withheld item names itself in an
     OperationOutcome issue. The diagnostics carry the linkId (questionnaire
-    structure, authored by the caller) and a fixed sentence; the expression
-    text is deliberately NOT echoed, because a `where()` clause is a place an
-    author can park a literal.
+    structure, authored by the caller); the expression text is deliberately
+    NOT echoed, because a `where()` clause is a place an author can park a
+    literal. The fixed sentence explaining them all is said once beside
+    them, not copied onto each.
     """
     _seed(app, tenant_id)
 
@@ -286,10 +304,10 @@ def test_a_withheld_expression_is_reported_as_an_issue_naming_its_link_id(
 
     assert sorted(_issue_link_ids(body)) == sorted(WITHHELD)
     outcome = _param(body, "issues")
-    diagnostics = outcome["issue"][0]["diagnostics"]
-    assert "%patient projection" in diagnostics
+    explanation = _issue_explanation(body)
+    assert "%patient projection" in explanation
     for expression in WITHHELD.values():
-        assert expression not in diagnostics
+        assert expression not in json.dumps(outcome)
     # One sentence for every leaf, at `information` severity — see
     # test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words
     # for why the wording may not distinguish withheld from absent.
@@ -349,15 +367,15 @@ def test_an_allowlisted_element_the_patient_lacks_reports_in_the_same_words(
     # Exactly one issue: the one leaf that got no answer. Not two.
     assert _issue_link_ids(body) == ["email"]
 
-    issue = _param(body, "issues")["issue"][0]
+    outcome = _param(body, "issues")
     # information, not warning: a form with one empty optional field is an
     # ordinary result, and a conformant client reading `warning` would treat
     # it as a failed operation.
-    assert issue["severity"] == "information"
-    diagnostics = issue["diagnostics"]
-    assert "%patient projection" in diagnostics
+    assert {i["severity"] for i in outcome["issue"]} == {"information"}
+    explanation = _issue_explanation(body)
+    assert "%patient projection" in explanation
     for claim in ("withheld", "refused", "denied"):
-        assert claim not in diagnostics.lower(), claim
+        assert claim not in explanation.lower(), claim
 
 
 # ---------------------------------------------------------------------------

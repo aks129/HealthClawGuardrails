@@ -78,8 +78,11 @@ def test_populate_records_issue_for_unresolved_item():
 
     # No answer produced, and no spurious answer array on the item.
     assert "answer" not in qr["item"][0]
-    assert [i["linkId"] for i in issues] == ["missing"]
-    assert issues[0]["detail"] == NOT_POPULATED
+    # The issue carries the linkId and nothing else: the reason is the same
+    # constant for every leaf and is said once per response by
+    # r6/sdc/routes.py:_issues_outcome.
+    assert issues == [{"linkId": "missing"}]
+    assert "no value resolved" in NOT_POPULATED
 
 
 def test_populate_nested_group_items():
