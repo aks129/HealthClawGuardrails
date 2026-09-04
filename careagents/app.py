@@ -547,10 +547,21 @@ def create_app(config: Config | None = None,
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
-            # Never claim a deletion that did not happen.
+            # Never claim a deletion that did not happen — and this said more
+            # than that. "Nothing was changed" is the same claim the review
+            # arms above used to make, on the destructive route: `purge_tenant`
+            # raises on ANY non-200 and on a read timeout, so a gateway 5xx or
+            # a lost answer can follow a purge that ran. Found by inventorying
+            # this file for claims about what was sent, approved, recorded or
+            # retried rather than by another report about one arm.
+            #
+            # `deleted: False` stays and is not the same claim: it is what
+            # keeps the connection linked here, which is observed — the
+            # unlink below is not reached — and is the conservative half.
             return jsonify({"error": "deletion_failed", "deleted": False,
-                            "message": "Your records were not deleted. "
-                                       "Nothing was changed — please retry."}), 502
+                            "message": "We couldn't confirm your records were "
+                                       "deleted. Your connection is still "
+                                       "linked here — please try again."}), 502
         svc.delete_connection(acct.id, conn_id)
         return jsonify({
             "deleted": True,
@@ -1179,11 +1190,21 @@ def create_app(config: Config | None = None,
                 body = dict(body) if isinstance(body, dict) else {}
                 body.update({
                     "confirmed": None,
-                    "message": ("Your review was saved, but we couldn't "
-                                "confirm whether the approval went through. "
-                                "Don't approve again yet — check the request's "
-                                "status first, because approving twice could "
-                                "send it twice."),
+                    # "approving twice could send it twice" was the last false
+                    # deterrent in this file, and the third instance of one
+                    # shape: two rounds fixed the sentence in front of them
+                    # and left the twin one arm over. Since #550 a second
+                    # approval reaches the REVIEW route, which answers 409
+                    # while the action is still awaiting confirmation and 404
+                    # once it has moved on; `confirm_action` is called only on
+                    # a decodable 200, so it is never reached twice and there
+                    # is no second send to warn about. What is true is that we
+                    # did not retry it ourselves, and that the page is about
+                    # to look up where the request stands.
+                    "message": ("Your review was saved. We couldn't tell "
+                                "whether your approval went through, so we "
+                                "have not tried it again. We are checking "
+                                "where this request stands."),
                 })
                 return jsonify(body), 502
             except HealthClawError:

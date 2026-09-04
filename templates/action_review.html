@@ -313,6 +313,31 @@
             return;
           }
 
+          // The session expired while the form sat open, which on a phone in
+          // an in-app browser is the ordinary way this page is used. This
+          // route is not under /api/, so `login_required` answers a 302 to
+          // /auth rather than a 401; fetch follows it, and what arrives is
+          // the sign-in page as 200 text/html. That parses as unreadable, so
+          // it was reported as an approval whose outcome we could not
+          // determine, with Approve taken away — when nothing was submitted
+          // and nothing could have been: the request never passed the
+          // session gate. Say that instead, and leave the button alone,
+          // because signing in and tapping Approve is the whole recovery.
+          //
+          // Keyed on the redirect AND on where it landed. A redirect to
+          // somewhere that is not our sign-in page — a captive portal, an
+          // enterprise proxy — is not evidence about the session, so it
+          // falls through to the unreadable branch below, which claims
+          // nothing either way.
+          if (res.r.redirected && /\/auth(\?|$)/.test(res.r.url || '')) {
+            btn.disabled = false;            // sign in, then approve
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'Your sign-in expired, so this approval was not submitted. ' +
+              'Sign in again in another tab, then approve here.';
+            return;
+          }
+
           // Say only that we could not read it. NOT what became of the
           // request: on an unreadable 200 the relay has already confirmed
           // the action, on an unreadable 502 it may or may not have, and
@@ -357,6 +382,34 @@
             return;
           }
 
+          // 404 from the ENGINE: the action is no longer awaiting review.
+          // `_load_form_fill_action` requires `awaiting_confirmation` and runs
+          // before the 409 pre-check, so once the confirm has claimed the
+          // action a second submit answers 404 {"error": "Unknown action"} —
+          // which is the ordinary two-tab and back-button outcome after an
+          // approval that WORKED. It rendered as a red machine string with
+          // Approve re-armed: the same shape the 409 branch exists to remove,
+          // one status code over.
+          //
+          // What this 404 establishes, and no more: the action has left
+          // `awaiting_confirmation`. That is claimed-and-run OR expired, and
+          // the status tells them apart — so state the one fact and let the
+          // poll finish the sentence. Ownership was verified before the
+          // submit went out, so "no such action" is not among the readings.
+          //
+          // The relay's OWN 404 is `{"error": "not yours"}` and is a different
+          // answer — a denial about this account, not about the action's
+          // state — so it is excluded here and keeps the failure arm below.
+          if (res.r.status === 404 && res.b.error !== 'not yours') {
+            btn.disabled = true;             // a further tap answers 404 too
+            gateMsg.className = 'alert alert-secondary';
+            gateMsg.textContent =
+              'This request is no longer waiting for your approval. We are ' +
+              'checking where it stands.';
+            checkStatus();
+            return;
+          }
+
           // THREE answers, not two (#220, #416). `confirmed === null` means
           // the engine never replied, so the approval MAY already have run.
           // This branch used to fall through to the else below and print
@@ -368,8 +421,12 @@
             btn.disabled = true;             // never invite a second send here
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent = res.b.message ||
-              'Your review was saved. We are checking whether the approval ' +
-              'went through.';
+              // NOT "your review was saved": this branch has two producers
+              // now, and on one of them — an answer to the review POST that
+              // nobody could read — it may not have been. The fallback fires
+              // only if the server sent no message at all, so it must be
+              // true for both.
+              'We are checking where this request stands.';
             checkStatus();
             return;
           }

@@ -268,6 +268,17 @@ def _block(js: str, anchor: str) -> str:
     raise AssertionError(f"unbalanced block after {anchor!r}")
 
 
+def _condition(js: str, anchor: str) -> str:
+    """The text from `anchor` to the `{` that opens its branch.
+
+    `_block` returns the branch BODY, so a guard about what a branch is keyed
+    ON has to read this instead — two of these guards were written against
+    `_block` first and passed nothing, because the condition is not in it.
+    """
+    start = js.index(anchor)
+    return js[start:js.index("{", start)]
+
+
 def test_the_json_parse_has_a_catch(page):
     """MUTATION: delete the `.catch` after `r.json()` -> red.
 
@@ -473,6 +484,25 @@ def test_the_awaiting_confirmation_arm_says_only_what_the_status_carries(page):
         "needs a destination)")
 
 
+def test_the_unknown_branchs_own_fallback_is_true_for_both_its_producers(page):
+    """A fallback is a sentence too, and this one gained a second producer.
+
+    `confirmed: null` was written for one case — the confirm went out and was
+    never answered, where the review HAD been saved. It now also carries the
+    answer to a review POST that nobody could read, where it may not have
+    been. The server sends a message on both, so the fallback fires only if
+    one is missing; it still may not assert what only one producer knows.
+
+    MUTATION: restore "Your review was saved." as the fallback -> red.
+    """
+    block = _block(_code_only(_submit_handler(page)),
+                   "res.b.confirmed === null")
+    assert "review was saved" not in block, (
+        "the unknown branch's fallback claims the review was saved. One of "
+        "its two producers is an answer nobody could read, where nothing "
+        "observed says it was")
+
+
 def test_the_relay_confirm_failure_gets_the_destination_it_points_at(page):
     """The other half of the loop.
 
@@ -559,9 +589,14 @@ def test_check_status_is_only_called_where_the_relay_answered(page):
     MUTATION: add `checkStatus();` to the `!res.reached` branch -> red.
     """
     body = _code_only(_submit_handler(page))
+    # The 404 was added to this list, not around it: it is the engine's own
+    # answer about this action — ownership was verified before the submit, so
+    # the action exists and is this tenant's — which is exactly the property
+    # the list encodes. The two branches deliberately outside it still are.
     anchors = ("res.r.status === 409",
                "res.b.confirmed === null",
-               "res.r.status === 502 &&")
+               "res.r.status === 502 &&",
+               "res.r.status === 404 &&")
     allowed = []
     for anchor in anchors:
         block = _block(body, anchor)
@@ -706,11 +741,6 @@ def test_a_body_that_parses_but_is_not_an_object_is_unreadable(page):
     assert "readable: false" in parse
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA on the finished stack (#550 -> #566 -> #579). The 409 branch removed "
-    "the #416 shape for a request still awaiting confirmation; the same shape "
-    "survives one status code over, for a request that was approved AND ran. "
-    "Fix needs a sentence about state, which is Dev's call, not QA's."))
 def test_an_action_that_moved_on_is_not_rendered_as_a_bare_failure(page):
     """Second tab, or the back button, after the approval went through.
 
@@ -734,19 +764,40 @@ def test_an_action_that_moved_on_is_not_rendered_as_a_bare_failure(page):
     read the body, not just the status; that is the part that is a claim
     about state rather than presentation, which is why QA pinned it instead
     of writing it.
+
+    Fixed here, and the pin's marker removed with it. The properties below
+    are the ones the browser walk measured as wrong, so the guard checks each
+    rather than only that a branch exists — a 404 arm that still painted red,
+    or still re-armed Approve, would have satisfied the original assertion.
+
+    MUTATION: delete the branch; render it `alert-danger`; leave the button
+    enabled; drop the `not yours` exclusion; drop `checkStatus()` -> red, one
+    at a time.
     """
     body = _code_only(_submit_handler(page))
     assert re.search(r"res\.r\.status\s*===\s*404", body), (
         "no branch handles the 404 a second approval gets once the action "
         "has moved on, so an approved-and-executed request renders as a red "
         "'Unknown action' with Approve re-armed")
+    block = _block(body, "res.r.status === 404")
+    assert "alert-danger" not in block, (
+        "the action was approved and ran; painting that as a failure is the "
+        "shape the 409 branch exists to remove")
+    assert re.search(r"btn\.disabled\s*=\s*true", block), (
+        "Approve is re-armed for an action that no longer accepts one — a "
+        "further tap answers 404 again")
+    assert "not yours" in _condition(body, "res.r.status === 404"), (
+        "the relay's own 404 is `{'error': 'not yours'}`, a denial about the "
+        "account rather than about the action's state; without excluding it "
+        "this branch tells someone else's form it merely moved on")
+    assert "checkStatus()" in block, (
+        "the branch says the request is no longer waiting and then abandons "
+        "it (#419). Claimed-and-ran and expired both reach this 404, and "
+        "only the status tells them apart")
+    assert body.index("res.r.status === 404") < body.index("alert alert-danger"), (
+        "the 404 branch sits below the generic failure arm and can never run")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA on the finished stack (#550 -> #566 -> #579). A session that expires "
-    "while the form is open is reported as an unknown approval outcome, on a "
-    "page whose primary device is a phone in an in-app browser. The page has "
-    "the evidence and does not read it. Fix names a state, so Dev's call."))
 def test_a_signed_out_submit_is_not_reported_as_an_unknown_outcome(page):
     """The patient left the form open and the cookie expired.
 
@@ -771,12 +822,39 @@ def test_a_signed_out_submit_is_not_reported_as_an_unknown_outcome(page):
     template, with the submit answered `200 text/html`. The 302 mechanics
     are read from `login_required`, not driven through a genuinely expired
     session.
+
+    Fixed here, and the pin's marker removed with it. Three properties, not
+    one: the redirect has to be READ, the branch has to run before the
+    unreadable arm that used to swallow it, and it has to leave Approve
+    alone — signing in and tapping Approve is the whole recovery, so a
+    branch that reads the redirect and still disables the button fixes only
+    the sentence.
+
+    Keyed on the destination too. A redirect somewhere that is not our
+    sign-in page is not evidence about the session, and must keep falling
+    through to the unreadable branch.
+
+    MUTATION: delete the branch; move it below `!res.readable`; disable the
+    button in it; drop the URL test -> red, one at a time.
     """
     body = _code_only(_submit_handler(page))
     assert "res.r.redirected" in body, (
         "the page cannot tell a signed-out submit from an unreadable answer, "
         "so an expired session is reported as an approval whose outcome is "
         "unknown, with Approve disabled")
+    assert body.index("res.r.redirected") < body.index("!res.readable"), (
+        "the redirect is read after the unreadable branch, which returns "
+        "first — the sign-in page parses as unreadable, so the new branch "
+        "can never run")
+    block = _block(body, "res.r.redirected")
+    assert "auth" in _condition(body, "res.r.redirected"), (
+        "the branch treats ANY redirect as a sign-out. A captive portal or "
+        "an enterprise proxy says nothing about the session, and claiming it "
+        "does is the same shape one layer out")
+    assert re.search(r"btn\.disabled\s*=\s*false", block), (
+        "Approve is taken away from a patient whose only problem is an "
+        "expired cookie, on the one branch where nothing was submitted and "
+        "a second tap is the recovery")
 
 
 # QA #566 (MEDIUM), filed as a strict xfail and fixed here, so the marker is
