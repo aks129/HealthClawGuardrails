@@ -725,6 +725,113 @@ def test_the_property_holds_on_the_nested_list_shape_too():
         _assert_zero_bits(q, qr, issues, f"nested-list / {label}")
 
 
+# --- the OTHER two mechanisms, inside a supported list group -----------------
+
+def _list_group_with(extra_leaf):
+    """A supported (AllergyIntolerance) repeating group carrying one ordinary
+    definition leaf plus whatever `extra_leaf` is."""
+    return {
+        "resourceType": "Questionnaire", "id": "mechanism-in-list",
+        "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "a.allergen", "type": "string",
+                 "definition": NESTED_ALLERGEN_DEF},
+                extra_leaf,
+            ],
+        }],
+    }
+
+
+#: The two population mechanisms that are NOT `definition`, placed where the
+#: engine takes a different code path: inside a group `_list_group_resource_type`
+#: recognises. Everything else in this file puts them outside one.
+_MECHANISM_LEAVES = {
+    "initialExpression, allowlisted": {
+        "linkId": "a.mech", "type": "string",
+        "extension": [{"url": INITIAL_EXPR_URL, "valueExpression": {
+            "language": "text/fhirpath", "expression": "%patient.gender"}}]},
+    "initialExpression, withheld": {
+        "linkId": "a.mech", "type": "string",
+        "extension": [{"url": INITIAL_EXPR_URL, "valueExpression": {
+            "language": "text/fhirpath",
+            "expression": "%patient.identifier.value"}}]},
+    "item.code": {
+        "linkId": "a.mech", "type": "string",
+        "code": [{"system": LOINC, "code": "29463-7"}]},
+}
+
+
+def test_an_expression_or_code_leaf_inside_a_supported_list_group_reports():
+    """THE THIRD SHAPE OF FINDING 1, in the branch the fix did not reach.
+
+    `_populate_list_children` resolves a row's leaves by `definition` and by
+    nothing else, so a leaf carrying an `initialExpression` or an `item.code`
+    inside a MedicationRequest / AllergyIntolerance / Condition group is
+    never evaluated AND never reported: an unanswered leaf, zero issues, and
+    over HTTP no `issues` parameter on the response at all. That is the exact
+    state the ruling set out to remove and that finding 1 closed for the two
+    shapes it looked at.
+
+    It is not a leak — the silence is a function of the QUESTIONNAIRE's
+    structure, identical on every patient and every record — and the intake
+    form has no such leaf, so there is no live impact. What it is, is the
+    divergence this change claims to have removed. The module docstring of
+    r6/sdc/populate.py and `_attempted_link_ids` above both say attempted
+    means "an initialExpression, an `item.code`, or a `definition` on a leaf
+    anywhere under a repeating group"; `_populate_list_children` implements
+    only the third clause. Two files restating one rule, agreeing on the
+    prose and disagreeing on the code, with no fixture crossing the
+    difference — which is how the first two shapes shipped.
+
+    EITHER RESOLUTION CLOSES THIS, and both places must move together:
+    resolve expression and code leaves inside a list row (the rule as
+    written), or narrow the rule and this file's `_attempted_link_ids` to
+    say `definition` alone applies inside a list group — and rewrite the
+    module docstring, since the two clauses would then be conditional on
+    where the leaf sits.
+    """
+    for label, leaf in _MECHANISM_LEAVES.items():
+        q = _list_group_with(leaf)
+        qr, issues = populate_questionnaire(
+            q, FULL_PATIENT, [_allergy("a1", code="Penicillin")])
+
+        unanswered = Counter(x["linkId"] for x in _leaf_occurrences(qr["item"])
+                             if "answer" not in x)
+        named = Counter(i["linkId"] for i in issues)
+        # Stated as "no leaf is silently empty" rather than as one expected
+        # list, because an allowlisted expression legitimately ANSWERS once
+        # it is evaluated: that row must then report nothing, and this reads
+        # correctly either way.
+        assert unanswered == named, (
+            f"[{label}] a leaf inside a supported list group is unanswered "
+            f"and unreported: unanswered={dict(unanswered)}, "
+            f"issues={dict(named)}. A caller reads that silence as 'this "
+            f"patient has no such value'.")
+
+
+def test_the_property_holds_with_a_mechanism_leaf_inside_a_list_group():
+    """The biconditional over the same shape, across records and patients.
+
+    Held apart from the assertion above so the failure reads as the property
+    rather than as one expected list: `_assert_zero_bits` names the leaf and
+    the direction, and it is the pin the whole file is built on.
+    """
+    for label, leaf in _MECHANISM_LEAVES.items():
+        q = _list_group_with(leaf)
+        shapes = {
+            "nothing stored": [],
+            "one labelled": [_allergy("a1", code="Penicillin")],
+            "two unlabelled": [_allergy("a1"), _allergy("a2")],
+        }
+        for plabel, patient in PATIENT_MATRIX.items():
+            for slabel, content in shapes.items():
+                qr, issues = populate_questionnaire(q, patient, content)
+                _assert_zero_bits(
+                    q, qr, issues, f"{label} / {plabel} / {slabel}")
+
+
 # --- the explanation, said once ---------------------------------------------
 
 def test_the_explanation_is_said_once_however_many_leaves_are_unanswered():
