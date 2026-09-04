@@ -19,11 +19,53 @@ r6/command_center/routes.py were never in that diff and still carried it
 (#508). A leak that comes back after its issue is closed is a leak with no
 guard on it, so this file is the guard rather than another fix.
 
-THE RULE, in one sentence: the name bound to the error half of
-`validate_step_up_token`'s tuple may be passed to a logger or to
-`r6.access.public_step_up_reason`, and to nothing else.
+THE RULE, in one sentence: the error half of `validate_step_up_token`'s tuple
+may be passed to a logger or to `r6.access.public_step_up_reason`, and to
+nothing else — however the caller gets hold of it.
 
-MUTATION: interpolate the raw reason into any response anywhere -> red.
+## The word "anywhere" was not true (#630 F6)
+
+This docstring used to end `MUTATION: interpolate the raw reason into any
+response anywhere -> red`, and that line had never been executed. The scanner
+recognised exactly ONE shape — a two-element TUPLE ASSIGNMENT whose value is a
+direct `validate_step_up_token(...)` call — so the same leak written as
+
+    res = validate_step_up_token(token, tenant_id)
+    if res[0]:
+        return None
+    return jsonify({"error": f"step-up token rejected: {res[1]}"}), 401
+
+walked straight past it. Applied to `_authz_write` in
+`r6/command_center/routes.py` that mutation put a *token tenant mismatch* back
+on the wire and the whole suite stayed green: 3157 passed, byte-identical to
+baseline (2026-09-04). #508, undetected, in the file this guard was written
+for.
+
+The shape is not hypothetical bad style. `res = validate_step_up_token(...)`
+is one keystroke from `if res:` — the truthiness test on the tuple that
+CLAUDE.md names as a silent auth bypass, since a 2-tuple is always truthy.
+A guard that cannot see the binding cannot see either failure.
+
+THE SHAPES RECOGNISED, so a reader knows the boundary rather than trusting
+the word "anywhere":
+
+  1. `valid, err = validate_step_up_token(...)` -> reads of `err`
+     (`_reason_names` + `_guarded_uses`)
+  2. `res = validate_step_up_token(...)`        -> reads of `res[1]`, and
+     bare reads of `res` (which carry both halves, and cover `if res:`).
+     `res[0]` is the boolean and is always allowed.
+     (`_tuple_names` + `_guarded_tuple_uses`)
+  3. `validate_step_up_token(...)[1]` with no name at all
+     (`_direct_reason_subscripts`)
+
+NOT recognised, and deliberately left rather than guessed at: a reason that
+travels through another function's return value, a dict, or `*rest`
+unpacking. `test_a_token_for_another_tenant_is_refused_without_naming_why`
+below is the backstop that does not care about syntax at all — it drives the
+two #508 sites over the wire.
+
+MUTATION (run 2026-09-04, both directions, see PR): rewrite either
+command_center site to bind the tuple and interpolate `res[1]` -> red.
 """
 
 import ast
@@ -80,14 +122,34 @@ def _reason_names(func):
     return names
 
 
-def _guarded_uses(func, name):
-    """Line numbers where `name` is read somewhere other than an allowed sink.
+def _tuple_names(func):
+    """Names bound to the WHOLE tuple: `res = validate_step_up_token(...)`.
 
-    A read is allowed when its nearest enclosing Call is a logger method or
-    the classifier. Everything else — an f-string in a response, a dict value,
-    a `.format` argument, a bare return — is a use that can reach a caller.
+    Shape 2 of the three in the module docstring. `_reason_names` above is
+    blind to it, which is what #630 F6 found.
     """
-    allowed_lines = set()
+    names = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target, value = node.targets[0], node.value
+        if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
+            continue
+        called = (getattr(value.func, 'id', None)
+                  or getattr(value.func, 'attr', None))
+        if called == 'validate_step_up_token':
+            names.add(target.id)
+    return names
+
+
+def _sink_positions(func, predicate):
+    """(lineno, col_offset) of every node inside an allowed sink call.
+
+    Position rather than identity because `ast.walk` visits a node once per
+    walk and the two passes below need to agree on which reads were already
+    accounted for.
+    """
+    positions = set()
     for node in ast.walk(func):
         if not isinstance(node, ast.Call):
             continue
@@ -95,9 +157,71 @@ def _guarded_uses(func, name):
                   or getattr(node.func, 'attr', None))
         if called not in _ALLOWED_SINKS:
             continue
-        for arg in ast.walk(node):
-            if isinstance(arg, ast.Name) and arg.id == name:
-                allowed_lines.add((arg.lineno, arg.col_offset))
+        for inner in ast.walk(node):
+            if predicate(inner):
+                positions.add((inner.lineno, inner.col_offset))
+    return positions
+
+
+def _guarded_tuple_uses(func, name):
+    """Line numbers where the tuple bound to `name` can carry the reason out.
+
+    `name[0]` is the boolean half — always fine. `name[1]` is the raw reason
+    and is fine only inside an allowed sink. A bare read of `name` is
+    reported because it carries both halves, which also makes this the check
+    that catches `if name:` — the truthiness test on the tuple that CLAUDE.md
+    calls a silent auth bypass.
+    """
+    allowed_lines = _sink_positions(
+        func, lambda n: isinstance(n, ast.Name) and n.id == name)
+
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Subscript):
+            continue
+        inner = node.value
+        if (isinstance(inner, ast.Name) and inner.id == name
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == 0):
+            allowed_lines.add((inner.lineno, inner.col_offset))
+
+    return [node.lineno for node in ast.walk(func)
+            if isinstance(node, ast.Name) and node.id == name
+            and isinstance(node.ctx, ast.Load)
+            and (node.lineno, node.col_offset) not in allowed_lines]
+
+
+def _direct_reason_subscripts(func):
+    """Line numbers of `validate_step_up_token(...)[1]` — shape 3, no name."""
+    allowed = _sink_positions(func, lambda n: isinstance(n, ast.Subscript))
+
+    bad = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Subscript):
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call):
+            continue
+        called = (getattr(call.func, 'id', None)
+                  or getattr(call.func, 'attr', None))
+        if called != 'validate_step_up_token':
+            continue
+        if not (isinstance(node.slice, ast.Constant) and node.slice.value == 1):
+            continue
+        if (node.lineno, node.col_offset) in allowed:
+            continue
+        bad.append(node.lineno)
+    return bad
+
+
+def _guarded_uses(func, name):
+    """Line numbers where `name` is read somewhere other than an allowed sink.
+
+    A read is allowed when its nearest enclosing Call is a logger method or
+    the classifier. Everything else — an f-string in a response, a dict value,
+    a `.format` argument, a bare return — is a use that can reach a caller.
+    """
+    allowed_lines = _sink_positions(
+        func, lambda n: isinstance(n, ast.Name) and n.id == name)
 
     bad = []
     for node in ast.walk(func):
@@ -116,11 +240,23 @@ def _leaks():
         for func in ast.walk(tree):
             if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            where = path.relative_to(REPO_ROOT)
             for name in _reason_names(func):
                 for lineno in _guarded_uses(func, name):
-                    yield (f'{path.relative_to(REPO_ROOT)}:{lineno}',
+                    yield (f'{where}:{lineno}',
                            f'{func.name}() reads `{name}` outside a logger '
                            'or public_step_up_reason')
+            for name in _tuple_names(func):
+                for lineno in _guarded_tuple_uses(func, name):
+                    yield (f'{where}:{lineno}',
+                           f'{func.name}() reads the validator tuple `{name}` '
+                           'outside a logger or public_step_up_reason '
+                           f'(`{name}[0]` is the only free read)')
+            for lineno in _direct_reason_subscripts(func):
+                yield (f'{where}:{lineno}',
+                       f'{func.name}() subscripts '
+                       'validate_step_up_token(...)[1] outside a logger or '
+                       'public_step_up_reason')
     assert scanned > 100, f'the leak scan only walked {scanned} files'
 
 
@@ -161,6 +297,62 @@ def test_the_leak_detector_actually_detects_the_leak():
     assert _guarded_uses(func, 'err') == []
 
 
+def _only_function(source):
+    return next(n for n in ast.walk(ast.parse(source))
+                if isinstance(n, ast.FunctionDef))
+
+
+def test_the_leak_detector_sees_the_tuple_reached_by_index_too():
+    """#630 F6: the shape the scanner could not see, proven visible.
+
+    Each case states what the OLD detector returned as well, because "the new
+    helper finds it" is only half the claim being repaired — the other half is
+    that the old one did not, which is why the census row exists.
+    """
+    indexed = _only_function(
+        'def handler():\n'
+        '    res = validate_step_up_token(t, tid)\n'
+        '    if res[0]:\n'
+        '        return None\n'
+        '    return jsonify({"error": f"rejected: {res[1]}"}), 401\n')
+    assert _reason_names(indexed) == set(), (
+        'the tuple-unpack detector was never blind to this; if it sees it '
+        'now, the #630 F6 premise changed and this repair needs re-deriving')
+    assert _tuple_names(indexed) == {'res'}
+    assert _guarded_tuple_uses(indexed, 'res') == [5]
+
+    classified = _only_function(
+        'def handler():\n'
+        '    res = validate_step_up_token(t, tid)\n'
+        '    if res[0]:\n'
+        '        return None\n'
+        '    logger.info("refused: %s", res[1])\n'
+        '    return jsonify({"error": public_step_up_reason(res[1])}), 401\n')
+    assert _guarded_tuple_uses(classified, 'res') == [], (
+        'the classified spelling of the same shape must stay green, or the '
+        'guard forces callers away from the one safe way to write it')
+
+    truthy = _only_function(
+        'def handler():\n'
+        '    res = validate_step_up_token(t, tid)\n'
+        '    if res:\n'
+        '        return None\n')
+    assert _guarded_tuple_uses(truthy, 'res') == [3], (
+        'a bare read of the tuple is the CLAUDE.md non-negotiable — a 2-tuple '
+        'is always truthy, so `if res:` authorizes every caller')
+
+    direct = _only_function(
+        'def handler():\n'
+        '    return jsonify(\n'
+        '        {"error": validate_step_up_token(t, tid)[1]}), 401\n')
+    assert _direct_reason_subscripts(direct) == [3]
+
+    sunk = _only_function(
+        'def handler():\n'
+        '    logger.info("refused: %s", validate_step_up_token(t, tid)[1])\n')
+    assert _direct_reason_subscripts(sunk) == []
+
+
 # --- the wire behaviour, both sides of the ruling -------------------------
 
 @pytest.mark.parametrize('reason', [
@@ -182,3 +374,61 @@ def test_a_reason_about_the_callers_own_token_still_reaches_them(reason):
 
 def test_the_one_reason_about_someone_elses_credential_does_not():
     assert public_step_up_reason('Token tenant mismatch') == _DENIED_REJECTED
+
+
+# --- the backstop that does not read source at all ------------------------
+
+#: Neither row may use the `tenant_id` fixture: `test-tenant` is in
+#: PUBLIC_TENANTS under the test config, and `/api/generate-link` skips the
+#: step-up branch entirely for a public tenant (200, a minted link). That is
+#: the documented demo carve-out, not a defect — but a probe pointed at a
+#: public tenant would have measured nothing.
+_PRIVATE_TENANT = 'probe-private-tenant'
+
+
+@pytest.mark.parametrize('path, payload', [
+    ('/command-center/api/conversations',
+     {'role': 'user', 'text': 'hello'}),
+    ('/command-center/api/generate-link', {}),
+])
+def test_a_token_for_another_tenant_is_refused_without_naming_why(
+        client, path, payload):
+    """The two #508 sites, driven over the wire.
+
+    Every other row in this file reads Python source, so all of them share one
+    failure mode: a leak spelled in a syntax the scanner does not model stays
+    invisible no matter how many shapes get added. This row cares only about
+    the bytes on the wire. It is the reason the scanner may honestly say which
+    three shapes it recognises instead of claiming "anywhere".
+
+    A token that is real, unexpired and correctly signed — but minted for a
+    DIFFERENT tenant — must come back as the generic refusal. Telling this
+    caller the token is merely issued elsewhere is the one carve-out in the
+    owner's 2026-08-10 ruling, and it is what #508 put back on the wire.
+
+    MUTATION (run 2026-09-04): bind the validator's tuple in `_authz_write`
+    and interpolate `res[1]` -> red, on the conversations row, with
+    'Token tenant mismatch' in the body.
+    """
+    from r6.command_center import access
+    from r6.stepup import generate_step_up_token
+    assert not access.is_public(_PRIVATE_TENANT), (
+        '%s is in PUBLIC_TENANTS, so generate-link never reaches the step-up '
+        'branch and this row measures nothing' % _PRIVATE_TENANT)
+    other = generate_step_up_token('a-different-tenant-entirely')
+
+    response = client.post(path,
+                           json={'tenant_id': _PRIVATE_TENANT, **payload},
+                           headers={'X-Step-Up-Token': other})
+
+    assert response.status_code == 401, (
+        'the refusal this row measures did not happen, so the assertions '
+        'below prove nothing: %s %s'
+        % (response.status_code, response.get_data(as_text=True)[:200]))
+    body = response.get_data(as_text=True)
+    assert 'mismatch' not in body.lower(), (
+        'the raw validator reason reached the caller: ' + body[:200])
+    assert _DENIED_REJECTED in body, (
+        'the refusal should carry the classified sentence; a different '
+        'refusal means this row stopped measuring the step-up gate: '
+        + body[:200])
