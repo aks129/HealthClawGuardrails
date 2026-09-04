@@ -273,6 +273,19 @@
           // may have run. Resolve into a shape the renderer can branch on.
           return r.json()
             .then(function (b) {
+              // A body that PARSES but is not an object is not an answer
+              // either, and it is worse than one that does not parse: the
+              // renderer below reads `.confirmed` and `.next_step` off it,
+              // and on `null` — valid JSON — that THROWS. Nothing catches
+              // after the renderer, deliberately, so the screen never moves
+              // and Approve stays armed: the silent failure this branch
+              // exists to remove, one body shape over. Verified in a
+              // browser at 390x844 — a 502 carrying the body `null` left
+              // the page still reading "Ready to generate" with Approve
+              // enabled, which is an invitation to tap it again.
+              if (b === null || typeof b !== 'object' || Array.isArray(b)) {
+                return { r: r, b: {}, reached: true, readable: false };
+              }
               return { r: r, b: b, reached: true, readable: true }; })
             .catch(function () {
               return { r: r, b: {}, reached: true, readable: false }; });
@@ -281,12 +294,15 @@
           // Nothing was reached, so nothing about the request is known here
           // — including whether it arrived at all.
           //
-          // RULED: leave Approve ENABLED, alone among these branches. A
-          // dropped connection most often means the request never left the
-          // device, and a disabled button with no way forward strands a
-          // patient mid-approval. Name the uncertainty, point at the check,
-          // and let them act on it. The option ruled out is the silent
-          // failure this branch used to be.
+          // RULED: leave Approve ENABLED. A dropped connection most often
+          // means the request never left the device, and a disabled button
+          // with no way forward strands a patient mid-approval. Name the
+          // uncertainty, point at the check, and let them act on it. The
+          // option ruled out is the silent failure this branch used to be.
+          //
+          // It is not alone in that any more — the relay's own 503s below
+          // stay armed too, for the same reason. It was, when this was
+          // written, and the sentence saying so outlived the fact.
           if (!res.reached) {
             btn.disabled = false;
             gateMsg.className = 'alert alert-warning';
@@ -402,6 +418,32 @@
               'We could not tell what happened to your approval, so we ' +
               'cannot say whether it went through. We have not sent it ' +
               'again. Reload this page to see where this request stands.';
+            return;
+          }
+
+          // A 503 the relay wrote is a STALL, not a decision about this
+          // request. All three of its 503 sites answer `review_unavailable`
+          // — the ownership pre-check could not be run, the review POST was
+          // lost in transport, or a gateway answered for an engine that said
+          // nothing — and each carries an honest sentence: we could not tell,
+          // we could not check. The failure style around it was not honest.
+          // Red states a refusal, and it was paired with an armed Approve:
+          // the style told the patient to stop while the control told them to
+          // continue, and on these paths continuing is the recovery (nothing
+          // ran, and if the POST did land the review route now answers 409).
+          // Ruled by QA on the finished stack; found in a browser, where all
+          // three painted `alert-danger` with Approve enabled.
+          //
+          // PRESENTATION ONLY. The sentence is still the server's, the
+          // button is left where these branches already left it — enabled,
+          // explicitly, so the next tidy-up cannot quietly disable it — and
+          // nothing polls, because a 503 has established nothing to poll for.
+          if (res.r.status === 503 && res.b.error === 'review_unavailable') {
+            btn.disabled = false;            // the recovery, not a hazard
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'We could not tell whether your review was saved. Reload ' +
+              'this page to see where this request stands.';
             return;
           }
 
