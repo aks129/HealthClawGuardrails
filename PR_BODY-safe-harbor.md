@@ -218,3 +218,27 @@ identifiers only ever appear as `resource.identifier` list entries. It does
 not depend on English-language system-name keywords (the exact class of bug
 being removed from the patient-controlled path) and needs no future
 maintenance as new identifier systems appear in upstream feeds.
+
+## Was truncated identifier output already committed to the repo?
+
+Checked, not assumed. Grepped every tracked file (not just code) for the old
+`***XXXX` shape. Four hits, all synthetic:
+
+- `docs/evidence/2026-08-16-set1-guardrail-core.md` and
+  `docs/evidence/2026-08-16-set2-connectors.md` — dated run-log transcripts,
+  each explicitly labeled synthetic in its own text (`urn:set2:evidence` as
+  the identifier system on one; "returned record (whole body, synthetic)" on
+  the other). Left untouched as history and annotated in place (this PR) with
+  a dated note that redaction behaviour changed 2026-09-04 — a reader six
+  months out should not mistake `***6789` for current behaviour.
+- `examples/aidbox-healthclaw-guardrails/README.md` — a living usage example
+  on synthetic patient `pt-demo`, not a dated artifact. Fixed in this PR (it
+  would otherwise have silently contradicted the code the moment this merged).
+- `skills/phi-redaction/SKILL.md` — prose description, already corrected
+  above.
+
+**No real credential or patient data was ever committed to this repository.**
+That is a checked claim (the grep above), not an inference from the absence
+of alarm.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

@@ -371,6 +371,11 @@ supplied, not a disclosure.
 **Executed** in-process, same caveat as §3. Synthetic values seeded by this run;
 no real record was involved.
 
+> Redaction behaviour changed on 2026-09-04 (#615): identifier values are now
+> removed, not truncated to their last four characters. The transcript below
+> shows the earlier shape and is left as-is — a dated record of what was true
+> that day, not current behaviour.
+
 ```
 === 5. Redaction, positive assertion FIRST ===
     PASS received Patient/baf75ac4-7282-47d5-abfb-9384f133bf75 (not an OperationOutcome)
