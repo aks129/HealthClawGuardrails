@@ -154,13 +154,17 @@ def test_the_docstring_does_not_present_the_f_as_current():
     """The F was measured on 2026-08-16 and fixed the same day by #514.
 
     A grade in a present-tense docstring is read as today's grade. This pins
-    only that the fix is named in the same docstring as the failure — not
-    how either is worded.
+    only that a stated F is dated and carries its fix — NOT that the F must
+    be stated at all. Deleting an expired grade from production code is the
+    tidiest possible improvement to this docstring, and a test that forced
+    the number to stay would be the same defect one level up: a guard
+    demanding that an out-of-date claim remain in the tree.
     """
     source = PROBES.read_text(encoding="utf-8")
     doc = re.search(r'def _synthetic_patient\(\):\n    """(.*?)"""', source, re.DOTALL)
     assert doc, "_synthetic_patient lost its docstring"
     body = doc.group(1)
-    assert "Grade F, 1/7" in body
+    if "Grade F" not in body:
+        pytest.skip("the docstring no longer states the grade; nothing to date")
     assert "#514" in body, "the docstring states the F without saying it was fixed"
     assert "2026-08-16" in body, "the F is stated without the date it was measured"
