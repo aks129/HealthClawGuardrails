@@ -228,7 +228,7 @@ refused by the guardrail with a corrective `OperationOutcome`) is documented in
 `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` step 4.
 **I did not execute it this run**, so it is cited, not asserted as measured.
 
-> **Citation corrected 2026-09-04 (#604).** This line elided the middle of
+> **Citation corrected 2026-09-04 (#605).** This line elided the middle of
 > the path to an ellipsis, which no reader could follow and no check could
 > resolve; the full path is above. The claim behind it was checked at the same
 > time and **holds** — the comment at step 4 of that script describes the
@@ -484,7 +484,7 @@ Stated plainly, because scope stated honestly beats coverage implied.
    compose project up, and re-run §1 (`$conformance` live), §3, §4, §5 against
    `localhost:5099` with
    `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh`.
-   (Path corrected 2026-09-04 (#604): this read `scripts/walkthrough.sh`,
+   (Path corrected 2026-09-04 (#605): this read `scripts/walkthrough.sh`,
    which does not exist at the repository root. The script is real; the
    citation was relative to the example directory without saying so.)
 2. Answer §2 for proxy mode: for each property the live endpoint reports PASSED,

@@ -79,7 +79,7 @@ which was never true of either set.
 
 **3,153** tests pass, 13 skip, 1 xfails.
 
-> **The component table disagrees with this block (#604, 2026-09-04).** The
+> **The component table disagrees with this block (#605, 2026-09-04).** The
 > engine is 29,508 LOC here and **29,446 LOC** in the component table near the
 > top of this document — one document, one metric, two numbers, and no command
 > cited for either. Measured at `89b42fb` with

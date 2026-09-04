@@ -505,7 +505,7 @@ that exists or a risk that is live.
 
 **Delete now** (code documenting promises nothing keeps):
 
-> **Status checked 2026-09-04 (#604).** Three of the four landed in `a66b33f`
+> **Status checked 2026-09-04 (#605).** Three of the four landed in `a66b33f`
 > (#471): `r6/schema_sync.py`, `careagents/conversation_locks.py` and the two
 > `careagents/app.py` constants are all gone, so those paths no longer
 > resolve. **`scripts/export_healthex_legacy.py` is still in the tree** — that

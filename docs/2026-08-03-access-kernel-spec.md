@@ -11,7 +11,7 @@ two design objections that blocked the kernel as originally specified.
 
 Every file:line below was verified against `origin/main` at `516cf5b`.
 
-> **Anchors re-checked 2026-09-04 (#604).** They have drifted. Three
+> **Anchors re-checked 2026-09-04 (#605).** They have drifted. Three
 > citations into `r6/read_auth.py` — two at lines 88-93 and one at 262 —
 > pointed past the end of a file that is now 86 lines: `a58e2df` (#431) moved
 > that code out to break the auth-stack import cycles, and `_PUBLIC_REASONS`
