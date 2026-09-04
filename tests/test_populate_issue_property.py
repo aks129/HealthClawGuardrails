@@ -42,10 +42,12 @@ questionnaire's own structure keeps this test independent of how populate.py
 decides.
 """
 
+import json
 from collections import Counter
 
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
+from r6.sdc.routes import _issues_outcome
 
 INITIAL_EXPR_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
@@ -172,46 +174,7 @@ def _expression_questionnaire(expressions):
 # The property, and the two halves it is built from
 # ---------------------------------------------------------------------------
 
-#: The resource types list-group population actually implements. This is a
-#: LITERAL, deliberately, not an import of r6/sdc/populate.py's
-#: `_LIST_RESOURCE_CONFIG` — the repo's two-file convention (cf.
-#: `_UNREDACTED_EXITS` and tests/test_unredacted_exits.py). Adding a fourth
-#: type to the engine goes red here until someone updates this set, which is
-#: the point of writing it twice.
-#:
-#: It is here because "a list-group leaf with a `definition`" turned out to
-#: mean two different things. The engine reads it as "a leaf of a group whose
-#: leaves name a type in that table" — `_list_group_resource_type` returns
-#: None for anything else, the group falls through to ordinary-group
-#: recursion, and its leaves are then not attempted at all. The first version
-#: of this helper read it as "any `definition` leaf under any repeating
-#: group", which is the CTO addendum's literal wording. The two disagree on
-#: exactly one shape, pinned below by
-#: test_a_repeating_group_of_an_unsupported_type_is_silent, and no fixture
-#: here exercised it, so the disagreement was invisible. QA review of #576.
-LIST_POPULATED_TYPES = {"MedicationRequest", "AllergyIntolerance", "Condition"}
-
-
-def _list_group_type(item):
-    """The resource type this repeating group's leaves populate from, or None.
-
-    Mirrors r6/sdc/populate.py:_list_group_resource_type — the FIRST child
-    definition naming a supported type wins, and a group naming none is not a
-    list group at all.
-    """
-    if not item.get("repeats"):
-        return None
-    for child in item.get("item", []):
-        definition = child.get("definition") or ""
-        if "#" not in definition:
-            continue
-        rtype = definition.split("#", 1)[1].split(".", 1)[0]
-        if rtype in LIST_POPULATED_TYPES:
-            return rtype
-    return None
-
-
-def _attempted_link_ids(questionnaire):
+def _attempted_link_ids(questionnaire, in_repeating_group=False):
     """linkIds where the questionnaire asks populate to resolve something.
 
     Read from the Questionnaire, not from populate.py, so this test still
@@ -220,27 +183,34 @@ def _attempted_link_ids(questionnaire):
 
       - an initialExpression (FHIRPath against the %patient projection),
       - an `item.code` (Observation matching),
-      - a `definition` on a leaf of a repeating group that names one of
-        LIST_POPULATED_TYPES (list-resource population).
+      - a `definition` on a leaf ANYWHERE under a `repeats: true` group.
 
     `definition` alone is deliberately not enough: every demographics leaf on
     the intake form carries one for `$extract`'s benefit and populates by
-    expression. A definition-bearing leaf outside a repeating group is not an
-    attempted population — and neither, today, is one inside a repeating
-    group naming a type the engine does not implement. See
-    LIST_POPULATED_TYPES for why that second clause is stated out loud.
+    expression, and a definition-bearing leaf outside a repeating group is
+    not an attempted population.
+
+    THE THIRD CLAUSE NAMES NO RESOURCE TYPE, and that is finding 1 of the QA
+    review of #576 fixed at its root. This helper used to carry
+    `LIST_POPULATED_TYPES`, a hand-copied literal of
+    r6/sdc/populate.py's `_LIST_RESOURCE_CONFIG` keys, because the engine
+    attempted a repeating group only when its leaves named MedicationRequest
+    / AllergyIntolerance / Condition and went silent on every other type.
+    Two files restating one type table is a divergence waiting to happen —
+    and it had already happened, in the other direction, which is how a
+    shape with unanswered leaves and zero issues passed this file. The
+    engine's predicate is now about questionnaire structure only, so there
+    is no type table left to mirror: a fourth resource type changes which
+    leaves ANSWER, never which leaves report.
     """
     found = set()
     for item in questionnaire.get("item", []):
         if item.get("type") == "group":
-            if _list_group_type(item):
-                for child in item.get("item", []):
-                    if child.get("definition"):
-                        found.add(child["linkId"])
-            else:
-                found |= _attempted_link_ids(item)
+            found |= _attempted_link_ids(
+                item, in_repeating_group or bool(item.get("repeats")))
             continue
-        if _has_initial_expression(item) or item.get("code"):
+        if (_has_initial_expression(item) or item.get("code")
+                or (in_repeating_group and item.get("definition"))):
             found.add(item["linkId"])
     return found
 
@@ -263,13 +233,76 @@ def _leaf_occurrences(items):
             yield item
 
 
+def _response_items(items):
+    """Every item in the response, groups included, one per occurrence."""
+    for item in items:
+        yield item
+        if "item" in item:
+            yield from _response_items(item["item"])
+
+
+def _questionnaire_leaf_link_ids(item):
+    """Every leaf linkId under a questionnaire item, at any depth.
+
+    A group with no children counts as a leaf, which is how
+    `_leaf_occurrences` reads the response side — the two walks have to
+    agree on the word or the comparison below means nothing.
+    """
+    children = item.get("item") or []
+    if not children:
+        return [item.get("linkId")]
+    out = []
+    for child in children:
+        out.extend(_questionnaire_leaf_link_ids(child))
+    return out
+
+
+def _repeating_group_leaves(questionnaire):
+    """linkId -> the leaves every emitted repeat of that group must carry."""
+    out = {}
+
+    def walk(item):
+        for child in item.get("item", []):
+            if child.get("type") != "group":
+                continue
+            if child.get("repeats") and child.get("item"):
+                out[child["linkId"]] = sorted(
+                    _questionnaire_leaf_link_ids(child))
+            walk(child)
+
+    walk(questionnaire)
+    return out
+
+
 def _assert_zero_bits(questionnaire, qr, issues, label):
     """THE PROPERTY. Per linkId: unanswered attempted occurrences == issues.
 
     MUTATION: silence any attempted leaf (re-add a classifier, of any shape)
     -> the expected count exceeds the actual and this goes red naming the
     linkId. Emit for an unattempted leaf -> the second assertion goes red.
+
+    THE STRUCTURAL MIRROR FIRST, because without it the biconditional can be
+    satisfied by DROPPING a leaf. A leaf that is absent from the response is
+    neither answered nor unanswered: it contributes nothing to either side
+    of the count, so the property holds vacuously and green means nothing.
+    That is not hypothetical — `_populate_list_group` used to lose every
+    leaf inside a nested group and this file passed (QA addendum to the
+    review of #576). So every emitted repeat of a repeating group must carry
+    exactly the leaves the questionnaire puts in it, at every depth.
     """
+    for wanted_group, wanted_leaves in _repeating_group_leaves(
+            questionnaire).items():
+        for row in _response_items(qr.get("item", [])):
+            if row.get("linkId") != wanted_group:
+                continue
+            emitted = sorted(leaf.get("linkId")
+                             for leaf in _leaf_occurrences([row]))
+            assert emitted == wanted_leaves, (
+                f"[{label}] a repeat of {wanted_group} does not mirror the "
+                f"questionnaire: missing="
+                f"{sorted(set(wanted_leaves) - set(emitted))}, "
+                f"unexpected={sorted(set(emitted) - set(wanted_leaves))}")
+
     attempted = _attempted_link_ids(questionnaire)
     expected = Counter()
     unattempted_answered = []
@@ -297,9 +330,14 @@ def _assert_zero_bits(questionnaire, qr, issues, label):
         f"[{label}] leaves with no population mechanism were answered: "
         f"{sorted(unattempted_answered)}")
 
-    # Every issue says the same thing, and it is the neutral sentence.
+    # Every issue carries ONLY the linkId. The reason is the same constant
+    # for all of them, said once per response by
+    # r6/sdc/routes.py:_issues_outcome — see
+    # test_the_explanation_is_said_once_however_many_leaves_are_unanswered.
+    # A copy of it per issue is what made a 29.3KB request come back
+    # 3519.6KB.
     for issue in issues:
-        assert issue["detail"] == NOT_POPULATED, issue
+        assert set(issue) == {"linkId"}, issue
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +449,12 @@ def test_the_issue_text_is_true_whether_the_value_was_withheld_or_absent():
     held back when they simply have no email address — so the text states
     what did not happen (no value resolved) and hands over the allowlist for
     the caller to compare against their own expression.
+
+    Since the explanation became one constant said once per response, the
+    two causes are indistinguishable BY CONSTRUCTION rather than by matching
+    strings: the only thing an issue carries is the linkId the caller wrote.
+    So the assertion is that the two issue payloads differ in nothing but
+    that linkId, and the words are checked once, on the constant.
     """
     withheld_q = _expression_questionnaire({"mrn": WITHHELD_EXPRESSIONS["mrn"]})
     absent_q = _expression_questionnaire(ABSENT_BUT_ALLOWLISTED)
@@ -420,31 +464,36 @@ def test_the_issue_text_is_true_whether_the_value_was_withheld_or_absent():
     _qr, absent_issues = populate_questionnaire(
         absent_q, SPARSE_PATIENT, [SPARSE_PATIENT])
 
-    assert len(withheld_issues) == len(absent_issues) == 1
-    assert withheld_issues[0]["detail"] == absent_issues[0]["detail"]
+    assert withheld_issues == [{"linkId": "mrn"}]
+    assert absent_issues == [{"linkId": "email"}]
 
-    detail = withheld_issues[0]["detail"]
     # The allowlist is public and is the actionable half.
     for element in ("name", "birthDate", "gender", "telecom", "address"):
-        assert element in detail, element
+        assert element in NOT_POPULATED, element
     # Nothing that reads as a claim about this patient or this request.
     for forbidden in ("withheld", "refused", "denied", "not permitted",
                       "does not have", "no such"):
-        assert forbidden not in detail.lower(), forbidden
+        assert forbidden not in NOT_POPULATED.lower(), forbidden
 
 
 def test_the_expression_text_is_never_echoed_back():
     """A `where()` clause is a place a questionnaire author parks a literal;
     the OperationOutcome leaves the boundary. Pre-existing property of the
-    fixed sentence, pinned here because the retext could have lost it."""
+    fixed sentence, pinned here because the retext could have lost it.
+
+    Asserted on the RENDERED OperationOutcome, not on the engine's issue
+    list, because that is what crosses the boundary — and because the
+    rendering is now the only place any text is chosen.
+    """
     expression = "%patient.identifier.value.where($this='a-planted-literal')"
     q = _expression_questionnaire({"planted": expression})
 
     _qr, issues = populate_questionnaire(q, FULL_PATIENT, [FULL_PATIENT])
 
-    assert len(issues) == 1
-    assert "planted" not in issues[0]["detail"]
-    assert expression not in issues[0]["detail"]
+    assert issues == [{"linkId": "planted"}]
+    rendered = json.dumps(_issues_outcome(issues))
+    assert "a-planted-literal" not in rendered
+    assert expression not in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -514,34 +563,29 @@ def _unsupported_list_questionnaire():
     }
 
 
-def test_a_repeating_group_of_an_unsupported_type_is_silent():
-    """THE ONE PLACE THE RULING AND THE ENGINE READ THE SAME WORDS DIFFERENTLY.
+def test_a_repeating_group_of_an_unsupported_type_reports_every_leaf():
+    """THE SHAPE THAT USED TO REPORT NOTHING AT ALL (QA review of #576).
 
-    The CTO addendum states the exclusion predicate as: the issue attaches
-    where population was attempted — "an `initialExpression`, an `item.code`
-    Observation match, or a list-group leaf with a `definition`". A
-    `definition` leaf inside a `repeats: true` group satisfies that wording
-    whatever type it names.
+    A `definition` leaf inside a `repeats: true` group is an attempted
+    population whatever type it names. The engine used to read it narrower:
+    `_list_group_resource_type` recognises only MedicationRequest /
+    AllergyIntolerance / Condition, so a group naming anything else was not a
+    list group, fell through to ordinary-group recursion, and its leaves
+    reached `_resolve_answer` with no expression and no code — the "NOTHING
+    WAS ATTEMPTED" branch. A Questionnaire asking for immunizations came back
+    with two unanswered leaves, zero issues, and no `issues` parameter on the
+    response at all. That is precisely the silence the ruling set out to
+    remove: a caller reads it and concludes the patient has no immunizations.
 
-    The engine reads it narrower. `_list_group_resource_type` only recognises
-    a group whose leaves name MedicationRequest / AllergyIntolerance /
-    Condition; anything else is not a list group, falls through to
-    ordinary-group recursion, and its leaves reach `_resolve_answer` with no
-    expression and no code — the "NOTHING WAS ATTEMPTED" branch. So a
-    Questionnaire asking for immunizations gets unanswered leaves and NO
-    issue naming them: silence, which is the state the ruling set out to
-    remove ("a caller reads silence and concludes the patient has no such
-    value").
+    The predicate is now questionnaire structure alone, so this holds for
+    ANY type the engine has no resolver for — which is why this file no
+    longer keeps a copy of the engine's type table. What a fourth supported
+    type would change is the answers on the next assertion, never these
+    issues.
 
-    This test pins WHAT THE ENGINE DOES TODAY, not what it should do. It is
-    deliberately a plain assertion rather than a strict xfail — CLAUDE.md
-    records a strict-xfail row going red on the day someone fixed what it
-    pinned. If the reading is widened so these leaves report, this test is
-    one of the two places to update; LIST_POPULATED_TYPES is the other.
-
-    Not a leak: the silence is a function of the QUESTIONNAIRE's structure
-    only — same shape, same result, on every patient — which is what the loop
-    over PATIENT_MATRIX states.
+    Not a leak, before and after: the outcome is a function of the
+    QUESTIONNAIRE's structure only — same shape, same result, on every
+    patient — which is what the loop over PATIENT_MATRIX states.
     """
     q = _unsupported_list_questionnaire()
 
@@ -553,28 +597,309 @@ def test_a_repeating_group_of_an_unsupported_type_is_silent():
             f"[{label}] {leaf_ids}")
         assert not [leaf for leaf in _leaf_occurrences(qr["item"])
                     if "answer" in leaf], label
-        # The divergence, stated as the number it is: two unanswered
-        # definition leaves, zero issues.
-        assert issues == [], (
-            f"[{label}] the engine now reports unsupported-type list leaves — "
-            f"good, but LIST_POPULATED_TYPES and this test have to be updated "
-            f"together: {issues}")
+        # Two unanswered definition leaves, two issues, each naming itself.
+        assert [i["linkId"] for i in issues] == [
+            "immunizations.vaccine", "immunizations.date"], (
+            f"[{label}] an unanswered leaf came back silent: {issues}")
 
 
 def test_the_property_holds_on_the_unsupported_list_shape_too():
     """The biconditional, evaluated on the shape above.
 
-    It passes because `_attempted_link_ids` now reads "attempted" the way the
-    engine does. Before the QA review of #576 the helper called those two
-    leaves attempted while the engine did not, so this assertion would have
-    failed — and no fixture in this file exercised the shape, so the helper's
-    "implementation-independent" claim went untested exactly where it was
-    wrong.
+    Before the fix, `_attempted_link_ids` and the engine disagreed on
+    exactly this shape — the helper carried the ruling's wording, the engine
+    carried a resource-type table — and no fixture here exercised it, so the
+    docstring's "implementation-independent" claim went untested exactly
+    where it was wrong. Both sides now read "attempted" the same way, and
+    neither reads it from a list of types.
     """
     q = _unsupported_list_questionnaire()
     for label, patient in PATIENT_MATRIX.items():
         qr, issues = populate_questionnaire(q, patient, [patient])
         _assert_zero_bits(q, qr, issues, f"unsupported-list / {label}")
+
+
+# --- a nested group inside a repeating list group ---------------------------
+
+NESTED_ALLERGEN_DEF = ("http://hl7.org/fhir/StructureDefinition/"
+                       "AllergyIntolerance#AllergyIntolerance.code.text")
+NESTED_REACTION_DEF = (
+    "http://hl7.org/fhir/StructureDefinition/AllergyIntolerance"
+    "#AllergyIntolerance.reaction.manifestation.text")
+
+
+def _nested_list_questionnaire():
+    """A supported list group whose second leaf sits one group deeper."""
+    return {
+        "resourceType": "Questionnaire", "id": "nested-list",
+        "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "a.allergen", "type": "string",
+                 "definition": NESTED_ALLERGEN_DEF},
+                {"linkId": "a.reactions", "type": "group", "item": [
+                    {"linkId": "a.reactions.text", "type": "string",
+                     "definition": NESTED_REACTION_DEF}]},
+            ],
+        }],
+    }
+
+
+def _allergy(resource_id, code=None, manifestation=None):
+    resource = {"resourceType": "AllergyIntolerance", "id": resource_id,
+                "patient": {"reference": "Patient/p1"}}
+    if code:
+        resource["code"] = {"text": code}
+    if manifestation:
+        resource["reaction"] = [{"manifestation": [{"text": manifestation}]}]
+    return resource
+
+
+def test_a_nested_group_inside_a_repeating_list_group_keeps_its_leaves():
+    """THE SECOND SHAPE THAT REPORTED NOTHING (QA addendum to the review).
+
+    `_populate_list_group` used to iterate a row's DIRECT children and test
+    `child.get("definition")`. A child that is itself a group has none, so it
+    was emitted as a bare item and its own leaves were never visited: a
+    stored `reaction.manifestation.text` and the leaf asking for it were
+    both absent from the response — no answer, no issue, no item.
+
+    Worse than silence, it was invisible to the property: a leaf that is not
+    in the response is neither answered nor unanswered, so the biconditional
+    held over a hole. `_assert_zero_bits`'s structural mirror is what makes
+    that case red now; this test states the same thing as the values a
+    caller actually gets.
+    """
+    q = _nested_list_questionnaire()
+    content = [_allergy("a1", code="Penicillin", manifestation="Hives")]
+
+    qr, issues = populate_questionnaire(
+        q, {"resourceType": "Patient", "id": "p1"}, content)
+
+    row = qr["item"][0]
+    assert row["linkId"] == "allergies.item"
+    nested = next(c for c in row["item"] if c["linkId"] == "a.reactions")
+    assert [leaf["linkId"] for leaf in _leaf_occurrences([row])] == [
+        "a.allergen", "a.reactions.text"]
+    assert nested["item"][0]["answer"] == [{"valueString": "Hives"}]
+    assert issues == []
+
+
+def test_a_nested_list_leaf_that_resolves_nothing_names_itself():
+    """The other half: the nested leaf reports like any other attempted one.
+
+    One labelled allergy with no reaction, one with neither. Row count still
+    equals record count, and every unanswered definition leaf — at whatever
+    depth — is in the issue list once per occurrence.
+    """
+    q = _nested_list_questionnaire()
+    content = [_allergy("a1", code="Penicillin"), _allergy("a2")]
+
+    qr, issues = populate_questionnaire(
+        q, {"resourceType": "Patient", "id": "p1"}, content)
+
+    assert len(qr["item"]) == 2, "row count must equal record count"
+    assert Counter(i["linkId"] for i in issues) == Counter({
+        "a.reactions.text": 2, "a.allergen": 1})
+
+
+def test_the_property_holds_on_the_nested_list_shape_too():
+    """The biconditional and the structural mirror, over record shapes.
+
+    MUTATION: revert `_populate_list_children` to iterating direct children
+    -> `a.reactions.text` disappears from every row and the mirror goes red
+    on all four shapes, including the empty one.
+    """
+    q = _nested_list_questionnaire()
+    shapes = {
+        "nothing stored": [],
+        "labelled, with a reaction": [
+            _allergy("a1", code="Penicillin", manifestation="Hives")],
+        "labelled, no reaction": [_allergy("a1", code="Penicillin")],
+        "two unlabelled": [_allergy("a1"), _allergy("a2")],
+    }
+    patient = {"resourceType": "Patient", "id": "p1"}
+    for label, content in shapes.items():
+        qr, issues = populate_questionnaire(q, patient, content)
+        _assert_zero_bits(q, qr, issues, f"nested-list / {label}")
+
+
+# --- the OTHER two mechanisms, inside a supported list group -----------------
+
+def _list_group_with(extra_leaf):
+    """A supported (AllergyIntolerance) repeating group carrying one ordinary
+    definition leaf plus whatever `extra_leaf` is."""
+    return {
+        "resourceType": "Questionnaire", "id": "mechanism-in-list",
+        "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "a.allergen", "type": "string",
+                 "definition": NESTED_ALLERGEN_DEF},
+                extra_leaf,
+            ],
+        }],
+    }
+
+
+#: The two population mechanisms that are NOT `definition`, placed where the
+#: engine takes a different code path: inside a group `_list_group_resource_type`
+#: recognises. Everything else in this file puts them outside one.
+_MECHANISM_LEAVES = {
+    "initialExpression, allowlisted": {
+        "linkId": "a.mech", "type": "string",
+        "extension": [{"url": INITIAL_EXPR_URL, "valueExpression": {
+            "language": "text/fhirpath", "expression": "%patient.gender"}}]},
+    "initialExpression, withheld": {
+        "linkId": "a.mech", "type": "string",
+        "extension": [{"url": INITIAL_EXPR_URL, "valueExpression": {
+            "language": "text/fhirpath",
+            "expression": "%patient.identifier.value"}}]},
+    "item.code": {
+        "linkId": "a.mech", "type": "string",
+        "code": [{"system": LOINC, "code": "29463-7"}]},
+}
+
+
+def test_an_expression_or_code_leaf_inside_a_supported_list_group_reports():
+    """THE THIRD SHAPE OF FINDING 1, in the branch the fix did not reach.
+
+    `_populate_list_children` resolves a row's leaves by `definition` and by
+    nothing else, so a leaf carrying an `initialExpression` or an `item.code`
+    inside a MedicationRequest / AllergyIntolerance / Condition group is
+    never evaluated AND never reported: an unanswered leaf, zero issues, and
+    over HTTP no `issues` parameter on the response at all. That is the exact
+    state the ruling set out to remove and that finding 1 closed for the two
+    shapes it looked at.
+
+    It is not a leak — the silence is a function of the QUESTIONNAIRE's
+    structure, identical on every patient and every record — and the intake
+    form has no such leaf, so there is no live impact. What it is, is the
+    divergence this change claims to have removed. The module docstring of
+    r6/sdc/populate.py and `_attempted_link_ids` above both say attempted
+    means "an initialExpression, an `item.code`, or a `definition` on a leaf
+    anywhere under a repeating group"; `_populate_list_children` implements
+    only the third clause. Two files restating one rule, agreeing on the
+    prose and disagreeing on the code, with no fixture crossing the
+    difference — which is how the first two shapes shipped.
+
+    EITHER RESOLUTION CLOSES THIS, and both places must move together:
+    resolve expression and code leaves inside a list row (the rule as
+    written), or narrow the rule and this file's `_attempted_link_ids` to
+    say `definition` alone applies inside a list group — and rewrite the
+    module docstring, since the two clauses would then be conditional on
+    where the leaf sits.
+    """
+    for label, leaf in _MECHANISM_LEAVES.items():
+        q = _list_group_with(leaf)
+        qr, issues = populate_questionnaire(
+            q, FULL_PATIENT, [_allergy("a1", code="Penicillin")])
+
+        unanswered = Counter(x["linkId"] for x in _leaf_occurrences(qr["item"])
+                             if "answer" not in x)
+        named = Counter(i["linkId"] for i in issues)
+        # Stated as "no leaf is silently empty" rather than as one expected
+        # list, because an allowlisted expression legitimately ANSWERS once
+        # it is evaluated: that row must then report nothing, and this reads
+        # correctly either way.
+        assert unanswered == named, (
+            f"[{label}] a leaf inside a supported list group is unanswered "
+            f"and unreported: unanswered={dict(unanswered)}, "
+            f"issues={dict(named)}. A caller reads that silence as 'this "
+            f"patient has no such value'.")
+
+
+def test_the_property_holds_with_a_mechanism_leaf_inside_a_list_group():
+    """The biconditional over the same shape, across records and patients.
+
+    Held apart from the assertion above so the failure reads as the property
+    rather than as one expected list: `_assert_zero_bits` names the leaf and
+    the direction, and it is the pin the whole file is built on.
+    """
+    for label, leaf in _MECHANISM_LEAVES.items():
+        q = _list_group_with(leaf)
+        shapes = {
+            "nothing stored": [],
+            "one labelled": [_allergy("a1", code="Penicillin")],
+            "two unlabelled": [_allergy("a1"), _allergy("a2")],
+        }
+        for plabel, patient in PATIENT_MATRIX.items():
+            for slabel, content in shapes.items():
+                qr, issues = populate_questionnaire(q, patient, content)
+                _assert_zero_bits(
+                    q, qr, issues, f"{label} / {plabel} / {slabel}")
+
+
+# --- the explanation, said once ---------------------------------------------
+
+def test_the_explanation_is_said_once_however_many_leaves_are_unanswered():
+    """FINDING 2. The sentence is a constant; the linkId is what varies.
+
+    Emitting the explanation on every leaf — 230 characters then, 285 now —
+    made the response grow with the number of unanswered leaves TIMES a
+    fixed paragraph, measured at 3519.6KB back from a 29.3KB request over
+    HTTP. The ruling was to stop repeating it rather
+    than to cap the list, so the shape is: one `informational` issue
+    carrying the reason, then one `incomplete` issue per unanswered leaf
+    carrying ONLY its linkId.
+
+    MUTATION: put the sentence back into each per-leaf `diagnostics` (or
+    prefix it, or append it) -> the count assertion goes red at 51 rather
+    than 1, and the per-leaf equality goes red naming the leaf. Drop the
+    summary issue -> the count goes red at 0 and the caller loses the only
+    statement of why.
+    """
+    issues = [{"linkId": f"section.item.leaf-{n}"} for n in range(50)]
+
+    outcome = _issues_outcome(issues)
+    rendered = json.dumps(outcome)
+
+    summary = [i for i in outcome["issue"] if i["code"] == "informational"]
+    per_leaf = [i for i in outcome["issue"] if i["code"] == "incomplete"]
+
+    assert len(summary) == 1
+    assert summary[0]["diagnostics"] == NOT_POPULATED
+    assert rendered.count("%patient projection") == 1, (
+        "the explanation is repeated: it is the same constant for every "
+        "leaf, and repeating it is what amplified the response")
+
+    # Each per-leaf issue carries the linkId and nothing else, so it is
+    # greppable on its own — which is what a caller branches on.
+    assert len(per_leaf) == 50
+    assert [i["diagnostics"] for i in per_leaf] == [
+        i["linkId"] for i in issues]
+    assert {i["severity"] for i in outcome["issue"]} == {"information"}
+
+
+def test_the_response_grows_with_the_leaf_count_not_with_a_paragraph():
+    """The amplification, stated as the shape of the growth rather than a cap.
+
+    Ten times the leaves must cost about ten times the bytes plus a
+    constant. With the sentence on every issue the per-leaf cost carried a
+    fixed paragraph, so this ratio was pinned to the paragraph instead of
+    to the data.
+
+    MUTATION: restore the per-leaf sentence -> the marginal cost per leaf
+    rises past the bound and this goes red.
+    """
+    def rendered_bytes(n):
+        return len(json.dumps(_issues_outcome(
+            [{"linkId": f"section.item.leaf-{i}"} for i in range(n)])))
+
+    small, large = rendered_bytes(10), rendered_bytes(1000)
+    per_leaf = (large - small) / 990
+
+    # The bound is the explanation itself, which is the honest way to state
+    # it: one more unanswered leaf must cost less than one more copy of the
+    # reason. Today that is ~91 bytes (a 21-character linkId plus the issue's
+    # JSON envelope) against a ~253-character constant. An absolute number
+    # here would be a second thing to keep true.
+    assert per_leaf < len(NOT_POPULATED), (
+        f"{per_leaf:.1f} bytes per unanswered leaf, against a "
+        f"{len(NOT_POPULATED)}-character explanation: the reason is being "
+        f"repeated per leaf again")
 
 
 # --- the item.code Observation path -----------------------------------------
