@@ -198,13 +198,30 @@ def apply_patient_controlled_redaction(resource, patient_id):
     institutional identifiers that could re-identify them to third parties.
 
     Rules (differ from the stricter de-identification preview):
-    - name[], telecom[], address[], photo[] — removed entirely
-    - birthDate — PRESERVED (patient wants their own DOB)
+    - name[], telecom[], address[], photo[] — removed entirely at the top
+      level (a stronger guarantee than the standard profile's redact-to-
+      initial, since this output feeds external sharing: SHL / $share-bundle)
+    - birthDate — PRESERVED at the top level (patient wants their own DOB)
     - Institutional identifiers (MRN, facility patient IDs) — removed
-    - The healthclaw patient_id is injected as the sole canonical identifier
+    - The healthclaw patient_id is injected as the sole canonical top-level
+      identifier
     - Clinical codes (SNOMED, ICD-10, LOINC, CVX, RxNorm) — pass through
     - meta.tag stamped with 'deidentified' + 'patient-controlled'
     - notes/comments — removed
+
+    #617: this function used to stop at the top level. `contained[]`,
+    `subject.display`, `generalPractitioner[].display` and any other nested
+    person-bearing field survived untouched inside a Bundle stamped
+    'ANONYED'. Fixed by running the same recursive walker `apply_redaction`
+    uses over the WHOLE tree first — every `display`/free-text key, every
+    nested name/telecom/address/photo/text/note, at any depth, gets the
+    standard profile's treatment — and then applying this function's own
+    STRONGER top-level-only policy (full removal instead of redaction,
+    verbatim birthDate, the single canonical identifier) on top. This is a
+    policy layered on the one walker, not a second one: nested resources
+    (a contained RelatedPerson, a referenced Practitioner's display) get the
+    standard profile's guarantee; the top-level resource — the one this
+    function exists to protect — gets the stronger one on top of it.
 
     Args:
         resource: FHIR resource dict (not modified in place)
@@ -215,6 +232,16 @@ def apply_patient_controlled_redaction(resource, patient_id):
     """
     import copy
     result = copy.deepcopy(resource)
+    original_birth_date = result.get('birthDate')
+
+    # Base pass: the same walker apply_redaction uses, over the whole tree.
+    # Closes #617 — nothing nested (contained[], subject.display,
+    # generalPractitioner[].display, any reference's .display) survives this
+    # untouched, because the walker does not stop at the top level.
+    _redact_recursive(result)
+
+    # Everything below is this function's OWN, stronger, top-level-only
+    # policy layered on top of the base pass above.
 
     # Remove direct identifiers entirely
     result.pop('name', None)
@@ -225,7 +252,12 @@ def apply_patient_controlled_redaction(resource, patient_id):
     # wholesale (this output feeds SHL / $share-bundle external sharing).
     result.pop('contact', None)
 
-    # birthDate is PRESERVED — patient wants their own DOB in their store
+    # birthDate is PRESERVED verbatim at the top level — patient wants their
+    # own DOB in their store. The base pass above truncated it to a year
+    # like every other date in the tree; restore the original here, only at
+    # the top level, only for this function.
+    if original_birth_date is not None:
+        result['birthDate'] = original_birth_date
 
     # The healthclaw canonical id is the SOLE identifier — built, not
     # filtered. The keyword denylist this replaced ('mrn', 'facility', ...)

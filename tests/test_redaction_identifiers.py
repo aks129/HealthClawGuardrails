@@ -118,3 +118,48 @@ def test_patient_controlled_still_preserves_birthdate_and_codes():
     assert out["birthDate"] == "1984-07-02"
     obs = apply_patient_controlled_redaction(OBSERVATION, "hc-123")
     assert obs["code"]["coding"][0]["code"] == "2339-0"
+
+
+def test_patient_controlled_recurses_into_contained_and_display():
+    """#617: this function used to stop at the top level. A Bundle stamped
+    ANONYED still carried a contained RelatedPerson's name and phone, the
+    patient's own name via subject.display, and a clinician's name via
+    generalPractitioner[].display — three independent escapes, none of them
+    hypothetical (this is the commonest real-feed shape: a subject reference
+    carries both an id and a human-readable display).
+
+    Property asserted on the actual output, at any depth — not on whether a
+    specific top-level field was touched.
+
+    MUTATION: skip the `_redact_recursive(result)` call at the top of
+    apply_patient_controlled_redaction -> red, all five values below survive.
+    """
+    resource = {
+        "resourceType": "Patient",
+        "id": "pt-1",
+        "name": [{"family": "Rivera", "given": ["Marisol"]}],
+        "subject": {"display": "Marisol Rivera"},
+        "generalPractitioner": [{"display": "Dr. Alice Nguyen"}],
+        "contained": [{
+            "resourceType": "RelatedPerson",
+            "name": [{"family": "Rivera", "given": ["Esteban"]}],
+            "telecom": [{"system": "phone", "value": "617-555-0199"}],
+        }],
+    }
+    out = apply_patient_controlled_redaction(resource, "hc-1")
+    blob = json.dumps(out)
+    for leaked in ("Marisol", "Esteban", "617-555-0199", "Alice Nguyen",
+                   "Rivera"):
+        assert leaked not in blob, f"{leaked!r} survived: {out!r}"
+
+    # The base pass is the standard profile, not full removal, on nested
+    # structures — a contained resource still carries a stripped shape
+    # (initials, [Redacted]) rather than vanishing outright. Only the TOP
+    # level gets this function's stronger, verbatim-removal policy.
+    contained_name = out["contained"][0]["name"][0]
+    assert contained_name["family"] == "R." and contained_name["given"] == ["E."]
+    assert out["contained"][0]["telecom"][0]["value"] == "[Redacted]"
+
+    # The top-level policy is unaffected by running the base pass first —
+    # name is still fully absent, not merely initialed, at the top level.
+    assert "name" not in out
