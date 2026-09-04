@@ -110,7 +110,7 @@ def _human():
     return sys.stderr if _human_to_stderr else sys.stdout
 
 # The build check's verdict, kept separately from `results`, because an exit
-# code is one scalar and the two alarms it drives are not. Without this the
+# code is one scalar and the alarms it drives are not. Without this the
 # workflow had to infer "is the build stale?" from a code an unrelated outage
 # also sets, and closed a live stale-build alarm with "passing again" during an
 # outage — the same unverified green #258 exists to eliminate.

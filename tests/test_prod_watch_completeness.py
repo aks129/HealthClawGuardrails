@@ -67,7 +67,14 @@ def _fake_get(grade="A"):
             return _Resp(200, {"entry": [{"resource": {
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
         if url.endswith("/healthz"):
+            # `run_workers`/`run_workers_state` are inert until #219 lands and
+            # prod_watch reads them. They are here so this file's idea of a
+            # HEALTHY deployment does not go stale the moment it does: a check
+            # that fails on the fake turns every exit code asserted below into
+            # 1, and these tests are about the codes.
             return _Resp(200, {"status": "ok", "accounts": True,
+                               "run_workers": True,
+                               "run_workers_state": "ready",
                                "build": "4f2a91cbeef1",
                                "built_at": 1754056800})
         if url.endswith("/auth"):
