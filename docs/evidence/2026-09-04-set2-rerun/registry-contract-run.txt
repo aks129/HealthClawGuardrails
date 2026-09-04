@@ -1,0 +1,41 @@
+# §5 (cases 1-3, case 3 = register entry R1) re-run at HEAD (89b42fb), 2026-09-04.
+$ uv run python scripts/connector-registry-contract.py
+connector-registry-contract.py
+date  2026-09-04T10:18:44Z
+repo  .
+cases [1, 2, 3]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 1 — FHIR_UPSTREAM_URL takes precedence over MEDPLUM_BASE_URL
+  FHIR_UPSTREAM_URL = https://server.fire.ly/R4
+  MEDPLUM_BASE_URL  = https://hapi.fhir.org/baseR4   (must be IGNORED)
+  MEDPLUM_CLIENT_ID / _SECRET = must-not-be-used
+
+  resolved -> mode='upstream' upstream={'fhir_version': '4.0.1', 'kind': 'generic', 'software': 'Firely Server', 'status': 'connected', 'upstream_url': 'https://server.fire.ly/R4'}
+  PASS FHIR_UPSTREAM_URL won; MEDPLUM_BASE_URL was not used
+  PASS kind is 'generic' — the MEDPLUM_* names did not imply the kind
+  PASS the upstream names itself 'Firely Server' in its CapabilityStatement
+
+Case 2 — an unknown kind is refused rather than guessed at
+  FHIR_UPSTREAM_KIND = totally-made-up
+  process exited 1 before binding a port
+  ValueError: FHIR_UPSTREAM_KIND='totally-made-up' is not one of ['aidbox', 'generic', 'hapi', 'medplum']. Refusing to guess: an unknown kind means an unknown aut
+  PASS the app REFUSES TO START on an unknown kind, naming the kind
+  NOTE §5 recorded the app BOOTING and answering 500 per request (register entry R6). This run differs.
+
+Case 3 — MEDPLUM_BASE_URL with no credentials  (register entry R1)
+  MEDPLUM_BASE_URL  = https://medplum.example.invalid/fhir
+  MEDPLUM_CLIENT_ID = set
+  MEDPLUM_CLIENT_SECRET = MISSING
+
+  GET /r6/fhir/health -> HTTP 503
+  status = 'degraded' | mode = 'local' | checks.upstream = 'misconfigured'
+  POST /r6/fhir/Patient -> HTTP 201, id c38f2ba7-c1da-4992-bb33-44f1eefaec9f
+  GET  /r6/fhir/Patient/c38f2ba7-c1da-4992-bb33-44f1eefaec9f -> HTTP 200, _source = None
+    r6_resources Patient rows = 1
+  NOTE the write landed in the proxy's own SQLite, not in a Medplum — unchanged from 2026-08-16, and the correct fallback.
+  PASS R1 CLOSED: health reports HTTP 503, status 'degraded', mode 'local', checks.upstream 'misconfigured' — a named upstream that could not be built is visible to a probe.
+
+Result
+  no assertion failed
+(exit 0)

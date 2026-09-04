@@ -345,6 +345,17 @@ section 6 — but not end to end against a server that requires it.
 
 ## 5. Registry contract, asserted against a booted app
 
+> **2026-09-04 (#602): re-run by someone other than this pack's author, and
+> reproduced.** `registry-contract.sh` and `halfconfig.sh` are still gone;
+> `scripts/connector-registry-contract.py` is one script written from the
+> three transcripts below and committed. Run against `2b7872d` — the tree this
+> pack measured — it prints all three cases as they are written here,
+> including case 3's four lines verbatim. Run against `89b42fb` two of them
+> differ, both because a defect this section found has since been fixed: case
+> 2 now refuses to boot (#518, register entry R6) and case 3 now reports
+> degraded rather than healthy (#513, register entry R1). Transcripts and the
+> comparison: `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`.
+
 Not unit tests. Each case boots the real Flask app with a real environment and
 asks `/r6/fhir/health` what it resolved.
 
@@ -390,6 +401,16 @@ this is where the half-configured behaviour was found.
 
 ## 6. What the proxy actually sends, per kind
 
+> **2026-09-04 (#602): re-run by someone other than this pack's author, and
+> reproduced.** `auth_probe.py` is still gone;
+> `scripts/connector-auth-probe.py` is it, rewritten from the transcript below
+> and committed. Against `2b7872d` it prints exactly what this section prints —
+> `hapi` sends nothing, `generic` sends `Basic`, from identical credentials.
+> Against `89b42fb` both send `Basic`: R5 is closed on the wire by #512. The
+> transcript here does not say which request was sent, so the committed script
+> sends the health check and records that as a reconstruction decision. See
+> `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`.
+
 The `hapi` connector's published summary — the string `supported_connectors()`
 returns to an operator asking what this build supports — reads:
 
@@ -414,6 +435,17 @@ Question: what Authorization header reaches the upstream?
 to set.** Register entry R5 — the highest-severity finding in this pass.
 
 ## 7. Image pins
+
+> **2026-09-04 (#602): the baseline below has now been used, and this section
+> named no script.** Unlike §5 and §6 there was no transcript to rewrite —
+> only "resolved today via the registry HTTP API" — so
+> `scripts/image-pin-digests.sh` was written from this table instead. Result:
+> both `1.10.0` tags resolve to the digests recorded here, so neither was
+> re-pushed; **both unpinned tags have moved** — `healthsamurai/aidboxone:edge`
+> and `postgres:18` (R9, no longer a prediction). The two supporting
+> observations below still hold. Nothing was pulled, so this says the tags
+> moved and nothing about what is inside them. See
+> `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`.
 
 `examples/aidbox-healthclaw-guardrails/docker-compose.yaml` names four images.
 Resolved today via the registry HTTP API (Docker was down, so not via `docker`):
@@ -461,7 +493,15 @@ Ordered by severity. None of these were fixed — no production code was modifie
 in this pass.
 
 **R1 — A half-configured upstream reports `mode: "upstream"` and `status:
-"healthy"` while serving from the local store. No issue yet.**
+"healthy"` while serving from the local store. FIXED by #513; re-run and
+confirmed 2026-09-04 (#602).** Reproduced exactly as written against `2b7872d`,
+and at `89b42fb` the same script reports HTTP 503, `status degraded`,
+`mode local`, `checks.upstream misconfigured`. Only the *reporting* changed:
+the write still lands in the proxy's own SQLite with `_source: None`, which is
+the correct fallback — the defect was never where the data went, it was that
+the health page said everything was fine. The citation below is stale;
+`is_proxy_enabled` now lives in `r6/fhir_proxy.py`, split against
+`upstream_intended()`. The finding as written on 2026-08-16 was:
 With `MEDPLUM_BASE_URL` and `MEDPLUM_CLIENT_ID` set and `MEDPLUM_CLIENT_SECRET`
 missing, `get_proxy()` correctly returns `None` (refusing to make anonymous
 requests at a record system), but `is_proxy_enabled()` at `r6/routes.py:1980`
@@ -526,7 +566,10 @@ imported in that module. Related but not the same: #463 (closed) covered tenant
 pollution by the same harness.
 
 **R5 — The `hapi` connector silently drops the credentials its own summary tells
-operators to set. No issue yet. Highest severity.**
+operators to set. FIXED by #512; re-run and confirmed 2026-09-04 (#602).**
+`scripts/connector-auth-probe.py` reproduces this exactly against `2b7872d`,
+and at `89b42fb` `hapi` puts the configured credential on the wire. The finding
+as written on 2026-08-16 was:
 Measured on the wire in §6. `CONNECTORS["hapi"]` is `auth=AUTH_NONE`, and
 `UpstreamConfig.basic_auth` returns credentials only when `auth == AUTH_BASIC`,
 so `FHIR_UPSTREAM_CLIENT_ID`/`_SECRET` are accepted, logged as configured, and
@@ -544,7 +587,10 @@ the wire. This is a pin that encodes the defect; per standing order 4 it has not
 been edited.
 
 **R6 — An unknown `FHIR_UPSTREAM_KIND` boots and 500s per request rather than
-refusing to start. No issue yet. Low severity.**
+refusing to start. FIXED by #518; re-run and confirmed 2026-09-04 (#602).**
+`scripts/connector-registry-contract.py --case 2` reproduces this exactly
+against `2b7872d`, and at `89b42fb` the process exits 1 before binding a port,
+carrying the same message. The finding as written on 2026-08-16 was:
 Measured in §5 case 2. The security property holds (it raises; it does not
 default to anonymous). Under compose it still fails closed, because that
 healthcheck raises on non-2xx. Worth knowing that the symptom of a typo is a
@@ -572,6 +618,12 @@ be demonstrated by these two kinds at all.
 **R9 — `healthsamurai/aidboxone:edge` is not pinned.** `pull_policy: always` on a
 moving tag, in the same file whose comment explains why the guardrails image is
 pinned. Digest recorded in §7. `postgres:18` floats at the patch level.
+**2026-09-04 (#602): both tags have moved.** Measured, not predicted — see §7
+and `scripts/image-pin-digests.sh`. One consequence for whoever owns the call:
+the floating-tag exemption in `tests/test_aidbox_example_tells_the_truth.py`
+justifies itself with "verified end to end against `edge` as of 2026-08-16, and
+against nothing else", and `edge` no longer resolves to that image. Nothing was
+edited here.
 
 **R10 — `$conformance` responses are cached.** The payload carries
 `"cached": true` with a `measured_at`, so a re-run after a configuration change
@@ -636,7 +688,25 @@ corrected.
 
 ## Reproducing this
 
-Scratch directory for this pass (scripts and raw run logs):
-`…/scratchpad/set2/` — `walkthrough-hapi.sh`, `registry-contract.sh`,
-`auth_probe.py`, `halfconfig.sh`, `medplum-qa.sh`, and the `*-run.txt` capture
-of each. Not committed; R8 covers what should be.
+**Updated 2026-09-04 (#602).** The scratch directory this section named is
+gone, and nothing was recovered from it. §5, §6 and §7 are now reproducible
+from the repository, by a second person, with the transcripts of that run
+committed:
+
+- `scripts/connector-registry-contract.py` — §5, all three cases (case 3 is
+  register entry R1). Replaces `registry-contract.sh` and `halfconfig.sh`.
+- `scripts/connector-auth-probe.py` — §6. Replaces `auth_probe.py`.
+- `scripts/image-pin-digests.sh` — §7, which named no script at all.
+- transcripts, negative controls and mutation checks:
+  `docs/evidence/2026-09-04-set2-rerun/`
+- what that run found: `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`
+
+`medplum-qa.sh` is **§2's** script, not one of these, and is still gone. §2
+needs a running Medplum and a client credential; neither exists on this
+machine, so it stays as 2026-08-16 left it. What this section said on
+2026-08-16:
+
+> Scratch directory for this pass (scripts and raw run logs):
+> `…/scratchpad/set2/` — `walkthrough-hapi.sh`, `registry-contract.sh`,
+> `auth_probe.py`, `halfconfig.sh`, `medplum-qa.sh`, and the `*-run.txt` capture
+> of each. Not committed; R8 covers what should be.
