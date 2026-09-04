@@ -373,6 +373,49 @@ def test_a_deployment_with_no_run_worker_is_an_outage_at_either_status_code():
     assert "all 13 checks passing" not in out
 
 
+def test_a_deployment_healthclaw_refuses_names_its_own_variables():
+    """`rejected` sends the operator somewhere different from `not_ready`.
+
+    HealthClaw answered 4xx: it refused THIS deployment's request, so the
+    remedy is CareAgents' own service variables, not the worker service and
+    not the engine. A line that said only "run_workers=False" would send the
+    3am reader to the wrong dashboard — the thing this second check exists to
+    prevent.
+
+    MUTATION: drop the "rejected" entry from `_WORKER_STATE_MEANING` and the
+    line falls back to "unrecognised state", failing the last two asserts.
+    """
+    refused = {**HEALTHY, "status": "degraded", "run_workers": False,
+               "run_workers_state": "rejected",
+               "build": "4f2a91cbeef1", "built_at": 1754056800}
+    code, out = _prod_watch_with(refused, [TIP], healthz_status=503)
+    assert code == 1, "a deployment HealthClaw refuses is an outage"
+    assert "careagents: a run worker is draining the queue" in out
+    assert "rejected" in out
+    assert "HEALTHCLAW_MINT_SECRET" in out and "HEALTHCLAW_BASE" in out
+
+
+def test_the_run_worker_line_stays_silent_when_healthz_was_never_read():
+    """#272's rule, applied to the field this check reads.
+
+    When `/healthz` is unreadable there is no `run_workers_state` to have a
+    verdict about, and `body.get(...)` would return this script's own default
+    — indistinguishable from a deployment that genuinely published nothing.
+    Asserting on it tells whoever reads the alarm to go fix the worker service
+    when the deployment is simply DOWN. The readiness check above already
+    reports that outage with the right remedy.
+
+    MUTATION: replace the `if healthz_read:` guard with an unconditional
+    `check(...)` and the "not asserted" assert goes red.
+    """
+    code, out = _prod_watch_with({}, [TIP], healthz_status=500)
+    assert code == 1, "an unreadable /healthz is an outage"
+    assert "careagents: a run worker is draining the queue" in out
+    assert "not asserted" in out
+    # It must not claim a verdict it never had the field for.
+    assert "not_ready" not in out and "unreported" not in out
+
+
 def test_an_unasserted_build_never_inflates_the_count():
     # The script's honesty property. "all 12 checks passing" must stay
     # literally true when nothing pinned the build.

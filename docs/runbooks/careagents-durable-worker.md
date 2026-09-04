@@ -322,7 +322,14 @@ fails the endpoint:
 | --- | --- | --- | --- |
 | `ready` | `true` | 200 | A worker's presence is fresh. The finish line above. |
 | `not_ready` | `false` | **503** | HealthClaw answered: nothing is draining the queue. The section above — fix the deployment. |
+| `rejected` | `false` | **503** | HealthClaw answered **4xx**: it refused this deployment's request. `HEALTHCLAW_MINT_SECRET` or `HEALTHCLAW_BASE` on the *CareAgents* service is wrong. |
 | `unknown` | `false` | 200 | We could not reach HealthClaw's worker-health endpoint within 2s. |
+
+`rejected` gates the deploy for the same reason `not_ready` does: HealthClaw
+answered, and what it said is that this container is wired wrong. A 403 from a
+stale mint secret and a 404 from a mistyped base URL both land here, and both
+produce a CareAgents that serves pages and cannot finish a single chat turn.
+Only a transport failure, a 5xx or a proxy interstitial is `unknown`.
 
 `unknown` is a statement about HealthClaw, not about this container, so it does
 not fail readiness: Railway probes only at the start of a deploy, and blocking

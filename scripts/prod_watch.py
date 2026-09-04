@@ -115,6 +115,10 @@ _WORKER_STATE_MEANING = {
     "ready": "a fresh worker is claiming runs",
     "not_ready": ("HealthClaw answered: nothing is draining the queue — the "
                   "careagents-worker service is down or was never deployed"),
+    "rejected": ("HealthClaw REFUSED this deployment's worker-health request "
+                 "(4xx) — CareAgents' own HEALTHCLAW_MINT_SECRET or "
+                 "HEALTHCLAW_BASE is wrong; fix the CareAgents service "
+                 "variables, not the engine"),
     "unknown": ("CareAgents could not reach HealthClaw's worker health inside "
                 "its budget — the engine or the network to it, not this app; "
                 "chat is refusing turns"),

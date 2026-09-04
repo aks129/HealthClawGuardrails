@@ -1582,6 +1582,113 @@ def test_unreachable_worker_control_plane_stops_admission_not_the_deploy(
     assert "temporarily unavailable" in response.get_json()["message"]
 
 
+@pytest.mark.parametrize("status,why", [
+    (403, "a stale or wrong HEALTHCLAW_MINT_SECRET"),
+    (404, "a HEALTHCLAW_BASE pointed at the wrong path root"),
+    (400, "a request HealthClaw understood and rejected"),
+])
+def test_a_deployment_healthclaw_refuses_must_not_pass_the_deploy_gate(
+        cfg, svc, monkeypatch, status, why):
+    """A 4xx is an ANSWER about US, and it must gate the deploy.
+
+    `/healthz` gates a Railway deploy: 503 keeps traffic on the previous
+    version. #219 correctly stopped gating on "we could not reach HealthClaw",
+    because that blocks the deploy that would fix someone else's outage. But
+    it routed EVERY `HealthClawError` there, and the client raises one for any
+    status outside (200, 503) as well as for a dead socket. So a CareAgents
+    container carrying the wrong mint secret — which HealthClaw answers 403 —
+    was filed as "we could not ask" and admitted.
+
+    Measured against a running pair before this test existed: wrong mint
+    secret -> `/healthz` 200 `"status":"ok"`, and every chat turn refused. The
+    fault is in the artifact being deployed, which is precisely the case the
+    PR's own ruling says must stay blocked.
+
+    MUTATION: return WORKERS_UNKNOWN for every HealthClawError in
+    `careagents/app.py:_worker_state` and this goes red on the 503.
+    """
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 503, (
+        f"{why} left a chat-dead deployment passing the deploy gate")
+    body = health.get_json()
+    assert body["run_workers_state"] == "rejected"
+    assert body["run_workers"] is False
+    assert body["status"] == "degraded"
+    # The account store is fine; this is not a claim about our database.
+    assert body["accounts"] is True
+
+    # The state is named separately from "the workers are down", because the
+    # remedy is different: this sends an operator to the CareAgents service
+    # variables, not to the worker service (#410's lesson, one layer along).
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "rejected-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_rejected"
+
+
+@pytest.mark.parametrize("status", [0, 500, 502, 503, 504])
+def test_an_outage_that_is_not_ours_still_lets_the_fixing_deploy_through(
+        cfg, svc, monkeypatch, status):
+    """The other half of the same carve, pinned so it cannot be over-tightened.
+
+    A dead socket (status 0), a 5xx, and a gateway error are statements about
+    HealthClaw or the network to it. Gating on those blocks a CareAgents
+    deploy on someone else's outage — including the deploy that fixes it —
+    which is the ruling #219 made and this must not undo.
+
+    MUTATION: widen the 4xx test in `_worker_state` to any non-zero status and
+    this goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 200, (
+        "a HealthClaw outage must not block the CareAgents deploy that fixes it")
+    assert health.get_json()["run_workers_state"] == "unknown"
+
+    # Admission still refuses — that is the gate that protects people.
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "unknown-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_unknown"
+
+
+def test_admission_bounds_its_dependency_call_too(cfg, svc, monkeypatch):
+    """The refusal path must not hold a thread for 25 seconds (#219).
+
+    `/healthz` got a bounded budget; `POST /api/chat` did not, so it inherited
+    the client's 25s CHAT timeout. Measured at 25.00s against a HealthClaw
+    that accepts the connection and never answers, versus 1.01s for the
+    bounded call. That is a gunicorn thread held for 25 seconds *to refuse a
+    turn*, during exactly the dependency outage `/healthz` now lets deploy —
+    and it spends the thread headroom the same change bought.
+
+    MUTATION: drop the `timeout=` argument at `careagents/app.py:958` and this
+    goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "budget-1"})
+
+    asked = fake.worker_health_timeout
+    assert asked != "never called", "admission never asked about the workers"
+    assert asked is not None, (
+        "admission inherited the client-wide 25s chat timeout; a turn that is "
+        "about to be REFUSED must not hold a web thread that long")
+    connect, read = asked
+    assert connect + read <= 5.0, (
+        f"admission's worst-case wait is {connect + read}s, which is more "
+        "than a person waiting on a refusal should hold a thread for")
+
+
 def test_healthz_bounds_the_dependency_call_to_its_own_probe_budget(
         cfg, svc, monkeypatch):
     """The endpoint's answer about itself cannot wait on a dependency.
@@ -1726,6 +1833,12 @@ class FakeClient:
         self._event_id = 0
         self.worker_available = True
         self.worker_health_error = False
+        # The HTTP status the raised HealthClawError carries. 0 is a transport
+        # failure ("we could not ask"); a 4xx is HealthClaw ANSWERING that it
+        # refused this deployment's request, which is a different incident
+        # with a different owner. The client raises with `r.status_code`, so a
+        # fake that only ever raises 0 cannot tell the two apart.
+        self.worker_health_error_status = 0
         # The timeout the caller asked for on the last worker-health call, so
         # a test can pin that the readiness probe bounds it (#219).
         self.worker_health_timeout = "never called"
@@ -1843,7 +1956,8 @@ class FakeClient:
     def agent_worker_health(self, max_age_seconds=30, *, timeout=None):
         self.worker_health_timeout = timeout
         if self.worker_health_error:
-            raise HealthClawError("worker health unavailable", 0)
+            raise HealthClawError("worker health unavailable",
+                                  self.worker_health_error_status)
         return {"available": self.worker_available,
                 "active_workers": 1 if self.worker_available else 0,
                 "max_age_seconds": max_age_seconds}
