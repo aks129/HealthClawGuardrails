@@ -225,6 +225,13 @@ def populate_questionnaire(questionnaire, subject, content_resources):
         copied onto each entry.
     """
     issues = []
+    # Per-request, and threaded exactly like `issues` beside it: the set of
+    # linkIds whose expression has already logged a failure. A leaf inside a
+    # list group is evaluated once per row, so without this a malformed
+    # expression logs a line per record — and the records come from the
+    # caller's own inline `content` Bundle. See r6/sdc/expressions.py's
+    # `warned`. It is NOT returned: nothing outside this call reads it.
+    warned = set()
     # The context carries a BOUNDED projection of `subject`, never the stored
     # Patient (r6/sdc/expressions.py). `subject` itself stays whole here
     # because the list-group and reference paths below match on it; only the
@@ -238,7 +245,7 @@ def populate_questionnaire(questionnaire, subject, content_resources):
     for item in questionnaire.get("item", []):
         answer_items.extend(_populate_item(
             item, subject, context, observations, issues, content_resources,
-            in_repeating_group=False))
+            warned, in_repeating_group=False))
 
     qr = {
         "resourceType": "QuestionnaireResponse",
@@ -253,7 +260,7 @@ def populate_questionnaire(questionnaire, subject, content_resources):
 
 
 def _populate_item(item, subject, context, observations, issues,
-                   content_resources, in_repeating_group):
+                   content_resources, warned, in_repeating_group):
     """Populate one questionnaire item. Always returns a list of zero or more
     QuestionnaireResponse items (zero or one for ordinary items; zero or many
     for a repeating list-resource group — one per matching resource).
@@ -271,7 +278,7 @@ def _populate_item(item, subject, context, observations, issues,
         if item.get("repeats") and list_resource_type:
             return _populate_list_group(item, list_resource_type, subject,
                                         context, observations,
-                                        content_resources, issues)
+                                        content_resources, issues, warned)
         # Ordinary group: recurse, keep the group only if it produced
         # child answers. A `repeats: true` group whose leaves name a type
         # with no resolver lands here too — that is what the flag carries
@@ -281,13 +288,13 @@ def _populate_item(item, subject, context, observations, issues,
         for child in item.get("item", []):
             children.extend(_populate_item(
                 child, subject, context, observations, issues,
-                content_resources, nested))
+                content_resources, warned, nested))
         if not children:
             return []
         return [{"linkId": link_id, "item": children}]
 
     answer_value, value_key = _resolve_answer(
-        item, item_type, context, observations, issues, link_id,
+        item, item_type, context, observations, issues, link_id, warned,
         in_repeating_group)
     # Leaf items are always emitted so the response mirrors the questionnaire's
     # structure; the answer array is attached only when a value resolved.
@@ -323,7 +330,7 @@ def _parse_definition(definition):
 
 
 def _populate_list_group(item, resource_type, subject, context, observations,
-                         content_resources, issues):
+                         content_resources, issues, warned):
     """Emit one repeat of `item` per matching, currently-relevant resource of
     `resource_type` for `subject`. Returns [] when there are none — an empty
     repeating group, never a default answer for a sibling item (see module
@@ -359,12 +366,13 @@ def _populate_list_group(item, resource_type, subject, context, observations,
     return [{"linkId": item.get("linkId"),
              "item": _populate_list_children(item.get("item", []),
                                              resource_type, config, resource,
-                                             context, observations, issues)}
+                                             context, observations, issues,
+                                             warned)}
             for resource in resources]
 
 
 def _populate_list_children(items, resource_type, config, resource, context,
-                            observations, issues):
+                            observations, issues, warned):
     """Resolve one row's leaves, AT EVERY DEPTH AND BY EVERY MECHANISM, and
     report the ones that resolve nothing.
 
@@ -410,7 +418,8 @@ def _populate_list_children(items, resource_type, config, resource, context,
         if child.get("type") == "group":
             nested = _populate_list_children(child.get("item", []),
                                              resource_type, config, resource,
-                                             context, observations, issues)
+                                             context, observations, issues,
+                                             warned)
             group_item = {"linkId": child.get("linkId")}
             if nested:
                 group_item["item"] = nested
@@ -434,7 +443,7 @@ def _populate_list_children(items, resource_type, config, resource, context,
             # nothing in the intake form or the fixtures has one.
             value, value_key = _resolve_answer(
                 child, child.get("type"), context, observations, issues,
-                link_id, in_repeating_group=True)
+                link_id, warned, in_repeating_group=True)
         child_item = {"linkId": link_id}
         if value is not None:
             child_item["answer"] = [{value_key: value}]
@@ -455,7 +464,7 @@ def _references_subject(resource, subject_field, subject_ref):
 
 
 def _resolve_answer(item, item_type, context, observations, issues, link_id,
-                    in_repeating_group):
+                    warned, in_repeating_group):
     value_key = _ANSWER_KEY_BY_TYPE.get(item_type, "valueString")
 
     expr = _initial_expression(item)
@@ -464,7 +473,7 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
         # not the stored Patient — so the allowlist applies to the
         # resource-root form (`Patient.name.family`) as well as to `%patient`.
         value = evaluate(expr, context.get("patient"), context,
-                         link_id=link_id)
+                         link_id=link_id, warned=warned)
         if value is not None:
             return _coerce(value, item_type), value_key
         _report_unpopulated(issues, link_id)
