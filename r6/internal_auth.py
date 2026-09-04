@@ -10,11 +10,11 @@ drive an operator action across all tenants.
 Extracted so `/internal/*` ingestion (#267) and `/r6/ops/*` (#304) share one
 gate rather than each carrying its own copy. Tenant-independent by design.
 """
-import hmac
 import os
 
 from flask import request
 
+from r6 import constant_time
 from r6.runtime_config import resolve_app_env
 
 
@@ -29,5 +29,5 @@ def internal_secret_authorized():
     mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
-        return hmac.compare_digest(provided, mint_secret)
+        return constant_time.equal(provided, mint_secret)
     return resolve_app_env() != 'production'

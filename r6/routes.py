@@ -12,7 +12,6 @@ Validation: structural checks for required fields. Falls back when external
 validator unavailable. No StructureDefinition or terminology binding validation.
 """
 
-import hmac
 import json
 import logging
 import os
@@ -31,6 +30,7 @@ from werkzeug.http import (
     unquote_header_value,
 )
 from models import db
+from r6 import constant_time
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
@@ -2022,7 +2022,7 @@ def _internal_mint_authorized(tenant_id):
     mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
-        return hmac.compare_digest(provided, mint_secret)
+        return constant_time.equal(provided, mint_secret)
     # Secret unset → open only outside production.
     return resolve_app_env() != 'production'
 
