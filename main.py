@@ -19,6 +19,7 @@ from typing import Any
 
 import click
 from flask import Flask, g, request as flask_request
+from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
 from r6.database_migrations import upgrade_database
 from r6.runtime_config import validate_runtime_environment
@@ -390,6 +391,33 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
             SESSION_COOKIE_HTTPONLY=True,
             SESSION_COOKIE_SAMESITE="Lax",
         )
+
+    # Every URL this app publishes is built from ``request.host_url``: the
+    # SMART configuration, the OAuth discovery document, the
+    # CapabilityStatement, ``Bundle.entry.fullUrl`` and every search self
+    # link. The hosting platform terminates TLS and forwards to the container
+    # over plain HTTP, so without this Flask sees scheme "http" and we
+    # advertise http:// endpoints on a deployment reachable only over https
+    # (#567). One middleware fixes every call site at once, including ones
+    # nobody has written yet — the alternative, a helper applied per site,
+    # is only ever as complete as the last person to remember it.
+    #
+    # Trusting X-Forwarded-* is a proxy-trust decision. It is safe here
+    # because the platform's edge is the only route to the container (the
+    # container publishes no port of its own), because each header is
+    # trusted for exactly one hop so the value the edge appends is the one
+    # that wins over anything a client sends, and because nothing in this
+    # app keys a security decision on the request scheme —
+    # SESSION_COOKIE_SECURE above is static config, not derived from it. A
+    # deployment that ever exposes this container directly must drop this.
+    #
+    # x_for stays 0 deliberately: r6/rate_limit.py does its own hop-counted
+    # X-Forwarded-For parse, and letting ProxyFix rewrite REMOTE_ADDR would
+    # give the limiter a second, differently-trusted answer for the same
+    # question.
+    flask_app.wsgi_app = ProxyFix(
+        flask_app.wsgi_app, x_for=0, x_proto=1, x_host=1, x_port=0, x_prefix=0
+    )
 
     db_uri = flask_app.config["SQLALCHEMY_DATABASE_URI"]
     if (
