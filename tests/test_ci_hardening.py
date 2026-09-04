@@ -67,3 +67,22 @@ def test_local_compose_security_defaults_are_documented_and_loopback_bound():
     )
     assert "MCP_AUTH_TOKEN=" in example_env
     assert "READ_AUTH_ENABLED=" in example_env
+
+
+def test_ci_runs_on_every_pull_request_including_stacked_ones():
+    """No base-branch filter on `pull_request`, or stacked PRs get no tests.
+
+    A `branches:` list under `pull_request` filters on the *base* branch, so a
+    PR stacked on another feature branch matched nothing and the whole test
+    pipeline was skipped — 19 checks on a PR into main, 6 on a stacked one,
+    none of the 6 a test, while the job that arms auto-merge ran on both (#585).
+    """
+    workflow = _workflow("ci.yml")
+    # PyYAML resolves the bare `on:` key to the boolean True (YAML 1.1).
+    triggers = workflow.get(True) or workflow["on"]
+    pull_request = triggers["pull_request"] or {}
+
+    assert "branches" not in pull_request, (
+        "ci.yml filters pull_request on the base branch; stacked PRs would "
+        f"run no tests at all: {pull_request}"
+    )
