@@ -4435,6 +4435,46 @@ def test_delete_confirmation_is_not_a_form_or_native_dialog():
     assert "showModal" not in _HOME_JS
 
 
+def test_the_delete_failure_fallback_cannot_reassert_what_the_server_dropped():
+    """The claim was removed from the server AND from here; only one is fenced.
+
+    `careagents/app.py`'s purge arm no longer says "Your records were not
+    deleted. Nothing was changed", because `purge_tenant` raises on a read
+    timeout, on a gateway 5xx, and on a 200 whose body nobody could decode —
+    and that last one is a purge that SUCCEEDED. Measured with the real
+    client over real sockets:
+
+        ok              -> success path
+        refused (403)   -> 502 arm   records really are still there
+        gateway (504)   -> 502 arm   the purge may have run
+        200, unreadable -> 502 arm   the purge DID run
+
+    `test_delete_does_not_unlink_when_the_purge_fails` fences the server
+    string. This fallback is the other place the sentence lived, it fires
+    when the server sends no message at all, and nothing stopped the old
+    wording from being restored here alone — on the destructive route, which
+    is the worst place in the product to be wrong about what happened.
+
+    MUTATION: restore `"Your records were not deleted."` as the fallback
+    -> red. Ran it, saw red.
+    """
+    anchor = '.conn-delete'
+    assert anchor in _HOME_JS, "the delete handler moved; this guard reads it"
+    block = _HOME_JS.split(anchor, 1)[1].split("location.reload();", 1)[0]
+    # Comments quote the old wording to record why it went. Scan what runs.
+    stripped = "\n".join(re.sub(r"//.*$", "", ln) for ln in block.splitlines())
+    assert "d.message" in stripped, (
+        "the block this guard reads is not the delete handler any more")
+    for claim in ("were not deleted", "nothing was changed",
+                  "nothing was deleted"):
+        assert claim not in stripped.lower(), (
+            f"the delete fallback can print {claim!r}. A purge that ran and "
+            f"lost its answer reaches this branch, so nothing here observed "
+            f"that the records are still present")
+    assert "confirm your records were deleted" in stripped.lower(), (
+        "the fallback no longer states the uncertainty it is there for")
+
+
 def test_hub_dialog_selector_contract():
     """home.js addresses these by id; a template rename would break the flow at
     runtime only, with no server-side signal."""
