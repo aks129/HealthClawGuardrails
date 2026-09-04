@@ -14,9 +14,15 @@ Exit codes, so a scheduled job can open the right issue:
     0  everything passing
     1  hard failure — a deployment is down, degraded, or a guardrail regressed
     2  the deployment is healthy but is running a build we did not expect
+    3  the run did not decide every check this script declares — a defect in
+       this script, not a verdict on production
 
 Those are different alarms with different remedies, and a stale build holding
-the outage issue open would destroy the meaning of the outage issue.
+the outage issue open would destroy the meaning of the outage issue. 3 is the
+same argument once more: "the harness is broken" and "production is broken"
+send different people to different places, and the first used to be reported
+as the second's absence — `all N checks passing`, with N derived from whatever
+happened to run.
 
 Why this exists
 ---------------
@@ -47,10 +53,12 @@ artifact works — a broken build carrying the right sha still passes it.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -85,6 +93,10 @@ BUILD_CHECK = "careagents: running the current build"
 _SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 
 results: list[tuple[str, bool, str]] = []
+#: Names decided WITHOUT an assertion — see `report`. Kept because a check that
+#: said "not asserted, and here is why" ran, and one that said nothing did not.
+#: The completeness guard in `run` has to be able to tell those apart.
+reported: list[str] = []
 
 # Where the human report goes. `--json` moves it to stderr so stdout carries
 # the payload and nothing else — the flag was documented as machine-readable
@@ -107,8 +119,75 @@ def _human():
 build_info: dict = {"deployed": None, "built_at": None, "built": None,
                     "asserted": False, "ok": None}
 
+# Whether the run decided everything it declares, kept apart from `results` for
+# the same reason build_info is: this is a claim about the RUN, not about
+# production, and it drives a third alarm whose remedy is "fix this script".
+# False until a run proves otherwise — not-yet-known is not complete.
+completeness: dict = {"complete": False, "missing": [], "unreadable": []}
+
+
+def _declared_checks(source: str | None = None):
+    """The check names this file declares, and the call sites it cannot read.
+
+    Every `check(NAME, ...)` here is a declaration that the run will decide
+    NAME. Reading them back out of the source is what keeps the expectation in
+    the same place as the checks: there is no list beside them to update, so
+    there is none to forget, and two branches that each add a check cannot
+    disagree about a total. Adding a check adds its expectation.
+
+    A name is readable when it is a string literal or a module-level string
+    constant (BUILD_CHECK is one). Anything else — an f-string, a name built at
+    run time — comes back as unreadable rather than being skipped: a call site
+    this cannot see is a check the guard cannot miss, which is the whole hole.
+
+    `report` sites are NOT declarations. report is how a declared name says
+    "not asserted this run", so a name that only ever reports asserts nothing
+    and must not be demanded of a run that had no reason to say it.
+    """
+    if source is None:
+        source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    consts: dict[str, str] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value.value
+
+    names: set[str] = set()
+    unreadable: list[str] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "check"):
+            continue
+        arg = node.args[0] if node.args else None
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            names.add(arg.value)
+        elif isinstance(arg, ast.Name) and arg.id in consts:
+            names.add(consts[arg.id])
+        else:
+            unreadable.append(
+                f"the check on line {node.lineno} does not name itself with a "
+                "literal or a module constant, so a run cannot tell whether "
+                "it ran")
+    return frozenset(names), unreadable
+
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
+    """Assert something, and record the verdict under `name`.
+
+    The name is a promise. Every `check(...)` call site in this file is read
+    back out of the source as a declaration that the run will DECIDE that name
+    — asserted here, or reported under the same name when there is honestly
+    nothing to assert (#272). A run that does neither has quietly checked less
+    than this script says it checks, and `run` fails it rather than counting
+    what happened to run.
+
+    So a name has to stay statically readable: a literal, or a module constant
+    like BUILD_CHECK. `_declared_checks` refuses anything it cannot read.
+    """
     results.append((name, ok, detail))
     mark = f"{G} OK {X}" if ok else f"{R}FAIL{X}"
     print(f"{mark} {name}" + (f" {D}— {detail}{X}" if detail else ""),
@@ -120,8 +199,12 @@ def report(name: str, detail: str) -> None:
     """Print a fact without asserting anything about it.
 
     Deliberately NOT recorded as a passing check: this script's whole claim is
-    that every line it prints was actually verified.
+    that every line it prints was actually verified. It IS recorded as decided,
+    because a check that says "not asserted, and here is why" has run — the
+    completeness guard must not report it as vanished, and a silence must not
+    borrow its cover.
     """
+    reported.append(name)
     print(f"{Y}INFO{X} {name} {D}— {detail}{X}", file=_human())
 
 
@@ -161,7 +244,13 @@ def post(url: str, timeout: float, **kw):
         return type(exc).__name__
 
 
-def run(timeout: float, expect_sha: list[str]) -> int:
+def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
+    """Run every check; return whether the build check found a stale build.
+
+    Split out of `run` so the summary and the completeness guard cannot be
+    skipped by anything added in here — including an early `return`, which is
+    one of the ways a check stops running in the first place.
+    """
     # Reset, because this is module state and a stale verdict is worse than no
     # verdict: a second run in informational mode would otherwise inherit the
     # first run's `asserted=True, ok=True` and let the workflow close a live
@@ -169,6 +258,12 @@ def run(timeout: float, expect_sha: list[str]) -> int:
     # process happens today; that is a property of main(), not of run().
     build_info.update(deployed=None, built_at=None, built=None,
                       asserted=False, ok=None)
+    # Both registers, together. The completeness guard reads them as "what
+    # THIS run decided"; a name left behind by an earlier run would answer for
+    # a check this one skipped, which is the guard being fooled by exactly the
+    # stale module state the reset above exists for.
+    results.clear()
+    reported.clear()
 
     # --- the guardrail engine ------------------------------------------------
     r = get(f"{HEALTHCLAW}/r6/fhir/health", timeout)
@@ -389,19 +484,72 @@ def run(timeout: float, expect_sha: list[str]) -> int:
           f"keyless initialize -> {code}"
           + ("" if served else " (no JSON-RPC result)"))
 
+    return stale
+
+
+def run(timeout: float, expect_sha: list[str]) -> int:
+    stale = _run_checks(timeout, expect_sha)
+
+    # Did this run actually run? `all N checks passing` counted what happened
+    # to execute, so a check that stopped running — moved inside a condition
+    # that no longer fires, lost in a merge, skipped by an early return — shrank
+    # N and the line still read as complete. That is the demo-tenant lesson one
+    # level up: a count answers "has something broken" and cannot answer "is
+    # this all of it". So compare the SET of names decided against the set this
+    # file declares, and name what is absent.
+    #
+    # The distinction this guard draws, because the script makes both kinds of
+    # claim: an assertion about a RESPONSE may be computed from the response —
+    # that is what checking is. A claim about how much of the HARNESS ran may
+    # not be computed from the harness.
+    try:
+        declared, unreadable = _declared_checks()
+    except (OSError, SyntaxError) as exc:
+        # Not knowing what we should have run IS the failure this guard is
+        # about, so it takes this guard's exit code. Raising here would exit 1
+        # and file the outage issue about a script that never reached
+        # production.
+        declared, unreadable = frozenset(), [
+            f"this script's own source could not be read ({type(exc).__name__}"
+            f": {exc}), so nothing knows what this run should have decided"]
+    missing = sorted(declared - ({n for n, _, _ in results} | set(reported)))
+    completeness.update(complete=not missing and not unreadable,
+                        missing=missing, unreadable=unreadable)
+
     failed = [n for n, ok, _ in results if not ok]
     hard = [n for n in failed if n != BUILD_CHECK]
     print(file=_human())
     if failed:
         print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed),
               file=_human())
+    if missing:
+        print(f"{R}{len(missing)} declared check(s) never ran:{X} "
+              + ", ".join(missing), file=_human())
+    for why in unreadable:
+        print(f"{R}this run cannot say what it should have decided:{X} {why}",
+              file=_human())
+    if missing or unreadable:
+        print(f"{D}Each line above is still true; this run as a whole is not a "
+              f"verdict on production. The defect is in scripts/prod_watch.py, "
+              f"not in the deployment.{X}", file=_human())
+
     # A stale build is not an outage. Reporting it as one would train the
-    # reader to ignore the outage alarm.
+    # reader to ignore the outage alarm. An incomplete run is neither of those:
+    # it says nothing about production at all, so it must not be able to close
+    # either alarm, and it outranks the stale one — a build verdict from a run
+    # that skipped checks is not worth acting on. An outage still outranks it,
+    # because a real outage is the more urgent of the two things to be told.
     if hard:
         return 1
+    if missing or unreadable:
+        return 3
     if stale:
         return 2
-    print(f"{G}all {len(results)} checks passing{X}", file=_human())
+    print(f"{G}all {len(results)} checks passing{X} "
+          f"{D}— {len(declared)} declared, all accounted for"
+          + (f" ({len(reported)} reported without assertion)"
+             if reported else "")
+          + f"{X}", file=_human())
     return 0
 
 
@@ -415,9 +563,9 @@ def main() -> int:
     ap.add_argument("--json-out", metavar="PATH",
                     help="write the same machine-readable results to PATH. "
                          "stdout keeps the human report unless --json is also "
-                         "given. The scheduled run uses this to drive its two "
-                         "alarms from the checks themselves rather than from "
-                         "one exit code.")
+                         "given. The scheduled run uses this to drive its "
+                         "three alarms from the checks themselves rather than "
+                         "from one exit code.")
     ap.add_argument("--expect-sha", action="append", default=[], metavar="SHA",
                     help="full commit sha the CareAgents build may have been "
                          "built from; repeatable or comma-separated. The "
@@ -455,9 +603,23 @@ def main() -> int:
                # manual CareAgents redeploy. That is the normal state of this
                # repo, not an edge case, and it is the exact meaning-destruction
                # the two-alarm split exists to prevent.
-               "hard_ok": code != 1,
+               # `and complete`: a run that skipped a check has not observed
+               # production, so it must not be able to close the outage issue.
+               # `!hardFailing` was already rejected in the workflow for
+               # exactly this reason — the absence of a failure is not an
+               # observation — and a shrunken denominator is that same absence
+               # arriving from inside the script instead of from the runner.
+               "hard_ok": code != 1 and completeness["complete"],
                "checks": [{"name": n, "ok": o, "detail": d}
                           for n, o, d in results],
+               # What this run DECLARES it decides, against what it decided.
+               # The scheduled job raises its third alarm from these and can
+               # name the check that vanished; `reported` is what accounts for
+               # the gap between `checks` and the declaration on an honest run.
+               "complete": completeness["complete"],
+               "missing": list(completeness["missing"]),
+               "unreadable": list(completeness["unreadable"]),
+               "reported": list(reported),
                # Separate from `checks` on purpose: in informational mode the
                # build is reported without being counted, so folding it in
                # would inflate the count. Omitting it entirely left --json as
