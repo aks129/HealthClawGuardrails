@@ -216,14 +216,22 @@ def _most_recent(resources, wanted_codes, as_of_date, cadence_months):
 
 
 def _cadence_for(rule, age):
-    """Months between screenings for a patient of `age` under this rule.
+    """Months between screenings for a patient of `age`, or None when this rule
+    has bands and there is no age to choose among them.
 
     A cadence may depend on age (USPSTF blood pressure: every 3-5 years at
-    18-39, annually at 40+). Only callable once the age gate has passed, since
-    without an age there is no band to pick — the rows that never get that far
-    report the rule's own `cadence_months`, which is also the fallback for any
-    age no band claims.
+    18-39, annually at 40+). With no age, a banded rule has NOTHING to report:
+    its own `cadence_months` is one band's figure — the 40+ one — so quoting it
+    on a row that has just said the date of birth is unknown asserts an age
+    band the row disclaims in the next field (#616). None is what that row
+    knows, and its `note` is what does the talking.
+
+    An age that no band claims is a different case and still gets
+    `cadence_months`: a band was consulted for this person and none applied,
+    which is a decision rather than an absence.
     """
+    if age is None:
+        return None if rule.get("cadence_bands") else rule["cadence_months"]
     for band in rule.get("cadence_bands") or ():
         if band["min_age"] <= age <= band["max_age"]:
             return band["cadence_months"]
@@ -254,7 +262,16 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
     results = []
     for rule in CARE_GAP_RULES:
         applies = rule["applies"]
-        cadence = _cadence_desc(rule["cadence_months"])
+        # Resolved with the patient's real age, ONCE, so that every row this
+        # loop can emit carries a cadence somebody chose for this person — or
+        # no cadence at all. It used to be `_cadence_desc(rule["cadence_months"])`
+        # here and the banded figure only after the age gate, which gave the
+        # rows that never reach the gate the 40+ figure by default (#616).
+        # `None` rather than a dropped key: the field is part of the row's
+        # shape for every consumer, exactly as `last_done` is.
+        cadence_months = _cadence_for(rule, age)
+        cadence = (_cadence_desc(cadence_months)
+                   if cadence_months is not None else None)
         base = {"rule_id": rule["id"], "title": rule["title"],
                 "cadence": cadence, "source": rule["source"],
                 "related_ecqm": rule["related_ecqm"],
@@ -296,16 +313,9 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
                             "note": "sex not recorded — cannot determine eligibility"})
             continue
 
-        # Applicable, and now old enough to have a cadence chosen for them.
-        # Resolved here rather than with `base` above because it needs an age:
-        # the not-applicable and indeterminate rows built before this point
-        # report the rule's default, which is the most that can be said when
-        # no age picked a band.
-        cadence_months = _cadence_for(rule, age)
-        cadence = _cadence_desc(cadence_months)
-        base = {**base, "cadence": cadence}
-
-        # Is there a satisfying record in the connected data?
+        # Is there a satisfying record in the connected data? `cadence_months`
+        # is never None below: the age gate above returns for `age is None`,
+        # and only a banded rule with no age has no cadence.
         last = _most_recent(by_resource[rule["satisfied_by"]["resource"]],
                             rule["satisfied_by"]["codes"], as_of_date,
                             cadence_months)
