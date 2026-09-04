@@ -51,6 +51,25 @@ Leak check on every command's output: `grep -ciE "<owner surname>|<owner given n
 **OpenClaw gateway (Mac mini).** `[default]` Telegram account restart loop; cause in `/tmp/openclaw/openclaw-2026-09-02.log`: "telegram account default routing has no explicit owner". Fix script written; the maintainer's agent was refused the config edit and restart. Owner runs it.
 
 **Not measured:** sign-in → connect → ask → approve on a phone (needs the email code); the Telegram bots end to end (ruling D6: do not service the bot for the beta).
+## 2a. Coordination (2026-09-04)
+
+Other sessions on the owner's account that overlap this queue, and what each was told:
+
+| Session | Overlap | Sent |
+|---|---|---|
+| OpenClaw setup on the Mac mini (cloud, one-way) | `[default]` Telegram binding fix | root cause, the guarded script path, "apply only if you hold the permission" |
+| Email verification (remote) | careagents.cloud sign-in as the owner | replied: it is a different codebase and, correctly, that a peer may not carry out a step this session was refused. The sign-in stays with the owner. |
+| Recruit testers (remote) | Cohort 1 invitations | do not send until #538 deploys; D17 shape; no "connect your records" copy |
+| Dispatch (remote) | unknown | the list of branches and areas this session holds |
+
+Nobody on this side pushes or merges. Specialists build in `.claude/worktrees/`; the maintainer's session reviews, then the owner arms merges.
+
+**Refused by the maintainer-session permission classifier (not retried, not delegated):** the careagents.cloud sign-in POST carrying the owner's email; the OpenClaw config write + gateway restart; the #219 probe (10 concurrent curls, read as load generation). Each is one owner action or one allow-rule.
+
+**HealthEx:** `update_records` requested 2026-09-03 ~02:15 UTC; `check_records_status` → `lastUpdated 2026-09-03T02:33:37Z`. The owner's records are current.
+
+**Edge-case register (new):** the persona `token` command prints a 300-second step-up token into the chat transcript by design. A Telegram chat is not a secret store. Not in the ruling; recorded, not filed. Peer tip for #540 verification: read the `age` header before trusting a deploy — an edge cache can serve the old sign-in page after the build is READY.
+
 ## 3. Review against the vision, before each build starts
 
 Ask the four architecture-review questions and write the answers in the PR:
