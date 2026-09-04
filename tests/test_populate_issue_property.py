@@ -172,7 +172,46 @@ def _expression_questionnaire(expressions):
 # The property, and the two halves it is built from
 # ---------------------------------------------------------------------------
 
-def _attempted_link_ids(questionnaire, parent_repeats=False):
+#: The resource types list-group population actually implements. This is a
+#: LITERAL, deliberately, not an import of r6/sdc/populate.py's
+#: `_LIST_RESOURCE_CONFIG` — the repo's two-file convention (cf.
+#: `_UNREDACTED_EXITS` and tests/test_unredacted_exits.py). Adding a fourth
+#: type to the engine goes red here until someone updates this set, which is
+#: the point of writing it twice.
+#:
+#: It is here because "a list-group leaf with a `definition`" turned out to
+#: mean two different things. The engine reads it as "a leaf of a group whose
+#: leaves name a type in that table" — `_list_group_resource_type` returns
+#: None for anything else, the group falls through to ordinary-group
+#: recursion, and its leaves are then not attempted at all. The first version
+#: of this helper read it as "any `definition` leaf under any repeating
+#: group", which is the CTO addendum's literal wording. The two disagree on
+#: exactly one shape, pinned below by
+#: test_a_repeating_group_of_an_unsupported_type_is_silent, and no fixture
+#: here exercised it, so the disagreement was invisible. QA review of #576.
+LIST_POPULATED_TYPES = {"MedicationRequest", "AllergyIntolerance", "Condition"}
+
+
+def _list_group_type(item):
+    """The resource type this repeating group's leaves populate from, or None.
+
+    Mirrors r6/sdc/populate.py:_list_group_resource_type — the FIRST child
+    definition naming a supported type wins, and a group naming none is not a
+    list group at all.
+    """
+    if not item.get("repeats"):
+        return None
+    for child in item.get("item", []):
+        definition = child.get("definition") or ""
+        if "#" not in definition:
+            continue
+        rtype = definition.split("#", 1)[1].split(".", 1)[0]
+        if rtype in LIST_POPULATED_TYPES:
+            return rtype
+    return None
+
+
+def _attempted_link_ids(questionnaire):
     """linkIds where the questionnaire asks populate to resolve something.
 
     Read from the Questionnaire, not from populate.py, so this test still
@@ -181,22 +220,27 @@ def _attempted_link_ids(questionnaire, parent_repeats=False):
 
       - an initialExpression (FHIRPath against the %patient projection),
       - an `item.code` (Observation matching),
-      - a `definition` on a leaf of a REPEATING group (list-resource
-        population).
+      - a `definition` on a leaf of a repeating group that names one of
+        LIST_POPULATED_TYPES (list-resource population).
 
     `definition` alone is deliberately not enough: every demographics leaf on
     the intake form carries one for `$extract`'s benefit and populates by
     expression. A definition-bearing leaf outside a repeating group is not an
-    attempted population.
+    attempted population — and neither, today, is one inside a repeating
+    group naming a type the engine does not implement. See
+    LIST_POPULATED_TYPES for why that second clause is stated out loud.
     """
     found = set()
     for item in questionnaire.get("item", []):
         if item.get("type") == "group":
-            found |= _attempted_link_ids(item, bool(item.get("repeats")))
+            if _list_group_type(item):
+                for child in item.get("item", []):
+                    if child.get("definition"):
+                        found.add(child["linkId"])
+            else:
+                found |= _attempted_link_ids(item)
             continue
         if _has_initial_expression(item) or item.get("code"):
-            found.add(item["linkId"])
-        elif parent_repeats and item.get("definition"):
             found.add(item["linkId"])
     return found
 
@@ -440,3 +484,177 @@ def test_one_absent_demographic_gives_exactly_one_issue():
     assert len(issues) == 4, [i["linkId"] for i in issues]
     assert [i["linkId"] for i in one_missing] == [
         "demographics.address-postal-code"]
+
+
+# ---------------------------------------------------------------------------
+# 5. The two mechanisms the matrix above never reached (QA review of #576)
+# ---------------------------------------------------------------------------
+
+LOINC = "http://loinc.org"
+
+UNSUPPORTED_LIST_DEF = ("http://hl7.org/fhir/StructureDefinition/Immunization"
+                        "#Immunization.vaccineCode.text")
+UNSUPPORTED_DATE_DEF = ("http://hl7.org/fhir/StructureDefinition/Immunization"
+                        "#Immunization.occurrenceDateTime")
+
+
+def _unsupported_list_questionnaire():
+    return {
+        "resourceType": "Questionnaire", "id": "unsupported-list",
+        "status": "active",
+        "item": [{
+            "linkId": "immunizations", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "immunizations.vaccine", "type": "string",
+                 "definition": UNSUPPORTED_LIST_DEF},
+                {"linkId": "immunizations.date", "type": "date",
+                 "definition": UNSUPPORTED_DATE_DEF},
+            ],
+        }],
+    }
+
+
+def test_a_repeating_group_of_an_unsupported_type_is_silent():
+    """THE ONE PLACE THE RULING AND THE ENGINE READ THE SAME WORDS DIFFERENTLY.
+
+    The CTO addendum states the exclusion predicate as: the issue attaches
+    where population was attempted — "an `initialExpression`, an `item.code`
+    Observation match, or a list-group leaf with a `definition`". A
+    `definition` leaf inside a `repeats: true` group satisfies that wording
+    whatever type it names.
+
+    The engine reads it narrower. `_list_group_resource_type` only recognises
+    a group whose leaves name MedicationRequest / AllergyIntolerance /
+    Condition; anything else is not a list group, falls through to
+    ordinary-group recursion, and its leaves reach `_resolve_answer` with no
+    expression and no code — the "NOTHING WAS ATTEMPTED" branch. So a
+    Questionnaire asking for immunizations gets unanswered leaves and NO
+    issue naming them: silence, which is the state the ruling set out to
+    remove ("a caller reads silence and concludes the patient has no such
+    value").
+
+    This test pins WHAT THE ENGINE DOES TODAY, not what it should do. It is
+    deliberately a plain assertion rather than a strict xfail — CLAUDE.md
+    records a strict-xfail row going red on the day someone fixed what it
+    pinned. If the reading is widened so these leaves report, this test is
+    one of the two places to update; LIST_POPULATED_TYPES is the other.
+
+    Not a leak: the silence is a function of the QUESTIONNAIRE's structure
+    only — same shape, same result, on every patient — which is what the loop
+    over PATIENT_MATRIX states.
+    """
+    q = _unsupported_list_questionnaire()
+
+    for label, patient in PATIENT_MATRIX.items():
+        qr, issues = populate_questionnaire(q, patient, [patient])
+
+        leaf_ids = [leaf["linkId"] for leaf in _leaf_occurrences(qr["item"])]
+        assert leaf_ids == ["immunizations.vaccine", "immunizations.date"], (
+            f"[{label}] {leaf_ids}")
+        assert not [leaf for leaf in _leaf_occurrences(qr["item"])
+                    if "answer" in leaf], label
+        # The divergence, stated as the number it is: two unanswered
+        # definition leaves, zero issues.
+        assert issues == [], (
+            f"[{label}] the engine now reports unsupported-type list leaves — "
+            f"good, but LIST_POPULATED_TYPES and this test have to be updated "
+            f"together: {issues}")
+
+
+def test_the_property_holds_on_the_unsupported_list_shape_too():
+    """The biconditional, evaluated on the shape above.
+
+    It passes because `_attempted_link_ids` now reads "attempted" the way the
+    engine does. Before the QA review of #576 the helper called those two
+    leaves attempted while the engine did not, so this assertion would have
+    failed — and no fixture in this file exercised the shape, so the helper's
+    "implementation-independent" claim went untested exactly where it was
+    wrong.
+    """
+    q = _unsupported_list_questionnaire()
+    for label, patient in PATIENT_MATRIX.items():
+        qr, issues = populate_questionnaire(q, patient, [patient])
+        _assert_zero_bits(q, qr, issues, f"unsupported-list / {label}")
+
+
+# --- the item.code Observation path -----------------------------------------
+
+def _observation(code, **value):
+    resource = {
+        "resourceType": "Observation", "id": f"o-{code}", "status": "final",
+        "subject": {"reference": "Patient/p1"},
+        "effectiveDateTime": "2026-01-01",
+        "code": {"coding": [{"system": LOINC, "code": code}]},
+    }
+    resource.update(value)
+    return resource
+
+
+#: Every shape `_observation_answer` can be handed, including the two that
+#: matter after `apply_redaction` has run: a valueCodeableConcept whose `text`
+#: was stripped and whose code r6/terminology.py has no label for, and a
+#: value[x] type the resolver does not read. Both resolve to nothing on a
+#: record that EXISTS, which is the case a record-driven classifier would
+#: treat differently from "no Observation at all".
+_OBSERVATION_CASES = {
+    "matched, valueQuantity": (True, [
+        _observation("29463-7", valueQuantity={"value": 70, "unit": "kg"})]),
+    "matched, valueString": (True, [
+        _observation("29463-7", valueString="70 kg")]),
+    "matched, valueCodeableConcept with text": (True, [
+        _observation("29463-7", valueCodeableConcept={"text": "Normal"})]),
+    "matched, valueCodeableConcept stripped of text": (False, [
+        _observation("29463-7", valueCodeableConcept={
+            "coding": [{"system": SNOMED, "code": "17621005"}]})]),
+    "matched, no value[x] at all": (False, [_observation("29463-7")]),
+    "matched, unsupported value[x] type": (False, [
+        _observation("29463-7", valueBoolean=True)]),
+    "a different code": (False, [
+        _observation("8302-2", valueString="170 cm")]),
+    "no observations at all": (False, []),
+}
+
+
+def test_the_item_code_path_holds_the_property():
+    """The third population mechanism, which nothing else in this file reaches.
+
+    The intake Questionnaire has no `item.code` items, so `_report_unpopulated`
+    on the Observation branch is invisible to every other fixture here — the
+    engine's own comment says so. A classifier re-introduced on that branch
+    alone would pass this whole file without these two tests.
+    """
+    q = {"resourceType": "Questionnaire", "id": "obs-q", "status": "active",
+         "item": [{"linkId": "weight", "type": "string",
+                   "code": [{"system": LOINC, "code": "29463-7"}]}]}
+
+    for label, (should_answer, content) in _OBSERVATION_CASES.items():
+        qr, issues = populate_questionnaire(q, FULL_PATIENT, content)
+        _assert_zero_bits(q, qr, issues, label)
+
+        leaf = qr["item"][0]
+        assert ("answer" in leaf) is should_answer, f"[{label}] {leaf}"
+        assert [i["linkId"] for i in issues] == ([] if should_answer
+                                                 else ["weight"]), label
+
+
+def test_the_item_code_issue_says_nothing_about_the_observation():
+    """Five different stored records, all unanswerable, one identical issue.
+
+    An Observation that exists but carries an unlabelled coded value has to be
+    indistinguishable from no Observation at all. Anything else is a read of
+    the record through the issue channel — the shape of the leak this file
+    exists to prevent, one mechanism over from where it was found.
+    """
+    q = {"resourceType": "Questionnaire", "id": "obs-q", "status": "active",
+         "item": [{"linkId": "weight", "type": "string",
+                   "code": [{"system": LOINC, "code": "29463-7"}]}]}
+
+    payloads = set()
+    for _label, (should_answer, content) in _OBSERVATION_CASES.items():
+        if should_answer:
+            continue
+        _qr, issues = populate_questionnaire(q, FULL_PATIENT, content)
+        payloads.add(repr(issues))
+
+    assert len(payloads) == 1, (
+        f"the issue payload varies with the stored Observation: {payloads}")
