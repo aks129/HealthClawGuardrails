@@ -249,13 +249,17 @@ _UNAUDITED_MUTATOR_PACKAGES = set()
 
 
 def test_no_new_package_mutates_without_auditing():
-    """MUTATION: delete the audit import from a gated blueprint -> red.
+    """MUTATION: rename the audit CALLS in a mutating package -> red.
+
+    Not the import: this walks the AST for call names, so deleting
+    `from r6.access import audit` while leaving `audit(...)` in place stays
+    green (verified 2026-09-04). The import is not what is measured.
 
     A package qualifies as a mutator if it validates step-up (it guards a
     write) or commits a transaction (it performs one). If it does either and
     never calls any audit primitive, its writes are invisible.
     """
-    gates, audits = {}, {}
+    gates, stepup_gates, audits = {}, {}, {}
     scanned = 0
     for path in _production_python_files():
         rel = _rel(path)
@@ -270,6 +274,9 @@ def test_no_new_package_mutates_without_auditing():
             name = _called_name(node)
             if name in ('validate_step_up_token', 'require_grant', 'commit'):
                 gates.setdefault(package, []).append(f'{rel}:{node.lineno}')
+                if name != 'commit':
+                    stepup_gates.setdefault(package, []).append(
+                        f'{rel}:{node.lineno}')
             elif name in ('record_audit_event', 'add_audit_event', 'audit'):
                 audits.setdefault(package, []).append(f'{rel}:{node.lineno}')
     assert scanned > 40, f'the mutator scan only walked {scanned} r6 files'
@@ -278,6 +285,20 @@ def test_no_new_package_mutates_without_auditing():
     assert len(gates) > 5, (
         f'the mutator predicate matched only {len(gates)} packages — it is '
         f'broken, and an empty silent set below means nothing')
+    #: The floor above does NOT pin the widening: deleting 'commit' from the
+    #: tuple drops the mutator set from 8 packages to 7, which still clears
+    #: `> 5`, so the 2026-09-04 strengthening could be reverted green
+    #: (verified by mutation). This is the pin for it — the commit half has to
+    #: still be reaching a package the step-up half does not, which is the
+    #: whole reason it was added. If this ever goes empty the widening has
+    #: become redundant and may be deleted, but that is then a deliberate
+    #: edit here rather than a silent one above.
+    commit_only = sorted(set(gates) - set(stepup_gates))
+    assert commit_only, (
+        "the 'commit' half of the mutator predicate now catches nothing the "
+        "step-up half does not — it has been neutered, or every committing "
+        "package has since adopted step-up. Do not delete this assertion to "
+        "go green; decide which it is.")
     silent = {pkg for pkg in gates if pkg not in audits}
     assert silent <= _UNAUDITED_MUTATOR_PACKAGES, _report(
         sorted(silent - _UNAUDITED_MUTATOR_PACKAGES),

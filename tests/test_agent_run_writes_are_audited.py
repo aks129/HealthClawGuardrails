@@ -537,7 +537,17 @@ def test_a_refused_mutation_leaves_no_audit_event(app, client, auth_headers,
     Also the fail-closed check for the flush-only audit primitive: a handler
     that audits and then raises must leave the row rolled back, not pending.
 
-    MUTATION: audit before the fence check in transition_owned_run -> red.
+    Both refusals here are raised BEFORE the audit could be reached — 401 at
+    the route, and the wrong-worker 409 inside `lock_owned_run`, which has no
+    `run` to audit yet. So neither one exercises the stated mutation; moving
+    `_audit_run_change` above the fence is caught by the double-count in
+    test_a_worker_transition_is_audited, not here (verified 2026-09-04).
+    The third case below is the one that does: it passes the fence with the
+    right worker and is then refused, so an audit placed on that path WOULD
+    run. It also exercises the fail-closed half — a flushed row behind a 409
+    trips the kernel's install_audit_assertions at teardown.
+
+    MUTATION: audit before the `completed` raise in transition_owned_run -> red.
     """
     message = _message(client, auth_headers)
     run_id = _claimed_run(client, auth_headers, internal_headers,
@@ -550,9 +560,17 @@ def test_a_refused_mutation_leaves_no_audit_event(app, client, auth_headers,
         headers=internal_headers,
         json={"worker_id": "not-the-owner", "status": "failed"},
     )
+    # Right worker, past the fence, refused on the next line: `completed` is
+    # reachable only through finalize.
+    refused_past_the_fence = client.post(
+        f"/command-center/api/runs/{run_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "worker-1", "status": "completed"},
+    )
 
     assert unauthenticated.status_code == 401
     assert wrong_worker.status_code == 409
+    assert refused_past_the_fence.status_code == 409
     assert _events(app) == []
 
 
@@ -578,5 +596,68 @@ def test_queue_chatter_is_deliberately_not_audited(app, client, auth_headers,
                        headers=internal_headers,
                        json={"worker_id": "worker-1", "type": "agent.thought"}
                        ).status_code == 201
+
+    assert _events(app) == []
+
+
+def test_the_deadline_sweep_writes_the_human_gate_and_audits_nothing(
+        app, client, auth_headers, internal_headers):
+    """The other three exemptions, and the one asymmetry they cost.
+
+    `test_queue_chatter_is_deliberately_not_audited` covers claim, heartbeat
+    and the event log — three of the six exempt endpoints. The other three are
+    the GETs, and calling them "reads" undersells what they do: the shared
+    deadline sweep runs inside them, and on a run holding a RUNNING tool call
+    it commits the run into `waiting_for_human` and the tool call into
+    `needs_reconciliation`. That is entry into the human gate, and it is the
+    same state `POST /transition` reaches — where it IS audited.
+
+    So the classification is per-code-path, not per-route: the gate is audited
+    when a worker declares it and silent when the deadline reaches it. The
+    consequence is that a `reconcile` audit — the package's most
+    evidence-worthy row — can stand in the trail with no record of how its
+    call became ambiguous. The same sweep also runs inside
+    `_enforce_worker_fence`, so `/transition`, `/heartbeat`, `/tool-calls`,
+    `/finalize` and `POST /events` each have a path that commits this and then
+    answers 409.
+
+    This test does not argue that is wrong — `AgentRunEvent` holds the story
+    and a timer is not a principal. It pins it, so a change of mind is an edit
+    here rather than drift, and so the three GET exemptions are exercised at
+    the wire like the other three.
+    """
+    run_id = _claimed_run(client, auth_headers, internal_headers,
+                          worker="lost-worker")
+    call_id = _register_tool(client, internal_headers, run_id,
+                             worker="lost-worker")
+    assert client.post(
+        f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition",
+        headers=internal_headers,
+        json={"worker_id": "lost-worker", "status": "running"},
+    ).status_code == 200
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+    _clear(app)
+
+    # GET #1: the read that terminalizes.
+    detail = client.get(f"/command-center/api/runs/{run_id}",
+                        headers=auth_headers)
+    assert detail.status_code == 200, detail.get_data(as_text=True)
+    body = detail.get_json()
+    # The write really happened, so "nothing was audited" is a decision about
+    # evidence and not an observation that nothing moved.
+    assert body["status"] == "waiting_for_human", body
+    assert [call["status"] for call in body["tool_calls"]] == [
+        "needs_reconciliation"], body
+
+    # GET #2 and #3: the event replay and the readiness poll, both of which
+    # run the same sweep.
+    assert client.get(f"/command-center/api/runs/{run_id}/events",
+                      headers=auth_headers).status_code == 200
+    assert client.get(
+        "/command-center/api/runs/workers/health",
+        headers=internal_headers).status_code in (200, 503)
 
     assert _events(app) == []
