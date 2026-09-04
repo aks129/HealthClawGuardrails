@@ -258,6 +258,48 @@ def test_no_published_document_cites_a_path_that_does_not_exist():
         'cannot be followed is not.\n\n' + '\n'.join(offenders))
 
 
+_LINE_CITE = re.compile(
+    r'((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:py|ts|tsx|js|sh|html|yaml|yml)'
+    r'):(\d+)')
+
+
+def test_no_published_document_cites_a_line_past_the_end_of_a_file():
+    """The one half of "the path exists but says something else" a machine can see.
+
+    A citation of `foo.py:900` in an 86-line file is not drift — no reading of
+    the file supports it. Ordinary drift (the line moved, the claim still
+    roughly holds) is deliberately NOT flagged: pinning exact line numbers
+    makes an unrelated edit above the line turn an evidence document red, and
+    the cost of that lands on someone who did nothing wrong.
+    """
+    offenders = []
+    for doc in _scanned_docs():
+        for line_no, line in enumerate(
+                doc.read_text(encoding='utf-8').splitlines(), 1):
+            for match in _LINE_CITE.finditer(line):
+                token, cited = match.group(1), int(match.group(2))
+                target = REPO_ROOT / token
+                if not target.exists():
+                    tail = token.split('/')[-1]
+                    found = [c for c in _TREE.get(tail, ())
+                             if str(c.relative_to(REPO_ROOT)).endswith(token)]
+                    if len(found) != 1:
+                        continue  # the path check above owns this case
+                    target = found[0]
+                length = len(target.read_text(
+                    encoding='utf-8', errors='replace').splitlines())
+                if cited > length:
+                    offenders.append(
+                        '%s:%d cites %s:%d, but that file ends at line %d'
+                        % (doc.relative_to(REPO_ROOT), line_no, token,
+                           cited, length))
+
+    assert not offenders, (
+        'A published document cites a line that cannot exist. The file has '
+        'shrunk past the citation, so the claim has no anchor at all.\n\n'
+        + '\n'.join(offenders))
+
+
 @pytest.mark.parametrize('doc_name', [
     '2026-08-16-set1-guardrail-core.md',
     '2026-08-16-set2-connectors.md',
