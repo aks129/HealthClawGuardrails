@@ -468,16 +468,22 @@
         return;
       }
       if (!r.ok) return;
-      if (typeof d.new_records === "number" && d.new_records > 0) {
-        clearInterval(iv);
-        // A complete sentence from the server, present only when documents
-        // the count excludes arrived, or when it could not find out (#226).
-        // The number covers what can actually be opened and says so, rather
-        // than quietly absorbing the rest.
-        const aside = d.uncounted_note ? ` ${d.uncounted_note}` : "";
-        msg.textContent = `${d.new_records} new record` +
-          (d.new_records === 1 ? "" : "s") + " added." + aside;
-      }
+      if (typeof d.new_records !== "number") return;
+      // Four outcomes, not two. Gating the whole render on new_records > 0
+      // dropped the case where a refresh delivers only documents: the page
+      // said nothing, which a person cannot tell from a sync that did
+      // nothing (#226). `uncounted_note` is a complete sentence the server
+      // sends only when it established something worth saying.
+      if (d.new_records === 0 && !d.uncounted_note) return;   // genuinely quiet
+      const lead = d.new_records > 0
+        ? `${d.new_records} new record` +
+          (d.new_records === 1 ? "" : "s") + " added."
+        : "No new records you can read.";
+      msg.textContent = lead + (d.uncounted_note ? ` ${d.uncounted_note}` : "");
+      // Only a readable record ends the watch. The document-only and
+      // could-not-check messages are interim: readable records may still
+      // land, and the message should upgrade rather than freeze.
+      if (d.new_records > 0) clearInterval(iv);
     }, 5000);
   }
 
