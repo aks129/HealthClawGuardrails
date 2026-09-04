@@ -455,19 +455,20 @@ def test_a_confirm_answered_200_but_unreadable_is_not_a_refusal(stub_base,
         _client(stub_base).confirm_action("t", "a1")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "QA #566 (HIGH). `submit_review` is the one method that opts out of the "
-    "rule `_json_object` exists to state: it substitutes "
-    "{'error': 'unexpected response'} for an unreadable body and returns the "
-    "status unchanged. On a 200 that means the relay believes the engine "
-    "saved the review and minted a confirmation when nothing reached the "
-    "engine at all. careagents/app.py:1116 then calls confirm_action, and a "
-    "mint refusal lands in the HealthClawError branch, which since this PR "
-    "tells the patient 'your review was saved and your approval is recorded' "
-    "and disables Approve. Reproduced against a running HealthClaw: "
-    "ActionConfirmation rows [] and QuestionnaireResponse rows 0 for the "
-    "action the patient was told carried their approval. Fixing this reddens "
-    "the pin: update it in the same PR."))
+# QA #566 (HIGH), filed as a strict xfail and fixed here, so the marker is
+# gone and the reason is kept as the record of what it caught:
+#
+#   `submit_review` was the one method that opted out of the rule
+#   `_json_object` exists to state. It substituted {'error': 'unexpected
+#   response'} for an unreadable body and returned the status unchanged, so on
+#   a 200 the relay believed the engine had saved the review and minted a
+#   confirmation when nothing reached the engine at all. careagents/app.py
+#   then called confirm_action, and the mint refusal landed in the
+#   HealthClawError branch, which told the patient "your review was saved and
+#   your approval is recorded" and disabled Approve. Reproduced against a
+#   running HealthClaw: ActionConfirmation rows [] and QuestionnaireResponse
+#   rows 0 for the action the patient was told carried their approval.
+
 def test_an_unreadable_200_review_is_not_a_saved_review(stub_base,
                                                         reset_mode):
     """A 200 nobody can decode is not the engine saying "saved".
@@ -480,10 +481,48 @@ def test_an_unreadable_200_review_is_not_a_saved_review(stub_base,
     The engine's real answer here always carries `reviewed_qr_id` and
     `approved_via: 'review-page'` — verified against a running instance — so
     there is evidence available to require rather than a shape to guess at.
+
+    MUTATION: return `(r.status_code, {"error": "unexpected response"})` on
+    the ok path again -> red. Ran it, saw red.
     """
     _set(status=200, body=NON_JSON_BODY, ctype="text/html")
     with pytest.raises(HealthClawError):
         _client(stub_base).submit_review("t", "a1", {"nka": "true"})
+
+
+def test_an_unreadable_200_review_is_the_third_answer_not_a_failure(
+        stub_base, reset_mode):
+    """And it is `HealthClawUnconfirmed` specifically, which is what routes it.
+
+    The type is the whole fix. Plain `HealthClawError` reaches the relay arm
+    that answers "Nothing has been approved" — false in the other direction,
+    because this POST is what MINTS the confirmation (#528): if the engine
+    did receive it, an approval exists. Neither answer is knowable, which is
+    what `confirmed: null` means.
+
+    MUTATION: raise plain `HealthClawError` from the ok path -> red.
+    Ran it, saw red.
+    """
+    _set(status=200, body=NON_JSON_BODY, ctype="text/html")
+    with pytest.raises(HealthClawUnconfirmed):
+        _client(stub_base).submit_review("t", "a1", {"nka": "true"})
+
+
+def test_an_unreadable_refusal_still_reaches_the_page_as_a_refusal(
+        stub_base, reset_mode):
+    """The scope of the raise, pinned from the other side.
+
+    A 4xx is somebody's decision and nothing was minted by it, so it keeps
+    the (status, dict) contract and renders as the engine's answer. Raising
+    on every unreadable body instead would convert the engine's own refusal
+    — a 422 behind an edge that rewrites error bodies — into an unknown
+    outcome, which is #416 run backwards.
+
+    MUTATION: hoist the raise above the `r.ok` test -> red.
+    """
+    _set(status=422, body=NON_JSON_BODY, ctype="text/html")
+    status, body = _client(stub_base).submit_review("t", "a1", {})
+    assert status == 422 and isinstance(body, dict)
 
 
 def test_a_confirm_answered_by_nobody_stays_unconfirmed(stub_base,

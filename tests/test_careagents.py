@@ -264,6 +264,16 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     why #416 survived a suite that looked like it covered this. The other half
     is in tests/test_healthclaw_transport.py, where the real client meets a
     real 504 over a real socket.
+
+    The assertion below used to require `"twice" in msg`, which froze the
+    deterrent "approving twice could send it twice" into place as though it
+    were the fix. It was true of #220's world and false since #550: a second
+    approval reaches the review route, which answers 409 while the action is
+    awaiting confirmation and 404 once it has moved on, so `confirm_action`
+    is never reached twice. A guard that pins a sentence rather than the
+    property behind it keeps the sentence after the property has gone —
+    which is how this survived two rounds of fixing its siblings. Pin the
+    property: the uncertainty is stated, and no false deterrent rides along.
     """
     from careagents.app import create_app
     from careagents.healthclaw import HealthClawUnconfirmed
@@ -293,7 +303,13 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     assert body["confirmed"] is None, "unknown is not false"
     msg = body["message"].lower()
     assert "nothing has been sent" not in msg
-    assert "couldn't confirm" in msg and "twice" in msg
+    assert "couldn't tell" in msg or "could not tell" in msg, (
+        "the message no longer states the uncertainty, which is the whole "
+        "of #220's third answer")
+    assert "twice" not in msg or "cannot" in msg, (
+        "the message warns that approving twice could send it twice; since "
+        "#550 a second approval answers 409 or 404 and never reaches the "
+        "confirm")
 
 
 def test_confirm_action_separates_a_refusal_from_an_unanswered_confirm():
@@ -3009,6 +3025,23 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     # connection survives, so the patient can retry
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
 
+    # ...and the sentence may not say more than that. "Nothing was changed"
+    # was here, which is the same claim the review arms made, on the
+    # destructive route: `purge_tenant` raises on ANY non-200 and on a read
+    # timeout, so a gateway 5xx or a lost answer can follow a purge that ran.
+    # Found by inventorying this file for claims about what was sent,
+    # approved, recorded or retried, not by a report about this route.
+    #
+    # MUTATION: restore "Your records were not deleted. Nothing was changed"
+    # -> red. Ran it, saw red.
+    msg = r.get_json()["message"].lower()
+    assert "nothing was changed" not in msg, (
+        "the purge may have run and lost its answer; nothing observed here "
+        "says the records are still there")
+    assert "were not deleted" not in msg, (
+        "same claim, shorter: this path cannot tell whether they were")
+    assert "couldn't confirm" in msg or "could not confirm" in msg
+
 
 def test_delete_and_disconnect_reject_other_peoples_connections(app, svc,
                                                                 monkeypatch):
@@ -3726,7 +3759,13 @@ def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(
                     json={"med-0": "yes", "nka": "true"})
     assert posted.status_code == 503
     assert posted.get_json().get("confirmed") is not True
-    assert "Nothing has been approved" in posted.get_json()["message"]
+    # This assertion used to require "Nothing has been approved" here too,
+    # and the GET above still does — correctly, because a GET has no side
+    # effect. The submit does: `_send` raises this same HealthClawError for a
+    # read timeout as readily as for a refused connection, so the POST may
+    # have been delivered and minted the confirmation (#528) before the
+    # answer was lost. Nothing observed on this path can say it did not.
+    assert "Nothing has been approved" not in posted.get_json()["message"]
 
 
 def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
@@ -3735,9 +3774,17 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
 
     A 5xx here was passed straight through as the response status with the
     engine's body, which tells the patient nothing about whether their
-    decisions were recorded. What we DO know is that `confirm_action` is
-    only reached on a 200, so nothing was approved — that half is sayable,
-    and it is the half that stops a second approval sending twice.
+    decisions were recorded.
+
+    This test used to also require the message to say "Nothing has been
+    approved", on the reasoning that `confirm_action` is only reached on a
+    200. That reasoning holds for EXECUTION and was written as if it held for
+    the approval: the review POST itself mints the ActionConfirmation (#528),
+    and a gateway 5xx is delivered-or-not, so an approval may exist for the
+    request the patient was told had none. Same defect as the unreadable-200
+    one, one branch over. `confirmed: False` still carries the half that is
+    known — nothing was carried out — which is the half that keeps Approve
+    armed for the retry that is this path's recovery.
 
     MUTATION: return `jsonify(body), status` unconditionally -> red.
     Ran it, saw red.
@@ -3759,13 +3806,218 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
     assert posted.status_code == 503
     payload = posted.get_json()
     assert payload.get("confirmed") is not True
-    assert "Nothing has been approved" in payload["message"]
+    assert "Nothing has been approved" not in payload["message"]
+    assert "could send it twice" not in payload["message"], (
+        "the old copy deterred the retry with a claim the seal makes false")
 
     # A 422 is the engine's own answer — attestation missing — and must
     # still reach the patient as the engine's answer, unchanged.
     fake.submit_review = FakeClient.submit_review.__get__(fake, FakeClient)
     refused = c.post(f"/review/{agent}/act-1/submit", json={"med-0": "yes"})
     assert refused.status_code == 422
+
+
+def test_an_unreadable_answer_to_the_review_is_neither_saved_nor_unsaved(
+        cfg, svc, monkeypatch):
+    """QA #566 (HIGH), the route half.
+
+    Something answered the review POST and nobody could read the answer. The
+    client now raises `HealthClawUnconfirmed` there (the transport half is in
+    tests/test_healthclaw_transport.py, over a real socket). This route must
+    catch it BEFORE `HealthClawError`, because that arm says "Nothing has
+    been approved" — and this POST is what mints the confirmation (#528), so
+    if the engine received it an approval exists. Neither half is knowable,
+    which is what `confirmed: null` is for (#220).
+
+    What must NOT happen is what shipped: the status passed through as 200,
+    `confirm_action` called on the strength of it, and the patient told
+    "your review was saved and your approval is recorded" with no
+    confirmation row anywhere.
+
+    MUTATION: delete the `except HealthClawUnconfirmed` arm -> red, the
+    subclass falls into the HealthClawError arm and answers 503 with
+    "Nothing has been approved". Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    confirms = []
+
+    fake = FakeClient()
+    fake.submit_review = _unreadable
+    fake.confirm_action = lambda t, a: confirms.append(a)
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    assert not confirms, "an unreadable answer must not be confirmed on"
+    msg = payload["message"].lower()
+    # Both directions. Each of these is false on one of the two ways this
+    # path can have happened, so neither of the two neighbouring messages
+    # can be reused here — which is why this is a third string.
+    assert "nothing has been approved" not in msg, \
+        "the review may have been saved, and this POST is what records it"
+    # The other direction, and a substring test alone cannot see it: this
+    # message contains "your review was saved" — inside "whether". What is
+    # forbidden is ASSERTING it, so require the qualifier rather than the
+    # absence of the words.
+    for claim in ("your review was saved", "your approval is recorded"):
+        at = msg.find(claim)
+        assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+            f"{claim!r} is stated here as a fact; nothing on this path "
+            f"observed it")
+    # What it may say, and does: that we could not tell.
+    assert "couldn't tell" in msg or "could not tell" in msg
+    # And the way back stays open: no instruction not to approve again.
+    assert "approving again" in msg or "before approving" in msg
+
+
+def test_no_review_submit_failure_claims_an_approval_does_not_exist(
+        cfg, svc, monkeypatch):
+    """The property, over every way the submit can fail, in one place.
+
+    Each of these was fixed one at a time and each time the sibling survived:
+    the unreadable 200 was found by review while the gateway 5xx and the
+    transport loss went on asserting the same thing next to it. The three
+    share a cause — the review POST is what mints the ActionConfirmation
+    (#528), so none of them can say whether an approval exists — so pin them
+    together rather than as three unrelated strings.
+
+    What each MAY still say, and does, is that nothing was carried out:
+    `confirm_action` is reached only on a decodable 200, and `confirmed`
+    carries that. This guard is about the words the patient reads.
+
+    MUTATION: put "Nothing has been approved" back in `_REVIEW_UNRESOLVED`
+    -> red on all three. Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _timeout(*_a, **_kw):
+        # What `_send` raises for a read timeout — which is delivered, then
+        # lost — and for a refused connection alike. Indistinguishable here.
+        raise HealthClawError("review submit failed", 0)
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    modes = {
+        "transport lost after possible delivery": _timeout,
+        "gateway 502, engine silent": lambda t, a, d: (502, {"error": "bad"}),
+        "gateway 504, engine silent": lambda t, a, d: (504, {"error": "bad"}),
+        "200 nobody could decode": _unreadable,
+    }
+
+    for name, impl in modes.items():
+        fake = FakeClient()
+        fake.submit_review = impl
+        app = create_app(config=cfg, client=fake, accounts=svc)
+        app.config["TESTING"] = True
+        c = app.test_client()
+        _login(c, svc, monkeypatch, email=f"gene+{len(name)}@example.com")
+        conn = c.post("/api/connections/sample").get_json()["id"]
+        agent = c.post("/api/agents",
+                       json={"name": "A", "persona": "calm",
+                             "connection_id": conn}).get_json()["id"]
+        posted = c.post(f"/review/{agent}/act-1/submit",
+                        json={"med-0": "yes", "nka": "true"})
+        msg = (posted.get_json() or {}).get("message", "").lower()
+        assert msg, f"{name}: no message at all"
+        assert "nothing has been approved" not in msg, (
+            f"{name}: the patient is told no approval exists. The review POST "
+            f"mints the confirmation, so on this path one may")
+        # The opposite claim, allowed only as the thing we could not tell —
+        # the message contains these words, inside "whether".
+        for claim in ("your review was saved", "your approval is recorded"):
+            at = msg.find(claim)
+            assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+                f"{name}: {claim!r} is stated as a fact")
+        assert "twice" not in msg or "cannot" in msg, (
+            f"{name}: the copy warns that approving twice could send twice. "
+            f"Once a confirmation exists the review route answers 409")
+        assert posted.get_json().get("confirmed") is not True
+
+
+# QA on the finished stack (#550 -> #566 -> #579), filed as a strict xfail and
+# fixed here, so the marker is gone and the reason is kept as the record:
+#
+#   The identical false deterrent the stack removed from the review-submit
+#   arms survived on the CONFIRM arm, careagents/app.py:1182-1186, and nothing
+#   guarded it. Two rounds fixed the sentence in front of them and left the
+#   twin. It is what an ordinary form-fill approval reaches on any deployment
+#   with no provider configured, which is every deployment today.
+
+def test_the_confirm_arm_does_not_deter_a_recovery_the_seal_makes_safe(
+        cfg, svc, monkeypatch):
+    """The review POST landed; the CONFIRM answer was lost.
+
+    The relay says: "Don't approve again yet - check the request's status
+    first, because approving twice could send it twice."
+
+    Both halves of that last clause are false since #550. What a second
+    approval reaches is the engine's review route, and that route now
+    answers 409 while the action is still awaiting_confirmation (a
+    confirmation exists) and 404 once it has moved on. `confirm_action` is
+    called only on a decodable 200, so it is never reached again and nothing
+    can be sent a second time. The stack's own PR body argues exactly this
+    to justify rewriting `_REVIEW_UNSUBMITTED`, and then leaves the same
+    sentence standing one arm over.
+
+    Not hypothetical, and not rare: driven against a running HealthClaw on
+    :5601 through the real relay and a real socket, an ordinary form-fill
+    approval on a deployment with no provider configured takes this path —
+
+        relay -> HTTP 502 confirmed=null
+        message: "... Don't approve again yet ... approving twice could
+                  send it twice."
+        engine status: failed        (2 confirmations, both consumed)
+        second approval -> HTTP 404 {"error": "Unknown action"}
+
+    The wording standard is the sibling guard's, so a fix has a shape to
+    aim at: it may say the outcome is unknown and it may say we have not
+    sent it again; it may not tell the patient that approving again could
+    send it twice.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    fake = FakeClient()
+
+    def _unconfirmed(*_a, **_kw):
+        raise HealthClawUnconfirmed("confirm unanswered (502)", 502)
+
+    fake.confirm_action = _unconfirmed
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    msg = payload["message"].lower()
+    assert "twice" not in msg or "cannot" in msg, (
+        "the copy warns that approving twice could send it twice. Since #550 "
+        "a second approval answers 409 while the action is awaiting "
+        "confirmation and 404 once it has moved on; confirm_action is "
+        "unreachable either way, so nothing can be sent a second time")
 
 
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
@@ -4137,6 +4389,46 @@ def test_delete_confirmation_is_not_a_form_or_native_dialog():
     assert "<form" not in _HOME_HTML.split('id="delete-modal"')[1].split("</div>\n\n")[0]
     assert "<dialog" not in _HOME_HTML
     assert "showModal" not in _HOME_JS
+
+
+def test_the_delete_failure_fallback_cannot_reassert_what_the_server_dropped():
+    """The claim was removed from the server AND from here; only one is fenced.
+
+    `careagents/app.py`'s purge arm no longer says "Your records were not
+    deleted. Nothing was changed", because `purge_tenant` raises on a read
+    timeout, on a gateway 5xx, and on a 200 whose body nobody could decode —
+    and that last one is a purge that SUCCEEDED. Measured with the real
+    client over real sockets:
+
+        ok              -> success path
+        refused (403)   -> 502 arm   records really are still there
+        gateway (504)   -> 502 arm   the purge may have run
+        200, unreadable -> 502 arm   the purge DID run
+
+    `test_delete_does_not_unlink_when_the_purge_fails` fences the server
+    string. This fallback is the other place the sentence lived, it fires
+    when the server sends no message at all, and nothing stopped the old
+    wording from being restored here alone — on the destructive route, which
+    is the worst place in the product to be wrong about what happened.
+
+    MUTATION: restore `"Your records were not deleted."` as the fallback
+    -> red. Ran it, saw red.
+    """
+    anchor = '.conn-delete'
+    assert anchor in _HOME_JS, "the delete handler moved; this guard reads it"
+    block = _HOME_JS.split(anchor, 1)[1].split("location.reload();", 1)[0]
+    # Comments quote the old wording to record why it went. Scan what runs.
+    stripped = "\n".join(re.sub(r"//.*$", "", ln) for ln in block.splitlines())
+    assert "d.message" in stripped, (
+        "the block this guard reads is not the delete handler any more")
+    for claim in ("were not deleted", "nothing was changed",
+                  "nothing was deleted"):
+        assert claim not in stripped.lower(), (
+            f"the delete fallback can print {claim!r}. A purge that ran and "
+            f"lost its answer reaches this branch, so nothing here observed "
+            f"that the records are still present")
+    assert "confirm your records were deleted" in stripped.lower(), (
+        "the fallback no longer states the uncertainty it is there for")
 
 
 def test_hub_dialog_selector_contract():
