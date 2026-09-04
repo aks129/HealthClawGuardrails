@@ -148,7 +148,7 @@ def upgrade_database(engine: Engine, revision: str = "head") -> str:
         config.attributes["connection"] = connection
         adoption_revision = _unstamped_adoption_revision(connection)
         if adoption_revision:
-            created = []  # MUTANT: fix removed
+            created = _create_missing_baseline_tables(connection)
             logger.info(
                 "Existing pre-Alembic schema detected (no alembic_version); "
                 "created %d missing baseline table(s) %s and stamping "
