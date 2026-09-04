@@ -10,7 +10,16 @@ Pure function (no DB, no Flask). Supports three SDC population mechanisms:
   - List-resource-based: a `repeats: true` group whose leaves carry a
     `definition` naming a supported resource type (MedicationRequest /
     AllergyIntolerance / Condition) emits one repeat of the group per
-    matching resource for the subject (see _populate_list_group).
+    matching resource for the subject, resolving leaves at every nesting
+    depth inside the group (see _populate_list_group).
+
+WHAT COUNTS AS ATTEMPTED, since it is one rule and it is read in two places:
+an initialExpression, an `item.code`, or a `definition` on a leaf anywhere
+under a `repeats: true` group. The third clause does NOT depend on the type
+the definition names — a repeating group of Immunizations is an attempted
+population this file has no resolver for, so it answers nothing and reports
+every leaf, rather than going silent and letting a caller read the silence
+as "this patient has no immunizations".
 
 Out of scope (v1): StructureMap-based and CQL populate.
 
@@ -29,12 +38,23 @@ and test_zero_medications_never_infers_no_current_medications.
 
 from r6.sdc.expressions import build_context, evaluate
 
-#: What an attempted-but-unresolved leaf reports. ONE sentence for both
-#: causes, because the server does not tell the two apart and must not appear
-#: to: "the projection withheld it" and "the patient has no email address"
-#: read identically here on purpose. `questionnaire_populate` is in the
-#: model-facing read tier, and text naming a refusal would have a model tell
-#: a patient their record was held back when it is simply empty.
+#: Why attempted-but-unresolved leaves report, said ONCE PER RESPONSE. ONE
+#: sentence for both causes, because the server does not tell the two apart
+#: and must not appear to: "the projection withheld it" and "the patient has
+#: no email address" read identically here on purpose.
+#: `questionnaire_populate` is in the model-facing read tier, and text naming
+#: a refusal would have a model tell a patient their record was held back
+#: when it is simply empty.
+#:
+#: ONCE, not once per leaf. This constant is identical for every leaf of
+#: every response, so a copy on each issue was pure repetition: it made the
+#: response grow with the number of unanswered leaves TIMES a fixed
+#: paragraph, and a 29.3KB request came back 3519.6KB over HTTP. The issues
+#: now carry the only thing that varies — the linkId — and this sentence is
+#: emitted once beside them (r6/sdc/routes.py:_issues_outcome). The CTO
+#: ruling on the QA review of #576 chose this over a cap: a cap is a second
+#: control to reason about and would silently truncate a legitimate long
+#: form, while the amplification was entirely the repetition of a constant.
 #:
 #: What the caller gets instead is the allowlist, which is public — they can
 #: compare it against their own expression without the server answering a
@@ -46,8 +66,9 @@ from r6.sdc.expressions import build_context, evaluate
 #: it, and a `where(value='...')` clause is a place to park a literal that
 #: would then ride out on an OperationOutcome.
 NOT_POPULATED = (
-    'not populated: no value resolved. $populate reads only the %patient '
-    'projection (name, birthDate, gender, telecom phone/email, address '
+    'not populated: no value resolved. Each accompanying issue names one '
+    'such item by linkId. $populate reads only the %patient projection '
+    '(name, birthDate, gender, telecom phone/email, address '
     'line/city/state/postalCode) and coded content this server recognises; '
     'anything else is not read.'
 )
@@ -187,8 +208,11 @@ def populate_questionnaire(questionnaire, subject, content_resources):
         Condition rows the list groups match. NOT the subject: that arrives
         as `subject` above, and putting it here as well left an unredacted
         Patient reachable by anything walking this list (PR #562 review).
-    issues: list of {'linkId', 'detail'} for items that errored (not for
-        items that simply had no data).
+    issues: list of {'linkId'} — one entry per leaf OCCURRENCE where
+        population was attempted and no value resolved. The reason is the
+        same for all of them and is the module constant NOT_POPULATED, said
+        once per response by r6/sdc/routes.py:_issues_outcome rather than
+        copied onto each entry.
     """
     issues = []
     # The context carries a BOUNDED projection of `subject`, never the stored
@@ -203,7 +227,8 @@ def populate_questionnaire(questionnaire, subject, content_resources):
     answer_items = []
     for item in questionnaire.get("item", []):
         answer_items.extend(_populate_item(
-            item, subject, context, observations, issues, content_resources))
+            item, subject, context, observations, issues, content_resources,
+            in_repeating_group=False))
 
     qr = {
         "resourceType": "QuestionnaireResponse",
@@ -217,10 +242,16 @@ def populate_questionnaire(questionnaire, subject, content_resources):
     return qr, issues
 
 
-def _populate_item(item, subject, context, observations, issues, content_resources):
+def _populate_item(item, subject, context, observations, issues,
+                   content_resources, in_repeating_group):
     """Populate one questionnaire item. Always returns a list of zero or more
     QuestionnaireResponse items (zero or one for ordinary items; zero or many
     for a repeating list-resource group — one per matching resource).
+
+    `in_repeating_group` is True once ANY ancestor group carries
+    `repeats: true`. It is what makes a `definition` leaf an attempted
+    population — see _resolve_answer's last branch, which is where the rule
+    is written down.
     """
     link_id = item.get("linkId")
     item_type = item.get("type")
@@ -231,18 +262,22 @@ def _populate_item(item, subject, context, observations, issues, content_resourc
             return _populate_list_group(item, list_resource_type, subject,
                                         content_resources, issues)
         # Ordinary group: recurse, keep the group only if it produced
-        # child answers.
+        # child answers. A `repeats: true` group whose leaves name a type
+        # with no resolver lands here too — that is what the flag carries
+        # down, so its leaves still count as attempted.
+        nested = in_repeating_group or bool(item.get("repeats"))
         children = []
         for child in item.get("item", []):
             children.extend(_populate_item(
                 child, subject, context, observations, issues,
-                content_resources))
+                content_resources, nested))
         if not children:
             return []
         return [{"linkId": link_id, "item": children}]
 
     answer_value, value_key = _resolve_answer(
-        item, item_type, context, observations, issues, link_id)
+        item, item_type, context, observations, issues, link_id,
+        in_repeating_group)
     # Leaf items are always emitted so the response mirrors the questionnaire's
     # structure; the answer array is attached only when a value resolved.
     answer_item = {"linkId": link_id}
@@ -309,25 +344,57 @@ def _populate_list_group(item, resource_type, subject, content_resources,
         and config["included"](r)
     ]
 
-    repeats = []
-    for resource in resources:
-        children = []
-        for child in item.get("item", []):
-            child_resource_type, element_path = _parse_definition(
-                child.get("definition"))
-            resolver = None
-            if child_resource_type == resource_type:
-                resolver = config["resolvers"].get(element_path)
-            value = resolver(resource) if resolver else None
-            child_item = {"linkId": child.get("linkId")}
-            if value is not None:
-                value_key = _ANSWER_KEY_BY_TYPE.get(child.get("type"), "valueString")
-                child_item["answer"] = [{value_key: value}]
-            elif child.get("definition"):
-                _report_unpopulated(issues, child.get("linkId"))
-            children.append(child_item)
-        repeats.append({"linkId": item.get("linkId"), "item": children})
-    return repeats
+    return [{"linkId": item.get("linkId"),
+             "item": _populate_list_children(item.get("item", []),
+                                             resource_type, config, resource,
+                                             issues)}
+            for resource in resources]
+
+
+def _populate_list_children(items, resource_type, config, resource, issues):
+    """Resolve one row's leaves, AT EVERY DEPTH, and report the ones that
+    resolve nothing.
+
+    NESTED GROUPS ARE WALKED, and that is the fix rather than an
+    embellishment. This loop used to visit the repeating group's DIRECT
+    children only and test `child.get("definition")`; a child that is itself
+    a group carries none, so it was emitted as a bare item and its own
+    leaves were never visited at all — no answer, no issue, and no item in
+    the response. A stored `reaction.manifestation.text` and the leaf asking
+    for it both simply vanished (QA addendum to the review of #576).
+
+    The response mirrors the questionnaire's structure at every depth now,
+    which is what makes "every leaf that could carry an answer and does not
+    gets an issue" a checkable claim instead of a vacuous one: a leaf that
+    is missing from the response is neither answered nor unanswered, so
+    dropping it satisfies the biconditional while defeating its purpose.
+    Pinned by tests/test_populate_issue_property.py's structural mirror.
+    """
+    children = []
+    for child in items:
+        if child.get("type") == "group":
+            nested = _populate_list_children(child.get("item", []),
+                                             resource_type, config, resource,
+                                             issues)
+            group_item = {"linkId": child.get("linkId")}
+            if nested:
+                group_item["item"] = nested
+            children.append(group_item)
+            continue
+        child_resource_type, element_path = _parse_definition(
+            child.get("definition"))
+        resolver = None
+        if child_resource_type == resource_type:
+            resolver = config["resolvers"].get(element_path)
+        value = resolver(resource) if resolver else None
+        child_item = {"linkId": child.get("linkId")}
+        if value is not None:
+            value_key = _ANSWER_KEY_BY_TYPE.get(child.get("type"), "valueString")
+            child_item["answer"] = [{value_key: value}]
+        elif child.get("definition"):
+            _report_unpopulated(issues, child.get("linkId"))
+        children.append(child_item)
+    return children
 
 
 def _references_subject(resource, subject_field, subject_ref):
@@ -342,7 +409,8 @@ def _references_subject(resource, subject_field, subject_ref):
     return ref == subject_ref.get("reference")
 
 
-def _resolve_answer(item, item_type, context, observations, issues, link_id):
+def _resolve_answer(item, item_type, context, observations, issues, link_id,
+                    in_repeating_group):
     value_key = _ANSWER_KEY_BY_TYPE.get(item_type, "valueString")
 
     expr = _initial_expression(item)
@@ -369,21 +437,52 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id):
         _report_unpopulated(issues, link_id)
         return None, value_key
 
-    # No initialExpression and no code: NOTHING WAS ATTEMPTED, so nothing is
-    # reported. THIS IS THE EXCLUSION AND IT IS LOAD-BEARING —
+    # No initialExpression and no code. Two cases, and the difference between
+    # them is finding 1 of the QA review of #576.
+    #
+    # (a) A `definition` leaf inside a repeating group IS an attempted list
+    # population — the questionnaire asked for one element of one record per
+    # row. When the group's leaves name a type _LIST_RESOURCE_CONFIG
+    # implements, _populate_list_group resolved and reported them and this
+    # branch is never reached. When they name anything else there is no
+    # resolver, _list_group_resource_type returns None, the group falls
+    # through to ordinary recursion, and the leaves arrive HERE. They used to
+    # return silently: unanswered leaves and ZERO issues — no `issues`
+    # parameter on the response at all — which is exactly the state the
+    # ruling set out to remove, a caller reading silence as "this patient has
+    # no such value". The predicate is deliberately about the
+    # QUESTIONNAIRE's structure and nothing else: not the record, and not
+    # which resource types this file happens to implement, so adding a
+    # fourth type cannot change who reports.
+    if in_repeating_group and item.get("definition"):
+        _report_unpopulated(issues, link_id)
+        return None, value_key
+
+    # (b) NOTHING WAS ATTEMPTED, so nothing is reported. THIS IS THE
+    # EXCLUSION AND IT IS LOAD-BEARING —
     # `allergies.no-known-allergies` and `medications.no-current-medications`
     # reach exactly here. They carry no code and no expression precisely so
     # that no mechanism ever touches them (r6/sdc/intake.py). An issue
     # reading "not populated: no value resolved" against `no-known-allergies`
     # tells a model-facing reader that the system tried to determine NKA and
     # could not — which is a hair from inferring it, and inferring it is the
-    # non-negotiable. Pinned by tests/test_populate_lists.py::
+    # non-negotiable. Clause (a) cannot reach them for two independent
+    # reasons: they carry no `definition`, and they are siblings of the
+    # repeating `<section>.item` group rather than children of it. Pinned by
+    # tests/test_populate_lists.py::
     # test_the_attestation_items_never_appear_in_the_issue_list.
     return None, value_key
 
 
 def _report_unpopulated(issues, link_id):
     """Record that `link_id` was attempted and resolved nothing.
+
+    ONE FIELD, and it is the only thing that varies between two of these.
+    The reason is NOT_POPULATED — the same constant for every leaf of every
+    response — so a copy per issue made the response grow with the number of
+    unanswered leaves TIMES a fixed paragraph, measured at 3519.6KB back from
+    a 29.3KB request. r6/sdc/routes.py:_issues_outcome says the sentence once
+    and gives each issue its linkId.
 
     UNCONDITIONAL, and that is the design rather than an omission. The
     response already says which leaves have no answer — `_populate_item`
@@ -404,7 +503,7 @@ def _report_unpopulated(issues, link_id):
     the biconditional per item; any classifier reddens on the first leaf it
     silences.
     """
-    issues.append({"linkId": link_id, "detail": NOT_POPULATED})
+    issues.append({"linkId": link_id})
 
 
 def _observation_answer(item_codes, observations):

@@ -30,7 +30,7 @@ from r6.access import Profile, TenantSource, fhir_response, tenant_from_request
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
-from r6.sdc.populate import populate_questionnaire
+from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
 from r6.sdc.extract import extract_resources
 
 logger = logging.getLogger(__name__)
@@ -332,15 +332,33 @@ def _commit_bundle(bundle, tenant_id):
 
 
 def _issues_outcome(issues):
-    # severity=information, NOT warning. Under unconditional emission
-    # (r6/sdc/populate.py:_report_unpopulated) an ordinary form with one
-    # empty optional field carries an issue, and a conformant client reading
-    # `warning` treats that as a failed operation. Nothing here is a
-    # failure — every issue says "this leaf resolved no value", which is a
-    # restatement of the response's own missing `answer`.
+    # THE EXPLANATION IS SAID ONCE. It used to ride on every issue, and it
+    # is a 250-character constant that is identical for every leaf, so the
+    # response grew with the number of unanswered leaves times a fixed
+    # paragraph: 29.3KB of request came back 3519.6KB over HTTP, and a
+    # 293.0KB request produced 352.5MB in process. The CTO ruling on the QA
+    # review of #576 is to stop repeating it rather than to cap the list —
+    # a cap is a second control to reason about and would silently truncate
+    # a legitimate long form, while the amplification was the repetition and
+    # nothing else.
+    #
+    # So: one leading `informational` issue carrying the sentence, then one
+    # `incomplete` issue per unanswered leaf carrying ONLY its linkId. A
+    # caller still learns exactly which leaves were unanswered and exactly
+    # why, each per-leaf entry is still greppable by linkId — which is what
+    # a caller branches on — and the two kinds are told apart by `code`
+    # rather than by position.
+    #
+    # severity=information on both, NOT warning. Under unconditional
+    # emission (r6/sdc/populate.py:_report_unpopulated) an ordinary form
+    # with one empty optional field carries an issue, and a conformant
+    # client reading `warning` treats that as a failed operation. Nothing
+    # here is a failure — every issue says "this leaf resolved no value",
+    # which is a restatement of the response's own missing `answer`.
     return {
         "resourceType": "OperationOutcome",
-        "issue": [{"severity": "information", "code": "incomplete",
-                   "diagnostics": f"{i['linkId']}: {i['detail']}"}
-                  for i in issues],
+        "issue": [{"severity": "information", "code": "informational",
+                   "diagnostics": NOT_POPULATED}]
+        + [{"severity": "information", "code": "incomplete",
+            "diagnostics": i["linkId"]} for i in issues],
     }
