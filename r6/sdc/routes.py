@@ -333,7 +333,7 @@ def _commit_bundle(bundle, tenant_id):
 
 def _issues_outcome(issues):
     # THE EXPLANATION IS SAID ONCE. It used to ride on every issue, and it
-    # is a 250-character constant that is identical for every leaf, so the
+    # was a 230-character constant identical for every leaf, so the
     # response grew with the number of unanswered leaves times a fixed
     # paragraph: 29.3KB of request came back 3519.6KB over HTTP, and a
     # 293.0KB request produced 352.5MB in process. The CTO ruling on the QA
