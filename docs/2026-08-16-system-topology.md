@@ -77,16 +77,17 @@ which was never true of either set.
 
 **50,429 lines of test code guard 29,508 lines of engine — 1.7 to 1.**
 
-> **Engine LOC re-measured 2026-09-04 (#604).** This document gave the engine
-> two different sizes and cited a command for neither: 29,446 in the component
-> table above, 29,508 here. Neither is reproducible as written, and they
-> cannot both be right. Measured today at `89b42fb` with
-> `git ls-files 'r6/*.py' 'r6/**/*.py' | xargs wc -l` → **29,537**. The 1.7:1
-> ratio survives; the two figures above are left as written, dated, rather
-> than silently reconciled. The other LOC rows in the table were not
-> re-measured except `services/agent-orchestrator`, which reads 7,899 above
-> and measures **7,640** tracked `.ts` lines today.
 **3,153** tests pass, 13 skip, 1 xfails.
+
+> **The component table disagrees with this block (#604, 2026-09-04).** The
+> engine is 29,508 LOC here and **29,446 LOC** in the component table near the
+> top of this document — one document, one metric, two numbers, and no command
+> cited for either. Measured at `89b42fb` with
+> `git ls-files 'r6/*.py' 'r6/**/*.py' | xargs wc -l` → **29,537**. Both
+> figures are left as written and dated rather than silently reconciled; the
+> table row is the one still uncorrected. Of the table's other sizes only
+> `services/agent-orchestrator` was re-checked: it reads 7,899 and measures
+> **7,640** tracked `.ts` lines today. The rest were not re-measured.
 
 Measured at `4cb3771`, which is this document's branch point, with
 `git ls-files 'r6/**/*.py' 'r6/*.py' | xargs wc -l` and the same over
