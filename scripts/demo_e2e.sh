@@ -18,6 +18,12 @@ TENANT_ID="${TENANT_ID:-demo-e2e-$(date +%s)}"
 STEP_UP_SECRET="${STEP_UP_SECRET:-dev-secret-change-in-production}"
 PASS=0
 FAIL=0
+# Every gate that runs, whether it passes or fails, marks itself ran. A gate
+# whose body is skipped (an empty variable, a short-circuited `if`) never
+# calls this and the final ran-count catches it — PASS+FAIL alone cannot,
+# because a silently-skipped gate contributes to neither.
+declare -a GATES_RAN=()
+gate_ran() { GATES_RAN+=("$1"); }
 
 _green() { printf '\033[0;32m✓ %s\033[0m\n' "$*"; }
 _red()   { printf '\033[0;31m✗ %s\033[0m\n' "$*"; }
@@ -28,6 +34,7 @@ gate_fail() { _red "$1"; FAIL=$((FAIL+1)); }
 
 check() {
   local desc="$1" expect="$2" actual="$3"
+  gate_ran "$desc"
   if echo "$actual" | grep -q "$expect" 2>/dev/null; then
     gate_pass "$desc"
   else
@@ -132,15 +139,41 @@ if [ -n "$PATIENT_ID" ]; then
     -H "X-Tenant-ID: $TENANT_ID" 2>/dev/null || echo '{}')
   check "Patient read succeeds" '"resourceType"' "$PATIENT_RESP"
 
-  # Family name must be redacted to single initial (e.g. "D." not "Doe")
-  FAMILY=$(echo "$PATIENT_RESP" | python3 -c "
-import sys, json, re
+  # Positive assertion first (the seed's raw PII must not survive redaction
+  # anywhere in the body — catches a leak in any field, not just the one
+  # below), then the specific format each redacted field must take. A single
+  # narrow assertion (just the family initial) passed once while the given
+  # name on the same record leaked in full — this checks every field
+  # r6/redaction.py's own docstring claims to touch.
+  RAW_LEAK_COUNT=$(echo "$PATIENT_RESP" | python3 -c "
+import sys, json
 d = json.load(sys.stdin)
-names = d.get('name', [])
-if names:
-  print(names[0].get('family', ''))
-" 2>/dev/null || echo "")
+body = json.dumps(d)
+raw = ['Rivera', 'Maria', 'Elena', '1985-03-15', '617-555-0198']
+print(sum(1 for v in raw if v in body))
+" 2>/dev/null || echo "?")
+  check "PHI redacted: none of the seeded raw values appear in the response" "^0$" "$RAW_LEAK_COUNT"
+
+  REDACTED_FIELDS=$(echo "$PATIENT_RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+names = d.get('name', [{}])
+name = names[0] if names else {}
+family = name.get('family', '')
+given = (name.get('given') or [''])[0]
+birth = d.get('birthDate', '')
+telecoms = d.get('telecom', [])
+phone = next((t.get('value', '') for t in telecoms if t.get('system') == 'phone'), '')
+print('|'.join([family, given, birth, phone]))
+" 2>/dev/null || echo "|||")
+  FAMILY=$(echo "$REDACTED_FIELDS" | cut -d'|' -f1)
+  GIVEN=$(echo "$REDACTED_FIELDS" | cut -d'|' -f2)
+  BIRTH=$(echo "$REDACTED_FIELDS" | cut -d'|' -f3)
+  PHONE=$(echo "$REDACTED_FIELDS" | cut -d'|' -f4)
   check "PHI redacted: family name is initial only" "^[A-Z]\.$" "$FAMILY"
+  check "PHI redacted: given name is initial only" "^[A-Z]\.$" "$GIVEN"
+  check "PHI redacted: birth date is year only" "^1985$" "$BIRTH"
+  check "PHI redacted: telecom value is [Redacted]" "^\[Redacted\]$" "$PHONE"
 fi
 
 # ─────────────────────────────────────────────────────
@@ -167,6 +200,20 @@ if [ -n "$PATIENT_ID" ]; then
   CROSS_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "$FHIR_BASE/Patient/$PATIENT_ID" \
     -H "X-Tenant-ID: $OTHER_TENANT" 2>/dev/null || echo "000")
   check "Cross-tenant read returns 404 (not 200)" "404" "$CROSS_STATUS"
+
+  # The direct-read shape and the search shape are different code paths (a
+  # dropped filter_by(tenant_id=...) on one does not necessarily drop it on
+  # the other) — search under the other tenant and confirm this patient's id
+  # is absent from the result set, not just that a targeted read 404s.
+  CROSS_SEARCH=$(curl -s "$FHIR_BASE/Patient?_count=50" \
+    -H "X-Tenant-ID: $OTHER_TENANT" 2>/dev/null || echo '{}')
+  CROSS_SEARCH_HIT=$(echo "$CROSS_SEARCH" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ids = [e.get('resource', {}).get('id', '') for e in d.get('entry', [])]
+print('LEAKED' if '$PATIENT_ID' in ids else 'absent')
+" 2>/dev/null || echo "?")
+  check "Cross-tenant search does not return this patient" "^absent$" "$CROSS_SEARCH_HIT"
 fi
 
 # ─────────────────────────────────────────────────────
@@ -268,16 +315,64 @@ fi
 # ─────────────────────────────────────────────────────
 # SUMMARY
 # ─────────────────────────────────────────────────────
+#
+# Every named check this script can perform on a fully healthy stack. A gate
+# whose body is skipped entirely (an upstream extraction came back empty, a
+# short-circuited `if`) contributes to neither PASS nor FAIL — so "N of N,
+# all passed" can be true with N silently smaller than this script actually
+# has to say. Compare the ran-count against this fixed total, not against
+# itself, and name what never ran.
+readonly EXPECTED_CHECKS=(
+  "Flask health endpoint responds"
+  "MCP server health endpoint responds"
+  "Write without X-Tenant-ID returns 4xx"
+  "Clinical POST without step-up token returns 401"
+  "Step-up token issued"
+  "Seed created resources"
+  "Seeded patient ID extracted"
+  "Patient read succeeds"
+  "PHI redacted: none of the seeded raw values appear in the response"
+  "PHI redacted: family name is initial only"
+  "PHI redacted: given name is initial only"
+  "PHI redacted: birth date is year only"
+  "PHI redacted: telecom value is [Redacted]"
+  "AuditEvents recorded (count ≥ 1)"
+  "Cross-tenant read returns 404 (not 200)"
+  "Cross-tenant search does not return this patient"
+  "Curatr evaluation returns result"
+  "Clinical write without X-Human-Confirmed returns 428"
+  "Action proposed — id returned"
+  "Action commit parks at the human gate"
+  "Audit trail contains ≥ 2 ProposedAction entries"
+)
+
 echo ""
 echo "────────────────────────────────────"
 TOTAL=$((PASS+FAIL))
 printf "  Gates passed: %d / %d\n" "$PASS" "$TOTAL"
-if [ "$FAIL" -gt 0 ]; then
-  printf "  \033[0;31mGates failed: %d\033[0m\n" "$FAIL"
+
+MISSING=()
+for name in "${EXPECTED_CHECKS[@]}"; do
+  found=0
+  for ran in "${GATES_RAN[@]}"; do
+    [ "$ran" = "$name" ] && found=1 && break
+  done
+  [ "$found" -eq 0 ] && MISSING+=("$name")
+done
+
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  _red "Gates that never ran (silently skipped, not failed): ${#MISSING[@]}"
+  for name in "${MISSING[@]}"; do
+    printf "    - %s\n" "$name"
+  done
+fi
+
+if [ "$FAIL" -gt 0 ] || [ "${#MISSING[@]}" -gt 0 ]; then
+  [ "$FAIL" -gt 0 ] && printf "  \033[0;31mGates failed: %d\033[0m\n" "$FAIL"
   echo "────────────────────────────────────"
   exit 1
 else
-  printf "  \033[0;32mAll gates passed.\033[0m\n"
+  printf "  \033[0;32mAll gates passed, all %d checks ran.\033[0m\n" "${#EXPECTED_CHECKS[@]}"
   echo "────────────────────────────────────"
   exit 0
 fi
