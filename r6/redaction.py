@@ -5,7 +5,10 @@ Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
 - Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
-- Identifiers: Keep last 4 characters
+- Identifiers: Remove the value; keep system and type (Safe Harbor
+  §164.514(b)(2)(i)(G)/(H)/(I)/(J) list SSNs, medical record numbers, health
+  plan and account numbers as identifiers to REMOVE — a last-four suffix is
+  a re-identification vector, not a redaction)
 - Addresses: Remove line/text, keep city/state/country
 - Telecom: Replace values with [Redacted]
 - Birth dates: Truncate to year only
@@ -70,17 +73,18 @@ def _redact_fields(resource, narrative=True):
     elif 'text' in resource:
         resource.pop('text', None)
 
-    # Redact identifiers (keep last 4 characters)
+    # Remove identifier values. Until 2026-09 this kept the last four
+    # characters, and SECURITY.md said so (docs/2026-08-16-hard-truths.md
+    # §4). `system` and `type` stay so a reader can see which kind of
+    # identifier existed without learning it.
     if 'identifier' in resource:
         identifiers = resource['identifier']
         if isinstance(identifiers, dict):
             identifiers = [identifiers]
         if isinstance(identifiers, list):
             for ident in identifiers:
-                if (isinstance(ident, dict)
-                        and isinstance(ident.get('value'), str)):
-                    val = ident['value']
-                    ident['value'] = '***' + val[-4:] if len(val) > 4 else '***'
+                if isinstance(ident, dict):
+                    ident.pop('value', None)
 
     # Remove full addresses
     if 'address' in resource and isinstance(resource['address'], list):
@@ -214,32 +218,15 @@ def apply_patient_controlled_redaction(resource, patient_id):
 
     # birthDate is PRESERVED — patient wants their own DOB in their store
 
-    # Remove institutional identifiers; inject healthclaw canonical ID
-    INSTITUTIONAL_SYSTEMS = {
-        'http://hl7.org/fhir/sid/us-ssn',
-        'urn:oid:2.16.840.1.113883.4.1',   # SSN OID
-    }
-    # Strip identifiers whose system looks institutional (MRN, facility ID)
-    # Keep only the injected healthclaw identifier
-    filtered_identifiers = []
-    if 'identifier' in result and isinstance(result['identifier'], list):
-        for ident in result['identifier']:
-            system = ident.get('system', '')
-            # Drop SSN and any system-less or facility-scoped identifiers
-            if system in INSTITUTIONAL_SYSTEMS:
-                continue
-            # Drop MRN-style identifiers (heuristic: system contains mrn etc.)
-            institutional_kw = ('mrn', 'patient_id', 'facility', 'org/', 'example.org')
-            if any(kw in system.lower() for kw in institutional_kw):
-                continue
-            filtered_identifiers.append(ident)
-
-    # Always inject healthclaw canonical identifier
-    filtered_identifiers.insert(0, {
+    # The healthclaw canonical id is the SOLE identifier — built, not
+    # filtered. The keyword denylist this replaced ('mrn', 'facility', ...)
+    # passed any upstream identifier whose system used other words through
+    # with its value intact, which is the same last-four-class gap the
+    # standard profile had (Safe Harbor §164.514(b)(2)(i)(H)).
+    result['identifier'] = [{
         'system': 'https://healthclaw.io/patient-id',
         'value': patient_id,
-    })
-    result['identifier'] = filtered_identifiers
+    }]
 
     # Remove notes/comments
     for field in ('note', 'comment'):

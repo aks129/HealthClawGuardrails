@@ -107,3 +107,42 @@ def test_every_code_the_live_demo_tenant_serves_has_a_label():
             ("http://www.nlm.nih.gov/research/umls/rxnorm", "860975")]
     missing = [c for c in live if not lookup(*c)]
     assert not missing, f"demo codes with no label: {missing}"
+
+
+def test_label_codings_runs_after_the_redaction_strip():
+    """THE ONE PROPERTY of the ordering: label_codings sees the ALREADY
+    stripped tree, not the raw upstream one, so nothing it reads back could
+    ever have been a PHI-bearing display that survived. r6/redaction.py's
+    apply_redaction docstring calls this "the order matters" and this test
+    is what makes it executable instead of a comment nobody re-checks.
+
+    MUTATION: swap the two calls in apply_redaction (label_codings before
+    _redact_recursive) -> red, because label_codings would then see the
+    unstripped 'Jane Secret' display before this test's spy fires.
+    """
+    import r6.redaction as redaction_mod
+
+    calls = []
+    real_label = redaction_mod.label_codings
+
+    def spying_label_codings(obj):
+        # If this fires before the strip, the coding's display below still
+        # carries the name — record what label_codings actually saw.
+        calls.append(obj["code"]["coding"][0].get("display"))
+        return real_label(obj)
+
+    obs = {
+        "resourceType": "Observation",
+        "code": {"coding": [{"system": LOINC, "code": "2339-0",
+                             "display": "Glucose for Jane Secret"}]},
+    }
+    orig = redaction_mod.label_codings
+    redaction_mod.label_codings = spying_label_codings
+    try:
+        redaction_mod.apply_redaction(obs)
+    finally:
+        redaction_mod.label_codings = orig
+
+    assert calls == [None], (
+        "label_codings must run after the strip removed the upstream "
+        f"display; it instead saw {calls!r}")
