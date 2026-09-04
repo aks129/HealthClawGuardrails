@@ -151,7 +151,11 @@ def _tree_files() -> dict[str, list[Path]]:
             ['git', 'ls-files', '-z'], cwd=REPO_ROOT,
             capture_output=True, text=True, timeout=60, check=True).stdout
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
-        pytest.skip(f'git is required to index the tree: {exc}')
+        # This runs at import time. Without allow_module_level, pytest turns a
+        # module-level skip into a collection *error*, which reads as the
+        # guard being broken rather than as git being unavailable.
+        pytest.skip(f'git is required to index the tree: {exc}',
+                    allow_module_level=True)
     for rel in listing.split('\0'):
         if rel:
             path = REPO_ROOT / rel
