@@ -11,17 +11,37 @@ candidate PR is open with a run log, not when it is merged.
 | Merge #544 (`npm audit fix`, lockfile only) | owner arms merge | `dependency-audit` green on the next PR run |
 | Merge #540, #541 | owner arms merge | prod watch green on the deploy |
 
-## 1. Build queue, this session
+## 1. Build queue — measured against the tracker on 2026-09-04
 
-| # | Item | Seat | Property protected | Proof | Lane |
-|---|---|---|---|---|---|
-| 2 | #536 hide + beta banner + `CARE_REAL_RECORDS` + privacy sentences + #264 308 | CareAgents | a stranger is never sent to a dead end | template tests; live curl of careagents.cloud after deploy | beta slice |
-| 5 | D10 `$populate` bound | Privacy | a form reads only what the form needs | negative tests: `%patient.identifier`, `.photo`, `%resources.code.text` produce no answer and name the `linkId` | beta slice |
-| 6 | #542 route half + #436 + rule register + #458 string | Clinical | page, summary flag, route, and audit line agree | pins flipped in `tests/test_caregaps_report.py`; audit `evaluated=0` on unresolved subject | beta slice |
-| 7 | Review open candidates #540 #541 #544 #545 #546 #547 #549 #550 | QA | never accept the first output | per-PR verdict with file:line, mutation check on each guard | beta slice |
-| P | F5 soft-delete selector, then B2 `agent_runs` audit, then A5 raw reads | Ratchet | deleted rows stay deleted; every write audited; every read tenant-scoped | `tests/test_ratchets.py` pin moves down in the same PR | parallel |
-| P | MCP phase 1: RFC 9728 PRM behind `MCP_CANONICAL_RESOURCE` | Interop | a conformant client can reach a token | unset → 404 and unchanged 401; set + canonical Host → PRM with `resource` from the constant | parallel |
-| D | Legacy-DB adoption stamps v1.8.0 without checking the schema | Defect lane | a pre-v1.8.0 database migrates instead of crashing | test builds an old-shape SQLite DB; `upgrade_database` reaches head | parallel |
+Another session opened the ruled work while this one was down: 40 PRs open, none merged since 2026-09-02, `main` unchanged at `89b42fb`. Duplicates were stood down the moment they were found. What remains unique here is listed second.
+
+**Stood down (existing PR owns it; this side reports gaps only):**
+
+| Ruling item | Existing PR(s) | This side's branch (kept for the record, not pushed) |
+|---|---|---|
+| 2 beta slice | #553 → #571 → #569 (hard order) | candidate/beta-slice-careagents |
+| 5 D10 populate bound | #562 → #576/#578/#584/#594 | candidate/d10-populate-bound |
+| 6 clinical honesty | #563 (#542, #436), #555 (#458) | candidate/clinical-honesty-542-436-458 |
+| P MCP phase 1 | #556, #560 (spec amendments) | candidate/mcp-phase1-prm |
+| P B2 agent_runs audit | #595 | — |
+| D https discovery | #583 (`x_proto` only — the better shape) | dropped |
+| 8 #219 probe | #573 (probe), #580 (build) | — (this side's probe was refused by the classifier) |
+
+**Still unique here (committed locally, not pushed):**
+
+| # | Branch | Property protected | Proof |
+|---|---|---|---|
+| D | candidate/medent-refresh-endpoint | a refresh reaches the endpoint that answers; no credential in error output | live run against the expired cache: clean 400, no secret printed |
+| D | candidate/demo-e2e-gates-execute | the pre-deploy gates for PHI redaction and cross-tenant isolation execute | 10/13 with skips → 16/16 |
+| D | candidate/legacy-db-adoption (building) | a pre-v1.8.0 database migrates instead of crashing | test builds the 11-table legacy DB; head reached |
+| P | candidate/safe-harbor-identifiers (building) | identifiers are removed, not truncated; SECURITY.md stops overclaiming | `***` pins flipped; Grade A held |
+| P | candidate/f5-live-resources, then a5-raw-tenant-reads (building) | deleted rows stay deleted; every read tenant-scoped | ratchet pins move in the same commit |
+| — | candidate/intent-and-plan | this document | — |
+
+**Three facts from the other session, relayed for the owner (each verified or verifiable):**
+1. Nothing has merged; #541 (the Cohort 1 gate) is reviewed, green, unmerged.
+2. The auto-merge workflow arms on approval and fires on the *next* push, reopen or ready-for-review — often someone else's. An approval is a deferred merge.
+3. #608: `claude-standards-review` reports SUCCESS on every PR because `ANTHROPIC_API_KEY` is unset and the step skips. No PR carries `claude:approve`. Do not read that green as a review.
 
 ## 2. QA with the owner's data — run log (2026-09-02, Mac mini)
 
