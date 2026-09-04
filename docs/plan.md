@@ -35,7 +35,9 @@ Another session opened the ruled work while this one was down: 40 PRs open, none
 | D | candidate/demo-e2e-gates-execute | the pre-deploy gates for PHI redaction and cross-tenant isolation execute | 10/13 with skips → 16/16 |
 | D | candidate/legacy-db-adoption (building) | a pre-v1.8.0 database migrates instead of crashing | test builds the 11-table legacy DB; head reached |
 | P | candidate/safe-harbor-identifiers (building) | identifiers are removed, not truncated; SECURITY.md stops overclaiming | `***` pins flipped; Grade A held |
-| P | candidate/f5-live-resources, then a5-raw-tenant-reads (building) | deleted rows stay deleted; every read tenant-scoped | ratchet pins move in the same commit |
+| P | F5/A5 stood down (collide with the unmerged intake-read stack); PR #618 fixes A5's own pin instead | deleted rows stay deleted; every read tenant-scoped | ratchet pins move in the same commit |
+
+**D11 correction (2026-09-04).** The council ruling scheduled A5 as "raw tenant reads 5 → 0" in the parallel lane. The 5 was the ratchet's own count, and the ratchet was broken — a substring needle that missed double-quoted calls, calls with a default argument, and any call split across two lines. An AST-based recount (PR #618) found 27, including the kernel spec's own open migration slice (`r6/agent_runs/routes.py:98`) and a two-line-split call (`r6/wearables/routes.py:233`) no text needle at any quoting could ever have caught. Anyone picking up A5 off the ruling as written would plan a 5-site slice; the real slice is 27 sites. Recorded here so the ruling's own number doesn't get re-planned from before this correction is read. New shape added to `docs/defect-catalogue.md` §13 — a fourth ratchet found today measuring something other than its named population, three of the four upstream of this session.
 | — | candidate/intent-and-plan | this document | — |
 
 **Three facts from the other session, relayed for the owner (each verified or verifiable):**
