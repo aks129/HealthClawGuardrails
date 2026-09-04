@@ -204,9 +204,10 @@ auditor.
   check `gh pr view <n> --json autoMergeRequest` before you approve *and*
   before you fix whatever is holding a PR red: an armed merge fires the moment
   the last check goes green, including the check you just fixed, and
-  `--disable-auto` cannot help once it has fired. On 2026-08-16 that merged a
-  PR mid-review, carrying content a review board had been convened to decide
-  on (#527).
+  `--disable-auto` cannot help once it has fired. On 2026-08-16 it fired on
+  exactly that: a lint fix turned the last check green, #519 merged while the
+  problem in it was still being worked on, and what it put on public `main`
+  had to be corrected afterwards (#527).
 - **Never read a stacked pull request's green as tested.** `ci.yml` filtered
   `pull_request` on `branches: [main, master]`, and that filter matches the
   pull request's *base* — so a change stacked on another feature branch matched
@@ -219,8 +220,8 @@ auditor.
   (`GET /branches/<branch>/protection` returns 404), so with the filter gone a
   red test on a stacked pull request is *visible* but still blocks nothing. And
   CodeQL here is GitHub default setup, which runs only against the default
-  branch, so a stacked pull request gets 15 checks where one into `main` gets
-  19. Count the checks on a stacked pull request; don't read the tick.
+  branch, so even once #588 has landed a stacked pull request gets 15 checks
+  where one into `main` gets 19. Count the checks on a stacked pull request; don't read the tick.
 
 ---
 
