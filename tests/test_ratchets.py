@@ -212,26 +212,48 @@ def test_post_commit_audit_callsites_only_decrease():
         'New audit calls must use add_audit_event (same transaction).')
 
 
-#: The two step-up-gated mutators that emit no audit events at all. They
-#: perform authenticated writes with no trail — the worst shape in the
-#: codebase for a system whose constitution says every FHIR resource access
-#: emits an AuditEvent. Playbook B1, B2. This ratchet counts blueprints
-#: that mutate without auditing; it goes to 0 and then becomes a tripwire.
-#: r6/command_center left this set on 2026-08-10 (playbook B1): its three
-#: step-up-gated writes now call add_audit_event inside their own
-#: transaction. r6/agent_runs stays, and stays deliberately — claim,
-#: heartbeat and transition fire on a timer, so auditing them would bury
-#: real access records under queue chatter. B2 is a decision about WHICH of
-#: its twelve endpoints deserve a trail, not a sweep.
-_UNAUDITED_MUTATOR_PACKAGES = {'r6/agent_runs'}
+#: Packages that mutate the store and emit no audit events at all — an
+#: authenticated write with no trail, the worst shape in the codebase for a
+#: system whose constitution says every resource access emits an AuditEvent.
+#: Playbook B1, B2. The set is now EMPTY, which makes this a tripwire rather
+#: than a ratchet (playbook A7's shape): a new silent mutator goes red on
+#: arrival instead of being counted.
+#:
+#: r6/command_center left the set on 2026-08-10 (B1) and r6/agent_runs on
+#: 2026-09-04 (B2).
+#:
+#: TWO THINGS THIS TEST DOES NOT PROVE, and both were true of the version
+#: that pinned agent_runs, so read them before trusting a green here:
+#:
+#: 1. It is a PRESENCE check per package, not per mutation. One audit call
+#:    anywhere in a package satisfies it while every other write stays
+#:    silent. The per-endpoint pin is
+#:    tests/test_agent_run_writes_are_audited.py, which classifies all
+#:    fourteen agent-run routes and proves each audited one at the wire;
+#:    tests/test_command_center_writes_are_audited.py is B1's equivalent. A
+#:    package arriving here needs one of those, not just an import.
+#: 2. Until 2026-09-04 it qualified a package as a mutator only if the
+#:    package validated STEP-UP. agent_runs gates ten of its fourteen
+#:    endpoints on a shared secret instead, so the guard's own subject was
+#:    mostly outside its scope — it caught this package by ONE call site,
+#:    the step-up check inside `_tenant_authorized`, and would have missed a
+#:    package that used no step-up at all (verified by mutation: with that
+#:    one call renamed, the old predicate does not flag this package).
+#:    The predicate below now also counts a package that
+#:    calls db.session.commit(): if it commits, it mutates. Measured before
+#:    the widening (2026-09-04): the commit predicate adds r6/fasten to the
+#:    mutator set and NOTHING to the silent set — every other committing
+#:    package already audits. So the widening is inert today and is a trap
+#:    laid for tomorrow, which is what a tripwire is for.
+_UNAUDITED_MUTATOR_PACKAGES = set()
 
 
 def test_no_new_package_mutates_without_auditing():
     """MUTATION: delete the audit import from a gated blueprint -> red.
 
     A package qualifies as a mutator if it validates step-up (it guards a
-    write). If it does that and never calls either audit primitive, the
-    write is authenticated and invisible.
+    write) or commits a transaction (it performs one). If it does either and
+    never calls any audit primitive, its writes are invisible.
     """
     gates, audits = {}, {}
     scanned = 0
@@ -246,16 +268,23 @@ def test_no_new_package_mutates_without_auditing():
             if not isinstance(node, ast.Call):
                 continue
             name = _called_name(node)
-            if name == 'validate_step_up_token' or name == 'require_grant':
+            if name in ('validate_step_up_token', 'require_grant', 'commit'):
                 gates.setdefault(package, []).append(f'{rel}:{node.lineno}')
             elif name in ('record_audit_event', 'add_audit_event', 'audit'):
                 audits.setdefault(package, []).append(f'{rel}:{node.lineno}')
     assert scanned > 40, f'the mutator scan only walked {scanned} r6 files'
+    #: A predicate that matched nothing would pass this forever, and the
+    #: widening above is exactly the edit that could break it silently.
+    assert len(gates) > 5, (
+        f'the mutator predicate matched only {len(gates)} packages — it is '
+        f'broken, and an empty silent set below means nothing')
     silent = {pkg for pkg in gates if pkg not in audits}
     assert silent <= _UNAUDITED_MUTATOR_PACKAGES, _report(
         sorted(silent - _UNAUDITED_MUTATOR_PACKAGES),
         len(_UNAUDITED_MUTATOR_PACKAGES),
-        'A package that gates writes with step-up must audit them.')
+        'A package that mutates the store must audit its writes. Presence '
+        'here is not enough: add a per-endpoint pin like '
+        'tests/test_agent_run_writes_are_audited.py in the same PR.')
 
 
 # ---------------------------------------------------------------------------
