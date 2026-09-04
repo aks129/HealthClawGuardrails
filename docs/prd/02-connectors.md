@@ -28,8 +28,8 @@ Not a mock, and not one kind standing in for another. A connector proven only ag
 
 | Kind | Proven live | Against | Re-run by a second person |
 |---|---|---|---|
-| `hapi` | **yes** | HAPI FHIR 8.11.16 | **yes** — 2026-09-04, reproduced |
-| `generic` | **yes** | Firely Server 6.9.1 | **yes** — 2026-09-04, reproduced |
+| `hapi` | **yes** | HAPI FHIR 8.11.16-SNAPSHOT (`7e7129efb5`) | **yes** — 2026-09-04, reproduced, same build |
+| `generic` | **yes** | Firely Server 6.9.1 | **yes** — 2026-09-04, reproduced, same build |
 | `aidbox` | **no** | server down 2026-08-16 | still down 2026-09-04 |
 | `medplum` | **no** | server down; no credentials present | unchanged |
 

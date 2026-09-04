@@ -56,16 +56,30 @@ Docker was down again, exactly as on 2026-08-16, so the MCP server did not run
 in either walkthrough. Step 5 is red for absence in both. That is not a
 connector finding either way.
 
-## Both upstreams answered
+## Both upstreams answered, and are the same builds as on 2026-08-16
 
-| Server | `/metadata` | Version |
+| Server | `/metadata` | `software.version`, measured today |
 |---|---|---|
-| `hapi.fhir.org/baseR4` | HTTP 200 in 0.98s | HAPI FHIR Server, FHIR 4.0.1 |
-| `server.fire.ly/R4` | HTTP 200 in 7.46s | Firely Server, FHIR 4.0.1 |
+| `hapi.fhir.org/baseR4` | HTTP 200 in 0.98s | `HAPI FHIR Server 8.11.16-SNAPSHOT/7e7129efb5/2026-07-08` |
+| `server.fire.ly/R4` | HTTP 200 in 7.46s | `Firely Server 6.9.1+e4f2e63c5e20f326898f61339c3b3fcd48017201` |
 
-Neither was down, so neither run has an outage to discount. Firely's 7.5s is
-why every request in the script carries `--max-time 60`: a 10s timeout would
-report a working server as unreachable.
+Both report FHIR 4.0.1. Neither was down, so neither run has an outage to
+discount. Firely's 7.5s is why every request in the script carries
+`--max-time 60`: a 10s timeout would report a working server as unreachable.
+
+**The versions were measured separately, by two `curl` calls, not by the
+script.** The walkthrough prints `software` and `fhir_version` from the proxy's
+health payload — `HAPI FHIR Server` and `4.0.1` — and never reads
+`software.version`, so the transcripts do not record which build answered. The
+8.11.16 and 6.9.1 in the topology and in PRD 02 were the 2026-08-16 pack's
+numbers; they are re-confirmed here rather than carried forward on trust. HAPI
+runs SNAPSHOT builds that move, and this one has not: same build hash, same
+2026-07-08 date as the pack's day.
+
+Follow-up worth doing, deliberately not done here: have the script print
+`software.version` so a transcript records the build on its own. Changing it
+now would break the property that the committed script is byte-identical to
+the one that produced these transcripts.
 
 ## Step-by-step, pack against today
 

@@ -50,8 +50,8 @@ someone other than its author** (`docs/evidence/2026-09-04-set2-connectors-rerun
 
 | Kind | Auth | Proven live against |
 |---|---|---|
-| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16** ✓ twice |
-| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ twice |
+| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16-SNAPSHOT** ✓ twice — same build both days (`7e7129efb5`) |
+| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ twice — same build both days |
 | `aidbox` | HTTP Basic | **not run** — local server down, both days |
 | `medplum` | OAuth2 client-credentials | **not run** — local server down, both days |
 
