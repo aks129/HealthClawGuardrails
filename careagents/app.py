@@ -45,6 +45,33 @@ logger = logging.getLogger(__name__)
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
 
+# `/healthz` asks HealthClaw whether a run worker is present. That call gets
+# its own budget rather than the client's 25s chat timeout: as a
+# `(connect, read)` pair the worst case is 2.0s of network wait, which fits
+# inside the 4s the container probe allows (`careagents/healthcheck.py`) and
+# the Dockerfile's `HEALTHCHECK --timeout=5s`. The probe measured the old
+# shape taking 25.01s to answer at zero load, purely because it inherited the
+# chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
+# PR #573).
+_HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
+# The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
+# relay ingress). It gets its own budget rather than sharing the readiness
+# probe's, because the stakes are opposite: `/healthz` must answer inside a
+# platform probe window and a wrong answer costs a deploy, while a turn
+# refused too eagerly costs a patient their question. A worker-health call
+# does two database round-trips on the engine that also serves clinicians, so
+# 1s of read is too tight to refuse a real user on.
+#
+# Left unbounded, this inherits the client's 25s CHAT timeout — measured at
+# 25.00s against a HealthClaw that accepts the connection and never answers.
+# That is a gunicorn thread held for 25 seconds *to refuse a turn*, in exactly
+# the dependency outage `/healthz` now reports as `unknown` and lets deploy,
+# and it eats the thread headroom this same change bought. 4s is a ceiling
+# chosen to end the 25s hold while leaving room for a loaded engine; it is not
+# a measured optimum, and a p99 from production should replace it.
+_ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
+
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
 # ceiling stops an oversized (or chunked / no-Content-Length) request
@@ -808,25 +835,57 @@ def create_app(config: Config | None = None,
     # below is unchanged. What changes is the claim: an incident used to be
     # filed as "the workers are down" when the workers were never reached
     # (#410).
-    WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN = (
-        "ready", "not_ready", "unknown")
+    WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN, WORKERS_REJECTED = (
+        "ready", "not_ready", "unknown", "rejected")
 
-    def _worker_state() -> str:
+    def _worker_state(timeout=None) -> str:
         try:
-            status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
-        except HealthClawError:
+            status = hc.agent_worker_health(cfg.run_worker_stale_seconds,
+                                            timeout=timeout)
+        except HealthClawError as exc:
+            # A 4xx is an ANSWER, not a failure to ask. HealthClaw understood
+            # the request and refused something about IT — the credential, the
+            # path, the query — so the fault is in THIS container's
+            # configuration and it gates the deploy exactly like a missing
+            # worker does. Measured: a wrong HEALTHCLAW_MINT_SECRET answers
+            # 403 and a wrong HEALTHCLAW_BASE path root answers 404, and both
+            # used to be filed as "we could not ask" and let a chat-dead
+            # deployment go live.
+            #
+            # Everything else stays `unknown`, deliberately: transport failure
+            # (status 0), a 5xx, and a 200 carrying a proxy interstitial are
+            # all statements about HealthClaw or the network to it, not about
+            # us. Blocking on those would re-block the deploy that fixes the
+            # outage, which is the ruling this endpoint exists to implement.
+            if 400 <= getattr(exc, "status", 0) < 500:
+                return WORKERS_REJECTED
             return WORKERS_UNKNOWN
         return WORKERS_READY if status.get("available") else WORKERS_NOT_READY
+
+    #: Which worker states mean "this deployment cannot finish a chat turn and
+    #: the fault is in the thing being deployed". These gate `/healthz`, and
+    #: through it the deploy. `unknown` is deliberately absent.
+    WORKERS_OUR_FAULT = (WORKERS_NOT_READY, WORKERS_REJECTED)
+
+    #: The machine-readable refusal code per state. Three states, three codes:
+    #: collapsing `rejected` into `run_workers_unavailable` would file "our
+    #: secret is wrong" as "the workers are down", which is the #410
+    #: mislabeling one layer along.
+    _REFUSAL_CODES = {
+        WORKERS_UNKNOWN: "run_workers_unknown",
+        WORKERS_REJECTED: "run_workers_rejected",
+        WORKERS_NOT_READY: "run_workers_unavailable",
+    }
 
     def _refuse_turn_without_workers(state: str):
         """The 503 body for a chat turn no worker can be promised to run.
 
-        The patient-facing sentence is the same in both failure states,
-        because it is true in both. Only the machine-readable code differs.
+        The patient-facing sentence is the same in every failure state,
+        because it is true in all of them. Only the machine-readable code
+        differs.
         """
         return jsonify({
-            "error": ("run_workers_unknown" if state == WORKERS_UNKNOWN
-                      else "run_workers_unavailable"),
+            "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
             "message": "Chat is temporarily unavailable. Try again soon.",
         }), 503
 
@@ -838,7 +897,21 @@ def create_app(config: Config | None = None,
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
-            page = hc.agent_run_events(tenant, run_id, after=cursor, limit=100)
+            try:
+                page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                           limit=100)
+            except HealthClawError:
+                # Without this the generator dies inside an open response and
+                # the browser is left with a stream that stopped for no stated
+                # reason (#219). Only this projection ends: the run is durable
+                # and keeps going, and a reconnect resumes at `cursor`. The
+                # text is the same generic sentence every other failure uses —
+                # an exception message here would be the first place engine
+                # internals reached a patient's screen.
+                logger.warning("run event stream failed for tenant %s", tenant)
+                yield "data: " + json.dumps({
+                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                return
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -882,7 +955,7 @@ def create_app(config: Config | None = None,
         text = (body.get("message") or "").strip()
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        workers = _worker_state()
+        workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
@@ -1246,7 +1319,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        workers = _worker_state()
+        workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(surface["account_id"]):
@@ -1356,11 +1429,39 @@ def create_app(config: Config | None = None,
         load balancer would route real sign-ins straight into failure. It now
         round-trips a trivial query so the answer reflects reality.
 
-        Readiness has two inputs, and both gate the status code: the account
-        store must answer, and a fresh agent-run worker must be present. A
-        deployment with no worker can serve pages but cannot complete a chat
-        turn, so advertising it as ready would route people into failure the
-        same way the hard-coded accounts=True once did.
+        Readiness has two inputs and they are NOT symmetric (#219). The
+        account store is ours, so it gates the status code outright. The run
+        workers are HealthClaw's, so what gates the status code is their
+        ANSWER, not our ability to get one:
+
+        - Confirmed absent — HealthClaw answered, and no worker presence is
+          fresh. That deployment serves pages and cannot finish a chat turn.
+          It is the web-only deployment the durable-worker runbook tells
+          operators to expect a 503 for, and it stays a 503 deliberately: on
+          Railway the health check runs at the start of a deploy, and this is
+          a deploy that must not go live.
+        - Refused — HealthClaw answered 4xx. It understood the request and
+          rejected something about it: this container's mint secret, or the
+          base URL it was pointed at. That is a fault in the artifact being
+          deployed, exactly like a missing worker, so it gates the deploy the
+          same way. Reported as `run_workers_state: "rejected"`. Splitting
+          this out of "unknown" is the difference between a deploy that is
+          blocked and a chat-dead deployment that goes live: measured, a
+          wrong mint secret answers 403 and a wrong base path answers 404.
+        - Could not ask, inside `_HEALTHZ_WORKER_TIMEOUT` — that is a fact
+          about HealthClaw, not about this container. Reported as
+          `run_workers_state: "unknown"`; it does not fail the endpoint.
+          Failing it would block a CareAgents deploy on someone else's
+          outage, including the deploy that fixes it, while traffic stays on
+          a previous version with exactly the same dependency. The probe
+          measured the old shape taking 25.01s to answer 503 with nothing
+          running at all (evidence §8, PR #573). A transport failure, a 5xx
+          and a proxy interstitial all land here, because none of them is
+          HealthClaw telling us something about ourselves.
+
+        Admission is unchanged, and it is the gate that protects people:
+        `POST /api/chat` still refuses a turn in ALL THREE failure states, so
+        nothing routes anyone into a turn no worker can run.
 
         It also reports which build is running (#258). That is telemetry, not
         a gate: an absent marker reports "unknown" and changes nothing about
@@ -1371,14 +1472,18 @@ def create_app(config: Config | None = None,
         including dependencies it does not control.
         """
         accounts_ok = svc.ping()
+        workers_state = _worker_state(timeout=_HEALTHZ_WORKER_TIMEOUT)
         # `run_workers` stays a boolean readiness VERDICT, not a claim about
         # the workers: false is correct when we could not confirm them, and
         # two runbooks plus the container-roles test read it as a bool.
-        workers_ok = _worker_state() == WORKERS_READY
-        ready = accounts_ok and workers_ok
+        # `run_workers_state` carries the claim the bool cannot make (#410) —
+        # and now also the difference the status code turns on.
+        workers_ok = workers_state == WORKERS_READY
+        ready = accounts_ok and workers_state not in WORKERS_OUR_FAULT
         body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
                 "run_workers": workers_ok,
+                "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
 
