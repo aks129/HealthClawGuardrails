@@ -67,6 +67,34 @@ def _code_only(js: str) -> str:
     return "\n".join(re.sub(r"//.*$", "", line) for line in js.splitlines())
 
 
+def _as_printed(js: str) -> str:
+    """Comment-stripped code with JS string concatenation joined up.
+
+    The forbidden-claims guards below compare banned sentences against the
+    source with `in`. Every message in this page is built the same way —
+
+        gateMsg.textContent =
+          'We could not tell what happened to your approval, so we ' +
+          'cannot say whether it went through.';
+
+    — so a banned sentence written in the page's own idiom is never a
+    substring of the source, and both guards were green against every
+    mutation that split one. Measured (QA, final stack review): a literal
+    `'nothing was sent'` was caught; `'Nothing was ' + 'sent.'` and a
+    three-line `'Your approval is ' + 'recorded and it did not ' + 'go
+    through.'` were both MISSED, by the case-sensitive guard and the
+    case-insensitive one alike. That is a control whose only enforcement was
+    its own description, which is what docs/2026-08-02-retro.md is about.
+
+    Collapsing `' + '` is exactly and only string concatenation, so this
+    joins nothing a reader would not read as one sentence. Whitespace is
+    normalised afterwards so a claim broken across lines inside one literal
+    is caught too.
+    """
+    joined = re.sub(r"['\"]\s*\+\s*['\"]", "", _code_only(js))
+    return re.sub(r"\s+", " ", joined)
+
+
 def test_there_is_a_submit_handler_to_examine(page):
     """A pass over a handler that no longer exists is not a pass."""
     body = _submit_handler(page)
@@ -97,8 +125,12 @@ def test_no_branch_can_call_an_unknown_outcome_a_rejection(page):
 
     A fallback string is fine. A fallback string that asserts an OUTCOME is
     not, because it fires exactly when the server declined to assert one.
+
+    Scans `_as_printed`, not the raw source: every sentence on this page is
+    assembled from concatenated fragments, so `in` against the source read
+    as coverage while catching only a claim nobody would write that way.
     """
-    body = _code_only(_submit_handler(page))
+    body = _as_printed(_submit_handler(page))
     for claim in ("Submission rejected", "was rejected", "did not go through",
                   "nothing was sent"):
         assert claim not in body, (
@@ -555,8 +587,12 @@ def test_the_forbidden_claims_guard_is_not_defeated_by_capitalisation(page):
 
     MUTATION: set any branch's text to 'Nothing was sent.' -> red here,
     green on the original guard.
+
+    Also scans `_as_printed`: capitalisation was the first way past this
+    list and concatenation was the second, and the second is the one the
+    page's own house style produces by default.
     """
-    body = _code_only(_submit_handler(page)).lower()
+    body = _as_printed(_submit_handler(page)).lower()
     for claim in ("submission rejected", "was rejected", "did not go through",
                   "nothing was sent",
                   # Added with the QA #566 fix. This is the HIGH's own
@@ -568,6 +604,139 @@ def test_the_forbidden_claims_guard_is_not_defeated_by_capitalisation(page):
                   "approval is recorded"):
         assert claim not in body, (
             f"the page can print {claim!r} without knowing it")
+
+
+def test_the_forbidden_claims_guard_is_not_defeated_by_concatenation():
+    """The guard's own mutation test, run over a synthetic page.
+
+    Both guards above compare with `in`. The page writes every sentence as
+    `'half a ' + 'sentence'` across lines, so before `_as_printed` a banned
+    claim written the way this file writes claims was invisible to both.
+    Measured on the real page (QA, final stack review):
+
+        CAUGHT  'nothing was sent'                 (one literal)
+        CAUGHT  'Nothing Was Sent'                 (capitalisation guard)
+        MISSED  'Nothing was ' + 'sent.'
+        MISSED  'Your approval is ' + 'recorded and it did not ' +
+                'go through.'
+        MISSED  'Submission ' + 'rejected.'
+
+    This runs those same shapes through the normaliser rather than trusting
+    that it works. MUTATION: revert `_as_printed` to `_code_only` -> red.
+    """
+    prologue = "form.addEventListener('submit', function (e) {\n"
+    epilogue = "\n});\nevaluate();"
+    shapes = {
+        "one literal": "  gateMsg.textContent = 'nothing was sent';",
+        "capitalised": "  gateMsg.textContent = 'Nothing Was Sent';",
+        "joined by a +": "  gateMsg.textContent = 'Nothing was ' + 'sent.';",
+        "the page's own idiom":
+            "  gateMsg.textContent =\n"
+            "    'Your approval is ' +\n"
+            "    'recorded and it did not ' +\n"
+            "    'go through.';",
+        "split mid-word-boundary":
+            "  gateMsg.textContent = 'Submission ' + 'rejected.';",
+        "mixed quote styles":
+            "  gateMsg.textContent = 'nothing was ' + \"sent\";",
+    }
+    banned = ("submission rejected", "was rejected", "did not go through",
+              "nothing was sent", "approval is recorded")
+    for name, snippet in shapes.items():
+        fake = prologue + snippet + epilogue
+        printed = _as_printed(_submit_handler(fake)).lower()
+        assert any(claim in printed for claim in banned), (
+            f"a false claim written as {name} walks past the forbidden-"
+            f"claims list. The page builds every sentence this way, so a "
+            f"guard that misses it reads as coverage and is not.")
+
+
+def test_a_relay_stall_is_not_painted_as_a_refusal(page):
+    """QA ruling on the finished stack: red style, armed button, honest text.
+
+    All three of the relay's 503 sites answer `review_unavailable` and say
+    some version of "we could not tell" or "we could not check". Driven in a
+    browser at 390x844 they all painted `alert-danger` with Approve still
+    enabled — the style saying the request was refused, the control saying
+    carry on. Nothing was refused on any of them, and on all three a second
+    approval is the recovery.
+
+    MUTATION: delete this branch, or set its class to `alert-danger` -> red.
+    """
+    body = _code_only(_submit_handler(page))
+    anchor = "res.r.status === 503"
+    assert anchor in body, (
+        "no branch separates the relay's own stall from a refusal, so an "
+        "honest 'we could not tell' renders in the failure style")
+    block = _block(body, anchor)
+    assert "alert-warning" in block, (
+        "the relay's 503 renders in the failure style. Red states a refusal "
+        "the relay never made")
+    assert "alert-danger" not in block
+    assert "btn.disabled = false" in block, (
+        "the stall branch does not leave Approve enabled. A second approval "
+        "is the recovery here: nothing ran, and if the POST did land the "
+        "review route answers 409 rather than sending anything twice")
+    assert "checkStatus()" not in block, (
+        "the stall branch polls. A 503 establishes nothing to poll for — "
+        "the request may never have reached the relay at all")
+
+
+def test_a_body_that_parses_but_is_not_an_object_is_unreadable(page):
+    """`null` is valid JSON, and the renderer reads fields off the body.
+
+    Driven in a browser: a 502 carrying the body `null` threw inside the
+    renderer — where nothing catches, by design — so the page still read
+    "Ready to generate. The server will re-verify every item on submit."
+    with Approve ENABLED, after the patient had tapped it. That is the exact
+    silent failure the parse `.catch` was added to remove, reached through a
+    body shape that parses.
+
+    MUTATION: delete the type check in the parse `.then` -> red.
+    """
+    body = _code_only(_submit_handler(page))
+    parse = body[body.index("r.json()"):body.index(".then(function (res)")]
+    assert "typeof b !== 'object'" in parse and "b === null" in parse, (
+        "a JSON body that is not an object is treated as readable, so the "
+        "renderer dereferences it and throws with nothing to catch: the "
+        "screen does not move and Approve stays armed")
+    assert "readable: false" in parse
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "QA on the finished stack (#550 -> #566 -> #579). The 409 branch removed "
+    "the #416 shape for a request still awaiting confirmation; the same shape "
+    "survives one status code over, for a request that was approved AND ran. "
+    "Fix needs a sentence about state, which is Dev's call, not QA's."))
+def test_an_action_that_moved_on_is_not_rendered_as_a_bare_failure(page):
+    """Second tab, or the back button, after the approval went through.
+
+    `_load_form_fill_action` requires `awaiting_confirmation` and runs before
+    the 409 pre-check, so once the confirm has claimed the action a second
+    submit answers 404 `{"error": "Unknown action"}` — the relay passes it
+    through untouched. Driven end to end against a running HealthClaw on
+    :5601 through the real relay, an ordinary form-fill approval reached
+
+        first approval  -> 502, engine status: failed  (approval consumed)
+        second approval -> 404 {"error": "Unknown action"}
+
+    and in a browser at 390x844 that painted:
+
+        alert alert-danger / "Unknown action" / Approve ENABLED
+
+    A machine string, in the failure style, for a request the patient really
+    did approve and that really did run — with the button re-armed. That is
+    the shape the 409 branch exists to remove. The 404 also cannot be told
+    apart here from the relay's own `{"error": "not yours"}`, so a fix has to
+    read the body, not just the status; that is the part that is a claim
+    about state rather than presentation, which is why QA pinned it instead
+    of writing it.
+    """
+    body = _code_only(_submit_handler(page))
+    assert re.search(r"res\.r\.status\s*===\s*404", body), (
+        "no branch handles the 404 a second approval gets once the action "
+        "has moved on, so an approved-and-executed request renders as a red "
+        "'Unknown action' with Approve re-armed")
 
 
 # QA #566 (MEDIUM), filed as a strict xfail and fixed here, so the marker is

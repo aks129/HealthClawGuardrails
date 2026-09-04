@@ -3917,6 +3917,72 @@ def test_no_review_submit_failure_claims_an_approval_does_not_exist(
         assert posted.get_json().get("confirmed") is not True
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "QA on the finished stack (#550 -> #566 -> #579). The identical false "
+    "deterrent the stack removed from the review-submit arms survives on the "
+    "CONFIRM arm, careagents/app.py:1182-1186, and nothing guarded it. "
+    "Fix is one sentence and belongs to Dev/Product, not QA."))
+def test_the_confirm_arm_does_not_deter_a_recovery_the_seal_makes_safe(
+        cfg, svc, monkeypatch):
+    """The review POST landed; the CONFIRM answer was lost.
+
+    The relay says: "Don't approve again yet - check the request's status
+    first, because approving twice could send it twice."
+
+    Both halves of that last clause are false since #550. What a second
+    approval reaches is the engine's review route, and that route now
+    answers 409 while the action is still awaiting_confirmation (a
+    confirmation exists) and 404 once it has moved on. `confirm_action` is
+    called only on a decodable 200, so it is never reached again and nothing
+    can be sent a second time. The stack's own PR body argues exactly this
+    to justify rewriting `_REVIEW_UNSUBMITTED`, and then leaves the same
+    sentence standing one arm over.
+
+    Not hypothetical, and not rare: driven against a running HealthClaw on
+    :5601 through the real relay and a real socket, an ordinary form-fill
+    approval on a deployment with no provider configured takes this path —
+
+        relay -> HTTP 502 confirmed=null
+        message: "... Don't approve again yet ... approving twice could
+                  send it twice."
+        engine status: failed        (2 confirmations, both consumed)
+        second approval -> HTTP 404 {"error": "Unknown action"}
+
+    The wording standard is the sibling guard's, so a fix has a shape to
+    aim at: it may say the outcome is unknown and it may say we have not
+    sent it again; it may not tell the patient that approving again could
+    send it twice.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    fake = FakeClient()
+
+    def _unconfirmed(*_a, **_kw):
+        raise HealthClawUnconfirmed("confirm unanswered (502)", 502)
+
+    fake.confirm_action = _unconfirmed
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    msg = payload["message"].lower()
+    assert "twice" not in msg or "cannot" in msg, (
+        "the copy warns that approving twice could send it twice. Since #550 "
+        "a second approval answers 409 while the action is awaiting "
+        "confirmation and 404 once it has moved on; confirm_action is "
+        "unreachable either way, so nothing can be sent a second time")
+
+
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
         cfg, svc, monkeypatch):
     """"Unknown run" and "unknown form" are claims about what exists (#410).
