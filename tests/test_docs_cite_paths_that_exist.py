@@ -75,8 +75,11 @@ DOCS = REPO_ROOT / 'docs'
 
 # Document kinds whose paths describe intent rather than the tree.
 _PROPOSAL_DIRS = frozenset({'superpowers', 'specs', 'design'})
+# Case-insensitive on purpose: `docs/ROADMAP.md` is the same kind of document
+# as `docs/x-roadmap.md`, and excluding one but not the other is the sort of
+# accident that makes a guard fire on a document it was never meant to police.
 _PROPOSAL_SUFFIX = re.compile(
-    r'(?:-design|-plan|-review|-playbook|-refactor-plan|roadmap)\.md$')
+    r'(?:-design|-plan|-review|-playbook|-refactor-plan|roadmap)\.md$', re.I)
 
 # Extensions that make a slashed token a claim about a file rather than a
 # route, a package name, or a sentence containing a slash.
@@ -133,13 +136,26 @@ def _git_ignores(path: str) -> bool:
 
 
 def _tree_files() -> dict[str, list[Path]]:
+    """Index the tracked tree, via git rather than a filesystem walk.
+
+    "In the repository" is literally the property under test, so the index has
+    to be the repository and not the working directory. A walk also picks up
+    `.venv` and — on the primary checkout — `.claude/worktrees/*`, which hold
+    whole copies of this repo. Every filename would then have two or more
+    matches, the unique-suffix step would stop resolving, and a citation that
+    is fine would go red on one machine and green in CI.
+    """
     index: dict[str, list[Path]] = {}
-    for p in REPO_ROOT.rglob('*'):
-        parts = p.parts
-        if '.git' in parts or 'node_modules' in parts or '.venv' in parts:
-            continue
-        if p.is_file():
-            index.setdefault(p.name, []).append(p)
+    try:
+        listing = subprocess.run(
+            ['git', 'ls-files', '-z'], cwd=REPO_ROOT,
+            capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
+        pytest.skip(f'git is required to index the tree: {exc}')
+    for rel in listing.split('\0'):
+        if rel:
+            path = REPO_ROOT / rel
+            index.setdefault(path.name, []).append(path)
     return index
 
 
@@ -194,6 +210,14 @@ def test_the_scan_reaches_the_directories_it_exists_for():
         assert required in reached, (
             'docs/%s/ is not being scanned, and it is a directory whose '
             'documents cite scripts as backing for claims' % required)
+
+
+def test_the_evidence_pack_parametrisation_is_not_empty():
+    """Parametrising over an empty glob collects zero tests and reports green."""
+    packs = sorted((DOCS / 'evidence').glob('*.md'))
+    assert len(packs) >= 2, (
+        'docs/evidence/ has %d pack(s); the per-pack test would be vacuous'
+        % len(packs))
 
 
 def test_the_extractor_actually_finds_citations():
@@ -300,18 +324,21 @@ def test_no_published_document_cites_a_line_past_the_end_of_a_file():
         + '\n'.join(offenders))
 
 
-@pytest.mark.parametrize('doc_name', [
-    '2026-08-16-set1-guardrail-core.md',
-    '2026-08-16-set2-connectors.md',
-])
-def test_every_evidence_pack_citation_resolves(doc_name):
+@pytest.mark.parametrize(
+    'pack',
+    sorted((DOCS / 'evidence').glob('*.md')),
+    ids=lambda p: p.name,
+)
+def test_every_evidence_pack_citation_resolves(pack):
     """The evidence packs are the most quoted artifacts this repo produces.
 
     Stated separately from the sweep above so that a pack failing is reported
     as a pack failing, rather than as one line in a list of every document.
+
+    Discovered by glob, not listed: #601 and #603 each add a pack, and a
+    hardcoded pair would cover neither. Listing filenames here is the exact
+    narrowness this file exists to avoid.
     """
-    pack = DOCS / 'evidence' / doc_name
-    assert pack.exists(), f'{doc_name} has been renamed or removed'
     unresolved = [
         '%s:%d -> %s' % (pack.name, line_no, token)
         for line_no, token in _citations(pack)
