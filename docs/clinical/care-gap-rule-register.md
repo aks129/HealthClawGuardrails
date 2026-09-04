@@ -208,6 +208,12 @@ what a verdict above means.
 **When something is unknown**
 
 - Unknown age on an age-gated rule → `indeterminate`, never a false "due".
+  On a rule whose cadence is banded by age, that row also carries **no
+  cadence at all** rather than the rule's default, because the default is
+  itself one band's figure — for `bp-screening`, the 40-and-over one. A row
+  that has said it does not know the person's age states no interval that
+  depends on it (#616), and the range covering both bands is not offered
+  either: it is still an answer to the question the row has just declined.
   **`diabetes-a1c` is the exception**: its diagnosis gate runs *before* the age
   gate, so with no date of birth on file it reports `not_applicable` — "no
   diabetes diagnosis found in your connected records" — rather than declining

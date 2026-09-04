@@ -5,7 +5,8 @@ enforced). 'Due' means no satisfying record was found in the CONNECTED data —
 never an assertion that the screening wasn't done elsewhere.
 """
 
-from r6.caregaps.evaluate import CARE_GAP_RULES, REFERENCES, evaluate_care_gaps
+from r6.caregaps.evaluate import (
+    CARE_GAP_RULES, REFERENCES, _cadence_desc, evaluate_care_gaps)
 
 
 def _patient(gender="female", birth="1968-05-01"):
@@ -336,3 +337,85 @@ def test_the_a1c_gate_reports_what_the_records_held_not_what_the_person_has():
     # The claim is bounded by where we looked.
     assert "connected records" in note
     assert "applies to patients" not in note
+
+
+# ─────────────────────────────────────────────
+# A row that could not pick a band must not quote one (#616)
+#
+# `base` was assembled at the top of the loop from `rule["cadence_months"]`,
+# before any gate ran, and the age-banded `_cadence_for` was consulted only
+# after the age gate passed. So the row for an unknown or missing date of
+# birth said "date of birth unknown — cannot determine eligibility" and
+# "yearly" in the same object: it admitted it did not know the age and then
+# asserted the cadence for one age band.
+#
+# The patient-facing filter drops that row (`_consumer_line` renders only
+# `applicable is True`), which is what made it look contained. It is not: the
+# operation's `detail` parameter is the raw unfiltered results
+# (r6/caregaps/routes.py) and the connector tool returns the whole Parameters
+# document unchanged (services/agent-orchestrator/src/tools.ts), so an agent
+# narrating the record can quote "yearly" as authoritative for someone who may
+# be twenty-five.
+#
+# Asserted as a property of every banded rule rather than against the string
+# "yearly", so it still holds when bands are added to a second rule.
+# ─────────────────────────────────────────────
+
+#: Inputs that leave `_age_years` with nothing to work from. Missing and
+#: unparseable are different journeys to the same row, and the row carries the
+#: same contradiction either way.
+_AGELESS = ({"resourceType": "Patient", "gender": "female"},
+            {"resourceType": "Patient", "gender": "female", "birthDate": ""},
+            {"resourceType": "Patient", "gender": "female",
+             "birthDate": "not-a-date"})
+
+
+def _band_figures(rule):
+    """Every cadence this rule can describe — its own and each band's.
+
+    The rule's own `cadence_months` is in here on purpose: for bp-screening it
+    IS a band's figure (the 40-and-over one), so "not a band's, just the
+    default" would print the same false claim.
+    """
+    months = {rule["cadence_months"]}
+    months |= {b["cadence_months"] for b in rule.get("cadence_bands") or ()}
+    return {_cadence_desc(m) for m in months}
+
+
+def test_a_row_that_never_picked_a_band_quotes_no_bands_figure():
+    """MUTATION: build `base` from `_cadence_desc(rule["cadence_months"])`
+    again -> red, the birth-date-unknown row reports "yearly".
+    """
+    banded = [r for r in CARE_GAP_RULES if r.get("cadence_bands")]
+    assert banded, (
+        "no rule carries cadence_bands — this test would assert nothing; "
+        "delete it or give it a rule to guard")
+    for patient in _AGELESS:
+        res = {r["rule_id"]: r for r in evaluate_care_gaps(
+            patient, as_of=_AS_OF)}
+        for rule in banded:
+            row = res[rule["id"]]
+            assert row["cadence"] not in _band_figures(rule), (
+                f"{rule['id']}: {row['cadence']!r} belongs to one age band, "
+                f"and this row has just said it does not know the age "
+                f"({row.get('indeterminate_reason') or row['note']})")
+            # Nothing else may stand in for it either: a range describing both
+            # bands is still an answer to the question the row has just
+            # declined to answer, and the note is what explains the silence.
+            assert row["cadence"] is None, row["cadence"]
+
+
+def test_an_unbanded_rule_still_states_its_one_cadence_with_no_age():
+    """The scope of the fix, pinned from the other side. A rule with a single
+    cadence for everyone it covers makes no age-dependent claim, so blanking
+    it would drop something true — and "consistency" is the reason someone
+    would.
+    """
+    unbanded = [r for r in CARE_GAP_RULES if not r.get("cadence_bands")]
+    assert unbanded, "every rule is banded — this test asserts nothing"
+    for patient in _AGELESS:
+        res = {r["rule_id"]: r for r in evaluate_care_gaps(
+            patient, as_of=_AS_OF)}
+        for rule in unbanded:
+            assert res[rule["id"]]["cadence"] == _cadence_desc(
+                rule["cadence_months"]), rule["id"]
