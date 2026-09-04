@@ -510,7 +510,8 @@ def create_app(config: Config | None = None,
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
             try:
-                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                                hc.uncounted_record_count(conn["tenant_id"]))
             except HealthClawError:
                 logger.warning("record_count after upload failed for %s",
                                conn_id)
@@ -593,9 +594,12 @@ def create_app(config: Config | None = None,
                             "consent_version": CONSENT_VERSION}), 428
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
-        # report what the refresh actually added.
+        # report what the refresh actually added — documents on the same
+        # terms, so "notes arrived" is a measured delta rather than a restatement
+        # of "this tenant holds notes" (#226).
         try:
-            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                            hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
             return jsonify({"error": "records service unavailable"}), 503
 
@@ -640,9 +644,49 @@ def create_app(config: Config | None = None,
                     current = hc.record_count(conn_tenant)
                 except HealthClawError:
                     current = None
+                # The count covers what the patient can actually reach;
+                # DocumentReferences are ingested but unreadable, so they are
+                # out of it and the sentence below says so (#226). When the
+                # probe itself fails we hedge rather than suppress: the count
+                # is a fact we did measure, and hiding it would trade one
+                # silence for another. State the known part, name the unknown
+                # — the posture the review relay already takes on an
+                # unestablished `confirmed`.
+                try:
+                    uncounted = hc.uncounted_record_count(conn_tenant)
+                except HealthClawError:
+                    uncounted = None
                 if current is not None:
+                    new_records = max(0, current - int(baseline))
                     out["record_count"] = current
-                    out["new_records"] = max(0, current - int(baseline))
+                    out["new_records"] = new_records
+                    # Documents that demonstrably arrived since the refresh
+                    # baselined them. None when the probe failed or the
+                    # connection predates the baseline column — in both cases
+                    # arrival is unknown, and unknown is never claimed.
+                    doc_baseline = conns[conn_tenant].get("last_uncounted")
+                    new_documents = (
+                        None if uncounted is None or doc_baseline is None
+                        else max(0, uncounted - int(doc_baseline)))
+                    if uncounted is None:
+                        out["uncounted_note"] = (
+                            "We could not check whether notes or documents "
+                            "were left out.")
+                    elif new_records > 0 and uncounted > 0:
+                        # A standing caveat on a number the patient can act
+                        # on: what you can read grew, and this excludes notes.
+                        out["uncounted_note"] = (
+                            "Notes and documents are not yet readable here.")
+                    elif new_records == 0 and new_documents:
+                        # The refresh delivered documents and nothing readable.
+                        # Silence here is indistinguishable from a sync that
+                        # did nothing, so say what happened. Gated on the
+                        # delta, never on `uncounted > 0` — the latter is true
+                        # from the first tick for every tenant that already
+                        # holds notes, and would fire on every no-op refresh.
+                        out["uncounted_note"] = (
+                            "Notes and documents arrived, and they are not "
+                            "readable here yet.")
             return jsonify(out)
         return jsonify({"status": "pending"})
 
