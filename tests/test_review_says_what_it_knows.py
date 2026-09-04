@@ -373,9 +373,12 @@ def test_the_fetch_itself_has_a_catch(page):
 def test_an_unreachable_service_leaves_the_button_enabled(page):
     """The ruling, pinned. MUTATION: set `btn.disabled = true` here -> red.
 
-    Deliberately the opposite of every sibling branch, which is exactly why
-    it needs a guard: the next person to tidy these into one shape would
-    disable it for consistency and strand the patient.
+    The opposite of most sibling branches, which is exactly why it needs a
+    guard: the next person to tidy these into one shape would disable it for
+    consistency and strand the patient. It read "every sibling branch" until
+    the relay's own 503s were ruled the same way for the same reason; the
+    sentence had outlived the fact, which is the thing this file exists to
+    catch, so it is stated as it is rather than as it was.
     """
     block = _block(_code_only(_submit_handler(page)), "!res.reached")
     assert "btn.disabled = false" in block, (
@@ -737,6 +740,43 @@ def test_an_action_that_moved_on_is_not_rendered_as_a_bare_failure(page):
         "no branch handles the 404 a second approval gets once the action "
         "has moved on, so an approved-and-executed request renders as a red "
         "'Unknown action' with Approve re-armed")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "QA on the finished stack (#550 -> #566 -> #579). A session that expires "
+    "while the form is open is reported as an unknown approval outcome, on a "
+    "page whose primary device is a phone in an in-app browser. The page has "
+    "the evidence and does not read it. Fix names a state, so Dev's call."))
+def test_a_signed_out_submit_is_not_reported_as_an_unknown_outcome(page):
+    """The patient left the form open and the cookie expired.
+
+    `/review/<agent>/<action>/submit` is not under `/api/`, so
+    `login_required` answers a 302 to the sign-in page rather than a 401
+    (careagents/app.py:189-192). `fetch` follows redirects by default, so
+    what arrives is `200 text/html` — the login page. That parses as
+    unreadable, and the page says, verbatim in a browser at 390x844:
+
+        alert alert-warning / Approve DISABLED
+        "We could not read the answer to your approval, so we cannot tell
+         you whether it went through. We have not sent it again. Reload
+         this page to see where this request stands."
+
+    Nothing was submitted and nothing could have been: the request never
+    passed the session gate. The screen reports an unknown approval
+    outcome, takes the only control away, and points at a reload that lands
+    on a sign-in page saying nothing about the request. `res.r.redirected`
+    and `res.r.url` are both on the response and neither is read.
+
+    Scope: the rendering above was executed in a browser against the real
+    template, with the submit answered `200 text/html`. The 302 mechanics
+    are read from `login_required`, not driven through a genuinely expired
+    session.
+    """
+    body = _code_only(_submit_handler(page))
+    assert "res.r.redirected" in body, (
+        "the page cannot tell a signed-out submit from an unreadable answer, "
+        "so an expired session is reported as an approval whose outcome is "
+        "unknown, with Approve disabled")
 
 
 # QA #566 (MEDIUM), filed as a strict xfail and fixed here, so the marker is
