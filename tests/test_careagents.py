@@ -4898,20 +4898,131 @@ def test_the_connect_refusal_is_announced_to_a_screen_reader():
     assert 'aria-live="polite"' in tag, tag
 
     # ...and the attributes alone are not the fix. A live region announces a
-    # change made while it is IN the accessibility tree; `hidden` is
-    # display:none, and say() also MOVES the element (a remove-then-insert).
-    # Writing the text in the same task as either one is a change nothing is
-    # listening for. So the region is shown first and written into after.
+    # change made while it is IN the accessibility tree, and say() MOVES the
+    # element next to the tapped tile — a remove-then-insert, which takes it
+    # out. So say() hides the region across the move and hands the write to
+    # announce(), which reveals it before the text lands. The ordering itself
+    # is pinned on announce(), below.
     body = re.sub(r"//[^\n]*", "",
                   _HOME_JS.split("function say(")[1].split("\n  }")[0])
-    assert body.index("el.hidden = false") < body.index("el.textContent = text")
-    # MUTATION (QA review): `"requestAnimationFrame" in body` passed with a
-    # SINGLE rAF — the case say()'s own comment says does not announce, because
-    # one frame's callback runs BEFORE the paint that puts the region in the
-    # accessibility tree. The count is the property, so the count is pinned.
-    assert body.count("requestAnimationFrame") == 2, body
-    assert re.search(
-        r"requestAnimationFrame\(\(\)\s*=>\s*requestAnimationFrame\(", body), body
+    assert body.index("el.hidden = true") < body.index("insertAdjacentElement"), body
+    assert re.search(r"announce\(el, text", body), body
+    # A re-tap of the same tile repeats the same sentence, and rewriting a
+    # string with itself is not a change anything has to announce — so that
+    # one is hidden and revealed again too. It lives here rather than in
+    # announce(), which is shared with two 5s pollers that repeat one sentence
+    # per tick and must not blink.
+    assert "el.textContent === text" in body, body
+    # MUTATION: writing the text here, on either side of the move, is the
+    # defect — the region is absent when the text lands.
+    assert "el.textContent = text" not in body, body
+
+
+def test_a_live_region_is_revealed_empty_and_written_into_after_a_wall_clock_wait():
+    """Every message element on this page is written through announce(), and
+    announce() reveals the region empty, waits, then writes. Without the wait
+    the text lands in the same task as the unhide, which is a change nothing
+    was listening for — the case that made the FIRST message on a connection
+    card silent (#590).
+
+    The wait is a wall-clock constant rather than a frame count. Two nested
+    `requestAnimationFrame`s — what #571 shipped — measure paints, not time:
+    ~33ms on a 60Hz phone, ~16ms at 120Hz, and none at all in a backgrounded
+    tab. The number that has to be big enough is a number of milliseconds, so
+    that is the unit.
+
+    Source-level, like the guards above: this executes no JavaScript, and
+    nothing here establishes that the region is SPOKEN. No screen reader has
+    been run against it (#590).
+    """
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function announce(")[1].split("\n  }")[0])
+    # Revealed empty first...
+    assert body.index('el.textContent = ""') < body.index("el.hidden = false"), body
+    assert body.index("el.hidden = false") < body.index("setTimeout("), body
+    # ...and the text is written in exactly one place, which the timer reaches
+    # and the unhide does not. MUTATION: hoisting that write up beside the
+    # unhide is the whole defect, and it leaves every other assertion green.
+    assert body.count("el.textContent = text") == 1, body
+    revealed = body[body.index("el.hidden = false"):]
+    armed = revealed.index("setTimeout(")
+    assert "= text" not in revealed[:armed], revealed[:armed]
+    deferred = revealed[armed:]
+    assert "write()" in deferred or "el.textContent = text" in deferred, deferred
+    assert "requestAnimationFrame" not in body, body
+    # MUTATION: `setTimeout(fn, 0)` restores the defect exactly, and 16 or 33
+    # restores the frame counts this replaced. The value is the property, so
+    # the value is pinned.
+    m = re.search(r"const ANNOUNCE_DELAY_MS = (\d+);", _HOME_JS)
+    assert m, "the wait has no named constant"
+    assert int(m.group(1)) >= 100, m.group(0)
+    # A deferred write that is overtaken has to be cancelled. Delete arms
+    # "Deleting…" and then awaits the DELETE; a failure that lands inside the
+    # wait would otherwise be papered over by the stale "Deleting…" arriving
+    # on top of "Your records were not deleted."
+    assert "clearTimeout" in body, body
+
+
+def test_no_connection_card_message_sets_its_text_before_it_is_shown():
+    """`.conn-refresh-msg` has carried `role="status"` + `aria-live="polite"`
+    since the refresh flow landed, and every one of its writers defeated them:
+    the text was set BEFORE `hidden = false`, so the region was absent when
+    the text landed and unchanged when it appeared. "Checking…", "Deleting…",
+    the poller's 503, an upload result and a failed disconnect all announced
+    nothing at all (#590).
+
+    Pinned as an absence — no card writer touches `.textContent` or `.hidden`
+    on a message element; both are announce()'s job now.
+    """
+    js = re.sub(r"//[^\n]*", "", _HOME_JS)
+    assert not re.findall(r"\b(?:msg|msgEl)\.textContent\s*=", js)
+    assert not re.findall(r"\b(?:msg|msgEl)\.hidden\s*=\s*false", js)
+    # ...and the sites that used to do it announce instead: the pending
+    # poller, report(), sayUpload(), disconnect, delete's two messages, and
+    # watchForNewRecords' two.
+    assert js.count("announce(msg") >= 8, js.count("announce(msg")
+
+
+def test_the_surfaces_message_is_a_live_region_too():
+    """`#surfaces-msg` carries the refusal for the messaging surfaces and the
+    words explaining every section flash ("Create an agent first, then connect
+    iMessage."), and had no live-region attributes at all — #571 gave the
+    treatment to one of the page's two message channels and the PR's framing
+    implied there was only one (#590).
+    """
+    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
+    tag = tag[:tag.index(">") + 1]
+    assert 'role="status"' in tag, tag
+    assert 'aria-live="polite"' in tag, tag
+
+    # flashSection moves it next to the section being scrolled to, so it hides
+    # across the move for the same reason say() does.
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function flashSection(")[1].split("\n  }")[0])
+    assert body.index("msgEl.hidden = true") < body.index("insertAdjacentElement"), body
+    assert "announce(msgEl, text)" in body, body
+
+
+def test_an_empty_live_region_draws_nothing_while_it_waits():
+    """The region is revealed empty and written into a beat later. Inside the
+    marketplace grid `.inline-msg` has a background and 10px of padding, and
+    an upload result carries `.form-ok`/`.form-warn` — so that window would be
+    a flash of empty colour and a layout jump on the phone the tester is
+    holding.
+
+    It has to collapse while empty WITHOUT leaving the accessibility tree:
+    `display: none` or `visibility: hidden` here would take the region back
+    out and defeat the deferral it is waiting on.
+    """
+    rule = _CSS.split(".inline-msg:empty")[1].split("}")[0]
+    assert "padding: 0" in rule, rule
+    assert "background: none" in rule, rule
+    assert "display: none" not in rule, rule
+    assert "visibility" not in rule, rule
+    assert ".conn-refresh-msg:empty" in _CSS
+    # Same specificity as `.marketplace > .inline-msg`, so it only wins by
+    # coming after it.
+    assert _CSS.index(".inline-msg:empty") > _CSS.index(".marketplace > .inline-msg")
 
 
 def test_the_password_reassurance_is_absent_while_those_logins_are_closed(

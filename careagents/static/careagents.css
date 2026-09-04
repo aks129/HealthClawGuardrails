@@ -458,6 +458,16 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
   grid-column: 1 / -1; margin-top: 2px;
   background: #FBE9E2; border-radius: 12px; padding: 10px 14px;
 }
+/* Both message elements are revealed EMPTY and written into ANNOUNCE_DELAY_MS
+   later, so the live region is in the accessibility tree before its text
+   changes (#590). While empty they must draw nothing, or that window is a
+   flash of blank colour and a layout jump. Padding and background only:
+   `display: none` or `visibility: hidden` would take the region back out of
+   the accessibility tree, which is the whole thing the wait is buying. Ties
+   with the rule above on specificity, so it has to come after it. */
+.inline-msg:empty, .conn-refresh-msg:empty {
+  margin: 0; padding: 0; background: none;
+}
 
 /* --- picker / code / delete dialogs --------------------------------------- */
 .modal.sheet { align-items: flex-end; }

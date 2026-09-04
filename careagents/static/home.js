@@ -91,6 +91,53 @@
     return { close, result };
   }
 
+  // How long the empty live region sits in the page before its text lands.
+  //
+  // A wall-clock number, not a frame count. What has to elapse is time for
+  // assistive technology to register the region; requestAnimationFrame
+  // measures paints, so the two nested frames this replaces were ~33ms on a
+  // 60Hz phone, ~16ms at 120Hz and never at all in a backgrounded tab —
+  // under the ~100ms that accessibility libraries conventionally allow. 150ms
+  // clears that and stays below the ~200ms where a person feels a wait, and
+  // `:empty` in the stylesheet keeps the window from drawing anything.
+  //
+  // Chosen from documented practice, not measured against a screen reader —
+  // no screen reader has been run against any of this (#590).
+  const ANNOUNCE_DELAY_MS = 150;
+  const announceTimers = new WeakMap();
+
+  // Put `text` into a message element so a live region actually announces it.
+  //
+  // A live region announces only a change made while it is IN the
+  // accessibility tree, and `hidden` is display:none. Text written in the same
+  // task as the unhide is a change nothing was listening for, which is exactly
+  // the FIRST message on any of these elements — the one a tester meets. So a
+  // hidden region is revealed empty, and the text follows a beat later.
+  //
+  // An already-settled visible region is written straight into: that is the
+  // textbook live-region update, and deferring it would blank the message
+  // between "Checking…" and its result for no gain. It also keeps the two 5s
+  // pollers quiet — while the record store is down they repeat one sentence
+  // every tick, and clearing the region for each would blink the card and
+  // re-announce it.
+  //
+  // A pending write that is overtaken is cancelled and re-armed with the newer
+  // text. Delete arms "Deleting…" and then awaits the request; a failure that
+  // lands inside the wait would otherwise be papered over by the stale
+  // "Deleting…" arriving on top of "Your records were not deleted."
+  function announce(el, text, after) {
+    const pending = announceTimers.get(el);
+    if (pending) clearTimeout(pending);
+    const write = () => { el.textContent = text; if (after) after(); };
+    if (!el.hidden && !pending) return write();
+    el.textContent = "";
+    el.hidden = false;
+    announceTimers.set(el, setTimeout(() => {
+      announceTimers.delete(el);
+      write();
+    }, ANNOUNCE_DELAY_MS));
+  }
+
   // Inline message: shown in the page beside what the user touched.
   //
   // The element is MOVED next to `anchor` before it is shown. A message that
@@ -100,22 +147,19 @@
   // one element keeps the id stable for anything addressing it.
   function say(anchor, el, text) {
     if (anchor && el.previousElementSibling !== anchor) {
+      // The move is a remove-then-insert, so the region leaves the
+      // accessibility tree even when it was already on screen. Hide it first
+      // and announce() brings it back the way it brings back any newly shown
+      // region — present and empty before the text arrives.
+      el.hidden = true;
       anchor.insertAdjacentElement("afterend", el);
+    } else if (!el.hidden && el.textContent === text) {
+      // Re-tapping the same closed tile repeats the same sentence, and
+      // rewriting a string with itself is not a change anything has to
+      // announce. Send it back through the reveal, the way a moved one goes.
+      el.hidden = true;
     }
-    // #connect-msg is a live region, and a live region announces only a change
-    // made while it is IN the accessibility tree. Both things this function
-    // does take it out: `hidden` is display:none, and the move above is a
-    // remove-then-insert. Setting the text in the same task as either one is a
-    // change nothing is listening for — the refusal a closed tile gives would
-    // be read out by no screen reader at all. So show the empty region, let a
-    // frame paint, then write into it. Nested rAF because a single one runs
-    // BEFORE that paint, which is the same task as far as the a11y tree is
-    // concerned; two frames is ~32ms, under the threshold where an empty box
-    // is perceptible.
-    el.textContent = "";
-    el.hidden = false;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      el.textContent = text;
+    announce(el, text, () => {
       // Only scrolls if it isn't already fully visible, and only as far as it
       // has to — no jump when the message is already under the user's thumb.
       // Never while a dialog is up: the message is behind the overlay, so the
@@ -125,7 +169,7 @@
       if (!document.querySelector(".modal:not([hidden])")) {
         el.scrollIntoView({ block: "nearest" });
       }
-    }));
+    });
   }
 
   // Scroll a section into view and pulse it — the in-page way to point at the
@@ -135,9 +179,11 @@
   function flashSection(el, msgEl, text) {
     if (!el) { if (msgEl) say(null, msgEl, text); return; }
     if (msgEl) {
+      // Moved, so out of the accessibility tree and back in — hidden across
+      // the move for the same reason say() hides.
+      msgEl.hidden = true;
       el.insertAdjacentElement("afterend", msgEl);
-      msgEl.textContent = text;
-      msgEl.hidden = false;
+      announce(msgEl, text);
     }
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.add("flash");
@@ -227,8 +273,7 @@
       // "pending" forever, and keep polling so it clears itself when the
       // record store comes back.
       if (r.status === 503 && d.error === "records_unavailable") {
-        msg.textContent = d.message;
-        msg.hidden = false;
+        announce(msg, d.message);
         saidUnavailable = true;
         return;
       }
@@ -249,7 +294,7 @@
       const msg = card.querySelector(".conn-refresh-msg");
       // Named apart from the module-scope say(anchor, el, text): this one is
       // card-local and takes only the text.
-      const report = (t) => { msg.textContent = t; msg.hidden = false; };
+      const report = (t) => announce(msg, t);
       btn.disabled = true;
       report("Checking…");
       let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
@@ -320,9 +365,10 @@
   let currentUploadCard = null;
 
   function sayUpload(msg, text, cls) {
-    msg.textContent = text;
+    // Class first, text through announce(): the result box is styled while it
+    // is still empty, and `:empty` keeps it from drawing until it has words.
     msg.className = "conn-refresh-msg" + (cls ? " " + cls : "");
-    msg.hidden = false;
+    announce(msg, text);
   }
 
   document.querySelectorAll(".conn-upload").forEach((btn) => {
@@ -415,8 +461,7 @@
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {
         btn.disabled = false;
-        msg.textContent = res.d.error || "Couldn't disconnect.";
-        msg.hidden = false;
+        announce(msg, res.d.error || "Couldn't disconnect.");
         return;
       }
       location.reload();
@@ -434,15 +479,14 @@
       if (!agreed) return;
 
       btn.disabled = true;
-      msg.textContent = "Deleting…";
-      msg.hidden = false;
+      announce(msg, "Deleting…");
       const r = await fetch(`/api/connections/${btn.dataset.conn}`,
                             { method: "DELETE" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         btn.disabled = false;
         // Say plainly that nothing was deleted — never imply a partial wipe.
-        msg.textContent = d.message || "Your records were not deleted.";
+        announce(msg, d.message || "Your records were not deleted.");
         return;
       }
       location.reload();
@@ -481,14 +525,14 @@
       // Same distinction as the pending poller: an unreachable record store
       // is reported, never rendered as "nothing new yet".
       if (r.status === 503 && d.error === "records_unavailable") {
-        msg.textContent = d.message;
+        announce(msg, d.message);
         return;
       }
       if (!r.ok) return;
       if (typeof d.new_records === "number" && d.new_records > 0) {
         clearInterval(iv);
-        msg.textContent = `${d.new_records} new record` +
-          (d.new_records === 1 ? "" : "s") + " added.";
+        announce(msg, `${d.new_records} new record` +
+          (d.new_records === 1 ? "" : "s") + " added.");
       }
     }, 5000);
   }
