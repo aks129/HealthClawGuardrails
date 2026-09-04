@@ -13,10 +13,20 @@ Pure function (no DB, no Flask). Supports three SDC population mechanisms:
     matching resource for the subject, resolving leaves at every nesting
     depth inside the group (see _populate_list_group).
 
+THE THREE ARE NOT EXCLUSIVE AND NONE OF THEM DEPENDS ON WHERE THE LEAF SITS.
+A leaf inside a list row that carries an initialExpression or an `item.code`
+populates by that mechanism, exactly as it would outside one; the row's own
+record is tried first and the rest is _resolve_answer's, which is the single
+place this rule is implemented.
+
 WHAT COUNTS AS ATTEMPTED, since it is one rule and it is read in two places:
 an initialExpression, an `item.code`, or a `definition` on a leaf anywhere
-under a `repeats: true` group. The third clause does NOT depend on the type
-the definition names — a repeating group of Immunizations is an attempted
+under a `repeats: true` group. ALL THREE CLAUSES, INSIDE A LIST ROW AS WELL —
+the engine used to implement the third alone there, so an expression leaf in
+an AllergyIntolerance group was neither evaluated nor reported while the same
+leaf in an Immunization group was both, which put _LIST_RESOURCE_CONFIG back
+into the predicate by the back door (QA review of #584). The third clause
+does NOT depend on the type the definition names — a repeating group of Immunizations is an attempted
 population this file has no resolver for, so it answers nothing and reports
 every leaf, rather than going silent and letting a caller read the silence
 as "this patient has no immunizations".
@@ -260,6 +270,7 @@ def _populate_item(item, subject, context, observations, issues,
         list_resource_type = _list_group_resource_type(item)
         if item.get("repeats") and list_resource_type:
             return _populate_list_group(item, list_resource_type, subject,
+                                        context, observations,
                                         content_resources, issues)
         # Ordinary group: recurse, keep the group only if it produced
         # child answers. A `repeats: true` group whose leaves name a type
@@ -311,8 +322,8 @@ def _parse_definition(definition):
     return parts[0], parts[1]
 
 
-def _populate_list_group(item, resource_type, subject, content_resources,
-                         issues):
+def _populate_list_group(item, resource_type, subject, context, observations,
+                         content_resources, issues):
     """Emit one repeat of `item` per matching, currently-relevant resource of
     `resource_type` for `subject`. Returns [] when there are none — an empty
     repeating group, never a default answer for a sibling item (see module
@@ -327,13 +338,14 @@ def _populate_list_group(item, resource_type, subject, content_resources,
     tests/test_populate_lists.py::
     test_three_unlabelled_allergies_still_produce_three_repeats.
 
-    Leaves report through the same mechanism as everything else: a leaf
-    carrying a `definition` is an attempted population, so one that resolves
-    nothing gets an issue naming its linkId. A leaf with no `definition` is
-    not attempted and is left alone — that is the same exclusion
-    `_resolve_answer` applies to the attestation booleans, and it is why a
-    future patient-entered leaf inside a repeating group will not be
-    reported as something the server failed to fill.
+    Leaves report through the same mechanism as everything else, and that
+    is now literally true rather than nearly: a row's leaves end at
+    `_resolve_answer`, the one function that decides what was attempted. A
+    leaf with NO mechanism at all — no definition, no expression, no code —
+    is left alone there, which is the same exclusion that keeps the
+    attestation booleans out of the issue list, and it is why a future
+    patient-entered leaf inside a repeating group will not be reported as
+    something the server failed to fill.
     """
     config = _LIST_RESOURCE_CONFIG[resource_type]
     subject_ref = _reference(subject)
@@ -347,13 +359,36 @@ def _populate_list_group(item, resource_type, subject, content_resources,
     return [{"linkId": item.get("linkId"),
              "item": _populate_list_children(item.get("item", []),
                                              resource_type, config, resource,
-                                             issues)}
+                                             context, observations, issues)}
             for resource in resources]
 
 
-def _populate_list_children(items, resource_type, config, resource, issues):
-    """Resolve one row's leaves, AT EVERY DEPTH, and report the ones that
-    resolve nothing.
+def _populate_list_children(items, resource_type, config, resource, context,
+                            observations, issues):
+    """Resolve one row's leaves, AT EVERY DEPTH AND BY EVERY MECHANISM, and
+    report the ones that resolve nothing.
+
+    THE ROW'S RECORD FIRST, THEN `_resolve_answer` FOR EVERYTHING ELSE. This
+    loop used to resolve a leaf by `definition` and by nothing else, and to
+    carry its own copy of the reporting decision (`elif
+    child.get("definition")`). A leaf carrying an initialExpression or an
+    `item.code` inside a MedicationRequest / AllergyIntolerance / Condition
+    group was therefore neither evaluated nor reported — an unanswered leaf
+    and no issue, which is the silence a caller reads as "this patient has
+    no such value". The same leaf inside a repeating group naming a type
+    with no resolver WAS evaluated and reported, because that group falls
+    through to ordinary recursion: which mechanisms applied depended on
+    whether `_LIST_RESOURCE_CONFIG` happened to contain the group's type,
+    so deleting the type table from the predicate had moved it here rather
+    than removed it (QA review of #584).
+
+    Handing the leaf to `_resolve_answer` leaves ONE implementation of
+    "attempted" in this file. A leaf whose definition names an element of
+    this row's resource takes the record value; anything else — including a
+    definition with no resolver — falls through to the shared predicate,
+    which evaluates the other two mechanisms and makes the one reporting
+    decision. Adding a fourth resource type still changes only which leaves
+    ANSWER.
 
     NESTED GROUPS ARE WALKED, and that is the fix rather than an
     embellishment. This loop used to visit the repeating group's DIRECT
@@ -375,24 +410,34 @@ def _populate_list_children(items, resource_type, config, resource, issues):
         if child.get("type") == "group":
             nested = _populate_list_children(child.get("item", []),
                                              resource_type, config, resource,
-                                             issues)
+                                             context, observations, issues)
             group_item = {"linkId": child.get("linkId")}
             if nested:
                 group_item["item"] = nested
             children.append(group_item)
             continue
+        link_id = child.get("linkId")
         child_resource_type, element_path = _parse_definition(
             child.get("definition"))
         resolver = None
         if child_resource_type == resource_type:
             resolver = config["resolvers"].get(element_path)
         value = resolver(resource) if resolver else None
-        child_item = {"linkId": child.get("linkId")}
+        value_key = _ANSWER_KEY_BY_TYPE.get(child.get("type"), "valueString")
+        if value is None:
+            # This row's record held nothing for the leaf — or the leaf does
+            # not name an element of it at all. The other two mechanisms and
+            # the whole reporting decision are _resolve_answer's, including
+            # the "nothing was attempted" exclusion the attestation booleans
+            # depend on. A leaf carrying both a matching definition and an
+            # expression is author-pathological and resolves record-first;
+            # nothing in the intake form or the fixtures has one.
+            value, value_key = _resolve_answer(
+                child, child.get("type"), context, observations, issues,
+                link_id, in_repeating_group=True)
+        child_item = {"linkId": link_id}
         if value is not None:
-            value_key = _ANSWER_KEY_BY_TYPE.get(child.get("type"), "valueString")
             child_item["answer"] = [{value_key: value}]
-        elif child.get("definition"):
-            _report_unpopulated(issues, child.get("linkId"))
         children.append(child_item)
     return children
 
@@ -442,11 +487,11 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
     #
     # (a) A `definition` leaf inside a repeating group IS an attempted list
     # population — the questionnaire asked for one element of one record per
-    # row. When the group's leaves name a type _LIST_RESOURCE_CONFIG
-    # implements, _populate_list_group resolved and reported them and this
-    # branch is never reached. When they name anything else there is no
-    # resolver, _list_group_resource_type returns None, the group falls
-    # through to ordinary recursion, and the leaves arrive HERE. They used to
+    # row. Leaves arrive here by both routes: from _populate_list_children,
+    # once this row's record has produced no value for them, and from
+    # ordinary recursion when the group names a type _LIST_RESOURCE_CONFIG
+    # has no resolver for. Reporting lives HERE for both, which is what
+    # keeps one rule in one place. They used to
     # return silently: unanswered leaves and ZERO issues — no `issues`
     # parameter on the response at all — which is exactly the state the
     # ruling set out to remove, a caller reading silence as "this patient has
