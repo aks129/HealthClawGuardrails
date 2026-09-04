@@ -9,18 +9,11 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from models import db
+from r6.database_migrations import register_model_metadata
 
 # Import model modules only. This populates the shared metadata without
 # importing main.py or constructing the WSGI application.
-import r6.actions.confirmations  # noqa: F401
-import r6.actions.events  # noqa: F401
-import r6.actions.models  # noqa: F401
-import r6.agent_runs.models  # noqa: F401
-import r6.command_center.models  # noqa: F401
-import r6.fasten.models  # noqa: F401
-import r6.models  # noqa: F401
-import r6.smbp.models  # noqa: F401
-import r6.wearables.models  # noqa: F401
+register_model_metadata()
 
 
 config = context.config
