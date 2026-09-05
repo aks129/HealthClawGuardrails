@@ -17,6 +17,12 @@ name: pr-agent
 #
 # The PR description is the evidence record in this repository, so
 # auto_describe stays off: the agent must not rewrite it.
+#
+# It needs the ANTHROPIC_API_KEY repository secret. That secret is not set
+# today (#608), which is also why claude-pr-review.yml skips its review
+# step. Until it is set, the first step here exits neutrally and the job
+# reports success without reviewing anything; the step's warning says so
+# on every run, so the green is never mistaken for a review.
 
 on:
   pull_request:
@@ -44,12 +50,23 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
+      - name: Skip if the reviewer is unconfigured
+        id: keycheck
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          echo "has_key=$HAS_KEY" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set; The PR Agent did not run (#608)."
+          fi
+
       - name: The PR Agent
+        if: steps.keycheck.outputs.has_key == 'true'
         # v0.44.0 = ab6ec54bfeb37933ddb74259338752e9272016c6
         uses: The-PR-Agent/pr-agent@v0.44.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Same Anthropic key the standards review already uses; no OpenAI key.
+          # The same secret name claude-pr-review.yml reads; no OpenAI key.
           ANTHROPIC.KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           config.model: "anthropic/claude-sonnet-5"
           config.fallback_models: '["anthropic/claude-haiku-4-5-20251001"]'
