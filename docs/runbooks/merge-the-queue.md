@@ -94,16 +94,28 @@ ORDER=(
 )
 if [ $# -gt 0 ]; then ORDER=("$@"); fi
 
+# The eight contexts branch protection requires. A fresh head has none of
+# them for a moment after update-branch, so "no pending checks" is not
+# "all checks passed"; wait until every required context is present.
+REQUIRED=(claude-standards-review python-tests node-tests postgres-tests lint secret-scan dependency-audit compliance-gates)
+
 wait_checks() {
-  # Poll until every check on the PR has a conclusion; print the failures.
-  local n=$1
+  # Wait until every required context exists and has a conclusion, then print
+  # the names of any that did not succeed. Gives up after 40 minutes.
+  local n=$1 i=0
   while true; do
-    local pending
-    pending=$(gh pr checks "$n" --repo "$REPO" --json state --jq '[.[] | select(.state=="PENDING" or .state=="QUEUED" or .state=="IN_PROGRESS")] | length')
-    [ "$pending" = "0" ] && break
+    local json missing pending
+    json=$(gh pr checks "$n" --repo "$REPO" --json name,state 2>/dev/null || echo '[]')
+    missing=0
+    for c in $REQUIRED; do
+      printf '%s' "$json" | jq -e --arg c "$c" 'map(select(.name==$c)) | length > 0' >/dev/null || missing=$((missing+1))
+    done
+    pending=$(printf '%s' "$json" | jq '[.[] | select(.state=="PENDING" or .state=="QUEUED" or .state=="IN_PROGRESS")] | length')
+    if [ "$missing" = "0" ] && [ "$pending" = "0" ]; then break; fi
+    i=$((i+1)); if [ $i -gt 53 ]; then echo "timeout waiting for checks ($missing missing, $pending pending)"; return; fi
     sleep 45
   done
-  gh pr checks "$n" --repo "$REPO" --json name,state --jq '.[] | select(.state=="FAILURE" or .state=="ERROR" or .state=="CANCELLED") | .name'
+  printf '%s' "$json" | jq -r --argjson req "$(printf '%s\n' $REQUIRED | jq -R . | jq -s .)" '.[] | select((.name as $x | $req | index($x)) and .state != "SUCCESS") | .name'
 }
 
 for n in $ORDER; do
@@ -138,7 +150,9 @@ for n in $ORDER; do
     labels=$(gh pr view "$n" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
     case "$labels" in *claude:approve*) ;; *) echo "STOP #$n: review verdict after update is '$labels'"; exit 1 ;; esac
   fi
-  echo "== #$n: merge"
+  m=$(gh pr view "$n" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus)
+  if [ "$m" = "BEHIND" ]; then echo "STOP #$n: main moved under this PR (BEHIND); re-run from #$n"; exit 1; fi
+  echo "== #$n: merge ($m)"
   if ! gh pr merge "$n" --repo "$REPO" --squash --delete-branch; then
     echo "STOP #$n: merge refused: $(gh pr view "$n" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus)"; exit 1
   fi

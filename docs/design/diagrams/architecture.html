@@ -27,7 +27,7 @@
     <div class="scroll">
 <svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-title arch-desc">
 <title id="arch-title">The guardrail boundary</title>
-<desc id="arch-desc">Every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</desc>
+<desc id="arch-desc">The boundary as HealthClaw 2.0 defines it: every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. The kernel is not yet the only path. On 2026-09-05 the ratchets in tests/test_ratchets.py still count 12 step-up call sites, 5 raw tenant reads and 89 audit calls outside it; the migration that closes them is the open 2.0 workstream. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55534B"/></marker><marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1B2FBF"/></marker><marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D4E6B"/></marker></defs>
 <rect width="100%" height="100%" fill="#FAF9F5"/>
 <rect x="40" y="80" width="260" height="312" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
@@ -153,7 +153,7 @@
 
 </svg>
     </div>
-    <p class="note">Every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</p>
+    <p class="note">The boundary as HealthClaw 2.0 defines it: every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. The kernel is not yet the only path. On 2026-09-05 the ratchets in tests/test_ratchets.py still count 12 step-up call sites, 5 raw tenant reads and 89 audit calls outside it; the migration that closes them is the open 2.0 workstream. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</p>
   </div>
 </body>
 </html>
