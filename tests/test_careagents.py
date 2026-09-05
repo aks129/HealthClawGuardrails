@@ -666,6 +666,26 @@ def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
     assert stored[1]["content"] == "here you go"
 
 
+def test_chat_route_also_accepts_agent_id_as_the_query_param(cfg, svc,
+                                                              monkeypatch):
+    """#645: every other endpoint in this file names the identifier
+    `agent_id` (/api/agents, /api/chat's JSON body, /api/form). This route
+    alone required the bare name `agent` and silently redirected to /home on
+    the equally-plausible `agent_id` — no error, just a dead end a tester
+    hit. Both spellings must resolve the same agent.
+
+    MUTATION: drop the `or request.args.get("agent_id", "")` fallback ->
+    the `agent_id=` request 302s to /home instead of 200.
+    """
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(cfg, svc, monkeypatch)
+
+    by_agent = c.get(f"/chat?agent={agent_id}")
+    by_agent_id = c.get(f"/chat?agent_id={agent_id}")
+
+    assert by_agent.status_code == 200
+    assert by_agent_id.status_code == 200
+
+
 def test_a_returning_person_sees_the_conversation_they_had(cfg, svc,
                                                            monkeypatch):
     # The core of #222: process memory is a cache, not the record. Wiping it

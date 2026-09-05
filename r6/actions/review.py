@@ -455,16 +455,26 @@ def review_submit(action_id):
         detail='reviewed via review-page; qr=%s' % qr_row.id,
     )
 
+    # #645: this response used to assert the executor's OUTCOME — "the
+    # form-fill executor currently returns an honest needs_review
+    # placeholder" — as if this handler could see it. It can't: this handler
+    # only stages a confirmation row (issue_confirmation, above); execution
+    # happens on a separate call (r6/actions/routes.py's confirm route),
+    # which this function returns before. A caller reading only this
+    # response has no way to know the true outcome yet, and the old string
+    # was itself only ever a guess — one that outlived being true, so a
+    # tester who generated a real PDF was told nothing had been generated.
+    # Say only what this handler actually knows: the review was recorded.
     from flask import jsonify
     return jsonify({
         'id': action.id,
         'status': action.status,
         'reviewed_qr_id': qr_row.id,
         'approved_via': 'review-page',
-        'next_step': ('Review recorded and approval issued. Form generation '
-                      '(PDF/DocumentReference) is Task 8; the form-fill '
-                      'executor currently returns an honest needs_review '
-                      'placeholder.'),
+        'next_step': ('Review recorded and approval issued. The form is '
+                      'generated once the confirmation above is claimed and '
+                      'executed — check the action\'s own status for the '
+                      'outcome.'),
     }), 200
 
 

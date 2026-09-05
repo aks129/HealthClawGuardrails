@@ -391,6 +391,42 @@ def test_post_with_nka_affirmed_succeeds(client, app, tenant_headers,
         assert _nka_answer(qr) is True
 
 
+def test_post_next_step_does_not_claim_an_outcome_it_cannot_know(
+        client, app, tenant_headers, auth_headers):
+    """#645: this handler stages a confirmation row (ActionConfirmation) and
+    returns BEFORE the separate confirm/execute call that actually renders
+    the form — so it cannot know, at response time, whether that later call
+    will produce a completed PDF or a needs_review/failed outcome. The old
+    text asserted one specific outcome ("the form-fill executor currently
+    returns an honest needs_review placeholder") — true when written, false
+    once form-fill was actually implemented, and nobody read the string
+    again to notice. Pin the PROPERTY, not a phrase: no wording produced
+    here may name a terminal, verifiable outcome ('completed', 'placeholder',
+    'generated', a task number) as if it already happened.
+
+    MUTATION: restore the deleted 'Task 8'/'placeholder' string -> red.
+    """
+    tenant = tenant_headers['X-Tenant-Id']
+    _seed(app, tenant, [PATIENT, MED_A, MED_B])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    resp = _post(client, auth_headers, action_id,
+                 {'med-0': 'yes', 'med-1': 'no', 'nka': 'true'})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    next_step = resp.get_json()['next_step']
+
+    # This handler DID succeed at what it does — say that plainly.
+    assert 'Review recorded' in next_step
+
+    # It must not assert what only the later execute() call can determine.
+    forbidden = ('Task 8', 'placeholder', 'needs_review', 'completed',
+                'generated.', 'was generated')
+    hits = [w for w in forbidden if w in next_step]
+    assert not hits, (
+        f'next_step claims an outcome this handler cannot know: {hits} '
+        f'in {next_step!r}')
+
+
 def test_post_confirming_real_allergy_succeeds(client, app, tenant_headers,
                                                auth_headers):
     tenant = tenant_headers['X-Tenant-Id']
