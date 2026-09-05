@@ -10,14 +10,22 @@ does. Reproduced against hapi.fhir.org directly:
 
 So the first `$conformance` run against a HAPI deployment passed and every
 run after it failed. It failed in the worst available way: the Patient create
-returns no id, the dependent Observation then 400s on a dangling subject
-reference, and the scorecard attributes both to the guardrails. Measured on a
-live run: **Grade F, 1/7, four of the six failures naming gates that were
-working.**
+returned no id, the dependent Observation then 400'd on a dangling subject
+reference, and the scorecard attributed both to the guardrails. Measured on a
+live run, 2026-08-16 against hapi.fhir.org: **Grade F, 1/7 — five of the six
+failing properties were the collision and not a defect (only `error_fidelity`,
+#498, was real), and two of those named a gate the same session had just
+watched work.**
 
 That is the flagship artifact accusing the thing it exists to certify, in
 front of whoever ran it against their own server. The grade is published, and
 a partner evaluating us reruns it — which is precisely the second run.
+
+The F expired the day it was measured: #514 is this fix, and the same
+deployment re-measured **Grade B, 6/7** on 2026-09-04. The transcript of the
+F is `docs/evidence/2026-08-16-set2-connectors.md` §3. The count above read
+"four of the six" here and in four other places until 2026-09-04; no count in
+that transcript yields four (#605).
 
 TWO PROPERTIES, and the second is why this file is not one assertion:
 
