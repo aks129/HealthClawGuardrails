@@ -11,11 +11,14 @@ document, which is the first thing a partner's reviewer reads, and the suite
 was green. A published blog post said "identifiers are stripped using HIPAA
 Safe Harbor rules" for the same reason.
 
-What the code actually does (`r6/redaction.py:83`) is truncate every
+What the code did at the time (`r6/redaction.py:83`) was truncate every
 identifier value to its last four characters. Safe Harbor
 §164.514(b)(2)(i)(G) requires the Social Security number REMOVED, not
-shortened, and a last-four SSN is a recognised re-identification vector. The
-behaviour is defensible as a compensating control. The unhedged claim is not.
+shortened, and a last-four SSN is a recognised re-identification vector.
+Identifier values are now removed (tests/test_redaction_identifiers.py), but
+the profile still keeps birth year, state and country, so it is still a
+compensating control and not the legal standard. The unhedged claim stays
+wrong.
 
 So the needle changed from four phrases to the claim itself: on a public
 surface, the words "Safe Harbor" may appear only in a sentence that says it
@@ -139,9 +142,9 @@ def _unqualified_mentions(text):
 def test_naming_safe_harbor_on_a_public_surface_disclaims_it():
     """The claim, not four spellings of it.
 
-    Redaction truncates identifiers rather than removing them, so an unhedged
-    "Safe Harbor" is wrong about what the product does — and it is wrong in
-    the direction a compliance reviewer will act on.
+    Redaction is field-level and keeps birth year, state and country, so an
+    unhedged "Safe Harbor" is wrong about what the product does — and it is
+    wrong in the direction a compliance reviewer will act on.
     """
     unqualified = []
     for relative_path, text in _public_files():
@@ -150,8 +153,8 @@ def test_naming_safe_harbor_on_a_public_surface_disclaims_it():
 
     assert not unqualified, (
         'a public surface names the legal standard without disclaiming it. '
-        'Redaction truncates identifiers to their last four characters, which '
-        'Safe Harbor does not permit for an SSN. Write it '
+        'Redaction is a field-level compensating control, not an Expert '
+        'Determination or a Safe Harbor certification. Write it '
         '"Safe-Harbor-*style* field redaction", or say in the same sentence '
         'that it is "not a legal" determination:\n  ' + '\n  '.join(unqualified))
 
