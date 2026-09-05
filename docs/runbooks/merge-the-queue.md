@@ -69,6 +69,15 @@ the partner lands, running the suite, and pushing:
 9. #642, then #643 last so the new reviewer does not fire on every
    update-branch of the queue.
 
+## If auto-merge is already armed
+
+Arming auto-merge on every change does not move the queue by itself: GitHub
+does not bring a branch up to date, and a branch that is behind cannot
+merge. The steps above still apply; the script only notices that the merge
+has already happened when the checks pass and moves on. On 2026-09-05 the
+owner armed forty-four changes and merged six by hand; from there the queue
+was walked exactly this way, one update-branch at a time.
+
 ## The script
 
 Run from the repository root as a maintainer. It walks the order above,
@@ -132,7 +141,7 @@ for n in $ORDER; do
        fi ;;
   esac
   if [ -n "$(gh pr view "$n" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest // empty')" ]; then
-    echo "STOP #$n: auto-merge is already armed; disarm or let it fire, then re-run"; exit 1
+    echo "   (auto-merge is armed; it will fire when the checks pass, and this script will not merge twice)"
   fi
   # 551 and 552 are byte-identical subsets of 544; close them once 544 is in.
   if [ "$n" = "544" ]; then :; fi
@@ -150,6 +159,8 @@ for n in $ORDER; do
     labels=$(gh pr view "$n" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
     case "$labels" in *claude:approve*) ;; *) echo "STOP #$n: review verdict after update is '$labels'"; exit 1 ;; esac
   fi
+  # An armed auto-merge fires the moment the checks above pass; treat that as done.
+  if [ "$(gh pr view "$n" --repo "$REPO" --json state --jq .state)" = "MERGED" ]; then echo "== #$n: merged by auto-merge"; continue; fi
   m=$(gh pr view "$n" --repo "$REPO" --json mergeStateStatus --jq .mergeStateStatus)
   if [ "$m" = "BEHIND" ]; then echo "STOP #$n: main moved under this PR (BEHIND); re-run from #$n"; exit 1; fi
   echo "== #$n: merge ($m)"
