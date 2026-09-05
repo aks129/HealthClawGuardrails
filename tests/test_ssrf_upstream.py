@@ -84,6 +84,58 @@ def test_is_blocked_ip_ranges():
         assert not _is_blocked_ip(ip), ip
 
 
+class TestHostnamesAreResolvedAndEveryAddressChecked:
+    """The hostname branch, which no test reached (#634 F4).
+
+    Every one of the nine tests above passes a literal IP or a malformed
+    string, so the resolve-then-check branch was unexecuted. Its docstring
+    claims "Hostnames are resolved and EVERY resolved IP is checked" — the
+    word doing the work is EVERY, and that is what the second test pins.
+
+    Neither test needs the network. `localhost` resolves from the hosts
+    file, and the multi-address case substitutes the resolver outright, so
+    this does not repeat the #635 mistake of reaching the public internet
+    from the default suite.
+
+    MUTATION: replace the `for info in infos:` loop in validate_upstream_url
+    with `return True` -> both tests below fail (executed 2026-09-05).
+    """
+
+    def test_a_hostname_resolving_to_loopback_is_refused(self):
+        """The branch is reached at all. `localhost` is a hostname, not a
+        literal, so it takes the resolve path the nine tests above skip."""
+        assert not validate_upstream_url("https://localhost/fhir")
+
+    def test_one_blocked_address_among_several_refuses_the_whole_host(
+            self, monkeypatch):
+        """EVERY, not ANY.
+
+        A host answering with a public address first and an internal one
+        second is the realistic shape — a split-horizon or attacker-run
+        domain. Checking only the first resolved address would accept it.
+        """
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            return [
+                (2, 1, 6, "", ("8.8.8.8", port)),
+                (2, 1, 6, "", ("169.254.169.254", port)),
+            ]
+        monkeypatch.setattr(
+            "r6.fhir_proxy.socket.getaddrinfo", fake_getaddrinfo)
+
+        assert not validate_upstream_url("https://split-horizon.example/fhir")
+
+    def test_the_refusal_is_not_vacuous_an_all_public_host_is_allowed(
+            self, monkeypatch):
+        """Without this, the test above passes if the branch refuses
+        everything, which would make it prove nothing."""
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            return [(2, 1, 6, "", ("8.8.8.8", port))]
+        monkeypatch.setattr(
+            "r6.fhir_proxy.socket.getaddrinfo", fake_getaddrinfo)
+
+        assert validate_upstream_url("https://all-public.example/fhir")
+
+
 #: Each is refused by `validate_upstream_url` above. The point here is not
 #: that the rule says no, it is that no proxy is built when it does.
 BLOCKED_UPSTREAMS = [
