@@ -65,7 +65,10 @@ below is the backstop that does not care about syntax at all — it drives the
 two #508 sites over the wire.
 
 MUTATION (run 2026-09-04, both directions, see PR): rewrite either
-command_center site to bind the tuple and interpolate `res[1]` -> red.
+command_center site to bind the tuple and interpolate `res[1]` -> red. Run
+on BOTH — `_authz_write` and `api_generate_link` — rather than one and an
+assumption about the other, since "either" is the kind of word this file now
+exists to stop anyone from writing untested.
 """
 
 import ast
@@ -406,8 +409,10 @@ def test_a_token_for_another_tenant_is_refused_without_naming_why(
     caller the token is merely issued elsewhere is the one carve-out in the
     owner's 2026-08-10 ruling, and it is what #508 put back on the wire.
 
-    MUTATION (run 2026-09-04): bind the validator's tuple in `_authz_write`
-    and interpolate `res[1]` -> red, on the conversations row, with
+    MUTATION (run 2026-09-04): bind the validator's tuple and interpolate
+    `res[1]` -> red. Run separately against each site: mutating
+    `_authz_write` reddens the conversations row, mutating
+    `api_generate_link` reddens the generate-link row, each with
     'Token tenant mismatch' in the body.
     """
     from r6.command_center import access

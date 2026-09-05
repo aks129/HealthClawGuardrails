@@ -579,12 +579,14 @@ def test_persist_intake_document_return_value_reaches_no_caller():
     assert len(id_subscripts) == 1, (
         "expected exactly one docref['id'] read; found %d, so the shape this "
         "row measures changed" % len(id_subscripts))
+    # getsource() starts at the `def`, so an AST lineno is an offset into it.
+    offset = form_fill.FormFillExecutor.execute.__code__.co_firstlineno - 1
     assert len(loads) == 1, (
         "`docref` is read %d times in execute() but subscripted for 'id' "
         "once — the dict itself is being passed somewhere, and every field "
         "persist_intake_document built (including the base64 PDF) travels "
-        "with it. Lines: %s"
-        % (len(loads), sorted({n.lineno for n in loads})))
+        "with it. form_fill.py lines: %s"
+        % (len(loads), sorted({n.lineno + offset for n in loads})))
 
 
 def test_document_reference_read_drops_the_embedded_pdf(

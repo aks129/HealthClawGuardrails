@@ -15,8 +15,14 @@ Scoping that branch to the root Patient —
 
 — hands back contained RelatedPerson and Practitioner names in full, and the
 whole suite stays green: 3157 passed, byte-identical to baseline
-(2026-09-04). Deleting the branch outright IS caught, seven tests over; the
-half-measure was not, which is the more likely edit.
+(2026-09-04).
+
+Deleting the branch OUTRIGHT is caught loudly: 15 existing tests go red,
+across conformance, the read path, ingest read-back and the coverage
+inventory (measured 2026-09-04; #630 said seven, which undercounts). So the
+suite is well defended against removing the control and was defended by
+nothing against narrowing it — and narrowing is the likelier edit, since it
+is what someone does to make a nested resource "readable".
 
 `test_names_below_the_root_are_truncated_too` and
 `test_a_root_resource_that_is_not_a_patient_is_redacted_too` below are the
