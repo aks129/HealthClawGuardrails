@@ -11,6 +11,16 @@ two design objections that blocked the kernel as originally specified.
 
 Every file:line below was verified against `origin/main` at `516cf5b`.
 
+> **Anchors re-checked 2026-09-04 (#605).** They have drifted. Three
+> citations into `r6/read_auth.py` — two at lines 88-93 and one at 262 —
+> pointed past the end of a file that is now 86 lines: `a58e2df` (#431) moved
+> that code out to break the auth-stack import cycles, and `_PUBLIC_REASONS`
+> now lives in `r6/access.py`, the kernel this document specifies. Those three
+> now name the function rather than a line, so they survive the next move.
+> **The rest of the file:line anchors below were not re-verified** and should
+> be read as of `516cf5b`, not of today. This slice order is still the live
+> contract for migration PRs; its line numbers are not.
+
 ---
 
 ## 0. Blocking precondition: the safety net is red
@@ -149,7 +159,7 @@ class Scope(Enum):
     rejects one. The names say what the check does, not what the caller
     wishes it did — the exact mistake behind _RESOURCE_ID_PATTERN.
     """
-    TENANT_BOUND = "tenant-bound"   # r6/read_auth.py:88-93 needs this
+    TENANT_BOUND = "tenant-bound"   # authorize_tenant_read() needs this
     WRITE        = "write"          # every write gate today
 
 
@@ -603,7 +613,7 @@ characterization test written first — which by rule 2 is a separate PR.
 | 5 | `r6/actions/routes.py:256-265`, `:354`, `:464-471`, `r6/actions/review.py:66` | Exercises `also_bearer`, `audience`, `operation`, `consume_nonce`. Four matrix rows. Note the matrix already found a site the audit's line list missed (`commit`, `routes.py:354`) — migrate from the matrix, not from the plan. |
 | 6 | `r6/routes.py:464-472` (create), `:629-637` (update), `:3370-3382` (share-bundle) | Three rows, all 401, all `parses_body_before_step_up` pinned. |
 | 7 | `r6/routes.py:1215-1231` (`$ingest-context`), `:2976-2994` + `:3010-3023` (curatr) | The flag-conditional gate (S-3) and the 403 dialect with a two-phase nonce consume. Migrate the SHAPE only. S-3's fail-open stays fail-open in this PR and is fixed in its own, so the diff shows one thing. |
-| 8 | `r6/read_auth.py:88-93` → `Scope.TENANT_BOUND` | **Last, deliberately.** It is called from the `before_request` hook at `r6/routes.py:269-270` on every GET and from `authenticate_tenant_read` at `:250`. Widest blast radius in the file. It is also the site that proved `require_write_grant` needed a scope parameter: `require_scope=None` here is load-bearing, and `tests/test_patient_connect_token.py:126-130` goes red if a write-grant replaces it. |
+| 8 | `authorize_tenant_read` in `r6/read_auth.py` → `Scope.TENANT_BOUND` | **Last, deliberately.** It is called from the `before_request` hook in `r6/routes.py` on every GET and from `authenticate_tenant_read`. Widest blast radius in the file. It is also the site that proved `require_write_grant` needed a scope parameter: `require_scope=None` here is load-bearing, and `tests/test_patient_connect_token.py:126-130` goes red if a write-grant replaces it. |
 
 Deferred out of this group with a reason: `r6/agent_runs/routes.py:53`
 (`validate_step_up_token(...)[0]`, S-5) and
@@ -898,7 +908,7 @@ Protect it.
   mismatch` describes a credential belonging to someone else: it confirms
   the token is valid and merely issued elsewhere, which is the distinction a
   caller probing with a token they should not have is trying to draw.
-  `r6/read_auth.py:262` withholds it for the same reason.
+  The tenant-read path withholds it for the same reason.
 
   Implemented as an allowlist (`_PUBLIC_REASONS`) with the withheld case
   documented beside it (`_WITHHELD_REASONS`), so a reason added to
