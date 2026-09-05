@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The guardrail boundary</title>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&amp;family=Fragment+Mono&amp;display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --paper: #FAF9F5; --ink: #14140F; --muted: #55534B; --sans: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; --mono: 'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+    body { font-family: var(--sans); background: var(--paper); color: var(--ink); min-height: 100vh;
+           display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1240px; width: 100%; }
+    .eyebrow { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.18em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem); font-weight: 500; letter-spacing: -0.02em;
+          line-height: 1.15; margin-bottom: 1.5rem; }
+    p.note { font-size: 0.875rem; color: var(--muted); max-width: 64ch; margin-top: 1rem; line-height: 1.5; }
+    svg { width: 100%; min-width: 960px; display: block; }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · HealthClaw</p>
+    <h1>The guardrail boundary</h1>
+    <div class="scroll">
+<svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-title arch-desc">
+<title id="arch-title">The guardrail boundary</title>
+<desc id="arch-desc">Every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55534B"/></marker><marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1B2FBF"/></marker><marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D4E6B"/></marker></defs>
+<rect width="100%" height="100%" fill="#FAF9F5"/>
+<rect x="40" y="80" width="260" height="312" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<rect x="56" y="84" width="88" height="12" rx="2" fill="#FAF9F5"/>
+<text x="100.0" y="93" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">AGENT SURFACES</text>
+
+<rect x="340" y="80" width="480" height="416" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<rect x="356" y="84" width="136" height="12" rx="2" fill="#FAF9F5"/>
+<text x="424.0" y="93" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">HEALTHCLAW ENGINE · r6/</text>
+
+<rect x="860" y="80" width="300" height="320" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<rect x="876" y="84" width="52" height="12" rx="2" fill="#FAF9F5"/>
+<text x="902.0" y="93" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">RECORDS</text>
+
+<path d="M 276,144 H 316 Q 324,144 324,152 V 210 Q 324,218 332,218 H 372" fill="none" stroke="#3D4E6B" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<line x1="276" y1="240" x2="372" y2="240" stroke="#3D4E6B" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 276,336 H 316 Q 324,336 324,328 V 270 Q 324,262 332,262 H 372" fill="none" stroke="#3D4E6B" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<line x1="572" y1="224" x2="884" y2="224" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 572,256 H 764 Q 772,256 772,264 V 344 Q 772,352 780,352 H 884" fill="none" stroke="#3D4E6B" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 472,196 V 152 Q 472,144 480,144 H 612" fill="none" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<line x1="276" y1="448" x2="612" y2="448" stroke="#1B2FBF" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+<path d="M 792,448 H 836 Q 844,448 844,440 V 360 a 8,8 0 0,1 0,-16 V 264 Q 844,256 852,256 H 884" fill="none" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<rect x="690.0" y="204" width="76" height="12" rx="2" fill="#FAF9F5"/>
+<text x="728" y="213" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">READ · WRITE</text>
+
+<rect x="780" y="294" width="32" height="12" rx="2" fill="#FAF9F5"/>
+<text x="796.0" y="303" fill="#3D4E6B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">FHIR</text>
+
+<rect x="514.0" y="124" width="64" height="12" rx="2" fill="#FAF9F5"/>
+<text x="546" y="133" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">EVERY READ</text>
+
+<rect x="420.0" y="428" width="48" height="12" rx="2" fill="#FAF9F5"/>
+<text x="444" y="437" fill="#1B2FBF" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">APPROVE</text>
+
+<rect x="788" y="300" width="48" height="12" rx="2" fill="#FAF9F5"/>
+<text x="812.0" y="309" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">EXECUTE</text>
+
+<rect x="64" y="112" width="212" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="64" y="112" width="212" height="64" rx="6" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<rect x="72" y="118" width="36" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="90.0" y="127" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="170.0" y="146.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">MCP server</text>
+<text x="170.0" y="162.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">agent-orchestrator · token-locked</text>
+
+<rect x="64" y="208" width="212" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="64" y="208" width="212" height="64" rx="6" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<rect x="72" y="214" width="36" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="90.0" y="223" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="170.0" y="242.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">CareAgents</text>
+<text x="170.0" y="258.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">web · text · stores no PHI</text>
+
+<rect x="64" y="304" width="212" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="64" y="304" width="212" height="64" rx="6" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.2)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="72" y="310" width="36" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="90.0" y="319" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="170.0" y="338.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Telegram bot</text>
+<text x="170.0" y="354.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">openclaw · sunset candidate</text>
+
+<rect x="64" y="416" width="212" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="64" y="416" width="212" height="64" rx="6" fill="rgba(85,83,75,0.10)" stroke="#76746A" stroke-width="1"/>
+<rect x="72" y="422" width="36" height="12" rx="2" fill="transparent" stroke="rgba(118,116,106,0.40)" stroke-width="0.8"/>
+<text x="90.0" y="431" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">HUMAN</text>
+<text x="170.0" y="450.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">The patient</text>
+<text x="170.0" y="466.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">a separate page, out of band</text>
+
+<rect x="372" y="196" width="200" height="88" rx="6" fill="#FAF9F5"/>
+<rect x="372" y="196" width="200" height="88" rx="6" fill="rgba(27,47,191,0.08)" stroke="#1B2FBF" stroke-width="1"/>
+<rect x="380" y="202" width="40" height="12" rx="2" fill="transparent" stroke="#1B2FBF" stroke-width="0.8"/>
+<text x="400.0" y="211" fill="#1B2FBF" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">KERNEL</text>
+<text x="472.0" y="236.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Access kernel</text>
+<text x="472.0" y="252.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">r6/access.py · require_grant</text>
+<text x="472.0" y="266.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">tenant · step-up · audit</text>
+
+<rect x="612" y="112" width="180" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="612" y="112" width="180" height="64" rx="6" fill="#FFFFFF" stroke="#14140F" stroke-width="1"/>
+<rect x="620" y="118" width="32" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.4)" stroke-width="0.8"/>
+<text x="636.0" y="127" fill="#14140F" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">EXIT</text>
+<text x="702.0" y="146.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Redaction</text>
+<text x="702.0" y="162.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">labels by code, never by display</text>
+
+<rect x="612" y="416" width="180" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="612" y="416" width="180" height="64" rx="6" fill="rgba(27,47,191,0.08)" stroke="#1B2FBF" stroke-width="1"/>
+<rect x="620" y="422" width="32" height="12" rx="2" fill="transparent" stroke="#1B2FBF" stroke-width="0.8"/>
+<text x="636.0" y="431" fill="#1B2FBF" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">GATE</text>
+<text x="702.0" y="450.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Human gate</text>
+<text x="702.0" y="466.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">action rail · approve endpoint</text>
+
+<rect x="884" y="196" width="252" height="88" rx="6" fill="#FAF9F5"/>
+<rect x="884" y="196" width="252" height="88" rx="6" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="1"/>
+<rect x="892" y="202" width="36" height="12" rx="2" fill="transparent" stroke="rgba(85,83,75,0.50)" stroke-width="0.8"/>
+<text x="910.0" y="211" fill="#55534B" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+<text x="1010.0" y="236.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Record store</text>
+<text x="1010.0" y="252.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">SQLite / Postgres</text>
+<text x="1010.0" y="266.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">R6Resource · AuditEvent · ProposedAction</text>
+
+<rect x="884" y="320" width="252" height="64" rx="6" fill="#FAF9F5"/>
+<rect x="884" y="320" width="252" height="64" rx="6" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<rect x="892" y="326" width="52" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="918.0" y="335" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">UPSTREAM</text>
+<text x="1010.0" y="354.0" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Upstream FHIR</text>
+<text x="1010.0" y="370.0" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">Aidbox · Medplum · HAPI · generic</text>
+
+<line x1="40" y1="528" x2="1160" y2="528" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="40" y="544" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="558" width="14" height="10" rx="2" fill="rgba(27,47,191,0.08)" stroke="#1B2FBF" stroke-width="1"/>
+<text x="60" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Guardrail (focal)</text>
+<rect x="172" y="558" width="14" height="10" rx="2" fill="#FFFFFF" stroke="#14140F" stroke-width="1"/>
+<text x="192" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Engine step</text>
+<rect x="276" y="558" width="14" height="10" rx="2" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="1"/>
+<text x="296" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Store</text>
+<rect x="352" y="558" width="14" height="10" rx="2" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<text x="372" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Agent / upstream</text>
+<rect x="480" y="558" width="14" height="10" rx="2" fill="rgba(85,83,75,0.10)" stroke="#76746A" stroke-width="1"/>
+<text x="500" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Person</text>
+<rect x="560" y="558" width="14" height="10" rx="2" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.2)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="580" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Being retired</text>
+<line x1="672" y1="563" x2="700" y2="563" stroke="#3D4E6B" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<text x="708" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">API call</text>
+<line x1="776" y1="563" x2="804" y2="563" stroke="#1B2FBF" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="812" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Human approval</text>
+<line x1="912" y1="563" x2="940" y2="563" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="948" y="566" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Engine call</text>
+
+</svg>
+    </div>
+    <p class="note">Every agent surface reaches the record through one kernel, which resolves the tenant, checks the step-up grant and writes the audit row before any FHIR read or write. Reads leave through redaction, where identifiers are stripped and labels are rebuilt from codes. An agent can propose an action; only a person can approve one, on an endpoint the agent's tools cannot reach.</p>
+  </div>
+</body>
+</html>

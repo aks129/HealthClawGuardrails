@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Where HealthClaw runs</title>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&amp;family=Fragment+Mono&amp;display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --paper: #FAF9F5; --ink: #14140F; --muted: #55534B; --sans: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; --mono: 'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+    body { font-family: var(--sans); background: var(--paper); color: var(--ink); min-height: 100vh;
+           display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1240px; width: 100%; }
+    .eyebrow { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.18em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem); font-weight: 500; letter-spacing: -0.02em;
+          line-height: 1.15; margin-bottom: 1.5rem; }
+    p.note { font-size: 0.875rem; color: var(--muted); max-width: 64ch; margin-top: 1rem; line-height: 1.5; }
+    svg { width: 100%; min-width: 960px; display: block; }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Deployment · HealthClaw</p>
+    <h1>Where HealthClaw runs</h1>
+    <div class="scroll">
+<svg viewBox="0 0 1040 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="deploy-title deploy-desc">
+<title id="deploy-title">Where HealthClaw runs</title>
+<desc id="deploy-desc">Production is three Railway services and one Postgres. The MCP server is the focal piece: token-locked, reached with a bearer token from the home gateway, and the one thing that is not up for negotiation. CareAgents deploys by hand and has drifted from main before. Two self-hosted hosts run agent gateways; the VPS has no verified path into production, so none is drawn. A Vercel copy of the site exists for demos and is omitted here.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#55534B"/></marker><marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1B2FBF"/></marker><marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3D4E6B"/></marker></defs>
+<rect width="100%" height="100%" fill="#FAF9F5"/>
+<rect x="40" y="40" width="232" height="300" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.2)" stroke-width="0.8" stroke-dasharray="4,4"/>
+<rect x="56" y="44" width="56" height="12" rx="2" fill="#FAF9F5"/>
+<text x="84.0" y="53" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">HOME LAN</text>
+
+<rect x="304" y="40" width="472" height="300" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.2)" stroke-width="0.8" stroke-dasharray="4,4"/>
+<rect x="320" y="44" width="120" height="12" rx="2" fill="#FAF9F5"/>
+<text x="380.0" y="53" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">RAILWAY · PRODUCTION</text>
+
+<rect x="792" y="40" width="208" height="300" rx="8" fill="rgba(20,20,15,0.02)" stroke="rgba(20,20,15,0.2)" stroke-width="0.8" stroke-dasharray="4,4"/>
+<rect x="808" y="44" width="28" height="12" rx="2" fill="#FAF9F5"/>
+<text x="822.0" y="53" fill="rgba(20,20,15,0.4)" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">VPS</text>
+
+<path d="M 156,92 V 72 Q 156,64 164,64 H 660 Q 668,64 668,72 V 80" fill="none" stroke="#1B2FBF" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+<path d="M 156,208 V 246 Q 156,254 164,254 H 328" fill="none" stroke="#3D4E6B" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-link)"/>
+<line x1="428" y1="196" x2="428" y2="164" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<line x1="576" y1="122" x2="520" y2="122" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 520,148 H 560 Q 568,148 568,156 V 248 Q 568,256 576,256" fill="none" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<line x1="520" y1="284" x2="576" y2="284" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<rect x="406.0" y="44" width="76" height="12" rx="2" fill="#FAF9F5"/>
+<text x="444" y="53" fill="#1B2FBF" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS BEARER</text>
+
+<rect x="208.0" y="234" width="76" height="12" rx="2" fill="#FAF9F5"/>
+<text x="246" y="243" fill="#3D4E6B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">RELAY STAGED</text>
+
+<rect x="436" y="174" width="36" height="12" rx="2" fill="#FAF9F5"/>
+<text x="454.0" y="183" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS</text>
+
+<rect x="530.0" y="102" width="36" height="12" rx="2" fill="#FAF9F5"/>
+<text x="548" y="111" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS</text>
+
+<rect x="532.0" y="264" width="32" height="12" rx="2" fill="#FAF9F5"/>
+<text x="548" y="273" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">5432</text>
+
+<rect x="64" y="92" width="184" height="116" rx="6" fill="#FAF9F5"/>
+<rect x="64" y="92" width="184" height="116" rx="6" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<rect x="72" y="100" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="86.0" y="109" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">MAC</text>
+<text x="156.0" y="132" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Mac mini · home</text>
+<rect x="72" y="144" width="168" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="80" y="160" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">openclaw gateway</text>
+<text x="232" y="160" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">:18789</text>
+<rect x="72" y="176" width="168" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="80" y="192" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">ollama</text>
+<text x="232" y="192" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">:11434</text>
+
+<rect x="328" y="80" width="192" height="84" rx="6" fill="#FAF9F5"/>
+<rect x="328" y="80" width="192" height="84" rx="6" fill="#FFFFFF" stroke="#14140F" stroke-width="1"/>
+<rect x="336" y="88" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.4)" stroke-width="0.8"/>
+<text x="350.0" y="97" fill="#14140F" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">WEB</text>
+<text x="424.0" y="120" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">app.healthclaw.io</text>
+<rect x="336" y="132" width="176" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="344" y="148" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">flask + site</text>
+<text x="504" y="148" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">v1.10.0</text>
+
+<rect x="576" y="80" width="184" height="116" rx="6" fill="#FAF9F5"/>
+<rect x="576" y="80" width="184" height="116" rx="6" fill="rgba(27,47,191,0.08)" stroke="#1B2FBF" stroke-width="1"/>
+<rect x="584" y="88" width="28" height="12" rx="2" fill="transparent" stroke="#1B2FBF" stroke-width="0.8"/>
+<text x="598.0" y="97" fill="#1B2FBF" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+<text x="668.0" y="120" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">mcp-server</text>
+<rect x="584" y="132" width="168" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="592" y="148" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">agent-orchestrator</text>
+<text x="744" y="148" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">LOCKED</text>
+<rect x="584" y="164" width="168" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="592" y="180" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">mcp-demo</text>
+<text x="744" y="180" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">OPEN · SYNTH</text>
+
+<rect x="328" y="196" width="192" height="116" rx="6" fill="#FAF9F5"/>
+<rect x="328" y="196" width="192" height="116" rx="6" fill="#FFFFFF" stroke="#14140F" stroke-width="1"/>
+<rect x="336" y="204" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.4)" stroke-width="0.8"/>
+<text x="350.0" y="213" fill="#14140F" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">APP</text>
+<text x="424.0" y="236" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">careagents</text>
+<rect x="336" y="248" width="176" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="344" y="264" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">web</text>
+<text x="504" y="264" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">≠ main · #427</text>
+<rect x="336" y="280" width="176" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="344" y="296" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">worker</text>
+<text x="504" y="296" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">railway up</text>
+
+<rect x="576" y="228" width="184" height="84" rx="6" fill="#FAF9F5"/>
+<rect x="576" y="228" width="184" height="84" rx="6" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="1"/>
+<rect x="584" y="236" width="48" height="12" rx="2" fill="transparent" stroke="rgba(85,83,75,0.50)" stroke-width="0.8"/>
+<text x="608.0" y="245" fill="#55534B" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">MANAGED</text>
+<text x="668.0" y="268" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">postgres</text>
+<rect x="584" y="280" width="168" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="592" y="296" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">railway pg</text>
+<text x="744" y="296" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">16</text>
+
+<rect x="816" y="92" width="160" height="116" rx="6" fill="#FAF9F5"/>
+<rect x="816" y="92" width="160" height="116" rx="6" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<rect x="824" y="100" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,20,15,0.22)" stroke-width="0.8"/>
+<text x="838.0" y="109" fill="#76746A" font-size="7" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">VPS</text>
+<text x="896.0" y="132" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">careagents.cloud</text>
+<rect x="824" y="144" width="144" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="832" y="160" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">nginx</text>
+<text x="960" y="160" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">:443</text>
+<rect x="824" y="176" width="144" height="24" rx="4" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="0.8"/>
+<text x="832" y="192" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">openclaw gateway</text>
+<text x="960" y="192" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end">:18789</text>
+
+<line x1="40" y1="360" x2="1000" y2="360" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="40" y="376" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="390" width="14" height="10" rx="2" fill="rgba(27,47,191,0.08)" stroke="#1B2FBF" stroke-width="1"/>
+<text x="60" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Locked MCP (focal)</text>
+<rect x="180" y="390" width="14" height="10" rx="2" fill="#FFFFFF" stroke="#14140F" stroke-width="1"/>
+<text x="200" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Service</text>
+<rect x="264" y="390" width="14" height="10" rx="2" fill="rgba(20,20,15,0.05)" stroke="#55534B" stroke-width="1"/>
+<text x="284" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Managed store</text>
+<rect x="376" y="390" width="14" height="10" rx="2" fill="rgba(20,20,15,0.03)" stroke="rgba(20,20,15,0.3)" stroke-width="1"/>
+<text x="396" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Self-hosted host</text>
+<line x1="504" y1="395" x2="532" y2="395" stroke="#1B2FBF" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="540" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Bearer call</text>
+<line x1="624" y1="395" x2="652" y2="395" stroke="#55534B" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+<text x="660" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Staged, not live</text>
+<line x1="768" y1="395" x2="796" y2="395" stroke="#55534B" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="804" y="398" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">In-zone call</text>
+
+</svg>
+    </div>
+    <p class="note">Production is three Railway services and one Postgres. The MCP server is the focal piece: token-locked, reached with a bearer token from the home gateway, and the one thing that is not up for negotiation. CareAgents deploys by hand and has drifted from main before. Two self-hosted hosts run agent gateways; the VPS has no verified path into production, so none is drawn. A Vercel copy of the site exists for demos and is omitted here.</p>
+  </div>
+</body>
+</html>
