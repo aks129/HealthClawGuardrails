@@ -21,11 +21,10 @@ class TestContextBuilder:
                                   headers=tenant_headers)
         data = patient_resp.get_json()
 
-        # Check identifier redaction
+        # Identifier values are removed
         if 'identifier' in data:
             for ident in data['identifier']:
-                if 'value' in ident:
-                    assert ident['value'].startswith('***')
+                assert 'value' not in ident
 
     def test_redaction_removes_address_lines(self, client, sample_bundle, tenant_headers):
         """Context builder should remove address line details."""
