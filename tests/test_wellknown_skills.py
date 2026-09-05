@@ -13,12 +13,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NAME_RE = re.compile(r"^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$")
 
+#: Pinned exactly, not by prefix. The spec makes this an opaque identifier that
+#: clients match against known schema URIs, so any other string — a later
+#: version we do not serve, or a host chosen because it resolves — reads to a
+#: conformant client as an index it SHOULD NOT process.
+DISCOVERY_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
+
 
 def test_index_serves_all_repo_skills(client):
     r = client.get("/.well-known/agent-skills/index.json")
     assert r.status_code == 200
     body = r.get_json()
-    assert body["$schema"].startswith("https://schemas.agentskills.io/discovery/")
+    assert body["$schema"] == DISCOVERY_SCHEMA
     names = {s["name"] for s in body["skills"]}
     on_disk = {p.parent.name for p in ROOT.glob("skills/*/SKILL.md")}
     assert names == on_disk
