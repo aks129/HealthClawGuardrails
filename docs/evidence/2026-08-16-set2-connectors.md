@@ -6,6 +6,11 @@
 reads `<user>`. Nothing else in any transcript below is altered — the redaction
 is incidental to every claim the output supports.
 
+**Dated note (added 2026-09-04, #615):** redaction behaviour changed after
+this pack was written — identifier values are now removed, not truncated to
+their last four characters. The `***XXXX` values in the transcripts below
+show the shape that was true on 2026-08-16, not current behaviour.
+
 Two of the four connector kinds ran a full live walkthrough against a real
 server of that kind. Two did not run at all, because the servers they need
 were not running on this machine and starting them was out of scope for this
