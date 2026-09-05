@@ -2,7 +2,7 @@
 Defense-in-depth security hardening tests.
 
 Covers:
-- security response headers on every response
+- security response headers on every zero-argument GET route the app registers
 - dashboards still render (200) with CSP present
 - opt-in step-up token replay guard
 - global payload cap (413 on oversized body)
@@ -46,6 +46,43 @@ def test_dashboards_200_with_csp(client, path):
     assert resp.status_code == 200
     assert 'Content-Security-Policy' in resp.headers
     assert resp.headers.get('X-Content-Type-Options') == 'nosniff'
+
+
+# The audit SSE stream is an infinite generator (while True + sleep) and the
+# Werkzeug test client buffers the body, so a GET here never returns.
+_UNSWEEPABLE_RULES = {'/r6/fhir/AuditEvent/$stream'}
+
+
+def test_security_headers_on_every_registered_get_route(app, client):
+    """MUTATION: early-return `response` from app.py's _security_headers when
+    request.path starts with '/r6/fhir' or '/fasten' -> red, naming every
+    stripped path. The three page checks above stay green under it: they only
+    reach the web blueprint, so /r6/fhir/mcp-apps/care-gaps — a patient-facing
+    text/html surface — could lose X-Frame-Options: DENY and its CSP
+    frame-ancestors 'none' with the file green (#634 F6).
+
+    Enumerating the url_map rather than a hand-kept path list means a new
+    blueprint is covered the moment it is registered.
+    """
+    rules = {str(r) for r in app.url_map.iter_rules()
+             if not r.arguments and 'GET' in (r.methods or set())}
+    stale = _UNSWEEPABLE_RULES - rules
+    assert not stale, f'exclusion names routes that no longer exist: {stale}'
+    # Non-vacuity: an empty or mis-read url_map would sweep nothing and pass.
+    assert '/r6/fhir/mcp-apps/care-gaps' in rules
+
+    failures = []
+    for path in sorted(rules - _UNSWEEPABLE_RULES):
+        resp = client.get(path)
+        bad = [f'{h}={resp.headers.get(h)!r}'
+               for h, expected in SECURITY_HEADERS.items()
+               if resp.headers.get(h) != expected]
+        if "frame-ancestors 'none'" not in resp.headers.get(
+                'Content-Security-Policy', ''):
+            bad.append("CSP frame-ancestors 'none'")
+        if bad:
+            failures.append(f'{path} -> {", ".join(bad)}')
+    assert not failures, failures
 
 
 def test_command_center_has_csp(client):
