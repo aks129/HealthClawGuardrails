@@ -620,6 +620,20 @@ characterization test so they can become gates, because they should not become
 gates. §1.2b adds `has_grant`, which is the same decision returned rather than
 raised, and they adopt *that*. Slices 15–18 below.
 
+**Ruled, #334 (council D5, unanimous).** The kernel strips the step-up token
+uniformly, at every source (`_step_up_token`, `r6/access.py:353-369`). Five of
+the six pre-migration sites did not strip and `r6/read_auth.py` did; one rule
+replaces both. It is authority-neutral — the HMAC still has to verify for the
+tenant, so a padded valid token is the valid token and stripping admits nobody
+who was not already admitted. Slices 3–11 landed on this behaviour before the
+ruling was recorded, so it is retroactive with no behaviour change; the pin is
+`test_a_padded_token_is_admitted_and_padded_garbage_is_still_refused`. Two
+edges deliberately outside the ruling: the strip is `str.strip()` with no
+argument, which is Unicode-wide rather than the ASCII-only the ruling names —
+narrowing it is a separate decision, not a migration PR; and the **tenant
+header stays unstripped** (§1.1, `_validated`), because it is an identifier
+compared against a stored value, not an authority-neutral token.
+
 ### 2.5b Slices 15–18 — `has_grant`, the four predicates
 
 Landed first as a pure addition adopted by nothing (§1.2b). Then, one site per
