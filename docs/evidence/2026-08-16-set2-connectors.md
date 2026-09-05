@@ -240,9 +240,21 @@ Two failures, neither of which is a guardrail failure:
 Docker is down. Reported as red because nothing ran, which is the correct
 report.
 
+> **Count corrected 2026-09-04 (#605).** The sentence below read "Four of the
+> six failing properties report a gate that is working as broken" from
+> 2026-08-16 until today, and register entry R4 said the same. **No count in
+> the transcript beneath it yields four.** The harness names six failing
+> properties; the walkthrough asserts on five, excluding `error_fidelity` (the
+> known #498 failure, which fails against Firely too); five FAIL blocks are
+> printed; and **two** of them carry `on_failure` text blaming a gate. This
+> was wrong on the day rather than overtaken since. The finding it supports is
+> unchanged and slightly stronger — five of the six failures were the
+> collision, not the guardrails. The transcript below is not edited.
+
 **Step 4's Grade F is caused by the harness, not the guardrails**, and the
-mechanism was traced to the end rather than assumed. Four of the six failing
-properties report a gate that is working as broken:
+mechanism was traced to the end rather than assumed. Five of the six failing
+properties are this collision rather than a defect, and two of them report a
+gate that is working as broken in so many words:
 
 ```
 ### FAIL step_up_enforcement
@@ -517,13 +529,18 @@ the script cannot pass at all against a deployment with read auth on — which
 production has.
 
 **R4 — `$conformance` cannot be re-run against an upstream with duplicate
-detection, and misattributes the failure to the guardrails. No issue yet.**
+detection, and misattributes the failure to the guardrails. FIXED by #514;
+re-measured 2026-09-04 (#601). Count corrected 2026-09-04 (#605): this entry
+read "Four properties then fail with `on_failure` text naming the gate" —
+**two** do.** The finding as written on 2026-08-16, with that one count
+corrected in place:
 Measured in §3. `_synthetic_patient()` in `r6/conformance/probes.py` returns a
 constant body; HAPI answers the second and later creates with 412 `HAPI-2840`.
-Four properties then fail with `on_failure` text naming the gate ("the gate
-refuses authorized writes too, so its 401s prove nothing") when the gate was
-never reached. Grade F against a deployment whose guardrails were, in the same
-session, observed to hold. The code comment on `_synthetic_observation` records
+Five of the six graded properties then fail for that reason rather than a
+defect, and **two** of them fail with `on_failure` text naming the gate ("the
+gate refuses authorized writes too, so its 401s prove nothing") when the gate
+was never reached. Grade F against a deployment whose guardrails were, in the
+same session, observed to hold. The code comment on `_synthetic_observation` records
 the same class of misattribution happening before against Aidbox (422, dangling
 reference), so this is the second instance of one shape. Suggested change (not
 made): give the synthetic identifier a per-run nonce — `uuid` is already

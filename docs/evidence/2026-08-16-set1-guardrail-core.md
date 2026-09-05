@@ -224,8 +224,15 @@ harness is explicit about that rather than rounding it up.
 
 The mechanism itself (unknown search parameters forwarded to Aidbox instead of
 refused by the guardrail with a corrective `OperationOutcome`) is documented in
-**#498** and in the code comment at `examples/.../scripts/walkthrough.sh` step 4.
+**#498** and in the code comment at
+`examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` step 4.
 **I did not execute it this run**, so it is cited, not asserted as measured.
+
+> **Citation corrected 2026-09-04 (#605).** This line elided the middle of
+> the path to an ellipsis, which no reader could follow and no check could
+> resolve; the full path is above. The claim behind it was checked at the same
+> time and **holds** — the comment at step 4 of that script describes the
+> unknown-parameter forwarding and names #498. Only the path was wrong.
 
 ---
 
@@ -480,7 +487,11 @@ Stated plainly, because scope stated honestly beats coverage implied.
 
 1. Restore `examples/aidbox-healthclaw-guardrails/.env` (**R-1**), bring the
    compose project up, and re-run §1 (`$conformance` live), §3, §4, §5 against
-   `localhost:5099` with `scripts/walkthrough.sh`.
+   `localhost:5099` with
+   `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh`.
+   (Path corrected 2026-09-04 (#605): this read `scripts/walkthrough.sh`,
+   which does not exist at the repository root. The script is real; the
+   citation was relative to the example directory without saying so.)
 2. Answer §2 for proxy mode: for each property the live endpoint reports PASSED,
    confirm the subject exists **in Aidbox** (**R-2**).
 3. Run `qa/demo.spec.ts` to produce the asserting recording.
