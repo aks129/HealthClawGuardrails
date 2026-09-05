@@ -215,8 +215,8 @@ def create_app(config: Config | None = None,
         if session.get("account_id") and not enroll:
             return redirect(url_for("home"))
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
-                               terms_url=f"{cfg.healthclaw_base}/terms",
-                               privacy_url=f"{cfg.healthclaw_base}/privacy")
+                               terms_url=f"{cfg.healthclaw_public_base}/terms",
+                               privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
     @app.get("/home")
     @login_required
@@ -229,8 +229,8 @@ def create_app(config: Config | None = None,
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
             telegram_bot=cfg.telegram_bot,
             imessage_handle=cfg.imessage_handle,
-            terms_url=f"{cfg.healthclaw_base}/terms",
-            privacy_url=f"{cfg.healthclaw_base}/privacy",
+            terms_url=f"{cfg.healthclaw_public_base}/terms",
+            privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             advisors=advisors.catalog(),
             catalog=connectors.catalog(cfg))
 
