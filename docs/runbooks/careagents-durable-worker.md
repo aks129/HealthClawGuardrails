@@ -220,13 +220,21 @@ If it refuses, it names what it found and nothing was created. **`cannot build
 a reference for: MY-VAR`** — Railway holds a name that `${{web.NAME}}` cannot
 express. Either rename it on the web service, or, if the worker does not need
 it, add it to the exclusion pattern beside `PORT` and `CARE_ROLE`.
-**`enumeration is missing CARE_ENV`** — you are reading the wrong service or
-project; check `railway status` before retrying. In both cases `$STAGE` is
-intact and you can re-run the block as-is.
+**`enumeration is missing CARE_ENV`** — usually you are reading the wrong
+service or project; check `railway status` before retrying. Check the variable
+names too before you go looking for a misconfigured project: the block names
+`CARE_ENV` and the two `*_API_KEY`s exactly, while `careagents/config.py` reads
+`CARE_ENV` **or** `APP_ENV` for the production switch and accepts
+`ANTHROPIC_OAUTH_TOKEN` as a third LLM credential. A service configured through
+either of those spellings is correct and still trips this block. The refusal is
+deliberate in that direction — it fails closed and creates nothing — but the
+diagnosis above is then the wrong one. In every case `$STAGE` is intact and you
+can re-run the block as-is.
 
 A reference resolves at deploy time, so rotating the web service's secret
 rotates the worker's with it and no secret is ever pasted into a second field.
-At the time of writing the web service carries 17 of them: `CARE_DATABASE_URL`,
+As enumerated on 2026-08-02 (#273) and not re-read against Railway since, the
+web service carries 17 of them: `CARE_DATABASE_URL`,
 `CARE_EMAIL_FROM`, `CARE_ENV`, `CARE_IMESSAGE_HANDLE`, `CARE_MODEL`,
 `CARE_OPENAI_MODEL`, `CARE_ORIGIN`, `CARE_RP_ID`, `CARE_RP_NAME`,
 `CARE_SESSION_SECRET`, `CARE_TELEGRAM_BOT`, `FASTEN_PUBLIC_KEY`,
