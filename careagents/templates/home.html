@@ -123,7 +123,11 @@
       {% endif %}
       <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
     </div>
-    <p class="inline-msg" id="surfaces-msg" hidden></p>
+    {# The refusal for these surfaces, and the words explaining every section
+       flash, arrive here. Same live-region treatment as #connect-msg and
+       .conn-refresh-msg; announce() shows it before writing into it. #}
+    <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
+       hidden></p>
   </section>
 </main>
 
