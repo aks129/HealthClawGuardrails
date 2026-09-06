@@ -151,7 +151,7 @@ def build_context(subject=None):
     return {'patient': projection, 'subject': projection}
 
 
-def evaluate(expression, resource, context=None, link_id=None):
+def evaluate(expression, resource, context=None, link_id=None, warned=None):
     """Evaluate a FHIRPath expression, returning a scalar, list, or None.
 
     Returns the single value when the result has one element, the list when
@@ -159,6 +159,16 @@ def evaluate(expression, resource, context=None, link_id=None):
 
     `link_id` names the questionnaire item, for the failure log only — see
     below for why it is what gets logged and the expression is not.
+
+    `warned` is an optional set of linkIds already logged, owned by the
+    caller and scoped to ONE REQUEST — populate_questionnaire builds it per
+    call. It exists because the same leaf is evaluated once per repeat
+    inside a list group, and a malformed expression would otherwise log a
+    line per row: the caller supplies the records through the inline
+    `content` Bundle, so log volume would scale with attacker-controlled
+    input. The evaluation itself is unchanged and still happens per row —
+    this is a logging concern only, and every line after the first says the
+    same thing about the same linkId.
     """
     if not expression:
         return None
@@ -175,6 +185,13 @@ def evaluate(expression, resource, context=None, link_id=None):
         # is caller-supplied too, and %r is what escapes control characters
         # in it. Pinned by tests/test_sdc_expressions.py::
         # test_a_failing_expression_is_not_echoed_into_the_log.
+        #
+        # ONCE PER REQUEST PER LINKID. `warned` is None for callers with no
+        # request scope (the direct unit tests), and those log every time.
+        if warned is not None:
+            if link_id in warned:
+                return None
+            warned.add(link_id)
         logger.warning('FHIRPath evaluation failed for item %r: %s',
                        link_id, type(exc).__name__)
         return None
