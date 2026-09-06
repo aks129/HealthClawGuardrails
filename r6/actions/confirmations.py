@@ -68,6 +68,16 @@ def payload_digest(payload_json):
                     hashlib.sha256).hexdigest()
 
 
+def approval_operation(action_id, payload_json):
+    """The operation an approval credential is bound to: the action AND the
+    keyed digest of the payload the person was shown when it was minted
+    (#659). The confirm route recomputes it from the payload about to
+    execute, so a payload swapped between the push and the tap fails the
+    token's own operation check before any claim, nonce or execution.
+    """
+    return '%s#%s' % (action_id, payload_digest(payload_json))
+
+
 def issue_confirmation(action_id, approved_via, ttl_minutes, *, payload_json):
     """Mint the consent record over the payload as it stands right now.
 

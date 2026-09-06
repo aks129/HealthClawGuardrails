@@ -295,6 +295,7 @@ def _confirm_the_form(client, tenant_headers, auth_headers):
     """
     from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
     from r6.stepup import generate_step_up_token
+    from tests.approval_helpers import bound_operation
     tenant = tenant_headers["X-Tenant-Id"]
 
     proposed = client.post("/r6/actions/propose", headers=tenant_headers,
@@ -319,7 +320,8 @@ def _confirm_the_form(client, tenant_headers, auth_headers):
 
     approval = dict(auth_headers)
     approval["X-Step-Up-Token"] = generate_step_up_token(
-        tenant, audience=ACTION_APPROVAL_AUDIENCE, operation=action_id)
+        tenant, audience=ACTION_APPROVAL_AUDIENCE,
+        operation=bound_operation(client.application, action_id))
     confirm = client.post("/r6/actions/%s/confirm" % action_id,
                           headers=approval, json={})
     assert confirm.status_code == 200, confirm.get_data(as_text=True)

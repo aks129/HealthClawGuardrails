@@ -10,9 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from models import db
 from r6.actions import errors
-from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
 from r6.actions.models import ProposedAction
-from r6.stepup import generate_step_up_token
 
 
 PROPOSE_BODY = {
@@ -29,7 +27,12 @@ def _past():
     return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
 
 
+_LAST_APP = None
+
+
 def _propose(client, tenant_headers, body=None):
+    global _LAST_APP
+    _LAST_APP = client.application
     resp = client.post('/r6/actions/propose', json=body or PROPOSE_BODY,
                        headers=tenant_headers)
     assert resp.status_code == 201, resp.get_data(as_text=True)
@@ -42,11 +45,10 @@ def _commit(client, auth_headers, action_id):
 
 
 def _approval_headers(auth_headers, action_id):
-    headers = dict(auth_headers)
-    headers['X-Step-Up-Token'] = generate_step_up_token(
-        headers['X-Tenant-Id'], audience=ACTION_APPROVAL_AUDIENCE,
-        operation=action_id)
-    return headers
+    # Bound to the action AND its payload digest, as the approve surface
+    # mints it (#659); _propose captured the app so the payload can be read.
+    from tests.approval_helpers import approval_headers
+    return approval_headers(_LAST_APP, auth_headers, action_id)
 
 
 def _confirm(client, auth_headers, action_id, body=None, headers=None):

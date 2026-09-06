@@ -30,6 +30,7 @@ from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
+                                      approval_operation,
                                       consume_confirmation,
                                       issue_confirmation,
                                       open_confirmations,
@@ -508,12 +509,30 @@ def confirm_action(action_id):
     # spends it so a captured token cannot authorize another execution. It
     # stays behind the body validation above so a 400 on a malformed request
     # does not burn the credential.
+    # (0) The credential is bound to the action AND to the keyed digest of
+    # the payload the person was shown when it was minted (#659, the push
+    # path's window that #658's confirmation digest could not cover). It is
+    # recomputed here from the payload about to execute, so a swap between
+    # the push and the tap fails the token's operation check before any
+    # claim, nonce or execution. Loaded tenant-scoped before the gate; an
+    # unauthenticated caller still gets the same 401 whether the action
+    # exists or not, because a token minted for another operation fails
+    # either way, and the 404 below stays behind the gate.
+    bound = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    # An action this tenant does not hold has no payload to bind to. The
+    # gate still runs (audience, tenant, expiry) so the 404 below stays
+    # behind it, but with no operation to match and the nonce left alone:
+    # nothing executes on this path, so the credential is not spent on a
+    # mistaken id, and a valid credential for another action learns only
+    # what the tenant-scoped status route already tells it.
     require_grant(
         scope=Scope.WRITE,
         tenant=tenant,
         audience=ACTION_APPROVAL_AUDIENCE,
-        operation=action_id,
-        consume_nonce=True,
+        operation=(approval_operation(action_id, bound.payload_json)
+                   if bound is not None else None),
+        consume_nonce=bound is not None,
         absent_status=401,
         rejected_status=401,
     )
@@ -695,7 +714,8 @@ def issue_action_approval_token(action_id):
         tenant_id,
         agent_id='human-approval',
         audience=ACTION_APPROVAL_AUDIENCE,
-        operation=action_id,
+        # Bound to the action AND the bytes the person is being shown (#659).
+        operation=approval_operation(action_id, action.payload_json),
     )
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
