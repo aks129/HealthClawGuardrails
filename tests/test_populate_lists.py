@@ -493,3 +493,59 @@ def test_a_mechanism_less_boolean_inside_a_list_row_is_neither_answered_nor_repo
         for item in _all_by_link_id(qr, "allergies.item.no-known-allergies"):
             assert "answer" not in item, (
                 f"{label}: absent allergy data is not an attestation")
+
+
+# ---------------------------------------------------------------------------
+# #572 part 2B1: every populated row carries the resource it came from.
+# A populated row used to carry {linkId, item} and nothing else, so an
+# extraction could not tell a row that IS a stored resource from a row the
+# person typed, and would duplicate every existing one. The marker is a
+# row-level extension, invisible to the leaves, the PDF walk and the answer
+# index; part 2B2 skips marked rows and writes only unsourced ones.
+# ---------------------------------------------------------------------------
+
+def _rows(qr, group_link_id):
+    return _all_by_link_id(qr, group_link_id)
+
+
+def _source_of(row):
+    from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
+    refs = [e.get("valueReference", {}).get("reference")
+            for e in row.get("extension", []) if e.get("url") == POPULATED_ROW_SOURCE_URL]
+    assert len(refs) <= 1
+    return refs[0] if refs else None
+
+
+def test_every_populated_row_carries_its_source():
+    """MUTATION: r6/sdc/populate.py, stop stamping the extension -> red."""
+    q = intake_questionnaire()
+    content = [_allergy("a-one", "peanut"), _allergy("a-two", "latex")]
+    qr, _issues = populate_questionnaire(q, PATIENT, content)
+    rows = _rows(qr, "allergies.item")
+    assert len(rows) == 2
+    assert sorted(_source_of(r) for r in rows) == ["AllergyIntolerance/a-one",
+                                                   "AllergyIntolerance/a-two"]
+    # The leaves are untouched: the allergen still resolves from the record.
+    allergens = [c for r in rows for c in r["item"] if c["linkId"] == "allergies.item.allergen"]
+    assert sorted(a["answer"][0]["valueString"] for a in allergens) == ["latex", "peanut"]
+
+
+def test_a_row_from_a_resource_without_an_id_carries_no_source():
+    q = intake_questionnaire()
+    anonymous = _allergy("a-one", "peanut")
+    anonymous.pop("id")
+    qr, _issues = populate_questionnaire(q, PATIENT, [anonymous])
+    rows = _rows(qr, "allergies.item")
+    assert len(rows) == 1 and _source_of(rows[0]) is None
+
+
+def test_the_marker_never_reaches_the_pdf():
+    from reportlab.lib.styles import getSampleStyleSheet
+    from r6.sdc.pdf import _render_items
+    from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
+    q = intake_questionnaire()
+    qr, _issues = populate_questionnaire(q, PATIENT, [_allergy("a-one", "peanut")])
+    rendered = _render_items(qr["item"], {}, getSampleStyleSheet(), 0)
+    text = " ".join(getattr(el, "text", "") for el in rendered)
+    assert "peanut" in text
+    assert "a-one" not in text and POPULATED_ROW_SOURCE_URL not in text
