@@ -90,6 +90,9 @@ class ContextBuilder:
 
                 if existing:
                     existing.update_resource(resource_json)
+                    # A re-ingest of a tombstoned (tenant, type, id) revives
+                    # it, as r6/fasten/ingester.py does (#509 defect 2).
+                    existing.is_deleted = False
                     r6_resource = existing
                 else:
                     r6_resource = R6Resource(

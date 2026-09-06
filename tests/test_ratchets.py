@@ -334,7 +334,12 @@ def test_no_new_package_mutates_without_auditing():
 #: named deletion as the case it handled and the query did not, so a
 #: tombstoned QuestionnaireResponse was rendered into a form submitted on a
 #: patient's behalf.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 10
+#: 10 -> 9: council ruling D10 filtered both queries in r6/sdc/routes.py —
+#: the Questionnaire/Patient resolution (_load_stored) and the auto-loaded
+#: clinical content ($populate's Observation / MedicationRequest /
+#: AllergyIntolerance / Condition sweep). A tombstoned row reaching an
+#: intake form is the form_fill shape again, one hop upstream.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 9
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
@@ -388,7 +393,10 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: only kind of raise this file permits — the guard has to sit at that call
 #: site, and extracting seed_tenant into its own module is a refactor that
 #: should not ride along with a security fix that was exploitable in prod.
-_GOD_MODULE_LINES = 3927
+#: 3927 -> 3928 (#583): one entry in the tenant-exemption table for the
+#: published privacy policy (#574). The table is the guard, so the line
+#: has to sit here; nothing else in that change touches this file.
+_GOD_MODULE_LINES = 3928
 
 
 def test_the_god_module_only_shrinks():
