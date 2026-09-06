@@ -478,7 +478,17 @@ class HealthClawClient:
     # meaningful set rather than every supported type — this is a progress
     # signal for the patient, not an inventory.
     COUNTED_TYPES = ("Condition", "Observation", "MedicationRequest",
-                     "AllergyIntolerance", "Immunization", "DocumentReference")
+                     "AllergyIntolerance", "Immunization")
+
+    # Ingested and stored, deliberately NOT counted (#226, council D2 option
+    # 3). Nothing can open one: `careagents/agent.py` search_records omits
+    # DocumentReference from its enum, and gate G2 measured the attachments
+    # coming back empty anyway — r6/redaction.py strips `data`, `url` and
+    # `title` from anything carrying a `contentType`. Counting them told the
+    # patient "247 records synced" where the notes dominating that number
+    # were unreachable. They stay ingested; only the claim changes, and the
+    # day a read path lands this moves back above.
+    UNCOUNTED_TYPES = ("DocumentReference",)
 
     def record_count(self, tenant: str) -> int:
         """Total records across the counted resource types.
@@ -494,6 +504,23 @@ class HealthClawClient:
         """
         total = 0
         for rt in self.COUNTED_TYPES:
+            bundle = self.search(tenant, rt, {"_summary": "count"})
+            total += int(bundle.get("total") or 0)
+        return total
+
+    def uncounted_record_count(self, tenant: str) -> int:
+        """How many records were synced that `record_count` leaves out.
+
+        The source for the one clause that keeps the number above honest: it
+        is a true count of what the patient can reach, and would be a silent
+        omission without something saying documents exist and are not in it.
+
+        Raises HealthClawError on the same terms as `record_count` — a 0 here
+        reads as "no documents arrived", which is not the same fact as "could
+        not ask".
+        """
+        total = 0
+        for rt in self.UNCOUNTED_TYPES:
             bundle = self.search(tenant, rt, {"_summary": "count"})
             total += int(bundle.get("total") or 0)
         return total
