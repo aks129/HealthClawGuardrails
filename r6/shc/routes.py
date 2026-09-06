@@ -35,7 +35,6 @@ Environment variables:
 """
 
 import collections
-import hmac
 import logging
 import os
 import threading
@@ -46,6 +45,7 @@ from flask import Blueprint, request, jsonify, current_app
 from markupsafe import escape
 
 from models import db
+from r6 import constant_time
 from r6.access import TenantRejected, TenantSource, tenant_from_request
 from r6.audit import record_audit_event
 
@@ -74,7 +74,7 @@ def _verify_secret() -> bool:
     if not auth.startswith('Bearer '):
         return False
     token = auth[len('Bearer '):]
-    return hmac.compare_digest(token.encode(), expected.encode())
+    return constant_time.equal(token, expected)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

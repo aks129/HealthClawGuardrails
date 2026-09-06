@@ -323,6 +323,47 @@ def test_a_read_scoped_token_does_buy_a_tenant_bound_grant(app, tenant_id):
     assert grant.scope is Scope.TENANT_BOUND
 
 
+def test_a_padded_token_is_admitted_and_padded_garbage_is_still_refused(
+        app, tenant_id):
+    """#334 (council D5): the kernel strips the step-up token uniformly.
+
+    A whitespace-padded valid token IS the valid token — the HMAC still has
+    to verify for this tenant, so stripping admits nobody who was not already
+    admitted. Six merged slices depend on this, so the ruling is retroactive
+    and this test pins the shipped behaviour rather than changing it. Note
+    the strip is `str.strip()` with no argument, which is Unicode-wide;
+    narrowing it to ASCII whitespace is a separate decision.
+
+    MUTATION: drop the .strip() in _step_up_token -> the first half red.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    padded = ' \t' + generate_step_up_token(tenant_id) + ' \t'
+    with app.test_request_context(headers=_headers(padded)):
+        grant = require_grant(scope=Scope.WRITE, tenant=tenant)
+    assert grant.tenant_id == tenant_id
+
+    with app.test_request_context(headers=_headers(' \tnot-a-token \t')):
+        with pytest.raises(StepUpDenied) as exc:
+            require_grant(scope=Scope.WRITE, tenant=tenant)
+    assert exc.value.checked is True
+
+
+def test_the_tenant_header_is_not_stripped_even_though_the_token_is(app,
+                                                                    tenant_id):
+    """#334, the other half: the strip is for the token only.
+
+    The tenant id is an identifier compared against a stored value, not an
+    authority-neutral token, so the padding that the token gate forgives
+    stays malformed here. Same padding, opposite answer, on purpose.
+
+    MUTATION: .strip() the value in _validated -> red.
+    """
+    with app.test_request_context(headers={'X-Tenant-Id': ' \tacme-1 \t'}):
+        with pytest.raises(TenantRejected) as exc:
+            tenant_from_request()
+    assert exc.value.reason == 'malformed'
+
+
 def test_the_bearer_header_is_ignored_unless_the_endpoint_opted_in(app,
                                                                   tenant_id):
     """MUTATION: read Authorization unconditionally -> the first half red."""
@@ -1372,7 +1413,29 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # is a ruling rather than a gate. Migrating these two is
                      # slice 17, and it stays blocked on their JSON wire
                      # shape.
-                     'r6/command_center/routes.py'}
+                     'r6/command_center/routes.py',
+                     # Council ruling D10, and NOT a migration slice: the
+                     # ruling directs $populate to read its tenant through
+                     # the kernel and to answer through fhir_response, so the
+                     # operation is counted as a shaped FHIR exit. Both
+                     # header reads in this module moved together (protocol
+                     # rule 8 — one way to do a thing, not two). The step-up
+                     # gate in sdc_extract did NOT move: its refusal names
+                     # `dryRun=true`, which the kernel's uniform
+                     # OperationOutcome cannot say, and that is the twelfth
+                     # site the kernel spec §2.5 already calls out as
+                     # blocked on a CTO ruling.
+                     'r6/sdc/routes.py',
+                     # playbook B2: the durable agent-run control plane's
+                     # audit. It imports `audit` and nothing else — its
+                     # step-up check still calls the validator directly and
+                     # is still counted by _STEP_UP_CALLSITES, because one
+                     # guard per PR is the protocol. The service layer rather
+                     # than the routes is the adopter on purpose: each of
+                     # these functions owns its own transaction, and the
+                     # kernel's audit() only keeps its promise when it flushes
+                     # inside the transaction it is evidence for.
+                     'r6/agent_runs/service.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

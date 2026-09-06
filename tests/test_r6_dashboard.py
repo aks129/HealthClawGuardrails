@@ -169,7 +169,7 @@ class TestFullAgentWorkflow:
                               headers=tenant_headers)
         assert read_resp.status_code == 200
         data = read_resp.get_json()
-        assert data['identifier'][0]['value'].startswith('***')
+        assert 'value' not in data['identifier'][0]
         assert 'line' not in data.get('address', [{}])[0]
 
         # 3. Search
@@ -843,10 +843,10 @@ class TestDemoAgentLoop:
                            headers={'X-Tenant-Id': 'demo-redact'})
         data = resp.get_json()
         patient = data['steps'][0]['result']
-        # Check identifiers are masked
+        # Identifier values are removed
         if patient.get('identifier'):
             for ident in patient['identifier']:
-                assert '***' in ident.get('value', ''), "Identifiers should be masked"
+                assert 'value' not in ident, "Identifier values should be removed"
         # Check names are redacted (given truncated to initial)
         if patient.get('name'):
             for name_entry in patient['name']:

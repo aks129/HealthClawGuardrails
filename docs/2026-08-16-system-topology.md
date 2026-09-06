@@ -30,7 +30,7 @@ problem it was written to solve.
 
 | Component | Size | State |
 |---|---|---|
-| `r6/` — the guardrail engine | 29,446 LOC, 11 blueprints | Conformance **Grade A 7/7 local**, measured today. Proxy mode **not measured** since 2026-08-16 morning. |
+| `r6/` — the guardrail engine | 29,446 LOC (see note), 11 blueprints | Conformance **Grade A 7/7 local**, measured today. Proxy mode **not measured** since 2026-08-16 morning. |
 | `r6/routes.py` — the god module | **3,924 lines, 39 routes** | Ratcheted; shrinking. Decomposition (#56) has not started. |
 | `r6/access.py` — the access kernel | one module | Adopted by 9 modules. `require_grant` + `has_grant` (#506). |
 | `careagents/` — consumer app | 5,311 LOC | On Railway + Postgres. **Deployed build is stale** (#427). Stores no PHI. |
@@ -44,14 +44,21 @@ problem it was written to solve.
 ## The four upstream connectors, and which are proven
 
 Measured 2026-08-16 by the set-2 evidence run
-(`docs/evidence/2026-08-16-set2-connectors.md`):
+(`docs/evidence/2026-08-16-set2-connectors.md`), and **re-run on 2026-09-04 by
+someone other than its author** (`docs/evidence/2026-09-04-set2-connectors-rerun.md`,
+#530). The two `yes` rows reproduced step for step.
 
 | Kind | Auth | Proven live against |
 |---|---|---|
-| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16** ✓ |
-| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ |
-| `aidbox` | HTTP Basic | **not run** — local server down |
-| `medplum` | OAuth2 client-credentials | **not run** — local server down |
+| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16-SNAPSHOT** ✓ twice — same build both days (`7e7129efb5`) |
+| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ twice — same build both days |
+| `aidbox` | HTTP Basic | **not run** — local server down, both days |
+| `medplum` | OAuth2 client-credentials | **not run** — local server down, both days |
+
+Anyone can now re-run the two: `scripts/walkthrough-upstream.sh hapi|generic`,
+transcripts in `docs/evidence/2026-09-04-set2-rerun/`. Until 2026-09-04 the
+claim rested on an uncommitted script and could not be checked by anyone but
+its author, which is what #530 was.
 
 ## Architecture ratchets
 
@@ -76,7 +83,18 @@ which was never true of either set.
 ## The two numbers that explain why this document exists
 
 **50,429 lines of test code guard 29,508 lines of engine — 1.7 to 1.**
+
 **3,153** tests pass, 13 skip, 1 xfails.
+
+> **The component table disagrees with this block (#605, 2026-09-04).** The
+> engine is 29,508 LOC here and **29,446 LOC** in the component table near the
+> top of this document — one document, one metric, two numbers, and no command
+> cited for either. Measured at `89b42fb` with
+> `git ls-files 'r6/*.py' 'r6/**/*.py' | xargs wc -l` → **29,537**. Both
+> figures are left as written and dated rather than silently reconciled; the
+> table row is the one still uncorrected. Of the table's other sizes only
+> `services/agent-orchestrator` was re-checked: it reads 7,899 and measures
+> **7,640** tracked `.ts` lines today. The rest were not re-measured.
 
 Measured at `4cb3771`, which is this document's branch point, with
 `git ls-files 'r6/**/*.py' 'r6/*.py' | xargs wc -l` and the same over
