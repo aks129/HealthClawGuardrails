@@ -1102,3 +1102,183 @@ refresh, and the missing `aud` check in `_oauth_authorizes`.
   `services/agent-orchestrator/src/index.ts`). On the
   OAuth path `_tenantId`, `_stepUpToken` and `_authorization` are discarded,
   exactly as `isPublicDemo()` pins them. Asserted as R8.
+
+---
+
+## 13. Amendment 2026-09-06: the consent surface, and a hosted connector reaching a real tenant (#568)
+
+**Status: proposed by the founder on 2026-09-06; design only in this section.**
+The founder asked for the locked server to work as an ordinary claude.ai
+connector on real records, with CareAgents as the account and consent surface.
+That request overrides the "phase 2 waits" clause of ruling D4. Everything in
+§1 to §12 stands; this section fills the one hole §6.1 and #568 left open.
+
+### 13.1 What claude.ai actually does, from Anthropic's own connector notes
+
+Read, not run, on 2026-09-06. Measured against our deployment only in the §8.4
+end-user run.
+
+- Claude registers itself with Dynamic Client Registration. The client name is
+  `Claude`. The callback is `https://claude.ai/api/mcp/auth_callback`, and
+  Anthropic says it may become `https://claude.com/api/mcp/auth_callback`, so
+  both are accepted as registered redirect URIs.
+- The authorize request carries `resource=` (the PRM `resource`, RFC 8707),
+  `scope=` (from the PRM), `code_challenge` with `S256`, and `state`. Claude
+  supports the 2025-03-26 and 2025-06-18 authorization specs, which is the
+  discovery chain §3 designs to.
+- Claude Code, as a native client, registers loopback redirect URIs
+  (`http://localhost/callback`, `http://127.0.0.1/callback`) on ephemeral
+  ports; redirect-URI matching for `localhost` and `127.0.0.1` must ignore the
+  port.
+- A manual client id and secret can be pasted under "Advanced settings"; that
+  path is not designed for and not needed.
+- Whether Claude uses the refresh grant is not stated. The server offers it
+  (§13.5); the end-user run reports whether it was taken.
+
+### 13.2 The shape: Flask stays the issuer, CareAgents is the front door
+
+The issuer is unchanged (`https://app.healthclaw.io`, D4). The MCP server
+still introspects at Flask (§3.5). What changes is what happens between a
+browser arriving at `/oauth/authorize` and a code being issued:
+
+```
+claude.ai ── GET /r6/fhir/oauth/authorize?...&resource=<RESOURCE> ──▶ Flask
+                Flask validates client, PKCE, resource; parks the request
+                302 ─▶ https://careagents.cloud/authorize?req=<signed handle>
+                                                                     │
+      CareAgents: passkey sign-in; consent page lists the account's   │
+      connections (each one a tenant) plus "the demo records";        │
+      approval requires a fresh passkey assertion; Grant row written  │
+                302 ◀─ /r6/fhir/oauth/consent/return?grant=<signed>  ─┘
+                Flask verifies the grant, binds the code to its tenant,
+                audits the consent under that tenant
+                302 ─▶ https://claude.ai/api/mcp/auth_callback?code&state&iss
+```
+
+Two extra top-level redirects. From the client's side it is ordinary OAuth
+2.1 with PKCE. CareAgents runs no authorization server: no registration, no
+token endpoint, no PKCE. It authenticates a person and records a decision.
+
+**The alternative, stated so it can be chosen instead:** CareAgents as the
+issuer. It would port registration, PKCE, the stores and revocation from
+`r6/oauth.py`, re-rule D4, and move the PRM's `authorization_servers`. Nothing
+the founder asked for needs that.
+
+### 13.3 The handoff protocol
+
+Both sides already share `INTERNAL_TOKEN_MINT_SECRET` (CareAgents mints
+step-up tokens with it). The handoff key is derived from it with domain
+separation, the way `payload_digest` derives from `STEP_UP_SECRET`:
+`sha256(b'healthclaw-consent-handoff:' + INTERNAL_TOKEN_MINT_SECRET)`. One
+fewer secret to provision, and a forged grant needs the mint secret, which
+already grants everything.
+
+**Outbound (Flask to CareAgents).** Flask stores the parked request under a
+random `request_id` (10 minutes, single use) with `client_id`, `client_name`,
+`redirect_uri`, `scopes`, `code_challenge`, `state`, `resource`. The URL
+carries `req=<request_id>.<exp>.<tag>`, where `tag` is HMAC-SHA256 over
+`request_id.exp` under the handoff key. The page shows the client name and
+scopes from the parked request, fetched by CareAgents from Flask
+(`GET /r6/fhir/oauth/consent/<request_id>`, service-authenticated with the
+mint secret), so nothing about the client rides in the URL.
+
+**Inbound (CareAgents to Flask).** `grant=<base64url(JSON)>.<tag>` where the
+JSON is `{request_id, tenant_id, consent_id, nonce, exp, decision}` and
+`decision` is `approved` or `denied`. Flask: `compare_digest` on the tag;
+`exp` in the future; `nonce` unused (the nonce cache in `r6/stepup.py`);
+the parked request popped exactly once; `tenant_id` matches
+`^[a-zA-Z0-9_-]{1,64}$`. Then the code is issued bound to `tenant_id`, or
+the client is sent `error=access_denied`.
+
+**Trust, written down as an assumption.** Flask cannot verify that the
+CareAgents account owns `tenant_id`; it trusts the signed assertion. That
+trust exists today: CareAgents holds the mint secret and can act on any
+tenant. This section adds no authority, it moves an existing one onto a
+signed, single-use, expiring message.
+
+**The tenant policy of the `invalid_target` map (§3.5.1) gains a third value.**
+`demo` binds `MCP_OAUTH_DEMO_TENANT`; `careagents` sends the request through
+§13.3 and binds whatever the grant names; the FHIR resource keeps binding the
+header tenant behind the existing public-tenant guard. With
+`CAREAGENTS_CONSENT_URL` unset, the MCP resource falls back to `demo`, which
+is the §3.5.1 behaviour unchanged.
+
+### 13.4 Consent is a tenant event, and it can be taken back
+
+- Flask writes an AuditEvent under the tenant on approval: `event_type=create`,
+  `resource_type=Consent`, `resource_id=<consent_id>`, detail
+  `client_id=… scopes=… via=careagents`. No account id, no email, no label.
+- Flask stores the consent (`consent_id` to `{tenant_id, client_id, scopes,
+  granted_at, revoked_at}`) beside the OAuth stores. Every access token and
+  refresh token carries its `consent_id`.
+- `POST /r6/fhir/oauth/consent/<consent_id>/revoke`, service-authenticated
+  with the mint secret, sets `revoked_at`. Introspection answers
+  `active: false` for every token of a revoked consent, and the refresh chain
+  dies with it.
+- CareAgents keeps a `Grant` row per approval (account, connection, client
+  name, scopes, granted and revoked times; no PHI) and shows it on the home
+  page with "Revoke", which calls the endpoint above.
+
+### 13.5 Refresh tokens, because hourly re-consent on real records is not acceptable (§6.8)
+
+The token endpoint gains `grant_type=refresh_token` for the clients registered
+here. Refresh tokens are opaque, live 30 days, carry `consent_id`, `aud`,
+`tenant_id`, `scopes` and `client_id`, and rotate on every use: the response
+carries a new refresh token and the old one is dead. Presenting a rotated
+token again revokes the whole chain (OAuth 2.1 §4.3.1). Public clients must
+send their `client_id`; a refresh token is bound to the client it was issued
+to. Discovery advertises `refresh_token` in `grant_types_supported`.
+
+### 13.6 The downstream credential on the OAuth path
+
+§3.6 leaves the MCP server without a credential for a protected tenant. The
+MCP server already holds `INTERNAL_TOKEN_MINT_SECRET` and already has
+`ensureReadToken`, which mints a step-up token per tenant. The gap is that
+`/internal/step-up-token` accepts no scope, so that mint is write-capable.
+Change: the mint endpoint accepts an optional `scope`, only `"read"` or
+absent, and the OAuth path always sends `"read"`. `generate_step_up_token`
+already produces read-scoped tokens and `authorize_tenant_read` already
+accepts them; a read-scoped token can never authorize a write (H4). The
+consent scopes are `fhir.read` and `context.read`, both reads, so the
+downstream authority equals the consented one. The minted token is cached
+under the SHA-256 of the OAuth token, never per tenant, for at most 5 minutes
+and never past the OAuth token's own expiry, so a revoked consent stops
+being served within the cache window.
+
+Token exchange (RFC 8693) was the alternative and is the more standard shape;
+it was not chosen because it adds a grant type and a second audience to the
+same outcome.
+
+### 13.7 What the person sees, and what is true about their identity
+
+The consent page says who is asking (`Claude`), what they get (read access,
+redacted, audited; never writes, which still need the human gate), and to
+which records. Approval requires a fresh passkey assertion with
+`user_verification=required`, not a remembered session. That is what makes
+"biometric" a true word here. The tenants offered are the account's
+connections, each created through a provider-portal sign-in via Fasten or
+through the person's own upload. No identity-assurance level is claimed
+anywhere; the page says what happened, not what it proves.
+
+Consent to expose a real tenant to a third-party agent is gated by
+`CARE_REAL_RECORDS` exactly as a new real-record connection is: `off` offers
+only the demo records, `allowlist` offers real tenants to listed accounts,
+`on` offers them to everyone. The founder can widen it later.
+
+### 13.8 Delivery, and the gates that are not ours
+
+Seven pull requests, each independently green and each behind the existing
+flags: Flask conformance (§3.5 P2-a to P2-d, root discovery, `aud` in
+`_oauth_authorizes`); introspection plus the mint scope; the handoff, revoke
+and consent audit; refresh; CareAgents consent page and Grant; MCP server
+phase 3 (`MCP_OAUTH_ENABLED`, drop passthrough and the tool-argument
+overrides, read-scoped mint, CORS on the 401 and its preflight); the
+walkthrough and this document's test plan.
+
+Nothing in the list deploys. The owner's checklist before the §8.4 run:
+repoint `mcp.healthclaw.io` and verify over DoH (#522); check the Vercel
+domain verification; set `MCP_CANONICAL_RESOURCE`, `OAUTH_ISSUER`,
+`MCP_INTROSPECTION_CLIENT_ID` and `_SECRET`, `CAREAGENTS_CONSENT_URL`; confirm
+`READ_AUTH_ENABLED=true` by observation (§10.2); deploy Flask, the MCP server
+and CareAgents web and worker from the same stage; then `MCP_OAUTH_ENABLED=true`
+in staging first.
