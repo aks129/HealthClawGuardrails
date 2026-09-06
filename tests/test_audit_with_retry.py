@@ -21,6 +21,13 @@ from audit_with_retry import OUTAGE_EXIT, classify  # noqa: E402
     (2, 'ConnectionError: HTTPSConnectionPool(host=\'pypi.org\', port=443): Max retries exceeded', 'outage'),
     (1, 'getaddrinfo EAI_AGAIN registry.npmjs.org', 'outage'),
     (3, 'some other tool error', 'finding'),
+    # A finding whose advisory title happens to name an outage word is
+    # still a finding: the summary line wins.
+    (1, 'Regular Expression Denial of Service via timeout in some-lib\n'
+        'found 1 high severity vulnerability', 'finding'),
+    (1, 'Found 1 known vulnerability in 1 package\n'
+        'Name Version ID Fix Versions\n'
+        'requests 2.0 GHSA-xxxx connection reset handling', 'finding'),
 ])
 def test_classify(code, output, verdict):
     assert classify(code, output) == verdict

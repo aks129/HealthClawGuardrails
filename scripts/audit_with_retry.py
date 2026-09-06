@@ -43,10 +43,26 @@ _OUTAGE = re.compile(
     re.IGNORECASE)
 
 
+# The tools' own verdict lines. Checked BEFORE the outage patterns: an
+# advisory title can contain "timeout" or "connection reset", and a real
+# finding must never be retried and then reported as an outage.
+_FINDING = re.compile(
+    r'found \d+ .*vulnerabilit|Found \d+ known vulnerabilit',
+    re.IGNORECASE)
+
+
 def classify(returncode: int, output: str) -> str:
-    """'ok', 'outage' or 'finding' (anything non-zero that is not an outage)."""
+    """'ok', 'finding' or 'outage'.
+
+    A finding is the tool saying so in its summary line; an outage is a
+    non-zero exit whose output names the registry not answering; anything
+    else non-zero is treated as a finding (never retried, code passed
+    through), because a tool error is not an outage either.
+    """
     if returncode == 0:
         return 'ok'
+    if _FINDING.search(output):
+        return 'finding'
     if _OUTAGE.search(output):
         return 'outage'
     return 'finding'
