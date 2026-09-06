@@ -232,6 +232,25 @@ auditor.
   a fix on the first pull-request event after it merges, not before. The
   property is pinned: `tests/test_ci_hardening.py` refuses a job condition
   that names an event its workflow never listens for.
+- **A "pinned set" of tests is a guess about what you touched.** Twice on
+  2026-09-06 a change went green on the files named in the PR and red on the
+  full suite: `tests/actions/` is a subdirectory the pinned set never
+  listed, and a line-keyed allowlist in `tests/test_access_kernel.py` moved
+  when lines were added above the call it named (#660). Run the whole suite
+  before opening a pull request, in the background if it must be, and read
+  the exit code rather than the last line.
+- **Postgres enforces what SQLite ignores.** `alembic_version.version_num` is
+  `VARCHAR(32)`. A 39-character revision id upgraded cleanly on every SQLite
+  run and failed the Postgres lane on the first deploy-shaped test with
+  `value too long for type character varying(32)` (#658).
+  `tests/test_database_migrations.py` now refuses a revision id over 32
+  characters; read the Postgres lane on its own, not the aggregate green.
+- **A comment can cancel a review.** A workflow with several triggers and
+  `cancel-in-progress: true` puts every kind of run in one concurrency group
+  unless the group names the event. The Vercel bot's deployment comment,
+  two seconds after a pull request opened, fired the reviewer's
+  `issue_comment` run and cancelled the review it was supposed to leave
+  alone (#653, fixed in #654 with a test).
 
 ---
 
