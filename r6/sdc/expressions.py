@@ -151,19 +151,32 @@ def build_context(subject=None):
     return {'patient': projection, 'subject': projection}
 
 
-def evaluate(expression, resource, context=None):
+def evaluate(expression, resource, context=None, link_id=None):
     """Evaluate a FHIRPath expression, returning a scalar, list, or None.
 
     Returns the single value when the result has one element, the list when
     it has several, and None when empty or on any evaluation error.
+
+    `link_id` names the questionnaire item, for the failure log only — see
+    below for why it is what gets logged and the expression is not.
     """
     if not expression:
         return None
     try:
         result = fhirpathpy.evaluate(resource or {}, expression, context or {})
     except Exception as exc:  # noqa: BLE001 — never let one expr kill the run
-        logger.warning('FHIRPath evaluation failed for %r: %s',
-                       expression, type(exc).__name__)
+        # THE EXPRESSION IS NOT LOGGED. A Questionnaire is request body, so
+        # its expression text is the caller's: newlines that forge a log
+        # line, and literals the caller chose to park in a `where()`. Nor is
+        # `str(exc)` — fhirpathpy puts the offending token in the message
+        # ("Not implemented: notAFunction"), which is the same text arriving
+        # by the back door. The linkId identifies the item well enough to
+        # debug and is questionnaire structure rather than patient data; it
+        # is caller-supplied too, and %r is what escapes control characters
+        # in it. Pinned by tests/test_sdc_expressions.py::
+        # test_a_failing_expression_is_not_echoed_into_the_log.
+        logger.warning('FHIRPath evaluation failed for item %r: %s',
+                       link_id, type(exc).__name__)
         return None
     if not result:
         return None

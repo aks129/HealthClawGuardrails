@@ -1,5 +1,8 @@
+import logging
+
 from r6.sdc.expressions import (build_context, evaluate,
                                 patient_projection)
+from r6.sdc.populate import INITIAL_EXPRESSION_URL, populate_questionnaire
 
 
 def test_evaluate_simple_path():
@@ -112,6 +115,79 @@ def test_build_context_with_no_subject_is_empty():
 #   - the allowlist-membership list is what the projection tests above
 #     already assert directly, on the projection itself rather than through
 #     a function that guessed at it.
+
+
+# ---------------------------------------------------------------------------
+# What an evaluation failure is allowed to log
+# ---------------------------------------------------------------------------
+
+#: A Questionnaire an attacker can POST. `notAFunction()` makes fhirpathpy
+#: raise, and everything after the newline is a log line forged to look like
+#: the access kernel granting a step-up.
+FORGED = ("notAFunction()\n"
+          "2026-09-03 18:00:00 - r6.access - WARNING - step-up token "
+          "accepted for tenant admin")
+
+
+def test_a_failing_expression_is_not_echoed_into_the_log(caplog):
+    """The expression text is caller-supplied, so it does not get logged.
+
+    A Questionnaire is request body: its expressions carry whatever the
+    caller wrote, newlines and a forged WARNING line included, and on this
+    path they can also carry literals the caller chose. Logging them back
+    hands an attacker the log file's contents (CTO ruling on #562, "not
+    blocking, please file"). What is logged instead is the linkId — which is
+    questionnaire structure, not patient data — and the exception's CLASS
+    name. Not `str(exc)`: fhirpathpy puts the offending token in the message
+    ("Not implemented: notAFunction"), which is the caller's text arriving
+    by the back door.
+
+    Asserted on the LogRecord rather than on `caplog.text`, because the two
+    disagree in exactly the way that matters. `%r` escapes the newline when
+    the record is formatted, so a text assertion goes green on a forged log
+    line while the raw expression is still sitting in `record.args`, where
+    any handler or formatter that reads it — a structured one, a shipper —
+    gets the unescaped string. (This app's own JSONFormatter, main.py:36,
+    happens to use `getMessage()` and would not; the record is still where
+    the untrusted text is, and the assertion should not depend on which
+    formatter is installed.)
+
+    Driven through `populate_questionnaire` rather than `evaluate` directly,
+    so the linkId plumbing is part of what is pinned: an item whose
+    expression fails must be identifiable from the log alone.
+    """
+    questionnaire = {
+        "resourceType": "Questionnaire", "status": "active",
+        "item": [{
+            "linkId": "demographics.phone", "type": "string",
+            "extension": [{
+                "url": INITIAL_EXPRESSION_URL,
+                "valueExpression": {"language": "text/fhirpath",
+                                    "expression": FORGED}}],
+        }],
+    }
+    with caplog.at_level(logging.WARNING, logger="r6.sdc.expressions"):
+        populate_questionnaire(questionnaire, {"resourceType": "Patient"}, [])
+
+    records = [r for r in caplog.records if r.name == "r6.sdc.expressions"]
+    assert len(records) == 1, "expected exactly one failure log record"
+    record = records[0]
+
+    parts = [str(record.msg), record.getMessage()]
+    parts += [str(arg) for arg in (record.args or ())]
+    for part in parts:
+        assert "notAFunction" not in part, (
+            "the caller's expression text reached the log record")
+        assert "step-up token accepted" not in part, (
+            "a caller forged a log line through an expression")
+        assert "\n" not in part
+
+    link_id, exc_type = record.args
+    assert link_id == "demographics.phone"
+    # A class name, not a message: `str(exc)` here is "Not implemented:
+    # notAFunction", which has spaces and a colon and would fail this.
+    assert exc_type.isidentifier(), (
+        f"{exc_type!r} is not a bare exception class name")
 
 
 def test_the_resource_root_form_still_evaluates_against_the_projection():

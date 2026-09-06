@@ -195,14 +195,23 @@ def register_sdc_routes(blueprint, deps):
         return None
 
     def _gather_content(params, subject, tenant_id):
+        # THE SUBJECT IS NOT IN THIS LIST. It reaches the engine as
+        # populate_questionnaire's `subject` argument, and it is NOT redacted
+        # there: an intake form exists to carry the patient's own name, DOB
+        # and address, and apply_redaction would truncate all three. What
+        # bounds it is the %patient projection in r6/sdc/expressions.py — an
+        # allowlist of exactly those elements — plus reference matching,
+        # which reads only the id.
+        #
+        # It used to be appended here as well. Nothing read it: the engine
+        # filters this list to Observations and to the three list-resource
+        # types, so a Patient passed no filter. But it was the second door to
+        # the identifier oracle QA walked an SSN through (PR #562 review) —
+        # `%resources.where(resourceType='Patient').identifier.value` — and
+        # it stayed reachable by anything that walks content. Pinned by
+        # tests/test_sdc_populate_bounded.py::
+        # test_the_content_list_handed_to_the_engine_carries_no_subject.
         content = []
-        if subject:
-            # The subject is NOT redacted: an intake form exists to carry the
-            # patient's own name, DOB and address, and apply_redaction would
-            # truncate all three. What bounds the subject is the %patient
-            # projection in r6/sdc/expressions.py, which is an allowlist of
-            # exactly those elements.
-            content.append(subject)
         if subject and subject.get("id"):
             for resource_type, subject_field in _AUTO_LOADED_RESOURCE_TYPES:
                 content.extend(_redacted_for_populate(
