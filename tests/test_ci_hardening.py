@@ -219,3 +219,40 @@ def test_every_event_a_job_condition_names_is_one_the_workflow_listens_for():
                     f"triggers on {event!r} (it listens for "
                     f"{sorted(listens_for)}); the job can never run")
     assert checked >= 1, "no job condition names an event; the scan is broken"
+
+
+def test_a_cancelling_concurrency_group_is_keyed_on_the_event_when_a_workflow_has_several():
+    """cancel-in-progress cancels whatever else is running in the same group,
+    and a workflow with several triggers puts several kinds of run in it. The
+    second reviewer keyed its group on the pull-request number alone, so the
+    issue_comment run that any comment fires (a bot comment lands seconds
+    after a pull request opens) cancelled the review that had just started;
+    the comment run then skipped itself, and the check list showed a cancelled
+    reviewer on every pull request (#653). A group that names the event keeps
+    the runs of one kind from cancelling another.
+
+    MUTATION: drop `${{ github.event_name }}` from pr-agent.yml's group -> red
+    naming the workflow and its triggers.
+    """
+    workflow_dir = ROOT / ".github" / "workflows"
+    checked = 0
+    for path in sorted(workflow_dir.glob("*.y*ml")):
+        workflow = yaml.safe_load(path.read_text())
+        triggers = workflow.get(True) or workflow.get("on")
+        if isinstance(triggers, str):
+            triggers = [triggers]
+        if isinstance(triggers, list):
+            triggers = dict.fromkeys(triggers)
+        events = sorted(triggers or {})
+        concurrency = workflow.get("concurrency")
+        if not isinstance(concurrency, dict) or not concurrency.get("cancel-in-progress"):
+            continue
+        if len(events) < 2:
+            continue
+        checked += 1
+        group = str(concurrency.get("group", ""))
+        assert "github.event_name" in group, (
+            f"{path.name} cancels in-progress runs and triggers on {events}, "
+            f"but its concurrency group {group!r} does not name the event, so "
+            f"a run of one kind cancels a run of another")
+    assert checked >= 1, "no workflow cancels in-progress across several triggers; the scan is broken"

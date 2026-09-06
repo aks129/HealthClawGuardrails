@@ -39,7 +39,10 @@ permissions:
   issues: write
 
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  # Keyed on the event as well as the number: a comment posted seconds after
+  # a pull request opens fires an issue_comment run in this workflow, and a
+  # group keyed on the number alone let that run cancel the review (#653).
+  group: pr-agent-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
