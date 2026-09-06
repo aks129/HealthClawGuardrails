@@ -78,6 +78,47 @@ CareAgents identity store use shared databases. The claim path is PostgreSQL
 safe (`FOR UPDATE SKIP LOCKED`); SQLite remains development-only for multiple
 hosts.
 
+## Application settings
+
+Both roles build the same `Config()` (`careagents/config.py`), so these are read
+whichever way the process was started — systemd, Railway or Compose. They change
+what the site does rather than how fast the queue drains:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `CAREAGENTS_CANONICAL_HOST` | unset | The site's only public hostname. A request arriving under any other `Host` is answered 308 to the same path and query there; `/healthz` is exempt |
+| `CARE_REAL_RECORDS` | `off` | Whether an account may **start** a Fasten, wearable or direct-upload connection. One of `off`, `allowlist`, `on` |
+| `CARE_REAL_RECORDS_ALLOWLIST` | empty | The account emails `allowlist` mode admits — comma-separated, case-insensitive |
+
+What each does when it is **absent** is the part worth reading:
+
+- **`CAREAGENTS_CANONICAL_HOST` unset installs no redirect**, and it is the one
+  of the three that does not fail safe. The service then answers on the
+  platform's own `*.up.railway.app` name as well as on `careagents.cloud`, which
+  is the pair of origins #264 exists to remove. WebAuthn binds a passkey to the
+  origin it was created on and `CARE_RP_ID`/`CARE_ORIGIN` name
+  `careagents.cloud`, so whoever lands on the other name cannot register or
+  present a credential the server will accept. It reaches you as "I can't sign
+  in", from a tester unlikely to have noticed which hostname they used, and
+  nothing in the logs names this variable. Set it to a bare hostname:
+  `careagents.cloud`, with no scheme, port, path or whitespace. Any of those
+  raises `ConfigError` at start-up and both roles crash-loop, deliberately —
+  `https://careagents.cloud` would otherwise 308 every request to
+  `https://https//careagents.cloud/...`, and since `/healthz` is exempt the
+  platform would go on reporting a healthy deploy over a dead site.
+- **`CARE_REAL_RECORDS` unset is `off`**, which renders the Fasten, wearable and
+  direct-upload tiles "coming soon" and answers the connect POST 503. That is
+  the intended beta posture, so a deploy that omits the variable arrives at it
+  by accident rather than by decision — set it explicitly and the next operator
+  can tell the two apart. It gates **new** connections only: refresh, poll,
+  upload and delete on a connection that already exists never consult it. A
+  value outside `off`, `allowlist`, `on` raises `ConfigError`.
+- **`CARE_REAL_RECORDS_ALLOWLIST` is read only in `allowlist` mode.** Unset
+  there, the set is empty and no account qualifies, so the mode closes rather
+  than opens. Entries are account emails, comma-separated; surrounding
+  whitespace and case are ignored. `off` and `on` ignore the variable outright,
+  so it is never a way around `off`.
+
 ## Railway
 
 Two services built from one image. The only configuration that differs is
@@ -246,6 +287,22 @@ you an empty value — a boot refusal if it was the only credential, or worse, a
 worker that claims runs and fails every one at inference while readiness reports
 green.
 
+That enumeration was read once, on 2026-08-02, and predates the three settings
+under [Application settings](#application-settings). Set those on the **web**
+service before deploying a build that contains them, and the enumeration then
+forwards whichever of the three you set alongside the original 17. How many
+that is depends on the posture you chose — `CARE_REAL_RECORDS_ALLOWLIST` means
+nothing outside `allowlist` mode — so check the names, not the total.
+
+A worker service created before they existed does not gain them on its next
+deploy: a reference is written per name at `railway add` time. It does not need
+them either — the worker builds `Config()` but never `create_app()`, so it
+serves no HTTP and starts no connections, and neither setting reaches anything
+it runs. This is the one place the mirror-everything rule has an exception, and
+it is safe only in that direction: add the three references to keep the two
+services identical if you prefer, in the same `${{careagents.NAME}}` form used
+above.
+
 Give the worker **no healthcheck path and no public domain**. It serves no
 HTTP, so Railway's default (no path configured, which is what the web service
 also runs with) is correct; a healthcheck path copied across from the web
@@ -296,12 +353,21 @@ visible. Readiness flips only once a worker's presence is fresh:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://careagents.cloud/healthz   # 200
 curl -s https://careagents.cloud/healthz                                    # "run_workers": true
+curl -sI -o /dev/null -w '%{http_code}\n' https://<web-public-domain>/      # 308
 ```
 
 `200` with `"run_workers": true` and a `build` matching the commit you staged is
 the finish line. If it stays 503, the worker is not running: check its deploy
 logs for a `ConfigError`, and check presence directly with the
 `agent_worker_presence` query under [Operations](#operations).
+
+The third call checks what the first two cannot. `careagents.cloud` is already
+the canonical host and `/healthz` is exempt from the redirect, so both of those
+pass identically whether or not `CAREAGENTS_CANONICAL_HOST` is set. Put the web
+service's own `RAILWAY_PUBLIC_DOMAIN` in `<web-public-domain>`: `308` is the
+redirect working, and `200` means the site is still answering on a second
+origin — where a tester can create a passkey that will not work on
+`careagents.cloud`.
 
 ### A deployment with only the web service
 
