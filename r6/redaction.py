@@ -5,7 +5,19 @@ Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
 - Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
-- Identifiers: Keep last 4 characters
+- Identifiers: Remove the value from every entry in a resource's
+  `identifier` array; keep `system` and `type`. Safe Harbor
+  §164.514(b)(2)(i)(G)/(H)/(I)/(J) list SSNs, medical record numbers,
+  health plan and account numbers among the identifiers to REMOVE — a
+  last-four suffix is a re-identification vector, not a redaction. This
+  covers those categories WHEN they appear as `identifier` array entries.
+  A category-J account number or a category-I health plan number carried
+  in a different field shape (e.g. `Coverage.subscriberId`, a plain string
+  rather than an `Identifier`) is a distinct field this function does not
+  inspect — see #112. Do not read "Safe Harbor §…(G)/(H)/(I)/(J)" above as
+  a claim that every field shape those categories can appear in is
+  covered; it names which categories this specific array is redacted
+  against, not the codebase's total Safe Harbor posture.
 - Addresses: Remove line/text, keep city/state/country
 - Telecom: Replace values with [Redacted]
 - Birth dates: Truncate to year only
@@ -70,17 +82,18 @@ def _redact_fields(resource, narrative=True):
     elif 'text' in resource:
         resource.pop('text', None)
 
-    # Redact identifiers (keep last 4 characters)
+    # Remove identifier values. Until 2026-09 this kept the last four
+    # characters, and SECURITY.md said so (docs/2026-08-16-hard-truths.md
+    # §4). `system` and `type` stay so a reader can see which kind of
+    # identifier existed without learning it.
     if 'identifier' in resource:
         identifiers = resource['identifier']
         if isinstance(identifiers, dict):
             identifiers = [identifiers]
         if isinstance(identifiers, list):
             for ident in identifiers:
-                if (isinstance(ident, dict)
-                        and isinstance(ident.get('value'), str)):
-                    val = ident['value']
-                    ident['value'] = '***' + val[-4:] if len(val) > 4 else '***'
+                if isinstance(ident, dict):
+                    ident.pop('value', None)
 
     # Remove full addresses
     if 'address' in resource and isinstance(resource['address'], list):
@@ -185,13 +198,30 @@ def apply_patient_controlled_redaction(resource, patient_id):
     institutional identifiers that could re-identify them to third parties.
 
     Rules (differ from the stricter de-identification preview):
-    - name[], telecom[], address[], photo[] — removed entirely
-    - birthDate — PRESERVED (patient wants their own DOB)
+    - name[], telecom[], address[], photo[] — removed entirely at the top
+      level (a stronger guarantee than the standard profile's redact-to-
+      initial, since this output feeds external sharing: SHL / $share-bundle)
+    - birthDate — PRESERVED at the top level (patient wants their own DOB)
     - Institutional identifiers (MRN, facility patient IDs) — removed
-    - The healthclaw patient_id is injected as the sole canonical identifier
+    - The healthclaw patient_id is injected as the sole canonical top-level
+      identifier
     - Clinical codes (SNOMED, ICD-10, LOINC, CVX, RxNorm) — pass through
     - meta.tag stamped with 'deidentified' + 'patient-controlled'
     - notes/comments — removed
+
+    #617: this function used to stop at the top level. `contained[]`,
+    `subject.display`, `generalPractitioner[].display` and any other nested
+    person-bearing field survived untouched inside a Bundle stamped
+    'ANONYED'. Fixed by running the same recursive walker `apply_redaction`
+    uses over the WHOLE tree first — every `display`/free-text key, every
+    nested name/telecom/address/photo/text/note, at any depth, gets the
+    standard profile's treatment — and then applying this function's own
+    STRONGER top-level-only policy (full removal instead of redaction,
+    verbatim birthDate, the single canonical identifier) on top. This is a
+    policy layered on the one walker, not a second one: nested resources
+    (a contained RelatedPerson, a referenced Practitioner's display) get the
+    standard profile's guarantee; the top-level resource — the one this
+    function exists to protect — gets the stronger one on top of it.
 
     Args:
         resource: FHIR resource dict (not modified in place)
@@ -202,6 +232,16 @@ def apply_patient_controlled_redaction(resource, patient_id):
     """
     import copy
     result = copy.deepcopy(resource)
+    original_birth_date = result.get('birthDate')
+
+    # Base pass: the same walker apply_redaction uses, over the whole tree.
+    # Closes #617 — nothing nested (contained[], subject.display,
+    # generalPractitioner[].display, any reference's .display) survives this
+    # untouched, because the walker does not stop at the top level.
+    _redact_recursive(result)
+
+    # Everything below is this function's OWN, stronger, top-level-only
+    # policy layered on top of the base pass above.
 
     # Remove direct identifiers entirely
     result.pop('name', None)
@@ -212,34 +252,22 @@ def apply_patient_controlled_redaction(resource, patient_id):
     # wholesale (this output feeds SHL / $share-bundle external sharing).
     result.pop('contact', None)
 
-    # birthDate is PRESERVED — patient wants their own DOB in their store
+    # birthDate is PRESERVED verbatim at the top level — patient wants their
+    # own DOB in their store. The base pass above truncated it to a year
+    # like every other date in the tree; restore the original here, only at
+    # the top level, only for this function.
+    if original_birth_date is not None:
+        result['birthDate'] = original_birth_date
 
-    # Remove institutional identifiers; inject healthclaw canonical ID
-    INSTITUTIONAL_SYSTEMS = {
-        'http://hl7.org/fhir/sid/us-ssn',
-        'urn:oid:2.16.840.1.113883.4.1',   # SSN OID
-    }
-    # Strip identifiers whose system looks institutional (MRN, facility ID)
-    # Keep only the injected healthclaw identifier
-    filtered_identifiers = []
-    if 'identifier' in result and isinstance(result['identifier'], list):
-        for ident in result['identifier']:
-            system = ident.get('system', '')
-            # Drop SSN and any system-less or facility-scoped identifiers
-            if system in INSTITUTIONAL_SYSTEMS:
-                continue
-            # Drop MRN-style identifiers (heuristic: system contains mrn etc.)
-            institutional_kw = ('mrn', 'patient_id', 'facility', 'org/', 'example.org')
-            if any(kw in system.lower() for kw in institutional_kw):
-                continue
-            filtered_identifiers.append(ident)
-
-    # Always inject healthclaw canonical identifier
-    filtered_identifiers.insert(0, {
+    # The healthclaw canonical id is the SOLE identifier — built, not
+    # filtered. The keyword denylist this replaced ('mrn', 'facility', ...)
+    # passed any upstream identifier whose system used other words through
+    # with its value intact, which is the same last-four-class gap the
+    # standard profile had (Safe Harbor §164.514(b)(2)(i)(H)).
+    result['identifier'] = [{
         'system': 'https://healthclaw.io/patient-id',
         'value': patient_id,
-    })
-    result['identifier'] = filtered_identifiers
+    }]
 
     # Remove notes/comments
     for field in ('note', 'comment'):

@@ -131,6 +131,17 @@ curl -s -H "X-Tenant-Id: desktop-demo" \
   https://<prod-host>/r6/fhir/Patient | python -m json.tool | head
 ```
 
+**A bare tenant header only reads a tenant named in `PUBLIC_TENANTS`.** Read
+auth arrived after this runbook was written: `authorize_tenant_read` in
+`r6/read_auth.py` refuses a credential-free read whenever `READ_AUTH_ENABLED`
+is set and the tenant is not public. If the target host has read auth on and
+`desktop-demo` is not in its `PUBLIC_TENANTS`, this returns 401 — which during
+a migration reads like the migration broke reads. Mint a step-up token and send
+`X-Step-Up-Token` instead — note that minting one for a non-public tenant is
+itself gated, and needs `X-Internal-Secret` matching `INTERNAL_TOKEN_MINT_SECRET`
+— and confirm the 401 is absent *before* the migration so the comparison means
+something. Not verified against production here.
+
 Then watch one Fasten ingest complete with `failed=0` where the old
 cross-tenant collisions used to show up as nonzero `failed` counts.
 
