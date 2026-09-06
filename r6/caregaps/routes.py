@@ -176,13 +176,37 @@ def register_caregaps_routes(blueprint, deps):
             return _resources_for(resource_type, subject, tenant_id) if subject else []
 
         as_of = date.today().isoformat()
-        results = evaluate_care_gaps(
-            patient, conditions=_for("Condition"),
-            observations=_for("Observation"),
-            immunizations=_for("Immunization"), procedures=_for("Procedure"),
-            as_of=as_of)
+        # A subject we could not resolve is not evaluated, full stop (#542).
+        # The route used to set `not_evaluated` and then run the rules anyway,
+        # against `patient=None`, which produced two false statements about a
+        # person nobody had identified:
+        #
+        #   - The condition gate in evaluate.py fires BEFORE the age gate, so
+        #     a rule with an empty condition list fell through to
+        #     `not_applicable` rather than `indeterminate`. A1c is the one
+        #     that showed it: `not_applicable: 1` for an unresolved subject.
+        #   - The audit detail counted those seven rules as `evaluated=7`.
+        #
+        # The consumer summary suppressed the rows (#389, #417), so the page
+        # looked right while the payload and the audit did not — which is the
+        # retro's shape exactly: a check that examined nothing printing the
+        # verdict of a check that examined everything
+        # (docs/2026-08-02-retro.md). Every other caller of this operation —
+        # the MCP tool, the Telegram summary, curl — read the rows.
+        if not_evaluated is not None:
+            results = []
+        else:
+            results = evaluate_care_gaps(
+                patient, conditions=_for("Condition"),
+                observations=_for("Observation"),
+                immunizations=_for("Immunization"),
+                procedures=_for("Procedure"), as_of=as_of)
 
         summary = build_caregaps_summary(results)
+        # An explicit flag a client can branch on without knowing the reason
+        # family. The MCP App page matches the reason list today (#538/#541)
+        # and can switch to this; both ship for one release (#542).
+        summary["evaluated"] = not_evaluated is None
         consumer = build_consumer_summary(results, not_evaluated=not_evaluated)
 
         record_audit_event(

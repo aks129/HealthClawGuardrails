@@ -528,8 +528,8 @@ class TestProxyRouteIntegration:
                                    headers=self.tenant_headers)
             assert resp.status_code == 200
             data = resp.get_json()
-            # Guardrails applied: identifier redacted
-            assert data['identifier'][0]['value'] == '***3456'
+            # Guardrails applied: identifier value removed
+            assert 'value' not in data['identifier'][0]
             # Address line stripped
             assert 'line' not in data['address'][0]
             # Telecom redacted
@@ -584,8 +584,8 @@ class TestProxyRouteIntegration:
             data = resp.get_json()
             assert data['total'] == 2
             assert len(data['entry']) == 2
-            # Identifier redacted on upstream data
-            assert data['entry'][0]['resource']['identifier'][0]['value'] == '***0001'
+            # Identifier value removed on upstream data
+            assert 'value' not in data['entry'][0]['resource']['identifier'][0]
             assert data.get('_source') == 'upstream'
 
     def test_local_mode_when_proxy_not_configured(self):

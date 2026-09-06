@@ -16,7 +16,6 @@ Approve-is-the-commit (Task 10):
 Audit detail and Telegram pushes use ProposedAction.summary() ONLY (no PHI).
 """
 
-import hmac
 import json
 import logging
 import os
@@ -25,6 +24,7 @@ import uuid
 from flask import Blueprint, jsonify, request
 
 from models import db
+from r6 import constant_time
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
                        tenant_from_request)
 from r6.actions import errors
@@ -643,7 +643,7 @@ def issue_action_approval_token(action_id):
 
     expected = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '')
     provided = request.headers.get('X-Internal-Secret', '')
-    if not expected or not hmac.compare_digest(provided, expected):
+    if not expected or not constant_time.equal(provided, expected):
         return _error(403, 'Forbidden')
 
     action = ProposedAction.query.filter_by(
@@ -725,7 +725,7 @@ def action_callback(provider):
     # unconfigured secret rejects ALL callbacks — fail closed.
     expected = os.environ.get('ACTIONS_WEBHOOK_SECRET', '')
     supplied = request.args.get('secret', '')
-    if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
+    if not expected or not constant_time.equal(supplied, expected):
         return _error(403, 'Webhook verification failed')
 
     action_id = request.args.get('action_id', '')

@@ -12,7 +12,6 @@ Validation: structural checks for required fields. Falls back when external
 validator unavailable. No StructureDefinition or terminology binding validation.
 """
 
-import hmac
 import json
 import logging
 import os
@@ -31,6 +30,7 @@ from werkzeug.http import (
     unquote_header_value,
 )
 from models import db
+from r6 import constant_time
 from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
@@ -71,6 +71,7 @@ from r6.curatr import (
     persist_curation_state as _persist_curation_state,
 )
 from r6.health_context import get as _hc_get
+from r6.caregaps.report import caller_reasons as _caregaps_caller_reasons
 
 _curatr_engine = CuratrEngine()
 
@@ -172,6 +173,7 @@ _EXEMPT_EXACT_PATHS = frozenset({
     f'{_R6_PREFIX}/metadata',       # CapabilityStatement
     f'{_R6_PREFIX}/health',         # health check
     f'{_R6_PREFIX}/$conformance',   # guardrail self-test (self-tenanted internally)
+    f'{_R6_PREFIX}/docs/privacy-policy',  # published in discovery + every _disclaimer; its reader has no tenant (#574)
 })
 
 # Genuinely-namespaced sub-trees exempt from tenant + read-auth enforcement.
@@ -2022,7 +2024,7 @@ def _internal_mint_authorized(tenant_id):
     mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
     if mint_secret:
         provided = request.headers.get('X-Internal-Secret', '')
-        return hmac.compare_digest(provided, mint_secret)
+        return constant_time.equal(provided, mint_secret)
     # Secret unset → open only outside production.
     return resolve_app_env() != 'production'
 
@@ -3424,6 +3426,8 @@ def mcp_app_care_gaps():
     html = render_template(
         'mcp_apps/care_gaps.html',
         tenant_id=tenant_id,
+        # The engine's own "nothing was read" list; the page must not copy it (#538).
+        not_evaluated_reasons=_caregaps_caller_reasons(),
     )
     resp = Response(html, mimetype='text/html')
     resp.headers['Content-Type'] = 'text/html; profile=mcp-app'

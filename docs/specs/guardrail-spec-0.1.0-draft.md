@@ -752,12 +752,17 @@ own referential-integrity rules, and its own free text.
 - **A create echoes the caller's upstream `display` back unredacted**
   ([#380](https://github.com/aks129/HealthClawGuardrails/issues/380)).
 - **Upstream referential integrity changes what a probe means.** A probe whose
-  subject the upstream rejected can score a pass on the failure of a guardrail
-  that was working. That happened: a constant Patient body, a server that
-  refuses duplicates, and a scorecard reading **Grade F, 1/7, with four of six
-  failures blaming the guardrails**. The synthetic subject is now unique per run
-  and clinical probes bind to a real subject where one can be created. Any
-  implementation of this suite MUST do the same.
+  subject the upstream rejected scores a FAILURE against a guardrail that was
+  working, and names it. That happened on 2026-08-16: a constant Patient body,
+  a server that refuses duplicates, and a scorecard reading **Grade F, 1/7 —
+  five of its six failing properties caused by that collision rather than by a
+  defect, two of them blaming a gate in the failure text**. The synthetic
+  subject is now unique per run and clinical probes bind to a real subject
+  where one can be created; the same deployment re-measured **B, 6/7** on
+  2026-09-04. Any implementation of this suite MUST do the same. (Count
+  corrected 2026-09-04, #605: this read "four of six" and the transcript
+  supports no such count. The inverted "score a pass on the failure" was
+  corrected with it.)
 - **MCP error paths beyond the read path forward raw backend text**
   ([#153](https://github.com/aks129/HealthClawGuardrails/issues/153)).
 

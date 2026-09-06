@@ -92,6 +92,127 @@ function isMCPBearerCredential(authorization: string | undefined): boolean {
   );
 }
 
+// --- RFC 9728 protected-resource metadata (phase 1, behind the constant) ---
+//
+// docs/specs/2026-08-16-mcp-authorization.md §3.2/§3.4, as amended 2026-09-02.
+// The canonical resource identifier is one pinned string, and everything below
+// is derived from it. Unset, none of this runs: the well-known paths 404 and
+// the challenge stays a bare `Bearer`, which is today's behaviour. Read
+// per-request like MCP_AUTH_TOKEN so config is authoritative at call time;
+// assertMCPCanonicalResourceConfigured re-reads it at boot so a malformed value
+// refuses to start rather than disabling the feature in silence.
+//
+// This admits nobody. It adds two unauthenticated documents that hold no
+// secret, name no tenant and grant nothing, and two parameters on a refusal
+// that is still a refusal.
+const AUTHORIZATION_SERVER_ISSUER = "https://app.healthclaw.io";
+const RESOURCE_SCOPES = ["fhir.read", "context.read"];
+const PRM_BASE_PATH = "/.well-known/oauth-protected-resource";
+
+// The check that matters is not "is this a URL" but "will the document we serve
+// survive RFC 9728 §3.3". A client derives the resource identifier by removing
+// the well-known segment from the URL it fetched, and rejects the document if
+// `resource` is not that string. So the configured value must already BE the
+// identifier a client derives, character for character — the constant is
+// advertised verbatim as `resource`, while the URL that carries it is built
+// from the parsed origin and path.
+//
+// Nine shapes parse as https URLs and fail that: a host or scheme in mixed case
+// (the URL parser lowercases both), an explicit `:443` (dropped), a `?query` or
+// `#fragment` (not in the path), `user:pass@` userinfo (also a credential we
+// would then publish in an unauthenticated, CORS-open document), a bare
+// trailing slash, and dot segments (resolved). Each one boots a server whose
+// own challenge points at a document the challenge's reader will refuse — the
+// §9.3 "confidently wrong" mode, which is the failure this check exists to
+// catch. Verified by starting the server on each value and fetching the
+// document at the URL its own challenge advertises.
+function parseCanonicalResource(raw: string | undefined): URL | null {
+  if (!raw || !raw.trim()) return null;
+  const trimmed = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname) return null;
+  // `origin` re-serializes: lowercased scheme and host, no userinfo, no default
+  // port. `pathname` is normalized and excludes query and fragment. A root path
+  // contributes nothing, because protectedResourceMetadataURL appends nothing
+  // for it and the identifier a client derives therefore has no trailing slash.
+  const canonicalForm =
+    parsed.pathname === "/" ? parsed.origin : `${parsed.origin}${parsed.pathname}`;
+  if (trimmed !== canonicalForm) return null;
+  return parsed;
+}
+
+function canonicalResource(): URL | null {
+  return parseCanonicalResource(process.env.MCP_CANONICAL_RESOURCE);
+}
+
+// RFC 9728 §3.1 inserts the resource's path after the well-known segment, so
+// `https://host/mcp` is described at `<host>/.well-known/oauth-protected-resource/mcp`.
+// Built from the constant and never from req.hostname. RFC 9728 §3.3 has a
+// client reject a document whose `resource` is not the identifier it inserted
+// into the well-known path, so what we advertise cannot follow the request —
+// whatever any proxy in front of us does or does not rewrite.
+function protectedResourceMetadataURL(resource: URL): string {
+  const path = resource.pathname === "/" ? "" : resource.pathname;
+  return `${resource.origin}${PRM_BASE_PATH}${path}`;
+}
+
+// `resourceIdentifier` is the configured string as configured, not a
+// re-serialized URL, so it string-equals the audience the client will request
+// and the authorization server will record. Nothing here comes from the
+// request.
+function protectedResourceMetadata(resourceIdentifier: string): Record<string, unknown> {
+  return {
+    resource: resourceIdentifier,
+    authorization_servers: [AUTHORIZATION_SERVER_ISSUER],
+    scopes_supported: RESOURCE_SCOPES,
+    bearer_methods_supported: ["header"],
+    resource_name: "HealthClaw Guardrails",
+    resource_documentation: `${AUTHORIZATION_SERVER_ISSUER}/r6/fhir/docs/privacy-policy`,
+  };
+}
+
+// A document whose `resource` disagrees with the host it was fetched from is
+// rejected by a conformant client (RFC 9728 §3.3), and that reads to a partner
+// as our bug. Until DNS points the canonical name here, the platform hostname
+// keeps answering exactly as it does today.
+function hostIsCanonical(req: express.Request, resource: URL): boolean {
+  const host = req.headers.host;
+  if (typeof host !== "string" || !host) return false;
+  try {
+    return new URL(`https://${host}`).hostname === resource.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function challengeHeader(req: express.Request): string {
+  const resource = canonicalResource();
+  if (!resource || !hostIsCanonical(req, resource)) return "Bearer";
+
+  const authorization = req.headers.authorization;
+  const credentialPresented =
+    typeof authorization === "string" && authorization.trim().length > 0;
+  // RFC 6750 §3.1: SHOULD NOT send `error` when no credential was presented —
+  // there is no token to call invalid. The description below distinguishes
+  // nothing on purpose: expired, wrong audience and not-a-token recover
+  // identically, and telling them apart is an oracle for a caller with no
+  // business getting one. It never carries the credential or a tenant.
+  const params = credentialPresented
+    ? [
+        'error="invalid_token"',
+        'error_description="The access token is invalid, expired, or was not issued for this resource."',
+      ]
+    : [];
+  params.push(`resource_metadata="${protectedResourceMetadataURL(resource)}"`);
+  params.push(`scope="${RESOURCE_SCOPES.join(" ")}"`);
+  return `Bearer ${params.join(", ")}`;
+}
+
 // Health probes and CORS preflight remain public. When configured, every MCP
 // network transport requires the deployment-scoped bearer credential.
 app.use((req, res, next) => {
@@ -106,7 +227,7 @@ app.use((req, res, next) => {
   }
 
   if (!isMCPBearerCredential(req.headers.authorization)) {
-    res.setHeader("WWW-Authenticate", "Bearer");
+    res.setHeader("WWW-Authenticate", challengeHeader(req));
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -677,6 +798,38 @@ app.post("/mcp/rpc", async (req, res) => {
   }
 });
 
+// --- Protected-resource metadata (RFC 9728) ---
+//
+// Mounted rather than declared per-path so the sub-path form always matches the
+// path inside the constant, which is the same path the challenge advertises. A
+// header pointing at a URL this server does not serve is the failure mode the
+// spec's §9.3 calls the worst one: confidently wrong beats absent, for the
+// partner reading the error.
+//
+// Both forms are served because clients try the sub-path first and the root
+// second. `next()` on every other case leaves the response byte-identical to
+// today's 404.
+app.use(PRM_BASE_PATH, (req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+
+  const resource = canonicalResource();
+  if (!resource || !hostIsCanonical(req, resource)) return next();
+
+  const isPathInsertionForm = req.path === resource.pathname;
+  const isRootForm = req.path === "/";
+  if (!isPathInsertionForm && !isRootForm) return next();
+
+  // Unauthenticated and readable cross-origin. A document a client must read
+  // before it can authenticate cannot itself require authentication, and a
+  // browser-context client that cannot read it is back at the dead end this
+  // phase removes (spec §9.4). The transport endpoint's origin allowlist is
+  // untouched.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  return res.json(
+    protectedResourceMetadata((process.env.MCP_CANONICAL_RESOURCE || "").trim())
+  );
+});
+
 // --- Health Check ---
 
 app.get("/health", (_req, res) => {
@@ -720,8 +873,30 @@ function assertMCPAuthConfigured(env: NodeJS.ProcessEnv = process.env): void {
   }
 }
 
+// A value that cannot be an audience is a configuration error, and the failure
+// it would otherwise produce is silence: the routes 404 and the challenge stays
+// bare, so phase 1 looks deployed and is not.
+function assertMCPCanonicalResourceConfigured(
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  const raw = env.MCP_CANONICAL_RESOURCE;
+  if (!raw || !raw.trim()) return; // Unset is the supported off state.
+  if (!parseCanonicalResource(raw)) {
+    // Names the variable and the shape, never the value: the rejected value may
+    // be the reason it was rejected (userinfo credentials), and a boot crash is
+    // the loudest place in the system to print one.
+    throw new Error(
+      "MCP_CANONICAL_RESOURCE must be an absolute https:// URL in canonical " +
+        "form — lowercase scheme and host, no userinfo, no default port, no " +
+        "query, no fragment, no trailing slash on a root path " +
+        "(e.g. https://mcp.healthclaw.io/mcp)"
+    );
+  }
+}
+
 if (require.main === module) {
   assertMCPAuthConfigured();
+  assertMCPCanonicalResourceConfigured();
   app.listen(PORT, () => {
     console.error(`FHIR R6 MCP Server v${SERVER_VERSION} running on port ${PORT}`);
     console.error(`FHIR Base URL: ${FHIR_BASE_URL}`);
@@ -759,6 +934,7 @@ function getRuntimeStateForTests(): {
 export {
   app,
   assertMCPAuthConfigured,
+  assertMCPCanonicalResourceConfigured,
   cleanupExpiredRuntimeStateForTests,
   closeMCPServerForTests,
   getRuntimeStateForTests,
