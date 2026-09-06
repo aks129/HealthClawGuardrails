@@ -49,7 +49,7 @@ Not a mock, and not one kind standing in for another. A connector proven only ag
   - `$conformance` colliding on a shared server (#514)
   - an unknown kind booting then 500-ing (#518)
 - The example's Aidbox image is **unpinned** (`:edge`, `pull_policy: always`) with a dated exemption recorded in `tests/test_aidbox_example_tells_the_truth.py`. As of 2026-09-04 that tag resolves to a different digest than the run the exemption cites (#602, `scripts/image-pin-digests.sh`), so the exemption's own reason has expired.
-- Three of those four fixes now have a run behind them, not just a diff: `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md` (#602) re-runs §5, §6 and §7 of the pack against both the tree that found them and the tree that fixed them. #514 is the one it does not cover; #601 does.
+- Three of those four fixes now have a run behind them, not just a diff. The rerun in `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md` (#602) covers §5, §6 and §7 of the pack. It runs against both the tree that found them and the tree that fixed them. #514 is the one it does not cover; #601 does.
 
 ## 5. Known gaps — the open issues in this set
 
