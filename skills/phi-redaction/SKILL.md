@@ -30,7 +30,7 @@ All redaction is applied at read time, not at storage time.
 - **Text**: Removed
 
 ### Identifiers
-- **Value**: Masked to last 4 characters (e.g., "123-45-6789" -> "***6789")
+- **Value**: Removed (e.g., `{"system": "…/us-ssn", "value": "123-45-6789"}` -> `{"system": "…/us-ssn"}`)
 - **System and type**: Kept for reference
 
 ### Addresses
@@ -86,10 +86,10 @@ This redaction profile minimizes these common identifier classes:
 - Dates (birth date truncated to year)
 - Telephone/fax numbers (redacted)
 - Email addresses (redacted)
-- Medical record numbers (masked to last 4)
+- Medical record numbers, Social Security numbers, account numbers — any `identifier.value` (removed)
 
 **Not covered by this profile** (would need additional implementation):
-- Social Security numbers (not typically in FHIR resources)
+- An identifier typed into a free-text field the profile does not strip (no pattern scan runs over arbitrary strings)
 - IP addresses, device identifiers (not redacted from extension fields)
 - Biometric identifiers
 - Full-face photographs (removed if in `photo` field, not scanned in attachments)
