@@ -21,6 +21,17 @@ MCP_URL="${MCP_URL:-https://mcp.healthclaw.io/mcp}"
 MCP_AUTH_TOKEN="${MCP_AUTH_TOKEN:-}"
 REDIRECT_URI="${REDIRECT_URI:-http://localhost/callback}"
 CALL_EVERY_TOOL="${CALL_EVERY_TOOL:-0}"
+# The public demo tenant. A6's authorize binds it through the demo policy and
+# ignores the header; R3's own FHIR-audience mint goes through the header
+# policy, which defaults to a tenant that is not public and refuses (found by
+# the first live run, 2026-09-06). Both name it, so both mint.
+DEMO_TENANT="${DEMO_TENANT:-desktop-demo}"
+#
+# Running against a local pair: the MCP server requires an https://
+# MCP_CANONICAL_RESOURCE and answers the enriched challenge only on that host,
+# so a local run needs a TLS-terminating proxy in front of each service and
+# curl's --connect-to to route the canonical hostname there (the #672 comment
+# records one such setup). Nothing in the script depends on it.
 
 fail=0; passed=0
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -102,7 +113,7 @@ print(v); print(c)'; }
 authorize_for() { # authorize_for <resource> -> prints "code|state|iss|verifier" or "error:<err>"
   local res="$1"; local state="st-$RANDOM"; local pk; pk=$(pkce); local verifier challenge
   verifier=$(printf '%s' "$pk" | sed -n 1p); challenge=$(printf '%s' "$pk" | sed -n 2p)
-  local code; code=$(req -G "$AUTHZ" --data-urlencode "client_id=$client_id" --data-urlencode "redirect_uri=$REDIRECT_URI" \
+  local code; code=$(req -G "$AUTHZ" -H "X-Tenant-Id: $DEMO_TENANT" --data-urlencode "client_id=$client_id" --data-urlencode "redirect_uri=$REDIRECT_URI" \
     --data-urlencode "code_challenge=$challenge" --data-urlencode "code_challenge_method=S256" \
     --data-urlencode "scope=fhir.read context.read" --data-urlencode "state=$state" --data-urlencode "resource=$res")
   local loc; loc=$(header Location)
