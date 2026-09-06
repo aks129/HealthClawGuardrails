@@ -173,6 +173,7 @@ _EXEMPT_EXACT_PATHS = frozenset({
     f'{_R6_PREFIX}/metadata',       # CapabilityStatement
     f'{_R6_PREFIX}/health',         # health check
     f'{_R6_PREFIX}/$conformance',   # guardrail self-test (self-tenanted internally)
+    f'{_R6_PREFIX}/docs/privacy-policy',  # published in discovery + every _disclaimer; its reader has no tenant (#574)
 })
 
 # Genuinely-namespaced sub-trees exempt from tenant + read-auth enforcement.

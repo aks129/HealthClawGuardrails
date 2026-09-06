@@ -343,7 +343,10 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: only kind of raise this file permits — the guard has to sit at that call
 #: site, and extracting seed_tenant into its own module is a refactor that
 #: should not ride along with a security fix that was exploitable in prod.
-_GOD_MODULE_LINES = 3927
+#: 3927 -> 3928 (#583): one entry in the tenant-exemption table for the
+#: published privacy policy (#574). The table is the guard, so the line
+#: has to sit here; nothing else in that change touches this file.
+_GOD_MODULE_LINES = 3928
 
 
 def test_the_god_module_only_shrinks():
