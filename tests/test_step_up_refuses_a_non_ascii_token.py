@@ -143,6 +143,18 @@ ROWS = [
     # assert sameness rather than 401.
     Row('wearables-sync-now', 'r6/wearables/routes.py:sync_now',
         'POST', '/wearables/sync-now', 403, body={}),
+    # Kernel slice 7. The 403 dialect again; phase one of the two-phase gate
+    # answers before the body is read, so the id need not exist.
+    Row('curatr-apply-fix', 'r6/routes.py:curatr_apply_fix',
+        'POST', '/r6/fhir/Condition/no-such-condition/$curatr-apply-fix', 403,
+        body={'fixes': [{'field_path': 'Condition.code.coding[0].code',
+                         'new_value': 'E11.9'}]},
+        headers=_HUMAN_CONFIRMED),
+    # Kernel slice 7c. The tenant travels in the body; the token may too, but
+    # the census sends it in the header, which the kernel reads first.
+    Row('internal-bind-telegram', 'r6/routes.py:bind_telegram_chat',
+        'POST', '/r6/fhir/internal/bind-telegram', 401,
+        body={'tenant_id': 'test-tenant', 'chat_id': 4242}),
 ]
 
 

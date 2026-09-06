@@ -32,7 +32,7 @@ from r6.agent_runs.service import (
 from r6.agent_runs.state import InvalidTransition
 from r6.command_center.models import ConversationMessage
 from r6.read_auth import TENANT_SESSION_KEY
-from r6.stepup import validate_step_up_token
+from r6.access import Scope, Tenant, TenantSource, has_grant
 
 
 agent_runs_blueprint = Blueprint(
@@ -52,19 +52,16 @@ _MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
 def _tenant_authorized(tenant_id: str) -> bool:
     if session.get(TENANT_SESSION_KEY) == tenant_id:
         return True
-    token = request.headers.get("X-Step-Up-Token", "")
-    if not token:
-        return False
-    # Destructure both halves (#307). `[0]` returned the correct boolean, but
-    # it sits one keystroke from `if validate_step_up_token(...)`, which is a
-    # silent auth bypass because a 2-tuple is always truthy — including
-    # `(False, 'expired')`. The reason is the other half of the fix: a refusal
-    # nobody can name is a refusal nobody can diagnose.
-    valid, error = validate_step_up_token(token, tenant_id)
-    if not valid:
-        logger.info("agent-runs step-up refused: tenant=%s reason=%s",
-                    tenant_id, error)
-    return valid
+    # Kernel slice 16 (spec §2.5b): the token branch of this predicate asks
+    # the kernel. has_grant returns the Grant or None and never raises, so the
+    # session-or-token shape and every JSON 401 below are unchanged. The
+    # kernel logs each refusal with its public reason ("step-up refused for
+    # tenant ..."), which is the line #307 asked for, so this site no longer
+    # logs one of its own. The id was chosen by the caller (body or header on
+    # create, the run row elsewhere); the grant is bound to it either way.
+    return has_grant(scope=Scope.WRITE,
+                     tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT),
+                     ) is not None
 
 
 def _internal_authorized() -> bool:
