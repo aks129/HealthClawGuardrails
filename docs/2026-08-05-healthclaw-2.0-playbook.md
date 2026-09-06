@@ -71,7 +71,7 @@ names its ratchet and its test-first artifact.
 | # | Chunk | Ratchet | Test-first |
 |---|---|---|---|
 | B1 | Audit for `command_center` (3 gated writes, currently 0 events) | coverage gap −1 | audit-assertion (#338 after-flush) turned on for these routes |
-| B2 | Audit for `agent_runs` (2 gated writes) | coverage gap −2 | same |
+| B2 | Audit for `agent_runs` — **shipped 2026-09-04**. "2 gated writes" was an undercount: the package has 14 routes and 10 of them are gated on a shared secret rather than step-up, which is also why the ratchet's step-up-only predicate barely covered its own subject. 8 routes audit, 6 are classified as timer chatter with reasons | coverage gap −2; unaudited-mutator set → empty (tripwire) | `tests/test_agent_run_writes_are_audited.py` — per-route classification, wire proof, PHI-free detail |
 | B3–B8 | `record_audit_event` → `add_audit_event`, one blueprint per PR (routes, curatr, labs, caregaps, shc/quality, actions/review) | 88→0 stepwise | audit-atomicity matrix: for each write path, assert audit row in `session.new` before commit |
 | B9 | Delete `record_audit_event` + its ambient commit | primitive count 2→1 | the ratchet at 0 is the precondition |
 | B10 | Enable `HC_ASSERT_AUDIT_COMMITTED` in production once B9 lands | tripwire live | prod_watch check |

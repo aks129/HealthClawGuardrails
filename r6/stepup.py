@@ -19,6 +19,7 @@ import secrets
 import threading
 import time
 
+from r6 import constant_time
 from r6.runtime_config import resolve_app_env
 
 logger = logging.getLogger(__name__)
@@ -217,11 +218,21 @@ def validate_step_up_token(token, tenant_id, consume_nonce=False,
 
     payload_b64, sig = parts
 
-    # Verify HMAC signature (constant-time comparison)
+    # Verify HMAC signature (constant-time comparison).
+    #
+    # Both halves of the token are caller-supplied, so both reach a byte
+    # operation through r6/constant_time (#557). Neither `str.encode` nor
+    # `hmac.compare_digest` is total over `str`: strict UTF-8 refuses a lone
+    # surrogate, and compare_digest refuses any non-ASCII `str` outright.
+    # Either one raised TypeError/UnicodeEncodeError out of this validator,
+    # past a `_evaluate` that deliberately does not catch, and answered an
+    # anonymous caller with a 500 that said their token was NOT merely wrong.
+    # A token that cannot be spelled is a token that does not verify, and it
+    # is refused right here with every other one that does not verify.
     expected_sig = hmac.new(
-        secret.encode(), payload_b64.encode(), hashlib.sha256
+        secret.encode(), constant_time.as_bytes(payload_b64), hashlib.sha256
     ).hexdigest()
-    if not hmac.compare_digest(sig, expected_sig):
+    if not constant_time.equal(sig, expected_sig):
         return False, 'Invalid token signature'
 
     # Decode and validate payload

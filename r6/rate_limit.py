@@ -6,13 +6,13 @@ Production deployments should use Redis-backed rate limiting.
 """
 
 import hashlib
-import hmac
 import logging
 import os
 import threading
 import time
 from typing import Any
 from flask import g, request, jsonify, session
+from r6 import constant_time
 from r6.read_auth import TENANT_SESSION_KEY
 from r6.runtime_config import resolve_app_env
 from r6.stepup import validate_step_up_token
@@ -145,7 +145,7 @@ def _tenant_claim_is_authenticated(tenant_id):
     is only armed in production is a limiter nobody can prove works.
     """
     mint_secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET')
-    if mint_secret and hmac.compare_digest(
+    if mint_secret and constant_time.equal(
             request.headers.get('X-Internal-Secret', ''), mint_secret):
         return True
     if session.get(TENANT_SESSION_KEY) == tenant_id:

@@ -212,28 +212,54 @@ def test_post_commit_audit_callsites_only_decrease():
         'New audit calls must use add_audit_event (same transaction).')
 
 
-#: The two step-up-gated mutators that emit no audit events at all. They
-#: perform authenticated writes with no trail — the worst shape in the
-#: codebase for a system whose constitution says every FHIR resource access
-#: emits an AuditEvent. Playbook B1, B2. This ratchet counts blueprints
-#: that mutate without auditing; it goes to 0 and then becomes a tripwire.
-#: r6/command_center left this set on 2026-08-10 (playbook B1): its three
-#: step-up-gated writes now call add_audit_event inside their own
-#: transaction. r6/agent_runs stays, and stays deliberately — claim,
-#: heartbeat and transition fire on a timer, so auditing them would bury
-#: real access records under queue chatter. B2 is a decision about WHICH of
-#: its twelve endpoints deserve a trail, not a sweep.
-_UNAUDITED_MUTATOR_PACKAGES = {'r6/agent_runs'}
+#: Packages that mutate the store and emit no audit events at all — an
+#: authenticated write with no trail, the worst shape in the codebase for a
+#: system whose constitution says every resource access emits an AuditEvent.
+#: Playbook B1, B2. The set is now EMPTY, which makes this a tripwire rather
+#: than a ratchet (playbook A7's shape): a new silent mutator goes red on
+#: arrival instead of being counted.
+#:
+#: r6/command_center left the set on 2026-08-10 (B1) and r6/agent_runs on
+#: 2026-09-04 (B2).
+#:
+#: TWO THINGS THIS TEST DOES NOT PROVE, and both were true of the version
+#: that pinned agent_runs, so read them before trusting a green here:
+#:
+#: 1. It is a PRESENCE check per package, not per mutation. One audit call
+#:    anywhere in a package satisfies it while every other write stays
+#:    silent. The per-endpoint pin is
+#:    tests/test_agent_run_writes_are_audited.py, which classifies all
+#:    fourteen agent-run routes and proves each audited one at the wire;
+#:    tests/test_command_center_writes_are_audited.py is B1's equivalent. A
+#:    package arriving here needs one of those, not just an import.
+#: 2. Until 2026-09-04 it qualified a package as a mutator only if the
+#:    package validated STEP-UP. agent_runs gates ten of its fourteen
+#:    endpoints on a shared secret instead, so the guard's own subject was
+#:    mostly outside its scope — it caught this package by ONE call site,
+#:    the step-up check inside `_tenant_authorized`, and would have missed a
+#:    package that used no step-up at all (verified by mutation: with that
+#:    one call renamed, the old predicate does not flag this package).
+#:    The predicate below now also counts a package that
+#:    calls db.session.commit(): if it commits, it mutates. Measured before
+#:    the widening (2026-09-04): the commit predicate adds r6/fasten to the
+#:    mutator set and NOTHING to the silent set — every other committing
+#:    package already audits. So the widening is inert today and is a trap
+#:    laid for tomorrow, which is what a tripwire is for.
+_UNAUDITED_MUTATOR_PACKAGES = set()
 
 
 def test_no_new_package_mutates_without_auditing():
-    """MUTATION: delete the audit import from a gated blueprint -> red.
+    """MUTATION: rename the audit CALLS in a mutating package -> red.
+
+    Not the import: this walks the AST for call names, so deleting
+    `from r6.access import audit` while leaving `audit(...)` in place stays
+    green (verified 2026-09-04). The import is not what is measured.
 
     A package qualifies as a mutator if it validates step-up (it guards a
-    write). If it does that and never calls either audit primitive, the
-    write is authenticated and invisible.
+    write) or commits a transaction (it performs one). If it does either and
+    never calls any audit primitive, its writes are invisible.
     """
-    gates, audits = {}, {}
+    gates, stepup_gates, audits = {}, {}, {}
     scanned = 0
     for path in _production_python_files():
         rel = _rel(path)
@@ -246,16 +272,40 @@ def test_no_new_package_mutates_without_auditing():
             if not isinstance(node, ast.Call):
                 continue
             name = _called_name(node)
-            if name == 'validate_step_up_token' or name == 'require_grant':
+            if name in ('validate_step_up_token', 'require_grant', 'commit'):
                 gates.setdefault(package, []).append(f'{rel}:{node.lineno}')
+                if name != 'commit':
+                    stepup_gates.setdefault(package, []).append(
+                        f'{rel}:{node.lineno}')
             elif name in ('record_audit_event', 'add_audit_event', 'audit'):
                 audits.setdefault(package, []).append(f'{rel}:{node.lineno}')
     assert scanned > 40, f'the mutator scan only walked {scanned} r6 files'
+    #: A predicate that matched nothing would pass this forever, and the
+    #: widening above is exactly the edit that could break it silently.
+    assert len(gates) > 5, (
+        f'the mutator predicate matched only {len(gates)} packages — it is '
+        f'broken, and an empty silent set below means nothing')
+    #: The floor above does NOT pin the widening: deleting 'commit' from the
+    #: tuple drops the mutator set from 8 packages to 7, which still clears
+    #: `> 5`, so the 2026-09-04 strengthening could be reverted green
+    #: (verified by mutation). This is the pin for it — the commit half has to
+    #: still be reaching a package the step-up half does not, which is the
+    #: whole reason it was added. If this ever goes empty the widening has
+    #: become redundant and may be deleted, but that is then a deliberate
+    #: edit here rather than a silent one above.
+    commit_only = sorted(set(gates) - set(stepup_gates))
+    assert commit_only, (
+        "the 'commit' half of the mutator predicate now catches nothing the "
+        "step-up half does not — it has been neutered, or every committing "
+        "package has since adopted step-up. Do not delete this assertion to "
+        "go green; decide which it is.")
     silent = {pkg for pkg in gates if pkg not in audits}
     assert silent <= _UNAUDITED_MUTATOR_PACKAGES, _report(
         sorted(silent - _UNAUDITED_MUTATOR_PACKAGES),
         len(_UNAUDITED_MUTATOR_PACKAGES),
-        'A package that gates writes with step-up must audit them.')
+        'A package that mutates the store must audit its writes. Presence '
+        'here is not enough: add a per-endpoint pin like '
+        'tests/test_agent_run_writes_are_audited.py in the same PR.')
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +393,10 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: only kind of raise this file permits — the guard has to sit at that call
 #: site, and extracting seed_tenant into its own module is a refactor that
 #: should not ride along with a security fix that was exploitable in prod.
-_GOD_MODULE_LINES = 3927
+#: 3927 -> 3928 (#583): one entry in the tenant-exemption table for the
+#: published privacy policy (#574). The table is the guard, so the line
+#: has to sit here; nothing else in that change touches this file.
+_GOD_MODULE_LINES = 3928
 
 
 def test_the_god_module_only_shrinks():
@@ -409,26 +462,64 @@ def test_the_god_module_only_shrinks():
 #: behaviour change, not a refactor. Check _is_exempt_discovery_path before
 #: moving a call site, per site — that is the whole reason this is 6 PRs and
 #: not one sed.
-_RAW_TENANT_READS = 5
+#:
+#: Corrected 2026-09-04: this was a single-quote, no-default-arg substring
+#: needle (`"request.headers.get('X-Tenant-Id')"` matched against the raw
+#: line) on a codebase where most call sites are double-quoted or carry a
+#: default — `request.headers.get("X-Tenant-Id")` and
+#: `request.headers.get('X-Tenant-Id', 'default')` both evaded it. The pin
+#: read 5; an AST-based recount (any quote style, with or without a
+#: default, plus the subscript form `request.headers['X-Tenant-Id']`) found
+#: 27, including r6/agent_runs/routes.py:98 — the kernel spec's own open
+#: slice 11j — and r6/wearables/routes.py:233, a call split across two
+#: lines that no single-line text needle could ever have matched regardless
+#: of quoting. This was decoration, not a ratchet: a migration touching
+#: only double-quoted single-line call sites could have lowered the count
+#: while the true number stayed flat.
+_RAW_TENANT_READS = 27
+
+
+def _is_tenant_header_read(node):
+    """`request.headers.get('X-Tenant-Id', ...)` or `request.headers['X-Tenant-Id']`.
+
+    Structural match, not source text: quote style and a default argument
+    are call-site style choices with no bearing on the property this pin
+    exists to hold — a handler reading the tenant header directly instead
+    of through the kernel. A needle that requires exact source text is a
+    guard that certifies whatever shape happened to exist when the needle
+    was written, and nothing else — see the correction above.
+    """
+    def is_request_headers(expr):
+        return (isinstance(expr, ast.Attribute) and expr.attr == 'headers'
+                and isinstance(expr.value, ast.Name) and expr.value.id == 'request')
+
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr == 'get'
+                and is_request_headers(func.value) and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 'X-Tenant-Id'):
+            return True
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+        if is_request_headers(node.value):
+            key = node.slice
+            if isinstance(key, ast.Constant) and key.value == 'X-Tenant-Id':
+                return True
+    return False
 
 
 def test_raw_tenant_header_reads_only_decrease():
-    """MUTATION: add `request.headers.get('X-Tenant-Id')` to a handler -> red.
+    """MUTATION: add `request.headers.get("X-Tenant-Id")` to a handler -> red.
 
     The kernel is meant to be the one tenant reader (spec §1.1). Without a
-    pin, the 24 that existed when the migration started would quietly become
-    25 the next time someone needed a tenant in a hurry.
+    pin, the 27 that exist today would quietly become 28 the next time
+    someone needed a tenant in a hurry.
     """
-    root = pathlib.Path(__file__).resolve().parents[1]
-    needle = "request.headers.get('X-Tenant-Id')"
-    sites = []
-    for path in sorted(root.glob('r6/**/*.py')):
-        rel = path.relative_to(root).as_posix()
-        if rel == 'r6/access.py':
-            continue  # the kernel is where this read is supposed to live
-        for n, line in enumerate(path.read_text(encoding='utf-8').split('\n'), 1):
-            if needle in line and not line.lstrip().startswith('#'):
-                sites.append(f'{rel}:{n}')
+    def collect(tree, path):
+        return [f'{_rel(path)}:{node.lineno}' for node in ast.walk(tree)
+                if _is_tenant_header_read(node)]
+
+    sites, scanned = _scan(collect, skip=('r6/access.py',))
     assert len(sites) <= _RAW_TENANT_READS, _report(
         sites, _RAW_TENANT_READS,
         'Read the tenant through r6.access.tenant_from_request.')

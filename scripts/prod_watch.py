@@ -267,6 +267,25 @@ def _declared_checks(source: str | None = None):
     return frozenset(names), unreadable
 
 
+#: What each `/healthz` `run_workers_state` means to whoever reads the alarm
+#: at 03:00. The two failures have different owners, so a line that said only
+#: "run_workers=False" would send the wrong person to the wrong dashboard.
+_WORKER_STATE_MEANING = {
+    "ready": "a fresh worker is claiming runs",
+    "not_ready": ("HealthClaw answered: nothing is draining the queue — the "
+                  "careagents-worker service is down or was never deployed"),
+    "rejected": ("HealthClaw REFUSED this deployment's worker-health request "
+                 "(4xx) — CareAgents' own HEALTHCLAW_MINT_SECRET or "
+                 "HEALTHCLAW_BASE is wrong; fix the CareAgents service "
+                 "variables, not the engine"),
+    "unknown": ("CareAgents could not reach HealthClaw's worker health inside "
+                "its budget — the engine or the network to it, not this app; "
+                "chat is refusing turns"),
+    "unreported": ("this deployment does not publish run_workers_state, so it "
+                   "predates #219 — check which build is running"),
+}
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     """Assert something, and record the verdict under `name`.
 
@@ -471,6 +490,40 @@ def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
           and body.get("accounts") is True,
           f"status={getattr(r, 'status_code', r)} accounts={body.get('accounts')}"
           + (f" — answered by {elsewhere}, not the origin" if elsewhere else ""))
+
+    # A SECOND check, not an extra clause on the one above (#219). The line
+    # above means one thing — the app reached its own database — and the retro
+    # (`docs/2026-08-02-retro.md`) names a control that quietly does two as
+    # this codebase's own defect shape.
+    #
+    # It exists because the status code stopped carrying this. `/healthz` used
+    # to answer 503 when it could not reach HealthClaw's worker health, and
+    # that 503 blocked the deploy that would have fixed the outage, so #219
+    # made "we could not ask" a 200 with the state in the body. That moved the
+    # signal; without this line it would have REMOVED it. On 2026-08-06 the
+    # edge to HealthClaw was blocked from CareAgents while HealthClaw itself
+    # answered this script perfectly — "healthclaw: alive" passed, and the only
+    # thing that went red was this deployment's readiness. That run must still
+    # go red, so this reads the field rather than the status code.
+    #
+    # The detail names WHICH state, because the two failures have different
+    # owners and different remedies: `not_ready` is our worker service, and
+    # `unknown` is the engine or the network between us and it.
+    workers_state = str(body.get("run_workers_state") or "unreported")
+    meaning = _WORKER_STATE_MEANING.get(
+        workers_state, f"unrecognised state {workers_state!r}")
+    if healthz_read:
+        check("careagents: a run worker is draining the queue",
+              body.get("run_workers") is True,
+              f"{workers_state} — {meaning}")
+    else:
+        # #272's rule, applied to this field too: a verdict about a field the
+        # run never read is how an outage got filed as a stale build. The
+        # readiness check above already reports the outage, and its remedy is
+        # the right one.
+        report("careagents: a run worker is draining the queue",
+               f"not asserted — /healthz was not readable "
+               f"({getattr(r, 'status_code', r)})")
 
     # Same body, no second request. Every other check on this deployment is
     # satisfied just as well by a months-old build — in #258 both CareAgents

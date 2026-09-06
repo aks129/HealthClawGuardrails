@@ -31,6 +31,11 @@ Revision `0001_v1_8_0` is a compatibility marker for the supported pre-Alembic
 schema. It must be *stamped*, not executed, on an existing database. Stamping
 does not run DDL, so verify the database and rehearse on a same-day copy first.
 
+`flask --app main init-db` performs this adoption itself. It creates any
+`0001_v1_8_0` table the old `db.create_all()` never built, stamps the baseline,
+and upgrades to head. The manual steps below are for operators who want to
+rehearse and verify each stage on a snapshot first.
+
 1. Stop ingestion and action workers; leave read-only traffic draining.
 2. Create and retain a Postgres snapshot.
 3. Restore the snapshot into a scratch database.

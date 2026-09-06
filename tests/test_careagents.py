@@ -656,6 +656,43 @@ def test_worker_health_client_accepts_fail_closed_503_projection():
     }
 
 
+def test_worker_health_uses_the_callers_timeout_and_otherwise_the_clients():
+    """The per-call budget reaches the wire, not just the signature (#219).
+
+    The app-level test pins that `/healthz` ASKS for a short timeout. This
+    pins that asking does anything: `_send` used to hard-code `self.timeout`
+    for every call, so a caller-supplied budget would have been accepted and
+    silently dropped — a fake would never have noticed.
+    """
+    import careagents.healthclaw as hcmod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"available": True, "active_workers": 1}
+
+    class _HTTP:
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            captured["timeout"] = timeout
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "mint-secret",
+                                    timeout=25.0)
+    client.http = _HTTP()
+
+    client.agent_worker_health(30, timeout=(1.0, 1.0))
+    assert captured["timeout"] == (1.0, 1.0)
+
+    # Every other caller keeps the client-wide timeout it has always had.
+    client.agent_worker_health(30)
+    assert captured["timeout"] == 25.0
+
+
 def test_worker_container_probe_uses_authenticated_queue_readiness(monkeypatch):
     from careagents import healthcheck
 
@@ -1411,6 +1448,41 @@ def test_tool_loop_stops_at_the_budget_instead_of_spending_forever(
     assert events[-1] == {"type": "text", "text": "final answer"}
 
 
+def test_a_stream_that_fails_mid_run_says_so_instead_of_going_quiet(
+        cfg, svc, monkeypatch):
+    """A dead stream must state that it died (#219).
+
+    `_stream_run` had no `except` around the run-event poll, so a
+    HealthClawError killed the generator inside an open response: the
+    connection dropped with no `error` frame and the page just stopped, with
+    nothing to tell the person whether their question was lost.
+
+    What the terminal frame may say is bounded by the same rule as every
+    other failure surface — the generic sentence, never the exception. Real
+    engine errors carry connection strings and correlation ids.
+    """
+    from careagents.agent import GENERIC_FAILURE_TEXT
+
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.run_events_error = "OperationalError: could not connect to db-7"
+
+    response = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "what did my results say",
+        "request_id": "stream-dies-midway"}, buffered=False)
+    # An SSE body is a generator: without reading it the stream never runs.
+    body = response.get_data().decode()
+
+    frames = [json.loads(line[len("data: "):])
+              for line in body.splitlines() if line.startswith("data: ")]
+    assert response.status_code == 200
+    assert frames[0]["type"] == "accepted"
+    assert frames[-1] == {"type": "error", "text": GENERIC_FAILURE_TEXT}
+    assert len(frames) == 2, (
+        f"the error frame must be terminal, got {frames}")
+    assert "OperationalError" not in body and "db-7" not in body
+
+
 def test_healthz_reports_ok_when_the_account_store_answers(app):
     r = app.test_client().get("/healthz")
     assert r.status_code == 200
@@ -1464,6 +1536,16 @@ def test_an_unstamped_build_is_still_ready(app, cfg, monkeypatch):
 
 def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
         cfg, svc, monkeypatch):
+    """The deploy gate that is KEPT, and deliberately (#219).
+
+    HealthClaw answered: there is no fresh worker. That is a CareAgents
+    deployment which serves pages and cannot finish a chat turn — the
+    web-only deployment `docs/runbooks/careagents-durable-worker.md`
+    documents a 503 for. Railway only probes at the start of a deploy, so
+    503 here means that deploy does not go live, which is the wanted
+    outcome: the fault is in the thing being deployed. Contrast the
+    unreachable case below, where the fault is not ours.
+    """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_available = False
@@ -1477,6 +1559,7 @@ def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
 
     assert health.status_code == 503
     assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "not_ready"
     assert refused.status_code == 503
     assert refused.get_json()["error"] == "run_workers_unavailable"
     assert fake.runs == {}
@@ -1501,23 +1584,36 @@ def test_chat_recovers_after_worker_queue_access_returns(
     assert len(fake.runs) == 1
 
 
-def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
+def test_unreachable_worker_control_plane_stops_admission_not_the_deploy(
         cfg, svc, monkeypatch):
-    """Both states still fail closed. The code says which one happened.
+    """Admission still fails closed. Readiness no longer does (#219).
 
-    Readiness and admission must refuse whether the workers reported
-    themselves absent or we could not reach the health endpoint at all — the
-    turn cannot be promised either way, and that half is unchanged. What
-    changed with #410 is the claim: this used to answer
-    `run_workers_unavailable`, filing "we could not ask" as "the workers are
-    down". The two are different incidents.
+    Admission is the gate that protects people, and it is unchanged: a turn
+    nobody can promise is refused whether the workers reported themselves
+    absent or we could not reach the health endpoint at all. #410 fixed the
+    *claim* — "we could not ask" stopped being filed as "the workers are
+    down" — and this changes what that claim is allowed to decide.
+
+    Readiness used to answer 503 here too. On Railway the health check runs
+    only at the start of a deploy, so that 503 blocked a CareAgents deploy
+    on a HealthClaw outage — including the deploy that would fix it — while
+    traffic stayed on a previous version with exactly the same dependency.
+    The state is still published, as `run_workers: false` with
+    `run_workers_state: "unknown"`; it just does not gate the status code.
+
+    MUTATION: restore `ready = accounts_ok and workers_ok` in
+    `careagents/app.py` and this fails on the 200.
     """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_health_error = True
 
-    assert client.get("/healthz").status_code == 503
-    assert client.get("/healthz").get_json()["run_workers"] is False
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "unknown"
+    assert health.get_json()["accounts"] is True
+
     response = client.post("/api/chat", json={
         "agent_id": agent_id, "message": "upstream is unreachable"})
     assert response.status_code == 503
@@ -1525,6 +1621,139 @@ def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
     # The sentence the patient reads is true in both states, so it does not
     # change with the code.
     assert "temporarily unavailable" in response.get_json()["message"]
+
+
+@pytest.mark.parametrize("status,why", [
+    (403, "a stale or wrong HEALTHCLAW_MINT_SECRET"),
+    (404, "a HEALTHCLAW_BASE pointed at the wrong path root"),
+    (400, "a request HealthClaw understood and rejected"),
+])
+def test_a_deployment_healthclaw_refuses_must_not_pass_the_deploy_gate(
+        cfg, svc, monkeypatch, status, why):
+    """A 4xx is an ANSWER about US, and it must gate the deploy.
+
+    `/healthz` gates a Railway deploy: 503 keeps traffic on the previous
+    version. #219 correctly stopped gating on "we could not reach HealthClaw",
+    because that blocks the deploy that would fix someone else's outage. But
+    it routed EVERY `HealthClawError` there, and the client raises one for any
+    status outside (200, 503) as well as for a dead socket. So a CareAgents
+    container carrying the wrong mint secret — which HealthClaw answers 403 —
+    was filed as "we could not ask" and admitted.
+
+    Measured against a running pair before this test existed: wrong mint
+    secret -> `/healthz` 200 `"status":"ok"`, and every chat turn refused. The
+    fault is in the artifact being deployed, which is precisely the case the
+    PR's own ruling says must stay blocked.
+
+    MUTATION: return WORKERS_UNKNOWN for every HealthClawError in
+    `careagents/app.py:_worker_state` and this goes red on the 503.
+    """
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 503, (
+        f"{why} left a chat-dead deployment passing the deploy gate")
+    body = health.get_json()
+    assert body["run_workers_state"] == "rejected"
+    assert body["run_workers"] is False
+    assert body["status"] == "degraded"
+    # The account store is fine; this is not a claim about our database.
+    assert body["accounts"] is True
+
+    # The state is named separately from "the workers are down", because the
+    # remedy is different: this sends an operator to the CareAgents service
+    # variables, not to the worker service (#410's lesson, one layer along).
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "rejected-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_rejected"
+
+
+@pytest.mark.parametrize("status", [0, 500, 502, 503, 504])
+def test_an_outage_that_is_not_ours_still_lets_the_fixing_deploy_through(
+        cfg, svc, monkeypatch, status):
+    """The other half of the same carve, pinned so it cannot be over-tightened.
+
+    A dead socket (status 0), a 5xx, and a gateway error are statements about
+    HealthClaw or the network to it. Gating on those blocks a CareAgents
+    deploy on someone else's outage — including the deploy that fixes it —
+    which is the ruling #219 made and this must not undo.
+
+    MUTATION: widen the 4xx test in `_worker_state` to any non-zero status and
+    this goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 200, (
+        "a HealthClaw outage must not block the CareAgents deploy that fixes it")
+    assert health.get_json()["run_workers_state"] == "unknown"
+
+    # Admission still refuses — that is the gate that protects people.
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "unknown-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_unknown"
+
+
+def test_admission_bounds_its_dependency_call_too(cfg, svc, monkeypatch):
+    """The refusal path must not hold a thread for 25 seconds (#219).
+
+    `/healthz` got a bounded budget; `POST /api/chat` did not, so it inherited
+    the client's 25s CHAT timeout. Measured at 25.00s against a HealthClaw
+    that accepts the connection and never answers, versus 1.01s for the
+    bounded call. That is a gunicorn thread held for 25 seconds *to refuse a
+    turn*, during exactly the dependency outage `/healthz` now lets deploy —
+    and it spends the thread headroom the same change bought.
+
+    MUTATION: drop the `timeout=` argument at `careagents/app.py:958` and this
+    goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "budget-1"})
+
+    asked = fake.worker_health_timeout
+    assert asked != "never called", "admission never asked about the workers"
+    assert asked is not None, (
+        "admission inherited the client-wide 25s chat timeout; a turn that is "
+        "about to be REFUSED must not hold a web thread that long")
+    connect, read = asked
+    assert connect + read <= 5.0, (
+        f"admission's worst-case wait is {connect + read}s, which is more "
+        "than a person waiting on a refusal should hold a thread for")
+
+
+def test_healthz_bounds_the_dependency_call_to_its_own_probe_budget(
+        cfg, svc, monkeypatch):
+    """The endpoint's answer about itself cannot wait on a dependency.
+
+    The probe measured `/healthz` taking 25.01s and returning 503 with
+    nothing running at all, because its worker-health call inherited the
+    client's 25s chat timeout
+    (`docs/evidence/2026-09-03-probe-219-thread-saturation.md` §8, PR #573).
+    The container probe gives it 4s (`careagents/healthcheck.py`) and the
+    Dockerfile's HEALTHCHECK 5s, so the dependency call gets a budget that
+    fits inside both.
+
+    Asserted rather than waited on: a test that actually hangs a socket for
+    25s to prove this would be the slowest test in the suite and would still
+    only prove it once.
+    """
+    app, client, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    assert client.get("/healthz").status_code == 200
+
+    connect, read = fake.worker_health_timeout
+    assert connect + read <= 2.0, (
+        "the readiness probe's dependency call must answer inside a couple "
+        f"of seconds; worst case here is {connect + read}s")
 
 
 def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
@@ -1645,6 +1874,18 @@ class FakeClient:
         self._event_id = 0
         self.worker_available = True
         self.worker_health_error = False
+        # The HTTP status the raised HealthClawError carries. 0 is a transport
+        # failure ("we could not ask"); a 4xx is HealthClaw ANSWERING that it
+        # refused this deployment's request, which is a different incident
+        # with a different owner. The client raises with `r.status_code`, so a
+        # fake that only ever raises 0 cannot tell the two apart.
+        self.worker_health_error_status = 0
+        # The timeout the caller asked for on the last worker-health call, so
+        # a test can pin that the readiness probe bounds it (#219).
+        self.worker_health_timeout = "never called"
+        # Set to a message to make the run-event poll raise, which is the
+        # mid-stream failure a browser used to see as a silent dead stream.
+        self.run_events_error = ""
         # Instance state, NOT a class attribute. `purged = []` at class scope
         # was mutated through `self.purged.append(...)`, so every FakeClient
         # in the session shared one list and a test's assertion on
@@ -1736,6 +1977,8 @@ class FakeClient:
         return dict(run)
 
     def agent_run_events(self, tenant, run_id, after=0, limit=100):
+        if self.run_events_error:
+            raise HealthClawError(self.run_events_error, 0)
         run = self.get_agent_run(tenant, run_id)
         if run["status"] == "queued":
             from datetime import datetime, timezone
@@ -1751,9 +1994,11 @@ class FakeClient:
                 "events": events,
                 "next_cursor": events[-1]["id"] if events else after}
 
-    def agent_worker_health(self, max_age_seconds=30):
+    def agent_worker_health(self, max_age_seconds=30, *, timeout=None):
+        self.worker_health_timeout = timeout
         if self.worker_health_error:
-            raise HealthClawError("worker health unavailable", 0)
+            raise HealthClawError("worker health unavailable",
+                                  self.worker_health_error_status)
         return {"available": self.worker_available,
                 "active_workers": 1 if self.worker_available else 0,
                 "max_age_seconds": max_age_seconds}
@@ -1924,6 +2169,13 @@ class FakeClient:
     def record_count(self, tenant):
         return self.counted
 
+    # DocumentReferences that landed but are deliberately not in `counted`
+    # (#226). Settable the same way.
+    uncounted = 0
+
+    def uncounted_record_count(self, tenant):
+        return self.uncounted
+
     purge_fails = False
 
     def purge_tenant(self, tenant):
@@ -1982,7 +2234,7 @@ class FakeClient:
 # for a proven client:
 #   * Behaviour. Signature parity says a call is *accepted*, never that it does
 #     the same thing. `FakeClient.record_count` returns a settable int;
-#     `HealthClawClient.record_count` sums six `_summary=count` searches and
+#     `HealthClawClient.record_count` sums five `_summary=count` searches and
 #     raises if any of them could not be asked. Both signatures are
 #     `(tenant)`.
 #   * Wire format. Nothing here talks to a running HealthClaw, so a body or
@@ -2898,6 +3150,358 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["status"] == "active"
     assert d["record_count"] == 112
     assert d["new_records"] == 12
+
+
+# --- #226: the count says what it leaves out ---------------------------------
+#
+# DocumentReferences are ingested but nothing can open one, so they are out of
+# the counted set (careagents/healthclaw.py COUNTED_TYPES). This poll is the
+# one place a count derived from `record_count` reaches a person — home.js
+# renders it as "N new records added." The unit-level half of this lives in
+# tests/test_uncounted_documents.py.
+
+def _poll_after_sync(cfg, svc, monkeypatch, documents):
+    """Refresh, land five readable records plus `documents`, return the poll."""
+    return _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=documents,
+                                 readable_after=105,
+                                 documents_after=documents)[0]
+
+
+def _refresh_then_deliver(cfg, svc, monkeypatch, documents_before,
+                          readable_after, documents_after, fake=None):
+    """Baseline at a refresh, then let the provider deliver, then poll.
+
+    Returns (poll body, fake). The refresh is what records both baselines, so
+    what the poll reports is growth since the patient asked for it — not a
+    restatement of what the tenant already held.
+    """
+    from careagents.app import create_app
+    fake = fake or FakeClient()
+    fake.uncounted = documents_before
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = readable_after
+    fake.uncounted = documents_after
+    return c.get(f"/api/connections/{tenant}/poll").get_json(), fake
+
+
+def test_the_poll_says_documents_are_not_readable_when_some_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: drop the clause from `poll_connection` -> red.
+
+    The number is true about what the patient can reach and silent about what
+    it omits. Without this there is nothing anywhere telling them the notes
+    are not in it (#226).
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["new_records"] == 5
+    note = d.get("uncounted_note", "")
+    assert "not yet readable" in note, d
+    assert "Notes and documents" in note, d
+    # A statement, not a hedge — here we know they arrived.
+    assert "could not check" not in note, d
+
+
+def test_the_poll_adds_no_clause_when_no_documents_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: emit the clause unconditionally -> red.
+
+    A standing disclaimer would be noise, and would imply documents exist for
+    someone who has none.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=0)
+    assert d["new_records"] == 5
+    assert "uncounted_note" not in d, d
+
+
+def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
+        cfg, svc, monkeypatch):
+    """MUTATION: default the failed probe to 0 -> red (the clause vanishes and
+    the count is published as though complete).
+
+    #403's "unknown is never zero" applies to the clause, not only the number:
+    a silent count would imply nothing was left out. But suppressing the count
+    trades one silence for another — the growth is a fact we did measure. So
+    the known part is stated and the unknown is named.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    fake.counted = 105
+    # The readable count answers; only the document probe is down.
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["status"] == "active"
+    # The count we did measure is still reported ...
+    assert d["record_count"] == 105
+    assert d["new_records"] == 5
+    # ... and the sentence says what could not be established, rather than
+    # the "not yet readable" claim, which would assert documents exist.
+    note = d["uncounted_note"]
+    assert "could not check" in note, note
+    assert "notes or documents" in note, note
+    assert "not yet readable" not in note, note
+
+
+# QA addition (review of PR #561). `home.js` renders the clause as
+# `"... added." + " " + uncounted_note`, and the author verified that by
+# inspection only — there is no JS harness in this repo. What makes the join
+# safe here, and on the next surface to carry it (a notification, an email,
+# the worker), is the sentence's own shape. Assert it on the string the poll
+# actually emitted, not on a copy: a fragment appended to "5 new records
+# added." reads as one run-on claim, and a clause with its own leading space
+# doubles the caller's.
+
+def _assert_joins_cleanly(note):
+    assert note == note.strip(), f"padded, so the join doubles a space: {note!r}"
+    assert note.endswith("."), f"a fragment, not a sentence: {note!r}"
+    assert not note.endswith(".."), f"doubled full stop: {note!r}"
+    assert note[0].isupper(), f"does not open a sentence: {note!r}"
+    assert note.count(".") == 1, f"more than one sentence: {note!r}"
+    # The rendered line, per careagents/static/home.js.
+    line = "5 new records added." + " " + note
+    assert ".." not in line and "  " not in line, line
+
+
+def test_the_documents_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """MUTATION: drop the trailing period from either sentence in
+    `poll_connection`, or pad one with a leading space -> red.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["uncounted_note"] == "Notes and documents are not yet readable here."
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """Same property for the sentence a failed probe produces, which is the
+    one a patient sees during an incident — the worst time for the copy to
+    render as a fragment.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = 105
+
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["uncounted_note"] == (
+        "We could not check whether notes or documents were left out.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+# --- the fourth outcome: a refresh that delivers only documents -------------
+#
+# `home.js` gated its whole render on new_records > 0, so this case said
+# NOTHING — indistinguishable from a sync that did nothing, for the patient
+# who just watched one happen. The sentence needs a real delta: `uncounted`
+# is a tenant TOTAL, true from the first tick for every tenant that already
+# holds notes, so gating on it would fire on every no-op refresh for exactly
+# the MEDENT tenants this issue is about. Hence the `last_uncounted`
+# baseline, recorded by the same refresh that baselines the readable count.
+
+def test_a_refresh_that_delivers_only_documents_says_so(
+        cfg, svc, monkeypatch):
+    """MUTATION: gate the clause on `uncounted > 0` instead of the delta ->
+    still green here, red in the no-op test below. Both rows are the pin.
+
+    MUTATION: drop the `new_records == 0` arm entirely -> red (silence).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=0,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)
+    assert d["new_records"] == 0
+    assert d["uncounted_note"] == (
+        "Notes and documents arrived, and they are not readable here yet.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_a_refresh_that_delivers_nothing_stays_quiet(cfg, svc, monkeypatch):
+    """The case that makes the delta load-bearing.
+
+    This tenant ALREADY holds two documents, and the refresh brings nothing.
+    A clause gated on `uncounted > 0` would announce documents on every such
+    refresh; gated on the delta it says nothing, which is the truth.
+
+    MUTATION: gate the clause on `uncounted > 0` -> red.
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=2,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)    # unchanged
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_documents_that_predate_the_baseline_are_not_called_new(
+        cfg, svc, monkeypatch):
+    """The first refresh after this column ships, for an account that already
+    holds documents.
+
+    The refresh records the baseline at its current value, so the follow-up
+    poll measures growth from there — the notes the record already held are
+    not announced as having just arrived.
+
+    MUTATION: treat a null baseline as 0 -> red (all 4 read as new).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=4,   # already on file
+                                 readable_after=100,
+                                 documents_after=4)
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_a_connection_with_no_document_baseline_claims_no_arrival(
+        cfg, svc, monkeypatch):
+    """A row written before `last_uncounted` existed: the baseline is NULL, so
+    arrival cannot be computed and is never claimed.
+
+    MUTATION: `int(doc_baseline or 0)` instead of the None check -> red, every
+    document on file reads as newly arrived.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    # A pre-migration refresh: readable baselined, documents never were.
+    svc.mark_synced(conn, 100)
+    fake.uncounted = 7
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_the_refresh_baselines_documents_as_well_as_records(
+        cfg, svc, monkeypatch):
+    """The delta above is only honest if the refresh actually records it.
+
+    MUTATION: drop the `uncounted` argument at the refresh call site -> red.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.uncounted = 3
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    # Read the row back, not the response: the point is that the refresh
+    # PERSISTED both baselines, which is what the next poll subtracts from.
+    with svc.session() as s:
+        from careagents.models import Connection
+        row = s.query(Connection).filter_by(id=conn).first()
+        assert row.last_count == 100
+        assert row.last_uncounted == 3
+
+
+def test_the_document_baseline_column_is_added_to_an_existing_table(tmp_path):
+    """An account created before this column shipped must get it on boot.
+
+    `create_all()` adds missing TABLES, never missing COLUMNS, so a live
+    deployment reaches the new code with an old `ca_connections`. Build that
+    table exactly as it shipped, then run the migration the app runs at start.
+
+    The ALTER is plain `ADD COLUMN ... INTEGER`, which SQLite and Postgres
+    both accept; this exercises the SQLite lane, and CI's Postgres lane runs
+    the same path.
+
+    MUTATION: delete the `last_uncounted` block from `_ensure_columns` -> red.
+    """
+    from sqlalchemy import create_engine, inspect, text
+    from careagents.models import _ensure_columns
+
+    # A bare engine, NOT make_engine: that helper runs create_all() and
+    # _ensure_columns() itself, which is the very thing under test. A file
+    # rather than :memory: keeps it clear of any other fixture's database.
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        # The pre-#226 shape: everything except last_uncounted.
+        conn.execute(text(
+            "CREATE TABLE ca_connections ("
+            "id VARCHAR(40) PRIMARY KEY, account_id VARCHAR(40), "
+            "kind VARCHAR(24), tenant_id VARCHAR(64), label VARCHAR(120), "
+            "status VARCHAR(16), provider VARCHAR(64), connected_at FLOAT, "
+            "consented_at FLOAT, consent_version VARCHAR(16), "
+            "last_synced_at FLOAT, last_count INTEGER)"))
+        conn.execute(text(
+            "INSERT INTO ca_connections (id, last_count) VALUES ('c1', 42)"))
+
+    assert "last_uncounted" not in {
+        c["name"] for c in inspect(engine).get_columns("ca_connections")}
+
+    _ensure_columns(engine)
+
+    cols = {c["name"] for c in inspect(engine).get_columns("ca_connections")}
+    assert "last_uncounted" in cols
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT last_count, last_uncounted FROM ca_connections "
+            "WHERE id='c1'")).first()
+    # NULL, not 0 — the difference between "no baseline recorded" and "there
+    # were no documents", which is what keeps the first refresh honest.
+    assert row[0] == 42 and row[1] is None
+    # Idempotent: boot runs this every time.
+    _ensure_columns(engine)
+
+
+def test_mark_synced_without_a_document_count_keeps_the_last_one(
+        cfg, svc, monkeypatch):
+    """An upload path that could not measure documents must not erase the
+    figure the last refresh established — a cleared baseline would make every
+    document on file read as new on the next poll.
+
+    MUTATION: assign `c.last_uncounted = uncounted` unconditionally -> red.
+    """
+    acct = _make_account(svc, monkeypatch, "baseline@example.com").id
+    conn = svc.add_connection(acct, "fasten", "t-baseline", "Test")
+    svc.mark_synced(conn, 10, 4)
+    svc.mark_synced(conn, 12)          # documents unknown this time
+    assert svc.get_connection(acct, conn)["last_uncounted"] == 4
 
 
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
