@@ -515,14 +515,17 @@ def has_grant(
     instead of raised — `has_grant(...) is None` is true in exactly the cases
     `require_grant(...)` would raise StepUpDenied.
 
-    WHY THIS EXISTS. Four step-up call sites are not authorization gates and
-    cannot become one:
+    WHY THIS EXISTS. Four step-up call sites were not authorization gates
+    and could not become one (two have since adopted it; the sites named
+    here are as they stood when it was written):
 
       r6/rate_limit.py:161      picks a bucket key, inside a try/except that
                                 must never fail a request
       r6/read_auth.py:77        one branch of a predicate that also accepts a
-                                session cookie and an OAuth bearer
-      r6/agent_runs/routes.py:63  the same shape, returning bool
+                                session cookie and an OAuth bearer (adopted,
+                                kernel slice 19)
+      r6/agent_runs/routes.py:63  the same shape, returning bool (adopted,
+                                kernel slice 16)
       r6/sdc/routes.py:104      refuses with a message naming `dryRun=true`,
                                 which the kernel's uniform outcome cannot say
 
