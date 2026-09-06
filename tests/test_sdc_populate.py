@@ -1,4 +1,4 @@
-from r6.sdc.populate import populate_questionnaire
+from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
 
 INITIAL_EXPR_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
@@ -58,6 +58,17 @@ def test_populate_observation_based_by_code():
 
 
 def test_populate_records_issue_for_unresolved_item():
+    """An item.code that matched no Observation is an ATTEMPTED population.
+
+    It reports for the same reason an initialExpression does: the caller
+    asked the server to resolve something and it did not. The issue is
+    `information`, not an error — "absence of data is not an error" still
+    holds, and the text says only that no value resolved.
+
+    The intake Questionnaire carries no item.code items, so this path is
+    invisible on today's form; another Questionnaire will have them, which
+    is why it is pinned here rather than left to the integration tests.
+    """
     q = {"resourceType": "Questionnaire", "status": "active",
          "item": [{"linkId": "missing", "type": "string",
                    "code": [{"system": "http://loinc.org", "code": "0000-0"}]}]}
@@ -67,7 +78,11 @@ def test_populate_records_issue_for_unresolved_item():
 
     # No answer produced, and no spurious answer array on the item.
     assert "answer" not in qr["item"][0]
-    assert issues == []  # absence of data is not an error, just no answer
+    # The issue carries the linkId and nothing else: the reason is the same
+    # constant for every leaf and is said once per response by
+    # r6/sdc/routes.py:_issues_outcome.
+    assert issues == [{"linkId": "missing"}]
+    assert "no value resolved" in NOT_POPULATED
 
 
 def test_populate_nested_group_items():
