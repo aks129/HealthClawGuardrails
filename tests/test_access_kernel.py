@@ -737,7 +737,7 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 #: predicate (full record with a tenant-bound grant, PHI-safe summary
 #: without one). A predicate, never a gate, so it asks rather than refuses.
 _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({'r6/agent_runs/routes.py:62',
-                                                  'r6/actions/routes.py:749'})
+                                                  'r6/actions/routes.py:769'})
 
 
 def _has_grant_calls():
