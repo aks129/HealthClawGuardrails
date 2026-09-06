@@ -324,6 +324,56 @@ def test_a_proven_tenant_still_gets_its_own_bucket(app):
     assert set(rate_limit._rate_limits) == {'t-one', 't-two', 't-three'}
 
 
+def test_a_malformed_token_does_not_prove_the_tenant(app):
+    """PRESENT but not valid, the branch the proven/unproven pair never
+    reached. Pinned before kernel slice 20 moves this predicate.
+
+    MUTATION (pre-kernel shape): `return bool(valid)` -> `return True` ->
+    red, while the proven-tenant test stays green. Executed 2026-09-06.
+    """
+    from r6.rate_limit import rate_limit_key
+    with app.test_request_context('/r6/actions/x', headers={
+            'X-Tenant-Id': 'acme', 'X-Step-Up-Token': 'not-a-real-token'},
+            environ_base={'REMOTE_ADDR': '203.0.113.9'}):
+        assert rate_limit_key() == 'ip:203.0.113.9'
+
+
+def test_a_bearer_alias_proves_the_tenant_like_the_header_does(app):
+    """Authorization: Bearer <step-up token> is the alias the read gate
+    accepts; the limiter must key the same caller the same way."""
+    from r6.rate_limit import rate_limit_key
+    from r6.stepup import generate_step_up_token
+    token = generate_step_up_token('acme')
+    with app.test_request_context('/r6/actions/x', headers={
+            'X-Tenant-Id': 'acme', 'Authorization': f'Bearer {token}'}):
+        assert rate_limit_key() == 'acme'
+
+
+def test_a_validator_that_raises_never_fails_the_request(app, monkeypatch):
+    """The limiter must never fail a request: a validator that cannot reach
+    its store answers "unproven", and the request keys by IP. Patched at
+    both the module the limiter imported from and the name it bound, so
+    the pin holds on either side of the kernel move.
+
+    MUTATION: drop the try/except around the check -> red (the exception
+    escapes rate_limit_key). Executed 2026-09-06.
+    """
+    from r6 import rate_limit, stepup
+    from r6.stepup import generate_step_up_token
+
+    def boom(*args, **kwargs):
+        raise RuntimeError('nonce store unreachable')
+
+    token = generate_step_up_token('acme')
+    monkeypatch.setattr(stepup, 'validate_step_up_token', boom)
+    monkeypatch.setattr(rate_limit, 'validate_step_up_token', boom,
+                        raising=False)
+    with app.test_request_context('/r6/actions/x', headers={
+            'X-Tenant-Id': 'acme', 'X-Step-Up-Token': token},
+            environ_base={'REMOTE_ADDR': '203.0.113.9'}):
+        assert rate_limit.rate_limit_key() == 'ip:203.0.113.9'
+
+
 def test_a_token_for_a_DIFFERENT_tenant_does_not_prove_this_one(app):
     """MUTATION: validate the token without binding it to the claimed tenant
     -> red. Holding one valid token would otherwise re-open the evasion."""
