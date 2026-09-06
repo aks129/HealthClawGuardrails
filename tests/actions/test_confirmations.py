@@ -25,7 +25,8 @@ def _naive(dt):
 
 def test_issue_then_consume_once(app):
     with app.app_context():
-        issue_confirmation('a1', approved_via='telegram', ttl_minutes=15)
+        issue_confirmation('a1', approved_via='telegram', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         db.session.commit()
         assert consume_confirmation('a1') is True
         db.session.commit()
@@ -34,7 +35,8 @@ def test_issue_then_consume_once(app):
 
 def test_expired_confirmation_refused(app):
     with app.app_context():
-        c = issue_confirmation('a2', approved_via='dashboard', ttl_minutes=15)
+        c = issue_confirmation('a2', approved_via='dashboard', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         c.expires_at = _naive(datetime.now(timezone.utc) - timedelta(minutes=1))
         db.session.commit()
         assert consume_confirmation('a2') is False
@@ -48,8 +50,10 @@ def test_two_confirmations_only_one_needed(app):
     # most one execution" is enforced by Task 10's single-winner claim
     # transition, not by this table having exactly one open row.
     with app.app_context():
-        issue_confirmation('a3', approved_via='telegram', ttl_minutes=15)
-        issue_confirmation('a3', approved_via='dashboard', ttl_minutes=15)
+        issue_confirmation('a3', approved_via='telegram', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
+        issue_confirmation('a3', approved_via='dashboard', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         db.session.commit()
         assert consume_confirmation('a3') is True
         db.session.commit()
@@ -63,7 +67,8 @@ def test_unknown_approval_channel_rejected(app):
     with app.app_context():
         with pytest.raises(ValueError):
             issue_confirmation('a9', approved_via='carrier-pigeon',
-                               ttl_minutes=15)
+                               ttl_minutes=15,
+                           payload_json='{"k": "v"}')
 
 
 def test_approved_via_column_fits_documented_vocabulary(app):

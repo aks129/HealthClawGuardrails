@@ -36,7 +36,8 @@ def _stored_payload(aid):
 def test_payload_sealed_once_a_confirmation_is_committed(app):
     with app.app_context():
         aid = _make()
-        issue_confirmation(aid, approved_via='dashboard', ttl_minutes=15)
+        issue_confirmation(aid, approved_via='dashboard', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         db.session.commit()
 
         action = db.session.get(ProposedAction, aid)
@@ -52,7 +53,8 @@ def test_payload_sealed_while_the_confirmation_is_still_pending(app):
     with app.app_context():
         aid = _make()
         action = db.session.get(ProposedAction, aid)
-        issue_confirmation(aid, approved_via='review-page', ttl_minutes=15)
+        issue_confirmation(aid, approved_via='review-page', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
 
         with pytest.raises(PayloadSealed):
             action.payload_json = json.dumps(SWAPPED)
@@ -65,7 +67,8 @@ def test_consumed_confirmation_still_seals(app):
     # spent signature is still a signature: the payload stays what it was.
     with app.app_context():
         aid = _make('executing')
-        issue_confirmation(aid, approved_via='telegram', ttl_minutes=15)
+        issue_confirmation(aid, approved_via='telegram', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         db.session.flush()
         assert consume_confirmation(aid) is True
         db.session.commit()
@@ -98,7 +101,8 @@ def test_confirmation_for_another_action_does_not_seal(app):
     with app.app_context():
         aid = _make()
         other = _make()
-        issue_confirmation(other, approved_via='dashboard', ttl_minutes=15)
+        issue_confirmation(other, approved_via='dashboard', ttl_minutes=15,
+                           payload_json='{"k": "v"}')
         db.session.commit()
 
         action = db.session.get(ProposedAction, aid)
@@ -140,6 +144,13 @@ PAYLOAD_JSON_WRITER_ALLOWLIST = {
     'r6/actions/review.py',
     # Does not write it — REFUSES it in **fields, which is the #528 guard.
     'r6/actions/state.py',
+    # #559: both READ it to digest it and never assign it. confirmations.py
+    # hashes the payload at mint; the confirm route in routes.py hashes it
+    # again before execution and compares. The scan is a co-mention, so a
+    # reader lands here too; the seal tests above are what prove neither
+    # writes.
+    'r6/actions/confirmations.py',
+    'r6/actions/routes.py',
 }
 
 

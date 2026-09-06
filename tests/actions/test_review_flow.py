@@ -469,9 +469,10 @@ def test_post_payload_is_final_before_the_confirmation_is_issued(
 
     seen = {}
 
-    def _snapshotting_issue(aid, approved_via, ttl_minutes):
+    def _snapshotting_issue(aid, approved_via, ttl_minutes, *, payload_json):
         seen['payload_json'] = db.session.get(ProposedAction, aid).payload_json
-        return confirmations.issue_confirmation(aid, approved_via, ttl_minutes)
+        return confirmations.issue_confirmation(aid, approved_via, ttl_minutes,
+                                                payload_json=payload_json)
 
     monkeypatch.setattr(review, 'issue_confirmation', _snapshotting_issue)
 
@@ -626,7 +627,8 @@ def test_issue_confirmation_accepts_review_page(app):
                                           issue_confirmation)
     assert 'review-page' in APPROVED_VIA_VALUES
     with app.app_context():
-        c = issue_confirmation('some-action', 'review-page', ttl_minutes=15)
+        c = issue_confirmation('some-action', 'review-page', ttl_minutes=15,
+                               payload_json='{"k": "v"}')
         db.session.add(c)
         db.session.commit()
         assert c.approved_via == 'review-page'
