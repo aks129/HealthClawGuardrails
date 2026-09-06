@@ -105,7 +105,7 @@ Add this to your Claude Desktop MCP config (`~/Library/Application Support/Claud
   "mcpServers": {
     "healthclaw-demo": {
       "type": "streamable-http",
-      "url": "https://healthclaw.up.railway.app/mcp",
+      "url": "https://mcp-demo-production-ee2c.up.railway.app/mcp",
       "headers": { "X-Tenant-ID": "desktop-demo" }
     }
   }
@@ -129,7 +129,7 @@ Add to `.mcp.json` in any project directory:
   "mcpServers": {
     "healthclaw-demo": {
       "type": "http",
-      "url": "https://healthclaw.up.railway.app/mcp",
+      "url": "https://mcp-demo-production-ee2c.up.railway.app/mcp",
       "headers": { "X-Tenant-ID": "desktop-demo" }
     }
   }
@@ -155,7 +155,7 @@ The seed endpoint is idempotent and additive:
 
 ```bash
 # HTTP — call the running server
-curl -X POST https://healthclaw.up.railway.app/r6/fhir/internal/seed \
+curl -X POST https://app.healthclaw.io/r6/fhir/internal/seed \
   -H "Content-Type: application/json" \
   -d '{"tenant_id": "desktop-demo"}'
 
@@ -168,7 +168,7 @@ fhir_seed(tenant_id="desktop-demo")
 The REST API works without MCP too:
 
 ```bash
-BASE=https://healthclaw.up.railway.app/r6/fhir
+BASE=https://app.healthclaw.io/r6/fhir
 
 # Health check
 curl $BASE/health
