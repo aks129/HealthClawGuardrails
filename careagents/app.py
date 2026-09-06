@@ -803,7 +803,13 @@ def create_app(config: Config | None = None,
     @login_required
     def chat():
         acct = current_account()
-        agent_id = request.args.get("agent", "")
+        # #645: a tester who typed `agent_id` (the name every JSON-body
+        # endpoint in this file uses — /api/agents, /api/chat, /api/form)
+        # got a silent redirect to /home with no error. `agent` is this
+        # route's actual name (the one internal JS call site that builds
+        # this URL uses it); accept the other spelling too rather than
+        # failing silently on it.
+        agent_id = request.args.get("agent") or request.args.get("agent_id", "")
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return redirect(url_for("home"))
