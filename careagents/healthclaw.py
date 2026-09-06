@@ -74,7 +74,8 @@ class HealthClawClient:
     # `ingest_bundle` alone rather than for the boundary.
 
     def _send(self, method: str, url: str, *, what: str,
-              error: type[HealthClawError] = HealthClawError, **kwargs):
+              error: type[HealthClawError] = HealthClawError,
+              timeout=None, **kwargs):
         """Issue one request; a transport failure becomes `error`.
 
         Dispatches to `Session.get`/`Session.post` rather than
@@ -82,6 +83,11 @@ class HealthClawClient:
         here used before, and the relay doubles the cross-layer tests
         substitute for a Session keep working. Resolved lazily for the same
         reason: some of those doubles define only the verb they relay.
+
+        `timeout` bounds a single call instead of inheriting the
+        client-wide one. It exists for callers that have a budget of their
+        own: a probe answering inside a platform's health-check window cannot
+        wait the 25s a chat turn is allowed to (#219). `None` inherits.
 
         `error` exists for one caller and one reason (#220). Losing the answer
         to a *retryable* call means it did not happen, which is an ordinary
@@ -92,7 +98,7 @@ class HealthClawClient:
         """
         send = self.http.get if method == "GET" else self.http.post
         try:
-            return send(url, timeout=self.timeout, **kwargs)
+            return send(url, timeout=timeout or self.timeout, **kwargs)
         except requests.RequestException as exc:
             raise error(f"{what} failed", 0) from exc
 
@@ -409,13 +415,34 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/review",
                        json=decisions, headers=self._headers(tenant),
                        what="review submit")
+        if r.ok:
+            # The rule the rest of this client follows, which this method was
+            # the one exemption from: a 200 carrying a proxy's interstitial is
+            # a failed call and not data (`_json_object`). Substituting a body
+            # and returning the status unchanged made the relay read it as the
+            # engine saying "saved" — it then confirmed, and told a patient
+            # their approval was recorded with no confirmation row anywhere
+            # (QA on #566, reproduced against a running engine).
+            #
+            # HealthClawUnconfirmed rather than a plain error, for the reason
+            # `confirm_action` raises it on its own unreadable 200: this POST
+            # MINTS the ActionConfirmation (#528), so something answered and
+            # whether an approval now exists is not knowable from here. Third
+            # answer (#220), and the relay routes it to `confirmed: null`.
+            try:
+                return r.status_code, self._json_object(r, "review submit")
+            except HealthClawError as exc:
+                raise HealthClawUnconfirmed(
+                    "review submit returned invalid data",
+                    r.status_code) from exc
         try:
             body = r.json()
         except ValueError:
             body = None
         if not isinstance(body, dict):
-            # The contract is (status, dict); a non-object body is a failed
-            # call, and handing it back would break the caller's `.get`.
+            # A non-2xx is somebody's refusal and nothing was minted by it.
+            # The contract is (status, dict); a non-object body would break
+            # the caller's `.get`.
             body = {"error": "unexpected response"}
         return r.status_code, body
 
@@ -457,7 +484,17 @@ class HealthClawClient:
     # meaningful set rather than every supported type — this is a progress
     # signal for the patient, not an inventory.
     COUNTED_TYPES = ("Condition", "Observation", "MedicationRequest",
-                     "AllergyIntolerance", "Immunization", "DocumentReference")
+                     "AllergyIntolerance", "Immunization")
+
+    # Ingested and stored, deliberately NOT counted (#226, council D2 option
+    # 3). Nothing can open one: `careagents/agent.py` search_records omits
+    # DocumentReference from its enum, and gate G2 measured the attachments
+    # coming back empty anyway — r6/redaction.py strips `data`, `url` and
+    # `title` from anything carrying a `contentType`. Counting them told the
+    # patient "247 records synced" where the notes dominating that number
+    # were unreachable. They stay ingested; only the claim changes, and the
+    # day a read path lands this moves back above.
+    UNCOUNTED_TYPES = ("DocumentReference",)
 
     def record_count(self, tenant: str) -> int:
         """Total records across the counted resource types.
@@ -473,6 +510,23 @@ class HealthClawClient:
         """
         total = 0
         for rt in self.COUNTED_TYPES:
+            bundle = self.search(tenant, rt, {"_summary": "count"})
+            total += int(bundle.get("total") or 0)
+        return total
+
+    def uncounted_record_count(self, tenant: str) -> int:
+        """How many records were synced that `record_count` leaves out.
+
+        The source for the one clause that keeps the number above honest: it
+        is a true count of what the patient can reach, and would be a silent
+        omission without something saying documents exist and are not in it.
+
+        Raises HealthClawError on the same terms as `record_count` — a 0 here
+        reads as "no documents arrived", which is not the same fact as "could
+        not ask".
+        """
+        total = 0
+        for rt in self.UNCOUNTED_TYPES:
             bundle = self.search(tenant, rt, {"_summary": "count"})
             total += int(bundle.get("total") or 0)
         return total
@@ -701,12 +755,19 @@ class HealthClawClient:
                 f"run claim failed ({r.status_code})", r.status_code)
         return self._json_object(r, "run claim")
 
-    def agent_worker_health(self, max_age_seconds: int = 30) -> dict:
-        """Return queue-backed worker readiness, including unavailable/503."""
+    def agent_worker_health(self, max_age_seconds: int = 30, *,
+                            timeout=None) -> dict:
+        """Return queue-backed worker readiness, including unavailable/503.
+
+        `timeout` bounds this one call; `None` inherits the client's. The
+        readiness probe passes its own, because the answer is only useful
+        inside the window the platform gives it (#219).
+        """
         r = self._send(
             "GET", f"{self.base}/command-center/api/runs/workers/health",
             params={"max_age_seconds": max_age_seconds},
-            headers=self._internal_headers(), what="run worker health")
+            headers=self._internal_headers(), what="run worker health",
+            timeout=timeout)
         if r.status_code not in (200, 503):
             raise HealthClawError(
                 f"run worker health failed ({r.status_code})", r.status_code)

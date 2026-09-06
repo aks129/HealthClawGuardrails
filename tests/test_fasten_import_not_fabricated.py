@@ -56,9 +56,15 @@ def _front_end_sources():
 
 # The wording the honest patient-facing page already uses. The dashboard must
 # reuse it verbatim rather than grow a second, drifting version.
+#
+# It used to end "Check Telegram for a ping when they land". The messaging
+# surface has not been served since June (council ruling D6), so a patient who
+# had just connected their records was told to wait for a notification that
+# could not arrive, and would conclude the connection had failed (#564). What
+# replaced it says the one thing that stops the wait.
 PENDING_COPY = (
     "Connection registered. Records will stream in over the next 5–45 "
-    "minutes. Check Telegram for a ping when they land."
+    "minutes. Nothing will notify you when they land."
 )
 
 
@@ -126,3 +132,35 @@ def test_the_connect_page_uses_the_pending_wording():
     assert PENDING_COPY in CONNECT_HTML.read_text(), (
         "templates/fasten_connect.html no longer carries the honest "
         "'records will stream in' wording")
+
+
+# --- #564: the page sends nobody to a surface that is not served ------------
+
+def test_the_connect_page_names_no_messaging_channel():
+    """A patient who has just connected is sent to nothing that is off.
+
+    This page told them to watch for a Telegram ping and listed the slash
+    commands to send when it arrived. The ping cannot arrive: the surface is
+    not served (council ruling D6, 2026-09-02). Someone who follows the
+    instruction waits, then concludes the connection failed — the same defect
+    as the fabricated import above, inverted: the page asserts an outcome the
+    system cannot produce, on the surface a first-time tester meets first.
+
+    SCOPE OF PROOF. The file, not the rendered page — as with every source
+    check in this module. Scoped to this one template on purpose:
+    privacy.html, index.html, wiki.html, security.html and faq.html describe
+    the component rather than promising a delivery, and a repo-wide ban would
+    redden on prose that is not the defect.
+
+    When the surface is served again, delete this test. That is a deliberate
+    act, which is the point of pinning it.
+
+    MUTATION: put "Check Telegram for a ping when they land." back into the
+    registration status string -> this and
+    test_the_connect_page_uses_the_pending_wording both redden.
+    Verified 2026-09-04.
+    """
+    assert "Telegram" not in CONNECT_HTML.read_text(encoding="utf-8"), (
+        "templates/fasten_connect.html points a patient at a messaging "
+        "channel; that surface is not served, so the instruction cannot be "
+        "followed")

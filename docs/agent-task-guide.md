@@ -191,6 +191,38 @@ auditor.
   updates its own matrix row in the *same* PR. Three security PRs skipped that
   and left `main` red for a day, each of them individually green. The matrix
   must report **0 failed and 0 xpassed** — an XPASS is a failure, not a pass.
+- **A maintainer's approval is the merge, not a verdict on it.** The
+  `auto-merge-when-satisfied` job in `.github/workflows/claude-pr-review.yml`
+  runs `gh pr merge --squash --auto` as soon as it sees an approving review
+  from an OWNER, MEMBER or COLLABORATOR. Once armed, GitHub merges when the
+  *required* checks pass — `main` requires eight, and every other base branch
+  requires none, so on a stacked PR arming is merging. The job fires on
+  `opened`/`synchronize`/`reopened`/`ready_for_review` and not on the review
+  event, which makes this worse rather than milder: a standing approval arms
+  on somebody else's later push, hours on, with the approver no longer
+  watching. There is no "approve now, merge when I say so" state — approve
+  only what you are willing to have land unattended. For the same reason,
+  check `gh pr view <n> --json autoMergeRequest` before you approve *and*
+  before you fix whatever is holding a PR red: an armed merge fires the moment
+  the last check goes green, including the check you just fixed, and
+  `--disable-auto` cannot help once it has fired. On 2026-08-16 it fired on
+  exactly that: a lint fix turned the last check green, #519 merged while the
+  problem in it was still being worked on, and what it put on public `main`
+  had to be corrected afterwards (#527).
+- **Never read a stacked pull request's green as tested.** `ci.yml` filtered
+  `pull_request` on `branches: [main, master]`, and that filter matches the
+  pull request's *base* — so a change stacked on another feature branch matched
+  nothing, and the whole workflow, every test lane in it, was skipped.
+  Measured 2026-09-03: **19 checks** on a pull request into `main`, **6** on a
+  stacked one, and none of the six was a test. One of the six was
+  `auto-merge-when-satisfied`, which is how the trap above becomes a merge with
+  zero tests behind it. #585 has the per-job detail; #588 drops the filter.
+  Two things survive that fix. Feature-branch bases carry no protection at all
+  (`GET /branches/<branch>/protection` returns 404), so with the filter gone a
+  red test on a stacked pull request is *visible* but still blocks nothing. And
+  CodeQL here is GitHub default setup, which runs only against the default
+  branch, so even once #588 has landed a stacked pull request gets 15 checks
+  where one into `main` gets 19. Count the checks on a stacked pull request; don't read the tick.
 
 ---
 
@@ -199,9 +231,12 @@ auditor.
 - Ask before large refactors of `r6/routes.py` — a carve-up is already planned
   (#56) and uncoordinated splits will conflict.
 - Prefer small, reviewable PRs. Every PR gets an automated standards review
-  ([.github/REVIEW_STANDARDS.md](../.github/REVIEW_STANDARDS.md)) plus CI.
+  ([.github/REVIEW_STANDARDS.md](../.github/REVIEW_STANDARDS.md)); how much CI
+  it gets depends on its base branch, which §6 covers.
 - **A maintainer approves before merge.** Agent-authored PRs do not
-  self-merge — the human stays the final authority on this project.
+  self-merge — the human stays the final authority on this project. That
+  approval is also the merge instruction (§6), so it is the last point at
+  which anything is decided, not a checkpoint before one.
 - If an issue's requirements turn out to be wrong once you're in the code, say
   so in the issue rather than silently building something different.
 

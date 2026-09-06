@@ -294,6 +294,43 @@ both halves: no control at all on the read-only host, and no `<button>`,
 `onclick` or `fetch(` anywhere in the page body. Where a host genuinely cannot
 do the thing, say so in prose instead of offering a button that will 405.
 
+## 13. The instrument, not the thing it measures
+
+**Shape.** A ratchet or counter claims to measure a population — every call
+site of a pattern, every package with an unaudited write. It actually measures
+whatever narrower thing its detection technique happens to catch: one literal
+string shape, one file-level or package-level presence check. The number it
+reports is real and stable and wrong, and nothing about a passing test suite
+distinguishes "the population is small" from "the instrument is blind to most
+of it."
+
+**Evidence.**
+
+| What | Where | Cost |
+|---|---|---|
+| `_UNAUDITED_MUTATOR_PACKAGES` asked only "does this package contain any audit call at all?" — per the PR's own words, "one `audit()` call anywhere in `r6/agent_runs` would have emptied the set while thirteen endpoints stayed silent." | #595, 2026-09-04 | The B2 migration's own completeness pin could not tell "audited" from "one route out of fourteen is audited." |
+| `_RAW_TENANT_READS` matched one literal source-text needle — single-quoted, no default argument. Most call sites in the codebase are double-quoted or carry a default, and one is split across two lines, which no single-line text needle can match at any quoting. The pin read 5; an AST-based recount found 27, including the kernel spec's own open migration slice (`r6/agent_runs/routes.py:98`), invisible to the needle the entire time. | #618, 2026-09-04 | Council ruling D11 scheduled this ratchet as "5 → 0" — a number people plan sprints from. The real slice was 27 → 0, a 5x undercount, silently published in another PR's own evidence table (#562) before the instrument was checked. |
+
+**Why the tests did not catch it.** Both pins had a passing test — `13 passed`
+on every run, including runs where the true count was already climbing. A
+ratchet's own test suite proves the ratchet runs and returns a number; it does
+not prove the number is the population's size. Nothing short of independently
+re-deriving the count with a different technique (grep vs. AST, file-level vs.
+call-site) exposes the gap, because the pin and its test agree with each other
+by construction.
+
+**Guard.** Count structurally (AST) rather than by source text, and at the
+finest grain the property actually names (call site, not file; call site, not
+package). When a pin's own comment cites a number from when it was written
+("the 24 that existed when the migration started"), that number is a claim —
+verify it against the technique, not against the pin's own prior reading of
+itself.
+
+**Reviewer question:** for any ratchet or completeness count in this PR, could
+a change satisfy the check by touching one instance of many, or by matching
+one syntactic shape of several a mutation could legally take? If yes, re-derive
+the count with a broader technique before trusting the number.
+
 ## How to use this in review
 
 1. Read §0. Ask what in the PR *claims* to have been checked.

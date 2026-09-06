@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from functools import wraps
+from urllib.parse import quote
 
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
@@ -44,6 +45,33 @@ logger = logging.getLogger(__name__)
 # Disconnect and Delete sat on the same page (#203). Understating our own
 # strongest privacy control in the one place people read carefully.
 CONSENT_VERSION = "2026-08-01"
+
+# `/healthz` asks HealthClaw whether a run worker is present. That call gets
+# its own budget rather than the client's 25s chat timeout: as a
+# `(connect, read)` pair the worst case is 2.0s of network wait, which fits
+# inside the 4s the container probe allows (`careagents/healthcheck.py`) and
+# the Dockerfile's `HEALTHCHECK --timeout=5s`. The probe measured the old
+# shape taking 25.01s to answer at zero load, purely because it inherited the
+# chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
+# PR #573).
+_HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
+# The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
+# relay ingress). It gets its own budget rather than sharing the readiness
+# probe's, because the stakes are opposite: `/healthz` must answer inside a
+# platform probe window and a wrong answer costs a deploy, while a turn
+# refused too eagerly costs a patient their question. A worker-health call
+# does two database round-trips on the engine that also serves clinicians, so
+# 1s of read is too tight to refuse a real user on.
+#
+# Left unbounded, this inherits the client's 25s CHAT timeout — measured at
+# 25.00s against a HealthClaw that accepts the connection and never answers.
+# That is a gunicorn thread held for 25 seconds *to refuse a turn*, in exactly
+# the dependency outage `/healthz` now reports as `unknown` and lets deploy,
+# and it eats the thread headroom this same change bought. 4s is a ceiling
+# chosen to end the 25s hold while leaving room for a loaded engine; it is not
+# a measured optimum, and a p99 from production should replace it.
+_ADMISSION_WORKER_TIMEOUT = (1.0, 3.0)
 
 # Local hard cap for the file-upload path (#227). The engine's
 # `internal/ingest-bundle` is the source of truth for the value; this
@@ -166,6 +194,41 @@ def create_app(config: Config | None = None,
 
     turns: dict[str, deque] = defaultdict(deque)
 
+    # --- canonical host (#264, D7) -------------------------------------------
+
+    @app.before_request
+    def _enforce_canonical_host():
+        # careagents.cloud is the sole origin. A request arriving under any
+        # other Host header (the platform's own *.up.railway.app name) is
+        # sent to the same path and query on the canonical host — 308, so a
+        # POST is replayed as a POST rather than downgraded to a GET. The
+        # target is built from config, never from the request, so a spoofed
+        # Host cannot steer it. `/healthz` is exempt: the platform's health
+        # check arrives on the internal hostname, and a 308 there would mark
+        # every deploy unhealthy. Unset means no redirect (local, CI).
+        if not cfg.canonical_host or request.path == "/healthz":
+            return None
+        # Hostname only. A proxy that appends the default port
+        # (`careagents.cloud:443`) is on the canonical host and must not be
+        # bounced — the Werkzeug test client normalises that port away, a
+        # real request does not, so the strip has to be explicit or every
+        # such request pays a redirect. Config forbids a port in
+        # canonical_host, so the only `:` here is the request's own.
+        host = request.host.lower()
+        if ":" in host and not host.endswith("]"):   # not a bare IPv6 literal
+            host = host.rsplit(":", 1)[0]
+        if host == cfg.canonical_host:
+            return None
+        # `request.path` arrives percent-DECODED, so it can carry bytes that
+        # are illegal in a header — `/%0d%0a...` produced a 500 rather than a
+        # redirect. Re-encode it; `safe` is RFC 3986's pchar set, so an
+        # ordinary path is unchanged byte for byte.
+        target = f"https://{cfg.canonical_host}" + quote(
+            request.path, safe="/:@-._~!$&'()*+,;=")
+        if request.query_string:
+            target += "?" + request.query_string.decode("utf-8", "replace")
+        return redirect(target, code=308)
+
     # --- auth plumbing -------------------------------------------------------
 
     def current_account():
@@ -215,8 +278,8 @@ def create_app(config: Config | None = None,
         if session.get("account_id") and not enroll:
             return redirect(url_for("home"))
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
-                               terms_url=f"{cfg.healthclaw_base}/terms",
-                               privacy_url=f"{cfg.healthclaw_base}/privacy")
+                               terms_url=f"{cfg.healthclaw_public_base}/terms",
+                               privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
     @app.get("/home")
     @login_required
@@ -229,10 +292,11 @@ def create_app(config: Config | None = None,
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
             telegram_bot=cfg.telegram_bot,
             imessage_handle=cfg.imessage_handle,
-            terms_url=f"{cfg.healthclaw_base}/terms",
-            privacy_url=f"{cfg.healthclaw_base}/privacy",
+            terms_url=f"{cfg.healthclaw_public_base}/terms",
+            privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             advisors=advisors.catalog(),
-            catalog=connectors.catalog(cfg))
+            catalog=connectors.catalog(
+                cfg, real_records=cfg.real_records_open_for(acct.email)))
 
     @app.post("/logout")
     def logout():
@@ -341,14 +405,20 @@ def create_app(config: Config | None = None,
     @app.get("/api/connections/catalog")
     @login_required
     def connections_catalog():
-        return jsonify({"connectors": connectors.catalog(cfg)})
+        acct = current_account()
+        return jsonify({"connectors": connectors.catalog(
+            cfg, real_records=cfg.real_records_open_for(acct.email))})
 
     @app.post("/api/connections/<connector_id>")
     @login_required
     def add_connection(connector_id):
         acct = current_account()
         body = request.get_json(silent=True) or {}
-        plan = connectors.start(connector_id, body.get("provider"), cfg, hc)
+        # New connections only (D3): refresh, poll, upload and delete on an
+        # existing connection never consult the real-records switch.
+        plan = connectors.start(
+            connector_id, body.get("provider"), cfg, hc,
+            real_records=cfg.real_records_open_for(acct.email))
         if plan.get("error"):
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):
@@ -510,7 +580,8 @@ def create_app(config: Config | None = None,
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
             try:
-                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                                hc.uncounted_record_count(conn["tenant_id"]))
             except HealthClawError:
                 logger.warning("record_count after upload failed for %s",
                                conn_id)
@@ -547,10 +618,21 @@ def create_app(config: Config | None = None,
         try:
             purged = hc.purge_tenant(conn["tenant_id"])
         except HealthClawError:
-            # Never claim a deletion that did not happen.
+            # Never claim a deletion that did not happen — and this said more
+            # than that. "Nothing was changed" is the same claim the review
+            # arms above used to make, on the destructive route: `purge_tenant`
+            # raises on ANY non-200 and on a read timeout, so a gateway 5xx or
+            # a lost answer can follow a purge that ran. Found by inventorying
+            # this file for claims about what was sent, approved, recorded or
+            # retried rather than by another report about one arm.
+            #
+            # `deleted: False` stays and is not the same claim: it is what
+            # keeps the connection linked here, which is observed — the
+            # unlink below is not reached — and is the conservative half.
             return jsonify({"error": "deletion_failed", "deleted": False,
-                            "message": "Your records were not deleted. "
-                                       "Nothing was changed — please retry."}), 502
+                            "message": "We couldn't confirm your records were "
+                                       "deleted. Your connection is still "
+                                       "linked here — please try again."}), 502
         svc.delete_connection(acct.id, conn_id)
         return jsonify({
             "deleted": True,
@@ -593,9 +675,12 @@ def create_app(config: Config | None = None,
                             "consent_version": CONSENT_VERSION}), 428
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
-        # report what the refresh actually added.
+        # report what the refresh actually added — documents on the same
+        # terms, so "notes arrived" is a measured delta rather than a restatement
+        # of "this tenant holds notes" (#226).
         try:
-            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]))
+            svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
+                            hc.uncounted_record_count(conn["tenant_id"]))
         except HealthClawError:
             return jsonify({"error": "records service unavailable"}), 503
 
@@ -640,9 +725,49 @@ def create_app(config: Config | None = None,
                     current = hc.record_count(conn_tenant)
                 except HealthClawError:
                     current = None
+                # The count covers what the patient can actually reach;
+                # DocumentReferences are ingested but unreadable, so they are
+                # out of it and the sentence below says so (#226). When the
+                # probe itself fails we hedge rather than suppress: the count
+                # is a fact we did measure, and hiding it would trade one
+                # silence for another. State the known part, name the unknown
+                # — the posture the review relay already takes on an
+                # unestablished `confirmed`.
+                try:
+                    uncounted = hc.uncounted_record_count(conn_tenant)
+                except HealthClawError:
+                    uncounted = None
                 if current is not None:
+                    new_records = max(0, current - int(baseline))
                     out["record_count"] = current
-                    out["new_records"] = max(0, current - int(baseline))
+                    out["new_records"] = new_records
+                    # Documents that demonstrably arrived since the refresh
+                    # baselined them. None when the probe failed or the
+                    # connection predates the baseline column — in both cases
+                    # arrival is unknown, and unknown is never claimed.
+                    doc_baseline = conns[conn_tenant].get("last_uncounted")
+                    new_documents = (
+                        None if uncounted is None or doc_baseline is None
+                        else max(0, uncounted - int(doc_baseline)))
+                    if uncounted is None:
+                        out["uncounted_note"] = (
+                            "We could not check whether notes or documents "
+                            "were left out.")
+                    elif new_records > 0 and uncounted > 0:
+                        # A standing caveat on a number the patient can act
+                        # on: what you can read grew, and this excludes notes.
+                        out["uncounted_note"] = (
+                            "Notes and documents are not yet readable here.")
+                    elif new_records == 0 and new_documents:
+                        # The refresh delivered documents and nothing readable.
+                        # Silence here is indistinguishable from a sync that
+                        # did nothing, so say what happened. Gated on the
+                        # delta, never on `uncounted > 0` — the latter is true
+                        # from the first tick for every tenant that already
+                        # holds notes, and would fire on every no-op refresh.
+                        out["uncounted_note"] = (
+                            "Notes and documents arrived, and they are not "
+                            "readable here yet.")
             return jsonify(out)
         return jsonify({"status": "pending"})
 
@@ -808,25 +933,57 @@ def create_app(config: Config | None = None,
     # below is unchanged. What changes is the claim: an incident used to be
     # filed as "the workers are down" when the workers were never reached
     # (#410).
-    WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN = (
-        "ready", "not_ready", "unknown")
+    WORKERS_READY, WORKERS_NOT_READY, WORKERS_UNKNOWN, WORKERS_REJECTED = (
+        "ready", "not_ready", "unknown", "rejected")
 
-    def _worker_state() -> str:
+    def _worker_state(timeout=None) -> str:
         try:
-            status = hc.agent_worker_health(cfg.run_worker_stale_seconds)
-        except HealthClawError:
+            status = hc.agent_worker_health(cfg.run_worker_stale_seconds,
+                                            timeout=timeout)
+        except HealthClawError as exc:
+            # A 4xx is an ANSWER, not a failure to ask. HealthClaw understood
+            # the request and refused something about IT — the credential, the
+            # path, the query — so the fault is in THIS container's
+            # configuration and it gates the deploy exactly like a missing
+            # worker does. Measured: a wrong HEALTHCLAW_MINT_SECRET answers
+            # 403 and a wrong HEALTHCLAW_BASE path root answers 404, and both
+            # used to be filed as "we could not ask" and let a chat-dead
+            # deployment go live.
+            #
+            # Everything else stays `unknown`, deliberately: transport failure
+            # (status 0), a 5xx, and a 200 carrying a proxy interstitial are
+            # all statements about HealthClaw or the network to it, not about
+            # us. Blocking on those would re-block the deploy that fixes the
+            # outage, which is the ruling this endpoint exists to implement.
+            if 400 <= getattr(exc, "status", 0) < 500:
+                return WORKERS_REJECTED
             return WORKERS_UNKNOWN
         return WORKERS_READY if status.get("available") else WORKERS_NOT_READY
+
+    #: Which worker states mean "this deployment cannot finish a chat turn and
+    #: the fault is in the thing being deployed". These gate `/healthz`, and
+    #: through it the deploy. `unknown` is deliberately absent.
+    WORKERS_OUR_FAULT = (WORKERS_NOT_READY, WORKERS_REJECTED)
+
+    #: The machine-readable refusal code per state. Three states, three codes:
+    #: collapsing `rejected` into `run_workers_unavailable` would file "our
+    #: secret is wrong" as "the workers are down", which is the #410
+    #: mislabeling one layer along.
+    _REFUSAL_CODES = {
+        WORKERS_UNKNOWN: "run_workers_unknown",
+        WORKERS_REJECTED: "run_workers_rejected",
+        WORKERS_NOT_READY: "run_workers_unavailable",
+    }
 
     def _refuse_turn_without_workers(state: str):
         """The 503 body for a chat turn no worker can be promised to run.
 
-        The patient-facing sentence is the same in both failure states,
-        because it is true in both. Only the machine-readable code differs.
+        The patient-facing sentence is the same in every failure state,
+        because it is true in all of them. Only the machine-readable code
+        differs.
         """
         return jsonify({
-            "error": ("run_workers_unknown" if state == WORKERS_UNKNOWN
-                      else "run_workers_unavailable"),
+            "error": _REFUSAL_CODES.get(state, "run_workers_unavailable"),
             "message": "Chat is temporarily unavailable. Try again soon.",
         }), 503
 
@@ -838,7 +995,21 @@ def create_app(config: Config | None = None,
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
         while time.monotonic() - started < cfg.run_sse_timeout_seconds:
-            page = hc.agent_run_events(tenant, run_id, after=cursor, limit=100)
+            try:
+                page = hc.agent_run_events(tenant, run_id, after=cursor,
+                                           limit=100)
+            except HealthClawError:
+                # Without this the generator dies inside an open response and
+                # the browser is left with a stream that stopped for no stated
+                # reason (#219). Only this projection ends: the run is durable
+                # and keeps going, and a reconnect resumes at `cursor`. The
+                # text is the same generic sentence every other failure uses —
+                # an exception message here would be the first place engine
+                # internals reached a patient's screen.
+                logger.warning("run event stream failed for tenant %s", tenant)
+                yield "data: " + json.dumps({
+                    "type": "error", "text": GENERIC_FAILURE_TEXT}) + "\n\n"
+                return
             events = page.get("events") or []
             for event in events:
                 cursor = max(cursor, int(event.get("id") or 0))
@@ -882,7 +1053,7 @@ def create_app(config: Config | None = None,
         text = (body.get("message") or "").strip()
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        workers = _worker_state()
+        workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
@@ -1027,17 +1198,37 @@ def create_app(config: Config | None = None,
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
-    # statement about ownership; saying nothing was approved is true in every
-    # failure mode here, because nothing was.
+    # statement about ownership.
+    #
+    # "Nothing has been approved" survives here and ONLY here, because every
+    # site that uses this string failed BEFORE any review POST went out: the
+    # ownership pre-check on either route, and the review GET, which has no
+    # side effect at all. Nothing was submitted, so nothing could have been
+    # recorded. The paragraph this replaced said the claim was "true in every
+    # failure mode here" and the submit route used it too — see below.
     _REVIEW_UNCHECKABLE = ("We couldn't check this form right now. Nothing "
                            "has been approved — please try again in a moment.")
-    #: Distinct from the above: the review was SENT and the engine never
-    #: answered, so whether the decisions were recorded is unknown. What is
-    #: known is that the approval step below was never reached.
-    _REVIEW_UNSUBMITTED = ("We couldn't confirm your review reached your "
-                           "records. Nothing has been approved — please open "
-                           "the form again to check before approving, because "
-                           "approving twice could send it twice.")
+    #: Every way the review POST can fail to produce a readable answer, in one
+    #: sentence, because the patient is in the same position in all three:
+    #: transport loss, a gateway status the engine never wrote, and a 200
+    #: nobody could decode. This POST is what MINTS the ActionConfirmation
+    #: (#528) — the approval record — so none of the three can say whether an
+    #: approval now exists, in either direction.
+    #:
+    #: It replaces `_REVIEW_UNSUBMITTED`, which asserted "Nothing has been
+    #: approved" on the first two. That sentence answered a question the
+    #: `confirmed` field answers ("was it carried out": no, and knowably so —
+    #: `confirm_action` is reached only on a decodable 200) with words that
+    #: state a different one ("is your approval on file": unknown). One
+    #: control, two meanings, which is the shape docs/2026-08-02-retro.md is
+    #: about. It also warned that "approving twice could send it twice",
+    #: deterring the recovery with a claim that is false: once a confirmation
+    #: exists the review route answers 409, the payload seal refuses the
+    #: resubmit that races that pre-check, and the claim transition into
+    #: `executing` has a single winner. Verified against a running engine.
+    _REVIEW_UNRESOLVED = ("We couldn't tell whether your review was saved. "
+                          "Reload this page to see where this request stands "
+                          "before approving again.")
 
     @app.get("/review/<agent_id>/<action_id>")
     @login_required
@@ -1090,27 +1281,60 @@ def create_app(config: Config | None = None,
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
+        except HealthClawUnconfirmed:
+            # Something answered the review POST and the answer was not
+            # readable. Caught FIRST because it is a subclass.
+            #
+            # `null` rather than the `false` below, and the difference is not
+            # about what was executed — no confirm went out on any of these
+            # three paths. It is about which answer the page should act on: a
+            # 200 means the submit reached something that accepted it, so a
+            # status lookup describes the request the patient just acted on,
+            # and null is the value that routes to the branch which performs
+            # one (#220). The two below have no evidence anything was
+            # delivered; polling there would report on a request that may
+            # never have been made, so they keep Approve armed instead.
+            logger.exception("review submit unreadable for %s", action_id)
+            return jsonify({
+                "error": "review_unavailable",
+                "confirmed": None,
+                "message": _REVIEW_UNRESOLVED,
+            }), 502
         except HealthClawError:
             # The decisions are gone and nobody told the patient. Ownership
             # was already confirmed, so this is not a permission answer.
+            #
+            # `confirmed: False` is right and stays: the confirm is only
+            # reached on a decodable 200, so the action was not carried out,
+            # and False is what leaves Approve armed — which on this path is
+            # the recovery, not a hazard. What was wrong was the SENTENCE:
+            # `_send` raises this for a read timeout as readily as for a
+            # refused connection, so the POST may have been delivered,
+            # recorded and minted before the answer was lost.
             logger.exception("review submit failed for %s", action_id)
             return jsonify({
                 "error": "review_unavailable",
                 "confirmed": False,
-                "message": _REVIEW_UNSUBMITTED,
+                "message": _REVIEW_UNRESOLVED,
             }), 503
         if status and not HealthClawClient._answered_about_data(status) \
                 and status != 200:
-            # The engine never answered, so we cannot say the review was
-            # saved. We CAN say nothing was approved: confirm_action is only
-            # reached on a 200 below, and that is the half that keeps a
-            # second approval from sending the request twice.
+            # A gateway spoke for an engine that said nothing. This arm used
+            # to reason: "we cannot say the review was saved, but we CAN say
+            # nothing was approved, because confirm_action is only reached on
+            # a 200 below". The first half of that is right and the second
+            # half is the same defect as the unreadable-200 one above, one
+            # branch over: what confirm_action reaches is EXECUTION. The
+            # approval record is minted by the review POST itself (#528), and
+            # a 5xx is delivered-or-not — so an approval may exist for a
+            # request this arm told the patient had none. `confirmed: False`
+            # still states the half that is known.
             logger.warning("review submit unanswered (%s) for %s",
                            status, action_id)
             return jsonify({
                 "error": "review_unavailable",
                 "confirmed": False,
-                "message": _REVIEW_UNSUBMITTED,
+                "message": _REVIEW_UNRESOLVED,
             }), 503
         if status == 200:
             try:
@@ -1126,26 +1350,58 @@ def create_app(config: Config | None = None,
                 body = dict(body) if isinstance(body, dict) else {}
                 body.update({
                     "confirmed": None,
-                    "message": ("Your review was saved, but we couldn't "
-                                "confirm whether the approval went through. "
-                                "Don't approve again yet — check the request's "
-                                "status first, because approving twice could "
-                                "send it twice."),
+                    # "approving twice could send it twice" was the last false
+                    # deterrent in this file, and the third instance of one
+                    # shape: two rounds fixed the sentence in front of them
+                    # and left the twin one arm over. Since #550 a second
+                    # approval reaches the REVIEW route, which answers 409
+                    # while the action is still awaiting confirmation and 404
+                    # once it has moved on; `confirm_action` is called only on
+                    # a decodable 200, so it is never reached twice and there
+                    # is no second send to warn about. What is true is that we
+                    # did not retry it ourselves, and that the page is about
+                    # to look up where the request stands.
+                    "message": ("Your review was saved. We couldn't tell "
+                                "whether your approval went through, so we "
+                                "have not tried it again. We are checking "
+                                "where this request stands."),
                 })
                 return jsonify(body), 502
             except HealthClawError:
                 # The review was recorded but the confirmation didn't land, so
                 # the action is still sitting unexecuted. Swallowing this told
                 # the person they'd approved something that would never happen.
-                # Say so plainly and let them retry — same posture as the
-                # delete flow, which never claims an outcome it didn't get.
+                #
+                # `confirmed` stays False, and that is not a formality: what
+                # reaches THIS branch is a failed approval-token mint (the
+                # confirm never went out) or a 4xx the engine itself answered.
+                # Every ambiguous case — transport loss on the confirm POST, a
+                # gateway 5xx/408/429, an undecodable 200 — is routed to
+                # HealthClawUnconfirmed above and answers `null` instead
+                # (careagents/healthclaw.py:352-357, :387-397). The action did
+                # not execute, and that is KNOWN, so `null` here would assert
+                # an uncertainty that does not exist — #220's third answer
+                # collapsed from the other side.
+                #
+                # The INSTRUCTION was the defect. This said "Nothing has been
+                # sent — please try approving again". Since #528 sealed the
+                # payload, the review route mints a confirmation on the first
+                # submit, so that retry answers 409 and the page tells them
+                # they have already approved: the patient was directed into a
+                # loop the page itself creates. "Nothing has been sent" also
+                # reads as "start over" when an approval IS on file.
+                #
+                # So: say what is known — saved, recorded, not completed — say
+                # plainly that re-approving here will not resend it, and point
+                # at the status rather than back at the button.
                 logger.exception("confirm failed after review for %s", action_id)
                 body = dict(body) if isinstance(body, dict) else {}
                 body.update({
                     "confirmed": False,
-                    "message": ("Your review was saved, but we couldn't submit "
-                                "the approval. Nothing has been sent — please "
-                                "try approving again."),
+                    "message": ("Your review was saved and your approval is "
+                                "recorded, but we could not complete it just "
+                                "now. Approving again here will not resend "
+                                "it. Check where this request stands."),
                 })
                 return jsonify(body), 502
             body = dict(body) if isinstance(body, dict) else {}
@@ -1246,7 +1502,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         if not text or len(text) > 2000:
             return jsonify({"error": "message must be 1-2000 characters"}), 400
-        workers = _worker_state()
+        workers = _worker_state(timeout=_ADMISSION_WORKER_TIMEOUT)
         if workers != WORKERS_READY:
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(surface["account_id"]):
@@ -1356,11 +1612,39 @@ def create_app(config: Config | None = None,
         load balancer would route real sign-ins straight into failure. It now
         round-trips a trivial query so the answer reflects reality.
 
-        Readiness has two inputs, and both gate the status code: the account
-        store must answer, and a fresh agent-run worker must be present. A
-        deployment with no worker can serve pages but cannot complete a chat
-        turn, so advertising it as ready would route people into failure the
-        same way the hard-coded accounts=True once did.
+        Readiness has two inputs and they are NOT symmetric (#219). The
+        account store is ours, so it gates the status code outright. The run
+        workers are HealthClaw's, so what gates the status code is their
+        ANSWER, not our ability to get one:
+
+        - Confirmed absent — HealthClaw answered, and no worker presence is
+          fresh. That deployment serves pages and cannot finish a chat turn.
+          It is the web-only deployment the durable-worker runbook tells
+          operators to expect a 503 for, and it stays a 503 deliberately: on
+          Railway the health check runs at the start of a deploy, and this is
+          a deploy that must not go live.
+        - Refused — HealthClaw answered 4xx. It understood the request and
+          rejected something about it: this container's mint secret, or the
+          base URL it was pointed at. That is a fault in the artifact being
+          deployed, exactly like a missing worker, so it gates the deploy the
+          same way. Reported as `run_workers_state: "rejected"`. Splitting
+          this out of "unknown" is the difference between a deploy that is
+          blocked and a chat-dead deployment that goes live: measured, a
+          wrong mint secret answers 403 and a wrong base path answers 404.
+        - Could not ask, inside `_HEALTHZ_WORKER_TIMEOUT` — that is a fact
+          about HealthClaw, not about this container. Reported as
+          `run_workers_state: "unknown"`; it does not fail the endpoint.
+          Failing it would block a CareAgents deploy on someone else's
+          outage, including the deploy that fixes it, while traffic stays on
+          a previous version with exactly the same dependency. The probe
+          measured the old shape taking 25.01s to answer 503 with nothing
+          running at all (evidence §8, PR #573). A transport failure, a 5xx
+          and a proxy interstitial all land here, because none of them is
+          HealthClaw telling us something about ourselves.
+
+        Admission is unchanged, and it is the gate that protects people:
+        `POST /api/chat` still refuses a turn in ALL THREE failure states, so
+        nothing routes anyone into a turn no worker can run.
 
         It also reports which build is running (#258). That is telemetry, not
         a gate: an absent marker reports "unknown" and changes nothing about
@@ -1371,14 +1655,18 @@ def create_app(config: Config | None = None,
         including dependencies it does not control.
         """
         accounts_ok = svc.ping()
+        workers_state = _worker_state(timeout=_HEALTHZ_WORKER_TIMEOUT)
         # `run_workers` stays a boolean readiness VERDICT, not a claim about
         # the workers: false is correct when we could not confirm them, and
         # two runbooks plus the container-roles test read it as a bool.
-        workers_ok = _worker_state() == WORKERS_READY
-        ready = accounts_ok and workers_ok
+        # `run_workers_state` carries the claim the bool cannot make (#410) —
+        # and now also the difference the status code turns on.
+        workers_ok = workers_state == WORKERS_READY
+        ready = accounts_ok and workers_state not in WORKERS_OUR_FAULT
         body = {"status": "ok" if ready else "degraded",
                 "provider": cfg.provider, "accounts": accounts_ok,
                 "run_workers": workers_ok,
+                "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
 
