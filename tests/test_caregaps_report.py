@@ -22,6 +22,23 @@ def _undecided(rule_id, title, why):
                    applicable=None, indeterminate_reason=why)
 
 
+def _unread(rule_id, title, evidence):
+    """An indeterminate rule the check knowingly cannot fully read.
+
+    `applicable` is True, as the engine emits it: the patient IS in the age
+    band, and it is our own coverage that could not decide. This fixture used
+    to inherit `applicable: None` from `_undecided`, which no test read until
+    #436 made it load-bearing — a hand-written fixture drifting from the
+    producer, which is the same shape as the brief's "due" key (#387/#435).
+    Pinned against the real evaluator by
+    `test_no_screening_reaches_the_patient_as_silence`.
+    """
+    out = _undecided(rule_id, title, "evidence-not-read")
+    out["applicable"] = True
+    out["unread_evidence"] = evidence
+    return out
+
+
 def test_summary_counts_by_status():
     results = [
         _result(status="due"),
@@ -67,13 +84,73 @@ def test_consumer_summary_up_to_date_line_mentions_last_done():
     assert "up to date" in line["message"].lower()
 
 
-def test_consumer_summary_skips_not_applicable_and_indeterminate():
+def test_an_undecided_screening_the_patient_is_eligible_for_gets_a_line():
+    """#436 — an indeterminate screening used to give the patient no line.
+
+    PIN FLIPPED: this test asserted `lines == []` for every indeterminate.
+    #428 made colorectal screening indeterminate and its PR claimed the prompt
+    to act survived the status change. It did not: `lines` was built only for
+    `due` and `up_to_date`, so the patient saw the screening named in the
+    unevaluated note and never a line telling them what to do about it.
+
+    Three rows, and only the third earns a line:
+
+      - `not_applicable` — the rule does not apply to this person. Silence is
+        correct; a line would invent a screening they do not need.
+      - `indeterminate` with `applicable: None` — we do not know whether it
+        applies, because a demographic was missing. A line here would surface
+        a screening that may well be for somebody else. It is named in
+        `unevaluated_titles` instead, which claims nothing about eligibility.
+      - `indeterminate` with `applicable: True` — the person IS eligible and
+        the check could not decide. That is the one with something to say.
+
+    MUTATION: build lines for `("due", "up_to_date")` again -> red.
+    """
     results = [
         _result(rule_id="mammography", status="not_applicable", applicable=False),
-        _result(rule_id="colorectal-screening", status="indeterminate", applicable=None),
+        _undecided("cervical-screening", "Cervical cancer screening (Pap)",
+                   "sex-unknown"),
+        _unread("colorectal-screening", "Colorectal cancer screening",
+                "stool-based tests (FIT or Cologuard)"),
     ]
     consumer = build_consumer_summary(results)
-    assert consumer["lines"] == []
+    assert [line["rule_id"] for line in consumer["lines"]] == [
+        "colorectal-screening"]
+
+
+def test_the_could_not_check_line_carries_its_own_status_and_the_rules_note():
+    """It sits BESIDE the due lines rather than under them, so it needs a
+    status of its own and a word for it a patient can read.
+
+    `status` stays the engine's own value, so a caller reading `lines` and a
+    caller reading `detail` or `summary` never disagree about one screening.
+    `status_label` exists because the MCP App page renders a status by
+    replacing underscores with spaces — which yields "due" and "up to date",
+    and would yield "indeterminate".
+    """
+    results = [_unread("colorectal-screening", "Colorectal cancer screening",
+                       "stool-based tests (FIT or Cologuard)")]
+    line = build_consumer_summary(results)["lines"][0]
+    assert line["status"] == "indeterminate"
+    assert line["status_label"] == "could not check"
+    assert line["title"] == "Colorectal cancer screening"
+    # The rule's own note, written for a patient, reaches the patient.
+    assert results[0]["note"] in line["message"]
+    assert "could not check" in line["message"].lower()
+
+
+def test_a_due_line_is_not_relabelled_by_the_could_not_check_line():
+    """The other half of the same property: adding a third kind of line must
+    not change the two that shipped."""
+    consumer = build_consumer_summary([
+        _result(status="due", note="confirm with your clinician"),
+        _result(rule_id="mammography", title="Breast cancer screening",
+                status="up_to_date", last_done="2026-03-01"),
+    ])
+    assert [line["status"] for line in consumer["lines"]] == [
+        "due", "up_to_date"]
+    for line in consumer["lines"]:
+        assert "status_label" not in line
 
 
 def test_consumer_summary_note_has_no_banned_words():
@@ -220,13 +297,6 @@ def test_one_undecided_rule_reads_as_one():
 # #425 — a coverage gap is not a gap in the record
 # ─────────────────────────────────────────────
 
-def _unread(rule_id, title, evidence):
-    """An indeterminate rule the check knowingly cannot fully read."""
-    out = _undecided(rule_id, title, "evidence-not-read")
-    out["unread_evidence"] = evidence
-    return out
-
-
 def test_a_coverage_gap_never_borrows_a_reason_about_the_person():
     """The reason has to name whose limitation it is.
 
@@ -292,3 +362,75 @@ def test_demographic_causes_alone_are_unchanged_by_the_split():
     assert out["unevaluated"] == "sex-unavailable"
     assert out["unevaluated_count"] == 2
     assert "sex was not recorded" in out["unevaluated_note"]
+
+
+# ─────────────────────────────────────────────
+# Nothing is dropped in silence (#436)
+# ─────────────────────────────────────────────
+
+def _every_screening_is_accounted_for(results, consumer):
+    """A line for every screening the person is eligible for; the rest named.
+
+    Written twice. The first version accepted "has a line OR is named in
+    `unevaluated_titles`", which was green BEFORE the fix — the marker already
+    named colorectal — so it would have shipped as evidence for a change it
+    could not see. That is the docs/2026-08-02-retro.md shape aimed at this
+    file, and the reason to state the property in terms of what #436 is
+    actually about:
+
+      - `applicable is True` — the person is eligible and the screening has
+        something to tell them, decided or not. It needs a LINE. Being named
+        in the marker is not enough; that was the defect.
+      - `applicable is None` — eligibility itself is undecided. Naming it is
+        the most that can be said without claiming it applies to this person.
+      - `not_applicable` — silence is correct.
+    """
+    lined = {line["rule_id"] for line in consumer["lines"]}
+    named = set(consumer.get("unevaluated_titles") or [])
+    for r in results:
+        if r["status"] == "not_applicable":
+            continue
+        if r["applicable"] is True:
+            assert r["rule_id"] in lined, (
+                f"{r['rule_id']} ({r['status']}) applies to this person and "
+                "got no patient-facing line")
+        else:
+            assert r["title"] in named, (
+                f"{r['rule_id']} ({r['status']}) was dropped in silence: not "
+                "decided, and not named as unchecked")
+
+
+def test_no_screening_reaches_the_patient_as_silence():
+    """Driven from the ENGINE's own output rather than hand-built rows.
+
+    A fixture written here is free to drift from what the evaluator emits,
+    which is how the brief came to require a "due" key the producer had never
+    written (#387/#435). Two records, because they exercise different gates:
+    a complete one, and one missing sex — routine in real feeds.
+
+    MUTATION: drop the indeterminate branch from `_consumer_line` -> red on
+    colorectal, which has a line and no other way to reach the patient.
+    """
+    from r6.caregaps.evaluate import evaluate_care_gaps
+
+    for patient in ({"resourceType": "Patient", "gender": "female",
+                     "birthDate": "1976-01-01"},
+                    {"resourceType": "Patient", "birthDate": "1976-01-01"}):
+        results = evaluate_care_gaps(patient, as_of="2026-07-01")
+        consumer = build_consumer_summary(results)
+        _every_screening_is_accounted_for(results, consumer)
+
+
+def test_the_could_not_check_line_is_no_excuse_to_stop_naming_it():
+    """A line AND the marker. The marker is what says how much of the answer
+    is missing; a per-rule line does not replace a count of them (#417)."""
+    from r6.caregaps.evaluate import evaluate_care_gaps
+
+    results = evaluate_care_gaps(
+        {"resourceType": "Patient", "gender": "female",
+         "birthDate": "1976-01-01"}, as_of="2026-07-01")
+    consumer = build_consumer_summary(results)
+    assert [line["rule_id"] for line in consumer["lines"]
+            if line["status"] == "indeterminate"] == ["colorectal-screening"]
+    assert consumer["unevaluated"] == "evidence-not-read"
+    assert consumer["unevaluated_titles"] == ["Colorectal cancer screening"]
