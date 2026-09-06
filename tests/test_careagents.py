@@ -2169,6 +2169,13 @@ class FakeClient:
     def record_count(self, tenant):
         return self.counted
 
+    # DocumentReferences that landed but are deliberately not in `counted`
+    # (#226). Settable the same way.
+    uncounted = 0
+
+    def uncounted_record_count(self, tenant):
+        return self.uncounted
+
     purge_fails = False
 
     def purge_tenant(self, tenant):
@@ -2227,7 +2234,7 @@ class FakeClient:
 # for a proven client:
 #   * Behaviour. Signature parity says a call is *accepted*, never that it does
 #     the same thing. `FakeClient.record_count` returns a settable int;
-#     `HealthClawClient.record_count` sums six `_summary=count` searches and
+#     `HealthClawClient.record_count` sums five `_summary=count` searches and
 #     raises if any of them could not be asked. Both signatures are
 #     `(tenant)`.
 #   * Wire format. Nothing here talks to a running HealthClaw, so a body or
@@ -3143,6 +3150,358 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["status"] == "active"
     assert d["record_count"] == 112
     assert d["new_records"] == 12
+
+
+# --- #226: the count says what it leaves out ---------------------------------
+#
+# DocumentReferences are ingested but nothing can open one, so they are out of
+# the counted set (careagents/healthclaw.py COUNTED_TYPES). This poll is the
+# one place a count derived from `record_count` reaches a person — home.js
+# renders it as "N new records added." The unit-level half of this lives in
+# tests/test_uncounted_documents.py.
+
+def _poll_after_sync(cfg, svc, monkeypatch, documents):
+    """Refresh, land five readable records plus `documents`, return the poll."""
+    return _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=documents,
+                                 readable_after=105,
+                                 documents_after=documents)[0]
+
+
+def _refresh_then_deliver(cfg, svc, monkeypatch, documents_before,
+                          readable_after, documents_after, fake=None):
+    """Baseline at a refresh, then let the provider deliver, then poll.
+
+    Returns (poll body, fake). The refresh is what records both baselines, so
+    what the poll reports is growth since the patient asked for it — not a
+    restatement of what the tenant already held.
+    """
+    from careagents.app import create_app
+    fake = fake or FakeClient()
+    fake.uncounted = documents_before
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = readable_after
+    fake.uncounted = documents_after
+    return c.get(f"/api/connections/{tenant}/poll").get_json(), fake
+
+
+def test_the_poll_says_documents_are_not_readable_when_some_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: drop the clause from `poll_connection` -> red.
+
+    The number is true about what the patient can reach and silent about what
+    it omits. Without this there is nothing anywhere telling them the notes
+    are not in it (#226).
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["new_records"] == 5
+    note = d.get("uncounted_note", "")
+    assert "not yet readable" in note, d
+    assert "Notes and documents" in note, d
+    # A statement, not a hedge — here we know they arrived.
+    assert "could not check" not in note, d
+
+
+def test_the_poll_adds_no_clause_when_no_documents_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: emit the clause unconditionally -> red.
+
+    A standing disclaimer would be noise, and would imply documents exist for
+    someone who has none.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=0)
+    assert d["new_records"] == 5
+    assert "uncounted_note" not in d, d
+
+
+def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
+        cfg, svc, monkeypatch):
+    """MUTATION: default the failed probe to 0 -> red (the clause vanishes and
+    the count is published as though complete).
+
+    #403's "unknown is never zero" applies to the clause, not only the number:
+    a silent count would imply nothing was left out. But suppressing the count
+    trades one silence for another — the growth is a fact we did measure. So
+    the known part is stated and the unknown is named.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    fake.counted = 105
+    # The readable count answers; only the document probe is down.
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["status"] == "active"
+    # The count we did measure is still reported ...
+    assert d["record_count"] == 105
+    assert d["new_records"] == 5
+    # ... and the sentence says what could not be established, rather than
+    # the "not yet readable" claim, which would assert documents exist.
+    note = d["uncounted_note"]
+    assert "could not check" in note, note
+    assert "notes or documents" in note, note
+    assert "not yet readable" not in note, note
+
+
+# QA addition (review of PR #561). `home.js` renders the clause as
+# `"... added." + " " + uncounted_note`, and the author verified that by
+# inspection only — there is no JS harness in this repo. What makes the join
+# safe here, and on the next surface to carry it (a notification, an email,
+# the worker), is the sentence's own shape. Assert it on the string the poll
+# actually emitted, not on a copy: a fragment appended to "5 new records
+# added." reads as one run-on claim, and a clause with its own leading space
+# doubles the caller's.
+
+def _assert_joins_cleanly(note):
+    assert note == note.strip(), f"padded, so the join doubles a space: {note!r}"
+    assert note.endswith("."), f"a fragment, not a sentence: {note!r}"
+    assert not note.endswith(".."), f"doubled full stop: {note!r}"
+    assert note[0].isupper(), f"does not open a sentence: {note!r}"
+    assert note.count(".") == 1, f"more than one sentence: {note!r}"
+    # The rendered line, per careagents/static/home.js.
+    line = "5 new records added." + " " + note
+    assert ".." not in line and "  " not in line, line
+
+
+def test_the_documents_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """MUTATION: drop the trailing period from either sentence in
+    `poll_connection`, or pad one with a leading space -> red.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["uncounted_note"] == "Notes and documents are not yet readable here."
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """Same property for the sentence a failed probe produces, which is the
+    one a patient sees during an incident — the worst time for the copy to
+    render as a fragment.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = 105
+
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["uncounted_note"] == (
+        "We could not check whether notes or documents were left out.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+# --- the fourth outcome: a refresh that delivers only documents -------------
+#
+# `home.js` gated its whole render on new_records > 0, so this case said
+# NOTHING — indistinguishable from a sync that did nothing, for the patient
+# who just watched one happen. The sentence needs a real delta: `uncounted`
+# is a tenant TOTAL, true from the first tick for every tenant that already
+# holds notes, so gating on it would fire on every no-op refresh for exactly
+# the MEDENT tenants this issue is about. Hence the `last_uncounted`
+# baseline, recorded by the same refresh that baselines the readable count.
+
+def test_a_refresh_that_delivers_only_documents_says_so(
+        cfg, svc, monkeypatch):
+    """MUTATION: gate the clause on `uncounted > 0` instead of the delta ->
+    still green here, red in the no-op test below. Both rows are the pin.
+
+    MUTATION: drop the `new_records == 0` arm entirely -> red (silence).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=0,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)
+    assert d["new_records"] == 0
+    assert d["uncounted_note"] == (
+        "Notes and documents arrived, and they are not readable here yet.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_a_refresh_that_delivers_nothing_stays_quiet(cfg, svc, monkeypatch):
+    """The case that makes the delta load-bearing.
+
+    This tenant ALREADY holds two documents, and the refresh brings nothing.
+    A clause gated on `uncounted > 0` would announce documents on every such
+    refresh; gated on the delta it says nothing, which is the truth.
+
+    MUTATION: gate the clause on `uncounted > 0` -> red.
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=2,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)    # unchanged
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_documents_that_predate_the_baseline_are_not_called_new(
+        cfg, svc, monkeypatch):
+    """The first refresh after this column ships, for an account that already
+    holds documents.
+
+    The refresh records the baseline at its current value, so the follow-up
+    poll measures growth from there — the notes the record already held are
+    not announced as having just arrived.
+
+    MUTATION: treat a null baseline as 0 -> red (all 4 read as new).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=4,   # already on file
+                                 readable_after=100,
+                                 documents_after=4)
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_a_connection_with_no_document_baseline_claims_no_arrival(
+        cfg, svc, monkeypatch):
+    """A row written before `last_uncounted` existed: the baseline is NULL, so
+    arrival cannot be computed and is never claimed.
+
+    MUTATION: `int(doc_baseline or 0)` instead of the None check -> red, every
+    document on file reads as newly arrived.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    # A pre-migration refresh: readable baselined, documents never were.
+    svc.mark_synced(conn, 100)
+    fake.uncounted = 7
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_the_refresh_baselines_documents_as_well_as_records(
+        cfg, svc, monkeypatch):
+    """The delta above is only honest if the refresh actually records it.
+
+    MUTATION: drop the `uncounted` argument at the refresh call site -> red.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.uncounted = 3
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    # Read the row back, not the response: the point is that the refresh
+    # PERSISTED both baselines, which is what the next poll subtracts from.
+    with svc.session() as s:
+        from careagents.models import Connection
+        row = s.query(Connection).filter_by(id=conn).first()
+        assert row.last_count == 100
+        assert row.last_uncounted == 3
+
+
+def test_the_document_baseline_column_is_added_to_an_existing_table(tmp_path):
+    """An account created before this column shipped must get it on boot.
+
+    `create_all()` adds missing TABLES, never missing COLUMNS, so a live
+    deployment reaches the new code with an old `ca_connections`. Build that
+    table exactly as it shipped, then run the migration the app runs at start.
+
+    The ALTER is plain `ADD COLUMN ... INTEGER`, which SQLite and Postgres
+    both accept; this exercises the SQLite lane, and CI's Postgres lane runs
+    the same path.
+
+    MUTATION: delete the `last_uncounted` block from `_ensure_columns` -> red.
+    """
+    from sqlalchemy import create_engine, inspect, text
+    from careagents.models import _ensure_columns
+
+    # A bare engine, NOT make_engine: that helper runs create_all() and
+    # _ensure_columns() itself, which is the very thing under test. A file
+    # rather than :memory: keeps it clear of any other fixture's database.
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        # The pre-#226 shape: everything except last_uncounted.
+        conn.execute(text(
+            "CREATE TABLE ca_connections ("
+            "id VARCHAR(40) PRIMARY KEY, account_id VARCHAR(40), "
+            "kind VARCHAR(24), tenant_id VARCHAR(64), label VARCHAR(120), "
+            "status VARCHAR(16), provider VARCHAR(64), connected_at FLOAT, "
+            "consented_at FLOAT, consent_version VARCHAR(16), "
+            "last_synced_at FLOAT, last_count INTEGER)"))
+        conn.execute(text(
+            "INSERT INTO ca_connections (id, last_count) VALUES ('c1', 42)"))
+
+    assert "last_uncounted" not in {
+        c["name"] for c in inspect(engine).get_columns("ca_connections")}
+
+    _ensure_columns(engine)
+
+    cols = {c["name"] for c in inspect(engine).get_columns("ca_connections")}
+    assert "last_uncounted" in cols
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT last_count, last_uncounted FROM ca_connections "
+            "WHERE id='c1'")).first()
+    # NULL, not 0 — the difference between "no baseline recorded" and "there
+    # were no documents", which is what keeps the first refresh honest.
+    assert row[0] == 42 and row[1] is None
+    # Idempotent: boot runs this every time.
+    _ensure_columns(engine)
+
+
+def test_mark_synced_without_a_document_count_keeps_the_last_one(
+        cfg, svc, monkeypatch):
+    """An upload path that could not measure documents must not erase the
+    figure the last refresh established — a cleared baseline would make every
+    document on file read as new on the next poll.
+
+    MUTATION: assign `c.last_uncounted = uncounted` unconditionally -> red.
+    """
+    acct = _make_account(svc, monkeypatch, "baseline@example.com").id
+    conn = svc.add_connection(acct, "fasten", "t-baseline", "Test")
+    svc.mark_synced(conn, 10, 4)
+    svc.mark_synced(conn, 12)          # documents unknown this time
+    assert svc.get_connection(acct, conn)["last_uncounted"] == 4
 
 
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
