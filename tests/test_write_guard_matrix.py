@@ -616,6 +616,7 @@ NON_CLINICAL_MUTATORS = {
     "r6.record_connect_diagnostic": "connect telemetry: log line, no store write",
     "r6.register_client": "OAuth dynamic client registration (token store)",
     "r6.token": "OAuth token grant (token store)",
+    "r6.introspect": "OAuth introspection (RFC 7662): reads the token store, writes nothing; service-client credential",
     "r6.revoke": "OAuth revocation (token store)",
     # POSTs that persist nothing in this system.
     "r6.validate_resource": "$validate persists nothing; audits 'validate'",

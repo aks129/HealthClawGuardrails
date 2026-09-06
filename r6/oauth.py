@@ -133,6 +133,9 @@ def discovery_document():
         'token_endpoint_auth_methods_supported': list(CLIENT_AUTH_METHODS),
         'code_challenge_methods_supported': ['S256'],
         'authorization_response_iss_parameter_supported': True,
+        'introspection_endpoint': f'{base}/r6/fhir/oauth/introspect',
+        'introspection_endpoint_auth_methods_supported': [
+            'client_secret_basic', 'client_secret_post'],
         'service_documentation': f'{base}/r6/fhir/docs/privacy-policy',
     }
 
@@ -142,6 +145,25 @@ def discovery_root_view():
     `/.well-known/oauth-authorization-server` — the first location a client
     tries for a path-less issuer (RFC 8414 §3)."""
     return jsonify(discovery_document())
+
+
+def introspection_client_authorized(body):
+    """RFC 7662 §2.1: the introspection endpoint is protected (P2-e).
+
+    The one caller is the MCP server, holding the pre-registered confidential
+    client `MCP_INTROSPECTION_CLIENT_ID` / `_SECRET`. Unconfigured means
+    nobody is authorized — an open introspection endpoint turns any captured
+    token into a lookup of the tenant behind it.
+    """
+    expected_id = os.environ.get('MCP_INTROSPECTION_CLIENT_ID', '').strip()
+    expected_secret = os.environ.get('MCP_INTROSPECTION_CLIENT_SECRET', '').strip()
+    if not expected_id or not expected_secret:
+        return False
+    client_id, client_secret = _presented_client_credentials(body)
+    if not client_id or not client_secret:
+        return False
+    return (constant_time_equal(client_id, expected_id)
+            and constant_time_equal(client_secret, expected_secret))
 
 
 def _presented_client_credentials(body):
@@ -556,6 +578,41 @@ def register_oauth_routes(blueprint):
             'expires_in': TOKEN_TTL_SECONDS,
             'scope': ' '.join(auth_code['scopes']),
         })
+
+    # --- Token Introspection (RFC 7662) ---
+
+    @blueprint.route('/oauth/introspect', methods=['POST'])
+    def introspect():
+        """Answer whether a token is live, and for whom (spec §3.5 item 3).
+
+        On any doubt the answer is `{"active": false}` and nothing else: an
+        unknown, expired or revoked token gets the same shape, so the
+        response never says which. The token value is not echoed.
+        """
+        body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+        if not introspection_client_authorized(body):
+            response = jsonify({'error': 'invalid_client'})
+            response.headers['WWW-Authenticate'] = 'Basic realm="introspection"'
+            return response, 401
+        inactive = jsonify({'active': False})
+        inactive.headers['Cache-Control'] = 'no-store'
+        token_value = (body.get('token') or '').strip()
+        if not token_value:
+            return inactive
+        ok, info = validate_bearer_token(token_value)
+        if not ok or not isinstance(info, dict):
+            return inactive
+        response = jsonify({
+            'active': True,
+            'token_type': 'Bearer',
+            'aud': info.get('aud'),
+            'scope': ' '.join(info.get('scopes') or []),
+            'tenant_id': info.get('tenant_id'),
+            'client_id': info.get('client_id'),
+            'exp': int(info['exp']),
+        })
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     # --- Token Revocation (RFC 7009) ---
 
