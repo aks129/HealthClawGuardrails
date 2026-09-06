@@ -325,14 +325,18 @@ TIP = "4f2a91cbeef1a9d3c05e7b21fd8460ac9e13d7f5"
 def test_a_current_build_is_counted_as_a_real_check():
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [TIP])
-    # MOVED PIN 12 -> 13: prod_watch gained the run-worker check (#219),
+    # MOVED PIN 11 -> 12: prod_watch gained the demo-tenant shape check
+    # (#457, catalogue §10). The number is the point of this test — it
+    # asserts the script counts an asserted build as a real check rather
+    # than inflating the total — so it moves by exactly one here and the
+    # property is unchanged.
+    # MOVED PIN 12 -> 14 (#537): the CareAgents checks moved to the origin
+    # users reach, the Railway host kept its readiness check under its own
+    # name, and the Telegram surface gained a check. Two more, both real.
+    # MOVED PIN 14 -> 15 (#219): prod_watch gained the run-worker check,
     # because /healthz stopped folding that state into its status code and
-    # the readiness check above never read the field. Previously 11 -> 12 for
-    # the demo-tenant shape check (#457, catalogue §10). The number is the
-    # point of this test — it asserts the script counts an asserted build as
-    # a real check rather than inflating the total — so it moves by exactly
-    # one here and the property is unchanged.
-    assert code == 0 and "all 13 checks passing" in out
+    # the readiness check above never read the field.
+    assert code == 0 and "all 15 checks passing" in out
 
 
 def test_a_deployment_with_no_run_worker_is_an_outage_at_either_status_code():
@@ -370,7 +374,7 @@ def test_a_deployment_with_no_run_worker_is_an_outage_at_either_status_code():
     assert code == 1, (
         "a 200 whose body says no worker was confirmed must not read green")
     assert "unknown" in out and "could not reach HealthClaw" in out
-    assert "all 13 checks passing" not in out
+    assert "all 15 checks passing" not in out
 
 
 def test_a_deployment_healthclaw_refuses_names_its_own_variables():
@@ -423,9 +427,11 @@ def test_an_unasserted_build_never_inflates_the_count():
     # MOVED PIN 11 -> 12, same reason as above: one new check, and the gap
     # between this number and the one above is still exactly one, which is
     # the property being pinned.
+    # MOVED PIN 11 -> 13 (#537), same two checks as above; the gap is still
+    # exactly one.
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [])
-    assert code == 0 and "all 12 checks passing" in out
+    assert code == 0 and "all 14 checks passing" in out
 
 
 class _Refused:
@@ -450,7 +456,9 @@ def test_a_demo_server_that_stops_serving_keyless_callers_is_an_outage():
                                  demo_handshake=_Refused())
     assert code == 1, "a demo server refusing keyless callers must be an outage"
     assert "serves an unauthenticated handshake" in out
-    assert "all 13 checks passing" not in out
+    # The current total, or the assertion is vacuous: a number the script no
+    # longer prints is trivially absent.
+    assert "all 15 checks passing" not in out
 
 
 @pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])

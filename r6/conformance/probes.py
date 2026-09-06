@@ -128,10 +128,18 @@ def _synthetic_patient():
 
     So the FIRST conformance run against a HAPI deployment passed and every
     run after it failed — and failed in the worst possible way, because the
-    dependent Observation then 400s on a dangling subject reference and the
-    scorecard blames the GUARDRAILS. Measured: Grade F, 1/7, with four of the
-    six failures naming gates that were working. A report that accuses the
-    thing it is meant to certify is worse than no report.
+    dependent Observation then 400'd on a dangling subject reference and the
+    scorecard blamed the GUARDRAILS rather than the probe. Measured
+    2026-08-16 against hapi.fhir.org: Grade F, 1/7, where five of the six
+    failing properties were this collision and not a defect (only
+    `error_fidelity`, #498, was real), and two of those named a gate the same
+    session had just watched work. A report that accuses the thing it is
+    meant to certify is worse than no report.
+
+    Fixed 2026-08-16 by the marker identifier below (#514); the same
+    deployment re-measured Grade B, 6/7 on 2026-09-04. None of the above is
+    current behaviour — it is why the marker exists. Transcript:
+    `docs/evidence/2026-08-16-set2-connectors.md` §3.
 
     The uniqueness lives in a marker identifier rather than in the five
     values the redaction checks look for. Those stay constant on purpose: a

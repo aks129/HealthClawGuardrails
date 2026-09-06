@@ -30,7 +30,7 @@ problem it was written to solve.
 
 | Component | Size | State |
 |---|---|---|
-| `r6/` — the guardrail engine | 29,446 LOC, 11 blueprints | Conformance **Grade A 7/7 local**, measured today. Proxy mode **not measured** since 2026-08-16 morning. |
+| `r6/` — the guardrail engine | 29,446 LOC (see note), 11 blueprints | Conformance **Grade A 7/7 local**, measured today. Proxy mode **not measured** since 2026-08-16 morning. |
 | `r6/routes.py` — the god module | **3,924 lines, 39 routes** | Ratcheted; shrinking. Decomposition (#56) has not started. |
 | `r6/access.py` — the access kernel | one module | Adopted by 9 modules. `require_grant` + `has_grant` (#506). |
 | `careagents/` — consumer app | 5,311 LOC | On Railway + Postgres. **Deployed build is stale** (#427). Stores no PHI. |
@@ -76,7 +76,18 @@ which was never true of either set.
 ## The two numbers that explain why this document exists
 
 **50,429 lines of test code guard 29,508 lines of engine — 1.7 to 1.**
+
 **3,153** tests pass, 13 skip, 1 xfails.
+
+> **The component table disagrees with this block (#605, 2026-09-04).** The
+> engine is 29,508 LOC here and **29,446 LOC** in the component table near the
+> top of this document — one document, one metric, two numbers, and no command
+> cited for either. Measured at `89b42fb` with
+> `git ls-files 'r6/*.py' 'r6/**/*.py' | xargs wc -l` → **29,537**. Both
+> figures are left as written and dated rather than silently reconciled; the
+> table row is the one still uncorrected. Of the table's other sizes only
+> `services/agent-orchestrator` was re-checked: it reads 7,899 and measures
+> **7,640** tracked `.ts` lines today. The rest were not re-measured.
 
 Measured at `4cb3771`, which is this document's branch point, with
 `git ls-files 'r6/**/*.py' 'r6/*.py' | xargs wc -l` and the same over

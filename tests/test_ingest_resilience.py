@@ -170,6 +170,111 @@ def test_resource_id_pattern_is_a_charset_control_not_a_length_control():
 
 
 # ---------------------------------------------------------------------------
+# #286 (council D8): what `_ingest_one` does with an id that is not a
+# well-formed string. Four cases, pinned in the shape the ruling gave them.
+# `invalid_id` is in REFUSED_OUTCOMES, so each refusal pages rather than
+# counting as a skip; keep it there.
+# ---------------------------------------------------------------------------
+def test_a_blank_resource_id_is_refused_as_invalid_id(client, tenant_id):
+    """`""` is not an absent id. It used to earn a fabricated UUID, which
+    turned every re-ingest of the same resource into a duplicate row
+    instead of an upsert on (tenant, type, id). Refused, and refused as a
+    refusal (#286).
+    """
+    from r6.fasten.ingester import REFUSED_OUTCOMES, _ingest_one
+
+    result, rid = _ingest_one(
+        {"resourceType": "Observation", "id": "", "status": "final"},
+        tenant_id)
+
+    assert (result, rid) == ("invalid_id", None)
+    assert "invalid_id" in REFUSED_OUTCOMES
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation").count() == 0
+
+
+def test_an_absent_resource_id_gets_a_uuid_and_is_stored(client, tenant_id):
+    """No `id` key at all: mint one. This is the only case that fabricates
+    an id, and it is fine because there is nothing to upsert against."""
+    from r6.fasten.ingester import _ingest_one
+
+    result, rid = _ingest_one(
+        {"resourceType": "Observation", "status": "final"}, tenant_id)
+
+    assert result == "ok"
+    assert uuid.UUID(rid)  # a well-formed UUID, not "" or "None"
+    row = R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation", id=rid).first()
+    assert row is not None and row.is_deleted is False
+
+
+def test_an_integer_resource_id_keeps_coercing_to_a_string(client, tenant_id):
+    """Pre-existing and live on the Fasten connector: `123` is stored as
+    `"123"`. Not widened, not narrowed — pinned (#286)."""
+    from r6.fasten.ingester import _ingest_one
+
+    result, rid = _ingest_one(
+        {"resourceType": "Observation", "id": 123, "status": "final"},
+        tenant_id)
+
+    assert (result, rid) == ("ok", "123")
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation", id="123"
+    ).first() is not None
+
+
+def test_any_other_non_string_resource_id_is_refused(client, tenant_id):
+    """`str()` of a bool or a float passes the id pattern — `True` becomes
+    `"True"`, `1.5` becomes `"1.5"` — so the type has to be checked before
+    the shape. `bool` is a subclass of `int`, so it is refused explicitly
+    rather than riding the int coercion. Objects and lists never passed the
+    pattern; they are here so the whole set is one pin (#286).
+
+    MUTATION: drop the isinstance guard in _ingest_one -> the first two red.
+    """
+    from r6.fasten.ingester import _ingest_one
+
+    for bad in (True, False, 1.5, {"a": 1}, [1]):
+        result, rid = _ingest_one(
+            {"resourceType": "Observation", "id": bad, "status": "final"},
+            tenant_id)
+        assert (result, rid) == ("invalid_id", None), repr(bad)
+
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation").count() == 0
+
+
+def test_an_explicit_json_null_id_mints_a_uuid_rather_than_being_refused(
+        client, tenant_id):
+    """The fifth falsy id, which D8's four cases do not name: `"id": null`.
+
+    `resource.get('id')` cannot tell an absent key from a present `null`,
+    so a null id takes the absent branch and is MINTED, while `""` — the
+    other empty id — is refused. That divergence is the behaviour today and
+    this pins it as-is; it is not an endorsement. If null should instead be
+    refused (the argument: a UUID for an id the feed did send, but sent
+    empty, turns the next re-ingest into a duplicate row — the same
+    append-not-upsert shape #286 exists to stop), that is a product call,
+    and this test is what makes changing it deliberate rather than silent.
+
+    MUTATION: `if resource_id is not None:` -> `if resource_id:` makes the
+    blank-id test red while this one stays green, which is precisely the
+    asymmetry being recorded.
+    """
+    from r6.fasten.ingester import _ingest_one
+
+    result, rid = _ingest_one(
+        {"resourceType": "Observation", "id": None, "status": "final"},
+        tenant_id)
+
+    assert result == "ok"
+    assert uuid.UUID(rid)  # minted, not "" and not the string "None"
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, resource_type="Observation", id=rid
+    ).first() is not None
+
+
+# ---------------------------------------------------------------------------
 # #293 / #306: a record we REFUSED is not a record we chose to skip, and the
 # SHC path never got the rollback the Fasten path was patched for on
 # 2026-07-08. Both call sites collapsed every non-'ok' outcome into `skipped`
