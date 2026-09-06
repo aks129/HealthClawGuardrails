@@ -406,8 +406,9 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: has to sit here; nothing else in that change touches this file.
 #: 3928 -> 3917 (kernel slice 7): eleven lines of hand-rolled gate removed.
 #: 3917 -> 3916 (kernel slice 7c).
-#: 3916 -> 3870: the exempt discovery paths moved to r6/discovery_paths.py (#591).
-_GOD_MODULE_LINES = 3870
+#: 3916 -> 3871: the exempt discovery paths moved to r6/discovery_paths.py, and
+#: the tenant hook gained the one call that keeps them off the resource rules (#591).
+_GOD_MODULE_LINES = 3871
 
 
 def test_the_god_module_only_shrinks():

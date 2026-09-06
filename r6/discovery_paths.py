@@ -5,6 +5,8 @@ path from ever reaching a resource handler can live beside the list it
 protects without growing the god module.
 """
 
+from flask import jsonify, request
+
 # The blueprint's url_prefix. Exemptions are matched against the full request
 # path, so they must be anchored to this prefix — NOT matched by suffix.
 # FHIR resource ids match [A-Za-z0-9.\-]{1,64}, so a suffix test like
@@ -50,3 +52,38 @@ def _is_exempt_discovery_path(path):
     if path in _EXEMPT_EXACT_PATHS:
         return True
     return any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
+
+
+def refuse_resource_rule_on_exempt_path():
+    """Answer 405 when an exempt discovery path was routed to a resource rule.
+
+    /r6/fhir/docs/privacy-policy and every two-segment path under the exempt
+    sub-trees have the shape of /<resource_type>/<resource_id>. Werkzeug
+    sends a method the explicit route does not declare (PUT on the policy
+    document, GET on an internal POST-only endpoint) to the resource
+    handler, where the resource-type allowlist and the write gate happened
+    to stop it: two guards nobody reasoned about for discovery, either of
+    which could be relaxed without anyone revisiting the exemption (#591).
+    An exempt path is a document or an endpoint of its own; it is never a
+    resource, so a request that landed on a resource rule is refused here,
+    before tenant enforcement and before any handler runs.
+
+    Returns None when the request reached an explicit route.
+    """
+    # The generic resource rules are the ones that START with the resource
+    # type right after the blueprint prefix. An explicit route elsewhere may
+    # use a converter of the same name (the MCP Apps pages take a resource
+    # type and id under their own prefix); those are explicit and stand.
+    rule = request.url_rule.rule if request.url_rule is not None else ''
+    if not rule.startswith(f'{_R6_PREFIX}/<resource_type>'):
+        return None
+    # A plain OperationOutcome, built here rather than through the access
+    # kernel: this module is not a kernel adopter, and the kernel's importer
+    # list is a ratchet a discovery helper has no business moving.
+    return jsonify({
+        'resourceType': 'OperationOutcome',
+        'issue': [{'severity': 'error', 'code': 'not-supported',
+                   'diagnostics': 'This discovery path does not accept %s'
+                                  % request.method}],
+    }), 405
+
