@@ -222,8 +222,33 @@ def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
     r = c.post(f"/review/{agent_id}/act-1/submit", json={"approved": []})
     assert r.status_code == 502
     body = r.get_json()
+    # False, not null. Only a failed token mint or a 4xx the engine itself
+    # answered reaches this branch; every ambiguous case is routed to
+    # HealthClawUnconfirmed and answers null. The action did not execute and
+    # that is known, so null here would undo #220's third answer from the
+    # other side.
     assert body["confirmed"] is False
     assert "not" in body["message"].lower() or "couldn't" in body["message"]
+
+    # The message must not direct the patient into a loop the page creates.
+    # Since #528 the review route mints a confirmation on the first submit,
+    # so "please try approving again" answers 409 and the page tells them
+    # they already approved. Same forbidden claims as the page's own guard
+    # (tests/test_review_says_what_it_knows.py), plus the dead instruction.
+    #
+    # MUTATION: restore "Nothing has been sent — please try approving
+    # again." -> red on two of these.
+    msg = body["message"]
+    for claim in ("Submission rejected", "was rejected", "did not go through",
+                  "nothing was sent", "try approving again",
+                  "approving again."):
+        assert claim.lower() not in msg.lower(), (
+            f"the relay tells the patient {claim!r}. Nothing executed, but a "
+            f"confirmation IS on file, so a retry 409s and 'nothing was sent' "
+            f"reads as 'start over'.")
+    assert "will not resend" in msg.lower(), (
+        "the message does not say that re-approving here cannot resend it, "
+        "which is the one thing that stops the loop")
 
 
 def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
