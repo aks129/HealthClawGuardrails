@@ -751,6 +751,10 @@ _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({
     # Slice 19: read-auth's step-up branch. The tenant is the one the read
     # gate already resolved; the bearer alias is accepted as before.
     'r6/read_auth.py:authorize_tenant_read',
+    # Slice 20: the limiter's proven-tenant predicate. A proven tenant keys
+    # its own bucket; anything else keys by IP, and the kernel raising is
+    # caught at the site so the limiter never fails a request.
+    'r6/rate_limit.py:_tenant_claim_is_authenticated',
 })
 
 
@@ -1569,7 +1573,8 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # Kernel slice 16: the session-or-token predicate
                      # asks has_grant; its four JSON 401s are unchanged.
                      'r6/agent_runs/routes.py',
-                     'r6/read_auth.py'}
+                     'r6/read_auth.py',
+                     'r6/rate_limit.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
