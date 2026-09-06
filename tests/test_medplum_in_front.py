@@ -44,8 +44,8 @@ def test_guardrails_redact_and_audit_medplum_read(client, tenant_headers,
     # PHI redaction applied to the Medplum-returned resource
     assert body["name"][0]["family"] == "H."                 # name truncated
     assert body["telecom"][0]["value"] == "[Redacted]"       # phone masked
-    ident = body["identifier"][0]["value"]
-    assert ident.startswith("***") and ident.endswith("6789")  # SSN masked
+    assert "value" not in body["identifier"][0]                # SSN removed
+    assert "6789" not in blob                                # no last-four either
     assert "42 Real St" not in blob                          # address line gone
     assert "617-555-0142" not in blob                        # emergency contact gone
     assert body.get("_source") == "upstream"                 # came from Medplum

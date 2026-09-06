@@ -3,8 +3,12 @@ name: CI - FHIR MCP Guardrails
 on:
   push:
     branches: [main, master, 'claude/**']
+  # No `branches:` filter here on purpose. That filter matches the PR's BASE
+  # branch, so a change stacked on another feature branch matched nothing and
+  # this entire workflow was skipped — every test lane with it (#585). Every
+  # job below is read-only reporting, so it is safe on any base; if one ever
+  # becomes too expensive for a stack, gate that job, not the workflow.
   pull_request:
-    branches: [main, master]
 
 # Least privilege: every job here only reads the repo (tests, lint, gitleaks,
 # audits). No job writes contents, comments, or uploads results.

@@ -351,6 +351,8 @@ scheduled in Phase 0/1 of the playbook.
   half-landed).
 - `r6/schema_sync.py` is dead code with zero production callers,
   contradicted by its own test suite. Delete it.
+  > **Done, 2026-09-04 (#605).** `a66b33f` (#471) deleted it. The path above
+  > no longer resolves; it is kept as the record of why, not as a pointer.
 
 ## 7. Measured against healthcare/FHIR practice
 
