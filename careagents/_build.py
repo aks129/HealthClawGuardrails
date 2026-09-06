@@ -6,9 +6,9 @@ asked about could tell a current build from a stale one, because nothing the
 running process exposed said which build it was.
 
 `careagents/BUILD_SHA` answers that. It is written at deploy time
-(`deploy/careagents/deploy.sh`, or by hand before `railway up`) and travels
-with the tree, so it cannot drift from the code the way a service variable
-can. It is generated, never committed — a checked-in marker would go stale
+(`deploy/careagents/stamp_build.sh`, run against the stage before `railway
+up`) and travels with the tree, so it cannot drift from the code the way a
+service variable can. It is generated, never committed — a checked-in marker would go stale
 silently, which is the exact failure this exists to catch.
 
 Two lines:

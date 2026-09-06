@@ -123,7 +123,7 @@ def dashboard():
             )
         return render_template(
             "command_center_login.html",
-            error="This link has expired or is invalid. Ask your Telegram agent for a fresh one.",
+            error="This link has expired or is invalid. Request a fresh one — see below.",
         ), 401
 
     tenant = _tenant()

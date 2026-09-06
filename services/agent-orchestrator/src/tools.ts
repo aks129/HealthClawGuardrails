@@ -1850,9 +1850,13 @@ export class FHIRTools {
       resource: `${resourceType}/${resourceId}`,
       overall_quality: quality,
       issue_count: issueCount,
+      // This grades ONE resource. Duplication is a property of a set, so a
+      // single-resource pass cannot see it however many rules it gains, and
+      // "no data quality issues found" was a verdict on the whole record
+      // (#458). Kept in step with the engine's own summary in r6/curatr.py.
       note: issueCount === 0
-        ? `No data quality issues found in this ${resourceType} record.`
-        : `Found ${issueCount} issue(s). Present each issue to the patient in plain language before calling curatr.apply_fix.`,
+        ? `No coding or structural issues found in this one ${resourceType} record. This checked one resource, not the patient's record; duplicates and other record types were not examined.`
+        : `Found ${issueCount} issue(s) in this one ${resourceType} record. Present each issue to the patient in plain language before calling curatr.apply_fix.`,
       next_steps: issueCount > 0
         ? [
             "Present each issue.plain_language and issue.impact to the patient",
@@ -1860,7 +1864,13 @@ export class FHIRTools {
             "Ask patient which fixes they approve",
             "Call curatr.apply_fix with approved fixes and patient_intent",
           ]
-        : ["No action needed — data quality looks good."],
+        : [
+            // NOT "no action needed" — that is a claim about the record, and
+            // one clean resource is no evidence for it.
+            "Tell the patient this checked one resource, not their whole record",
+            "Do not describe the record as free of duplicates — that was not checked",
+            "Call curatr.evaluate on other resources to cover more of the record",
+          ],
       public_services_used: [
         "tx.fhir.org (SNOMED CT, LOINC)",
         "NLM Clinical Tables API (ICD-10-CM)",

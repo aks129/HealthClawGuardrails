@@ -1,0 +1,24 @@
+# §6 re-run at HEAD (89b42fb), 2026-09-04.
+$ uv run python scripts/connector-auth-probe.py 
+connector-auth-probe.py
+date      2026-09-04T10:18:52Z
+repo      .
+recorder  http://127.0.0.1:55702
+request   GET /r6/fhir/health -> proxy GET http://127.0.0.1:55702/metadata
+
+Identical env for both cases:
+  FHIR_UPSTREAM_CLIENT_ID     = set2-probe-client
+  FHIR_UPSTREAM_CLIENT_SECRET = <set>
+Question: what Authorization header reaches the upstream?
+
+  kind=hapi     -> Authorization: Basic <redacted>
+  kind=generic  -> Authorization: Basic <redacted>
+
+Against 2026-08-16 (§6 of docs/evidence/2026-08-16-set2-connectors.md):
+  kind=hapi     DIFFERS: 2026-08-16 sent no credential, today sends Basic
+  kind=generic  same as 2026-08-16 (Basic)
+
+  R5 CLOSED on the wire: both kinds send the configured credential.
+
+no assertion failed
+(exit 0)

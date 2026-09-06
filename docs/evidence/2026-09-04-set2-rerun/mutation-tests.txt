@@ -1,0 +1,63 @@
+# Mutation checks for tests/test_set2_sections_5_to_7_evidence.py
+# Run 2026-09-04 at HEAD (89b42fb).
+# Each mutation must turn its named test RED. A test that stays green
+# is not testing what it says it tests.
+
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q     (unmutated)
+  35 passed in 0.21s
+
+# a home-directory path appears in a committed transcript
+#   file: docs/evidence/2026-09-04-set2-rerun/auth-probe-run.txt
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_the_committed_transcripts_carry_no_home_path
+  1 failed, 9 passed, 25 deselected in 0.03s
+  -> RED (correct)
+
+# a script prints the absolute checkout path again
+#   file: scripts/connector-auth-probe.py
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_a_script_never_prints_an_absolute_checkout_path
+  1 failed, 1 passed, 33 deselected in 0.11s
+  -> RED (correct)
+
+# one hex digit of an image baseline drifts from the pack
+#   file: scripts/image-pin-digests.sh
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_every_image_digest_the_script_compares_against_is_in_the_pack
+  1 failed, 34 deselected in 0.03s
+  -> RED (correct)
+
+# the auth probe's baseline is flipped to say hapi sent Basic in August
+#   file: scripts/connector-auth-probe.py
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_the_auth_probe_compares_against_what_section_6_recorded
+  1 failed, 34 deselected in 0.03s
+  -> RED (correct)
+
+# the write-up's is_proxy_enabled citation drifts
+#   file: docs/evidence/2026-09-04-set2-sections-5-7-rerun.md
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_the_correction_to_the_packs_stale_citation_is_itself_correct
+  1 failed, 34 deselected in 0.03s
+  -> RED (correct)
+
+# the image-pin script reports success on a compose naming no images
+#   file: scripts/image-pin-digests.sh
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_a_compose_file_with_no_images_is_refused
+  1 failed, 34 deselected in 0.04s
+  -> RED (correct)
+
+# a transcript the write-up rests on is deleted
+#   file: docs/evidence/2026-09-04-set2-rerun/registry-contract-at-2b7872d-run.txt
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_the_transcripts_are_committed
+  1 failed, 9 passed, 25 deselected in 0.03s
+  -> RED (correct)
+
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q     (after restoring every file)
+  35 passed in 0.20s
+
+# one hex digit of a digest quoted in the write-up drifts from the transcript
+#   file: docs/evidence/2026-09-04-set2-sections-5-7-rerun.md
+#   Added after an abbreviated digest in the write-up's §7 was off by one
+#   character. The abbreviation is gone; this is the guard that replaces it.
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q -k test_every_digest_the_write_up_prints_was_actually_measured
+  1 failed, 35 deselected in 0.04s
+  -> RED (correct)
+
+$ pytest tests/test_set2_sections_5_to_7_evidence.py -q     (after restoring the write-up)
+  36 passed in 0.22s

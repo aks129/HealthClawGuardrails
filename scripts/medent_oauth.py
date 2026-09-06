@@ -11,7 +11,7 @@ MEDENT endpoints (v23.5+):
   Practice list:        https://fhir.medent.com/fhir/resources/practices.php
   Authorization:        https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/authorize
   Token (initial):      https://fhir.medent.com/fhir/R4/token/index.php?medent_practice_id={PRACTICE_ID}
-  Token (refresh):      https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/token
+  Token (refresh):      https://fhir.medent.com/fhir/R4/token/index.php?medent_practice_id={PRACTICE_ID}
   FHIR base:            https://fhir.medent.com/fhir/R4/{PRACTICE_ID}/
 
 Auth flow:
@@ -55,6 +55,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -179,6 +180,20 @@ def _wait_for_callback(port: int, timeout: int) -> dict:
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+def _scrub(text: str) -> str:
+    """Mask OAuth credentials that upstream errors echo back in URLs.
+
+    MEDENT redirects the token endpoint with the grant material in the query
+    string, so a bare httpx error message would print the refresh token to
+    the terminal and into any captured log.
+    """
+    return re.sub(
+        r"((?:refresh_token|access_token|code|client_secret)=)[^&\s'\"]+",
+        r"\1[REDACTED]",
+        str(text),
+    )
+
 
 def _post(url: str, **kwargs) -> dict:
     import httpx
@@ -375,7 +390,7 @@ def cmd_authorize(args: argparse.Namespace) -> int:
             },
         )
     except Exception as exc:
-        print(f"error: token exchange failed — {exc}", file=sys.stderr)
+        print(f"error: token exchange failed — {_scrub(exc)}", file=sys.stderr)
         return 1
 
     expires_in = int(body.get("expires_in", 900))
@@ -473,7 +488,10 @@ def cmd_refresh(_args: argparse.Namespace) -> int:
     client = _load_client()
     client_id = client.get("client_id", os.environ.get("MEDENT_CLIENT_ID", "")).strip()
 
-    refresh_url = f"{_MEDENT_BASE}/{practice_id}/token"
+    # Same endpoint form the authorization-code exchange uses. The shorter
+    # {base}/{practice_id}/token path 302-redirects to this one, and the
+    # redirect carries the refresh_token in the query string.
+    refresh_url = f"{_MEDENT_BASE}/token/index.php?medent_practice_id={practice_id}"
     print(f"refreshing tokens at {refresh_url} ...")
     try:
         body = _post(
@@ -485,7 +503,7 @@ def cmd_refresh(_args: argparse.Namespace) -> int:
             },
         )
     except Exception as exc:
-        print(f"error: refresh failed — {exc}", file=sys.stderr)
+        print(f"error: refresh failed — {_scrub(exc)}", file=sys.stderr)
         return 1
 
     expires_in = int(body.get("expires_in", 900))

@@ -1,0 +1,29 @@
+image-pin-digests.sh
+compose  examples/aidbox-healthclaw-guardrails/docker-compose.yaml
+date     2026-09-04T10:19:13Z
+accept   application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json
+baseline docs/evidence/2026-08-16-set2-connectors.md §7 (2026-08-16)
+
+1. Manifest digests for every image the compose file names
+  image                                                digest today
+  postgres:18                                          sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+  NOTE postgres:18: MOVED since 2026-08-16 (sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941 -> sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280). This is R9: an unpinned tag, and `pull_policy: always` on one of them.
+  healthsamurai/aidboxone:edge                         sha256:90c4e72811765b6c420387d79f6033069fd0b045281e7f491be7b8cf6b3c3952
+  NOTE healthsamurai/aidboxone:edge: MOVED since 2026-08-16 (sha256:42e4e8e10d9d42b54bf3f4602b3f584e06acc70738cdcf280ce7634bdb5e58b3 -> sha256:90c4e72811765b6c420387d79f6033069fd0b045281e7f491be7b8cf6b3c3952). This is R9: an unpinned tag, and `pull_policy: always` on one of them.
+  ghcr.io/aks129/healthclaw-guardrails:1.10.0          sha256:57b345e0c8f6a6bf88690084f57fe863bd02882ade0e2c7b70002baa4c0e225b
+  PASS ghcr.io/aks129/healthclaw-guardrails:1.10.0: same digest as 2026-08-16. The version tag was not re-pushed.
+  ghcr.io/aks129/healthclaw-mcp-server:1.10.0          sha256:d37c997ea15c73c715cdc2b90ea01aa6a49dc34cb6897913ce1691d8d012cd53
+  PASS ghcr.io/aks129/healthclaw-mcp-server:1.10.0: same digest as 2026-08-16. The version tag was not re-pushed.
+
+2. The two observations §7 recorded next to the table
+  ghcr.io/aks129/healthclaw-guardrails tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-guardrails: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: latest still resolves to the same digest as 1.10.0 (sha256:57b345e0c8f6a6bf88690084f57fe863bd02882ade0e2c7b70002baa4c0e225b).
+  ghcr.io/aks129/healthclaw-mcp-server tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: latest still resolves to the same digest as 1.10.0 (sha256:d37c997ea15c73c715cdc2b90ea01aa6a49dc34cb6897913ce1691d8d012cd53).
+
+Result
+  no assertion failed

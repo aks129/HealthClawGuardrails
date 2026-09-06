@@ -132,6 +132,21 @@ jobs:
             // observed pass may close one.
             const buildResolved = status?.build?.asserted === true
                                   && status?.build?.ok === true;
+            // The third condition, and not a variant of the first: "the watch
+            // did not run every check it declares" is a defect in
+            // scripts/prod_watch.py, and its remedy is a code change, not a
+            // deploy or a redeploy. Filed as an outage it would send whoever
+            // reads it at 03:00 to the wrong dashboard; folded into the
+            // outage alarm's silence it would be exactly the failure it
+            // reports — a summary line that reads complete because the
+            // denominator shrank.
+            //
+            // Belt and braces for the same reason the stale alarm has it:
+            // exit 3 has one meaning, and it keeps firing if the verdict file
+            // is absent, truncated, or schema-drifted (rename `complete` and
+            // the JSON-only predicate silently never fires again).
+            const incomplete = exit === '3' || status?.complete === false;
+            const complete = status?.complete === true;
             // WHAT is wrong, reduced to a comparable value. A comment is a
             // notification; an edit is not. So the issue body is refreshed
             // every run (always current, silent) and a comment is posted only
@@ -159,6 +174,11 @@ jobs:
             const outageFp = status ? `checks:${failingNames}` : unknown;
             const staleFp = status?.build?.deployed
               ? `build:${status.build.deployed}` : unknown;
+            // WHICH checks vanished, so a second one going missing comments
+            // and the same one every six hours does not.
+            const gone = [...(status?.missing ?? []),
+                          ...(status?.unreadable ?? [])].sort().join('|');
+            const incompleteFp = status ? `missing:${gone}` : unknown;
 
             const MARK = (fp) => `<!-- prod-watch-fingerprint: ${fp} -->`;
             const FP_RE = /<!-- prod-watch-fingerprint: (.*?) -->/;
@@ -169,6 +189,15 @@ jobs:
               ['prod-watch: deployed build is stale', staleFiring, buildResolved,
                'Production is healthy, but it is not running the build we expect.',
                staleFp],
+              ['prod-watch: the watch is not running every check it declares',
+               incomplete, complete,
+               'This run decided fewer checks than scripts/prod_watch.py ' +
+               'declares. Every OK line below is still true; the run as a ' +
+               'whole is not a verdict on production, because part of the ' +
+               'harness did not execute. Fix the script — this is not a ' +
+               'deployment problem, and the outage alarm stays open until a ' +
+               'complete run observes production passing.',
+               incompleteFp],
             ];
             for (const [title, firing, resolved, lead, fingerprint] of alarms) {
               const { data: found } = await github.rest.search.issuesAndPullRequests({
