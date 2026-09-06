@@ -505,6 +505,12 @@ that exists or a risk that is live.
 
 **Delete now** (code documenting promises nothing keeps):
 
+> **Status checked 2026-09-04 (#605).** Three of the four landed in `a66b33f`
+> (#471): `r6/schema_sync.py`, `careagents/conversation_locks.py` and the two
+> `careagents/app.py` constants are all gone, so those paths no longer
+> resolve. **`scripts/export_healthex_legacy.py` is still in the tree** — that
+> item was not carried out and is still open.
+
 - `r6/schema_sync.py` — zero production callers; contradicted by its own
   test suite.
 - `careagents/conversation_locks.py` (85 LOC) — imported only by a test;

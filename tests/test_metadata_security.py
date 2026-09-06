@@ -108,6 +108,51 @@ class TestPrivacyReconciliation:
         # Honest comparative point.
         assert 'exceeds the security posture of typical consumer health' in body
 
+    def test_careagents_beta_tester_tenant_and_deletion_stated(self, client):
+        # Council ruling 2026-09-02 (D3), derived from what the code does, not
+        # from what we would like it to do. The synthetic tenant is
+        # r6/seed.py's built-in set (Patient + 1 Condition + 3 Observations +
+        # 1 MedicationRequest + intake_questionnaire()); deletion is
+        # careagents' DELETE /api/connections/<id> -> /internal/purge-tenant,
+        # which purges and commits in the same request (r6/routes.py) and
+        # keeps the PHI-free audit rows (r6/purge.py).
+        body = client.get('/privacy').get_data(as_text=True)
+        assert 'CareAgents beta testers' in body
+        assert 'one fictional sample patient' in body
+        assert 'purges that tenant' in body
+        assert 'audit trail' in body
+
+    def test_careagents_retention_names_everything_that_survives(self, client):
+        # A retention statement that lists only the audit trail reads as the
+        # exhaustive list. It is not: the CareAgents account row (email,
+        # passkey credential, which sources were connected) outlives a records
+        # deletion and has no self-serve removal (#554). The first draft of
+        # this paragraph also said the tenant held "nothing else about you",
+        # which contradicts docs/beta-tester-guide.md's own data table. This
+        # is a privacy-policy promise, so the page has to name both survivors.
+        body = client.get('/privacy').get_data(as_text=True)
+        assert 'nothing else about you' not in body
+        assert 'no other health data about you' in body
+        assert 'passkey credential' in body
+        assert 'deleting your' in body and 'does not delete it' in body
+        assert 'support@healthclaw.io' in body
+
+
+class TestCareAgentsSurfaceCopy:
+    """The site's CareAgents card is landing copy for a product whose Telegram
+    surface is out of service for the beta (#536, D6). D6 hid the tile and
+    rewrote the tester guide; this bullet kept promising the surface from the
+    page a stranger reads before either of those. Documentation is part of the
+    product surface (docs/2026-08-02-retro.md, "reality drifted")."""
+
+    def test_landing_card_does_not_offer_telegram_as_a_careagents_surface(
+            self, client):
+        body = client.get('/').get_data(as_text=True)
+        card = body.split('<div class="card__title">careagents</div>')[1]
+        card = card.split('</a>')[0]
+        assert 'Passkey sign-in' in card, "the surface bullet moved or was renamed"
+        assert 'Telegram' not in card
+
 
 # ---------------------------------------------------------------------------
 # 3. Bot /start risk disclosure (source-content check)

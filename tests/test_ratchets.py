@@ -284,7 +284,12 @@ def test_no_new_package_mutates_without_auditing():
 #: named deletion as the case it handled and the query did not, so a
 #: tombstoned QuestionnaireResponse was rendered into a form submitted on a
 #: patient's behalf.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 10
+#: 10 -> 9: council ruling D10 filtered both queries in r6/sdc/routes.py —
+#: the Questionnaire/Patient resolution (_load_stored) and the auto-loaded
+#: clinical content ($populate's Observation / MedicationRequest /
+#: AllergyIntolerance / Condition sweep). A tombstoned row reaching an
+#: intake form is the form_fill shape again, one hop upstream.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 9
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the

@@ -233,6 +233,14 @@
     }
     form.addEventListener('change', evaluate);
 
+    // The server-side rule, on this side of the relay: a 4xx other than 408
+    // or 429 is somebody's decision about this request, and nothing ran that
+    // was not meant to. Everything else — 5xx, 408, 429 — is a gateway
+    // speaking for a service that said nothing (#416).
+    function answeredAboutRequest(status) {
+      return status >= 400 && status < 500 && status !== 408 && status !== 429;
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       if (!evaluate()) { return; }
@@ -247,12 +255,158 @@
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload)
-      }).then(function (r) { return r.json().then(function (b) { return { r: r, b: b }; }); })
+      })
+        // A rejection HERE is not an answer of any kind — the request never
+        // got one. Resolved to a sentinel rather than handled in place, for
+        // two reasons: the renderer below then owns every outcome in one
+        // place, and a .catch attached after the renderer would also swallow
+        // a throw from the rendering itself and report it as a network
+        // failure.
+        .catch(function () { return null; })
+        .then(function (r) {
+          if (r === null) { return { reached: false }; }
+          // An unreadable body is an OUTCOME, not the absence of one. A body
+          // that is not JSON — a Werkzeug HTML error page, a gateway's own
+          // 502 — rejects here, and with no .catch the entire chain went
+          // silent: the screen did not move and the button stayed enabled,
+          // which is an invitation to tap Approve again on a request that
+          // may have run. Resolve into a shape the renderer can branch on.
+          return r.json()
+            .then(function (b) {
+              // A body that PARSES but is not an object is not an answer
+              // either, and it is worse than one that does not parse: the
+              // renderer below reads `.confirmed` and `.next_step` off it,
+              // and on `null` — valid JSON — that THROWS. Nothing catches
+              // after the renderer, deliberately, so the screen never moves
+              // and Approve stays armed: the silent failure this branch
+              // exists to remove, one body shape over. Verified in a
+              // browser at 390x844 — a 502 carrying the body `null` left
+              // the page still reading "Ready to generate" with Approve
+              // enabled, which is an invitation to tap it again.
+              if (b === null || typeof b !== 'object' || Array.isArray(b)) {
+                return { r: r, b: {}, reached: true, readable: false };
+              }
+              return { r: r, b: b, reached: true, readable: true }; })
+            .catch(function () {
+              return { r: r, b: {}, reached: true, readable: false }; });
+        })
         .then(function (res) {
+          // Nothing was reached, so nothing about the request is known here
+          // — including whether it arrived at all.
+          //
+          // RULED: leave Approve ENABLED. A dropped connection most often
+          // means the request never left the device, and a disabled button
+          // with no way forward strands a patient mid-approval. Name the
+          // uncertainty, point at the check, and let them act on it. The
+          // option ruled out is the silent failure this branch used to be.
+          //
+          // It is not alone in that any more — the relay's own 503s below
+          // stay armed too, for the same reason. It was, when this was
+          // written, and the sentence saying so outlived the fact.
+          if (!res.reached) {
+            btn.disabled = false;
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not reach the service, so we cannot tell you ' +
+              'whether your approval was sent. Reload this page to see ' +
+              'where this request stands before approving again.';
+            return;
+          }
+
+          // The session expired while the form sat open, which on a phone in
+          // an in-app browser is the ordinary way this page is used. This
+          // route is not under /api/, so `login_required` answers a 302 to
+          // /auth rather than a 401; fetch follows it, and what arrives is
+          // the sign-in page as 200 text/html. That parses as unreadable, so
+          // it was reported as an approval whose outcome we could not
+          // determine, with Approve taken away — when nothing was submitted
+          // and nothing could have been: the request never passed the
+          // session gate. Say that instead, and leave the button alone,
+          // because signing in and tapping Approve is the whole recovery.
+          //
+          // Keyed on the redirect AND on where it landed. A redirect to
+          // somewhere that is not our sign-in page — a captive portal, an
+          // enterprise proxy — is not evidence about the session, so it
+          // falls through to the unreadable branch below, which claims
+          // nothing either way.
+          if (res.r.redirected && /\/auth(\?|$)/.test(res.r.url || '')) {
+            btn.disabled = false;            // sign in, then approve
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'Your sign-in expired, so this approval was not submitted. ' +
+              'Sign in again in another tab, then approve here.';
+            return;
+          }
+
+          // Say only that we could not read it. NOT what became of the
+          // request: on an unreadable 200 the relay has already confirmed
+          // the action, on an unreadable 502 it may or may not have, and
+          // neither is observable from here. Claim neither, and do not
+          // re-arm the button on an outcome nobody established.
+          if (!res.readable) {
+            btn.disabled = true;             // never invite a second send here
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not read the answer to your approval, so we cannot ' +
+              'tell you whether it went through. We have not sent it again. ' +
+              'Reload this page to see where this request stands.';
+            return;
+          }
+
           if (res.r.ok) {
             gateMsg.className = 'alert alert-success';
             gateMsg.textContent = 'Review recorded. ' + (res.b.next_step || '');
             btn.disabled = true;
+            return;
+          }
+
+          // 409: this action already carries a confirmation, so the review
+          // was submitted before (#528 follow-on). The server refuses at the
+          // pre-check, and the seal behind it refuses the double-tap that
+          // races that pre-check; both answers arrive here.
+          //
+          // It must not render as an error. A red failure for a request that
+          // WAS approved is the #416 shape — told it failed, a reasonable
+          // person approves again, which is the double-tap that produced the
+          // 409 in the first place. It must also not say nothing was sent: a
+          // confirmation exists, so that is a claim this page never observed.
+          // State what the 409 does establish — the person already approved
+          // it — and let the status resolve the rest.
+          if (res.r.status === 409) {
+            btn.disabled = true;             // never invite a second send here
+            gateMsg.className = 'alert alert-secondary';
+            gateMsg.textContent =
+              'You have already approved this request. We are checking ' +
+              'where it stands.';
+            checkStatus();
+            return;
+          }
+
+          // 404 from the ENGINE: the action is no longer awaiting review.
+          // `_load_form_fill_action` requires `awaiting_confirmation` and runs
+          // before the 409 pre-check, so once the confirm has claimed the
+          // action a second submit answers 404 {"error": "Unknown action"} —
+          // which is the ordinary two-tab and back-button outcome after an
+          // approval that WORKED. It rendered as a red machine string with
+          // Approve re-armed: the same shape the 409 branch exists to remove,
+          // one status code over.
+          //
+          // What this 404 establishes, and no more: the action has left
+          // `awaiting_confirmation`. That is claimed-and-run OR expired, and
+          // the status tells them apart — so state the one fact and let the
+          // poll finish the sentence. Ownership was verified before the
+          // submit went out, so "no such action" is not among the readings.
+          //
+          // The relay's OWN 404 is `{"error": "not yours"}` and is a different
+          // answer — a denial about this account, not about the action's
+          // state — so it is excluded here and keeps the failure arm below.
+          if (res.r.status === 404 && res.b.error !== 'not yours') {
+            btn.disabled = true;             // a further tap answers 404 too
+            gateMsg.className = 'alert alert-secondary';
+            gateMsg.textContent =
+              'This request is no longer waiting for your approval. We are ' +
+              'checking where it stands.';
+            checkStatus();
             return;
           }
 
@@ -267,9 +421,86 @@
             btn.disabled = true;             // never invite a second send here
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent = res.b.message ||
-              'Your review was saved. We are checking whether the approval ' +
-              'went through.';
+              // NOT "your review was saved": this branch has two producers
+              // now, and on one of them — an answer to the review POST that
+              // nobody could read — it may not have been. The fallback fires
+              // only if the server sent no message at all, so it must be
+              // true for both.
+              'We are checking where this request stands.';
             checkStatus();
+            return;
+          }
+
+          // The relay's confirm-failure: the review WAS saved and the
+          // approval IS recorded (the review route mints it), and only the
+          // completion failed. Its message points the patient at the status,
+          // so that instruction needs a destination (#419) — and the button
+          // must not be left armed, because since #528 the retry it invites
+          // answers 409.
+          //
+          // Keyed on the STATUS as well as the value, not on
+          // `confirmed === false` alone: the two 503s carry that same value
+          // for a review that never reached the engine, where there is no
+          // approval on file, nothing to look up, and the poll would report
+          // on a request that was never made.
+          if (res.r.status === 502 && res.b.confirmed === false) {
+            btn.disabled = true;             // its retry now answers 409
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'Your review was saved, but we could not complete your ' +
+              'approval. We are checking where this request stands.';
+            checkStatus();
+            return;
+          }
+
+          // Everything the relay itself answers on this route carries either
+          // `confirmed` (its two 502s) or the `review_unavailable` code (its
+          // 503s). A 5xx carrying neither was not written by it: a gateway
+          // spoke for a service that said nothing, and by this project's own
+          // rule (`_upstream_answered`, careagents/healthclaw.py) that is
+          // silence with a status code on it, not a refusal. It reached the
+          // red arm below with Approve armed — the #416 shape, one body
+          // shape over from the unreadable branch that handles it honestly.
+          //
+          // No checkStatus: nothing here establishes that the relay ran at
+          // all, let alone that a confirmation exists, and a poll from a
+          // branch that has established neither is what the guard on
+          // checkStatus's callers exists to forbid.
+          var relayAnswered = res.b.confirmed !== undefined
+            || res.b.error === 'review_unavailable';
+          if (!relayAnswered && !answeredAboutRequest(res.r.status)) {
+            btn.disabled = true;             // it may already have run
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent =
+              'We could not tell what happened to your approval, so we ' +
+              'cannot say whether it went through. We have not sent it ' +
+              'again. Reload this page to see where this request stands.';
+            return;
+          }
+
+          // A 503 the relay wrote is a STALL, not a decision about this
+          // request. All three of its 503 sites answer `review_unavailable`
+          // — the ownership pre-check could not be run, the review POST was
+          // lost in transport, or a gateway answered for an engine that said
+          // nothing — and each carries an honest sentence: we could not tell,
+          // we could not check. The failure style around it was not honest.
+          // Red states a refusal, and it was paired with an armed Approve:
+          // the style told the patient to stop while the control told them to
+          // continue, and on these paths continuing is the recovery (nothing
+          // ran, and if the POST did land the review route now answers 409).
+          // Ruled by QA on the finished stack; found in a browser, where all
+          // three painted `alert-danger` with Approve enabled.
+          //
+          // PRESENTATION ONLY. The sentence is still the server's, the
+          // button is left where these branches already left it — enabled,
+          // explicitly, so the next tidy-up cannot quietly disable it — and
+          // nothing polls, because a 503 has established nothing to poll for.
+          if (res.r.status === 503 && res.b.error === 'review_unavailable') {
+            btn.disabled = false;            // the recovery, not a hazard
+            gateMsg.className = 'alert alert-warning';
+            gateMsg.textContent = res.b.message ||
+              'We could not tell whether your review was saved. Reload ' +
+              'this page to see where this request stands.';
             return;
           }
 
@@ -306,35 +537,113 @@
             return { ok: r.ok, b: b }; }); })
           .then(function (res) {
             var status = res.ok ? (res.b.status || '') : '';
-            if (status === 'completed' || status === 'sent') {
+            // ONE SENTENCE PER STATE, saying only what that state
+            // establishes — read off `_TRANSITIONS` (r6/actions/models.py),
+            // not off who called this. The three arms that were here read
+            // 'sent', 'pending' and 'approved', which this system cannot
+            // produce, and none of the five it can, so a form-fill that
+            // really did run and fail arrived at the terminal "we cannot
+            // tell" while the status said otherwise. A test compares the two
+            // vocabularies so a new state cannot be added without an arm.
+            //
+            // What changed with them: the caller-conditioned clause. The
+            // previous `awaiting_confirmation` copy said "your approval is
+            // recorded", which that status does not carry — it is set at
+            // COMMIT, before any human approval — and was true only of the
+            // callers there were then. There is now a caller with no
+            // confirmation established (an unreadable answer to the review
+            // POST, QA #566), and a claim that depends on the caller is the
+            // shape docs/2026-08-02-retro.md is about. Every sentence below
+            // is true for every caller.
+            if (status === 'completed') {
               gateMsg.className = 'alert alert-success';
               // "and nothing was sent twice" was in this string. A status
               // of completed says the action completed; it says nothing
               // about how many times it ran. Claim only what was observed.
-              gateMsg.textContent = 'Confirmed. Your approval went through.';
+              gateMsg.textContent =
+                'Confirmed. Your approval went through and this request was ' +
+                'carried out.';
               return;
             }
-            if (status === 'pending' || status === 'approved') {
+            // executing, failed, needs_review and unknown are reachable only
+            // THROUGH executing, and the claim into executing spends an
+            // approval grant. So each of them does establish that the
+            // approval went through, on the status alone.
+            if (status === 'executing') {
               gateMsg.className = 'alert alert-success';
               gateMsg.textContent =
-                'Confirmed. Your approval was recorded and is being sent.';
+                'Confirmed. Your approval went through and this request is ' +
+                'being carried out now.';
+              return;
+            }
+            if (status === 'needs_review') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'Your approval went through. This request needs a person to ' +
+                'look at it before it can be completed.';
+              return;
+            }
+            if (status === 'failed') {
+              gateMsg.className = 'alert alert-danger';
+              // Red, and that is not the #416 shape: #416 is a definite
+              // failure printed for an outcome nobody observed. Here the
+              // engine observed it. Naming what failed matters — the
+              // approval landed, the work after it did not.
+              gateMsg.textContent =
+                'Your approval went through and this request could not be ' +
+                'completed. Approving again will not retry it.';
+              return;
+            }
+            if (status === 'unknown') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'We cannot tell whether this request went out. We have not ' +
+                'sent it again, because it may already have gone.';
+              return;
+            }
+            // The action is committed and not yet claimed: nothing has run.
+            // The route back is a reload, because every branch that reaches
+            // here has disabled Approve — and it has to be offered, since on
+            // one of those branches the review may never have been saved and
+            // "do not approve again" would strand the patient mid-approval.
+            // Offering it is safe on all of them: once a confirmation exists
+            // the review route answers 409 (and the payload seal refuses the
+            // resubmit that races it), and the claim transition has a single
+            // winner, so a second approval cannot produce a second send.
+            if (status === 'awaiting_confirmation') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'This request has not been carried out yet. If you need to ' +
+                'approve it again, reload this page first — a second ' +
+                'approval cannot send it twice.';
+              return;
+            }
+            if (status === 'expired') {
+              gateMsg.className = 'alert alert-warning';
+              gateMsg.textContent =
+                'This request expired before it was carried out, and it ' +
+                'cannot be approved now.';
               return;
             }
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
-            // Still unknown after four tries. Say that, and say what we will
-            // do about it. Do NOT invite a retry: the first one may have run.
+            // Still unknown after four tries. Say that, and point at the one
+            // thing that can still resolve it. This used to end "Please do
+            // not approve a second time", which is an instruction we cannot
+            // support: on the unreadable-answer path nothing may have been
+            // saved, and obeying it strands the patient mid-approval.
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent =
               'We still cannot tell whether your approval went through, so ' +
-              'we have not sent it again. Your care team will see this ' +
-              'request either way. Please do not approve a second time.';
+              'we have not sent it again. Reload this page to see where ' +
+              'this request stands.';
           })
           .catch(function () {
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
             gateMsg.className = 'alert alert-warning';
             gateMsg.textContent =
               'We still cannot tell whether your approval went through, so ' +
-              'we have not sent it again. Please do not approve a second time.';
+              'we have not sent it again. Reload this page to see where ' +
+              'this request stands.';
           });
       })();
     }
