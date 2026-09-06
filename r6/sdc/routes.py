@@ -26,12 +26,13 @@ import logging
 
 from flask import request, jsonify
 
-from r6.access import Profile, TenantSource, fhir_response, tenant_from_request
+from r6.access import (Profile, TenantSource, audit, fhir_response,
+                       tenant_from_request)
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
 from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
-from r6.sdc.extract import extract_resources
+from r6.sdc.extract import RAIL_ONLY_TYPES, extract_resources
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,22 @@ def register_sdc_routes(blueprint, deps):
                 "Questionnaire for the response could not be resolved"), 404
 
         bundle = extract_resources(qr, questionnaire)
+
+        if not dry_run and any(
+                e["resource"]["resourceType"] in RAIL_ONLY_TYPES
+                for e in bundle["entry"]):
+            # #572 part 2B2. Nothing on the human-gated path calls $extract,
+            # so commit mode here runs on a step-up token alone; a bundle
+            # carrying allergies, conditions or medications is refused rather
+            # than written on that, and rather than dropped silently after
+            # dryRun showed it. The form-fill rail commits those rows after
+            # the person confirms them.
+            return operation_outcome(
+                "error", "business-rule",
+                "This bundle carries clinical rows (allergies, conditions or "
+                "medications). The form-fill rail commits those after human "
+                "confirmation; $extract does not. Use dryRun=true to preview "
+                "them."), 422
 
         if not dry_run:
             # H4 posture (deliberate): $extract commits clinical resources as a
@@ -320,7 +337,7 @@ def _redacted_for_populate(resources):
 
 def _commit_bundle(bundle, tenant_id):
     from r6.models import db
-    for entry in bundle["entry"]:
+    for index, entry in enumerate(bundle["entry"]):
         resource = entry["resource"]
         row = R6Resource(
             resource_type=resource["resourceType"],
@@ -328,6 +345,15 @@ def _commit_bundle(bundle, tenant_id):
             tenant_id=tenant_id,
         )
         db.session.add(row)
+        db.session.flush()
+        # One audit row per written resource, in this transaction (#572 part
+        # 2B2): the bundle-level event the route records afterwards cannot
+        # say which rows landed. Type, id and entry index only; never the
+        # answer text.
+        audit(tenant=tenant_id, event_type="create",
+              resource_type=row.resource_type, resource_id=row.id,
+              agent_id=request.headers.get("X-Agent-Id"),
+              detail="extract; entry=%d" % index)
     db.session.commit()
 
 
