@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 from flask import Blueprint, Response, request
 
+from r6 import constant_time
 from r6.sdc.documents import get_document_pdf_bytes
 from r6.audit import record_audit_event
 
@@ -85,7 +86,7 @@ def verify_document_link(tenant_id, docref_id, exp, sig, *, now=None):
     except (TypeError, ValueError):
         return False, 'malformed'
     expected = _sign(tenant_id, docref_id, exp_int)
-    if not hmac.compare_digest(expected, sig):
+    if not constant_time.equal(sig, expected):
         return False, 'bad-signature'
     if int(now or time.time()) > exp_int:
         return False, 'expired'
