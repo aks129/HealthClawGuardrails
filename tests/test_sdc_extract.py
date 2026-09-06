@@ -1,3 +1,5 @@
+import json
+
 from r6.sdc.extract import extract_resources
 
 OBS_EXTRACT_URL = (
@@ -193,3 +195,44 @@ def test_a_definition_with_no_element_path_does_not_crash():
     bundle = extract_resources(_intake_like_response(), q)
     assert all(e["resource"]["resourceType"] == "Patient" for e in bundle["entry"])
 
+
+
+# ---------------------------------------------------------------------------
+# #572 part 2A: a response bound to a subject never yields a Patient entry.
+# Each committed form used to create a NEW Patient with a fresh uuid, so a
+# tenant accumulated a Patient per submission and every downstream check
+# lost its subject. The review page renders demographics read-only, so no
+# human-confirmed demographic change exists to write back; a subject-less
+# response still creates one, as it always did.
+# ---------------------------------------------------------------------------
+
+def _subject_bound(qr):
+    qr = json.loads(json.dumps(qr)) if isinstance(qr, dict) else qr
+    qr["subject"] = {"reference": "Patient/p-572"}
+    return qr
+
+
+def test_a_subject_bound_response_never_yields_a_patient():
+    """MUTATION: r6/sdc/extract.py, drop the subject check in
+    _extract_by_definition -> red (a Patient entry appears)."""
+    bundle = extract_resources(_subject_bound(_intake_like_response()),
+                               _intake_like_questionnaire())
+    types = [e["resource"]["resourceType"] for e in bundle["entry"]]
+    assert "Patient" not in types
+    assert "Synthetic" not in json.dumps(bundle)
+
+
+def test_submitting_the_same_bound_response_twice_yields_no_patient_either_time():
+    q = _intake_like_questionnaire()
+    for _ in range(2):
+        bundle = extract_resources(_subject_bound(_intake_like_response()), q)
+        assert all(e["resource"]["resourceType"] != "Patient" for e in bundle["entry"])
+
+
+def test_a_subject_less_response_still_posts_a_patient():
+    """MUTATION: drop the Patient build entirely -> red."""
+    bundle = extract_resources(_intake_like_response(), _intake_like_questionnaire())
+    patients = [e for e in bundle["entry"] if e["resource"]["resourceType"] == "Patient"]
+    assert len(patients) == 1
+    assert patients[0]["request"]["method"] == "POST"
+    assert patients[0]["resource"]["name"][0]["family"] == "Synthetic"
