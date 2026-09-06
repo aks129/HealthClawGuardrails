@@ -415,6 +415,132 @@ def test_post_confirming_real_allergy_succeeds(client, app, tenant_headers,
         assert _nka_answer(qr) is not True   # NKA never inferred
 
 
+def test_post_payload_is_final_before_the_confirmation_is_issued(
+        client, app, tenant_headers, auth_headers, monkeypatch):
+    """The confirmation is the human's signature over the payload; the
+    payload must not move after it is minted (human-gate spec §9 R2, #528).
+
+    Snapshot payload_json at the instant issue_confirmation() runs and
+    compare it with what is stored after the request. Before the fix the
+    review route appended reviewed_qr_id AFTER minting, so the two differed
+    and the ledger could not say what was approved."""
+    import r6.actions.review as review
+    from r6.actions import confirmations
+
+    tenant = tenant_headers['X-Tenant-Id']
+    _seed(app, tenant, [PATIENT, MED_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    seen = {}
+
+    def _snapshotting_issue(aid, approved_via, ttl_minutes):
+        seen['payload_json'] = db.session.get(ProposedAction, aid).payload_json
+        return confirmations.issue_confirmation(aid, approved_via, ttl_minutes)
+
+    monkeypatch.setattr(review, 'issue_confirmation', _snapshotting_issue)
+
+    resp = _post(client, auth_headers, action_id,
+                 {'med-0': 'yes', 'nka': 'true'})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        assert action.payload['reviewed_qr_id']           # hand-off kept
+        assert seen['payload_json'] == action.payload_json
+
+
+def test_second_submit_answers_409_instead_of_raising_the_seal(
+        client, app, tenant_headers, auth_headers, monkeypatch):
+    """A resubmitted review is refused, not crashed (#528 follow-on).
+
+    This route never transitions the action, so _load_form_fill_action keeps
+    accepting it after a successful submit — and the payload is sealed from
+    the moment the first submit mints a confirmation. Before the pre-check,
+    the second POST raised PayloadSealed out of the handler: a Werkzeug HTML
+    500, which action_review.html's `r.json()` rejects with no .catch, so the
+    patient's screen does not move and a double-tap is the ordinary way in.
+
+    Pins the refusal AND that the first review is left completely alone: one
+    confirmation, the original reviewed_qr_id, and no second (orphan)
+    QuestionnaireResponse row.
+
+    Also pins what the pre-check specifically buys over the except branch
+    that backs it: the doomed request is refused BEFORE _draft_qr re-reads
+    the patient's record out of FHIR. Without that assertion the pre-check is
+    unpinned — the except branch answers 409 either way and the rollback
+    hides the QuestionnaireResponse insert.
+    """
+    import r6.actions.review as review
+    from r6.models import R6Resource
+
+    tenant = tenant_headers['X-Tenant-Id']
+    _seed(app, tenant, [PATIENT, MED_A, ALLERGY_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    first = _post(client, auth_headers, action_id,
+                  {'med-0': 'yes', 'allergy-0': 'confirm'})
+    assert first.status_code == 200, first.get_data(as_text=True)
+    with app.app_context():
+        qr_id = db.session.get(ProposedAction, action_id).payload[
+            'reviewed_qr_id']
+        qr_count = R6Resource.query.filter_by(
+            resource_type='QuestionnaireResponse', tenant_id=tenant).count()
+
+    # Same action, DIFFERENT answers — the swap the seal exists to refuse.
+    # _draft_qr must not run: a request that cannot succeed does not re-read
+    # the record.
+    def _must_not_repopulate(*a, **kw):
+        raise AssertionError('re-read FHIR for an already-submitted review')
+
+    monkeypatch.setattr(review, '_draft_qr', _must_not_repopulate)
+    second = _post(client, auth_headers, action_id,
+                   {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
+    monkeypatch.undo()
+    assert second.status_code == 409, second.get_data(as_text=True)
+    assert 'already been submitted' in second.get_json()['error']
+
+    with app.app_context():
+        action = db.session.get(ProposedAction, action_id)
+        assert action.status == 'awaiting_confirmation'
+        assert action.payload['reviewed_qr_id'] == qr_id
+        assert ActionConfirmation.query.filter_by(
+            action_id=action_id).count() == 1
+        assert R6Resource.query.filter_by(
+            resource_type='QuestionnaireResponse',
+            tenant_id=tenant).count() == qr_count
+
+
+def test_second_submit_racing_the_precheck_answers_409_not_500(
+        client, app, tenant_headers, auth_headers, monkeypatch):
+    """The pre-check is not a lock. Two submits milliseconds apart both pass
+    it and the loser reaches the seal with the winner's confirmation already
+    committed. Neutralising the pre-check reproduces exactly that branch: it
+    must answer 409 too, not raise.
+
+    The validator does its own function-local import of has_confirmation, so
+    patching the name in this module reaches the route's pre-check only —
+    the seal itself still fires. That is the point of the test.
+    """
+    import r6.actions.review as review
+
+    tenant = tenant_headers['X-Tenant-Id']
+    _seed(app, tenant, [PATIENT, MED_A, ALLERGY_A])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    first = _post(client, auth_headers, action_id,
+                  {'med-0': 'yes', 'allergy-0': 'confirm'})
+    assert first.status_code == 200, first.get_data(as_text=True)
+
+    monkeypatch.setattr(review, 'has_confirmation', lambda _aid: False)
+    second = _post(client, auth_headers, action_id,
+                   {'med-0': 'no', 'allergy-0': 'remove', 'nka': 'true'})
+    assert second.status_code == 409, second.get_data(as_text=True)
+
+    with app.app_context():
+        assert ActionConfirmation.query.filter_by(
+            action_id=action_id).count() == 1
+
+
 def test_post_requires_step_up(client, app, tenant_headers, auth_headers):
     _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
