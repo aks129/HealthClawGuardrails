@@ -8,6 +8,10 @@ Pure function. Supports two SDC extraction mechanisms:
 Out of scope (v1): template-based and StructureMap-based extraction.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 OBSERVATION_EXTRACT_URL = (
     "http://hl7.org/fhir/uv/sdc/StructureDefinition/"
     "sdc-questionnaire-observationExtract"
@@ -79,6 +83,21 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
         path = definition.split("#", 1)[1]  # e.g. Patient.name.family
         item_answers = answers.get(item.get("linkId"), [])
         if not item_answers:
+            continue
+        # #572: a definition names its own resource type. This engine builds
+        # ONE target type, so an answer declared for another type (the intake
+        # form's allergen, AllergyIntolerance#AllergyIntolerance.code.text)
+        # must not be written into the target as if it were an element of
+        # it: that produced Patient.code.text holding an allergen name, an
+        # element Patient does not have and no validator catches. Until the
+        # engine builds those types too, the answer is dropped and the drop
+        # is said out loud, naming the item and the types, never the answer.
+        defined_type = path.split(".", 1)[0]
+        if defined_type != target_type:
+            logger.warning(
+                "extract: item %s not extracted: its definition targets %s "
+                "and this questionnaire extracts %s (#572)",
+                item.get("linkId"), defined_type, target_type)
             continue
         _value_key, value = _answer_value(item_answers[0])
         if value is None:
