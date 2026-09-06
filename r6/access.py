@@ -520,7 +520,8 @@ def has_grant(
     here are as they stood when it was written):
 
       r6/rate_limit.py:161      picks a bucket key, inside a try/except that
-                                must never fail a request
+                                must never fail a request (adopted, kernel
+                                slice 20; the try/except stayed at the site)
       r6/read_auth.py:77        one branch of a predicate that also accepts a
                                 session cookie and an OAuth bearer (adopted,
                                 kernel slice 19)

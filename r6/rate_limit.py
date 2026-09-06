@@ -13,9 +13,9 @@ import time
 from typing import Any
 from flask import g, request, jsonify, session
 from r6 import constant_time
+from r6.access import Scope, Tenant, TenantSource, has_grant
 from r6.read_auth import TENANT_SESSION_KEY
 from r6.runtime_config import resolve_app_env
-from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
 
@@ -150,19 +150,20 @@ def _tenant_claim_is_authenticated(tenant_id):
         return True
     if session.get(TENANT_SESSION_KEY) == tenant_id:
         return True
-    auth = (request.headers.get('Authorization') or '').strip()
-    bearer = auth[7:].strip() if auth.lower().startswith('bearer ') else ''
-    token = (request.headers.get('X-Step-Up-Token') or '').strip() or bearer
-    if not token:
-        return False
+    # Kernel slice 20: the last direct site that was a predicate. has_grant
+    # reads X-Step-Up-Token and then the bearer alias in the same order and
+    # with the same stripping, accepts read-scoped tokens (TENANT_BOUND), and
+    # answers None in exactly the cases require_grant would refuse. It does
+    # NOT catch a validator that raises (by design: an outage is not an
+    # authorization result), so the try/except stays here, at the one site
+    # that has a reason to survive it. The tenant is the raw X-Tenant-Id the
+    # caller claimed, exactly what the validator bound the token to before.
     try:
-        # Destructure BOTH values — a truthiness test on this tuple is always
-        # True and is a documented auth-bypass shape in this codebase.
-        valid, _error = validate_step_up_token(token, tenant_id,
-                                               require_scope=None)
+        return has_grant(scope=Scope.TENANT_BOUND,
+                         tenant=Tenant(id=tenant_id, source=TenantSource.HEADER),
+                         also_bearer=True) is not None
     except Exception:  # noqa: BLE001 — never fail a request from the limiter
         return False
-    return bool(valid)
 
 
 def rate_limit_key():

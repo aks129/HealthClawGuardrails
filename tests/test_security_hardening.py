@@ -330,6 +330,8 @@ def test_a_malformed_token_does_not_prove_the_tenant(app):
 
     MUTATION (pre-kernel shape): `return bool(valid)` -> `return True` ->
     red, while the proven-tenant test stays green. Executed 2026-09-06.
+    Kernel shape: `has_grant(...) is not None` -> `True` -> the same red.
+    Executed 2026-09-06.
     """
     from r6.rate_limit import rate_limit_key
     with app.test_request_context('/r6/actions/x', headers={
