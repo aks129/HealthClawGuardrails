@@ -89,6 +89,25 @@ def test_status_via_fields_rejected(app):
         assert ActionEvent.query.filter_by(action_id=aid).count() == 0
 
 
+def test_payload_json_via_fields_rejected(app):
+    # The #528 repro: the guarded UPDATE took everything but status straight
+    # from **fields, so the claim could swap the executable payload after the
+    # human approved it — and bulk UPDATE never reaches the model validator,
+    # so this is the only place that writer can be refused.
+    with app.app_context():
+        aid = _make('awaiting_confirmation')
+        before = db.session.get(ProposedAction, aid).payload_json
+        with pytest.raises(IllegalTransition):
+            transition_action(aid, from_states=('awaiting_confirmation',),
+                              to_state='executing', actor='agent',
+                              payload_json='{"body": "SWAPPED AFTER APPROVAL"}')
+        db.session.expire_all()
+        row = db.session.get(ProposedAction, aid)
+        assert row.payload_json == before
+        assert row.status == 'awaiting_confirmation'
+        assert ActionEvent.query.filter_by(action_id=aid).count() == 0
+
+
 def test_extra_criteria_blocks_transition(app):
     # extra_criteria predicates join the guarded UPDATE's WHERE, making the
     # claim stricter (e.g. the expiry check on commit/confirm claims). A

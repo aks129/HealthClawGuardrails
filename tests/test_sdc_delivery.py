@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs
 import pytest
 
 from r6.sdc.delivery import (
+    DEFAULT_TTL_SECONDS,
     build_document_link,
     verify_document_link,
     _sign,
@@ -223,3 +224,40 @@ def test_route_current_time_expiry(app, client):
 
     resp = client.get(path, query_string=query)
     assert resp.status_code == 200
+
+
+def test_the_default_link_lives_for_24_hours_not_a_week():
+    """Council ruling D10 cut this from 7 days.
+
+    The link is a bearer credential for a PDF of somebody's intake form —
+    the HMAC in the URL is the whole authorization, so anyone who ends up
+    holding the URL can open it for as long as it lives. The number is
+    asserted rather than the comment beside it, because a comment saying
+    "24 hours" over `7 * 24 * 3600` is exactly the drift this repo keeps
+    finding.
+
+    MUTATION: put 7 * 24 * 3600 back -> red.
+    """
+    assert DEFAULT_TTL_SECONDS == 24 * 3600
+
+
+def test_a_default_link_is_dead_a_day_and_a_second_later():
+    """The TTL as the route enforces it, not as the constant declares it.
+
+    A constant nothing reads would pass the test above forever. This drives
+    build_document_link with no explicit ttl and checks the boundary either
+    side of it, so the default has to actually reach the signature.
+    """
+    minted_at = 1_000_000
+    link = build_document_link('test-tenant', 'doc-1', now=minted_at)
+    exp = int(_route_path_and_query(link)[1]['exp'])
+    assert exp == minted_at + 24 * 3600
+
+    ok, _ = verify_document_link('test-tenant', 'doc-1', exp,
+                                 _sign('test-tenant', 'doc-1', exp),
+                                 now=exp - 1)
+    assert ok
+    expired, reason = verify_document_link('test-tenant', 'doc-1', exp,
+                                           _sign('test-tenant', 'doc-1', exp),
+                                           now=exp + 1)
+    assert not expired and reason == 'expired'

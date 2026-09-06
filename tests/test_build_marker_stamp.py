@@ -323,7 +323,10 @@ def test_a_current_build_is_counted_as_a_real_check():
     # asserts the script counts an asserted build as a real check rather
     # than inflating the total — so it moves by exactly one here and the
     # property is unchanged.
-    assert code == 0 and "all 12 checks passing" in out
+    # MOVED PIN 12 -> 14 (#537): the CareAgents checks moved to the origin
+    # users reach, the Railway host kept its readiness check under its own
+    # name, and the Telegram surface gained a check. Two more, both real.
+    assert code == 0 and "all 14 checks passing" in out
 
 
 def test_an_unasserted_build_never_inflates_the_count():
@@ -333,9 +336,11 @@ def test_an_unasserted_build_never_inflates_the_count():
     # MOVED PIN 10 -> 11, same reason as above: one new check, and the gap
     # between this number and the one above is still exactly one, which is
     # the property being pinned.
+    # MOVED PIN 11 -> 13 (#537), same two checks as above; the gap is still
+    # exactly one.
     code, out = _prod_watch_with({**HEALTHY, "build": "4f2a91cbeef1",
                                   "built_at": 1754056800}, [])
-    assert code == 0 and "all 11 checks passing" in out
+    assert code == 0 and "all 13 checks passing" in out
 
 
 class _Refused:
@@ -360,7 +365,9 @@ def test_a_demo_server_that_stops_serving_keyless_callers_is_an_outage():
                                  demo_handshake=_Refused())
     assert code == 1, "a demo server refusing keyless callers must be an outage"
     assert "serves an unauthenticated handshake" in out
-    assert "all 12 checks passing" not in out
+    # The current total, or the assertion is vacuous: a number the script no
+    # longer prints is trivially absent.
+    assert "all 14 checks passing" not in out
 
 
 @pytest.mark.parametrize("supplied", ["", ",", " ", ",,"])
