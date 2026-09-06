@@ -150,6 +150,11 @@ ROWS = [
         body={'fixes': [{'field_path': 'Condition.code.coding[0].code',
                          'new_value': 'E11.9'}]},
         headers=_HUMAN_CONFIRMED),
+    # Kernel slice 7c. The tenant travels in the body; the token may too, but
+    # the census sends it in the header, which the kernel reads first.
+    Row('internal-bind-telegram', 'r6/routes.py:bind_telegram_chat',
+        'POST', '/r6/fhir/internal/bind-telegram', 401,
+        body={'tenant_id': 'test-tenant', 'chat_id': 4242}),
 ]
 
 

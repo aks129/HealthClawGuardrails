@@ -37,8 +37,8 @@ from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
-from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       public_step_up_reason, tenant_from_request)
+from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
+                       require_grant, tenant_from_request)
 from r6.stepup import validate_step_up_token, generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -2168,8 +2168,6 @@ def bind_telegram_chat():
     tenant_id = (body.get('tenant_id') or '').strip()
     chat_id_raw = body.get('chat_id')
     username = (body.get('username') or '').strip() or None
-    token = (body.get('step_up_token')
-             or request.headers.get('X-Step-Up-Token', '')).strip()
 
     if not tenant_id or chat_id_raw is None:
         return jsonify({'error': 'tenant_id and chat_id are required'}), 400
@@ -2180,12 +2178,13 @@ def bind_telegram_chat():
     if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
         return jsonify({'error': 'invalid tenant_id format'}), 400
 
-    from r6.stepup import validate_step_up_token
-    if not token:
-        return jsonify({'error': 'valid step-up token required'}), 401
-    valid, err = validate_step_up_token(token, tenant_id)
-    if not valid:
-        return jsonify({'error': public_step_up_reason(err)}), 401
+    # Kernel slice 7c: the body tenant (validated above, as the matrix row
+    # says) is bound to the grant; the token may come from body or header.
+    # The refusal is now an OperationOutcome; no caller reads that body.
+    require_grant(scope=Scope.WRITE,
+                  tenant=Tenant(id=tenant_id, source=TenantSource.BODY),
+                  also_body_field='step_up_token',
+                  absent_status=401, rejected_status=401)
 
     from r6.telegram_push import bind as bind_chat
     try:
