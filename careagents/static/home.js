@@ -623,4 +623,23 @@
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
   });
+  // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
+  // HealthClaw is asked first; the card changes only on its yes, and a
+  // failure is announced on the card's live region, never assumed away.
+  document.querySelectorAll(".grant-revoke").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".grant-card");
+      const msg = card && card.querySelector(".grant-msg");
+      btn.disabled = true;
+      const res = await post(`/api/grants/${btn.dataset.grant}/revoke`, {});
+      if (res.ok && res.d.revoked) {
+        btn.remove();
+        const status = card && card.querySelector(".status");
+        if (status) { status.textContent = "revoked"; status.className = "status status-revoked"; }
+      } else {
+        btn.disabled = false;
+        if (msg) announce(msg, res.d.message || res.d.error || "That didn't work.");
+      }
+    });
+  });
 })();

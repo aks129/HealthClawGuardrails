@@ -76,6 +76,23 @@
       </div>
       {% endfor %}
     </div>
+    {% if grants %}
+    <h3 class="add-heading">Shared with other apps</h3>
+    <div class="card-grid" id="grants">
+      {% for g in grants %}
+      <div class="hub-card grant-card" data-grant="{{ g.id }}">
+        <div class="hub-card-name">{{ g.client_name }}</div>
+        <div class="hub-card-sub">reads {{ g.tenant_label or 'one connection' }} through HealthClaw</div>
+        <span class="status status-{{ g.status }}">{{ g.status }}</span>
+        {% if g.status != 'revoked' %}
+        <button type="button" class="grant-revoke" data-grant="{{ g.id }}"
+                title="Stop this app reading your records">Revoke</button>
+        {% endif %}
+        <span class="grant-msg" role="status" aria-live="polite" hidden></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     <h3 class="add-heading">Connect records</h3>
     <div class="marketplace" id="marketplace">
       {% for m in catalog %}

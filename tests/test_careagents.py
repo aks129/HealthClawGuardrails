@@ -1912,6 +1912,28 @@ class FakeClient:
         # `len(fake.purged)` depended on which tests ran before it.
         self.purged: list[str] = []
 
+        # Consent handoff (spec §13.3, §13.4): the parked request HealthClaw
+        # would answer for any request id, the ids asked about, the consents
+        # revoked, and a knob that makes the revoke fail the way a gateway
+        # 5xx would.
+        self.parked = {"request_id": "req-1", "client_id": "cid-claude",
+                       "client_name": "Claude",
+                       "scopes": ["fhir.read", "context.read"],
+                       "exp": 4102444800}
+        self.consent_requests: list[str] = []
+        self.revoked: list[str] = []
+        self.revoke_fails = False
+
+    def consent_request(self, request_id):
+        self.consent_requests.append(request_id)
+        return dict(self.parked) if self.parked else None
+
+    def revoke_consent(self, consent_id):
+        if self.revoke_fails:
+            raise HealthClawError("consent revoke failed (502)", 502)
+        self.revoked.append(consent_id)
+        return True
+
     @staticmethod
     def conversation_id(agent_id):
         return f"careagents:{agent_id}"

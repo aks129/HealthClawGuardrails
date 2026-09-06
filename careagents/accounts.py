@@ -25,7 +25,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-from careagents.models import (Account, Agent, Connection, EmailToken, Passkey,
+from careagents.models import (Account, Agent, Connection, EmailToken, Grant, Passkey,
                                Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
@@ -234,15 +234,20 @@ class AccountService:
 
     # --- WebAuthn: authentication -------------------------------------------
 
-    def authentication_options(self) -> tuple[dict, str]:
+    def authentication_options(self, require_uv: bool = False) -> tuple[dict, str]:
+        """`require_uv` asks the authenticator for user verification (face,
+        fingerprint, PIN) rather than mere presence: the consent step wants
+        the person, not the device."""
         opts = webauthn.generate_authentication_options(
             rp_id=self.cfg.rp_id,
-            user_verification=UserVerificationRequirement.PREFERRED)
+            user_verification=(UserVerificationRequirement.REQUIRED if require_uv
+                               else UserVerificationRequirement.PREFERRED))
         return (_opts_to_dict(webauthn.options_to_json(opts)),
                 bytes_to_base64url(opts.challenge))
 
     def finish_authentication(self, credential: dict,
-                              expected_challenge: str) -> Account:
+                              expected_challenge: str,
+                              require_uv: bool = False) -> Account:
         raw_id = base64url_to_bytes(credential["rawId"])
         with self.session() as s:
             pk = s.query(Passkey).filter_by(credential_id=raw_id).first()
@@ -255,6 +260,7 @@ class AccountService:
                 expected_origin=self.cfg.origin,
                 credential_public_key=pk.public_key,
                 credential_current_sign_count=pk.sign_count,
+                require_user_verification=require_uv,
             )
             pk.sign_count = verification.new_sign_count
             acct = s.get(Account, pk.account_id)
@@ -346,7 +352,55 @@ class AccountService:
             for agent in s.query(Agent).filter_by(connection_id=conn_id).all():
                 s.query(Surface).filter_by(agent_id=agent.id).delete()
                 s.delete(agent)
+            # A grant outlives its connection as a record of what was shared
+            # and whether it was taken back; detach it rather than lose it
+            # (and rather than let the foreign key refuse the delete on
+            # Postgres, which SQLite would never have shown).
+            for g in s.query(Grant).filter_by(connection_id=conn_id).all():
+                g.connection_id = None
             s.delete(c)
+            return True
+
+    # --- grants: consents given to third-party agents (spec §13.4) ---------
+
+    def add_grant(self, account_id: str, connection_id: str | None,
+                  tenant_id: str, client_id: str, client_name: str,
+                  scopes: str, consent_id: str) -> str:
+        with self.session() as s:
+            g = Grant(account_id=account_id, connection_id=connection_id,
+                      tenant_id=tenant_id, client_id=client_id[:64],
+                      client_name=(client_name or "An agent")[:120],
+                      scopes=scopes[:255], consent_id=consent_id)
+            s.add(g)
+            s.flush()
+            return g.id
+
+    def list_grants(self, account_id: str) -> list[dict]:
+        with self.session() as s:
+            rows = (s.query(Grant).filter_by(account_id=account_id)
+                    .order_by(Grant.granted_at.desc()).all())
+            return [_grant_dict(g) for g in rows]
+
+    def grants_for_connection(self, account_id: str, conn_id: str,
+                              active_only: bool = True) -> list[dict]:
+        with self.session() as s:
+            q = s.query(Grant).filter_by(account_id=account_id, connection_id=conn_id)
+            if active_only:
+                q = q.filter(Grant.revoked_at.is_(None))
+            return [_grant_dict(g) for g in q.all()]
+
+    def get_grant(self, account_id: str, grant_id: str) -> dict | None:
+        with self.session() as s:
+            g = s.query(Grant).filter_by(id=grant_id, account_id=account_id).first()
+            return _grant_dict(g) if g else None
+
+    def mark_grant_revoked(self, account_id: str, grant_id: str) -> bool:
+        with self.session() as s:
+            g = s.query(Grant).filter_by(id=grant_id, account_id=account_id).first()
+            if g is None:
+                return False
+            if g.revoked_at is None:
+                g.revoked_at = now()
             return True
 
     def get_connection(self, account_id: str, conn_id: str) -> dict | None:
@@ -488,6 +542,15 @@ def _conn_dict(c: Connection) -> dict:
             "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count,
             "last_uncounted": c.last_uncounted}
+
+
+def _grant_dict(g: Grant) -> dict:
+    return {"id": g.id, "connection_id": g.connection_id,
+            "tenant_id": g.tenant_id, "client_id": g.client_id,
+            "client_name": g.client_name, "scopes": g.scopes,
+            "consent_id": g.consent_id, "granted_at": g.granted_at,
+            "revoked_at": g.revoked_at,
+            "status": "revoked" if g.revoked_at else "active"}
 
 
 def _agent_dict(a: Agent) -> dict:

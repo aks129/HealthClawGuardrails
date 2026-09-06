@@ -253,6 +253,31 @@ class HealthClawClient:
         return {"X-Internal-Secret": self.mint_secret,
                 "X-Agent-Id": "careagents-worker"}
 
+    # --- consent handoff (spec §13.3, §13.4) ---------------------------------
+
+    def consent_request(self, request_id: str) -> dict | None:
+        """Who is asking, and for what: the parked authorization request.
+        None when HealthClaw no longer holds it (expired or already decided)."""
+        r = self._send("GET", f"{self.fhir}/oauth/consent/{request_id}",
+                       headers=self._internal_headers(), what="consent request")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise HealthClawError(
+                f"consent request failed ({r.status_code})", r.status_code)
+        return self._json_object(r, "consent request")
+
+    def revoke_consent(self, consent_id: str) -> bool:
+        """Take a consent back at HealthClaw: every token under it dies.
+        404 is already-gone, which is the state we wanted. Anything else
+        raises, and the caller must not claim the revocation happened."""
+        r = self._send("POST", f"{self.fhir}/oauth/consent/{consent_id}/revoke",
+                       headers=self._internal_headers(), what="consent revoke")
+        if r.status_code in (200, 404):
+            return True
+        raise HealthClawError(
+            f"consent revoke failed ({r.status_code})", r.status_code)
+
     # --- reads (redacted + audited by the layer) -----------------------------
 
     def search(self, tenant: str, resource_type: str,

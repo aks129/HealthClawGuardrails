@@ -338,6 +338,7 @@ h1 em { font-style: italic; color: var(--clay); }
   font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   padding: 4px 9px; border-radius: 999px; }
 .status-active { background: #EAF1EA; color: var(--sage); }
+.status-revoked { background: #F1ECEC; color: #7A4A4A; }
 .status-pending { background: #FBEFD9; color: #A97516; }
 .status-error { background: #FBE4DC; color: var(--clay-deep); }
 .empty { color: var(--ink-soft); font-size: 14px; padding: 8px 2px; }
@@ -601,3 +602,18 @@ textarea:focus-visible {
       person reads when something has just gone wrong, and the last place to
       set 14px. */
 .form-error, .form-ok, .form-warn { font-size: 16px; }
+
+/* --- consent page (a third-party agent asks to read one connection) --- */
+.consent-h2 { font-size: 15px; letter-spacing: .02em; text-transform: uppercase;
+  margin: 26px 0 8px; opacity: .75; }
+.consent-scopes { margin: 0; padding-left: 20px; }
+.consent-scopes li { margin: 6px 0; }
+.consent-choices { display: grid; gap: 10px; }
+.consent-choice { display: grid; grid-template-columns: auto 1fr; column-gap: 10px;
+  align-items: center; padding: 12px 14px; border: 1px solid rgba(0,0,0,.12);
+  border-radius: 10px; cursor: pointer; }
+.consent-choice input { margin: 0; grid-row: span 2; }
+.consent-choice-name { font-weight: 600; }
+.consent-choice-sub { font-size: 13px; opacity: .7; }
+.grant-revoke { margin-top: 8px; }
+.grant-msg { display: block; font-size: 13px; margin-top: 6px; }
