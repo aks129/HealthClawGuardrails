@@ -17,6 +17,8 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.orm import validates
+
 from models import db
 
 PROPOSAL_TTL_MINUTES = 30
@@ -44,6 +46,11 @@ _TRANSITIONS = {
 def _utcnow():
     # Stored naive-UTC; columns aren't timezone-aware, so this matches what other models' aware defaults become after DB round-trip.
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class PayloadSealed(RuntimeError):
+    """A write to payload_json after a confirmation exists for the action.
+    Same idiom as the AuditEvent immutability listeners in r6/models.py."""
 
 
 class ProposedAction(db.Model):
@@ -87,6 +94,23 @@ class ProposedAction(db.Model):
 
     def is_expired(self):
         return _utcnow() >= self.expires_at
+
+    @validates('payload_json')
+    def _seal_payload_once_confirmed(self, key, value):
+        """The confirmation is the human's signature over the payload they
+        saw; once one exists the payload is what was approved, and any write
+        to it means the ledger cannot say what was (human-gate spec §9 R2,
+        #528). Fires on every ORM assignment, including __init__ — a new row
+        has no id, so no confirmation, so construction passes. Bulk
+        Query.update() never reaches a validator; transition_action() refuses
+        payload_json in **fields for that writer."""
+        # Local import: confirmations.py imports _utcnow from this module.
+        from r6.actions.confirmations import has_confirmation
+        if self.id is not None and has_confirmation(self.id):
+            raise PayloadSealed(
+                'payload_json is sealed: a confirmation exists for action %s'
+                % self.id)
+        return value
 
     @property
     def payload(self):

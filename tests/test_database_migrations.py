@@ -366,6 +366,51 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
     assert upgrade_database(engine) == "0007_agent_worker_presence"
 
 
+def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
+    """A database built by an older ``db.create_all()`` has fewer tables than
+    the v1.8.0 baseline (found live: a dev SQLite file with 11 tables). It
+    lacks ``proposed_actions`` and ``audit_events.outcome_detail_code``, and
+    an interrupted earlier run left an EMPTY ``alembic_version`` behind.
+    Stamping it at 0001 as-is made 0002 die with NoSuchTableError on
+    ``proposed_actions``. upgrade_database() must reach head with every
+    baseline table present."""
+    from r6.database_migrations import upgrade_database
+
+    url = f"sqlite:///{tmp_path / 'pre-v1-8.db'}"
+    command.upgrade(_config(url), BASELINE_REVISION)
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        for table in (
+            "action_confirmations", "action_events", "proposed_actions",
+            "smbp_sessions",
+        ):
+            connection.execute(text(f"DROP TABLE {table}"))
+        connection.execute(text("DELETE FROM alembic_version"))
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == {
+        "alembic_version", "r6_resources", "audit_events",
+        "context_envelopes", "context_items", "fasten_connections",
+        "fasten_jobs", "cc_agent_tasks", "cc_conversation_messages",
+        "telegram_bindings", "wearable_connections",
+    }
+    assert "outcome_detail_code" not in {
+        column["name"] for column in inspector.get_columns("audit_events")
+    }
+
+    revision = upgrade_database(engine)
+
+    assert revision == "0007_agent_worker_presence"
+    inspector = inspect(engine)
+    assert {
+        "action_confirmations", "action_events", "proposed_actions",
+        "smbp_sessions",
+    } <= set(inspector.get_table_names())
+    assert "outcome_detail_code" in {
+        column["name"] for column in inspector.get_columns("audit_events")
+    }
+    engine.dispose()
+
+
 def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
     """A pre-W0 SQLite deployment (docker-compose default) has r6_resources
     with an UNNAMED single-column primary key, VARCHAR(64) id, and nullable
@@ -381,8 +426,8 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
     engine = create_engine(url)
     # Realistic legacy state: the complete schema the old boot path built,
     # with r6_resources swapped for its pre-W0 shape (single unnamed PK,
-    # 64-char id, nullable tenant). A DB missing whole tables is older than
-    # any supported deployment — 0002 fails loud there by design.
+    # 64-char id, nullable tenant). A DB missing whole baseline tables is
+    # covered by test_pre_v1_8_database_missing_baseline_tables_is_adopted.
     db.metadata.create_all(engine)
     with engine.begin() as c:
         c.execute(text("DROP TABLE r6_resources"))

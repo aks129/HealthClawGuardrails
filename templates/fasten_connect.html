@@ -262,15 +262,19 @@
       back to HealthClaw, which registers it against tenant
       <strong>{{ tenant_id }}</strong>. From then on, every record export from
       Fasten arrives at <code style="color:var(--cyan);font-family:var(--font-mono);font-size:12px">/fasten/webhook</code>,
-      gets ingested, scanned by Curatr for data-quality issues, and emits a
-      Telegram notification (if the chat is bound via <code>/start</code>).
+      gets ingested, and is scanned by Curatr for data-quality issues.
     </p>
     <div class="next-steps">
-      When you see the Telegram ping, try:<br>
-      &nbsp;&nbsp;<code>/summary</code> — high-level review<br>
-      &nbsp;&nbsp;<code>/conditions</code> — list with redacted IDs<br>
-      &nbsp;&nbsp;<code>/curatr</code> — data-quality findings<br>
-      &nbsp;&nbsp;<code>/dashboard</code> — visual review surface
+      Nothing notifies you when records land, so there is no message to wait
+      for. What to expect on this page instead:<br>
+      &nbsp;&nbsp;<strong>Within a minute or two</strong> — the connection is
+      verified and your assistant setup appears in Step 1, under the Share
+      Records button.<br>
+      &nbsp;&nbsp;<strong>5–45 minutes</strong> — records keep arriving in the
+      background.<br>
+      &nbsp;&nbsp;<strong>Nothing appears</strong> — email
+      <a href="mailto:support@healthclaw.io" style="color:var(--cyan)">support@healthclaw.io</a>
+      with your tenant id and we will check the connection.
     </div>
   </div>
 </div>
@@ -319,7 +323,7 @@
       });
       showStatus(
         resp.ok
-          ? 'Connection registered. Records will stream in over the next 5–45 minutes. Check Telegram for a ping when they land.'
+          ? 'Connection registered. Records will stream in over the next 5–45 minutes. Nothing will notify you when they land.'
           : 'Connection registration failed (HTTP ' + resp.status + ').',
         resp.ok ? 'success' : 'error'
       );

@@ -1,14 +1,40 @@
 #!/usr/bin/env bash
-# Deploy CareAgents to the careagents.cloud VPS.
+# RETIRED — this is not how CareAgents is deployed. It refuses to run.
 #
-#   ./deploy/careagents/deploy.sh [user@host]      # default root@187.77.4.50
+# It deployed CareAgents to the careagents.cloud VPS (187.77.4.50). That host
+# is no longer in front of any user: careagents.cloud is served by Railway,
+# careagents.cloud/healthz and careagents-production.up.railway.app/healthz
+# report the same build, and scripts/prod_watch.py watches only the Railway
+# name (#289). #264 (2026-08-02) called for exactly this — finish the DNS
+# cutover, keep one origin, retire this path — because two origins over one
+# account store break passkeys, which are bound to the origin they were
+# enrolled against. The cutover happened; the issue is still open.
 #
-# Idempotent: rsyncs the careagents package, (re)builds the venv, installs the
-# systemd unit, swaps nginx's `location /` from the static stub to the app
-# (leaving /gateway/, /telegram/, /hermes/, /health untouched), and restarts.
-# Secrets are NOT shipped by this script — /etc/careagents/careagents.env is
-# created once on the host (template printed if missing).
+# The live path is a staged `railway up` for the web and worker services:
+# docs/runbooks/careagents-durable-worker.md (## Railway).
+#
+# Kept rather than deleted so the retired path can still be read, and refusing
+# rather than warning because what it would do is the failure it was last
+# changed to catch: ship to a second origin that no monitor checks. Measured
+# 2026-09-04, that host is still serving CareAgents on its old vhost
+# (`curl --resolve careagents.cloud:443:187.77.4.50 https://careagents.cloud/healthz`)
+# and answers without `build`, `built_at` or `run_workers` — code from before
+# #257 and #258. Shutting it down is an owner action, not this script's.
+#
+# Everything below the refusal is the deploy as it last ran, on 2026-08-02.
 set -euo pipefail
+
+cat >&2 <<'RETIRED'
+deploy.sh is retired and did nothing.
+
+careagents.cloud is served by Railway. This script deploys to the VPS at
+187.77.4.50, which no user reaches and no monitor checks, against the same
+account store — a passkey enrolled there works on neither origin (#264).
+
+Deploy CareAgents with the staged `railway up` for BOTH services, per
+docs/runbooks/careagents-durable-worker.md (## Railway).
+RETIRED
+exit 1
 
 HOST="${1:-root@187.77.4.50}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

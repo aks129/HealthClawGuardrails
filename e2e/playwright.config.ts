@@ -16,6 +16,22 @@ export const CARE_BASE_URL = `http://localhost:${CARE_PORT}`;
 export const CARE_LOG = '/tmp/e2e-careagents.log';
 const CARE_DB = '/tmp/e2e-careagents.db';
 
+// A THIRD app: the same CareAgents code with CARE_REAL_RECORDS=allowlist
+// (#553, council ruling 2026-09-02 D3). The switch is read once, at
+// create_app(), so one process can only ever be in one mode — proving in a
+// browser that an allowlisted account sees different tiles from a stranger
+// needs its own server, its own SQLite and its own log.
+export const CARE_ALLOW_PORT = process.env.CARE_ALLOW_E2E_PORT || '5102';
+export const CARE_ALLOW_BASE_URL = `http://localhost:${CARE_ALLOW_PORT}`;
+export const CARE_ALLOW_LOG = '/tmp/e2e-careagents-allow.log';
+const CARE_ALLOW_DB = '/tmp/e2e-careagents-allow.db';
+// Fixed, and synthetic. The allowlist is server env, so the address the spec
+// signs in with has to be known before the server boots — it cannot be the
+// per-test unique address the other specs use. `.test` is reserved (RFC 2606)
+// and can never be a real mailbox; nothing is ever sent anyway (the dev mail
+// stub logs to stderr).
+export const CARE_ALLOW_EMAIL = 'e2e-allowlisted@example.test';
+
 export default defineConfig({
   testDir: './tests',
   // Serial execution — shared SQLite instance, tests create resources
@@ -98,6 +114,44 @@ export default defineConfig({
         // Explicitly blank so a developer shell with a real Resend key still
         // gets the stderr mail stub — codes must never leave the machine.
         RESEND_API_KEY: '',
+        // The beta's real-record switch, pinned CLOSED for this server (#553,
+        // D3). Blank resolves to `off` exactly as unset does; the *unset*
+        // default is pinned by pytest (test_careagents.py::
+        // test_real_records_switch_defaults_to_off_and_parses_the_allowlist),
+        // and pinning it here stops a developer shell that exports
+        // CARE_REAL_RECORDS=on from quietly running the browser suite against
+        // the open path while its name still says closed.
+        CARE_REAL_RECORDS: '',
+        CARE_REAL_RECORDS_ALLOWLIST: '',
+      },
+    },
+    {
+      // CareAgents again, in allowlist mode — see CARE_ALLOW_* above.
+      command:
+        `rm -f ${CARE_ALLOW_DB} ${CARE_ALLOW_LOG} && cd .. && ` +
+        `uv run flask --app careagents.wsgi run --port ${CARE_ALLOW_PORT} ` +
+        `2>> ${CARE_ALLOW_LOG}`,
+      url: `${CARE_ALLOW_BASE_URL}/`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+      env: {
+        CARE_ENV: 'development',
+        CARE_DATABASE_URL: `sqlite:///${CARE_ALLOW_DB}`,
+        // Dead port, for the same reason as the entry above.
+        HEALTHCLAW_BASE: 'http://127.0.0.1:9',
+        CARE_ORIGIN: CARE_ALLOW_BASE_URL,
+        CARE_RP_ID: 'localhost',
+        RESEND_API_KEY: '',
+        CARE_REAL_RECORDS: 'allowlist',
+        CARE_REAL_RECORDS_ALLOWLIST: CARE_ALLOW_EMAIL,
+        // Fasten key present and the wearables sidecar declared wired, so the
+        // ONLY thing between an account and a live real-record tile here is
+        // the allowlist. Without these two, `catalog()` would answer "soon"
+        // for its own reasons ("not configured on this deployment") and the
+        // allowlist test would pass while proving nothing. The key is never
+        // used: nothing in the spec starts a Fasten flow.
+        FASTEN_PUBLIC_KEY: 'e2e-not-a-real-fasten-key',
+        CARE_WEARABLES_ENABLED: '1',
       },
     },
   ],

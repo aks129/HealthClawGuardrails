@@ -16,6 +16,8 @@ import logging
 import os
 import time
 
+from r6 import constant_time
+
 logger = logging.getLogger(__name__)
 
 _REPLAY_TOLERANCE_SECONDS = 300  # reject webhooks older than 5 minutes
@@ -82,7 +84,7 @@ def verify_webhook(headers: dict, raw_body: bytes) -> bool:
     for sig_entry in msg_signature.split(' '):
         parts = sig_entry.split(',', 1)
         if len(parts) == 2 and parts[0] == 'v1':
-            if hmac.compare_digest(parts[1], computed):
+            if constant_time.equal(parts[1], computed):
                 return True
 
     logger.warning('Fasten webhook: signature mismatch')
