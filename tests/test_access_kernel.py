@@ -731,7 +731,9 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 #: adopted by nothing, exactly as the kernel itself landed. A migration slice
 #: adds its site here in the same PR that writes it — adoption is a reviewable
 #: list, not a thing that happens quietly.
-_HAS_GRANT_CALLSITES: frozenset[str] = frozenset()
+#: Kernel slice 16: r6/agent_runs/routes.py:_tenant_authorized, the
+#: session-or-token predicate. Its answer is returned, never discarded.
+_HAS_GRANT_CALLSITES: frozenset[str] = frozenset({'r6/agent_runs/routes.py:62'})
 
 
 def _has_grant_calls():
@@ -751,7 +753,7 @@ def _has_grant_calls():
                        node.lineno in discarded)
 
 
-def test_has_grant_is_adopted_by_nothing_yet():
+def test_has_grant_is_adopted_only_where_listed():
     """MUTATION: call has_grant from any production module -> red."""
     sites = sorted(site for site, _ in _has_grant_calls())
     unexpected = [s for s in sites if s not in _HAS_GRANT_CALLSITES]
@@ -1435,7 +1437,10 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # these functions owns its own transaction, and the
                      # kernel's audit() only keeps its promise when it flushes
                      # inside the transaction it is evidence for.
-                     'r6/agent_runs/service.py'}
+                     'r6/agent_runs/service.py',
+                     # Kernel slice 16: the session-or-token predicate
+                     # asks has_grant; its four JSON 401s are unchanged.
+                     'r6/agent_runs/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
