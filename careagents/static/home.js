@@ -428,8 +428,12 @@
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         btn.disabled = false;
-        // Say plainly that nothing was deleted — never imply a partial wipe.
-        msg.textContent = d.message || "Your records were not deleted.";
+        // Never imply a partial wipe — and never assert a whole one either
+        // way. This fallback said "Your records were not deleted", which the
+        // server itself can no longer say: a purge that ran and lost its
+        // answer reaches here too.
+        msg.textContent = d.message ||
+          "We couldn't confirm your records were deleted.";
         return;
       }
       location.reload();
