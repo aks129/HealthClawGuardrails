@@ -294,6 +294,10 @@ def _mint_oauth_token(tenant_id, scopes):
         'client_id': 'test-client',
         'scopes': scopes,
         'tenant_id': tenant_id,
+        # RFC 8707: a read bearer is a credential here only when it was
+        # minted for this FHIR surface (tests/test_oauth_as_conformance.py
+        # holds the refusals for every other audience).
+        'aud': 'http://localhost/r6/fhir',
         'exp': time.time() + 3600,
     }
     return tok

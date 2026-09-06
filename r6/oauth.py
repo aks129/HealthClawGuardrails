@@ -21,16 +21,138 @@ import secrets
 import time
 import uuid
 from functools import wraps
-from flask import request, jsonify
+from urllib.parse import urlencode, urlsplit
+from flask import request, jsonify, redirect
 from r6.runtime_config import resolve_app_env
 from r6.runtime_config import read_auth_enabled
+from r6.constant_time import equal as constant_time_equal
 
 logger = logging.getLogger(__name__)
 
 # Configuration
-OAUTH_ISSUER = os.environ.get('OAUTH_ISSUER', '')
 OAUTH_SECRET = os.environ.get('OAUTH_SECRET', os.environ.get('STEP_UP_SECRET', ''))
 TOKEN_TTL_SECONDS = int(os.environ.get('OAUTH_TOKEN_TTL', '3600'))
+#: A registered client lives this long; `client_secret_expires_at` says so.
+CLIENT_TTL_SECONDS = 30 * 24 * 3600
+#: RFC 7591 methods a client may register with. `none` is a public client:
+#: no secret is issued and `client_id` is required at the token endpoint.
+CLIENT_AUTH_METHODS = ('none', 'client_secret_post', 'client_secret_basic')
+#: Loopback hosts whose redirect URIs match on any port (RFC 8252 §7.3).
+#: Native clients such as Claude Code listen on an ephemeral port.
+_LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
+
+
+def issuer():
+    """The issuer identifier (RFC 8414). `OAUTH_ISSUER` when set, else the
+    request's own root. Read per call: the tests set the variable after import,
+    and a deployment sets it without a code change."""
+    configured = os.environ.get('OAUTH_ISSUER', '').strip().rstrip('/')
+    return configured or request.host_url.rstrip('/')
+
+
+def fhir_resource():
+    """RFC 8707 identifier of the FHIR surface this issuer fronts. A token
+    minted for it carries it as `aud`; `r6.read_auth` accepts nothing else."""
+    return f'{issuer()}/r6/fhir'
+
+
+def resource_policies():
+    """Every audience this server will mint for, and how a browser-initiated
+    authorize binds its tenant for that audience (spec §3.5.1, P2-b).
+
+    `header`: today's behaviour, the `X-Tenant-Id` header behind the
+    public-tenant guard. `demo`: `MCP_OAUTH_DEMO_TENANT`, and the header is
+    ignored, because a browser flow has no trusted place to put a tenant.
+    The map is explicit; an audience not in it is `invalid_target`, never
+    recorded as sent.
+    """
+    policies = {fhir_resource(): 'header'}
+    mcp = os.environ.get('MCP_CANONICAL_RESOURCE', '').strip()
+    if mcp:
+        policies[mcp] = 'demo'
+    return policies
+
+
+def _loopback_form(uri):
+    """The port-stripped form of a plain-http loopback URI, else None."""
+    parts = urlsplit(uri)
+    if parts.scheme == 'http' and (parts.hostname or '') in _LOOPBACK_HOSTS:
+        return parts._replace(netloc=parts.hostname)
+    return None
+
+
+def redirect_uri_allowed(uri):
+    """RFC 7591 registration: `https://`, or a plain-http loopback URI.
+    Anything else is a redirect we would send a code to over the open
+    network, and the registration is refused rather than stored."""
+    if not isinstance(uri, str):
+        return False
+    parts = urlsplit(uri)
+    if not parts.netloc or parts.fragment:
+        return False
+    if parts.scheme == 'https':
+        return True
+    return _loopback_form(uri) is not None
+
+
+def redirect_uri_matches(candidate, registered):
+    """Exact match, except that loopback URIs match on any port."""
+    if candidate == registered:
+        return True
+    a, b = _loopback_form(candidate), _loopback_form(registered)
+    return a is not None and b is not None and a == b
+
+
+def _redirect_to_client(redirect_uri, state, **params):
+    """302 to the client's registered redirect URI (OAuth 2.1 §4.1.2), with
+    each parameter URL-encoded and RFC 9207 `iss` appended so the client can
+    tell which issuer answered. `state` is echoed only when it was sent."""
+    if state:
+        params['state'] = state
+    params['iss'] = issuer()
+    separator = '&' if '?' in redirect_uri else '?'
+    response = redirect(f'{redirect_uri}{separator}{urlencode(params)}',
+                        code=302)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def discovery_document():
+    """RFC 8414 metadata. Served under the issuer's root and under the FHIR
+    prefix; both copies are this one document."""
+    base = issuer()
+    return {
+        'issuer': base,
+        'authorization_endpoint': f'{base}/r6/fhir/oauth/authorize',
+        'token_endpoint': f'{base}/r6/fhir/oauth/token',
+        'registration_endpoint': f'{base}/r6/fhir/oauth/register',
+        'revocation_endpoint': f'{base}/r6/fhir/oauth/revoke',
+        'scopes_supported': list(SMART_SCOPES.keys()),
+        'response_types_supported': ['code'],
+        'grant_types_supported': ['authorization_code'],
+        'token_endpoint_auth_methods_supported': list(CLIENT_AUTH_METHODS),
+        'code_challenge_methods_supported': ['S256'],
+        'authorization_response_iss_parameter_supported': True,
+        'service_documentation': f'{base}/r6/fhir/docs/privacy-policy',
+    }
+
+
+def discovery_root_view():
+    """The issuer-root copy of the metadata, registered by `main` at
+    `/.well-known/oauth-authorization-server` — the first location a client
+    tries for a path-less issuer (RFC 8414 §3)."""
+    return jsonify(discovery_document())
+
+
+def _presented_client_credentials(body):
+    """(client_id, client_secret) from the POST body, else HTTP Basic."""
+    client_id = body.get('client_id')
+    client_secret = body.get('client_secret')
+    basic = request.authorization
+    if basic is not None and basic.type == 'basic':
+        client_id = client_id or basic.username
+        client_secret = client_secret or basic.password
+    return client_id, client_secret
 
 # SMART-on-FHIR v2 scope definitions
 SMART_SCOPES = {
@@ -172,28 +294,16 @@ def register_oauth_routes(blueprint):
 
     @blueprint.route('/.well-known/oauth-authorization-server', methods=['GET'])
     def oauth_discovery():
-        """RFC 8414 OAuth Authorization Server Metadata."""
-        base = request.host_url.rstrip('/')
-        return jsonify({
-            'issuer': OAUTH_ISSUER or base,
-            'authorization_endpoint': f'{base}/r6/fhir/oauth/authorize',
-            'token_endpoint': f'{base}/r6/fhir/oauth/token',
-            'registration_endpoint': f'{base}/r6/fhir/oauth/register',
-            'revocation_endpoint': f'{base}/r6/fhir/oauth/revoke',
-            'scopes_supported': list(SMART_SCOPES.keys()),
-            'response_types_supported': ['code'],
-            'grant_types_supported': ['authorization_code'],
-            'token_endpoint_auth_methods_supported': ['client_secret_post', 'none'],
-            'code_challenge_methods_supported': ['S256'],
-            'service_documentation': f'{base}/r6/fhir/docs/privacy-policy',
-        })
+        """RFC 8414 OAuth Authorization Server Metadata (the prefixed copy;
+        the issuer-root copy is registered in `main`)."""
+        return jsonify(discovery_document())
 
     # --- SMART-on-FHIR Well-Known ---
 
     @blueprint.route('/.well-known/smart-configuration', methods=['GET'])
     def smart_configuration():
         """SMART App Launch v2 configuration."""
-        base = request.host_url.rstrip('/')
+        base = issuer()
         return jsonify({
             'authorization_endpoint': f'{base}/r6/fhir/oauth/authorize',
             'token_endpoint': f'{base}/r6/fhir/oauth/token',
@@ -220,28 +330,49 @@ def register_oauth_routes(blueprint):
         if not body:
             return jsonify({'error': 'invalid_request'}), 400
 
+        redirect_uris = body.get('redirect_uris')
+        if (not isinstance(redirect_uris, list) or not redirect_uris
+                or not all(redirect_uri_allowed(u) for u in redirect_uris)):
+            return jsonify({
+                'error': 'invalid_redirect_uri',
+                'error_description': 'redirect_uris must be https URLs or '
+                'plain-http loopback URLs (localhost, 127.0.0.1, [::1])',
+            }), 400
+        auth_method = body.get('token_endpoint_auth_method') or 'client_secret_post'
+        if auth_method not in CLIENT_AUTH_METHODS:
+            return jsonify({
+                'error': 'invalid_client_metadata',
+                'error_description': 'token_endpoint_auth_method must be one of '
+                + ', '.join(CLIENT_AUTH_METHODS),
+            }), 400
+
         client_id = str(uuid.uuid4())
-        client_secret = secrets.token_urlsafe(32)
-        redirect_uris = body.get('redirect_uris', [])
+        client_secret = None if auth_method == 'none' else secrets.token_urlsafe(32)
         client_name = body.get('client_name', 'Unknown Client')
         scope = body.get('scope', 'fhir.read context.read')
+        issued_at = int(time.time())
 
         _oauth_store_set('client', client_id, {
             'client_secret': client_secret,
             'redirect_uris': redirect_uris,
             'client_name': client_name,
             'scope': scope,
-            'created_at': time.time(),
-        }, ttl=30 * 24 * 3600)
+            'token_endpoint_auth_method': auth_method,
+            'created_at': issued_at,
+        }, ttl=CLIENT_TTL_SECONDS)
 
-        return jsonify({
+        response = {
             'client_id': client_id,
-            'client_secret': client_secret,
+            'client_id_issued_at': issued_at,
             'client_name': client_name,
             'redirect_uris': redirect_uris,
             'scope': scope,
-            'token_endpoint_auth_method': 'client_secret_post',
-        }), 201
+            'token_endpoint_auth_method': auth_method,
+        }
+        if client_secret is not None:
+            response['client_secret'] = client_secret
+            response['client_secret_expires_at'] = issued_at + CLIENT_TTL_SECONDS
+        return jsonify(response), 201
 
     # --- Authorization Endpoint ---
 
@@ -264,7 +395,8 @@ def register_oauth_routes(blueprint):
         if not registered_client:
             return jsonify({'error': 'invalid_client',
                           'error_description': 'Client not registered'}), 401
-        if redirect_uri not in registered_client.get('redirect_uris', []):
+        if not any(redirect_uri_matches(redirect_uri, registered)
+                   for registered in registered_client.get('redirect_uris', [])):
             return jsonify({'error': 'invalid_request',
                           'error_description': 'redirect_uri not registered for this client'}), 400
 
@@ -276,19 +408,45 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_request',
                           'error_description': 'Only S256 code_challenge_method supported'}), 400
 
-        # H3: this endpoint AUTO-APPROVES with no consent screen and binds the
-        # token's tenant from the request header. When read-auth is on, that
-        # would let anyone mint a read bearer for any tenant, bypassing the gate.
-        # Restrict auto-approve to public/demo tenants; a protected tenant needs
-        # real per-user consent (out of scope for this reference OAuth server).
-        requested_tenant = request.headers.get('X-Tenant-Id', 'default')
+        # From here the redirect URI is the client's own registered one, so
+        # protocol errors go back to it (OAuth 2.1 §4.1.2.1) instead of to a
+        # JSON body a browser popup cannot act on.
+        resource = (request.args.get('resource') or '').strip()
+        policies = resource_policies()
+        if resource and resource not in policies:
+            # RFC 8707 §2: an audience we do not know is refused, and is never
+            # recorded as sent — that would make `aud` a caller-chosen string.
+            return _redirect_to_client(redirect_uri, state, error='invalid_target',
+                                       error_description='unknown resource')
+        audience = resource or fhir_resource()
+        policy = policies[audience]
+
         from r6.command_center.access import is_public
-        if read_auth_enabled() and not is_public(requested_tenant):
-            return jsonify({
-                'error': 'access_denied',
-                'error_description': 'Auto-approve authorization is limited to '
-                'public/demo tenants; protected tenants require per-user consent.',
-            }), 403
+        if policy == 'demo':
+            # P2-b: for the MCP audience the tenant is config, not a header.
+            # The demo tenant must be public; anything else fails closed here
+            # rather than minting the strongest token a browser flow can ask for.
+            requested_tenant = os.environ.get('MCP_OAUTH_DEMO_TENANT', '').strip()
+            if not requested_tenant or (
+                    read_auth_enabled() and not is_public(requested_tenant)):
+                return jsonify({
+                    'error': 'access_denied',
+                    'error_description': 'The MCP resource binds a configured '
+                    'demo tenant, and none is configured or it is not public.',
+                }), 403
+        else:
+            # H3: this endpoint AUTO-APPROVES with no consent screen and binds
+            # the token's tenant from the request header. When read-auth is on,
+            # that would let anyone mint a read bearer for any tenant, bypassing
+            # the gate. Restrict auto-approve to public/demo tenants; a protected
+            # tenant needs real per-user consent (spec §13, not built here).
+            requested_tenant = request.headers.get('X-Tenant-Id', 'default')
+            if read_auth_enabled() and not is_public(requested_tenant):
+                return jsonify({
+                    'error': 'access_denied',
+                    'error_description': 'Auto-approve authorization is limited to '
+                    'public/demo tenants; protected tenants require per-user consent.',
+                }), 403
 
         # Generate authorization code
         code = secrets.token_urlsafe(32)
@@ -299,18 +457,14 @@ def register_oauth_routes(blueprint):
             'code_challenge_method': code_challenge_method,
             'scopes': scope.split(),
             'tenant_id': requested_tenant,
+            'aud': audience,
             'exp': time.time() + 600,  # 10 minutes
         }, ttl=600)
 
-        # In production, this would render a consent screen.
-        # For the MCP server, we auto-approve and redirect.
-        separator = '&' if '?' in redirect_uri else '?'
-        location = f'{redirect_uri}{separator}code={code}&state={state}'
-        return jsonify({
-            'redirect': location,
-            'code': code,
-            'state': state,
-        })
+        # OAuth 2.1 §4.1.2: the code travels in a 302 to the registered
+        # redirect URI, with RFC 9207 `iss`. A JSON body here is a flow no
+        # browser can finish (#568).
+        return _redirect_to_client(redirect_uri, state, code=code)
 
     # --- Token Endpoint ---
 
@@ -324,13 +478,14 @@ def register_oauth_routes(blueprint):
         body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
         code = body.get('code')
         code_verifier = body.get('code_verifier')
-        client_id = body.get('client_id')
+        client_id, client_secret = _presented_client_credentials(body)
 
         if not code or not code_verifier:
             return jsonify({'error': 'invalid_request',
                           'error_description': 'code and code_verifier required'}), 400
 
-        # Validate authorization code
+        # Validate authorization code. Popped before the client is checked so
+        # a failed exchange burns the code: a code is single-use either way.
         auth_code = _oauth_store_pop('auth-code', code)
         if not auth_code:
             return jsonify({'error': 'invalid_grant',
@@ -339,6 +494,24 @@ def register_oauth_routes(blueprint):
         if auth_code['exp'] < time.time():
             return jsonify({'error': 'invalid_grant',
                           'error_description': 'Authorization code expired'}), 400
+
+        # Client authentication (RFC 6749 §3.2.1). A public client has no
+        # secret, so its `client_id` is the only thing binding the code to the
+        # client it was issued to (§4.1.3) and is required. A confidential
+        # client authenticates with the secret it was issued, POST body or
+        # HTTP Basic; a secret that is absent or wrong is `invalid_client`.
+        registered_client = _oauth_store_get('client', auth_code['client_id']) or {}
+        auth_method = registered_client.get('token_endpoint_auth_method',
+                                            'client_secret_post')
+        if auth_method == 'none':
+            if not client_id:
+                return jsonify({'error': 'invalid_request',
+                              'error_description': 'client_id required for a public client'}), 400
+        else:
+            expected_secret = registered_client.get('client_secret') or ''
+            if not client_secret or not expected_secret or not constant_time_equal(
+                    client_secret, expected_secret):
+                return jsonify({'error': 'invalid_client'}), 401
 
         if client_id and auth_code['client_id'] != client_id:
             return jsonify({'error': 'invalid_grant',
@@ -359,12 +532,21 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_grant',
                           'error_description': 'PKCE verification failed'}), 400
 
+        # RFC 8707 (P2-c): a `resource` here must be the one the code was
+        # issued for; absent, it inherits. A code for one audience is never
+        # redeemed for another.
+        resource = (body.get('resource') or '').strip()
+        if resource and resource != auth_code.get('aud'):
+            return jsonify({'error': 'invalid_target',
+                          'error_description': 'resource does not match the authorization'}), 400
+
         # Issue access token
         access_token = secrets.token_urlsafe(48)
         _oauth_store_set('access-token', access_token, {
             'client_id': auth_code['client_id'],
             'scopes': auth_code['scopes'],
             'tenant_id': auth_code['tenant_id'],
+            'aud': auth_code.get('aud'),
             'exp': time.time() + TOKEN_TTL_SECONDS,
         }, ttl=TOKEN_TTL_SECONDS)
 

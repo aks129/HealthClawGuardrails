@@ -12,7 +12,7 @@ from flask import request, session
 # environment variable. Re-exported so this module's own importers are
 # unchanged.
 from r6.runtime_config import is_public_tenant, read_auth_enabled
-from r6.oauth import validate_bearer_token
+from r6.oauth import fhir_resource, validate_bearer_token
 from r6.stepup import validate_step_up_token
 
 
@@ -37,6 +37,12 @@ def _oauth_authorizes(token: str, tenant_id: str) -> bool:
     if not ok or not isinstance(info, dict):
         return False
     if info.get("tenant_id") != tenant_id:
+        return False
+    # RFC 8707: only a token minted for this FHIR surface is a credential
+    # here. One minted at the same issuer for another audience (the MCP
+    # server's) is refused, whatever tenant and scopes it carries — spec
+    # §9.2, the replay nobody would otherwise notice.
+    if info.get("aud") != fhir_resource():
         return False
     return bool(set(info.get("scopes") or ()) & _OAUTH_READ_SCOPES)
 
