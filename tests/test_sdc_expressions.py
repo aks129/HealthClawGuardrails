@@ -22,8 +22,28 @@ def test_evaluate_returns_none_on_no_match():
     assert evaluate("Patient.name.given.first()", patient) is None
 
 
-def test_evaluate_returns_none_on_bad_expression():
+def test_evaluate_returns_none_on_an_empty_result():
+    """The library answers an empty result for this input rather than
+    raising, so this exercises the empty path, not the handler (#581 item
+    2 renamed it to say so)."""
     assert evaluate("this is not fhirpath (((", {}) is None
+
+
+def test_evaluate_returns_none_when_the_library_raises(caplog):
+    """The handler: fhirpathpy raises on an unknown function ("Not
+    implemented: foo"), and evaluate swallows it, answers None, and logs the
+    failure naming the item, never the expression (#581 item 2).
+
+    MUTATION: r6/sdc/expressions.py, remove the except clause -> this test
+    errors with the library's exception.
+    """
+    import logging
+    with caplog.at_level(logging.WARNING, logger="r6.sdc.expressions"):
+        assert evaluate("foo()", {"resourceType": "Patient"},
+                        link_id="item-581") is None
+    logged = [r.getMessage() for r in caplog.records]
+    assert any("item-581" in m for m in logged), logged
+    assert not any("foo()" in m for m in logged), logged
 
 
 # ---------------------------------------------------------------------------

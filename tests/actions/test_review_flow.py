@@ -668,3 +668,56 @@ def test_review_refuses_a_read_scoped_token(client, app, tenant_headers,
             tenant_headers['X-Tenant-Id'], scope='read'),
     }, action_id)
     assert resp.status_code == 401, resp.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# #581 item 1: the content list handed to the populate engine never holds the
+# Patient. The Patient arrives as `subject`; a copy inside the list was dead
+# weight sitting beside a redaction boundary, the same door $populate closed
+# in #578 after proving nothing read it.
+# ---------------------------------------------------------------------------
+
+def test_the_content_list_never_holds_the_patient(app, tenant_id, monkeypatch):
+    """MUTATION: r6/actions/review.py, seed the list with the patient again
+    (`content = [patient]`) -> red."""
+    from r6.actions import review
+    from r6.models import R6Resource
+    from models import db
+
+    with app.app_context():
+        db.session.add(R6Resource(
+            resource_type='Patient', resource_id='p-581', tenant_id=tenant_id,
+            resource_json='{"resourceType":"Patient","id":"p-581","name":[{"family":"Quux581"}]}'))
+        db.session.add(R6Resource(
+            resource_type='AllergyIntolerance', resource_id='a-581', tenant_id=tenant_id,
+            resource_json='{"resourceType":"AllergyIntolerance","id":"a-581",'
+                          '"patient":{"reference":"Patient/p-581"},'
+                          '"code":{"text":"peanut-581"}}'))
+        db.session.commit()
+        patient = review._load_patient(tenant_id, 'Patient/p-581')
+        assert patient and patient['id'] == 'p-581'
+        content = review._gather_content(tenant_id, patient, 'Patient/p-581')
+        assert content.resolved
+        types = [r['resourceType'] for r in content.resources]
+        assert 'Patient' not in types
+        assert types == ['AllergyIntolerance']       # the record still reaches the engine
+
+        # And what the engine is handed on the page's own path: the subject
+        # separately, the list without it.
+        seen = {}
+        real = review.populate_questionnaire
+
+        def _capture(questionnaire, subject, content_resources):
+            seen['subject'] = subject
+            seen['content'] = list(content_resources)
+            return real(questionnaire, subject, content_resources)
+
+        monkeypatch.setattr(review, 'populate_questionnaire', _capture)
+        from r6.actions.models import ProposedAction
+        action = ProposedAction(tenant_id=tenant_id, kind='form-fill',
+                                payload={'subject': {'reference': 'Patient/p-581'}})
+        db.session.add(action)
+        db.session.commit()
+        review._draft_qr(action, tenant_id)
+        assert seen['subject']['id'] == 'p-581'
+        assert all(r['resourceType'] != 'Patient' for r in seen['content'])
