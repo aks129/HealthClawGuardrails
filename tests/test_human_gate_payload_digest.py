@@ -191,3 +191,41 @@ def test_the_digest_needs_the_secret(app, monkeypatch):
         with pytest.raises(ValueError):
             payload_digest('{"k": "v"}')
 
+
+@pytest.mark.parametrize('guess', ['', 'secret', 'changeme', 'password',
+                                   'test-secret', 'healthclaw'])
+def test_a_digest_keyed_with_a_guessed_secret_is_refused(
+        client, app, tenant_headers, auth_headers, tenant_id, guess):
+    """The round-2 adversarial pass: an attacker who knows the scheme (HMAC,
+    this label, sha256 of label+secret) but not the secret. Nine guesses
+    refused live; the shape is kept here as a pin so the scheme cannot
+    quietly become guessable (a fixed key, an empty default).
+
+    MUTATION: make _digest_key ignore the secret -> the guess that matches
+    the ignored value walks through, red.
+    """
+    import hashlib
+    import hmac
+    from r6.actions.confirmations import _DIGEST_KEY_LABEL
+    action_id = _propose(client, tenant_headers)
+    _commit(client, tenant_headers, auth_headers, action_id)
+    forged = json.dumps(dict(PROPOSE_BODY['payload'], phone='617-555-0199'))
+    canonical = json.dumps(json.loads(forged), sort_keys=True,
+                           separators=(',', ':'), ensure_ascii=False)
+    key = hashlib.sha256(_DIGEST_KEY_LABEL + guess.encode('utf-8')).digest()
+    guessed = hmac.new(key, canonical.encode('utf-8'), hashlib.sha256).hexdigest()
+    with app.app_context():
+        action = ProposedAction.query.get(action_id)
+        issue_confirmation(action_id, approved_via='review-page',
+                           ttl_minutes=15, payload_json=action.payload_json)
+        db.session.commit()
+        ProposedAction.query.filter_by(id=action_id).update(
+            {'payload_json': forged}, synchronize_session=False)
+        ActionConfirmation.query.filter_by(action_id=action_id).update(
+            {'payload_digest': guessed}, synchronize_session=False)
+        db.session.commit()
+    resp = client.post('/r6/actions/%s/confirm' % action_id,
+                       headers=_approval_headers(auth_headers, action_id))
+    assert resp.status_code == 409
+    assert resp.get_json()['error_code'] == 'approved_payload_mismatch'
+
