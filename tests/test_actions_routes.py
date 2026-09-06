@@ -147,9 +147,10 @@ def test_status_hides_payload_with_a_malformed_step_up_token(client,
     presence stayed green. Presenting a garbage token is the only way to
     tell "a valid token" from "a token".
 
-    MUTATION: r6/actions/routes.py, `privileged = valid` ->
-    `privileged = bool(step_up)` (equivalently, collapse the three-line
-    check to `privileged = bool(step_up)`) -> red. Executed 2026-09-04.
+    MUTATION: r6/actions/routes.py, the has_grant predicate ->
+    `privileged = bool(request.headers.get('X-Step-Up-Token'))` -> red.
+    Executed 2026-09-04 against the pre-kernel shape (`privileged = valid` ->
+    `privileged = bool(step_up)`) and again 2026-09-06 for kernel slice 17.
     """
     action_id = _propose(client, tenant_headers)
     headers = dict(tenant_headers)

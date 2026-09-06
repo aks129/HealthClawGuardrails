@@ -25,8 +25,8 @@ from flask import Blueprint, jsonify, request
 
 from models import db
 from r6 import constant_time
-from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       tenant_from_request)
+from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
+                       require_grant, tenant_from_request)
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
@@ -40,7 +40,7 @@ from r6.actions.state import transition_action
 from r6.audit import record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.read_auth import authorize_tenant_read
-from r6.stepup import generate_step_up_token, validate_step_up_token
+from r6.stepup import generate_step_up_token
 from r6.telegram_push import notify_tenant
 from r6.body_guard import json_body_within_depth
 
@@ -706,12 +706,12 @@ def action_status(action_id):
 
     # Only a caller holding a valid tenant-bound step-up token gets the full
     # record (phone number + message body). Everyone else gets the PHI-safe
-    # summary (id/kind/recipient-label/status).
-    step_up = request.headers.get('X-Step-Up-Token')
-    privileged = False
-    if step_up:
-        valid, _err = validate_step_up_token(step_up, tenant_id)
-        privileged = valid
+    # summary (id/kind/recipient-label/status). Kernel slice 17: this is a
+    # predicate, not a gate, so it asks has_grant, which answers None in
+    # exactly the cases require_grant would refuse (absent, malformed,
+    # expired, another tenant's token) and never raises. The grant is bound
+    # to the header tenant the kernel already validated above.
+    privileged = has_grant(scope=Scope.TENANT_BOUND, tenant=tenant) is not None
     return jsonify(action.to_dict() if privileged else action.summary()), 200
 
 
