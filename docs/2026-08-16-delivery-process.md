@@ -1,6 +1,8 @@
 # How work gets defined, built, and proven
 
-**Status: proposed. Needs the owner's decision before it binds anyone.**
+**Status: adopted 2026-09-02 by the council the owner delegated flagged decisions
+to, with nine amendments recorded in `docs/2026-09-02-council-ruling.md` §D1. The
+owner can override any item in writing.**
 
 ## Why this exists, stated as the owner stated it
 

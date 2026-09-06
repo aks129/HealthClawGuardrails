@@ -325,7 +325,7 @@ cd HealthClawGuardrails
     <span class="faq-icon"><i class="fas fa-plus"></i></span>
   </div>
   <div class="faq-answer">
-    <p><a href="https://sharponmcp.com" target="_blank" rel="noopener noreferrer">SHARP-on-MCP</a> (Standardised Healthcare Agent Remote Protocol) is a vendor-neutral spec for how an MCP server in healthcare receives its FHIR context. Instead of every MCP server running its own OAuth dance against every EHR, the <em>agent host</em> obtains a SMART-on-FHIR access token and forwards it on every call via three headers:</p>
+    <p>SHARP-on-MCP (Standardised Healthcare Agent Remote Protocol) is a vendor-neutral spec for how an MCP server in healthcare receives its FHIR context. Instead of every MCP server running its own OAuth dance against every EHR, the <em>agent host</em> obtains a SMART-on-FHIR access token and forwards it on every call via three headers:</p>
     <ul>
       <li><code>X-FHIR-Server-URL</code> — the upstream FHIR base (Epic, Cerner, MEDITECH, etc.)</li>
       <li><code>X-FHIR-Access-Token</code> — the SMART access token</li>
