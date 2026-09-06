@@ -3087,27 +3087,22 @@ def curatr_apply_fix(resource_type, resource_id):
             f'Resource type {resource_type} is not supported'
         ), 400
 
-    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
-    step_up_token = request.headers.get('X-Step-Up-Token')
-    if not step_up_token:
-        return _operation_outcome(
-            'error', 'security',
-            'Write operations require X-Step-Up-Token header'
-        ), 403
+    tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+    tenant_id = tenant.id
 
     production_approval = resolve_app_env() == 'production'
     operation = f'curatr-apply-fix:{resource_type}/{resource_id}'
-    valid, err = validate_step_up_token(
-        step_up_token,
-        tenant_id,
-        require_audience='curatr' if production_approval else None,
-        require_operation=operation if production_approval else None,
+    # Kernel slice 7 (spec §2.5): the same two-phase gate, through the
+    # kernel. Phase one checks without spending, so a malformed body below
+    # cannot burn a one-time approval. The 403 dialect this site answers
+    # today is passed through, not normalized. The refusal text changes: the
+    # kernel names the public causes and withholds the rest (#478).
+    require_grant(
+        scope=Scope.WRITE, tenant=tenant,
+        audience='curatr' if production_approval else None,
+        operation=operation if production_approval else None,
+        absent_status=403, rejected_status=403,
     )
-    if not valid:
-        return _operation_outcome(
-            'error', 'security',
-            f'Step-up token rejected: {public_step_up_reason(err)}'
-        ), 403
 
     body = request.get_json(silent=True)
     if not body:
@@ -3124,19 +3119,13 @@ def curatr_apply_fix(resource_type, resource_id):
         ), 400
 
     if production_approval:
-        # Consume only after the request shape is valid so malformed attempts
-        # cannot burn a legitimate one-time approval credential.
-        valid, err = validate_step_up_token(
-            step_up_token,
-            tenant_id,
-            consume_nonce=True,
-            require_audience='curatr',
-            require_operation=operation,
+        # Phase two: consume only after the request shape is valid so
+        # malformed attempts cannot burn a legitimate one-time approval.
+        require_grant(
+            scope=Scope.WRITE, tenant=tenant,
+            audience='curatr', operation=operation, consume_nonce=True,
+            absent_status=403, rejected_status=403,
         )
-        if not valid:
-            return _operation_outcome(
-                'error', 'security',
-                f'Step-up token rejected: {public_step_up_reason(err)}'), 403
 
     try:
         result = _curatr_apply_fix(
