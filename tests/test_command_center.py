@@ -336,7 +336,8 @@ class TestRestEndpoints:
     # MUTATION (pre-kernel shape): `if valid: return None` -> `return None`
     # (presence check) -> the malformed, other-tenant and default-binding
     # tests go red while the valid-token test stays green. Executed
-    # 2026-09-06.
+    # 2026-09-06. Kernel shape: `has_grant(...) is not None` -> `True`
+    # -> the same three red. Executed 2026-09-06.
 
     def test_api_system_with_a_step_up_token_for_the_named_tenant(self, client):
         from r6.stepup import generate_step_up_token
