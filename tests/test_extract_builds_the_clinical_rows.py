@@ -180,3 +180,25 @@ def test_each_committed_resource_is_audited_in_the_same_transaction(
         assert len(audits) == 1
         assert audits[0].event_type == "create"
         assert "extract" in audits[0].detail and "70" not in audits[0].detail
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("group, resource_type", [
+    (_allergies(_row("allergies.item", {"allergen": "peanut-2b2", "reaction": "hives"})), "AllergyIntolerance"),
+    ({"linkId": "medications", "item": [_row("medications.item", {"name": "metformin-2b2", "dose": "daily"})]}, "MedicationRequest"),
+    ({"linkId": "conditions", "item": [_row("conditions.item", {"name": "hypertension-2b2"})]}, "Condition"),
+])
+def test_the_validator_accepts_every_row_the_engine_builds(group, resource_type):
+    """The statuses are called the minimum the validator demands; this runs
+    the validator over each built row rather than asserting the shape, so a
+    validator change cannot leave dryRun previewing rows no commit path
+    could ever accept."""
+    from r6.validator import R6Validator
+    validator = R6Validator()
+    bundle = extract_resources(_qr(group), intake_questionnaire())
+    rows = [e["resource"] for e in bundle["entry"] if e["resource"]["resourceType"] == resource_type]
+    assert len(rows) == 1
+    result = validator.validate_resource(rows[0])
+    assert result["valid"], result["operation_outcome"]
