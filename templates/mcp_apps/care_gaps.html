@@ -36,6 +36,7 @@
   .stat.due .num{color:var(--amber)}
   .stat.ok .num{color:var(--green)}
   .stat.na .num{color:var(--dim)}
+  .stats.unevaluated .num{color:var(--dim)}
   .card{background:var(--panel);border:1px solid var(--border);
     border-radius:8px;padding:16px;margin-bottom:12px}
   .card h3{margin:0 0 6px;font-size:15px;font-weight:600}
@@ -51,6 +52,9 @@
   .consumer h3{margin:0 0 8px;font-size:13px;color:var(--cyan);
     text-transform:uppercase;letter-spacing:.05em}
   .consumer li{margin:4px 0}
+  .consumer.unevaluated{background:rgba(251,191,36,.06);
+    border-color:rgba(251,191,36,.35)}
+  .consumer.unevaluated h3{color:var(--amber)}
   .empty{color:var(--dim);padding:24px;text-align:center}
   .err-box{color:var(--red);padding:12px;background:rgba(248,113,113,.06);
     border:1px solid rgba(248,113,113,.2);border-radius:6px;margin:0 0 16px}
@@ -90,6 +94,9 @@
 
 <script>
   const TENANT_ID = {{ tenant_id | tojson }};
+  // The engine's own list of the `unevaluated` values that mean no record was
+  // read (r6/caregaps/report.py). Injected by the route, never copied here.
+  const NOT_EVALUATED = {{ not_evaluated_reasons | tojson }};
   const errEl = document.getElementById('err');
   const contentEl = document.getElementById('content');
 
@@ -108,16 +115,28 @@
     const summary = param(parameters, 'summary') || {};
     const consumer = param(parameters, 'consumerSummary') || {};
     const detail = param(parameters, 'detail') || [];
+    // `unevaluated` comes in two families (r6/caregaps/report.py). A CALLER
+    // reason means the rules never read a record: every count is an artefact
+    // of the call and every "date of birth unknown" card describes a record
+    // nobody opened, so the note is the whole finding (#538). An ENGINE
+    // reason means a record WAS read; the counts and cards are real for what
+    // was evaluated and the note explains the rest.
+    const notEvaluated = NOT_EVALUATED.includes(consumer.unevaluated);
+    // Read before the box is built: this used to live inside a box gated on
+    // `lines`, which is empty on exactly the path that has a note to show.
+    const caveat = consumer.unevaluated_note
+      ? `<div class="note">${esc(consumer.unevaluated_note)}</div>` : '';
+    const tile = (cls, label, n) => `
+        <div class="stat ${cls}"><div class="num"${notEvaluated
+          ? ' aria-label="not evaluated" title="not evaluated"' : ''}>${
+          notEvaluated ? '—' : esc(n || 0)}</div>
+          <div class="label">${label}</div></div>`;
     const stats = `
-      <div class="stats">
-        <div class="stat due"><div class="num">${summary.due || 0}</div>
-          <div class="label">Due</div></div>
-        <div class="stat ok"><div class="num">${summary.up_to_date || 0}</div>
-          <div class="label">Up to date</div></div>
-        <div class="stat na"><div class="num">${summary.not_applicable || 0}</div>
-          <div class="label">Not applicable</div></div>
-        <div class="stat na"><div class="num">${summary.indeterminate || 0}</div>
-          <div class="label">Needs data</div></div>
+      <div class="stats${notEvaluated ? ' unevaluated' : ''}">
+        ${tile('due', 'Due', summary.due)}
+        ${tile('ok', 'Up to date', summary.up_to_date)}
+        ${tile('na', 'Not applicable', summary.not_applicable)}
+        ${tile('na', 'Needs data', summary.indeterminate)}
       </div>`;
     const cards = (detail || []).map(r => `
       <div class="card">
@@ -131,14 +150,22 @@
     // never had a populated list to draw (#417).
     const lines = (consumer.lines || [])
       .map(l => `<li>${esc(l.message || l)}</li>`).join('');
-    const consumerBox = lines ? `
-      <div class="consumer"><h3>In plain terms</h3><ul>${lines}</ul>
-        ${consumer.unevaluated_note
-          ? `<div class="note">${esc(consumer.unevaluated_note)}</div>` : ''}
-        ${consumer.note ? `<div class="note">${esc(consumer.note)}</div>` : ''}
+    // The caveat goes above the list it qualifies, so it is read first. The
+    // box draws whenever it has anything at all to say.
+    const parts = [];
+    if(caveat){ parts.push(caveat); }
+    if(lines){ parts.push(`<ul>${lines}</ul>`); }
+    if(consumer.note){ parts.push(`<div class="note">${esc(consumer.note)}</div>`); }
+    const consumerBox = parts.length ? `
+      <div class="consumer${notEvaluated ? ' unevaluated' : ''}">
+        <h3>${notEvaluated ? 'Not evaluated' : 'In plain terms'}</h3>
+        ${parts.join('')}
       </div>` : '';
-    contentEl.innerHTML = stats + consumerBox +
-      (cards || '<div class="empty">No screenings evaluated.</div>');
+    contentEl.innerHTML = notEvaluated
+      ? consumerBox + stats +
+        '<div class="empty">No screenings were evaluated.</div>'
+      : stats + consumerBox +
+        (cards || '<div class="empty">No screenings evaluated.</div>');
   }
 
   async function load(){
@@ -154,8 +181,14 @@
         body: '{}',
       });
       if(!res.ok){
+        // Step-up is the write gate; this is a read. The server answers the
+        // same 401 for a tenant that does not exist and one that is not
+        // yours — by design, so a probe cannot learn which — so the copy
+        // has to name both causes (#535).
         throw new Error('care-gaps returned HTTP ' + res.status +
-          (res.status === 401 ? ' — this tenant requires a step-up token' : ''));
+          (res.status === 401
+            ? ' — check the tenant id is spelled correctly, or this tenant needs a credential.'
+            : ''));
       }
       render(await res.json());
     }catch(e){
@@ -166,6 +199,9 @@
   }
 
   document.getElementById('load-btn').addEventListener('click', load);
+  document.getElementById('tenant-input').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){ load(); }
+  });
   if(TENANT_ID){ load(); }
 </script>
 </body>

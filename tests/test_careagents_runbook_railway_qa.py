@@ -48,10 +48,13 @@ case "$1" in
     for a in "$@"; do
       if [ "$a" = "--json" ]; then
         cat <<'JSON'
-{"CARE_DATABASE_URL":"postgresql://care:S3cr3tPassw0rd@postgres-bfs.railway.internal:5432/railway",
+{"CAREAGENTS_CANONICAL_HOST":"careagents.cloud",
+ "CARE_DATABASE_URL":"postgresql://care:S3cr3tPassw0rd@postgres-bfs.railway.internal:5432/railway",
  "CARE_EMAIL_FROM":"CareAgents <hello@careagents.cloud>","CARE_ENV":"production",
  "CARE_IMESSAGE_HANDLE":"+15550100","CARE_MODEL":"claude-sonnet-5",
  "CARE_OPENAI_MODEL":"gpt-4o-mini","CARE_ORIGIN":"https://careagents.cloud",
+ "CARE_REAL_RECORDS":"allowlist",
+ "CARE_REAL_RECORDS_ALLOWLIST":"first.tester@example.com,second.tester@example.com",
  "CARE_RP_ID":"careagents.cloud","CARE_RP_NAME":"CareAgents",
  "CARE_SESSION_SECRET":"RtQm9xPLv2eWs7YbKd4NfHj6Uz1AoCg3=",
  "CARE_TELEGRAM_BOT":"example_bot",
@@ -70,6 +73,7 @@ JSON
       fi
     done
     cat <<'VARS'
+CAREAGENTS_CANONICAL_HOST=careagents.cloud
 CARE_DATABASE_URL=postgresql://care:S3cr3tPassw0rd@postgres-bfs.railway.internal:5432/railway
 CARE_EMAIL_FROM=CareAgents <hello@careagents.cloud>
 CARE_ENV=production
@@ -77,6 +81,8 @@ CARE_IMESSAGE_HANDLE=+15550100
 CARE_MODEL=claude-sonnet-5
 CARE_OPENAI_MODEL=gpt-4o-mini
 CARE_ORIGIN=https://careagents.cloud
+CARE_REAL_RECORDS=allowlist
+CARE_REAL_RECORDS_ALLOWLIST=first.tester@example.com,second.tester@example.com
 CARE_RP_ID=careagents.cloud
 CARE_RP_NAME=CareAgents
 CARE_SESSION_SECRET=RtQm9xPLv2eWs7YbKd4NfHj6Uz1AoCg3=
@@ -103,11 +109,17 @@ esac
 """
 
 # Every name the snippet must forward: the stub's list minus RAILWAY_*, PORT
-# and CARE_ROLE. These are exactly the 17 the live web service carries, and
-# they include the two whose absence crash-loops the worker.
+# and CARE_ROLE. It is the set the runbook documents, not a reading of Railway
+# — the module docstring is explicit that these tests cannot see the live
+# service — and it includes the two whose absence crash-loops the worker. The
+# order is the stub's JSON order, because that is the order the argv comes out
+# in. The last three arrived with the beta batch (#553) and are described under
+# "Application settings" in the runbook.
 EXPECTED_NAMES = [
+    "CAREAGENTS_CANONICAL_HOST",
     "CARE_DATABASE_URL", "CARE_EMAIL_FROM", "CARE_ENV", "CARE_IMESSAGE_HANDLE",
-    "CARE_MODEL", "CARE_OPENAI_MODEL", "CARE_ORIGIN", "CARE_RP_ID",
+    "CARE_MODEL", "CARE_OPENAI_MODEL", "CARE_ORIGIN", "CARE_REAL_RECORDS",
+    "CARE_REAL_RECORDS_ALLOWLIST", "CARE_RP_ID",
     "CARE_RP_NAME", "CARE_SESSION_SECRET", "CARE_TELEGRAM_BOT",
     "FASTEN_PUBLIC_KEY", "HEALTHCLAW_BASE", "HEALTHCLAW_MINT_SECRET",
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "RESEND_API_KEY",
@@ -126,6 +138,10 @@ SECRET_FRAGMENTS = [
     # the snippet actually calls. Without this the leak assertion would not
     # cover the value shape that motivated switching away from `--kv` at all.
     "QUFAKEKEYQAFAKEKEYQAFAKEKEYQAFAKEKEY",
+    # Not a secret, but CARE_REAL_RECORDS_ALLOWLIST holds tester email
+    # addresses, and the reference form is what keeps them out of the argv and
+    # the shell history along with everything else.
+    "second.tester@example.com",
 ]
 
 # The block is fenced ```bash and uses bash/zsh arrays and a herestring, so it
@@ -427,3 +443,20 @@ def test_the_runbook_does_not_send_the_operator_back_to_a_repo_build():
     assert "Do not create the service from the GitHub repo" in railway_section
     assert "railway.toml" in railway_section
     assert "--repo" not in railway_section
+
+
+def test_the_runbook_documents_the_settings_that_change_what_the_site_does():
+    # These three shipped in #553 with no entry on the page an operator deploys
+    # from. Two fail safe when omitted — CARE_REAL_RECORDS defaults to `off`
+    # and closes the record tiles, which is the beta posture anyway. The
+    # canonical host does not: unset, no redirect is installed, the platform's
+    # own *.up.railway.app name stays a second origin, and the WebAuthn failure
+    # that follows reaches an operator as "testers cannot sign in" — a symptom
+    # that points nowhere near a missing variable.
+    text = RUNBOOK.read_text()
+    assert "## Application settings" in text
+    for name in ("CAREAGENTS_CANONICAL_HOST", "CARE_REAL_RECORDS",
+                 "CARE_REAL_RECORDS_ALLOWLIST"):
+        assert f"`{name}`" in text, (
+            f"careagents/config.py reads {name}, but the deploy runbook never "
+            f"mentions it")

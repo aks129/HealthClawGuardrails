@@ -57,7 +57,7 @@ This is the uncomfortable pattern, and it is consistent:
 
 | Artifact | The claim | The reality |
 |---|---|---|
-| `$conformance`, the flagship | a grade a partner can trust | graded **F, 1/7** against a real HAPI, with **four of six failures blaming the guardrails** — the probe was creating a constant Patient and the server rejected the duplicate |
+| `$conformance`, the flagship | a grade a partner can trust | graded **F, 1/7** against a real HAPI, with **five of six failures caused by the probe and two of them blaming a gate by name** — the probe was creating a constant Patient and the server rejected the duplicate. *(Count corrected 2026-09-04, #605: this cell read "four of six failures blaming the guardrails"; no count in the run's transcript yields four.)* |
 | `SECURITY.md`, the policy doc | "HIPAA Safe Harbor … redaction" | redaction **truncates** identifiers to their last four characters; Safe Harbor requires SSNs removed |
 | the connector registry summary | "add `CLIENT_ID`/`_SECRET` for a HAPI behind Basic" | `AUTH_NONE` — the credentials were read, accepted and **dropped** |
 | `smoke_medplum.py`, the QA script | "7/8 guardrail checks passed" | there was **no Medplum**; two of the seven passed on the body of a 401 |
