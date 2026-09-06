@@ -63,7 +63,10 @@ leases at `deadline_at` and atomically enforce the same deadline invariant.
 
 All paths are under `/command-center/api/runs`:
 
-- `POST /` — idempotently create from `{tenant_id, message_id}`.
+- `POST` on the base path itself — idempotently create from
+  `{tenant_id, message_id}`. Post to `/command-center/api/runs`, **not**
+  `/command-center/api/runs/`; the route carries no trailing slash and the
+  slashed form is a 404, not a redirect.
 - `GET /<id>` — PHI-redacted run/tool projection.
 - `GET /<id>/events?after=<cursor>` — ordered durable replay.
 - `POST /<id>/cancel` — durable cancellation request.

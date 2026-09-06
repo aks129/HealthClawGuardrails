@@ -409,13 +409,34 @@ class HealthClawClient:
         r = self._send("POST", f"{self.actions}/{action_id}/review",
                        json=decisions, headers=self._headers(tenant),
                        what="review submit")
+        if r.ok:
+            # The rule the rest of this client follows, which this method was
+            # the one exemption from: a 200 carrying a proxy's interstitial is
+            # a failed call and not data (`_json_object`). Substituting a body
+            # and returning the status unchanged made the relay read it as the
+            # engine saying "saved" — it then confirmed, and told a patient
+            # their approval was recorded with no confirmation row anywhere
+            # (QA on #566, reproduced against a running engine).
+            #
+            # HealthClawUnconfirmed rather than a plain error, for the reason
+            # `confirm_action` raises it on its own unreadable 200: this POST
+            # MINTS the ActionConfirmation (#528), so something answered and
+            # whether an approval now exists is not knowable from here. Third
+            # answer (#220), and the relay routes it to `confirmed: null`.
+            try:
+                return r.status_code, self._json_object(r, "review submit")
+            except HealthClawError as exc:
+                raise HealthClawUnconfirmed(
+                    "review submit returned invalid data",
+                    r.status_code) from exc
         try:
             body = r.json()
         except ValueError:
             body = None
         if not isinstance(body, dict):
-            # The contract is (status, dict); a non-object body is a failed
-            # call, and handing it back would break the caller's `.get`.
+            # A non-2xx is somebody's refusal and nothing was minted by it.
+            # The contract is (status, dict); a non-object body would break
+            # the caller's `.get`.
             body = {"error": "unexpected response"}
         return r.status_code, body
 

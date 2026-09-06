@@ -114,8 +114,9 @@ def test_care_gaps_with_no_subject_uses_the_tenants_own_patient(
     assert resolution == {"state": "tenant-default", "subject": "Patient/p-solo"}
 
     # The tenant's own Condition reached the evaluator: the diabetes rule is
-    # no longer dismissed as "applies to patients with a diabetes diagnosis".
-    # Against subject None it was, because the Condition never matched.
+    # no longer dismissed as "no diabetes diagnosis found in your connected
+    # records". Against subject None it was, because the Condition never
+    # matched.
     detail = json.loads(_resp_param(body, "detail")["valueString"])
     a1c = next(d for d in detail if d["rule_id"] == "diabetes-a1c")
     assert a1c["status"] != "not_applicable", (
@@ -407,7 +408,13 @@ def test_the_fallback_path_evaluates_the_patient_it_resolved(
     assert summary["due"] + summary["up_to_date"] == 5
 
     consumer = json.loads(_resp_param(body, "consumerSummary")["valueString"])
-    assert len(consumer["lines"]) == 5
+    # PIN MOVED with #436, in the PR that moved it: 5 -> 6. The five decided
+    # screenings are unchanged; colorectal now gets a line of its own saying
+    # it could not be checked, instead of appearing only in the note. The
+    # property this test exists for is untouched — the rules read the record.
+    assert len(consumer["lines"]) == 6
+    assert [line["status"] for line in consumer["lines"]].count(
+        "indeterminate") == 1
 
     # The point of #389 half two, stated directly: nothing is undecided for
     # want of demographics, because the evaluator was handed the record. The
@@ -445,7 +452,11 @@ def test_the_fallback_path_now_carries_a_reason_that_is_true(
                     json={})
     consumer = json.loads(
         _resp_param(r.get_json(), "consumerSummary")["valueString"])
-    assert len(consumer["lines"]) == 3
+    # PIN MOVED with #436, in the PR that moved it: 3 -> 4. Colorectal joins
+    # the lines with a "could not check" status; the two sex-gated screenings
+    # do not, because with no sex on file nothing here knows they apply to
+    # this person. All three stay named in the marker below.
+    assert len(consumer["lines"]) == 4
     assert consumer["unevaluated"] == "partly-unchecked"
     assert consumer["unevaluated_count"] == 3
     assert consumer["unevaluated_titles"] == [
@@ -493,7 +504,13 @@ def test_a_partial_screening_list_says_how_much_of_it_is_missing(
     # on annual FIT would have matched nothing. So the decided list drops from
     # four to three and a third screening joins the undecided set — for a
     # different reason than the other two.
-    assert len(consumer["lines"]) == 3
+    #
+    # PIN MOVED AGAIN with #436, in the PR that moved it: 3 -> 4. Colorectal
+    # is still undecided and still named in the marker; what changed is that
+    # it now also reaches the patient as a line, which is the whole of #436.
+    # The two sex-gated screenings get no line — nothing here knows whether
+    # they apply to a record with no sex on it.
+    assert len(consumer["lines"]) == 4
     assert consumer["unevaluated_count"] == 3
     assert consumer["unevaluated_titles"] == [
         "Colorectal cancer screening",
@@ -565,3 +582,138 @@ class TestCareGapsMcpApp:
         resp = client.get('/r6/fhir/mcp-apps/care-gaps/')
         assert resp.status_code == 200
         assert 'Enter a tenant id' in resp.get_data(as_text=True)
+
+
+# ─────────────────────────────────────────────
+# The rules do not run against a patient nobody resolved (#542)
+#
+# The route set `not_evaluated` and then called the evaluator anyway. Two
+# things came out of that, and the retro's shape is both of them: a check that
+# examined nothing printed the verdict of a check that examined everything
+# (docs/2026-08-02-retro.md).
+#
+#   1. FALSE not_applicable. With no patient the condition gate (evaluate.py,
+#      before the age gate) fires first, so the A1c rule reported
+#      "not_applicable" — a decision about a person nobody looked at.
+#   2. THE AUDIT LIED. detail read `evaluated=7` for seven evaluations that
+#      did not happen.
+#
+# The consumer summary already suppressed the rows (#389/#417), so this was
+# invisible from the page. The payload and the audit carried them to every
+# other caller — the MCP tool, the Telegram summary, curl.
+
+def _audit_details(app, tenant_id):
+    """Every care-gaps audit row this tenant has, newest last."""
+    from r6.models import AuditEventRecord
+    with app.app_context():
+        rows = AuditEventRecord.query.filter_by(
+            tenant_id=tenant_id, event_type="read",
+            resource_type="Patient").all()
+        return [r.detail for r in rows
+                if (r.detail or "").startswith("care-gaps;")]
+
+
+def test_an_unresolved_subject_evaluates_no_rules_at_all(
+        client, app, tenant_id, tenant_headers):
+    """Two Patient rows, no subject: nothing may be decided about either.
+
+    `summary.evaluated` is the flag a client branches on without knowing the
+    reason family. It is NOT sufficient on its own to catch the defect — it
+    stays False whether or not the evaluator ran — so the emptiness of the
+    rows is asserted directly.
+
+    MUTATION: call evaluate_care_gaps(patient, ...) unconditionally again ->
+    red on `detail`, on `not_applicable`, and on the audit row.
+    """
+    _seed_patient(app, tenant_id, pid="p-one")
+    _seed_patient(app, tenant_id, pid="p-two")
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    assert r.status_code == 200
+    body = r.get_json()
+
+    detail = json.loads(_resp_param(body, "detail")["valueString"])
+    assert detail == [], (
+        "the rules ran against a patient the route could not resolve")
+
+    summary = json.loads(_resp_param(body, "summary")["valueString"])
+    assert summary["evaluated"] is False
+    assert summary["total"] == 0
+    # The one that was patient-visible: A1c fell through the condition gate
+    # and reported "not applicable" for a person nobody identified.
+    assert summary["not_applicable"] == 0
+    assert summary["due"] == 0
+    assert summary["indeterminate"] == 0
+
+
+def test_the_audit_says_nothing_was_evaluated_when_nothing_was(
+        client, app, tenant_id, tenant_headers):
+    """One AuditEvent on the caller path, PHI-free, counting what happened.
+
+    MUTATION: restore the unconditional evaluate_care_gaps call -> red with
+    `evaluated=7`.
+    """
+    _seed_patient(app, tenant_id, pid="p-one")
+    _seed_patient(app, tenant_id, pid="p-two")
+
+    client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers, json={})
+
+    details = _audit_details(app, tenant_id)
+    assert len(details) == 1, f"expected exactly one care-gaps audit row: {details}"
+    assert details[0] == (
+        "care-gaps; subject=ambiguous-patient evaluated=0 due=0")
+
+
+def test_no_patient_row_evaluates_nothing_either(
+        client, app, tenant_id, tenant_headers):
+    """The other caller reason. Same property, and the more common one — a
+    tenant that has connected nothing yet."""
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    body = r.get_json()
+    assert json.loads(_resp_param(body, "detail")["valueString"]) == []
+    summary = json.loads(_resp_param(body, "summary")["valueString"])
+    assert summary["evaluated"] is False
+    assert summary["not_applicable"] == 0
+    assert _audit_details(app, tenant_id) == [
+        "care-gaps; subject=no-patient evaluated=0 due=0"]
+
+
+def test_a_subject_we_hold_no_record_for_evaluates_nothing(
+        client, app, tenant_id, tenant_headers):
+    """`check-incomplete` — a supplied subject naming a row we do not hold.
+
+    The third reason, and the one where `state` and the not-evaluated reason
+    differ: the subject WAS supplied, so the audit says so, and `evaluated=0`
+    carries the rest.
+    """
+    r = client.get("/r6/fhir/Patient/$care-gaps?subject=Patient/nope",
+                   headers=tenant_headers)
+    body = r.get_json()
+    assert json.loads(_resp_param(body, "detail")["valueString"]) == []
+    summary = json.loads(_resp_param(body, "summary")["valueString"])
+    assert summary["evaluated"] is False
+    assert _audit_details(app, tenant_id) == [
+        "care-gaps; subject=supplied evaluated=0 due=0"]
+
+
+def test_a_resolved_patient_is_still_evaluated_and_says_so(
+        client, app, tenant_id, tenant_headers):
+    """The guard must not become a blanket refusal to evaluate anyone.
+
+    MUTATION: return `results = []` unconditionally -> red.
+    """
+    _seed_patient(app, tenant_id, pid="p-real", gender="female",
+                  birth=_birth_date_for_age(50))
+
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=tenant_headers,
+                    json={})
+    body = r.get_json()
+    summary = json.loads(_resp_param(body, "summary")["valueString"])
+    assert summary["evaluated"] is True
+    assert summary["total"] == 7
+    detail = json.loads(_resp_param(body, "detail")["valueString"])
+    assert len(detail) == 7
+    assert _audit_details(app, tenant_id) == [
+        "care-gaps; subject=tenant-default evaluated=7 due=%d" % summary["due"]]

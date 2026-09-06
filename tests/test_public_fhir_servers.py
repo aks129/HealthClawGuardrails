@@ -305,11 +305,9 @@ class TestFlaskGuardrailsWithHAPI:
             resource = entry.get('resource', {})
             if resource.get('resourceType') != 'Patient':
                 continue
-            # Identifiers should be redacted
+            # Identifier values are removed
             for ident in resource.get('identifier', []):
-                val = ident.get('value', '')
-                if val:
-                    assert val.startswith('***') or len(val) <= 4
+                assert 'value' not in ident
             # Address lines should be stripped
             for addr in resource.get('address', []):
                 assert 'line' not in addr
