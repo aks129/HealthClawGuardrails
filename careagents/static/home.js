@@ -15,7 +15,11 @@
     tile.addEventListener("click", async () => {
       const id = tile.dataset.connector;
       if (tile.dataset.soon) {
-        await post("/api/connections/" + id);  // records intent, never errors
+        // Waitlist tiles record intent and answer 200. A real-record tile
+        // closed by CARE_REAL_RECORDS answers 503 — show that, rather than
+        // a "we'll let you know" the server never agreed to.
+        const res = await post("/api/connections/" + id);
+        if (!res.ok) return say(tile, $("connect-msg"), res.d.error || "Not available yet");
         tile.querySelector(".connector-tag").textContent = "we'll let you know";
         return;
       }

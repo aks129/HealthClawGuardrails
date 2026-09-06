@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from functools import wraps
+from urllib.parse import quote
 
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
@@ -166,6 +167,41 @@ def create_app(config: Config | None = None,
 
     turns: dict[str, deque] = defaultdict(deque)
 
+    # --- canonical host (#264, D7) -------------------------------------------
+
+    @app.before_request
+    def _enforce_canonical_host():
+        # careagents.cloud is the sole origin. A request arriving under any
+        # other Host header (the platform's own *.up.railway.app name) is
+        # sent to the same path and query on the canonical host — 308, so a
+        # POST is replayed as a POST rather than downgraded to a GET. The
+        # target is built from config, never from the request, so a spoofed
+        # Host cannot steer it. `/healthz` is exempt: the platform's health
+        # check arrives on the internal hostname, and a 308 there would mark
+        # every deploy unhealthy. Unset means no redirect (local, CI).
+        if not cfg.canonical_host or request.path == "/healthz":
+            return None
+        # Hostname only. A proxy that appends the default port
+        # (`careagents.cloud:443`) is on the canonical host and must not be
+        # bounced — the Werkzeug test client normalises that port away, a
+        # real request does not, so the strip has to be explicit or every
+        # such request pays a redirect. Config forbids a port in
+        # canonical_host, so the only `:` here is the request's own.
+        host = request.host.lower()
+        if ":" in host and not host.endswith("]"):   # not a bare IPv6 literal
+            host = host.rsplit(":", 1)[0]
+        if host == cfg.canonical_host:
+            return None
+        # `request.path` arrives percent-DECODED, so it can carry bytes that
+        # are illegal in a header — `/%0d%0a...` produced a 500 rather than a
+        # redirect. Re-encode it; `safe` is RFC 3986's pchar set, so an
+        # ordinary path is unchanged byte for byte.
+        target = f"https://{cfg.canonical_host}" + quote(
+            request.path, safe="/:@-._~!$&'()*+,;=")
+        if request.query_string:
+            target += "?" + request.query_string.decode("utf-8", "replace")
+        return redirect(target, code=308)
+
     # --- auth plumbing -------------------------------------------------------
 
     def current_account():
@@ -232,7 +268,8 @@ def create_app(config: Config | None = None,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             advisors=advisors.catalog(),
-            catalog=connectors.catalog(cfg))
+            catalog=connectors.catalog(
+                cfg, real_records=cfg.real_records_open_for(acct.email)))
 
     @app.post("/logout")
     def logout():
@@ -341,14 +378,20 @@ def create_app(config: Config | None = None,
     @app.get("/api/connections/catalog")
     @login_required
     def connections_catalog():
-        return jsonify({"connectors": connectors.catalog(cfg)})
+        acct = current_account()
+        return jsonify({"connectors": connectors.catalog(
+            cfg, real_records=cfg.real_records_open_for(acct.email))})
 
     @app.post("/api/connections/<connector_id>")
     @login_required
     def add_connection(connector_id):
         acct = current_account()
         body = request.get_json(silent=True) or {}
-        plan = connectors.start(connector_id, body.get("provider"), cfg, hc)
+        # New connections only (D3): refresh, poll, upload and delete on an
+        # existing connection never consult the real-records switch.
+        plan = connectors.start(
+            connector_id, body.get("provider"), cfg, hc,
+            real_records=cfg.real_records_open_for(acct.email))
         if plan.get("error"):
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):
