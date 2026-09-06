@@ -736,14 +736,56 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 #: Kernel slice 17: r6/actions/routes.py:action_status, the privileged-view
 #: predicate (full record with a tenant-bound grant, PHI-safe summary
 #: without one). A predicate, never a gate, so it asks rather than refuses.
-_HAS_GRANT_CALLSITES: frozenset[str] = frozenset({'r6/agent_runs/routes.py:62',
-                                                  'r6/actions/routes.py:714'})
+# Keyed by the function that holds the call, never by its line number. A line
+# is not a property of the call; it is a property of everything above it, so a
+# line-keyed entry went red on #658, a PR that touched neither the kernel nor
+# this call, and every slice had to recompute its line after editing and hope
+# nothing landed above it first (#660).
+_HAS_GRANT_CALLSITES: frozenset[str] = frozenset({
+    'r6/agent_runs/routes.py:_tenant_authorized',
+    'r6/actions/routes.py:action_status',
+})
+
+
+def _definition_spans(tree):
+    """(first line, last line, dotted name) for every def and class in a tree.
+
+    Nested definitions come after the ones that hold them, so the innermost
+    span containing a line is the last one that contains it.
+    """
+    spans = []
+
+    def walk(node, prefix):
+        for child in ast.iter_child_nodes(node):
+            holder = isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            if not holder:
+                walk(child, prefix)
+                continue
+            name = f'{prefix}.{child.name}' if prefix else child.name
+            spans.append((child.lineno, child.end_lineno, name))
+            walk(child, name)
+
+    walk(tree, '')
+    return spans
+
+
+def _holder_of(spans, lineno):
+    """The dotted name of the innermost definition holding `lineno`.
+
+    A call outside every definition — a module-level guard, a decorator
+    expression — belongs to the module itself, which is a shape worth being
+    able to name rather than silently skipping.
+    """
+    holding = [name for start, end, name in spans if start <= lineno <= end]
+    return holding[-1] if holding else '<module>'
 
 
 def _has_grant_calls():
-    """(path:lineno, is_discarded) for every production call to has_grant."""
+    """(path:function, is_discarded) for every production call to has_grant."""
     for path in _production_python_files():
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        spans = _definition_spans(tree)
         discarded = {node.value.lineno for node in ast.walk(tree)
                      if isinstance(node, ast.Expr)
                      and isinstance(node.value, ast.Call)}
@@ -753,7 +795,8 @@ def _has_grant_calls():
             name = (getattr(node.func, 'id', None)
                     or getattr(node.func, 'attr', None))
             if name == 'has_grant':
-                yield (f'{path.relative_to(REPO_ROOT)}:{node.lineno}',
+                yield (f'{path.relative_to(REPO_ROOT)}:'
+                       f'{_holder_of(spans, node.lineno)}',
                        node.lineno in discarded)
 
 
@@ -766,6 +809,80 @@ def test_has_grant_is_adopted_only_where_listed():
         'the answer is a silent bypass, so each one is listed deliberately in '
         '_HAS_GRANT_CALLSITES by the PR that adopts it. Unlisted: '
         + ', '.join(unexpected))
+
+
+def test_every_listed_call_site_still_holds_a_call():
+    """A stale entry is an allowlist that permits a call nobody wrote.
+
+    It also hides the next one: a slice that moves its call into a new
+    function and leaves the old name listed passes the unlisted-site check
+    while the guard's list no longer describes the code.
+
+    MUTATION: list a function that holds no has_grant call -> red naming it.
+    """
+    sites = {site for site, _ in _has_grant_calls()}
+    stale = sorted(_HAS_GRANT_CALLSITES - sites)
+    assert not stale, (
+        'listed in _HAS_GRANT_CALLSITES but holding no call to has_grant; '
+        'remove the entry or restore the call: ' + ', '.join(stale))
+
+
+def test_no_call_site_key_is_ambiguous():
+    """Two definitions of one name in one file would share a key.
+
+    The key is only as good as its uniqueness: a redefined function, or a
+    method whose dotted name repeats, would let a listed site vouch for a
+    call somewhere else in the same file.
+    """
+    for path in _production_python_files():
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        spans = _definition_spans(tree)
+        holders = {_holder_of(spans, node.lineno)
+                   for node in ast.walk(tree)
+                   if isinstance(node, ast.Call)
+                   and (getattr(node.func, 'id', None)
+                        or getattr(node.func, 'attr', None)) == 'has_grant'}
+        if not holders:
+            continue
+        names = [name for _, _, name in spans]
+        repeated = sorted({name for name in holders
+                           if names.count(name) > 1})
+        assert not repeated, (
+            f'{path.relative_to(REPO_ROOT)} defines these names more than '
+            'once and a has_grant call sits in one of them, so the key does '
+            'not say which: ' + ', '.join(repeated))
+
+
+def test_the_holder_of_a_call_is_the_innermost_definition():
+    """The key must survive an edit above the call, and name the inner def.
+
+    Both halves are the point of #660: the same call keyed the same way
+    after lines are inserted above it, and a nested helper named as itself
+    rather than as the function that holds it.
+    """
+    source = (
+        'import os\n'
+        'def outer():\n'
+        '    def inner():\n'
+        '        return has_grant(scope=1, tenant=2)\n'
+        '    return inner\n'
+        'class Holder:\n'
+        '    def method(self):\n'
+        '        return has_grant(scope=1, tenant=2)\n'
+        'GATE = has_grant(scope=1, tenant=2)\n')
+
+    def holders(text):
+        tree = ast.parse(text)
+        spans = _definition_spans(tree)
+        return [_holder_of(spans, node.lineno) for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and getattr(node.func, 'id', None) == 'has_grant']
+
+    assert sorted(holders(source)) == [
+        '<module>', 'Holder.method', 'outer.inner']
+    # The defect this replaces: line keys move, function keys do not.
+    assert sorted(holders('# a comment somebody added\n' + source)) == sorted(
+        holders(source))
 
 
 def test_a_has_grant_call_may_never_have_its_answer_thrown_away():
