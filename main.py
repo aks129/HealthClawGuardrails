@@ -21,7 +21,7 @@ import click
 from flask import Flask, g, request as flask_request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
-from r6.database_migrations import upgrade_database
+from r6.database_migrations import register_model_metadata, upgrade_database
 from r6.runtime_config import validate_runtime_environment
 
 
@@ -84,19 +84,6 @@ def _database_uri(app_env: str, settings: Mapping[str, Any]) -> str:
             "production. SQLite is not suitable for production use."
         )
     return "sqlite:///mcp_server.db"
-
-
-def register_model_metadata() -> None:
-    """Import every model module that database lifecycle tasks must see."""
-    from r6.models import R6Resource  # noqa: F401
-    import r6.actions.confirmations  # noqa: F401
-    import r6.actions.events  # noqa: F401
-    import r6.actions.models  # noqa: F401
-    import r6.agent_runs.models  # noqa: F401
-    import r6.command_center.models  # noqa: F401
-    import r6.fasten.models  # noqa: F401
-    import r6.smbp.models  # noqa: F401
-    import r6.wearables.models  # noqa: F401
 
 
 def initialize_database(flask_app: Flask) -> str:
