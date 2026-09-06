@@ -92,15 +92,26 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
         # element Patient does not have and no validator catches. Until the
         # engine builds those types too, the answer is dropped and the drop
         # is said out loud, naming the item and the types, never the answer.
-        defined_type = path.split(".", 1)[0]
-        if defined_type != target_type:
+        # A definition names its resource type twice: in the StructureDefinition
+        # URL before "#" and as the first segment of the element path after
+        # it. Both must be the type this questionnaire extracts. The QA pass
+        # on #664 showed why one is not enough: `AllergyIntolerance#Patient.
+        # name.given` passed a path-only check and landed the allergen answer
+        # in Patient.name.given, and a Questionnaire is a stored resource
+        # that can arrive through the ordinary ingest paths, not only the
+        # intake form this engine was written for.
+        defined_url_type = _definition_url_type(definition)
+        defined_path_type = path.split(".", 1)[0]
+        if defined_path_type != target_type or (
+                defined_url_type and defined_url_type != target_type):
             # %r for the linkId, as the handler in expressions.py does: it is
             # caller-supplied questionnaire structure, and %r is what escapes
             # a newline that would forge a log line.
             logger.warning(
                 "extract: item %r not extracted: its definition targets %s "
-                "and this questionnaire extracts %s (#572)",
-                item.get("linkId"), defined_type, target_type)
+                "(url) / %s (path) and this questionnaire extracts %s (#572)",
+                item.get("linkId"), defined_url_type or "none",
+                defined_path_type, target_type)
             continue
         _value_key, value = _answer_value(item_answers[0])
         if value is None:
@@ -110,6 +121,27 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
     if not populated:
         return []
     return [_post_entry(resource)]
+
+
+_HL7_BASE_SD = "http://hl7.org/fhir/StructureDefinition/"
+
+
+def _definition_url_type(definition):
+    """The base resource type the StructureDefinition URL before "#" names,
+    when that can be read off the URL: the last segment under the HL7 base
+    namespace (http://hl7.org/fhir/StructureDefinition/Patient -> Patient),
+    or a bare type name ("Patient"). Any other URL is a profile whose base
+    type is not in its name (http://example.org/SD, us-core-patient), and
+    cannot be checked without resolving the profile: "" means unknown, and
+    the element path's own type is what the check has."""
+    url = definition.split("#", 1)[0].strip()
+    if not url:
+        return ""
+    if url.startswith(_HL7_BASE_SD):
+        return url[len(_HL7_BASE_SD):].strip("/")
+    if "/" not in url and ":" not in url:
+        return url
+    return ""
 
 
 def _set_path(resource, dotted_path, value):

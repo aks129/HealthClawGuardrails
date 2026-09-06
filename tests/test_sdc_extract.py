@@ -140,3 +140,54 @@ def test_a_definition_for_the_target_type_still_extracts():
     qr = _intake_like_response()
     bundle = extract_resources(qr, q)
     assert [e["resource"]["resourceType"] for e in bundle["entry"]] == ["Patient"]
+
+
+def test_a_definition_whose_url_and_path_disagree_is_refused(caplog):
+    """The QA pass on #664: `AllergyIntolerance#Patient.name.given` names one
+    type in the URL and another in the path. A path-only check let the
+    allergen answer land in Patient.name.given. Both halves must be the
+    target type now.
+
+    MUTATION: r6/sdc/extract.py, drop the URL half of the comparison -> red
+    (the Patient carries name.given).
+    """
+    import json
+    import logging
+    q = _intake_like_questionnaire()
+    q["item"][1]["item"][0]["definition"] = (
+        "http://hl7.org/fhir/StructureDefinition/AllergyIntolerance#Patient.name.given")
+    with caplog.at_level(logging.WARNING, logger="r6.sdc.extract"):
+        bundle = extract_resources(_intake_like_response(), q)
+    patients = [e["resource"] for e in bundle["entry"]
+                if e["resource"]["resourceType"] == "Patient"]
+    assert len(patients) == 1
+    assert patients[0]["name"][0].get("given") is None
+    assert "peanut-572" not in json.dumps(bundle)
+    dropped = [r.getMessage() for r in caplog.records if "not extracted" in r.getMessage()]
+    assert len(dropped) == 1
+    assert "AllergyIntolerance" in dropped[0] and "Patient" in dropped[0]
+
+
+def test_bare_absent_and_profile_url_forms_of_the_target_type_still_extract():
+    """A custom profile URL does not carry its base type in its name
+    (us-core-patient, http://example.org/SD), so it cannot be checked
+    without resolving the profile; the element path's type is what governs
+    there, as it always did. Only the HL7 base namespace and a bare type
+    name are read off the URL."""
+    for definition in ("Patient#Patient.name.family", "#Patient.name.family",
+                       "http://example.org/fhir/StructureDefinition/my-patient#Patient.name.family",
+                       "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient#Patient.name.family"):
+        q = _intake_like_questionnaire()
+        q["item"][0]["definition"] = definition
+        bundle = extract_resources(_intake_like_response(), q)
+        patient = bundle["entry"][0]["resource"]
+        assert patient["resourceType"] == "Patient"
+        assert patient["name"][0]["family"] == "Synthetic", definition
+
+
+def test_a_definition_with_no_element_path_does_not_crash():
+    q = _intake_like_questionnaire()
+    q["item"][0]["definition"] = "http://hl7.org/fhir/StructureDefinition/Patient#"
+    bundle = extract_resources(_intake_like_response(), q)
+    assert all(e["resource"]["resourceType"] == "Patient" for e in bundle["entry"])
+
