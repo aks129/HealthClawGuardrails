@@ -143,7 +143,7 @@ curl -H "X-Tenant-Id: demo" -H "X-Step-Up-Token: $TOKEN" \
 ```json
 { "resourceType": "Patient", "id": "pt-demo",
   "name": [{"given": ["M."], "family": "A."}],
-  "identifier": [{"system": "urn:mrn", "value": "***8214"}],
+  "identifier": [{"system": "urn:mrn"}],
   "birthDate": "1974",
   "address": [{"state": "PA"}] }
 ```

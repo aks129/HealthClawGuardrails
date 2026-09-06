@@ -336,6 +336,16 @@ def skills_index():
 # (type "skill-md"); digests are SHA-256 of the artifact, computed at import.
 # The /.well-known/skills/ alias serves v0.1 clients.
 # ---------------------------------------------------------------------------
+# The $schema value is an opaque version identifier, not an address. The RFC
+# (github.com/cloudflare/agent-skills-discovery-rfc, "Versioning") has clients
+# match it against known schema URIs and states it "does not need to be
+# resolvable"; a client that does not recognise the exact string SHOULD NOT
+# process the index, and one that finds no $schema at all reads the index as
+# v0.1.0, a format we do not serve. `schemas.agentskills.io` does not resolve
+# today and the spec permits that; whether it resolves is simply not a property
+# of this value. Repointing this at a host that answers, or dropping the field,
+# breaks every conformant client. Change it only to adopt a later spec
+# version, byte-for-byte as that version defines it.
 _SKILLS_DISCOVERY_SCHEMA = "https://schemas.agentskills.io/discovery/0.2.0/schema.json"
 _SKILL_NAME_RE = re.compile(r"^(?!-)(?!.*--)[a-z0-9-]{1,64}(?<!-)$")
 

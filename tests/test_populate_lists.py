@@ -11,6 +11,19 @@ of whether the patient has any allergies/medications on file. Absent data is
 not consent to a "no known allergies" attestation; only a human can make
 that call (Task 6). See test_zero_allergies_never_infers_no_known_allergies
 below, which is the point of this whole file.
+
+THE SECOND INVARIANT, added with the CTO ruling on PR #562: ROW COUNT EQUALS
+RECORD COUNT. A stored resource always produces a repeat, even when not one
+of its leaves resolves a label — an unlabelled allergen is a row with no
+answer plus an issue naming it, never a dropped row. A patient with three
+allergies shown two is a false negative on an allergy list, and an allergy
+section that renders empty is one click from someone ticking "no known
+allergies", which walks straight into the invariant above.
+
+Under that ruling every ATTEMPTED leaf that resolves nothing reports an
+issue, so the `issues` assertions here are exact lists rather than `[]`.
+`PATIENT` below carries no telecom and no address, which is why five
+demographics leaves appear in nearly all of them.
 """
 
 from r6.sdc.intake import intake_questionnaire
@@ -43,6 +56,45 @@ def _by_link_id(qr, link_id):
 
 def _all_by_link_id(qr, link_id):
     return [item for item in _walk(qr.get("item", [])) if item.get("linkId") == link_id]
+
+
+def _issue_ids(issues):
+    """Every linkId reported, WITH duplicates — one allergy row per repeat."""
+    return sorted(issue["linkId"] for issue in issues)
+
+
+#: `PATIENT` has name/birthDate/gender and neither telecom nor address, so
+#: these five intake demographics leaves resolve nothing on every populate in
+#: this file. Spelled out rather than filtered away: an assertion that says
+#: "and nothing else" is what stops a real regression hiding in the list.
+ABSENT_DEMOGRAPHICS = [
+    "demographics.address-city",
+    "demographics.address-line",
+    "demographics.address-postal-code",
+    "demographics.address-state",
+    "demographics.phone",
+]
+
+
+def _snomed_allergy(rid, code, reaction_code=None):
+    """An allergy as the engine actually sees it after apply_redaction.
+
+    r6/terminology.py holds zero SNOMED entries and TERMINOLOGY_LOOKUP_ENABLED
+    is unset in every deploy config, so on a real import the upstream `text`
+    and `display` are stripped and nothing replaces them — this is the shape
+    that reaches populate.py, not a hypothetical.
+    """
+    resource = {
+        "resourceType": "AllergyIntolerance",
+        "id": rid,
+        "patient": {"reference": "Patient/p1"},
+        "code": {"coding": [{"system": "http://snomed.info/sct", "code": code}]},
+    }
+    if reaction_code:
+        resource["reaction"] = [{"manifestation": [
+            {"coding": [{"system": "http://snomed.info/sct",
+                         "code": reaction_code}]}]}]
+    return resource
 
 
 def _med_request(rid, display, status="active", dose=None):
@@ -118,7 +170,11 @@ def test_two_active_medications_populate_two_repeats():
                         for c in r["item"]))
     dose_item = next(c for c in dosed["item"] if c["linkId"] == "medications.item.dose")
     assert dose_item["answer"][0]["valueString"] == "Twice daily"
-    assert issues == []
+
+    # m2 carries no dosageInstruction, so its dose leaf resolves nothing and
+    # says so. One issue for one unresolved row, not one for the linkId.
+    assert _issue_ids(issues) == sorted(
+        ABSENT_DEMOGRAPHICS + ["medications.item.dose"])
 
 
 def test_inactive_medications_excluded():
@@ -157,7 +213,8 @@ def test_one_allergy_populates_and_nka_stays_unanswered():
 
     nka = _by_link_id(qr, "allergies.no-known-allergies")
     assert "answer" not in nka
-    assert issues == []
+    # Both allergy leaves resolved, so only the absent demographics report.
+    assert _issue_ids(issues) == ABSENT_DEMOGRAPHICS
 
 
 def test_zero_allergies_never_infers_no_known_allergies():
@@ -183,7 +240,12 @@ def test_zero_allergies_never_infers_no_known_allergies():
     # The allergies repeating group produced zero repeats — it's empty, not
     # defaulted to anything.
     assert _all_by_link_id(qr, "allergies.item") == []
-    assert issues == []
+
+    # And zero allergies produces zero ALLERGY issues too. The issue channel
+    # must not become the back door the answer set is not: "we tried to work
+    # out your allergies and could not" is the same inference wearing a
+    # different hat.
+    assert _issue_ids(issues) == ABSENT_DEMOGRAPHICS
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +263,7 @@ def test_zero_medications_never_infers_no_current_medications():
     assert "answer" not in no_current
 
     assert _all_by_link_id(qr, "medications.item") == []
-    assert issues == []
+    assert _issue_ids(issues) == ABSENT_DEMOGRAPHICS
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +290,7 @@ def test_three_conditions_populate_three_repeats():
     }
     assert names == {"Type 2 diabetes mellitus", "Essential hypertension",
                       "Hyperlipidemia"}
-    assert issues == []
+    assert _issue_ids(issues) == ABSENT_DEMOGRAPHICS
 
 
 # ---------------------------------------------------------------------------
@@ -269,4 +331,165 @@ def test_all_three_lists_populate_together_and_nka_still_unanswered():
     assert len(_all_by_link_id(qr, "conditions.item")) == 1
     nka = _by_link_id(qr, "allergies.no-known-allergies")
     assert "answer" not in nka
-    assert issues == []
+
+    # m1 has no dose and a1 has no reaction; both say so, and nothing else
+    # does.
+    assert _issue_ids(issues) == sorted(
+        ABSENT_DEMOGRAPHICS
+        + ["allergies.item.reaction", "medications.item.dose"])
+
+
+# ---------------------------------------------------------------------------
+# 7. Row count equals record count, and the attestation exclusion
+#    (CTO ruling on PR #562)
+# ---------------------------------------------------------------------------
+
+def test_three_unlabelled_allergies_still_produce_three_repeats():
+    """THE ROW-COUNT INVARIANT.
+
+    Three stored allergies, none of which the server can label — SNOMED
+    codes, and r6/terminology.py has no SNOMED entries, so apply_redaction
+    strips the upstream text and nothing replaces it. That is today's real
+    behaviour on a MEDENT-shaped import, not an edge case.
+
+    Three rows must still come back. Omitting an unlabelled row would show a
+    patient with three allergies only the ones we happened to recognise,
+    which is a false negative on an allergy list, and it would leave the
+    section empty for a patient whose allergies are all SNOMED-coded.
+
+    The blanks are REPORTED rather than answered: six issues, one per
+    unresolved leaf, so the renderer knows the row exists and its label does
+    not. Nothing goes into the answer set — a marker string there becomes
+    fabricated clinical text the moment $extract writes it back.
+
+    MUTATION: skip a repeat whose leaves all resolve None -> len(repeats)
+    drops and this goes red before anything renders.
+    """
+    q = intake_questionnaire()
+    allergies = [
+        _snomed_allergy("a1", "91936005"),    # penicillin allergy
+        _snomed_allergy("a2", "300916003"),   # latex allergy
+        _snomed_allergy("a3", "425525006"),   # dairy allergy
+    ]
+    content = [PATIENT] + allergies
+
+    qr, issues = populate_questionnaire(q, PATIENT, content)
+
+    repeats = _all_by_link_id(qr, "allergies.item")
+    assert len(repeats) == 3, "row count must equal record count"
+    for repeat in repeats:
+        assert [c["linkId"] for c in repeat["item"]] == [
+            "allergies.item.allergen", "allergies.item.reaction"]
+        for child in repeat["item"]:
+            assert "answer" not in child, (
+                "an unresolvable label must not be invented into the answer "
+                "set — $extract writes answers back as clinical text")
+
+    assert _issue_ids(issues) == sorted(
+        ABSENT_DEMOGRAPHICS
+        + ["allergies.item.allergen"] * 3
+        + ["allergies.item.reaction"] * 3)
+
+
+def test_the_attestation_items_never_appear_in_the_issue_list():
+    """THE EXCLUSION, pinned as its own row.
+
+    `allergies.no-known-allergies` and `medications.no-current-medications`
+    carry no `code` and no initialExpression precisely so that no population
+    mechanism ever touches them (r6/sdc/intake.py). Under unconditional issue
+    emission they are the two linkIds it must still never name.
+
+    An issue reading "not populated: no value resolved" against
+    `no-known-allergies` tells a model-facing reader that the server TRIED to
+    determine whether this patient has no known allergies and failed. That is
+    one step from something inferring the attestation, and "no known
+    allergies is never inferred" is a non-negotiable (CLAUDE.md). The
+    attestation is a thing a human affirms; it is not a value that can be
+    absent.
+
+    Asserted across every content shape, because "with no allergies on file"
+    is exactly the case where a helpful-sounding issue would be tempting.
+    """
+    q = intake_questionnaire()
+    shapes = {
+        "nothing on file": [PATIENT],
+        "allergies on file": [PATIENT, _allergy("a1", "Penicillin", "Hives")],
+        "unlabelled allergies on file": [PATIENT, _snomed_allergy("a1", "91936005")],
+        "medications on file": [PATIENT, _med_request("m1", "Metformin")],
+    }
+
+    for label, content in shapes.items():
+        qr, issues = populate_questionnaire(q, PATIENT, content)
+        named = _issue_ids(issues)
+        for attestation in ("allergies.no-known-allergies",
+                            "medications.no-current-medications"):
+            assert attestation not in named, f"{label}: {attestation} reported"
+            item = _by_link_id(qr, attestation)
+            assert item is not None and "answer" not in item, label
+
+
+ALLERGEN_DEF = ("http://hl7.org/fhir/StructureDefinition/AllergyIntolerance"
+                "#AllergyIntolerance.code.text")
+
+
+def _row_with_attestation():
+    """A supported list group carrying an attestation-shaped leaf INSIDE it.
+
+    `allergies.no-known-allergies` is a sibling of the repeating group on the
+    real intake form, so nothing there exercises a mechanism-less boolean
+    reaching the list-row path. This puts one exactly there.
+    """
+    return {
+        "resourceType": "Questionnaire", "id": "attestation-in-row",
+        "status": "active",
+        "item": [{
+            "linkId": "allergies.item", "type": "group", "repeats": True,
+            "item": [
+                {"linkId": "allergies.item.allergen", "type": "string",
+                 "definition": ALLERGEN_DEF},
+                {"linkId": "allergies.item.no-known-allergies",
+                 "type": "boolean"},
+            ],
+        }],
+    }
+
+
+def test_a_mechanism_less_boolean_inside_a_list_row_is_neither_answered_nor_reported():
+    """THE EXCLUSION, ON THE ROW PATH.
+
+    A row's leaves now resolve through `_resolve_answer` rather than by
+    `definition` alone, so a leaf with no mechanism at all reaches the
+    "NOTHING WAS ATTEMPTED" branch by a route it never took before. That
+    branch is what keeps `allergies.no-known-allergies` out of the issue
+    list, and an issue reading "not populated: no value resolved" against an
+    NKA-shaped boolean tells a model-facing reader the server TRIED to
+    determine no-known-allergies and failed — one step from inferring it,
+    which is the non-negotiable (CLAUDE.md).
+
+    Asserted with allergies on file and with none, because zero rows and
+    unlabelled rows are the two shapes where a helpful-sounding answer or
+    issue would be tempting. Zero rows emits no repeat at all, so the leaf
+    cannot be answered there either.
+
+    MUTATION: report any unresolved leaf in a row regardless of mechanism ->
+    the boolean is named and this goes red.
+    """
+    q = _row_with_attestation()
+    shapes = {
+        "nothing on file": [],
+        "one labelled": [_allergy("a1", "Penicillin")],
+        "two unlabelled": [_snomed_allergy("a1", "91936005"),
+                           _snomed_allergy("a2", "300916003")],
+    }
+
+    for label, allergies in shapes.items():
+        qr, issues = populate_questionnaire(q, PATIENT, [PATIENT] + allergies)
+
+        rows = _all_by_link_id(qr, "allergies.item")
+        assert len(rows) == len(allergies), (
+            f"{label}: row count must equal record count")
+        assert "allergies.item.no-known-allergies" not in _issue_ids(issues), (
+            f"{label}: a mechanism-less boolean inside a row was reported")
+        for item in _all_by_link_id(qr, "allergies.item.no-known-allergies"):
+            assert "answer" not in item, (
+                f"{label}: absent allergy data is not an attestation")

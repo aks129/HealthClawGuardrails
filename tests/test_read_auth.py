@@ -333,3 +333,130 @@ def test_read_flag_on_oauth_bearer_no_read_scope_401(client, monkeypatch):
         'Authorization': f'Bearer {tok}',
     })
     assert resp.status_code == 401
+
+
+# --- Read-shaped POST operations -------------------------------------------
+#
+# The before_request hook above only gates GET ("Only reads. Writes ... are
+# gated elsewhere"), so every read-shaped POST — a FHIR $operation that reads
+# rather than writes — has to call authenticate_tenant_read for itself. Each
+# such call is therefore the ONLY thing standing between an unauthenticated
+# caller and that tenant's data, and until now four of them had no test.
+#
+# Each test below asserts the status AND the OperationOutcome, because under
+# the mutation these routes do not return 200 uniformly — $populate 404s on an
+# unresolvable questionnaire — and "not 200" is a weaker claim than "401
+# security", which is the one the gate makes.
+#
+# The other two read-shaped POSTs are already pinned, next to their own
+# routes rather than here: QuestionnaireResponse/$extract in
+# tests/test_sdc_routes.py and Measure/$evaluate-measure in
+# tests/test_quality_routes.py. Named so the next reader does not re-add them.
+
+def _assert_read_refused(resp):
+    assert resp.status_code == 401, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body['resourceType'] == 'OperationOutcome'
+    assert body['issue'][0]['code'] == 'security'
+
+
+def test_read_flag_on_interpret_post_no_token_401(client, monkeypatch):
+    """POST Observation/$interpret returns interpreted labs for the tenant.
+
+    MUTATION: r6/labs/routes.py, delete the authenticate_tenant_read call in
+    interpret_labs (or null its result) -> red. Executed 2026-09-04.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.post('/r6/fhir/Observation/$interpret',
+                       json={'resourceType': 'Parameters', 'parameter': []},
+                       headers={'X-Tenant-Id': 'private-tenant'})
+    _assert_read_refused(resp)
+
+
+def test_read_flag_on_care_gaps_post_no_token_401(client, monkeypatch):
+    """Patient/$care-gaps is registered for GET *and* POST. The GET is caught
+    by the before_request hook; the POST is caught by nothing but the
+    in-handler call, so the POST is the one worth pinning.
+
+    MUTATION: r6/caregaps/routes.py, delete the authenticate_tenant_read call
+    in care_gaps (or null its result) -> red. Executed 2026-09-04.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.post('/r6/fhir/Patient/$care-gaps',
+                       json={'resourceType': 'Parameters', 'parameter': []},
+                       headers={'X-Tenant-Id': 'private-tenant'})
+    _assert_read_refused(resp)
+
+
+def test_read_flag_on_populate_post_no_token_401(client, monkeypatch):
+    """POST Questionnaire/$populate fills a form from the tenant's record.
+
+    The gate must fire BEFORE questionnaire resolution, or the refusal
+    degrades into a 404 that reports whether the questionnaire exists.
+
+    MUTATION: r6/sdc/routes.py, delete the authenticate_tenant_read call in
+    sdc_populate (or null its result) -> red (404, not 401). Executed
+    2026-09-04.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.post('/r6/fhir/Questionnaire/$populate',
+                       json={'resourceType': 'Parameters', 'parameter': []},
+                       headers={'X-Tenant-Id': 'private-tenant'})
+    _assert_read_refused(resp)
+
+
+
+def test_read_flag_on_these_operations_answer_for_a_public_tenant(
+        client, monkeypatch):
+    """Non-vacuity for the three above.
+
+    Each asserts a 401. A route that 401s for every caller — or that stopped
+    being registered at all — would satisfy every one of them. With the flag
+    on and the tenant public, the same three calls must NOT be 401.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    body = {'resourceType': 'Parameters', 'parameter': []}
+    headers = {'X-Tenant-Id': 'desktop-demo'}
+    for path in ('/r6/fhir/Observation/$interpret',
+                 '/r6/fhir/Patient/$care-gaps',
+                 '/r6/fhir/Questionnaire/$populate'):
+        resp = client.post(path, json=body, headers=headers)
+        assert resp.status_code != 401, (
+            f'{path} refuses a public tenant, so its 401 test proves nothing')
+
+
+def test_read_flag_on_appointment_brief_no_token_401(client, monkeypatch):
+    """/AppointmentBrief had no read-auth test at all; now it has one.
+
+    Stated carefully, because the obvious mutation does NOT turn this red.
+    The brief is a GET, so it is gated twice: by the `authenticate_read`
+    before_request hook AND by its own `authenticate_tenant_read` call.
+    Either one alone refuses — verified by nulling each in turn, both times
+    still 401. So this test pins the property (no token, no brief) and
+    notices only the loss of the LAST gate, not the first.
+
+    MUTATION: null r6/brief/routes.py's authenticate_tenant_read call ->
+    still green (defence in depth). Null the `request.method != 'GET'` early
+    return in r6/routes.py's authenticate_read as well -> red. Both executed
+    2026-09-04. #630 lists this route alongside the read-shaped POSTs; it is
+    a GET, and the single-call mutation it names does not turn a guard red.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', '')
+    resp = client.get('/r6/fhir/AppointmentBrief',
+                      headers={'X-Tenant-Id': 'private-tenant'})
+    _assert_read_refused(resp)
+
+
+def test_read_flag_on_appointment_brief_answers_a_public_tenant(
+        client, monkeypatch):
+    """Non-vacuity for the brief: public tenant, flag on, not a 401."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
+    resp = client.get('/r6/fhir/AppointmentBrief',
+                      headers={'X-Tenant-Id': 'desktop-demo'})
+    assert resp.status_code != 401, resp.get_data(as_text=True)
