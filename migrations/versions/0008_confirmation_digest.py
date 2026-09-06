@@ -1,6 +1,6 @@
 """Record what bytes a human approved: action_confirmations.payload_digest.
 
-Revision ID: 0008_action_confirmation_payload_digest
+Revision ID: 0008_confirmation_digest
 Revises: 0007_agent_worker_presence
 
 #559, human-gate spec 8.3: sha256 over the canonical payload at the moment
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0008_action_confirmation_payload_digest"
+revision = "0008_confirmation_digest"
 down_revision = "0007_agent_worker_presence"
 branch_labels = None
 depends_on = None
