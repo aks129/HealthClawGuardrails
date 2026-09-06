@@ -7,9 +7,12 @@ name: pr-agent
 # /improve, /ask and /describe typed into a PR comment. Two reviewers with
 # different prompts miss different things.
 #
-# Runs on `pull_request`, never `pull_request_target`, so a PR from a fork
-# receives no secret and the job fails closed. The action never checks out
-# or executes PR code; it reads the diff through the GitHub API.
+# Runs on `pull_request_target`, like claude-pr-review.yml, for the same
+# reason: tests/test_ci_hardening.py refuses write permissions on anything
+# triggered by `pull_request`, and this job needs `pull-requests: write` to
+# post a review. That is safe because the action never checks out or
+# executes pull-request code; it reads the diff through the GitHub API and
+# treats every byte of it as data under review.
 #
 # `synchronize` is deliberately absent from the trigger list: a review on
 # every push would re-run on each "update branch" during a long merge queue
@@ -25,7 +28,7 @@ name: pr-agent
 # on every run, so the green is never mistaken for a review.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, ready_for_review]
   issue_comment:
     types: [created]
