@@ -94,8 +94,11 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
         # is said out loud, naming the item and the types, never the answer.
         defined_type = path.split(".", 1)[0]
         if defined_type != target_type:
+            # %r for the linkId, as the handler in expressions.py does: it is
+            # caller-supplied questionnaire structure, and %r is what escapes
+            # a newline that would forge a log line.
             logger.warning(
-                "extract: item %s not extracted: its definition targets %s "
+                "extract: item %r not extracted: its definition targets %s "
                 "and this questionnaire extracts %s (#572)",
                 item.get("linkId"), defined_type, target_type)
             continue
