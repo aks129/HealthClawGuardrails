@@ -482,7 +482,7 @@ def build(out: Path) -> None:
         '  "mcpServers": {\n'
         '    "healthclaw-demo": {\n'
         '      "type": "streamable-http",\n'
-        '      "url":  "https://healthclaw.up.railway.app/mcp",\n'
+        '      "url":  "https://mcp-demo-production-ee2c.up.railway.app/mcp",\n'
         '      "headers": { "X-Tenant-ID": "desktop-demo" }\n'
         "    }\n"
         "  }\n"
