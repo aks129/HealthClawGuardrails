@@ -84,6 +84,13 @@ class Connection(Base):
     # the next one can report "N new records" without diffing every resource.
     last_synced_at = Column(Float, nullable=True)
     last_count = Column(Integer, nullable=True)
+    # The same baseline for the types the count deliberately excludes —
+    # DocumentReferences, which are ingested but not readable (#226). Without
+    # it the only measurable fact is "this tenant holds documents", which is
+    # true from the first tick for every MEDENT tenant and so cannot tell an
+    # arrival from a record that has held notes all along. A plain integer:
+    # no patient data, nothing about the record's content.
+    last_uncounted = Column(Integer, nullable=True)
     account = relationship("Account", back_populates="connections")
     agents = relationship("Agent", back_populates="connection")
 
@@ -184,6 +191,10 @@ def _ensure_columns(engine) -> None:
             if "last_count" not in cols:
                 conn.execute(text(
                     "ALTER TABLE ca_connections ADD COLUMN last_count INTEGER"))
+            if "last_uncounted" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE ca_connections ADD COLUMN last_uncounted "
+                    "INTEGER"))
 
 
 def make_engine(url: str):

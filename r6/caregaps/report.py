@@ -96,6 +96,29 @@ def _consumer_line(r):
         return {"rule_id": r.get("rule_id"), "title": title, "status": status,
                 "message": (f"Your {title.lower()} looks up to date "
                             f"(last on {r.get('last_done')}).")}
+    # An undecided screening the person is ELIGIBLE for (#436). #428 made
+    # colorectal screening indeterminate rather than let it claim a gap it had
+    # not checked for, and its PR said the prompt to act survived the status
+    # change. It did not: lines were built for `due` and `up_to_date` only, so
+    # the note written for the patient reached the clinician-facing `detail`
+    # and stopped there. The person saw the screening named in
+    # `unevaluated_note` and nothing about what to do.
+    #
+    # `applicable is True` and not merely `indeterminate`: a rule that could
+    # not decide whether it applies AT ALL (sex or date of birth missing) has
+    # nothing to tell this person yet, and a line for it would put a screening
+    # in front of someone who may not need one. Those stay named in the marker,
+    # which claims no eligibility. The two causes are kept apart here for the
+    # same reason `_coverage_marker` keeps them apart below.
+    if status == "indeterminate" and r.get("applicable") is True:
+        return {"rule_id": r.get("rule_id"), "title": title, "status": status,
+                # The engine's own status travels, so `lines`, `detail` and
+                # `summary` never disagree about one screening. The label is
+                # the word for it a patient can read: the MCP App page renders
+                # a status by swapping underscores for spaces, which gives
+                # "due" and "up to date" and would give "indeterminate".
+                "status_label": "could not check",
+                "message": f"We could not check {title.lower()} ({cadence}). {note}"}
     return None
 
 
@@ -200,12 +223,15 @@ def build_consumer_summary(results, not_evaluated=None):
     hand over. The caller knows all three and the engine can see none of them,
     since an unidentifiable patient produces exactly the rule results a
     healthy one does."""
+    # Which statuses earn a line is `_consumer_line`'s decision alone. The
+    # status check used to be made here as well, so the rule lived in two
+    # places and the copies had to be changed together — the generator behind
+    # #387/#435 (docs/2026-08-06-two-generators-three-laws.md, Law 2).
     lines = []
     for r in results:
-        if r.get("status") in ("due", "up_to_date"):
-            line = _consumer_line(r)
-            if line:
-                lines.append(line)
+        line = _consumer_line(r)
+        if line:
+            lines.append(line)
     out = {"lines": lines, "note": _CONSUMER_NOTE}
     marker = _unevaluated_marker(results, not_evaluated)
     if marker:

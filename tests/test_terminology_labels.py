@@ -7,6 +7,8 @@ which leaked PHI — real feeds put patient names in that field. These tests pin
 the safe version.
 """
 
+import json
+
 from r6.redaction import apply_redaction
 from r6.terminology import (label_codings, lookup, reset_unlabelled,
                             unlabelled_codes)
@@ -107,3 +109,61 @@ def test_every_code_the_live_demo_tenant_serves_has_a_label():
             ("http://www.nlm.nih.gov/research/umls/rxnorm", "860975")]
     missing = [c for c in live if not lookup(*c)]
     assert not missing, f"demo codes with no label: {missing}"
+
+
+def test_no_upstream_display_survives_into_the_redacted_output():
+    """THE PROPERTY, asserted on what apply_redaction actually returns: no
+    raw upstream free text reaches the caller, regardless of what order
+    label_codings and the strip run in internally.
+
+    This supersedes a call-order-only version of this test. That version
+    spied on what label_codings was CALLED with and asserted the spy saw
+    `None` — which pins one implementation of "order matters" (strip, then
+    label) but not the property the ordering exists to protect. A mutation
+    that strips the display, lets the spy fire clean, and then restores the
+    raw display afterward (label_codings itself does this kind of "stash a
+    value, put it back" restore for codes it doesn't recognise, so this is
+    not a contrived attack — it's the shape of code already in this file)
+    passes the old assertion while 'Jane Secret' reaches the return value.
+    Verified: with that restore-after mutation applied, the old
+    `calls == [None]` assertion, both identifier tests, and conformance
+    Grade A all stayed green while the leak occurred — see PR discussion
+    on #615.
+
+    MUTATION 1 (call order): swap the two calls in apply_redaction
+    (label_codings before _redact_recursive) -> red.
+    MUTATION 2 (stash-and-restore around a clean call order): strip, call
+    label_codings, then restore the pre-strip display afterward -> red,
+    because this test reads the final return value, not a spy's snapshot.
+    """
+    import r6.redaction as redaction_mod
+
+    obs = {
+        "resourceType": "Observation",
+        "code": {"coding": [{"system": LOINC, "code": "2339-0",
+                             "display": "Glucose for Jane Secret"}]},
+    }
+    result = redaction_mod.apply_redaction(obs)
+
+    result_text = json.dumps(result)
+    assert "Jane Secret" not in result_text, (
+        "the upstream display survived into the redacted output "
+        f"regardless of call order: {result!r}")
+
+    # The positive half: a recognised code still gets its label back — the
+    # strip-then-label order exists to serve this, not to leave every
+    # coding blank. Losing this the other direction (over-eagerly blank)
+    # is the #112-adjacent regression the ordering also has to avoid.
+    coding = result["code"]["coding"][0]
+    assert coding.get("display") == real_label_for(LOINC, "2339-0"), (
+        f"a recognised code should still be labelled from the terminology "
+        f"table after the strip; got {coding.get('display')!r}")
+
+
+def real_label_for(system, code):
+    """The label the terminology table gives a known code, for the
+    positive-assertion half above — read directly rather than duplicating
+    r6/terminology.py's table here."""
+    probe = {"code": {"coding": [{"system": system, "code": code}]}}
+    label_codings(probe)
+    return probe["code"]["coding"][0].get("display")

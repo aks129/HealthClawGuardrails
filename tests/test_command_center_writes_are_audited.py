@@ -19,6 +19,7 @@ whole contract is that it holds no PHI.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -79,17 +80,36 @@ def test_the_conversation_audit_never_carries_the_message(app, client, step_up):
     PHI-free, and chat transcripts are PHI-adjacent.
 
     MUTATION: put `text` (or any slice of it) into the detail -> red.
+    Executed 2026-09-04 as `preview={text[:10]}`. Before the two additions
+    below it was NOT red: `text[:10]` is "Quintaviou", which contains none of
+    the five whole words, and the POST's status was never asserted, so a
+    refusal would have satisfied the loop with an empty trail.
     """
     _clear(app)
-    client.post("/command-center/api/conversations",
-                headers={"X-Step-Up-Token": step_up},
-                json={"tenant_id": _TENANT, "role": "user",
-                      "text": _SECRET_TEXT, "agent_id": "a1"})
+    resp = client.post("/command-center/api/conversations",
+                       headers={"X-Step-Up-Token": step_up},
+                       json={"tenant_id": _TENANT, "role": "user",
+                             "text": _SECRET_TEXT, "agent_id": "a1"})
+
+    # Non-vacuity. Without this the write could 4xx and the absence check
+    # below would be reporting on a trail that was never written.
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    events = _events(app, "ConversationMessage")
+    assert len(events) == 1, events
 
     blob = json.dumps(_events(app))
     for token in ("Quintavious", "Zzyzxbarton", "A1c", "8.1", "scared"):
         assert token not in blob, (
             f"the audit trail carries {token!r} out of the message body")
+
+    # The property, rather than a list of phrases that happen not to appear:
+    # the detail is exactly these four ids-and-counts fields and nothing
+    # else. A blocklist can only refuse what it was told about; a fullmatch
+    # refuses everything it was not. Any appended slice of the turn — any
+    # appended anything — fails here.
+    assert re.fullmatch(
+        r"conversation=\S+ role=\S+ channel=\S+ chars=\d+",
+        events[0]["detail"]), events[0]["detail"]
 
 
 def test_an_idempotent_replay_does_not_audit_a_second_write(app, client, step_up):
@@ -138,18 +158,28 @@ def test_creating_and_updating_a_task_are_both_audited(app, client, step_up):
 def test_the_task_audit_never_carries_the_title(app, client, step_up):
     """A task title is caller-supplied free text and may name a condition.
 
-    MUTATION: put `title` into the create detail -> red.
+    MUTATION: put `title` into the create detail -> red. Executed 2026-09-04
+    as `title={title[:10]}` — the same slice-shaped leak as the conversation
+    case, and the same result: green before the additions below, red after.
+    This docstring had never been run.
     """
     _clear(app)
-    client.post("/command-center/api/tasks",
-                headers={"X-Step-Up-Token": step_up},
-                json={"tenant_id": _TENANT, "agent_id": "joe",
-                      "title": _SECRET_TEXT})
+    resp = client.post("/command-center/api/tasks",
+                       headers={"X-Step-Up-Token": step_up},
+                       json={"tenant_id": _TENANT, "agent_id": "joe",
+                             "title": _SECRET_TEXT})
+
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    events = _events(app, "AgentTask")
+    assert len(events) == 1, events
 
     blob = json.dumps(_events(app, "AgentTask"))
     for token in ("Quintavious", "Zzyzxbarton", "A1c", "scared"):
         assert token not in blob, (
             f"the audit trail carries {token!r} out of a task title")
+
+    assert re.fullmatch(r"priority=\S+ title_chars=\d+",
+                        events[0]["detail"]), events[0]["detail"]
 
 
 # --- the gap this file closes, stated as a property -------------------------

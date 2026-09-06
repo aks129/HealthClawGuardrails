@@ -42,11 +42,12 @@ Copy this into the release PR/issue and check items off.
       `https://app.healthclaw.io/r6/fhir/metadata` returns 200 post-deploy
 - [ ] **mcp-server does NOT auto-deploy** — staging-dir `railway up` (see
       [docs/development.md](docs/development.md) deploy notes), then verify `POST /mcp/rpc tools/list` returns the expected tool count
-- [ ] **CareAgents does NOT auto-deploy** — `./deploy/careagents/deploy.sh` (VPS) or a
-      staging-dir `railway up` (see [docs/development.md](docs/development.md) deploy
-      notes), then verify `GET /healthz` reports `build` = the released commit. Skipping
-      this is how both deployments ended up months behind `main` while every production
-      check was green (#258)
+- [ ] **CareAgents does NOT auto-deploy** — staging-dir `railway up` for the web *and*
+      worker service (see
+      [docs/runbooks/careagents-durable-worker.md](docs/runbooks/careagents-durable-worker.md)),
+      then verify `GET /healthz` reports `build` = the released commit. Skipping
+      this is how the deployments ended up months behind `main` while every production
+      check was green (#258). The old VPS script is retired and refuses to run
 - [ ] Re-seed `desktop-demo` if the release changed seed data: `POST /r6/fhir/internal/seed`
 
 ### 5. Announce (within 48h of the release)

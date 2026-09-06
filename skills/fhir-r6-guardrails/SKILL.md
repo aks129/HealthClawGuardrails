@@ -97,9 +97,9 @@ DeviceAlert, DeviceAssociation, Requirements, ActorDefinition.
 ## Security Guardrails (Always Active)
 
 ### PHI Redaction
-Applied on every read path. Names truncated to initials, identifiers masked to
-last 4 characters, addresses stripped to city/state/country, birth dates truncated
-to year, photos removed, notes replaced with [Redacted].
+Applied on every read path. Names truncated to initials, identifier values
+removed (system and type kept), addresses stripped to city/state/country, birth
+dates truncated to year, photos removed, notes replaced with [Redacted].
 
 ### Audit Trail
 Append-only AuditEvent records for every resource access. Database-level immutability.

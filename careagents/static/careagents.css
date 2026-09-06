@@ -56,6 +56,14 @@ h1, h2, .wordmark, .chat-name {
 }
 .guardrail-tag:hover { border-color: var(--sage); }
 
+/* --- beta banner (landing + hub) ---------------------------------------- */
+.beta-banner {
+  margin: 0 clamp(20px, 5vw, 56px) 4px; padding: 9px 14px;
+  font-size: 13.5px; color: var(--ink-soft);
+  background: #F6E6D9; border: 1px solid #EBD3C0; border-radius: 12px;
+}
+.beta-banner b { color: var(--clay-deep); }
+
 /* --- landing ---------------------------------------------------------- */
 .hero { padding: clamp(30px, 7vh, 90px) clamp(20px, 5vw, 56px) 30px; }
 .hero-inner { max-width: 880px; }
@@ -372,7 +380,6 @@ h1 em { font-style: italic; color: var(--clay); }
 .surface.on { border-color: #D8E2D8; background: #F3F7F3; cursor: default; }
 .surface.on span { color: var(--sage); font-weight: 600; }
 .surface.soon { opacity: .6; cursor: default; }
-#tg-surface:hover { border-color: var(--clay); }
 
 /* --- onboarding cues ----------------------------------------------------- */
 .onboard-lead { color: var(--ink-soft); font-size: 16px; margin: 2px 0 26px;
@@ -450,6 +457,16 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .marketplace > .inline-msg, .surface-row > .inline-msg {
   grid-column: 1 / -1; margin-top: 2px;
   background: #FBE9E2; border-radius: 12px; padding: 10px 14px;
+}
+/* Both message elements are revealed EMPTY and written into ANNOUNCE_DELAY_MS
+   later, so the live region is in the accessibility tree before its text
+   changes (#590). While empty they must draw nothing, or that window is a
+   flash of blank colour and a layout jump. Padding and background only:
+   `display: none` or `visibility: hidden` would take the region back out of
+   the accessibility tree, which is the whole thing the wait is buying. Ties
+   with the rule above on specificity, so it has to come after it. */
+.inline-msg:empty, .conn-refresh-msg:empty {
+  margin: 0; padding: 0; background: none;
 }
 
 /* --- picker / code / delete dialogs --------------------------------------- */

@@ -40,15 +40,16 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO / "deploy" / "careagents" / "Dockerfile"
 
-# The command the web role ran before #273, split as the shell splits it. Any
-# edit to a flag, a default, or the access-log format has to be made here too —
-# which is the point: the durable-run split must not quietly re-tune the web
-# process while it is adding a second role.
+# The command the web role runs, split as the shell splits it. Any edit to a
+# flag, a default, or the access-log format has to be made here too — which is
+# the point: the durable-run split must not quietly re-tune the web process
+# while it is adding a second role. `--threads` moved 4 -> 8 in #219; the test
+# below says why, so the number is never re-tuned from an estimate.
 WEB_ARGV = [
     "gunicorn", "careagents.wsgi:app",
     "--bind", "0.0.0.0:8600",
     "--workers", "2",
-    "--threads", "4",
+    "--threads", "8",
     "--timeout", "180",
     "--access-logfile", "-",
     "--error-logfile", "-",
@@ -111,6 +112,36 @@ def test_the_default_role_still_starts_the_web_server_unchanged(stubs, role):
     code, argv, stderr = _start(stubs, role)
     assert code == 0, stderr
     assert argv == WEB_ARGV
+
+
+def test_the_web_thread_pool_is_the_size_the_probe_measured(stubs):
+    """2 workers x 8 threads, because that is what was measured (#219).
+
+    Every open chat turn holds one gunicorn thread for the whole life of its
+    run — the SSE replay loop, not inference, which has run outside this
+    process since #257. The pool is therefore the concurrency ceiling for
+    every route, `/healthz` included. Measured 2026-09-03 against this exact
+    invocation, 20s turns:
+
+        2 x 4 :  N=8 -> /healthz waited 18.19s;  N=16 -> 38.32s
+        2 x 8 :  N=8 -> /healthz waited  0.00s;  N=16 -> 18.23s
+
+    (`docs/evidence/2026-09-03-probe-219-thread-saturation.md` §7, PR #573.)
+
+    One doubling is all that evidence supports. It moves the failure from 8
+    concurrent turns to 16; it does not remove it, and each thread also polls
+    HealthClaw ~4x/s on a browser's behalf, so the next doubling doubles that
+    load on the engine that also serves clinicians. This pin exists so the
+    next edit is a decision with a measurement behind it rather than drift.
+    """
+    _, argv, _ = _start(stubs, "web")
+    assert argv[argv.index("--threads") + 1] == "8", (
+        "the web thread count is pinned to the 2x8 the #219 probe measured; "
+        "changing it needs a new measurement, not an estimate")
+    assert argv[argv.index("--workers") + 1] == "2", (
+        "the probe measured 2 workers x 8 threads; CARE_WEB_WORKERS can "
+        "override the worker half on the platform, which multiplies a thread "
+        "count nobody measured")
 
 
 def test_the_web_role_still_honours_its_port_and_worker_overrides(stubs):

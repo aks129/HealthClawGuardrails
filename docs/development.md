@@ -119,23 +119,29 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
     && railway up --service mcp-server --detach
   ```
 
-- **CareAgents does NOT auto-deploy either.** Neither path is wired to a push:
-  the VPS path rsyncs the tree (`./deploy/careagents/deploy.sh`) and the Railway
-  path is `railway up` from a staging dir. Merged work therefore sits unshipped
-  until a human runs one of them — in #258 both deployments were serving code
-  months older than `main` while `scripts/prod_watch.py` reported 9/9 green,
-  because nothing it checked could tell the two apart.
+- **CareAgents does NOT auto-deploy either.** One path, not wired to a push:
+  `railway up` from a staging dir, for the web service *and* the worker. Merged
+  work therefore sits unshipped until a human runs it — in #258 the deployments
+  were serving code months older than `main` while `scripts/prod_watch.py`
+  reported 9/9 green, because nothing it checked could tell a current build from
+  a stale one. The full procedure is
+  [docs/runbooks/careagents-durable-worker.md](runbooks/careagents-durable-worker.md).
+
+  The VPS path (`./deploy/careagents/deploy.sh`) is **retired and refuses to
+  run.** careagents.cloud is served by Railway; the host that script deploys to
+  is reached by no user and checked by no monitor, and deploying a second origin
+  over the one account store is the passkey failure #264 exists to stop. It is
+  kept, refusing, so the retired path can still be read.
 
   Every deploy must stamp `careagents/BUILD_SHA`, the two-line marker
   (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
   import and `/healthz` reports as `build` / `built_at`. It is gitignored on
   purpose: a committed marker goes stale silently, which is the failure it
   exists to catch. `deploy/careagents/stamp_build.sh` is the only thing that
-  knows the format; both deploy paths call it, so they cannot drift apart.
-  `deploy.sh` runs it for you. On the Railway path, run it yourself against the
-  staging dir before `railway up` — it derives the repo from its own location,
-  so it works from anywhere and with a target outside the checkout, and it
-  refuses rather than writing nothing if you point it at the wrong directory:
+  knows the format. Nothing runs it for you: run it against every stage you
+  upload, before `railway up` — it derives the repo from its own location, so it
+  works from anywhere and with a target outside the checkout, and it refuses
+  rather than writing nothing if you point it at the wrong directory:
 
   ```bash
   # $STAGE = the directory `railway up` uploads

@@ -862,9 +862,16 @@ class CuratrEngine:
             quality = "good"
 
         if not issues:
+            # `evaluate` grades ONE resource. Duplication is a property of a
+            # set, so a single-resource pass cannot see it however many rules
+            # it gains — and "no data quality issues found" is a verdict on
+            # the whole record (#458). Say what was actually checked until a
+            # set-level evaluator exists.
             summary = (
-                "No data quality issues found in this "
-                f"{resource_type} record."
+                f"No coding or structural issues found in this one "
+                f"{resource_type} record. This checked one resource, not "
+                "your record; duplicates and other record types were not "
+                "examined."
             )
         else:
             c = severities.count("critical")

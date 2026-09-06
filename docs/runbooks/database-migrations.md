@@ -17,14 +17,24 @@ uv run alembic current
 uv run alembic check
 ```
 
-Expected current revision: `0002_current_contract (head)`. `alembic check`
-must print `No new upgrade operations detected.`
+`alembic current` must name the same revision as `alembic heads` and print
+`(head)` beside it — `0007_agent_worker_presence` when last checked
+(2026-09-04). **Compare the two commands rather than trusting that literal**,
+which every new revision moves; a name pinned here once went stale four days
+after it was written and stayed wrong for seven weeks.
+
+`alembic check` must print `No new upgrade operations detected.`
 
 ## Existing v1.8.0 database (first Alembic deployment)
 
 Revision `0001_v1_8_0` is a compatibility marker for the supported pre-Alembic
 schema. It must be *stamped*, not executed, on an existing database. Stamping
 does not run DDL, so verify the database and rehearse on a same-day copy first.
+
+`flask --app main init-db` performs this adoption itself. It creates any
+`0001_v1_8_0` table the old `db.create_all()` never built, stamps the baseline,
+and upgrades to head. The manual steps below are for operators who want to
+rehearse and verify each stage on a snapshot first.
 
 1. Stop ingestion and action workers; leave read-only traffic draining.
 2. Create and retain a Postgres snapshot.
