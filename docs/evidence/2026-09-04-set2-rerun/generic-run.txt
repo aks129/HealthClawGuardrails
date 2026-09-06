@@ -1,0 +1,51 @@
+walkthrough-upstream.sh  kind=generic  upstream=https://server.fire.ly/R4
+run nonce 471213ce4181  (all created resources carry it)
+date 2026-09-04T09:01:36Z
+
+0. Preflight
+    proxy version 1.10.0, mode upstream
+    upstream: kind=generic software='Firely Server' fhirVersion=4.0.1 status=connected
+  PASS proxy is in upstream mode, connected, and reports the kind it was built as
+  NOTE the upstream serves ANONYMOUS callers (HTTP 200). Expected for a public
+       sandbox (this kind degrades to anonymous when no credential is set).
+       The "proxy holds its own credential" property is NOT demonstrated by
+       this run.
+
+1a. A subject to write about (synthetic)
+  PASS guardrailed create -> upstream (Patient/a50568a6-505f-4883-a1dc-2507f93ef156)
+  PASS the write reached the upstream (asked https://server.fire.ly/R4 directly)
+
+1b. A CLINICAL write, and two gates that do not substitute for each other
+    neither gate               -> HTTP 428
+  PASS neither gate
+    confirmed, no credential   -> HTTP 401
+  PASS confirmed, no credential
+    credential, no human       -> HTTP 428
+  PASS credential, no human
+    both gates satisfied       -> HTTP 201
+  PASS both gates satisfied
+  PASS the Observation reached the upstream (1 found)
+
+2. The same resource, both ways
+  through the guardrail proxy:
+    {"resourceType": "Patient", "id": "a50568a6-505f-4883-a1dc-2507f93ef156", "name": [{"family": "Z.", "given": ["E."]}], "identifier": [{"system": "urn:walkthrough:471213ce4181", "value": "***5409"}], "birthDate": "1980", "telecom": [{"system": "phone", "value": "[Redacted]"}], "_source": "upstream"}
+  PASS the upstream holds the full record; the agent's path does not (_source=upstream)
+
+3. The read left a record
+    AuditEvent entries: 3
+  PASS audit written, and PHI-free
+
+4. Grade the deployment
+    grade B (6/7)
+    failing properties: error_fidelity
+  PASS 6/7 — only error fidelity fails (known, #498)
+
+5. What the agent actually connects to
+    tools/list, no token      -> HTTP 000
+  FAIL expected 401 from an unauthenticated tools/list, got 000 (NOT RUNNING = not checked)
+
+Created on https://server.fire.ly/R4 and left in place (synthetic): Patient/a50568a6-505f-4883-a1dc-2507f93ef156, one Observation,
+plus whatever $conformance created. All carry nonce 471213ce4181.
+
+Walkthrough FAILED. A guardrail this connector claims did not hold,
+or a step could not be run. Read which above — they are not the same thing.

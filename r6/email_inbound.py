@@ -20,6 +20,8 @@ import os
 import requests
 from flask import Blueprint, request
 
+from r6 import constant_time
+
 logger = logging.getLogger(__name__)
 
 email_blueprint = Blueprint("email_inbound", __name__)
@@ -46,7 +48,7 @@ def _verify_svix(secret: str, headers, payload: bytes) -> bool:
     signed = f"{msg_id}.{timestamp}.{payload.decode()}".encode()
     expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
     for part in signatures.split(" "):
-        if "," in part and hmac.compare_digest(part.split(",", 1)[1], expected):
+        if "," in part and constant_time.equal(part.split(",", 1)[1], expected):
             return True
     return False
 

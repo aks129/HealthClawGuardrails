@@ -1,0 +1,25 @@
+# §6 re-run against the tree the 2026-08-16 pack measured (2b7872d), exported with git archive and booted with THIS checkout's interpreter, so the only variable is source code.
+$ uv run python scripts/connector-auth-probe.py --repo /tmp/hc-qa-602/at-2b7872d
+connector-auth-probe.py
+date      2026-09-04T10:18:53Z
+repo      ../../../../../../../private/tmp/hc-qa-602/at-2b7872d
+recorder  http://127.0.0.1:55713
+request   GET /r6/fhir/health -> proxy GET http://127.0.0.1:55713/metadata
+
+Identical env for both cases:
+  FHIR_UPSTREAM_CLIENT_ID     = set2-probe-client
+  FHIR_UPSTREAM_CLIENT_SECRET = <set>
+Question: what Authorization header reaches the upstream?
+
+  kind=hapi     -> Authorization: None (NO credential sent)
+  kind=generic  -> Authorization: Basic <redacted>
+
+Against 2026-08-16 (§6 of docs/evidence/2026-08-16-set2-connectors.md):
+  kind=hapi     same as 2026-08-16 (no credential sent)
+  kind=generic  same as 2026-08-16 (Basic)
+
+  R5 STILL OPEN: hapi accepts the credentials its summary asks for
+  and does not send them.
+
+at least one assertion failed
+(exit 1)

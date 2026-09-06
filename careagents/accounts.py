@@ -356,12 +356,18 @@ class AccountService:
                  .filter_by(id=conn_id, account_id=account_id).first())
             return _conn_dict(c) if c else None
 
-    def mark_synced(self, conn_id: str, count: int) -> dict:
+    def mark_synced(self, conn_id: str, count: int,
+                    uncounted: int | None = None) -> dict:
         """Record the end of a sync and report what changed since the last one.
 
         Returns {"new": int, "total": int} where `new` is the growth since the
         previous sync (0 on the first one, since there's no baseline to compare
         against and every record is arguably 'new').
+
+        `uncounted` baselines the types the count excludes (#226) on the same
+        terms. Passing None leaves the stored baseline untouched rather than
+        clearing it — a caller that could not measure documents must not erase
+        the last figure that was measured.
         """
         with self.session() as s:
             c = s.query(Connection).filter_by(id=conn_id).first()
@@ -369,6 +375,8 @@ class AccountService:
                 return {"new": 0, "total": count}
             previous = c.last_count
             c.last_count = count
+            if uncounted is not None:
+                c.last_uncounted = uncounted
             c.last_synced_at = now()
             new = 0 if previous is None else max(0, count - int(previous))
             return {"new": new, "total": count}
@@ -478,7 +486,8 @@ def _conn_dict(c: Connection) -> dict:
     return {"id": c.id, "kind": c.kind, "tenant_id": c.tenant_id,
             "label": c.label, "status": c.status, "provider": c.provider,
             "connected_at": c.connected_at,
-            "last_synced_at": c.last_synced_at, "last_count": c.last_count}
+            "last_synced_at": c.last_synced_at, "last_count": c.last_count,
+            "last_uncounted": c.last_uncounted}
 
 
 def _agent_dict(a: Agent) -> dict:
