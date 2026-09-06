@@ -34,6 +34,12 @@ class Config:
 
         self.healthclaw_base = (e.get("HEALTHCLAW_BASE")
                                 or "https://app.healthclaw.io").rstrip("/")
+        # `healthclaw_base` is for server-to-server calls and may be an
+        # internal host (in production it is the Railway-private hostname).
+        # `healthclaw_public_base` is for anything rendered into a page a
+        # person will click — Terms, Privacy — and must stay public (#534).
+        self.healthclaw_public_base = (e.get("HEALTHCLAW_PUBLIC_BASE")
+                                       or "https://app.healthclaw.io").rstrip("/")
         self.session_secret = e.get("CARE_SESSION_SECRET", "")
 
         # Build provenance (#258) — telemetry, never a gate. Deliberately not
@@ -68,6 +74,48 @@ class Config:
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # Real-record sources (Fasten, wearables, direct FHIR) for the beta
+        # (council ruling 2026-09-02, D3). Gates NEW connections only: an
+        # existing connection keeps refreshing, polling and deleting whatever
+        # this says. `off` renders those tiles "coming soon" and refuses the
+        # connect POST; `allowlist` opens them to the account emails in
+        # CARE_REAL_RECORDS_ALLOWLIST (comma-separated, case-insensitive);
+        # `on` opens them to everyone. Unset is `off`: a deployment that
+        # forgets the variable must not open real records to strangers.
+        self.real_records = (
+            e.get("CARE_REAL_RECORDS") or "off").strip().lower()
+        if self.real_records not in ("off", "allowlist", "on"):
+            raise ConfigError(
+                "CARE_REAL_RECORDS must be one of off, allowlist, on "
+                f"(got {self.real_records!r})")
+        self.real_records_allowlist = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_REAL_RECORDS_ALLOWLIST") or "").split(",")
+            if x.strip())
+        # Sole public hostname (#264, D7). When set, a request whose Host
+        # header differs is answered 308 to the same path and query on this
+        # host, so the platform's own *.up.railway.app name is not a second
+        # front door with its own passkey origin. `/healthz` is exempt (the
+        # platform's health check arrives on the internal hostname). Unset
+        # means no redirect, which is what local and CI want.
+        self.canonical_host = (
+            e.get("CAREAGENTS_CANONICAL_HOST") or "").strip().lower()
+        # A bare hostname and nothing else. `https://careagents.cloud` is what
+        # an operator types by reflex, and it is not a harmless no-op: the
+        # comparison below never matches, so EVERY request — including one
+        # already on the real site — is answered 308 to a malformed
+        # `https://https//careagents.cloud/...`, and a trailing slash loops
+        # forever, one slash longer each hop. `/healthz` is exempt, so the
+        # platform keeps reporting the deploy healthy while the site is dead.
+        # Refuse to boot, exactly as CARE_REAL_RECORDS does above.
+        if self.canonical_host and (
+                "/" in self.canonical_host
+                or ":" in self.canonical_host
+                or any(c.isspace() for c in self.canonical_host)):
+            raise ConfigError(
+                "CAREAGENTS_CANONICAL_HOST must be a bare hostname — no "
+                "scheme, port, path or whitespace (got "
+                f"{self.canonical_host!r})")
         # Secret for minting step-up tokens for careagents' non-public tenants
         # on the HealthClaw layer (X-Internal-Secret). Server-side only.
         self.mint_secret = e.get("HEALTHCLAW_MINT_SECRET", "")
@@ -176,3 +224,13 @@ class Config:
         if self.anthropic_api_key or self.anthropic_oauth_token:
             return "anthropic"
         return "openai"
+
+    def real_records_open_for(self, email) -> bool:
+        """May this account START a real-record connection? See
+        CARE_REAL_RECORDS above. The allowlist is consulted only in
+        `allowlist` mode — never as a back door around `off`."""
+        if self.real_records == "on":
+            return True
+        if self.real_records == "allowlist":
+            return (email or "").strip().lower() in self.real_records_allowlist
+        return False

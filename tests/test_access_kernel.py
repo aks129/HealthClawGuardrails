@@ -323,6 +323,47 @@ def test_a_read_scoped_token_does_buy_a_tenant_bound_grant(app, tenant_id):
     assert grant.scope is Scope.TENANT_BOUND
 
 
+def test_a_padded_token_is_admitted_and_padded_garbage_is_still_refused(
+        app, tenant_id):
+    """#334 (council D5): the kernel strips the step-up token uniformly.
+
+    A whitespace-padded valid token IS the valid token — the HMAC still has
+    to verify for this tenant, so stripping admits nobody who was not already
+    admitted. Six merged slices depend on this, so the ruling is retroactive
+    and this test pins the shipped behaviour rather than changing it. Note
+    the strip is `str.strip()` with no argument, which is Unicode-wide;
+    narrowing it to ASCII whitespace is a separate decision.
+
+    MUTATION: drop the .strip() in _step_up_token -> the first half red.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    padded = ' \t' + generate_step_up_token(tenant_id) + ' \t'
+    with app.test_request_context(headers=_headers(padded)):
+        grant = require_grant(scope=Scope.WRITE, tenant=tenant)
+    assert grant.tenant_id == tenant_id
+
+    with app.test_request_context(headers=_headers(' \tnot-a-token \t')):
+        with pytest.raises(StepUpDenied) as exc:
+            require_grant(scope=Scope.WRITE, tenant=tenant)
+    assert exc.value.checked is True
+
+
+def test_the_tenant_header_is_not_stripped_even_though_the_token_is(app,
+                                                                    tenant_id):
+    """#334, the other half: the strip is for the token only.
+
+    The tenant id is an identifier compared against a stored value, not an
+    authority-neutral token, so the padding that the token gate forgives
+    stays malformed here. Same padding, opposite answer, on purpose.
+
+    MUTATION: .strip() the value in _validated -> red.
+    """
+    with app.test_request_context(headers={'X-Tenant-Id': ' \tacme-1 \t'}):
+        with pytest.raises(TenantRejected) as exc:
+            tenant_from_request()
+    assert exc.value.reason == 'malformed'
+
+
 def test_the_bearer_header_is_ignored_unless_the_endpoint_opted_in(app,
                                                                   tenant_id):
     """MUTATION: read Authorization unconditionally -> the first half red."""

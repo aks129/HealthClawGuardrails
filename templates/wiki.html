@@ -559,7 +559,7 @@ cd HealthClawGuardrails
 <table class="wiki-table">
   <thead><tr><th>Spec</th><th>Where in capabilities</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td><a href="https://sharponmcp.com" target="_blank" rel="noopener noreferrer">SHARP-on-MCP</a></td><td><code>capabilities.experimental.{fhir_context_required, sharp}</code></td><td>Vendor-neutral header-forwarding contract — agent host obtains a SMART access token and forwards it on every call. No OAuth dance in HealthClaw itself.</td></tr>
+    <tr><td>SHARP-on-MCP</td><td><code>capabilities.experimental.{fhir_context_required, sharp}</code></td><td>Vendor-neutral header-forwarding contract — agent host obtains a SMART access token and forwards it on every call. No OAuth dance in HealthClaw itself.</td></tr>
     <tr><td><a href="https://docs.promptopinion.ai/fhir-context/mcp-fhir-context" target="_blank" rel="noopener noreferrer">PromptOpinion FHIR Extension</a></td><td><code>capabilities.extensions["ai.promptopinion/fhir-context"]</code></td><td>Declares the SMART-on-FHIR scope manifest PromptOpinion should request from the agent host (<code>patient/*.read</code> required, <code>patient/*.write</code> and <code>offline_access</code> optional).</td></tr>
   </tbody>
 </table>
