@@ -85,7 +85,14 @@ git push --force-with-lease origin HEAD:<stacked branch>
 ```
 
 Measured on #579 (2026-09-05): the merge showed eleven conflict hunks in
-three files; the rebase replayed six commits with none. A stacked change
+three files; the rebase replayed six commits with none.
+
+Never chain the rebase and the push in one command. If the rebase stops
+on a conflict, `HEAD` is the base you rebased onto, and a force-push at
+that moment replaces the branch with `main`'s tip. GitHub then closes
+the pull request as already merged, and it has to be reopened once the
+real commits are pushed back. This happened on #598 (2026-09-05).
+Rebase, look at `git status`, resolve, run the tests, and only then push. A stacked change
 carries no auto-merge, so merge it yourself once its checks pass.
 
 ## If auto-merge is already armed
