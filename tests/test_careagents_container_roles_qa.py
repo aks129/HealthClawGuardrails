@@ -42,7 +42,9 @@ WEB_ARGV = [
     "gunicorn", "careagents.wsgi:app",
     "--bind", "0.0.0.0:8600",
     "--workers", "2",
-    "--threads", "4",
+    # 4 -> 8 in #219, the one deliberate retune of this command since the role
+    # split. tests/test_careagents_container_roles.py carries the measurement.
+    "--threads", "8",
     "--timeout", "180",
     "--access-logfile", "-",
     "--error-logfile", "-",
@@ -216,10 +218,17 @@ def test_port_and_web_worker_overrides_reach_gunicorn(sandbox, shell):
     assert argv[argv.index("--workers") + 1] == "7"
 
 
-def test_the_web_command_is_unchanged_from_before_the_role_split():
+def test_the_web_command_changed_only_where_a_measurement_changed_it():
     # Byte-for-byte, not token-for-token: the durable-run split must not retune
     # the web process while it adds a second role. The doubled internal spaces
     # come from the line continuations and are part of the comparison.
+    #
+    # One difference is authorised, and it is written out here rather than
+    # loosened away: #219 measured the thread pool starving `/healthz` and
+    # raised it 4 -> 8. Anything else still fails, including a second edit to
+    # the same flag — this comparison would then be against 8, not against 4.
+    RETUNES = [("--threads 4", "--threads 8", "#219, measured")]
+
     previous = subprocess.run(
         ["git", "-C", str(REPO), "show",
          "f71d46e:deploy/careagents/Dockerfile"],
@@ -229,6 +238,11 @@ def test_the_web_command_is_unchanged_from_before_the_role_split():
     before = json.loads(re.search(
         r"^CMD (\[.*\])\s*$",
         previous.stdout.replace("\\\n", ""), re.M).group(1))[2]
+    for old, new, why in RETUNES:
+        assert old in before, (
+            f"the authorised retune ({why}) no longer applies: {old!r} is not "
+            "in the pre-split command, so this test is comparing to nothing")
+        before = before.replace(old, new)
     script = _script()
     opening = 'case "${CARE_ROLE-web}" in   web) exec '
     assert script.startswith(opening)

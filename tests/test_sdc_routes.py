@@ -55,13 +55,29 @@ def test_populate_auto_loads_medications_allergies_conditions(
     way it already auto-loads Observations — the forms rail isn't complete
     if a caller has to hand-assemble a content Bundle just to see a
     patient's med list.
+
+    The resources are CODED, and that is the change council ruling D10 made
+    here. Auto-loaded content now goes through apply_redaction before the
+    engine sees it (r6/sdc/routes.py::_redacted_for_populate), so the name on
+    a row is whatever r6/terminology.py knows for its code — never the
+    upstream `text`, which is where real feeds put patient names. This test
+    seeded text-only resources before, which is the shape that stops
+    populating; the shape that still populates is the one a real feed sends.
+
+    The allergy is deliberately still text-only: the server has no allergen
+    vocabulary, so nothing can be put back for it. That the repeat is emitted
+    with no answer, and that `no-known-allergies` is still untouched, is
+    pinned in tests/test_sdc_populate_bounded.py rather than asserted twice.
     """
     _store(app, {"resourceType": "Patient", "id": "p1",
                  "name": [{"given": ["Ada"]}]}, tenant_id)
     _store(app, {"resourceType": "MedicationRequest", "id": "m1",
                  "status": "active", "intent": "order",
                  "subject": {"reference": "Patient/p1"},
-                 "medicationCodeableConcept": {"text": "Metformin"}},
+                 "medicationCodeableConcept": {
+                     "coding": [{"system": "http://www.nlm.nih.gov/research/"
+                                           "umls/rxnorm", "code": "860975"}],
+                     "text": "Metformin"}},
            tenant_id)
     _store(app, {"resourceType": "AllergyIntolerance", "id": "a1",
                  "patient": {"reference": "Patient/p1"},
@@ -70,7 +86,9 @@ def test_populate_auto_loads_medications_allergies_conditions(
                  "subject": {"reference": "Patient/p1"},
                  "clinicalStatus": {"coding": [{"code": "active"}]},
                  "verificationStatus": {"coding": [{"code": "confirmed"}]},
-                 "code": {"text": "Type 2 diabetes"}}, tenant_id)
+                 "code": {"coding": [{"system": "http://hl7.org/fhir/sid/"
+                                                "icd-10-cm", "code": "E11.9"}],
+                          "text": "Type 2 diabetes"}}, tenant_id)
     _store(app, {"resourceType": "Questionnaire", "id": "healthclaw-intake",
                  "status": "active",
                  "item": [
@@ -126,14 +144,19 @@ def test_populate_auto_loads_medications_allergies_conditions(
                     return found
         return None
 
+    # The label is the SERVER's, keyed by code (r6/terminology.py), applied
+    # after redaction stripped whatever the upstream `text` said.
     med_name = by_link_id(qr["item"], "medications.item.name")
-    assert med_name["answer"][0]["valueString"] == "Metformin"
+    assert med_name["answer"][0]["valueString"] == "Metformin 500 mg"
+    condition_name = by_link_id(qr["item"], "conditions.item.name")
+    assert condition_name["answer"][0]["valueString"] == (
+        "Type 2 diabetes mellitus, without complications")
+    # The allergy row is still emitted — an allergy on file that we could not
+    # name is not the same as no allergy — and NKA is still never inferred.
     allergen = by_link_id(qr["item"], "allergies.item.allergen")
-    assert allergen["answer"][0]["valueString"] == "Penicillin"
+    assert allergen is not None and "answer" not in allergen
     nka = by_link_id(qr["item"], "allergies.no-known-allergies")
     assert "answer" not in nka
-    condition_name = by_link_id(qr["item"], "conditions.item.name")
-    assert condition_name["answer"][0]["valueString"] == "Type 2 diabetes"
 
 
 def test_extract_requires_step_up(client, tenant_headers):

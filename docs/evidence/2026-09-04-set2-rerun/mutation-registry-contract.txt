@@ -1,0 +1,119 @@
+# Mutation and negative controls for scripts/connector-registry-contract.py
+# Run 2026-09-04 at HEAD (89b42fb). None of these may report a pass.
+
+# M1: FHIR_UPSTREAM_URL is dropped, so MEDPLUM_BASE_URL wins — precedence reversed.
+#   guard under test: the resolved upstream must be the FHIR_UPSTREAM_URL one, reachable and named by the upstream
+# The mutant is this script with the line(s) below changed. To reproduce:
+#   sed -e 's|            "FHIR_UPSTREAM_URL": CASE1_UPSTREAM,|            # MUTANT: removed|' \
+#       scripts/connector-registry-contract.py > /tmp/mutant.py
+#   -            "FHIR_UPSTREAM_URL": CASE1_UPSTREAM,
+#   +            # MUTANT: removed
+$ uv run python /tmp/mutant.py --repo . --case 1
+connector-registry-contract.py
+date  2026-09-04T10:19:03Z
+repo  .
+cases [1]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 1 — FHIR_UPSTREAM_URL takes precedence over MEDPLUM_BASE_URL
+  FHIR_UPSTREAM_URL = https://server.fire.ly/R4
+  MEDPLUM_BASE_URL  = https://hapi.fhir.org/baseR4   (must be IGNORED)
+  MEDPLUM_CLIENT_ID / _SECRET = must-not-be-used
+
+  resolved -> mode='upstream' upstream={'error': "Client error '404 Not Found' for url 'https://hapi.fhir.org/oauth2/token'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404", 'status': 'unreachable', 'upstream_url': 'https://hapi.fhir.org/baseR4'}
+  FAIL the proxy could not reach the upstream (status 'unreachable'). The 'software' field below would not be the upstream naming itself.
+
+Result
+  at least one assertion failed
+(exit 1)
+
+# M2: case 2 is given a kind that IS in the registry, so nothing is refused.
+#   guard under test: an app that answers 2xx with the case's kind set has resolved it, and must not read as a refusal
+# The mutant is this script with the line(s) below changed. To reproduce:
+#   sed -e 's|^CASE2_KIND = "totally-made-up"|CASE2_KIND = "generic"  # MUTANT|' \
+#       scripts/connector-registry-contract.py > /tmp/mutant.py
+#   -CASE2_KIND = "totally-made-up"
+#   +CASE2_KIND = "generic"  # MUTANT
+$ uv run python /tmp/mutant.py --repo . --case 2
+connector-registry-contract.py
+date  2026-09-04T10:19:04Z
+repo  .
+cases [2]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 2 — an unknown kind is refused rather than guessed at
+  FHIR_UPSTREAM_KIND = generic
+  /r6/fhir/health -> HTTP 200
+  FAIL /r6/fhir/health answered HTTP 200 with an unknown kind set. body='{"checks": {"database": "ok", "upstream": {"fhir_version": "4.0.1", "kind": "generic", "software": "Firely Server", "status": "connected", "upstream_url": "https://server.fire.ly/R4"}}, "fhirVersion":'. An unknown kind must not resolve.
+
+Result
+  at least one assertion failed
+(exit 1)
+
+# M3: no case ever gets an answer out of the app.
+#   guard under test: the script must not exit 0 having measured nothing
+# The mutant is this script with the line(s) below changed. To reproduce:
+#   sed -e 's|^    deadline = time.time() + timeout|    return None, None  # MUTANT\n    deadline = time.time() + timeout|' \
+#       scripts/connector-registry-contract.py > /tmp/mutant.py
+#   +    return None, None  # MUTANT
+$ uv run python /tmp/mutant.py --repo .
+connector-registry-contract.py
+date  2026-09-04T10:19:06Z
+repo  .
+cases [1, 2, 3]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 1 — FHIR_UPSTREAM_URL takes precedence over MEDPLUM_BASE_URL
+  FHIR_UPSTREAM_URL = https://server.fire.ly/R4
+  MEDPLUM_BASE_URL  = https://hapi.fhir.org/baseR4   (must be IGNORED)
+  MEDPLUM_CLIENT_ID / _SECRET = must-not-be-used
+  FAIL the app never answered /r6/fhir/health — case 1 measured nothing
+
+Case 2 — an unknown kind is refused rather than guessed at
+  FHIR_UPSTREAM_KIND = totally-made-up
+  FAIL the app exited -15 without the registry's message. Something else stopped it; this case proves nothing.
+
+Case 3 — MEDPLUM_BASE_URL with no credentials  (register entry R1)
+  MEDPLUM_BASE_URL  = https://medplum.example.invalid/fhir
+  MEDPLUM_CLIENT_ID = set
+  MEDPLUM_CLIENT_SECRET = MISSING
+  FAIL the app never answered /r6/fhir/health — case 3 measured nothing
+
+Result
+  case(s) [1, 3] never produced a measurement
+  at least one assertion failed
+(exit 1)
+
+# M4: no upstream configured at all, so the app is genuinely in local mode. M1 does not reach this guard, because dropping only FHIR_UPSTREAM_URL leaves MEDPLUM_BASE_URL to build a proxy that is merely unreachable.
+#   guard under test: checks.upstream must be a proxy health payload, not the string 'not_configured'
+# The mutant is this script with the line(s) below changed. To reproduce:
+#   sed -e 's|            "FHIR_UPSTREAM_URL": CASE1_UPSTREAM,|            # MUTANT: removed|' \
+#   sed -e 's|            "MEDPLUM_BASE_URL": CASE1_MEDPLUM_DECOY,|            # MUTANT: removed|' \
+#       scripts/connector-registry-contract.py > /tmp/mutant.py
+#   -            "FHIR_UPSTREAM_URL": CASE1_UPSTREAM,
+#   -            "MEDPLUM_BASE_URL": CASE1_MEDPLUM_DECOY,
+#   +            # MUTANT: removed
+#   +            # MUTANT: removed
+$ uv run python /tmp/mutant.py --repo . --case 1
+connector-registry-contract.py
+date  2026-09-04T10:19:06Z
+repo  .
+cases [1]
+baseline docs/evidence/2026-08-16-set2-connectors.md §5 and R1
+
+Case 1 — FHIR_UPSTREAM_URL takes precedence over MEDPLUM_BASE_URL
+  FHIR_UPSTREAM_URL = https://server.fire.ly/R4
+  MEDPLUM_BASE_URL  = https://hapi.fhir.org/baseR4   (must be IGNORED)
+  MEDPLUM_CLIENT_ID / _SECRET = must-not-be-used
+
+  resolved -> mode='local' upstream='not_configured'
+  FAIL checks.upstream is 'not_configured', not a proxy health payload. No upstream was resolved, so precedence was not exercised.
+
+Result
+  at least one assertion failed
+(exit 1)
+
+# NC: a checkout with no app in it. Must refuse, not report a result.
+$ uv run python scripts/connector-registry-contract.py --repo /nonexistent
+no main.py under ../../../../../../../nonexistent — nothing to boot
+(exit 2)

@@ -23,11 +23,18 @@ from urllib.parse import quote
 
 from flask import Blueprint, Response, request
 
+from r6 import constant_time
 from r6.sdc.documents import get_document_pdf_bytes
 from r6.audit import record_audit_event
 
-# One week — a patient/clinic link that is emailed and opened days later.
-DEFAULT_TTL_SECONDS = 7 * 24 * 3600  # 604800
+# 24 hours (council ruling D10, cut from one week). The link is a bearer
+# credential for a PDF of somebody's intake form: the signature in the URL is
+# the whole authorization, so anyone who ends up holding the URL — a
+# forwarded email, a shared screen, a mail archive — can open it for as long
+# as it lives. A day covers "sent this morning, opened this evening", which
+# is the case this exists for; a week was six extra days of exposure bought
+# for a case nobody measured.
+DEFAULT_TTL_SECONDS = 24 * 3600  # 86400
 
 
 def _link_secret():
@@ -79,7 +86,7 @@ def verify_document_link(tenant_id, docref_id, exp, sig, *, now=None):
     except (TypeError, ValueError):
         return False, 'malformed'
     expected = _sign(tenant_id, docref_id, exp_int)
-    if not hmac.compare_digest(expected, sig):
+    if not constant_time.equal(sig, expected):
         return False, 'bad-signature'
     if int(now or time.time()) > exp_int:
         return False, 'expired'

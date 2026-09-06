@@ -1413,7 +1413,29 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # is a ruling rather than a gate. Migrating these two is
                      # slice 17, and it stays blocked on their JSON wire
                      # shape.
-                     'r6/command_center/routes.py'}
+                     'r6/command_center/routes.py',
+                     # Council ruling D10, and NOT a migration slice: the
+                     # ruling directs $populate to read its tenant through
+                     # the kernel and to answer through fhir_response, so the
+                     # operation is counted as a shaped FHIR exit. Both
+                     # header reads in this module moved together (protocol
+                     # rule 8 — one way to do a thing, not two). The step-up
+                     # gate in sdc_extract did NOT move: its refusal names
+                     # `dryRun=true`, which the kernel's uniform
+                     # OperationOutcome cannot say, and that is the twelfth
+                     # site the kernel spec §2.5 already calls out as
+                     # blocked on a CTO ruling.
+                     'r6/sdc/routes.py',
+                     # playbook B2: the durable agent-run control plane's
+                     # audit. It imports `audit` and nothing else — its
+                     # step-up check still calls the validator directly and
+                     # is still counted by _STEP_UP_CALLSITES, because one
+                     # guard per PR is the protocol. The service layer rather
+                     # than the routes is the adopter on purpose: each of
+                     # these functions owns its own transaction, and the
+                     # kernel's audit() only keeps its promise when it flushes
+                     # inside the transaction it is evidence for.
+                     'r6/agent_runs/service.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

@@ -33,6 +33,21 @@ def issue_confirmation(action_id, approved_via, ttl_minutes):
     return c
 
 
+def has_confirmation(action_id):
+    """True if any ActionConfirmation names action_id — committed, or still
+    pending in this session (the review route mints and commits in one
+    transaction). Backs the payload seal on ProposedAction (#528): once a
+    confirmation exists, the payload is what the human approved. Runs
+    without autoflush so a validator never flushes unrelated state as a
+    side effect; the pending scan covers what that flush would have found."""
+    for obj in db.session.new:
+        if isinstance(obj, ActionConfirmation) and obj.action_id == action_id:
+            return True
+    with db.session.no_autoflush:
+        return ActionConfirmation.query.filter_by(
+            action_id=action_id).first() is not None
+
+
 def consume_confirmation(action_id):
     """Atomically claim every unconsumed, unexpired confirmation for
     action_id. Returns True iff at least one row was consumed by THIS call

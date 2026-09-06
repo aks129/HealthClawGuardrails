@@ -1,0 +1,70 @@
+# Mutation checks for scripts/connector-auth-probe.py
+# Run 2026-09-04 at HEAD (89b42fb). Each mutant must FAIL.
+
+# M1: the recorder is replaced with a dead port, so the proxy's request never arrives. 'Authorization: None' and 'no request happened' print the same way; only one of them is a measurement.
+#   guard under test: the recorder saw no /metadata request
+# The mutant is this script with one line changed. To reproduce:
+#   sed -e 's|upstream = f"http://127.0.0.1:{server.server_port}"|upstream = "http://127.0.0.1:1"  # MUTANT|' \
+#       scripts/connector-auth-probe.py > /tmp/mutant.py
+# The line it changes:
+#   -    upstream = f"http://127.0.0.1:{server.server_port}"
+#   +    upstream = "http://127.0.0.1:1"  # MUTANT
+$ uv run python /tmp/mutant.py --repo .
+connector-auth-probe.py
+date      2026-09-04T10:19:07Z
+repo      .
+recorder  http://127.0.0.1:1
+request   GET /r6/fhir/health -> proxy GET http://127.0.0.1:1/metadata
+
+Identical env for both cases:
+  FHIR_UPSTREAM_CLIENT_ID     = set2-probe-client
+  FHIR_UPSTREAM_CLIENT_SECRET = <set>
+Question: what Authorization header reaches the upstream?
+
+  kind=hapi     -> FAIL the recorder saw no /metadata request. Nothing was measured for this kind. (health mode='upstream', upstream={'error': '[Errno 61] Connection refused', 'status': 'unreachable', 'upstream_url': 'http://127.0.0.1:1'})
+  kind=generic  -> FAIL the recorder saw no /metadata request. Nothing was measured for this kind. (health mode='upstream', upstream={'error': '[Errno 61] Connection refused', 'status': 'unreachable', 'upstream_url': 'http://127.0.0.1:1'})
+
+Against 2026-08-16 (§6 of docs/evidence/2026-08-16-set2-connectors.md):
+  kind=hapi     NOT MEASURED this run — no comparison is possible
+  kind=generic  NOT MEASURED this run — no comparison is possible
+
+  NO VERDICT ON R5. Not every kind produced a header this run,
+  so nothing here says whether hapi sends its credential.
+
+at least one assertion failed
+(exit 1)
+
+# M2: the app is given a different client id from the one asserted on.
+#   guard under test: the Basic header must carry the configured client id
+# The mutant is this script with one line changed. To reproduce:
+#   sed -e 's|env\["FHIR_UPSTREAM_CLIENT_ID"\] = CLIENT_ID|env["FHIR_UPSTREAM_CLIENT_ID"] = "someone-else"  # MUTANT|' \
+#       scripts/connector-auth-probe.py > /tmp/mutant.py
+# The line it changes:
+#   -        env["FHIR_UPSTREAM_CLIENT_ID"] = CLIENT_ID
+#   +        env["FHIR_UPSTREAM_CLIENT_ID"] = "someone-else"  # MUTANT
+$ uv run python /tmp/mutant.py --repo .
+connector-auth-probe.py
+date      2026-09-04T10:19:08Z
+repo      .
+recorder  http://127.0.0.1:55765
+request   GET /r6/fhir/health -> proxy GET http://127.0.0.1:55765/metadata
+
+Identical env for both cases:
+  FHIR_UPSTREAM_CLIENT_ID     = set2-probe-client
+  FHIR_UPSTREAM_CLIENT_SECRET = <set>
+Question: what Authorization header reaches the upstream?
+
+  kind=hapi     -> Authorization: Basic <redacted>
+           FAIL the Basic header carries 'someone-else', not the configured 'set2-probe-client'
+  kind=generic  -> Authorization: Basic <redacted>
+           FAIL the Basic header carries 'someone-else', not the configured 'set2-probe-client'
+
+Against 2026-08-16 (§6 of docs/evidence/2026-08-16-set2-connectors.md):
+  kind=hapi     DIFFERS: 2026-08-16 sent no credential, today sends Basic
+  kind=generic  same as 2026-08-16 (Basic)
+
+  NO VERDICT ON R5. Not every kind produced a header this run,
+  so nothing here says whether hapi sends its credential.
+
+at least one assertion failed
+(exit 1)
