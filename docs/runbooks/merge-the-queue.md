@@ -69,6 +69,25 @@ the partner lands, running the suite, and pushing:
 9. #642, then #643 last so the new reviewer does not fire on every
    update-branch of the queue.
 
+## Stacked changes after their base squash-merges
+
+When a base merges by squash and its branch is deleted, GitHub retargets
+the change stacked on it to `main`, and that change is then dirty: its
+branch still carries the base's original commits, which `main` holds only
+as one squashed commit, so a merge conflicts on every region the base
+touched. Do not resolve that merge by hand. Replay only the stacked
+change's own commits:
+
+```zsh
+FORK=$(git merge-base <last commit of the base branch> origin/<stacked branch>)
+git rebase --onto origin/main "$FORK"
+git push --force-with-lease origin HEAD:<stacked branch>
+```
+
+Measured on #579 (2026-09-05): the merge showed eleven conflict hunks in
+three files; the rebase replayed six commits with none. A stacked change
+carries no auto-merge, so merge it yourself once its checks pass.
+
 ## If auto-merge is already armed
 
 Arming auto-merge on every change does not move the queue by itself: GitHub
