@@ -92,7 +92,18 @@ on a conflict, `HEAD` is the base you rebased onto, and a force-push at
 that moment replaces the branch with `main`'s tip. GitHub then closes
 the pull request as already merged, and it has to be reopened once the
 real commits are pushed back. This happened on #598 (2026-09-05).
-Rebase, look at `git status`, resolve, run the tests, and only then push. A stacked change
+Rebase, look at `git status`, resolve, run the tests, and only then push.
+
+Two more, both paid for on 2026-09-05:
+
+- Never write `pytest ... | tail -1 && git push`. The `&&` sees `tail`'s
+  exit code, which is always zero, so a red suite pushes. Redirect the
+  output to a file and test `$?` (#584 went out with two failures this
+  way; nothing merged, because CI was red, but it cost a run).
+- When a change adds the test for a shape that the *next* change in its
+  chain fixes, the two cannot land separately: the first is red alone.
+  Fold the fix's commits onto the first change's branch and let the
+  second close itself with an empty diff (#584 and #594). A stacked change
 carries no auto-merge, so merge it yourself once its checks pass.
 
 ## If auto-merge is already armed
