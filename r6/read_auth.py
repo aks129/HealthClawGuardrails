@@ -13,7 +13,6 @@ from flask import request, session
 # unchanged.
 from r6.runtime_config import is_public_tenant, read_auth_enabled
 from r6.oauth import validate_bearer_token
-from r6.stepup import validate_step_up_token
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes"})
@@ -69,18 +68,22 @@ def authorize_tenant_read(
     if session_tenant == tenant_id:
         return tenant_id
 
+    # Kernel slice 19: the step-up branch asks has_grant, which reads
+    # X-Step-Up-Token and then the bearer alias in the same order this
+    # function did, strips both the same way (#334), accepts read-scoped
+    # tokens (TENANT_BOUND is the validator's require_scope=None), and
+    # answers None in exactly the cases require_grant would refuse. The
+    # OAuth branch below is untouched: a bearer that is not a step-up token
+    # still gets its SMART scope check. Imported here, not at the top,
+    # because r6.access imports TENANT_SESSION_KEY from this module.
+    from r6.access import Scope, Tenant, TenantSource, has_grant
+
+    if has_grant(scope=Scope.TENANT_BOUND,
+                 tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT),
+                 also_bearer=True) is not None:
+        return tenant_id
     auth = (request.headers.get("Authorization") or "").strip()
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    step_up = (request.headers.get("X-Step-Up-Token") or "").strip() or bearer
-
-    if step_up:
-        valid, _error = validate_step_up_token(
-            step_up,
-            tenant_id,
-            require_scope=None,
-        )
-        if valid:
-            return tenant_id
     if bearer and _oauth_authorizes(bearer, tenant_id):
         return tenant_id
     return None

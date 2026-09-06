@@ -741,7 +741,8 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 #: list. The tenant is read by the kernel in the order the site always used.
 _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({'r6/agent_runs/routes.py:62',
                                                   'r6/actions/routes.py:714',
-                                                  'r6/command_center/routes.py:277'})
+                                                  'r6/command_center/routes.py:277',
+                                                  'r6/read_auth.py:81'})
 
 
 def _has_grant_calls():
@@ -1448,7 +1449,8 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      'r6/agent_runs/service.py',
                      # Kernel slice 16: the session-or-token predicate
                      # asks has_grant; its four JSON 401s are unchanged.
-                     'r6/agent_runs/routes.py'}
+                     'r6/agent_runs/routes.py',
+                     'r6/read_auth.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():

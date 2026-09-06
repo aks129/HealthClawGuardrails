@@ -102,7 +102,9 @@ def test_read_flag_on_malformed_token_401(client, monkeypatch):
 
     MUTATION (pre-kernel shape): `if valid: return tenant_id` ->
     `return tenant_id` -> this test and the wrong-tenant one go red while
-    the valid-token test stays green. Executed 2026-09-06.
+    the valid-token test stays green. Executed 2026-09-06. Kernel shape:
+    the has_grant predicate -> a header-presence check -> the same red.
+    Executed 2026-09-06.
     """
     monkeypatch.setenv('READ_AUTH_ENABLED', '1')
     resp = client.get('/r6/fhir/Patient', headers={
