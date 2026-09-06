@@ -363,12 +363,39 @@ def _populate_list_group(item, resource_type, subject, context, observations,
         and config["included"](r)
     ]
 
-    return [{"linkId": item.get("linkId"),
-             "item": _populate_list_children(item.get("item", []),
-                                             resource_type, config, resource,
-                                             context, observations, issues,
-                                             warned)}
+    return [_row_with_source(
+                {"linkId": item.get("linkId"),
+                 "item": _populate_list_children(item.get("item", []),
+                                                 resource_type, config, resource,
+                                                 context, observations, issues,
+                                                 warned)},
+                resource_type, resource)
             for resource in resources]
+
+
+#: A populated repeating-group row names the resource it came from (#572
+#: part 2B1). Without it an extraction cannot tell a row that IS a stored
+#: resource from a row the person typed, and would duplicate every existing
+#: one. Row-level, so it is invisible to the leaves (_resolve_answer), the
+#: PDF walk (which reads linkId, text, answer and item) and the answer index
+#: (_index_answers reads answers). The review page carries rows verbatim
+#: into the reviewed response, so it survives to extraction, where part 2B2
+#: skips a marked row and writes only an unsourced one. A row from a
+#: resource without an id carries no marker. The marker is caller-visible
+#: and forgeable, which is harmless while marked rows are skipped; a future
+#: PUT must check the reference exists, in this tenant, for this subject.
+POPULATED_ROW_SOURCE_URL = (
+    "http://healthclaw.io/fhir/StructureDefinition/populated-row-source")
+
+
+def _row_with_source(row, resource_type, resource):
+    rid = resource.get("id")
+    if isinstance(rid, str) and rid:
+        row["extension"] = [{
+            "url": POPULATED_ROW_SOURCE_URL,
+            "valueReference": {"reference": "%s/%s" % (resource_type, rid)},
+        }]
+    return row
 
 
 def _populate_list_children(items, resource_type, config, resource, context,
