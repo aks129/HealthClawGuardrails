@@ -2,9 +2,25 @@
 
 **Owner:** owner-connectors · **Date:** 2026-08-16 · **Verdict: EVIDENCE PARTIAL**
 
+> **2026-09-04 (#530):** §3 and §4 — the two live runs, and the "2 of 4" claim
+> the process documents carry — were **re-run by someone other than this pack's
+> author and reproduced**, against the same two public servers, from a script
+> now committed as `scripts/walkthrough-upstream.sh`. One line differs and is
+> better: `$conformance` against HAPI graded **B 6/7**, not the F 1/7 in §3,
+> because #514 fixed the probe collision §3 diagnosed. See
+> `docs/evidence/2026-09-04-set2-connectors-rerun.md`. Sections 5, 6 and 7 have
+> **not** been independently re-run — their scripts are still uncommitted and
+> the scratch directory is gone. Nothing below is rewritten; 2026-08-16's
+> findings stand as 2026-08-16's findings.
+
 **One redaction:** the operator's home-directory name in pasted shell output
 reads `<user>`. Nothing else in any transcript below is altered — the redaction
 is incidental to every claim the output supports.
+
+**Dated note (added 2026-09-04, #615):** redaction behaviour changed after
+this pack was written — identifier values are now removed, not truncated to
+their last four characters. The `***XXXX` values in the transcripts below
+show the shape that was true on 2026-08-16, not current behaviour.
 
 Two of the four connector kinds ran a full live walkthrough against a real
 server of that kind. Two did not run at all, because the servers they need
@@ -235,9 +251,21 @@ Two failures, neither of which is a guardrail failure:
 Docker is down. Reported as red because nothing ran, which is the correct
 report.
 
+> **Count corrected 2026-09-04 (#605).** The sentence below read "Four of the
+> six failing properties report a gate that is working as broken" from
+> 2026-08-16 until today, and register entry R4 said the same. **No count in
+> the transcript beneath it yields four.** The harness names six failing
+> properties; the walkthrough asserts on five, excluding `error_fidelity` (the
+> known #498 failure, which fails against Firely too); five FAIL blocks are
+> printed; and **two** of them carry `on_failure` text blaming a gate. This
+> was wrong on the day rather than overtaken since. The finding it supports is
+> unchanged and slightly stronger — five of the six failures were the
+> collision, not the guardrails. The transcript below is not edited.
+
 **Step 4's Grade F is caused by the harness, not the guardrails**, and the
-mechanism was traced to the end rather than assumed. Four of the six failing
-properties report a gate that is working as broken:
+mechanism was traced to the end rather than assumed. Five of the six failing
+properties are this collision rather than a defect, and two of them report a
+gate that is working as broken in so many words:
 
 ```
 ### FAIL step_up_enforcement
@@ -552,13 +580,18 @@ the script cannot pass at all against a deployment with read auth on — which
 production has.
 
 **R4 — `$conformance` cannot be re-run against an upstream with duplicate
-detection, and misattributes the failure to the guardrails. No issue yet.**
+detection, and misattributes the failure to the guardrails. FIXED by #514;
+re-measured 2026-09-04 (#601). Count corrected 2026-09-04 (#605): this entry
+read "Four properties then fail with `on_failure` text naming the gate" —
+**two** do.** The finding as written on 2026-08-16, with that one count
+corrected in place:
 Measured in §3. `_synthetic_patient()` in `r6/conformance/probes.py` returns a
 constant body; HAPI answers the second and later creates with 412 `HAPI-2840`.
-Four properties then fail with `on_failure` text naming the gate ("the gate
-refuses authorized writes too, so its 401s prove nothing") when the gate was
-never reached. Grade F against a deployment whose guardrails were, in the same
-session, observed to hold. The code comment on `_synthetic_observation` records
+Five of the six graded properties then fail for that reason rather than a
+defect, and **two** of them fail with `on_failure` text naming the gate ("the
+gate refuses authorized writes too, so its 401s prove nothing") when the gate
+was never reached. Grade F against a deployment whose guardrails were, in the
+same session, observed to hold. The code comment on `_synthetic_observation` records
 the same class of misattribution happening before against Aidbox (422, dangling
 reference), so this is the second instance of one shape. Suggested change (not
 made): give the synthetic identifier a per-run nonce — `uuid` is already
@@ -605,7 +638,11 @@ the fallback is `sqlite:///mcp_server.db`, so the container writes to
 `instance/mcp_server.db`, not to the path the compose file names. Harmless today
 and misleading to anyone reasoning about where the example's data lives.
 
-**R8 — There is no `hapi` or `generic` walkthrough in the repo. No issue yet.**
+**R8 — There is no `hapi` or `generic` walkthrough in the repo. CLOSED
+2026-09-04 by `scripts/walkthrough-upstream.sh` (#530).** Both kinds were
+re-run from it by someone other than this pack's author and reproduced; see
+`docs/evidence/2026-09-04-set2-connectors-rerun.md`. The finding as written on
+2026-08-16 was:
 The evidence in §3 and §4 was produced by a re-pointed copy of
 `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` living in a
 scratch directory, which means it is not runnable by anyone else and will not
@@ -688,18 +725,22 @@ corrected.
 
 ## Reproducing this
 
-**Updated 2026-09-04 (#602).** The scratch directory this section named is
-gone, and nothing was recovered from it. §5, §6 and §7 are now reproducible
-from the repository, by a second person, with the transcripts of that run
-committed:
+**Updated 2026-09-04 (#530, #602).** The scratch directory this section named
+is gone, and nothing was recovered from it. The two live walkthroughs, and §5,
+§6 and §7, are now reproducible from the repository, by a second person, with
+the transcripts of those runs committed:
 
+- `scripts/walkthrough-upstream.sh hapi` and `… generic` — the two live
+  walkthroughs (#530).
 - `scripts/connector-registry-contract.py` — §5, all three cases (case 3 is
   register entry R1). Replaces `registry-contract.sh` and `halfconfig.sh`.
 - `scripts/connector-auth-probe.py` — §6. Replaces `auth_probe.py`.
 - `scripts/image-pin-digests.sh` — §7, which named no script at all.
 - transcripts, negative controls and mutation checks:
   `docs/evidence/2026-09-04-set2-rerun/`
-- what that run found: `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`
+- what those runs found: `docs/evidence/2026-09-04-set2-connectors-rerun.md`
+  (the walkthroughs) and `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md`
+  (§5, §6 and §7).
 
 `medplum-qa.sh` is **§2's** script, not one of these, and is still gone. §2
 needs a running Medplum and a client credential; neither exists on this

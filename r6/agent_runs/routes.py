@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import re
@@ -11,6 +10,7 @@ from flask import Blueprint, jsonify, request, session
 from sqlalchemy.exc import SQLAlchemyError
 
 from models import db
+from r6 import constant_time
 from r6.agent_runs.models import AgentRun, AgentRunEvent, AgentToolCall
 from r6.agent_runs.service import (
     append_event,
@@ -70,13 +70,13 @@ def _tenant_authorized(tenant_id: str) -> bool:
 def _internal_authorized() -> bool:
     expected = os.environ.get("INTERNAL_TOKEN_MINT_SECRET", "")
     provided = request.headers.get("X-Internal-Secret", "")
-    return bool(expected and hmac.compare_digest(provided, expected))
+    return bool(expected and constant_time.equal(provided, expected))
 
 
 def _reconciler_authorized() -> bool:
     expected = os.environ.get("AGENT_RUN_RECONCILE_SECRET", "")
     provided = request.headers.get("X-Reconciliation-Secret", "")
-    return bool(expected and hmac.compare_digest(provided, expected))
+    return bool(expected and constant_time.equal(provided, expected))
 
 
 def _run_or_404(run_id: str) -> AgentRun | None:

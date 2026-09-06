@@ -122,6 +122,63 @@ def test_status_shows_payload_with_step_up(client, tenant_headers, auth_headers)
     assert 'payload' in resp.get_json()
 
 
+def _assert_summary_only(resp, action_id):
+    """The PHI-safe summary, asserted as a property rather than a shape.
+
+    Same three facts as test_status_hides_payload_without_step_up, factored
+    out so the unprivileged branch is checked identically however the caller
+    failed to prove itself.
+    """
+    assert resp.status_code == 200
+    d = resp.get_json()
+    assert 'payload' not in d
+    blob = json.dumps(d)
+    assert '617-555-0100' not in blob   # phone
+    assert 'metformin' not in blob      # message body
+    assert d['id'] == action_id
+
+
+def test_status_hides_payload_with_a_malformed_step_up_token(client,
+                                                             tenant_headers):
+    """H4, the branch nothing reached: token PRESENT but not valid.
+
+    The pair above tests header-absent and header-present-and-valid, so a
+    route that stopped validating and merely checked for the header's
+    presence stayed green. Presenting a garbage token is the only way to
+    tell "a valid token" from "a token".
+
+    MUTATION: r6/actions/routes.py, `privileged = valid` ->
+    `privileged = bool(step_up)` (equivalently, collapse the three-line
+    check to `privileged = bool(step_up)`) -> red. Executed 2026-09-04.
+    """
+    action_id = _propose(client, tenant_headers)
+    headers = dict(tenant_headers)
+    headers['X-Step-Up-Token'] = 'not-a-real-token'
+    resp = client.get(f'/r6/actions/{action_id}', headers=headers)
+    _assert_summary_only(resp, action_id)
+
+
+def test_status_hides_payload_from_another_tenants_step_up_token(
+        client, tenant_headers):
+    """A well-formed, correctly-signed token issued to a DIFFERENT tenant.
+
+    Distinct from the malformed case: this one survives signature checking
+    and is refused only because the route passes `tenant_id` to the
+    validator. It is what pins the tenant binding the route comment claims —
+    dropping the argument would leave the malformed test green.
+
+    MUTATION: r6/stepup.py, drop the tenant-binding check
+    (`if payload.get('tid') != tenant_id: return False, ...`) -> red, while
+    the malformed-token test above stays green. Executed 2026-09-04.
+    """
+    from r6.stepup import generate_step_up_token
+    action_id = _propose(client, tenant_headers)
+    headers = dict(tenant_headers)
+    headers['X-Step-Up-Token'] = generate_step_up_token('some-other-tenant')
+    resp = client.get(f'/r6/actions/{action_id}', headers=headers)
+    _assert_summary_only(resp, action_id)
+
+
 def test_commit_requires_step_up(client, tenant_headers):
     action_id = _propose(client, tenant_headers)
     resp = client.post('/r6/actions/%s/commit' % action_id,

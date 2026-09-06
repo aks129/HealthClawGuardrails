@@ -241,6 +241,7 @@
       <li><strong>Claude Desktop / Claude Code</strong> — Anthropic's clients connect over native MCP. Use the published <code>.mcp.json</code> config or the hosted Railway URL.</li>
     </ul>
     <p>All four use the same MCP server, the same skills library, and the same guardrails. Pick by where you want to type, not by what you can do.</p>
+    <p><strong>One exception right now:</strong> the Telegram surface is not currently served — the bot has been out of service since June — so OpenClaw, and the Telegram channel of Hermes, describe what those components are rather than somewhere you can reach us today.</p>
   </div>
 </div>
 
@@ -325,7 +326,7 @@ cd HealthClawGuardrails
     <span class="faq-icon"><i class="fas fa-plus"></i></span>
   </div>
   <div class="faq-answer">
-    <p><a href="https://sharponmcp.com" target="_blank" rel="noopener noreferrer">SHARP-on-MCP</a> (Standardised Healthcare Agent Remote Protocol) is a vendor-neutral spec for how an MCP server in healthcare receives its FHIR context. Instead of every MCP server running its own OAuth dance against every EHR, the <em>agent host</em> obtains a SMART-on-FHIR access token and forwards it on every call via three headers:</p>
+    <p>SHARP-on-MCP (Standardised Healthcare Agent Remote Protocol) is a vendor-neutral spec for how an MCP server in healthcare receives its FHIR context. Instead of every MCP server running its own OAuth dance against every EHR, the <em>agent host</em> obtains a SMART-on-FHIR access token and forwards it on every call via three headers:</p>
     <ul>
       <li><code>X-FHIR-Server-URL</code> — the upstream FHIR base (Epic, Cerner, MEDITECH, etc.)</li>
       <li><code>X-FHIR-Access-Token</code> — the SMART access token</li>

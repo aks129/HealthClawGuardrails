@@ -1,0 +1,10 @@
+walkthrough-upstream.sh  kind=hapi  upstream=https://hapi.fhir.org/baseR4
+run nonce d114478e72aa  (all created resources carry it)
+date 2026-09-04T09:02:26Z
+
+0. Preflight
+    proxy version 1.10.0, mode local
+
+The proxy is running in LOCAL mode — it is not talking to hapi at all.
+Everything below would pass against the proxy's own SQLite store and prove
+nothing about the connector. Check FHIR_UPSTREAM_URL is exported.
