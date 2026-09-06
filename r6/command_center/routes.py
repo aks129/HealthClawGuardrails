@@ -44,7 +44,8 @@ from r6.command_center.models import (
     default_conversation_id,
 )
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
-from r6.access import public_step_up_reason
+from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
+                       public_step_up_reason, tenant_from_request)
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 from r6.stepup import validate_step_up_token
 
@@ -258,22 +259,24 @@ def _require_session_or_stepup():
     """System status / sessions-list leak infra URLs — require session or step-up."""
     if session.get(SESSION_KEY):
         return None
-    step_up = request.headers.get("X-Step-Up-Token")
-    if step_up:
-        tenant = (
-            request.args.get("tenant")
-            or request.headers.get("X-Tenant-Id")
-            or DEFAULT_TENANT
-        )
-        # Both halves used, not just destructured (#307). Throwing the reason
-        # away made every refusal here indistinguishable — a misconfigured
-        # STEP_UP_SECRET, an expired token and a token for someone else's
-        # tenant all produced the same silent 401.
-        valid, error = validate_step_up_token(step_up, tenant)
-        if valid:
+    if request.headers.get("X-Step-Up-Token"):
+        # Kernel slice 18: a predicate, not a gate, so it asks has_grant,
+        # which answers None in exactly the cases require_grant would refuse
+        # and never raises; the kernel logs each refusal with its public
+        # reason (the line #307 asked for), so this site no longer logs one
+        # of its own. The tenant is read in the order this predicate always
+        # used (?tenant=, then X-Tenant-Id, then the blueprint default). A
+        # malformed id is not a 400 here: it never was, it was a token that
+        # failed its tenant binding, and it stays the same 401.
+        try:
+            tenant = tenant_from_request(
+                sources=(TenantSource.QUERY, TenantSource.HEADER),
+                default=DEFAULT_TENANT, query_keys=("tenant",))
+        except TenantRejected:
+            tenant = None
+        if tenant is not None and has_grant(
+                scope=Scope.TENANT_BOUND, tenant=tenant) is not None:
             return None
-        logger.info("command-center step-up refused: tenant=%s reason=%s",
-                    tenant, error)
     return jsonify({"error": "authentication required"}), 401
 
 

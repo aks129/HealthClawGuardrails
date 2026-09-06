@@ -736,8 +736,12 @@ def test_a_grant_is_constructed_in_exactly_one_place():
 #: Kernel slice 17: r6/actions/routes.py:action_status, the privileged-view
 #: predicate (full record with a tenant-bound grant, PHI-safe summary
 #: without one). A predicate, never a gate, so it asks rather than refuses.
+#: Kernel slice 18: r6/command_center/routes.py:_require_session_or_stepup,
+#: the session-or-token predicate guarding system status and the sessions
+#: list. The tenant is read by the kernel in the order the site always used.
 _HAS_GRANT_CALLSITES: frozenset[str] = frozenset({'r6/agent_runs/routes.py:62',
-                                                  'r6/actions/routes.py:714'})
+                                                  'r6/actions/routes.py:714',
+                                                  'r6/command_center/routes.py:277'})
 
 
 def _has_grant_calls():
