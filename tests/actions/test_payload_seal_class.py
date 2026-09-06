@@ -33,6 +33,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 # refuses payload_json at runtime and pins that refusal in its own tests.
 RUNTIME_GUARDED = {'r6/actions/state.py:transition_action'}
 
+# The columns no bulk writer in this codebase may name: the executable
+# payload (#528) and the digest the human gate verifies it against (#658;
+# the QA pass on that PR forged both in one transaction).
+SEALED_COLUMNS = {'payload_json', 'payload_digest'}
+
 
 def _names(node):
     return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
@@ -85,14 +90,14 @@ def _bulk_updates():
             f = node.func
             if not (isinstance(f, ast.Attribute) and f.attr in ('update', 'values')):
                 continue
-            if 'ProposedAction' not in _names(f.value):
+            if not ({'ProposedAction', 'ActionConfirmation'} & _names(f.value)):
                 continue
             where = '%s:%s' % (path.relative_to(ROOT).as_posix(),
                                owner.get(id(node), '<module>'))
             yield where, node.lineno, node
 
 
-def test_no_bulk_update_on_proposed_action_can_carry_payload_json():
+def test_no_bulk_update_on_the_action_rail_can_carry_a_sealed_column():
     seen, violations = 0, []
     for where, line, call in _bulk_updates():
         seen += 1
@@ -101,10 +106,10 @@ def test_no_bulk_update_on_proposed_action_can_carry_payload_json():
             if where not in RUNTIME_GUARDED:
                 violations.append('%s (line %d): non-literal mapping at a site '
                                   'not listed as runtime-guarded' % (where, line))
-        elif 'payload_json' in keys:
-            violations.append('%s (line %d): bulk update names payload_json'
-                              % (where, line))
-    assert seen >= 3, 'the scan found %d bulk writers; it used to find 3' % seen
+        elif keys & SEALED_COLUMNS:
+            violations.append('%s (line %d): bulk update names %s'
+                              % (where, line, ', '.join(sorted(keys & SEALED_COLUMNS))))
+    assert seen >= 4, 'the scan found %d bulk writers; it used to find 4' % seen
     assert not violations, (
         'A bulk writer can reach payload_json past the ORM seal (#620):\n  '
         + '\n  '.join(violations))
