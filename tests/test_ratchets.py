@@ -137,7 +137,10 @@ def _report(sites, pin, what):
 #: behind. It was blocked on whether a refusal may state its reason; the
 #: owner ruled yes (#475), so the three reasons its contract pins survive
 #: the kernel.
-_STEP_UP_CALLSITES = 12
+#: 12 -> 10 (kernel slice 7): $curatr-apply-fix's two-phase gate now goes
+#: through require_grant, both phases. r6/routes.py keeps two direct sites
+#: ($ingest-context at its flag-conditional gate, bind-telegram).
+_STEP_UP_CALLSITES = 10
 
 
 def test_direct_step_up_validation_only_decreases():
@@ -396,7 +399,8 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: 3927 -> 3928 (#583): one entry in the tenant-exemption table for the
 #: published privacy policy (#574). The table is the guard, so the line
 #: has to sit here; nothing else in that change touches this file.
-_GOD_MODULE_LINES = 3928
+#: 3928 -> 3917 (kernel slice 7): eleven lines of hand-rolled gate removed.
+_GOD_MODULE_LINES = 3917
 
 
 def test_the_god_module_only_shrinks():
