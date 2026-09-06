@@ -47,7 +47,7 @@
 <div class="cc-login">
     <i class="fas fa-shield-heart" style="font-size:2.75rem;color:var(--cc-accent,#38bdf8);margin-bottom:0.5rem"></i>
     <h1>Your personal health command center</h1>
-    <p>The dashboard for private tenants is protected. Ask your OpenClaw Telegram agent for a signed access link.</p>
+    <p>The dashboard for private tenants is protected. Access is by signed link, and there is no self-serve route to a private tenant during the beta.</p>
 
     {% if error %}
     <div class="cc-login-err"><i class="fas fa-triangle-exclamation"></i> {{ error }}</div>
@@ -55,11 +55,11 @@
 
     <div class="cc-login-steps">
         <strong>How to get in:</strong>
-        <ol style="margin:0.5rem 0 0 1rem;padding:0;line-height:1.8">
-            <li>Open your HealthClaw Telegram bot</li>
-            <li>Send <code>/dashboard</code> — the bot replies with a signed link</li>
-            <li>Click the link — valid for 24 hours</li>
-        </ol>
+        <p style="margin:0.5rem 0 0;line-height:1.7">
+            Email <a href="mailto:support@healthclaw.io" style="color:var(--cc-accent,#38bdf8)">support@healthclaw.io</a>
+            with your tenant id and we will issue you a signed link. Links are
+            valid for 24 hours from the moment they are issued.
+        </p>
     </div>
 
     <p style="margin-top:1.5rem;font-size:0.85rem">

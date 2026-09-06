@@ -572,22 +572,28 @@ BY_ID = {row.id: row for row in MATRIX}
 
 NON_CLINICAL_MUTATORS = {
     # Durable agent-run queue: execution bookkeeping, not patient data.
-    # NOTE: none of these emits an AuditEvent, and that is a decision rather
-    # than an oversight: claim/heartbeat/transition fire on a timer, so
-    # auditing them would bury real access records under queue chatter. The
-    # three command-centre writes below were the half of this note worth
-    # acting on, and they now audit.
-    "agent_runs.create_agent_run": "queue: tenant session or step-up",
-    "agent_runs.cancel_agent_run": "queue: tenant session or step-up",
-    "agent_runs.claim_agent_run": "queue: internal secret",
-    "agent_runs.heartbeat_agent_run": "queue: internal secret",
-    "agent_runs.transition_agent_run": "queue: internal secret",
-    "agent_runs.append_agent_run_event": "queue: internal secret",
-    "agent_runs.create_agent_tool_call": "queue: internal secret",
-    "agent_runs.transition_agent_tool_call": "queue: internal secret",
-    "agent_runs.finalize_agent_run": "queue: internal secret",
-    "agent_runs.resume_agent_run": "queue: internal secret",
-    "agent_runs.reconcile_agent_tool_call": "queue: reconciliation secret",
+    # The old NOTE here said none of these emitted an AuditEvent and called
+    # that a decision. Half of it was: claim and heartbeat are polled by every
+    # live worker, and auditing them would bury real records under queue
+    # chatter. The other half was an oversight, and playbook B2 corrected it —
+    # a run's creation, its outcomes, every tool call an agent registers or
+    # resolves, an operator's reconciliation, and the assistant answer a
+    # finalize persists all audit now. They stay in this dict because they are
+    # non-clinical, not because they are unaudited;
+    # tests/test_agent_run_writes_are_audited.py classifies all fourteen
+    # routes and holds each line, PHI-free detail included.
+    "agent_runs.create_agent_run": "queue: tenant session or step-up; audited",
+    "agent_runs.cancel_agent_run": "queue: tenant session or step-up; audited",
+    "agent_runs.claim_agent_run": "queue: internal secret; timer poll",
+    "agent_runs.heartbeat_agent_run": "queue: internal secret; timer poll",
+    "agent_runs.transition_agent_run": "queue: internal secret; audited",
+    "agent_runs.append_agent_run_event": "queue: internal secret; run event log",
+    "agent_runs.create_agent_tool_call": "queue: internal secret; audited",
+    "agent_runs.transition_agent_tool_call": "queue: internal secret; audited",
+    "agent_runs.finalize_agent_run": "queue: internal secret; audited",
+    "agent_runs.resume_agent_run": "queue: internal secret; audited",
+    "agent_runs.reconcile_agent_tool_call":
+        "queue: reconciliation secret; audited",
     # Command-center activity log: _authz_write = session or step-up.
     # These three DO emit AuditEvents now (the note above no longer covers
     # them). They stay in this dict because they are non-clinical, not

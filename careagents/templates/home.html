@@ -3,6 +3,7 @@
 {% block bodyclass %}page-home{% endblock %}
 {% block head %}<link rel="manifest" href="/manifest.webmanifest">{% endblock %}
 {% block content %}
+{% include "_beta_banner.html" %}
 <main class="hub">
   <div class="hub-head">
     <div>
@@ -91,9 +92,19 @@
       </button>
       {% endfor %}
     </div>
-    <p class="inline-msg" id="connect-msg" hidden></p>
+    {# The only channel for a refusal: tap a closed tile and this paragraph is
+       the whole of what the deployment says back. Same live-region treatment
+       as .conn-refresh-msg above; say() shows it before writing into it. #}
+    <p class="inline-msg" id="connect-msg" role="status" aria-live="polite"
+       hidden></p>
+    {# True, and worth keeping — but only where the logins it describes are
+       open. Under three "not open in this beta" tiles it contradicted the
+       screen it sat on. #}
+    {% if catalog | selectattr('id', 'in', ['fasten', 'wearable'])
+                  | rejectattr('tier', 'equalto', 'soon') | list %}
     <p class="add-note">Verified provider &amp; wearable logins happen on the
       provider’s own site — we never see your password.</p>
+    {% endif %}
   </section>
 
   <!-- SURFACES -->
@@ -101,8 +112,9 @@
     <div class="section-head"><h2>Where you can reach your agent</h2></div>
     <div class="surface-row">
       <div class="surface on"><b>Web</b><span>always on</span></div>
-      <div class="surface" id="tg-surface"><b>Telegram</b>
-        <span id="tg-state">connect →</span></div>
+      {# Not serviced in the beta (#536, D6): no webhook, no poller. No id, so
+         home.js has nothing to bind — the tile is a label, not a control. #}
+      <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
       {% if imessage_handle %}
       <div class="surface" id="im-surface"><b>iMessage</b>
         <span id="im-state">connect →</span></div>
@@ -111,7 +123,11 @@
       {% endif %}
       <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
     </div>
-    <p class="inline-msg" id="surfaces-msg" hidden></p>
+    {# The refusal for these surfaces, and the words explaining every section
+       flash, arrive here. Same live-region treatment as #connect-msg and
+       .conn-refresh-msg; announce() shows it before writing into it. #}
+    <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
+       hidden></p>
   </section>
 </main>
 
@@ -241,6 +257,9 @@
      current owner before triggering the picker. -->
 <input type="file" id="upload-file" accept=".json,application/json,application/fhir+json" hidden>
 
-<script>window.CARE = { telegramBot: {{ (telegram_bot or '')|tojson }} };</script>
+{# `window.CARE = {telegramBot: ...}` used to be emitted here. Nothing reads
+   it (home.js builds the deep link from the server response), and with the
+   Telegram tile out of service for the beta (#536, D6) it only put the bot
+   handle in the page source. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
 {% endblock %}

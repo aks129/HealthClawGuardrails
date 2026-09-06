@@ -68,17 +68,43 @@ _CATALOG = [
 _BY_ID = {c["id"]: c for c in _CATALOG}
 _WEARABLE_IDS = {p["id"] for p in WEARABLE_PROVIDERS}
 
+# The sources that take a person's OWN records. Closed to new connections
+# unless the deployment's CARE_REAL_RECORDS switch opens them for this
+# account (council ruling 2026-09-02, D3) — the beta runs on synthetic data.
+REAL_RECORD_SOURCES = ("fasten", "wearable", "direct")
+# The one sentence a refused tester reads, so it is a sentence: patient-facing
+# copy here is plain, sentence-cased and em-dash-free. Parallel to the closed
+# tile's own blurb ("Not open in this beta — start with the sample records.").
+_REAL_RECORDS_CLOSED = ("Connecting your own records isn't open in this beta "
+                        "yet. Start with the sample records.")
 
-def catalog(cfg) -> list[dict]:
-    """The marketplace tiles with per-deployment availability resolved."""
+
+def catalog(cfg, real_records: bool = False) -> list[dict]:
+    """The marketplace tiles with per-deployment availability resolved.
+
+    `real_records` is whether the viewing account may START a real-record
+    connection (`cfg.real_records_open_for(email)`); the app passes it. The
+    default is closed so a caller that forgets fails safe.
+    """
     out = []
     for c in _CATALOG:
         item = {k: c[k] for k in ("id", "label", "blurb", "icon", "tier")}
+        if c["id"] in REAL_RECORD_SOURCES and not real_records:
+            # Coming soon, honestly: no consent card (nothing to consent
+            # to), and the tag says what a tester can do instead.
+            item["tier"] = "soon"
+            item["note"] = "coming soon"
+            item["blurb"] = ("Not open in this beta — start with the "
+                             "sample records.")
+            if "providers" in c:
+                item["providers"] = c["providers"]
+            out.append(item)
+            continue
         # Every live real-record source gets the consent card; sample
         # doesn't. `direct` (patient-provided FHIR bundle upload) is a
         # real-record source too — the file is the patient's own PHI, so
         # it rides the same consent gate as fasten/wearable.
-        if c["id"] in ("fasten", "wearable", "direct"):
+        if c["id"] in REAL_RECORD_SOURCES:
             item["requires_consent"] = True
         if c["id"] == "fasten" and not getattr(cfg, "fasten_public_key", ""):
             item["tier"] = "soon"
@@ -100,7 +126,8 @@ def get(connector_id: str) -> dict | None:
     return _BY_ID.get(connector_id)
 
 
-def start(connector_id: str, provider: str | None, cfg, client) -> dict:
+def start(connector_id: str, provider: str | None, cfg, client,
+          real_records: bool = False) -> dict:
     """Return a plan for the connection the app should persist, or a marker:
 
       {tenant, status, label, provider?, connect_url?}  — create this connection
@@ -108,11 +135,16 @@ def start(connector_id: str, provider: str | None, cfg, client) -> dict:
       {"error": msg, "code": int}                       — refuse
 
     The app layer owns persistence (account scoping) and any seeding; `start`
-    only decides the plan + builds provider URLs.
+    only decides the plan + builds provider URLs. `real_records` is as for
+    `catalog()`: a closed real-record source is refused with 503 here, not
+    waitlisted, so the hub never records intent for a tile the switch hid.
     """
     spec = _BY_ID.get(connector_id)
     if spec is None:
         return {"error": "unknown connector", "code": 404}
+
+    if connector_id in REAL_RECORD_SOURCES and not real_records:
+        return {"error": _REAL_RECORDS_CLOSED, "code": 503}
 
     if connector_id == "sample":
         # Synthetic data only — no personal data, so no consent gate. Keeping

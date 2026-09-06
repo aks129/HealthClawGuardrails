@@ -9,6 +9,7 @@ from datetime import timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 
 from models import db
+from r6.access import audit
 from r6.agent_runs.models import (
     AgentRun,
     AgentRunEvent,
@@ -23,6 +24,76 @@ from r6.agent_runs.state import (
     require_tool_transition,
 )
 from r6.command_center.models import Conversation, ConversationMessage
+
+
+# ---------------------------------------------------------------------------
+# Audit (playbook B2)
+# ---------------------------------------------------------------------------
+#
+# Which mutations record evidence is a decision, and it is made here rather
+# than at the routes: every one of these functions owns its own transaction,
+# so an audit written anywhere else would commit separately from the change it
+# describes — fail-open on the data, fail-closed on the response. The kernel's
+# audit() flushes inside THIS transaction and never commits, so the row and
+# the state change resolve together.
+#
+# The line: a mutation a principal asked for is audited; a mutation the system
+# makes to itself on a timer is not. Deadline sweeps, lease recovery, claim
+# redelivery, heartbeats and the run's own event log stay out — they are
+# already fully recorded in AgentRunEvent, and putting them here would bury
+# the records an auditor needs under queue chatter.
+# tests/test_agent_run_writes_are_audited.py classifies all fourteen routes
+# and proves each audited one at the wire.
+
+def _detail(**fields) -> str:
+    """A PHI-FREE `key=value` detail line, in the command centre's shape.
+
+    Only ids, states, counts and regex-constrained identifiers may be passed.
+    Never a message body, a tool argument, or a tool result: this package
+    handles the assistant's answer and the arguments a model chose, and both
+    are the most sensitive field in their request. Fields that are None are
+    dropped rather than rendered, so a detail says nothing it does not know.
+    """
+    return " ".join(f"{key}={value}" for key, value in fields.items()
+                    if value is not None)
+
+
+def _audit_run_change(run: AgentRun, previous_status: str, **extra) -> None:
+    """Record one principal-requested change to a run's state."""
+    audit(
+        tenant=run.tenant_id,
+        event_type="update",
+        resource_type="AgentRun",
+        resource_id=run.id,
+        agent_id=run.agent_id,
+        detail=_detail(**{"from": previous_status, "status": run.status,
+                          "attempt": run.attempt,
+                          "error_class": run.error_class, **extra}),
+    )
+
+
+def _audit_tool_change(
+    run: AgentRun,
+    call: AgentToolCall,
+    event_type: str,
+    **extra,
+) -> None:
+    """Record one change to a tool call — the agent's real-world side effect.
+
+    `tool_name` is `_ID`-constrained at the route and `input_hash` is a digest,
+    so both are safe to name. `outcome_ref` is a free-form 256-character worker
+    string and is deliberately absent.
+    """
+    audit(
+        tenant=run.tenant_id,
+        event_type=event_type,
+        resource_type="AgentToolCall",
+        resource_id=call.id,
+        agent_id=run.agent_id,
+        detail=_detail(**{"run": run.id, "tool": call.tool_name,
+                          "status": call.status, "attempt": call.attempt,
+                          "error_class": call.error_class, **extra}),
+    )
 
 
 def create_run(
@@ -57,6 +128,19 @@ def create_run(
     try:
         db.session.flush()
         append_event(run, "run.queued", {"status": "queued"})
+        # Inside the try: a concurrent creation rolls this transaction back,
+        # and the audit row goes with it. The replay above returns before
+        # here, so a run that already existed is never recorded as created.
+        audit(
+            tenant=run.tenant_id,
+            event_type="create",
+            resource_type="AgentRun",
+            resource_id=run.id,
+            agent_id=run.agent_id,
+            detail=_detail(conversation=run.conversation_id,
+                           message=run.message_id, surface=run.surface,
+                           deadline_s=deadline_seconds),
+        )
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -583,21 +667,36 @@ def transition_owned_run(
         raise InvalidTransition(
             "completed is only allowed through atomic finalization")
     require_run_transition(run.status, target)
+    # Captured before the transition, and after every raise above: an audit
+    # flushed ahead of a refusal would be evidence of a write that did not
+    # happen, and the flush-only primitive would leave it pending at teardown.
+    previous = run.status
+    # commit=False throughout, so the audit is the last flush before the one
+    # commit that resolves the whole change.
     if _preserve_ambiguous_tools(
-            run, reason=f"worker_{target}_with_running_tool"):
+            run, reason=f"worker_{target}_with_running_tool", commit=False):
+        _audit_run_change(run, previous, requested=target)
+        db.session.commit()
         return run
     if run.cancel_requested and target != "cancelled":
-        return transition_run(
+        run = transition_run(
             run, "cancelled", event_type="run.cancelled",
-            payload={"status": "cancelled"})
-    return transition_run(
-        run,
-        target,
-        event_type=event_type,
-        payload=payload,
-        error_class=error_class,
-        available_in_seconds=available_in_seconds,
-    )
+            payload={"status": "cancelled"}, commit=False)
+    else:
+        run = transition_run(
+            run,
+            target,
+            event_type=event_type,
+            payload=payload,
+            error_class=error_class,
+            available_in_seconds=available_in_seconds,
+            commit=False,
+        )
+    # A worker declaring an outcome is a once-per-attempt fact, not a poll:
+    # this is where a run enters the human gate, fails, or is retried.
+    _audit_run_change(run, previous, requested=target)
+    db.session.commit()
+    return run
 
 
 def request_cancel(run: AgentRun) -> AgentRun:
@@ -610,19 +709,31 @@ def request_cancel(run: AgentRun) -> AgentRun:
     if locked is None:
         raise LookupError("unknown run")
     run = locked
+    # A finished run changes nothing, so it is not audited — an audit event
+    # for it would report a write that did not happen. The same holds for a
+    # repeat cancellation of a run already waiting on reconciliation, below.
+    # The `running` path is NOT idempotent: it re-sets the flag and appends
+    # another run.cancel_requested event on every call, which predates this
+    # change, so a repeat cancel there audits again.
     if run.status in TERMINAL_RUN_STATES:
         return run
+    previous = run.status
     if run.status == "waiting_for_human" and AgentToolCall.query.filter_by(
             run_id=run.id, status="needs_reconciliation").first() is not None:
         if not run.cancel_requested:
             run.cancel_requested = True
             append_event(run, "run.cancel_requested", {"status": run.status})
+            _audit_run_change(run, previous, cancel_requested=True)
             db.session.commit()
         return run
     if run.status in ("queued", "waiting_for_human"):
-        return transition_run(run, "cancelled")
+        run = transition_run(run, "cancelled", commit=False)
+        _audit_run_change(run, previous)
+        db.session.commit()
+        return run
     run.cancel_requested = True
     append_event(run, "run.cancel_requested", {"status": run.status})
+    _audit_run_change(run, previous, cancel_requested=True)
     db.session.commit()
     return run
 
@@ -640,9 +751,17 @@ def resume_run(run_id: str) -> AgentRun:
     if AgentToolCall.query.filter_by(
             run_id=run.id, status="needs_reconciliation").first() is not None:
         raise InvalidTransition("run has a tool awaiting reconciliation")
-    return transition_run(
+    previous = run.status
+    # The other half of the human gate. Entering `waiting_for_human` is
+    # audited by transition_owned_run; leaving it is audited here, so the
+    # trail can show a run that stopped for a person and the release that
+    # let it continue.
+    run = transition_run(
         run, "queued", event_type="run.resumed",
-        payload={"status": "queued"})
+        payload={"status": "queued"}, commit=False)
+    _audit_run_change(run, previous, resumed=True)
+    db.session.commit()
+    return run
 
 
 def register_tool_call(
@@ -677,6 +796,11 @@ def register_tool_call(
             "tool_name": tool_name,
             "input_hash": input_hash,
         })
+        # The moment an agent commits to a real-world side effect. The
+        # arguments themselves never leave input_json — the digest is what
+        # makes a replay provable without copying what was asked for.
+        _audit_tool_change(run, call, "create",
+                           input_sha256=input_hash[:12])
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -740,6 +864,9 @@ def transition_tool_call(
         "outcome_ref": outcome_ref,
         "error_class": error_class,
     })
+    # `result` is the provider's response about a patient and never appears
+    # here; the event log above already holds it for the worker's own replay.
+    _audit_tool_change(run, call, "update")
     db.session.commit()
     return call
 
@@ -797,7 +924,9 @@ def finalize_run(
             raise InvalidTransition(
                 "assistant request ID conflicts with persisted outcome")
         message = prior
+        created_message = False
     else:
+        created_message = True
         conversation = (
             Conversation.query
             .filter_by(tenant_id=run.tenant_id, id=run.conversation_id)
@@ -831,6 +960,7 @@ def finalize_run(
             "checkpoint_id": checkpoint_id,
             "text": text,
         })
+    previous = run.status
     transition_run(
         run,
         "completed",
@@ -838,6 +968,27 @@ def finalize_run(
         payload={"status": "completed"},
         commit=False,
     )
+    # The flush assigns message.id, so the audit can name the row it is
+    # evidence for.
+    db.session.flush()
+    if created_message:
+        # The mirror image of the command centre's audit on the user's turn
+        # (r6/command_center/routes.py). Auditing one and not the other would
+        # leave a trail that can show a question and never its answer.
+        # DETAIL IS PHI-FREE: `text` is the assistant's answer about a
+        # patient, so this carries its length and nothing of its content.
+        audit(
+            tenant=run.tenant_id,
+            event_type="create",
+            resource_type="ConversationMessage",
+            resource_id=message.id,
+            agent_id=run.agent_id,
+            detail=_detail(run=run.id, conversation=run.conversation_id,
+                           role="assistant", channel=run.surface,
+                           chars=len(text)),
+        )
+    _audit_run_change(run, previous, checkpoint=checkpoint_id,
+                      message=message.id)
     db.session.commit()
     return run, message, True
 
@@ -939,6 +1090,11 @@ def reconcile_tool_call(
         "run_status": run.status,
         "run_error_class": run.error_class,
     })
+    # A human asserting what happened in the world — the single most
+    # evidence-worthy mutation in this package. `evidence_ref` is _ID-
+    # constrained at the route, so it is an opaque handle rather than prose.
+    _audit_tool_change(run, call, "update", evidence=evidence_ref,
+                       run_status=run.status)
     db.session.commit()
     return call, run, True
 

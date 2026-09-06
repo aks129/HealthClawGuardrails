@@ -222,8 +222,33 @@ def test_review_submit_reports_a_failed_confirmation(cfg, svc, monkeypatch):
     r = c.post(f"/review/{agent_id}/act-1/submit", json={"approved": []})
     assert r.status_code == 502
     body = r.get_json()
+    # False, not null. Only a failed token mint or a 4xx the engine itself
+    # answered reaches this branch; every ambiguous case is routed to
+    # HealthClawUnconfirmed and answers null. The action did not execute and
+    # that is known, so null here would undo #220's third answer from the
+    # other side.
     assert body["confirmed"] is False
     assert "not" in body["message"].lower() or "couldn't" in body["message"]
+
+    # The message must not direct the patient into a loop the page creates.
+    # Since #528 the review route mints a confirmation on the first submit,
+    # so "please try approving again" answers 409 and the page tells them
+    # they already approved. Same forbidden claims as the page's own guard
+    # (tests/test_review_says_what_it_knows.py), plus the dead instruction.
+    #
+    # MUTATION: restore "Nothing has been sent — please try approving
+    # again." -> red on two of these.
+    msg = body["message"]
+    for claim in ("Submission rejected", "was rejected", "did not go through",
+                  "nothing was sent", "try approving again",
+                  "approving again."):
+        assert claim.lower() not in msg.lower(), (
+            f"the relay tells the patient {claim!r}. Nothing executed, but a "
+            f"confirmation IS on file, so a retry 409s and 'nothing was sent' "
+            f"reads as 'start over'.")
+    assert "will not resend" in msg.lower(), (
+        "the message does not say that re-approving here cannot resend it, "
+        "which is the one thing that stops the loop")
 
 
 def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
@@ -239,6 +264,16 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     why #416 survived a suite that looked like it covered this. The other half
     is in tests/test_healthclaw_transport.py, where the real client meets a
     real 504 over a real socket.
+
+    The assertion below used to require `"twice" in msg`, which froze the
+    deterrent "approving twice could send it twice" into place as though it
+    were the fix. It was true of #220's world and false since #550: a second
+    approval reaches the review route, which answers 409 while the action is
+    awaiting confirmation and 404 once it has moved on, so `confirm_action`
+    is never reached twice. A guard that pins a sentence rather than the
+    property behind it keeps the sentence after the property has gone —
+    which is how this survived two rounds of fixing its siblings. Pin the
+    property: the uncertainty is stated, and no false deterrent rides along.
     """
     from careagents.app import create_app
     from careagents.healthclaw import HealthClawUnconfirmed
@@ -268,7 +303,13 @@ def test_review_submit_does_not_claim_nothing_was_sent_when_it_cannot_tell(
     assert body["confirmed"] is None, "unknown is not false"
     msg = body["message"].lower()
     assert "nothing has been sent" not in msg
-    assert "couldn't confirm" in msg and "twice" in msg
+    assert "couldn't tell" in msg or "could not tell" in msg, (
+        "the message no longer states the uncertainty, which is the whole "
+        "of #220's third answer")
+    assert "twice" not in msg or "cannot" in msg, (
+        "the message warns that approving twice could send it twice; since "
+        "#550 a second approval answers 409 or 404 and never reaches the "
+        "confirm")
 
 
 def test_confirm_action_separates_a_refusal_from_an_unanswered_confirm():
@@ -613,6 +654,43 @@ def test_worker_health_client_accepts_fail_closed_503_projection():
         "X-Internal-Secret": "mint-secret",
         "X-Agent-Id": "careagents-worker",
     }
+
+
+def test_worker_health_uses_the_callers_timeout_and_otherwise_the_clients():
+    """The per-call budget reaches the wire, not just the signature (#219).
+
+    The app-level test pins that `/healthz` ASKS for a short timeout. This
+    pins that asking does anything: `_send` used to hard-code `self.timeout`
+    for every call, so a caller-supplied budget would have been accepted and
+    silently dropped — a fake would never have noticed.
+    """
+    import careagents.healthclaw as hcmod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"available": True, "active_workers": 1}
+
+    class _HTTP:
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            captured["timeout"] = timeout
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "mint-secret",
+                                    timeout=25.0)
+    client.http = _HTTP()
+
+    client.agent_worker_health(30, timeout=(1.0, 1.0))
+    assert captured["timeout"] == (1.0, 1.0)
+
+    # Every other caller keeps the client-wide timeout it has always had.
+    client.agent_worker_health(30)
+    assert captured["timeout"] == 25.0
 
 
 def test_worker_container_probe_uses_authenticated_queue_readiness(monkeypatch):
@@ -1370,6 +1448,41 @@ def test_tool_loop_stops_at_the_budget_instead_of_spending_forever(
     assert events[-1] == {"type": "text", "text": "final answer"}
 
 
+def test_a_stream_that_fails_mid_run_says_so_instead_of_going_quiet(
+        cfg, svc, monkeypatch):
+    """A dead stream must state that it died (#219).
+
+    `_stream_run` had no `except` around the run-event poll, so a
+    HealthClawError killed the generator inside an open response: the
+    connection dropped with no `error` frame and the page just stopped, with
+    nothing to tell the person whether their question was lost.
+
+    What the terminal frame may say is bounded by the same rule as every
+    other failure surface — the generic sentence, never the exception. Real
+    engine errors carry connection strings and correlation ids.
+    """
+    from careagents.agent import GENERIC_FAILURE_TEXT
+
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.run_events_error = "OperationalError: could not connect to db-7"
+
+    response = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "what did my results say",
+        "request_id": "stream-dies-midway"}, buffered=False)
+    # An SSE body is a generator: without reading it the stream never runs.
+    body = response.get_data().decode()
+
+    frames = [json.loads(line[len("data: "):])
+              for line in body.splitlines() if line.startswith("data: ")]
+    assert response.status_code == 200
+    assert frames[0]["type"] == "accepted"
+    assert frames[-1] == {"type": "error", "text": GENERIC_FAILURE_TEXT}
+    assert len(frames) == 2, (
+        f"the error frame must be terminal, got {frames}")
+    assert "OperationalError" not in body and "db-7" not in body
+
+
 def test_healthz_reports_ok_when_the_account_store_answers(app):
     r = app.test_client().get("/healthz")
     assert r.status_code == 200
@@ -1423,6 +1536,16 @@ def test_an_unstamped_build_is_still_ready(app, cfg, monkeypatch):
 
 def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
         cfg, svc, monkeypatch):
+    """The deploy gate that is KEPT, and deliberately (#219).
+
+    HealthClaw answered: there is no fresh worker. That is a CareAgents
+    deployment which serves pages and cannot finish a chat turn — the
+    web-only deployment `docs/runbooks/careagents-durable-worker.md`
+    documents a 503 for. Railway only probes at the start of a deploy, so
+    503 here means that deploy does not go live, which is the wanted
+    outcome: the fault is in the thing being deployed. Contrast the
+    unreachable case below, where the fault is not ours.
+    """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_available = False
@@ -1436,6 +1559,7 @@ def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
 
     assert health.status_code == 503
     assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "not_ready"
     assert refused.status_code == 503
     assert refused.get_json()["error"] == "run_workers_unavailable"
     assert fake.runs == {}
@@ -1460,23 +1584,36 @@ def test_chat_recovers_after_worker_queue_access_returns(
     assert len(fake.runs) == 1
 
 
-def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
+def test_unreachable_worker_control_plane_stops_admission_not_the_deploy(
         cfg, svc, monkeypatch):
-    """Both states still fail closed. The code says which one happened.
+    """Admission still fails closed. Readiness no longer does (#219).
 
-    Readiness and admission must refuse whether the workers reported
-    themselves absent or we could not reach the health endpoint at all — the
-    turn cannot be promised either way, and that half is unchanged. What
-    changed with #410 is the claim: this used to answer
-    `run_workers_unavailable`, filing "we could not ask" as "the workers are
-    down". The two are different incidents.
+    Admission is the gate that protects people, and it is unchanged: a turn
+    nobody can promise is refused whether the workers reported themselves
+    absent or we could not reach the health endpoint at all. #410 fixed the
+    *claim* — "we could not ask" stopped being filed as "the workers are
+    down" — and this changes what that claim is allowed to decide.
+
+    Readiness used to answer 503 here too. On Railway the health check runs
+    only at the start of a deploy, so that 503 blocked a CareAgents deploy
+    on a HealthClaw outage — including the deploy that would fix it — while
+    traffic stayed on a previous version with exactly the same dependency.
+    The state is still published, as `run_workers: false` with
+    `run_workers_state: "unknown"`; it just does not gate the status code.
+
+    MUTATION: restore `ready = accounts_ok and workers_ok` in
+    `careagents/app.py` and this fails on the 200.
     """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_health_error = True
 
-    assert client.get("/healthz").status_code == 503
-    assert client.get("/healthz").get_json()["run_workers"] is False
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "unknown"
+    assert health.get_json()["accounts"] is True
+
     response = client.post("/api/chat", json={
         "agent_id": agent_id, "message": "upstream is unreachable"})
     assert response.status_code == 503
@@ -1484,6 +1621,139 @@ def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
     # The sentence the patient reads is true in both states, so it does not
     # change with the code.
     assert "temporarily unavailable" in response.get_json()["message"]
+
+
+@pytest.mark.parametrize("status,why", [
+    (403, "a stale or wrong HEALTHCLAW_MINT_SECRET"),
+    (404, "a HEALTHCLAW_BASE pointed at the wrong path root"),
+    (400, "a request HealthClaw understood and rejected"),
+])
+def test_a_deployment_healthclaw_refuses_must_not_pass_the_deploy_gate(
+        cfg, svc, monkeypatch, status, why):
+    """A 4xx is an ANSWER about US, and it must gate the deploy.
+
+    `/healthz` gates a Railway deploy: 503 keeps traffic on the previous
+    version. #219 correctly stopped gating on "we could not reach HealthClaw",
+    because that blocks the deploy that would fix someone else's outage. But
+    it routed EVERY `HealthClawError` there, and the client raises one for any
+    status outside (200, 503) as well as for a dead socket. So a CareAgents
+    container carrying the wrong mint secret — which HealthClaw answers 403 —
+    was filed as "we could not ask" and admitted.
+
+    Measured against a running pair before this test existed: wrong mint
+    secret -> `/healthz` 200 `"status":"ok"`, and every chat turn refused. The
+    fault is in the artifact being deployed, which is precisely the case the
+    PR's own ruling says must stay blocked.
+
+    MUTATION: return WORKERS_UNKNOWN for every HealthClawError in
+    `careagents/app.py:_worker_state` and this goes red on the 503.
+    """
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 503, (
+        f"{why} left a chat-dead deployment passing the deploy gate")
+    body = health.get_json()
+    assert body["run_workers_state"] == "rejected"
+    assert body["run_workers"] is False
+    assert body["status"] == "degraded"
+    # The account store is fine; this is not a claim about our database.
+    assert body["accounts"] is True
+
+    # The state is named separately from "the workers are down", because the
+    # remedy is different: this sends an operator to the CareAgents service
+    # variables, not to the worker service (#410's lesson, one layer along).
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "rejected-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_rejected"
+
+
+@pytest.mark.parametrize("status", [0, 500, 502, 503, 504])
+def test_an_outage_that_is_not_ours_still_lets_the_fixing_deploy_through(
+        cfg, svc, monkeypatch, status):
+    """The other half of the same carve, pinned so it cannot be over-tightened.
+
+    A dead socket (status 0), a 5xx, and a gateway error are statements about
+    HealthClaw or the network to it. Gating on those blocks a CareAgents
+    deploy on someone else's outage — including the deploy that fixes it —
+    which is the ruling #219 made and this must not undo.
+
+    MUTATION: widen the 4xx test in `_worker_state` to any non-zero status and
+    this goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 200, (
+        "a HealthClaw outage must not block the CareAgents deploy that fixes it")
+    assert health.get_json()["run_workers_state"] == "unknown"
+
+    # Admission still refuses — that is the gate that protects people.
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "unknown-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_unknown"
+
+
+def test_admission_bounds_its_dependency_call_too(cfg, svc, monkeypatch):
+    """The refusal path must not hold a thread for 25 seconds (#219).
+
+    `/healthz` got a bounded budget; `POST /api/chat` did not, so it inherited
+    the client's 25s CHAT timeout. Measured at 25.00s against a HealthClaw
+    that accepts the connection and never answers, versus 1.01s for the
+    bounded call. That is a gunicorn thread held for 25 seconds *to refuse a
+    turn*, during exactly the dependency outage `/healthz` now lets deploy —
+    and it spends the thread headroom the same change bought.
+
+    MUTATION: drop the `timeout=` argument at `careagents/app.py:958` and this
+    goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "budget-1"})
+
+    asked = fake.worker_health_timeout
+    assert asked != "never called", "admission never asked about the workers"
+    assert asked is not None, (
+        "admission inherited the client-wide 25s chat timeout; a turn that is "
+        "about to be REFUSED must not hold a web thread that long")
+    connect, read = asked
+    assert connect + read <= 5.0, (
+        f"admission's worst-case wait is {connect + read}s, which is more "
+        "than a person waiting on a refusal should hold a thread for")
+
+
+def test_healthz_bounds_the_dependency_call_to_its_own_probe_budget(
+        cfg, svc, monkeypatch):
+    """The endpoint's answer about itself cannot wait on a dependency.
+
+    The probe measured `/healthz` taking 25.01s and returning 503 with
+    nothing running at all, because its worker-health call inherited the
+    client's 25s chat timeout
+    (`docs/evidence/2026-09-03-probe-219-thread-saturation.md` §8, PR #573).
+    The container probe gives it 4s (`careagents/healthcheck.py`) and the
+    Dockerfile's HEALTHCHECK 5s, so the dependency call gets a budget that
+    fits inside both.
+
+    Asserted rather than waited on: a test that actually hangs a socket for
+    25s to prove this would be the slowest test in the suite and would still
+    only prove it once.
+    """
+    app, client, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    assert client.get("/healthz").status_code == 200
+
+    connect, read = fake.worker_health_timeout
+    assert connect + read <= 2.0, (
+        "the readiness probe's dependency call must answer inside a couple "
+        f"of seconds; worst case here is {connect + read}s")
 
 
 def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
@@ -1604,6 +1874,18 @@ class FakeClient:
         self._event_id = 0
         self.worker_available = True
         self.worker_health_error = False
+        # The HTTP status the raised HealthClawError carries. 0 is a transport
+        # failure ("we could not ask"); a 4xx is HealthClaw ANSWERING that it
+        # refused this deployment's request, which is a different incident
+        # with a different owner. The client raises with `r.status_code`, so a
+        # fake that only ever raises 0 cannot tell the two apart.
+        self.worker_health_error_status = 0
+        # The timeout the caller asked for on the last worker-health call, so
+        # a test can pin that the readiness probe bounds it (#219).
+        self.worker_health_timeout = "never called"
+        # Set to a message to make the run-event poll raise, which is the
+        # mid-stream failure a browser used to see as a silent dead stream.
+        self.run_events_error = ""
         # Instance state, NOT a class attribute. `purged = []` at class scope
         # was mutated through `self.purged.append(...)`, so every FakeClient
         # in the session shared one list and a test's assertion on
@@ -1695,6 +1977,8 @@ class FakeClient:
         return dict(run)
 
     def agent_run_events(self, tenant, run_id, after=0, limit=100):
+        if self.run_events_error:
+            raise HealthClawError(self.run_events_error, 0)
         run = self.get_agent_run(tenant, run_id)
         if run["status"] == "queued":
             from datetime import datetime, timezone
@@ -1710,9 +1994,11 @@ class FakeClient:
                 "events": events,
                 "next_cursor": events[-1]["id"] if events else after}
 
-    def agent_worker_health(self, max_age_seconds=30):
+    def agent_worker_health(self, max_age_seconds=30, *, timeout=None):
+        self.worker_health_timeout = timeout
         if self.worker_health_error:
-            raise HealthClawError("worker health unavailable", 0)
+            raise HealthClawError("worker health unavailable",
+                                  self.worker_health_error_status)
         return {"available": self.worker_available,
                 "active_workers": 1 if self.worker_available else 0,
                 "max_age_seconds": max_age_seconds}
@@ -1883,6 +2169,13 @@ class FakeClient:
     def record_count(self, tenant):
         return self.counted
 
+    # DocumentReferences that landed but are deliberately not in `counted`
+    # (#226). Settable the same way.
+    uncounted = 0
+
+    def uncounted_record_count(self, tenant):
+        return self.uncounted
+
     purge_fails = False
 
     def purge_tenant(self, tenant):
@@ -1941,7 +2234,7 @@ class FakeClient:
 # for a proven client:
 #   * Behaviour. Signature parity says a call is *accepted*, never that it does
 #     the same thing. `FakeClient.record_count` returns a settable int;
-#     `HealthClawClient.record_count` sums six `_summary=count` searches and
+#     `HealthClawClient.record_count` sums five `_summary=count` searches and
 #     raises if any of them could not be asked. Both signatures are
 #     `(tenant)`.
 #   * Wire format. Nothing here talks to a running HealthClaw, so a body or
@@ -2082,6 +2375,9 @@ def cfg():
                        "OPENAI_API_KEY": "k",
                        "HEALTHCLAW_MINT_SECRET": "mint-secret",
                        "FASTEN_PUBLIC_KEY": "pub123",
+                       # Real-record sources are closed by default (D3);
+                       # the connector tests exercise the open flows.
+                       "CARE_REAL_RECORDS": "on",
                        "CARE_TELEGRAM_BOT": "carebot",
                        "CARE_IMESSAGE_HANDLE": "im-test-handle"})
 
@@ -2742,12 +3038,13 @@ def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
     from careagents.app import create_app
     from careagents.config import Config
     # default (no CARE_WEARABLES_ENABLED) → soon, no client call
-    assert connectors.start("wearable", "apple", svc.cfg, FakeClient()) == {
-        "soon": True}
+    assert connectors.start("wearable", "apple", svc.cfg, FakeClient(),
+                            real_records=True) == {"soon": True}
     # enabled → live connect URL routed through HealthClaw wearables OAuth
     cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
                        "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
-                       "CARE_WEARABLES_ENABLED": "1"})
+                       "CARE_WEARABLES_ENABLED": "1",
+                       "CARE_REAL_RECORDS": "on"})
     a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
     a.config["TESTING"] = True
     c = a.test_client()
@@ -2853,6 +3150,358 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     assert d["status"] == "active"
     assert d["record_count"] == 112
     assert d["new_records"] == 12
+
+
+# --- #226: the count says what it leaves out ---------------------------------
+#
+# DocumentReferences are ingested but nothing can open one, so they are out of
+# the counted set (careagents/healthclaw.py COUNTED_TYPES). This poll is the
+# one place a count derived from `record_count` reaches a person — home.js
+# renders it as "N new records added." The unit-level half of this lives in
+# tests/test_uncounted_documents.py.
+
+def _poll_after_sync(cfg, svc, monkeypatch, documents):
+    """Refresh, land five readable records plus `documents`, return the poll."""
+    return _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=documents,
+                                 readable_after=105,
+                                 documents_after=documents)[0]
+
+
+def _refresh_then_deliver(cfg, svc, monkeypatch, documents_before,
+                          readable_after, documents_after, fake=None):
+    """Baseline at a refresh, then let the provider deliver, then poll.
+
+    Returns (poll body, fake). The refresh is what records both baselines, so
+    what the poll reports is growth since the patient asked for it — not a
+    restatement of what the tenant already held.
+    """
+    from careagents.app import create_app
+    fake = fake or FakeClient()
+    fake.uncounted = documents_before
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = readable_after
+    fake.uncounted = documents_after
+    return c.get(f"/api/connections/{tenant}/poll").get_json(), fake
+
+
+def test_the_poll_says_documents_are_not_readable_when_some_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: drop the clause from `poll_connection` -> red.
+
+    The number is true about what the patient can reach and silent about what
+    it omits. Without this there is nothing anywhere telling them the notes
+    are not in it (#226).
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["new_records"] == 5
+    note = d.get("uncounted_note", "")
+    assert "not yet readable" in note, d
+    assert "Notes and documents" in note, d
+    # A statement, not a hedge — here we know they arrived.
+    assert "could not check" not in note, d
+
+
+def test_the_poll_adds_no_clause_when_no_documents_arrived(
+        cfg, svc, monkeypatch):
+    """MUTATION: emit the clause unconditionally -> red.
+
+    A standing disclaimer would be noise, and would imply documents exist for
+    someone who has none.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=0)
+    assert d["new_records"] == 5
+    assert "uncounted_note" not in d, d
+
+
+def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
+        cfg, svc, monkeypatch):
+    """MUTATION: default the failed probe to 0 -> red (the clause vanishes and
+    the count is published as though complete).
+
+    #403's "unknown is never zero" applies to the clause, not only the number:
+    a silent count would imply nothing was left out. But suppressing the count
+    trades one silence for another — the growth is a fact we did measure. So
+    the known part is stated and the unknown is named.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    fake.counted = 105
+    # The readable count answers; only the document probe is down.
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["status"] == "active"
+    # The count we did measure is still reported ...
+    assert d["record_count"] == 105
+    assert d["new_records"] == 5
+    # ... and the sentence says what could not be established, rather than
+    # the "not yet readable" claim, which would assert documents exist.
+    note = d["uncounted_note"]
+    assert "could not check" in note, note
+    assert "notes or documents" in note, note
+    assert "not yet readable" not in note, note
+
+
+# QA addition (review of PR #561). `home.js` renders the clause as
+# `"... added." + " " + uncounted_note`, and the author verified that by
+# inspection only — there is no JS harness in this repo. What makes the join
+# safe here, and on the next surface to carry it (a notification, an email,
+# the worker), is the sentence's own shape. Assert it on the string the poll
+# actually emitted, not on a copy: a fragment appended to "5 new records
+# added." reads as one run-on claim, and a clause with its own leading space
+# doubles the caller's.
+
+def _assert_joins_cleanly(note):
+    assert note == note.strip(), f"padded, so the join doubles a space: {note!r}"
+    assert note.endswith("."), f"a fragment, not a sentence: {note!r}"
+    assert not note.endswith(".."), f"doubled full stop: {note!r}"
+    assert note[0].isupper(), f"does not open a sentence: {note!r}"
+    assert note.count(".") == 1, f"more than one sentence: {note!r}"
+    # The rendered line, per careagents/static/home.js.
+    line = "5 new records added." + " " + note
+    assert ".." not in line and "  " not in line, line
+
+
+def test_the_documents_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """MUTATION: drop the trailing period from either sentence in
+    `poll_connection`, or pad one with a leading space -> red.
+    """
+    d = _poll_after_sync(cfg, svc, monkeypatch, documents=2)
+    assert d["uncounted_note"] == "Notes and documents are not yet readable here."
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
+    """Same property for the sentence a failed probe produces, which is the
+    one a patient sees during an incident — the worst time for the copy to
+    render as a fragment.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+    fake.counted = 105
+
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["uncounted_note"] == (
+        "We could not check whether notes or documents were left out.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+# --- the fourth outcome: a refresh that delivers only documents -------------
+#
+# `home.js` gated its whole render on new_records > 0, so this case said
+# NOTHING — indistinguishable from a sync that did nothing, for the patient
+# who just watched one happen. The sentence needs a real delta: `uncounted`
+# is a tenant TOTAL, true from the first tick for every tenant that already
+# holds notes, so gating on it would fire on every no-op refresh for exactly
+# the MEDENT tenants this issue is about. Hence the `last_uncounted`
+# baseline, recorded by the same refresh that baselines the readable count.
+
+def test_a_refresh_that_delivers_only_documents_says_so(
+        cfg, svc, monkeypatch):
+    """MUTATION: gate the clause on `uncounted > 0` instead of the delta ->
+    still green here, red in the no-op test below. Both rows are the pin.
+
+    MUTATION: drop the `new_records == 0` arm entirely -> red (silence).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=0,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)
+    assert d["new_records"] == 0
+    assert d["uncounted_note"] == (
+        "Notes and documents arrived, and they are not readable here yet.")
+    _assert_joins_cleanly(d["uncounted_note"])
+
+
+def test_a_refresh_that_delivers_nothing_stays_quiet(cfg, svc, monkeypatch):
+    """The case that makes the delta load-bearing.
+
+    This tenant ALREADY holds two documents, and the refresh brings nothing.
+    A clause gated on `uncounted > 0` would announce documents on every such
+    refresh; gated on the delta it says nothing, which is the truth.
+
+    MUTATION: gate the clause on `uncounted > 0` -> red.
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=2,
+                                 readable_after=100,   # unchanged
+                                 documents_after=2)    # unchanged
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_documents_that_predate_the_baseline_are_not_called_new(
+        cfg, svc, monkeypatch):
+    """The first refresh after this column ships, for an account that already
+    holds documents.
+
+    The refresh records the baseline at its current value, so the follow-up
+    poll measures growth from there — the notes the record already held are
+    not announced as having just arrived.
+
+    MUTATION: treat a null baseline as 0 -> red (all 4 read as new).
+    """
+    d, _ = _refresh_then_deliver(cfg, svc, monkeypatch,
+                                 documents_before=4,   # already on file
+                                 readable_after=100,
+                                 documents_after=4)
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_a_connection_with_no_document_baseline_claims_no_arrival(
+        cfg, svc, monkeypatch):
+    """A row written before `last_uncounted` existed: the baseline is NULL, so
+    arrival cannot be computed and is never claimed.
+
+    MUTATION: `int(doc_baseline or 0)` instead of the None check -> red, every
+    document on file reads as newly arrived.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    tenant = created["connect_url"].rsplit("/connect/", 1)[1]
+
+    # A pre-migration refresh: readable baselined, documents never were.
+    svc.mark_synced(conn, 100)
+    fake.uncounted = 7
+
+    d = c.get(f"/api/connections/{tenant}/poll").get_json()
+    assert d["new_records"] == 0
+    assert "uncounted_note" not in d, d
+
+
+def test_the_refresh_baselines_documents_as_well_as_records(
+        cfg, svc, monkeypatch):
+    """The delta above is only honest if the refresh actually records it.
+
+    MUTATION: drop the `uncounted` argument at the refresh call site -> red.
+    """
+    from careagents.app import create_app
+    fake = FakeClient()
+    fake.uncounted = 3
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    created = c.post("/api/connections/fasten",
+                     json={"consent": True}).get_json()
+    conn = created["id"]
+    assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
+
+    # Read the row back, not the response: the point is that the refresh
+    # PERSISTED both baselines, which is what the next poll subtracts from.
+    with svc.session() as s:
+        from careagents.models import Connection
+        row = s.query(Connection).filter_by(id=conn).first()
+        assert row.last_count == 100
+        assert row.last_uncounted == 3
+
+
+def test_the_document_baseline_column_is_added_to_an_existing_table(tmp_path):
+    """An account created before this column shipped must get it on boot.
+
+    `create_all()` adds missing TABLES, never missing COLUMNS, so a live
+    deployment reaches the new code with an old `ca_connections`. Build that
+    table exactly as it shipped, then run the migration the app runs at start.
+
+    The ALTER is plain `ADD COLUMN ... INTEGER`, which SQLite and Postgres
+    both accept; this exercises the SQLite lane, and CI's Postgres lane runs
+    the same path.
+
+    MUTATION: delete the `last_uncounted` block from `_ensure_columns` -> red.
+    """
+    from sqlalchemy import create_engine, inspect, text
+    from careagents.models import _ensure_columns
+
+    # A bare engine, NOT make_engine: that helper runs create_all() and
+    # _ensure_columns() itself, which is the very thing under test. A file
+    # rather than :memory: keeps it clear of any other fixture's database.
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        # The pre-#226 shape: everything except last_uncounted.
+        conn.execute(text(
+            "CREATE TABLE ca_connections ("
+            "id VARCHAR(40) PRIMARY KEY, account_id VARCHAR(40), "
+            "kind VARCHAR(24), tenant_id VARCHAR(64), label VARCHAR(120), "
+            "status VARCHAR(16), provider VARCHAR(64), connected_at FLOAT, "
+            "consented_at FLOAT, consent_version VARCHAR(16), "
+            "last_synced_at FLOAT, last_count INTEGER)"))
+        conn.execute(text(
+            "INSERT INTO ca_connections (id, last_count) VALUES ('c1', 42)"))
+
+    assert "last_uncounted" not in {
+        c["name"] for c in inspect(engine).get_columns("ca_connections")}
+
+    _ensure_columns(engine)
+
+    cols = {c["name"] for c in inspect(engine).get_columns("ca_connections")}
+    assert "last_uncounted" in cols
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT last_count, last_uncounted FROM ca_connections "
+            "WHERE id='c1'")).first()
+    # NULL, not 0 — the difference between "no baseline recorded" and "there
+    # were no documents", which is what keeps the first refresh honest.
+    assert row[0] == 42 and row[1] is None
+    # Idempotent: boot runs this every time.
+    _ensure_columns(engine)
+
+
+def test_mark_synced_without_a_document_count_keeps_the_last_one(
+        cfg, svc, monkeypatch):
+    """An upload path that could not measure documents must not erase the
+    figure the last refresh established — a cleared baseline would make every
+    document on file read as new on the next poll.
+
+    MUTATION: assign `c.last_uncounted = uncounted` unconditionally -> red.
+    """
+    acct = _make_account(svc, monkeypatch, "baseline@example.com").id
+    conn = svc.add_connection(acct, "fasten", "t-baseline", "Test")
+    svc.mark_synced(conn, 10, 4)
+    svc.mark_synced(conn, 12)          # documents unknown this time
+    assert svc.get_connection(acct, conn)["last_uncounted"] == 4
 
 
 def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
@@ -2983,6 +3632,23 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     assert r.get_json()["deleted"] is False
     # connection survives, so the patient can retry
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
+
+    # ...and the sentence may not say more than that. "Nothing was changed"
+    # was here, which is the same claim the review arms made, on the
+    # destructive route: `purge_tenant` raises on ANY non-200 and on a read
+    # timeout, so a gateway 5xx or a lost answer can follow a purge that ran.
+    # Found by inventorying this file for claims about what was sent,
+    # approved, recorded or retried, not by a report about this route.
+    #
+    # MUTATION: restore "Your records were not deleted. Nothing was changed"
+    # -> red. Ran it, saw red.
+    msg = r.get_json()["message"].lower()
+    assert "nothing was changed" not in msg, (
+        "the purge may have run and lost its answer; nothing observed here "
+        "says the records are still there")
+    assert "were not deleted" not in msg, (
+        "same claim, shorter: this path cannot tell whether they were")
+    assert "couldn't confirm" in msg or "could not confirm" in msg
 
 
 def test_delete_and_disconnect_reject_other_peoples_connections(app, svc,
@@ -3701,7 +4367,13 @@ def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(
                     json={"med-0": "yes", "nka": "true"})
     assert posted.status_code == 503
     assert posted.get_json().get("confirmed") is not True
-    assert "Nothing has been approved" in posted.get_json()["message"]
+    # This assertion used to require "Nothing has been approved" here too,
+    # and the GET above still does — correctly, because a GET has no side
+    # effect. The submit does: `_send` raises this same HealthClawError for a
+    # read timeout as readily as for a refused connection, so the POST may
+    # have been delivered and minted the confirmation (#528) before the
+    # answer was lost. Nothing observed on this path can say it did not.
+    assert "Nothing has been approved" not in posted.get_json()["message"]
 
 
 def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
@@ -3710,9 +4382,17 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
 
     A 5xx here was passed straight through as the response status with the
     engine's body, which tells the patient nothing about whether their
-    decisions were recorded. What we DO know is that `confirm_action` is
-    only reached on a 200, so nothing was approved — that half is sayable,
-    and it is the half that stops a second approval sending twice.
+    decisions were recorded.
+
+    This test used to also require the message to say "Nothing has been
+    approved", on the reasoning that `confirm_action` is only reached on a
+    200. That reasoning holds for EXECUTION and was written as if it held for
+    the approval: the review POST itself mints the ActionConfirmation (#528),
+    and a gateway 5xx is delivered-or-not, so an approval may exist for the
+    request the patient was told had none. Same defect as the unreadable-200
+    one, one branch over. `confirmed: False` still carries the half that is
+    known — nothing was carried out — which is the half that keeps Approve
+    armed for the retry that is this path's recovery.
 
     MUTATION: return `jsonify(body), status` unconditionally -> red.
     Ran it, saw red.
@@ -3734,13 +4414,218 @@ def test_a_gateway_504_on_review_submit_does_not_claim_the_review_was_saved(
     assert posted.status_code == 503
     payload = posted.get_json()
     assert payload.get("confirmed") is not True
-    assert "Nothing has been approved" in payload["message"]
+    assert "Nothing has been approved" not in payload["message"]
+    assert "could send it twice" not in payload["message"], (
+        "the old copy deterred the retry with a claim the seal makes false")
 
     # A 422 is the engine's own answer — attestation missing — and must
     # still reach the patient as the engine's answer, unchanged.
     fake.submit_review = FakeClient.submit_review.__get__(fake, FakeClient)
     refused = c.post(f"/review/{agent}/act-1/submit", json={"med-0": "yes"})
     assert refused.status_code == 422
+
+
+def test_an_unreadable_answer_to_the_review_is_neither_saved_nor_unsaved(
+        cfg, svc, monkeypatch):
+    """QA #566 (HIGH), the route half.
+
+    Something answered the review POST and nobody could read the answer. The
+    client now raises `HealthClawUnconfirmed` there (the transport half is in
+    tests/test_healthclaw_transport.py, over a real socket). This route must
+    catch it BEFORE `HealthClawError`, because that arm says "Nothing has
+    been approved" — and this POST is what mints the confirmation (#528), so
+    if the engine received it an approval exists. Neither half is knowable,
+    which is what `confirmed: null` is for (#220).
+
+    What must NOT happen is what shipped: the status passed through as 200,
+    `confirm_action` called on the strength of it, and the patient told
+    "your review was saved and your approval is recorded" with no
+    confirmation row anywhere.
+
+    MUTATION: delete the `except HealthClawUnconfirmed` arm -> red, the
+    subclass falls into the HealthClawError arm and answers 503 with
+    "Nothing has been approved". Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    confirms = []
+
+    fake = FakeClient()
+    fake.submit_review = _unreadable
+    fake.confirm_action = lambda t, a: confirms.append(a)
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    assert not confirms, "an unreadable answer must not be confirmed on"
+    msg = payload["message"].lower()
+    # Both directions. Each of these is false on one of the two ways this
+    # path can have happened, so neither of the two neighbouring messages
+    # can be reused here — which is why this is a third string.
+    assert "nothing has been approved" not in msg, \
+        "the review may have been saved, and this POST is what records it"
+    # The other direction, and a substring test alone cannot see it: this
+    # message contains "your review was saved" — inside "whether". What is
+    # forbidden is ASSERTING it, so require the qualifier rather than the
+    # absence of the words.
+    for claim in ("your review was saved", "your approval is recorded"):
+        at = msg.find(claim)
+        assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+            f"{claim!r} is stated here as a fact; nothing on this path "
+            f"observed it")
+    # What it may say, and does: that we could not tell.
+    assert "couldn't tell" in msg or "could not tell" in msg
+    # And the way back stays open: no instruction not to approve again.
+    assert "approving again" in msg or "before approving" in msg
+
+
+def test_no_review_submit_failure_claims_an_approval_does_not_exist(
+        cfg, svc, monkeypatch):
+    """The property, over every way the submit can fail, in one place.
+
+    Each of these was fixed one at a time and each time the sibling survived:
+    the unreadable 200 was found by review while the gateway 5xx and the
+    transport loss went on asserting the same thing next to it. The three
+    share a cause — the review POST is what mints the ActionConfirmation
+    (#528), so none of them can say whether an approval exists — so pin them
+    together rather than as three unrelated strings.
+
+    What each MAY still say, and does, is that nothing was carried out:
+    `confirm_action` is reached only on a decodable 200, and `confirmed`
+    carries that. This guard is about the words the patient reads.
+
+    MUTATION: put "Nothing has been approved" back in `_REVIEW_UNRESOLVED`
+    -> red on all three. Ran it, saw red.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    def _timeout(*_a, **_kw):
+        # What `_send` raises for a read timeout — which is delivered, then
+        # lost — and for a refused connection alike. Indistinguishable here.
+        raise HealthClawError("review submit failed", 0)
+
+    def _unreadable(*_a, **_kw):
+        raise HealthClawUnconfirmed("review submit returned invalid data", 200)
+
+    modes = {
+        "transport lost after possible delivery": _timeout,
+        "gateway 502, engine silent": lambda t, a, d: (502, {"error": "bad"}),
+        "gateway 504, engine silent": lambda t, a, d: (504, {"error": "bad"}),
+        "200 nobody could decode": _unreadable,
+    }
+
+    for name, impl in modes.items():
+        fake = FakeClient()
+        fake.submit_review = impl
+        app = create_app(config=cfg, client=fake, accounts=svc)
+        app.config["TESTING"] = True
+        c = app.test_client()
+        _login(c, svc, monkeypatch, email=f"gene+{len(name)}@example.com")
+        conn = c.post("/api/connections/sample").get_json()["id"]
+        agent = c.post("/api/agents",
+                       json={"name": "A", "persona": "calm",
+                             "connection_id": conn}).get_json()["id"]
+        posted = c.post(f"/review/{agent}/act-1/submit",
+                        json={"med-0": "yes", "nka": "true"})
+        msg = (posted.get_json() or {}).get("message", "").lower()
+        assert msg, f"{name}: no message at all"
+        assert "nothing has been approved" not in msg, (
+            f"{name}: the patient is told no approval exists. The review POST "
+            f"mints the confirmation, so on this path one may")
+        # The opposite claim, allowed only as the thing we could not tell —
+        # the message contains these words, inside "whether".
+        for claim in ("your review was saved", "your approval is recorded"):
+            at = msg.find(claim)
+            assert at == -1 or msg[:at].rstrip().endswith("whether"), (
+                f"{name}: {claim!r} is stated as a fact")
+        assert "twice" not in msg or "cannot" in msg, (
+            f"{name}: the copy warns that approving twice could send twice. "
+            f"Once a confirmation exists the review route answers 409")
+        assert posted.get_json().get("confirmed") is not True
+
+
+# QA on the finished stack (#550 -> #566 -> #579), filed as a strict xfail and
+# fixed here, so the marker is gone and the reason is kept as the record:
+#
+#   The identical false deterrent the stack removed from the review-submit
+#   arms survived on the CONFIRM arm, careagents/app.py:1182-1186, and nothing
+#   guarded it. Two rounds fixed the sentence in front of them and left the
+#   twin. It is what an ordinary form-fill approval reaches on any deployment
+#   with no provider configured, which is every deployment today.
+
+def test_the_confirm_arm_does_not_deter_a_recovery_the_seal_makes_safe(
+        cfg, svc, monkeypatch):
+    """The review POST landed; the CONFIRM answer was lost.
+
+    The relay says: "Don't approve again yet - check the request's status
+    first, because approving twice could send it twice."
+
+    Both halves of that last clause are false since #550. What a second
+    approval reaches is the engine's review route, and that route now
+    answers 409 while the action is still awaiting_confirmation (a
+    confirmation exists) and 404 once it has moved on. `confirm_action` is
+    called only on a decodable 200, so it is never reached again and nothing
+    can be sent a second time. The stack's own PR body argues exactly this
+    to justify rewriting `_REVIEW_UNSUBMITTED`, and then leaves the same
+    sentence standing one arm over.
+
+    Not hypothetical, and not rare: driven against a running HealthClaw on
+    :5601 through the real relay and a real socket, an ordinary form-fill
+    approval on a deployment with no provider configured takes this path —
+
+        relay -> HTTP 502 confirmed=null
+        message: "... Don't approve again yet ... approving twice could
+                  send it twice."
+        engine status: failed        (2 confirmations, both consumed)
+        second approval -> HTTP 404 {"error": "Unknown action"}
+
+    The wording standard is the sibling guard's, so a fix has a shape to
+    aim at: it may say the outcome is unknown and it may say we have not
+    sent it again; it may not tell the patient that approving again could
+    send it twice.
+    """
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawUnconfirmed
+
+    fake = FakeClient()
+
+    def _unconfirmed(*_a, **_kw):
+        raise HealthClawUnconfirmed("confirm unanswered (502)", 502)
+
+    fake.confirm_action = _unconfirmed
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+
+    posted = c.post(f"/review/{agent}/act-1/submit",
+                    json={"med-0": "yes", "nka": "true"})
+    assert posted.status_code == 502
+    payload = posted.get_json()
+    assert payload["confirmed"] is None, "unknown is not false, and not true"
+    msg = payload["message"].lower()
+    assert "twice" not in msg or "cannot" in msg, (
+        "the copy warns that approving twice could send it twice. Since #550 "
+        "a second approval answers 409 while the action is awaiting "
+        "confirmation and 404 once it has moved on; confirm_action is "
+        "unreachable either way, so nothing can be sent a second time")
 
 
 def test_an_unreachable_engine_is_never_reported_as_an_unknown_run(
@@ -4158,14 +5043,58 @@ def test_delete_confirmation_is_not_a_form_or_native_dialog():
     assert "showModal" not in _HOME_JS
 
 
+def test_the_delete_failure_fallback_cannot_reassert_what_the_server_dropped():
+    """The claim was removed from the server AND from here; only one is fenced.
+
+    `careagents/app.py`'s purge arm no longer says "Your records were not
+    deleted. Nothing was changed", because `purge_tenant` raises on a read
+    timeout, on a gateway 5xx, and on a 200 whose body nobody could decode —
+    and that last one is a purge that SUCCEEDED. Measured with the real
+    client over real sockets:
+
+        ok              -> success path
+        refused (403)   -> 502 arm   records really are still there
+        gateway (504)   -> 502 arm   the purge may have run
+        200, unreadable -> 502 arm   the purge DID run
+
+    `test_delete_does_not_unlink_when_the_purge_fails` fences the server
+    string. This fallback is the other place the sentence lived, it fires
+    when the server sends no message at all, and nothing stopped the old
+    wording from being restored here alone — on the destructive route, which
+    is the worst place in the product to be wrong about what happened.
+
+    MUTATION: restore `"Your records were not deleted."` as the fallback
+    -> red. Ran it, saw red.
+    """
+    anchor = '.conn-delete'
+    assert anchor in _HOME_JS, "the delete handler moved; this guard reads it"
+    block = _HOME_JS.split(anchor, 1)[1].split("location.reload();", 1)[0]
+    # Comments quote the old wording to record why it went. Scan what runs.
+    stripped = "\n".join(re.sub(r"//.*$", "", ln) for ln in block.splitlines())
+    assert "d.message" in stripped, (
+        "the block this guard reads is not the delete handler any more")
+    for claim in ("were not deleted", "nothing was changed",
+                  "nothing was deleted"):
+        assert claim not in stripped.lower(), (
+            f"the delete fallback can print {claim!r}. A purge that ran and "
+            f"lost its answer reaches this branch, so nothing here observed "
+            f"that the records are still present")
+    assert "confirm your records were deleted" in stripped.lower(), (
+        "the fallback no longer states the uncertainty it is there for")
+
+
 def test_hub_dialog_selector_contract():
     """home.js addresses these by id; a template rename would break the flow at
-    runtime only, with no server-side signal."""
+    runtime only, with no server-side signal.
+
+    `tg-surface` / `tg-state` are deliberately absent: the Telegram tile is
+    "coming soon" for the beta (#536, D6) and home.js guards its handler with
+    `if (tg)`. Put them back here when the surface is serviced again."""
     for sel in ('id="provider-picker"', 'id="picker-cancel"', 'id="picker-rows"',
                 'id="connect-msg"', 'id="surfaces-msg"', 'id="agents"',
                 'id="code-card"', 'id="pair-code"', 'id="copy-code"',
                 'id="copy-state"', 'id="code-instructions"', 'id="code-done"',
-                'id="tg-state"', 'id="im-state"', 'id="delete-modal"',
+                'id="im-state"', 'id="delete-modal"',
                 'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
                 'id="delete-cancel"'):
         assert sel in _HOME_HTML, sel
@@ -4543,3 +5472,617 @@ def test_show_lab_timeline_with_no_match_emits_no_card_and_forbids_absence(
     assert events == []
     assert out["chart_shown"] is False
     assert "not the same as" in out["note"]
+
+
+# --- beta posture (council ruling 2026-09-02, D3 / D6 / D7) -------------------
+# The beta admits strangers. Real-record sources are closed by default, the
+# Telegram surface is not serviced, the hub says it is a beta, and the Railway
+# hostname is not a second front door.
+
+def _beta_app(svc, **env):
+    """An app whose Config carries only what the test names — so the DEFAULTS
+    of the new switches are what get exercised, not the fixture's `on`."""
+    from careagents.app import create_app
+    cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                       "CARE_RP_ID": "localhost",
+                       "CARE_ORIGIN": "http://localhost",
+                       "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
+                       "FASTEN_PUBLIC_KEY": "pub123",
+                       "CARE_WEARABLES_ENABLED": "1",
+                       **env})
+    a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
+    a.config["TESTING"] = True
+    return a
+
+
+_REAL_RECORD_TILES = ("fasten", "wearable", "direct")
+
+
+def test_real_records_switch_defaults_to_off_and_parses_the_allowlist():
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    # Unset is closed. A deployment that forgets the variable must not open
+    # real records to strangers.
+    assert Config(env=base).real_records == "off"
+    assert Config(env=base).real_records_allowlist == frozenset()
+    for raw, expected in (("off", "off"), ("ALLOWLIST", "allowlist"),
+                          (" on ", "on")):
+        assert Config(env={**base, "CARE_REAL_RECORDS": raw}
+                      ).real_records == expected
+    # Emails are case-folded and whitespace-trimmed; empty entries vanish.
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                      "CARE_REAL_RECORDS_ALLOWLIST":
+                          " Dr.Who@Example.org ,, second@example.org,"})
+    assert cfg.real_records_allowlist == frozenset(
+        {"dr.who@example.org", "second@example.org"})
+    # A misspelling must not fall through to some default. Refuse to boot.
+    for bad in ("yes", "1", "open", "true"):
+        with pytest.raises(ConfigError):
+            Config(env={**base, "CARE_REAL_RECORDS": bad})
+
+
+def test_real_records_open_for_follows_the_switch():
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    off = Config(env={**base, "CARE_REAL_RECORDS": "off",
+                      "CARE_REAL_RECORDS_ALLOWLIST": "a@example.org"})
+    # `off` is off for everyone, including an address on the list: the list
+    # is consulted only in allowlist mode, never as a back door.
+    assert off.real_records_open_for("a@example.org") is False
+    on = Config(env={**base, "CARE_REAL_RECORDS": "on"})
+    assert on.real_records_open_for("anyone@example.org") is True
+    listed = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                         "CARE_REAL_RECORDS_ALLOWLIST": "Dr.Who@Example.org"})
+    assert listed.real_records_open_for("dr.who@example.org") is True
+    assert listed.real_records_open_for("DR.WHO@EXAMPLE.ORG") is True
+    assert listed.real_records_open_for(" dr.who@example.org ") is True
+    assert listed.real_records_open_for("someone.else@example.org") is False
+    assert listed.real_records_open_for("") is False
+    assert listed.real_records_open_for(None) is False
+
+
+def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
+        svc, monkeypatch):
+    # Fasten key set and wearables enabled, so without the switch every
+    # real-record tile would be live. The switch is unset -> off.
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile]["tier"] == "soon", tile
+        assert "requires_consent" not in cat[tile], tile
+        assert cat[tile]["note"] == "coming soon", tile
+    # Sample records are the beta's whole track; they stay live.
+    assert cat["sample"]["tier"] == "live"
+    body = c.get("/home").get_data(as_text=True)
+    for tile in _REAL_RECORD_TILES:
+        start = body.index(f'data-connector="{tile}"')
+        opening = body[body.rindex("<button", 0, start):body.index(">", start)]
+        assert 'data-soon="1"' in opening, tile
+        assert "data-consent" not in opening, tile
+        assert "tier-soon" in opening, tile
+    assert "Not open in this beta" in body
+
+
+def test_real_record_connect_posts_are_refused_with_503_when_off(
+        svc, monkeypatch):
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    for tile, payload in (("fasten", {"consent": True}),
+                          ("wearable", {"provider": "apple", "consent": True}),
+                          ("direct", {"consent": True})):
+        r = c.post(f"/api/connections/{tile}", json=payload)
+        assert r.status_code == 503, tile
+        assert "beta" in r.get_json()["error"], tile
+    with svc.session() as s:
+        from careagents.models import Connection
+        assert s.query(Connection).count() == 0
+    # The synthetic track is untouched by the switch.
+    assert c.post("/api/connections/sample").status_code == 200
+
+
+def test_allowlisted_account_sees_and_can_use_real_record_tiles(
+        svc, monkeypatch):
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="Dr.Who@Example.org")
+    # Listed, in a different case from the list entry.
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="dr.who@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    assert cat["fasten"]["tier"] == "live"
+    assert cat["wearable"]["tier"] == "live"
+    assert cat["direct"]["tier"] == "import"
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile].get("requires_consent") is True, tile
+    r = c.post("/api/connections/fasten", json={"consent": True})
+    assert r.status_code == 200 and r.get_json()["status"] == "pending"
+    # Not listed: same deployment, tiles closed, POST refused.
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="stranger@example.org")
+    cat = {m["id"]: m for m in
+           other.get("/api/connections/catalog").get_json()["connectors"]}
+    for tile in _REAL_RECORD_TILES:
+        assert cat[tile]["tier"] == "soon", tile
+    assert other.post("/api/connections/fasten",
+                      json={"consent": True}).status_code == 503
+
+
+def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
+    c = _beta_app(svc, CARE_REAL_RECORDS="on").test_client()
+    _login(c, svc, monkeypatch, email="anyone@example.org")
+    cat = {m["id"]: m for m in
+           c.get("/api/connections/catalog").get_json()["connectors"]}
+    assert cat["fasten"]["tier"] == "live"
+    assert c.post("/api/connections/direct",
+                  json={"consent": True}).status_code == 200
+
+
+def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
+    # The one clinician already onboarded keeps working when production runs
+    # `allowlist`: refresh, poll, upload and delete on an EXISTING connection
+    # never consult the switch.
+    from careagents.app import create_app
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    fasten = c.post("/api/connections/fasten",
+                    json={"consent": True}).get_json()
+    direct = c.post("/api/connections/direct",
+                    json={"consent": True}).get_json()["id"]
+    tenant = fasten["connect_url"].rsplit("/connect/", 1)[1]
+
+    monkeypatch.setattr(cfg, "real_records", "off")
+
+    assert c.post("/api/connections/fasten",
+                  json={"consent": True}).status_code == 503
+    r = c.post(f"/api/connections/{fasten['id']}/refresh")
+    assert r.status_code == 200 and r.get_json()["status"] == "reauth"
+    assert c.get(f"/api/connections/{tenant}/poll").status_code == 200
+    r = c.post(f"/api/connections/{direct}/upload", data=json.dumps(
+        {"resourceType": "Bundle", "type": "collection", "entry": []}),
+        content_type="application/fhir+json")
+    assert r.status_code == 200
+    assert c.delete(f"/api/connections/{fasten['id']}").status_code == 200
+
+
+def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,
+                                                          monkeypatch):
+    # #536: no webhook and no poller since June, so the tile was a dead end
+    # for a stranger. It stays visible so nobody wonders where it went, but it
+    # is not a control: no id for home.js to bind, no "connect" affordance.
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    body = c.get("/home").get_data(as_text=True)
+    assert 'id="tg-surface"' not in body
+    assert 'id="tg-state"' not in body
+    start = body.index("<b>Telegram</b>")
+    tile = body[body.rindex("<div", 0, start):body.index("</div>", start)]
+    assert "soon" in tile and "coming soon" in tile
+    assert "connect" not in tile
+
+
+def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
+                                                            monkeypatch):
+    c = app.test_client()
+    landing = c.get("/").get_data(as_text=True)
+    assert 'class="beta-banner"' in landing
+    _login(c, svc, monkeypatch)
+    home = c.get("/home").get_data(as_text=True)
+    assert 'class="beta-banner"' in home
+    # One sentence, under fifteen words, and it says the two things a
+    # stranger needs: what the records are, and that it will break.
+    sentence = re.search(r'class="beta-banner"[^>]*>(.*?)</p>', home,
+                         re.S).group(1)
+    words = re.sub(r"<[^>]+>", "", sentence).split()
+    assert len(words) < 15, words
+    assert "Beta" in sentence and "synthetic" in sentence
+
+
+def test_no_canonical_host_means_no_redirect(app):
+    # Local, dev and this suite: unset is a no-op, whatever the Host header.
+    c = app.test_client()
+    r = c.get("/", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code == 200
+    r = c.get("/healthz", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code in (200, 503)
+
+
+def test_the_railway_hostname_308s_to_the_canonical_host(svc):
+    # #264 / D7: careagents.cloud is the sole origin. 308, not 301, so a POST
+    # that lands on the wrong host is replayed as a POST, not downgraded.
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    internal = "https://careagents-production.up.railway.app"
+    r = c.get("/home?x=1&y=two", base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/home?x=1&y=two"
+    r = c.get("/auth", base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/auth"
+    r = c.post("/api/auth/email", json={"email": "x@example.org"},
+               base_url=internal)
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/api/auth/email"
+    # Hostnames are case-insensitive; the canonical host itself is served.
+    assert c.get("/", base_url="https://careagents.cloud").status_code == 200
+    assert c.get("/", base_url="https://CareAgents.Cloud").status_code == 200
+    # The Location is built from config, never from the request. Deliberately
+    # a hostname with a port: nothing of it may survive into the redirect.
+    r = c.get("/home", base_url="http://evil.example:8080")
+    assert r.headers["Location"] == "https://careagents.cloud/home"
+
+
+def test_healthz_is_exempt_from_the_canonical_host_redirect(svc):
+    # Railway's health check reaches the container on its internal hostname.
+    # A 308 there would mark every deploy unhealthy.
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    r = c.get("/healthz", base_url="https://careagents-production.up.railway.app")
+    assert r.status_code in (200, 503)
+    assert "Location" not in r.headers
+
+
+def test_the_tester_guide_no_longer_offers_text_as_a_surface():
+    # D6: the guide's "on the web, or by text" became "on the web". Telegram
+    # is not serviced in the beta, and the guide is what a tester reads first.
+    import pathlib
+    guide = pathlib.Path(__file__).resolve().parents[1] / "docs" / (
+        "beta-tester-guide.md")
+    text = guide.read_text(encoding="utf-8")
+    assert "on the web, or by text" not in text
+    assert "on the web." in text
+    assert "Telegram" not in text.split("## Where your data goes")[0], (
+        "the guide's opening must not offer Telegram as a way in")
+
+
+# --- QA hardening for the beta batch (review of PR #553) ---------------------
+# Each of these pins a property the batch's own tests left open, and each was
+# reproduced against a running CareAgents before it was written.
+
+def test_canonical_host_refuses_a_value_that_is_not_a_bare_hostname():
+    """`https://careagents.cloud` is what an operator types by reflex, and it
+    is not a harmless no-op: the host comparison never matches, so every
+    request — including one already on the real site — is answered 308 to
+    `https://https//careagents.cloud/...`, and a trailing slash loops forever,
+    one slash longer per hop. `/healthz` is exempt, so the platform keeps
+    reporting the deploy healthy while the site is dead. Reproduced on
+    0931974 before the guard: Config accepted "https://careagents.cloud" and
+    GET https://careagents.cloud/home answered 308 with
+    Location: https://https//careagents.cloud/home."""
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    for bad in ("https://careagents.cloud", "http://careagents.cloud",
+                "careagents.cloud/", "careagents.cloud/home",
+                "careagents.cloud:8080", "care agents.cloud"):
+        with pytest.raises(ConfigError):
+            Config(env={**base, "CAREAGENTS_CANONICAL_HOST": bad})
+    # Surrounding whitespace is still trimmed, not refused, and unset is unset.
+    assert Config(env={**base,
+                       "CAREAGENTS_CANONICAL_HOST": " CareAgents.Cloud "}
+                  ).canonical_host == "careagents.cloud"
+    assert Config(env=base).canonical_host == ""
+
+
+def test_canonical_host_compares_hostnames_not_host_and_port(svc):
+    """A proxy that appends the default port is still the canonical host.
+    `test_the_railway_hostname_308s_to_the_canonical_host` cannot see this:
+    the Werkzeug test client normalises `:443` out of `base_url`, so the
+    header has to be set by hand. On a running server
+    (`curl -H 'Host: careagents.cloud:443'`) 0931974 answered 308, costing
+    every such request a round trip."""
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    r = c.get("/", headers={"Host": "careagents.cloud:443"})
+    assert r.status_code == 200
+    assert "Location" not in r.headers
+    # A different host with a port is still redirected, port dropped.
+    r = c.get("/home",
+              headers={"Host": "careagents-production.up.railway.app:8080"})
+    assert r.status_code == 308
+    assert r.headers["Location"] == "https://careagents.cloud/home"
+
+
+def test_canonical_redirect_survives_a_path_that_cannot_go_in_a_header(svc):
+    """`request.path` arrives percent-DECODED, so a target built from it can
+    carry bytes that are illegal in a header. On 0931974 `/%0d%0aX` raised
+    ValueError("Header values must not contain newline characters") inside
+    `redirect()` and the Railway hostname answered 500 instead of 308."""
+    c = _beta_app(svc, CAREAGENTS_CANONICAL_HOST="careagents.cloud"
+                  ).test_client()
+    internal = "https://careagents-production.up.railway.app"
+    r = c.get("/%0d%0aSet-Cookie:%20a=b", base_url=internal)
+    assert r.status_code == 308
+    loc = r.headers["Location"]
+    assert loc.startswith("https://careagents.cloud/")
+    assert "\r" not in loc and "\n" not in loc
+    # An ordinary path is unchanged byte for byte by the re-encoding.
+    assert c.get("/api/connections/catalog", base_url=internal).headers[
+        "Location"] == "https://careagents.cloud/api/connections/catalog"
+
+
+def test_allowlist_mode_with_an_empty_list_is_closed_to_everyone(svc,
+                                                                 monkeypatch):
+    """`allowlist` with the address variable unset is the state a
+    half-finished deploy lands in. It must be closed, not open."""
+    base = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
+            "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m"}
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist"})
+    assert cfg.real_records_allowlist == frozenset()
+    assert cfg.real_records_open_for("anyone@example.org") is False
+    # Only separators, no addresses, is the same state.
+    cfg = Config(env={**base, "CARE_REAL_RECORDS": "allowlist",
+                      "CARE_REAL_RECORDS_ALLOWLIST": " , ,, "})
+    assert cfg.real_records_open_for("anyone@example.org") is False
+    c = _beta_app(svc, CARE_REAL_RECORDS="allowlist").test_client()
+    _login(c, svc, monkeypatch, email="anyone@example.org")
+    assert c.post("/api/connections/fasten",
+                  json={"consent": True}).status_code == 503
+
+
+def test_the_tester_guide_matches_what_the_switch_actually_does():
+    """The guide is the first thing a tester reads, and D3 closed the door it
+    was sending them through. `Track 2` told ten testers to connect a real
+    provider; the connect POST answers 503. The `Leaving` section told them to
+    email us to delete, while the hub has had a self-serve Delete since #203 —
+    and it did not say the account row outlives it."""
+    import pathlib
+    guide = (pathlib.Path(__file__).resolve().parents[1] / "docs"
+             / "beta-tester-guide.md").read_text(encoding="utf-8")
+    track2 = guide.split("### Track 2")[1].split("---")[0]
+    assert "closed for this cohort" in track2
+    assert "not open in this beta" in track2
+    leaving = guide.split("## Leaving")[1].split("---")[0]
+    # The hub's own Delete, not a support ticket, is how records go.
+    assert "**Delete** button" in leaving
+    # ...and the account is named as a separate thing that survives it.
+    assert "Delete the account" in leaving
+    assert "no self-serve" in leaving
+    assert "support@healthclaw.io" in leaving
+
+
+# --- browser pass over the beta batch (#553) ---------------------------------
+# Three defects a screen reader and a pair of eyes found on the hub that no
+# server-side assertion could see.
+
+def test_the_connect_refusal_is_announced_to_a_screen_reader():
+    """`#connect-msg` is the ONLY channel for a refusal: tap a closed tile and
+    this paragraph is the whole of what the deployment says back. Without the
+    live-region attributes a blind tester taps and is told nothing at all.
+
+    Its sibling `.conn-refresh-msg` has carried `role="status"` +
+    `aria-live="polite"` since the refresh flow landed; this is the same
+    treatment on the same kind of element.
+    """
+    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="connect-msg"'):]
+    tag = tag[:tag.index(">") + 1]
+    assert 'role="status"' in tag, tag
+    assert 'aria-live="polite"' in tag, tag
+
+    # ...and the attributes alone are not the fix. A live region announces a
+    # change made while it is IN the accessibility tree, and say() MOVES the
+    # element next to the tapped tile — a remove-then-insert, which takes it
+    # out. So say() hides the region across the move and hands the write to
+    # announce(), which reveals it before the text lands. The ordering itself
+    # is pinned on announce(), below.
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function say(")[1].split("\n  }")[0])
+    assert body.index("el.hidden = true") < body.index("insertAdjacentElement"), body
+    assert re.search(r"announce\(el, text", body), body
+    # A re-tap of the same tile repeats the same sentence, and rewriting a
+    # string with itself is not a change anything has to announce — so that
+    # one is hidden and revealed again too. It lives here rather than in
+    # announce(), which is shared with two 5s pollers that repeat one sentence
+    # per tick and must not blink.
+    assert "el.textContent === text" in body, body
+    # MUTATION: writing the text here, on either side of the move, is the
+    # defect — the region is absent when the text lands.
+    assert "el.textContent = text" not in body, body
+
+
+def test_a_live_region_is_revealed_empty_and_written_into_after_a_wall_clock_wait():
+    """Every message element on this page is written through announce(), and
+    announce() reveals the region empty, waits, then writes. Without the wait
+    the text lands in the same task as the unhide, which is a change nothing
+    was listening for — the case that made the FIRST message on a connection
+    card silent (#590).
+
+    The wait is a wall-clock constant rather than a frame count. Two nested
+    `requestAnimationFrame`s — what #571 shipped — measure paints, not time:
+    ~33ms on a 60Hz phone, ~16ms at 120Hz, and none at all in a backgrounded
+    tab. The number that has to be big enough is a number of milliseconds, so
+    that is the unit.
+
+    Source-level, like the guards above: this executes no JavaScript, and
+    nothing here establishes that the region is SPOKEN. No screen reader has
+    been run against it (#590).
+    """
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function announce(")[1].split("\n  }")[0])
+    # Revealed empty first...
+    assert body.index('el.textContent = ""') < body.index("el.hidden = false"), body
+    assert body.index("el.hidden = false") < body.index("setTimeout("), body
+    # ...and the text is written in exactly one place, which the timer reaches
+    # and the unhide does not. MUTATION: hoisting that write up beside the
+    # unhide is the whole defect, and it leaves every other assertion green.
+    assert body.count("el.textContent = text") == 1, body
+    revealed = body[body.index("el.hidden = false"):]
+    armed = revealed.index("setTimeout(")
+    assert "= text" not in revealed[:armed], revealed[:armed]
+    deferred = revealed[armed:]
+    assert "write()" in deferred or "el.textContent = text" in deferred, deferred
+    assert "requestAnimationFrame" not in body, body
+    # MUTATION: `setTimeout(fn, 0)` restores the defect exactly, and 16 or 33
+    # restores the frame counts this replaced. The value is the property, so
+    # the value is pinned.
+    m = re.search(r"const ANNOUNCE_DELAY_MS = (\d+);", _HOME_JS)
+    assert m, "the wait has no named constant"
+    assert int(m.group(1)) >= 100, m.group(0)
+    # A deferred write that is overtaken has to be cancelled. Delete arms
+    # "Deleting…" and then awaits the DELETE; a failure that lands inside the
+    # wait would otherwise be papered over by the stale "Deleting…" arriving
+    # on top of "Your records were not deleted."
+    assert "clearTimeout" in body, body
+
+
+def test_no_connection_card_message_sets_its_text_before_it_is_shown():
+    """`.conn-refresh-msg` has carried `role="status"` + `aria-live="polite"`
+    since the refresh flow landed, and every one of its writers defeated them:
+    the text was set BEFORE `hidden = false`, so the region was absent when
+    the text landed and unchanged when it appeared. "Checking…", "Deleting…",
+    the poller's 503, an upload result and a failed disconnect all announced
+    nothing at all (#590).
+
+    Pinned as an absence — no card writer touches `.textContent` or `.hidden`
+    on a message element; both are announce()'s job now.
+    """
+    js = re.sub(r"//[^\n]*", "", _HOME_JS)
+    assert not re.findall(r"\b(?:msg|msgEl)\.textContent\s*=", js)
+    assert not re.findall(r"\b(?:msg|msgEl)\.hidden\s*=\s*false", js)
+    # ...and the sites that used to do it announce instead: the pending
+    # poller, report(), sayUpload(), disconnect, delete's two messages, and
+    # watchForNewRecords' two.
+    assert js.count("announce(msg") >= 8, js.count("announce(msg")
+
+
+def test_the_surfaces_message_is_a_live_region_too():
+    """`#surfaces-msg` carries the refusal for the messaging surfaces and the
+    words explaining every section flash ("Create an agent first, then connect
+    iMessage."), and had no live-region attributes at all — #571 gave the
+    treatment to one of the page's two message channels and the PR's framing
+    implied there was only one (#590).
+    """
+    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
+    tag = tag[:tag.index(">") + 1]
+    assert 'role="status"' in tag, tag
+    assert 'aria-live="polite"' in tag, tag
+
+    # flashSection moves it next to the section being scrolled to, so it hides
+    # across the move for the same reason say() does.
+    body = re.sub(r"//[^\n]*", "",
+                  _HOME_JS.split("function flashSection(")[1].split("\n  }")[0])
+    assert body.index("msgEl.hidden = true") < body.index("insertAdjacentElement"), body
+    assert "announce(msgEl, text)" in body, body
+
+
+def test_an_empty_live_region_draws_nothing_while_it_waits():
+    """The region is revealed empty and written into a beat later. Inside the
+    marketplace grid `.inline-msg` has a background and 10px of padding, and
+    an upload result carries `.form-ok`/`.form-warn` — so that window would be
+    a flash of empty colour and a layout jump on the phone the tester is
+    holding.
+
+    It has to collapse while empty WITHOUT leaving the accessibility tree:
+    `display: none` or `visibility: hidden` here would take the region back
+    out and defeat the deferral it is waiting on.
+    """
+    rule = _CSS.split(".inline-msg:empty")[1].split("}")[0]
+    assert "padding: 0" in rule, rule
+    assert "background: none" in rule, rule
+    assert "display: none" not in rule, rule
+    assert "visibility" not in rule, rule
+    assert ".conn-refresh-msg:empty" in _CSS
+    # Same specificity as `.marketplace > .inline-msg`, so it only wins by
+    # coming after it.
+    assert _CSS.index(".inline-msg:empty") > _CSS.index(".marketplace > .inline-msg")
+
+
+def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
+        svc, monkeypatch):
+    """"Verified provider & wearable logins happen on the provider's own site"
+    rendered directly beneath three tiles saying those logins are not open in
+    this beta. The sentence is true and stays — for the deployment where the
+    tiles it describes are live.
+
+    Keyed on the `add-note` element, not on the words in it (QA review): the
+    live Fasten tile's own blurb ends "we never see your password", so a
+    phrase match is satisfied by the tile whether or not the note rendered,
+    and deleting the note outright left the assertion green.
+    """
+    note = 'class="add-note"'
+    closed = _beta_app(svc).test_client()
+    _login(closed, svc, monkeypatch, email="tester@example.org")
+    body = closed.get("/home").get_data(as_text=True)
+    assert note not in body
+    # The tiles it contradicted are the ones on screen.
+    assert "Not open in this beta" in body
+
+    app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")
+    listed = app.test_client()
+    _login(listed, svc, monkeypatch, email="dr.who@example.org")
+    body = listed.get("/home").get_data(as_text=True)
+    assert note in body
+    assert "never see your password" in body
+    # Same deployment, an account that is not on the list: no sentence.
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="stranger@example.org")
+    assert note not in other.get("/home").get_data(as_text=True)
+
+
+def test_the_password_reassurance_needs_a_login_tile_not_just_an_open_switch(
+        svc, monkeypatch):
+    """The gate is `fasten`/`wearable`, not "any real-record source is open".
+
+    A deployment can have the switch fully ON and still have neither login:
+    `catalog()` marks Fasten "soon" without a `FASTEN_PUBLIC_KEY` and the
+    wearable tile "soon" without the Open Wearables sidecar, while `direct`
+    (upload a bundle) stays live — it needs no provider login. Widening the
+    gate to include `direct` would put "Verified provider & wearable logins
+    happen on the provider's own site" back under two tiles that say those
+    logins are not configured here. MUTATION (QA review): that widening left
+    the whole suite green, so the distinction is pinned here.
+    """
+    note = 'class="add-note"'
+    open_no_logins = _beta_app(svc, CARE_REAL_RECORDS="on",
+                               FASTEN_PUBLIC_KEY="",
+                               CARE_WEARABLES_ENABLED="")
+    c = open_no_logins.test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    body = c.get("/home").get_data(as_text=True)
+    tiers = {t["id"]: t["tier"] for t in
+             c.get("/api/connections/catalog").get_json()["connectors"]}
+    # The arrangement this pins: switch open, both logins unconfigured, upload
+    # live. Assert it, or a future default change makes the test vacuous.
+    assert tiers["fasten"] == "soon" and tiers["wearable"] == "soon", tiers
+    assert tiers["direct"] == "import", tiers
+    assert note not in body
+
+    # ...and one configured login is enough to bring it back.
+    one = _beta_app(svc, CARE_REAL_RECORDS="on", CARE_WEARABLES_ENABLED="")
+    c2 = one.test_client()
+    _login(c2, svc, monkeypatch, email="tester2@example.org")
+    assert note in c2.get("/home").get_data(as_text=True)
+
+
+def test_the_landing_page_does_not_promise_a_provider_login_the_beta_closes(
+        app):
+    """Step 1 sent a stranger to "your provider's own verified login", which
+    the switch closes for all but an allowlisted account. The landing page is
+    public and gets no account, so it cannot resolve the switch — the clause
+    goes rather than being made conditional."""
+    body = app.test_client().get("/").get_data(as_text=True)
+    assert "verified login" not in body
+    assert "connect your records" in body
+
+
+def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
+    """It read `real-records connect isn't open on this beta deployment yet —
+    start with the sample records`: lowercase start, no full stop, an em dash
+    this repo does not use in patient-facing copy. It is the one sentence a
+    refused tester gets."""
+    from careagents.connectors import _REAL_RECORDS_CLOSED as msg
+    assert msg == ("Connecting your own records isn't open in this beta yet. "
+                   "Start with the sample records.")
+    assert "—" not in msg and "--" not in msg
+    c = _beta_app(svc).test_client()
+    _login(c, svc, monkeypatch, email="tester@example.org")
+    for tile, payload in (("fasten", {"consent": True}),
+                          ("wearable", {"provider": "apple", "consent": True}),
+                          ("direct", {"consent": True})):
+        r = c.post(f"/api/connections/{tile}", json=payload)
+        assert r.status_code == 503, tile
+        assert r.get_json()["error"] == msg, tile

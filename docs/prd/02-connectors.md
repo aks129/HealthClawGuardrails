@@ -26,20 +26,30 @@ Not a mock, and not one kind standing in for another. A connector proven only ag
 
 ## 4. Current state, measured
 
-| Kind | Proven live | Against |
-|---|---|---|
-| `hapi` | **yes** | HAPI FHIR 8.11.16 |
-| `generic` | **yes** | Firely Server 6.9.1 |
-| `aidbox` | **no** | server down 2026-08-16 |
-| `medplum` | **no** | server down; no credentials present |
+| Kind | Proven live | Against | Re-run by a second person |
+|---|---|---|---|
+| `hapi` | **yes** | HAPI FHIR 8.11.16-SNAPSHOT (`7e7129efb5`) | **yes** — 2026-09-04, reproduced, same build |
+| `generic` | **yes** | Firely Server 6.9.1 | **yes** — 2026-09-04, reproduced, same build |
+| `aidbox` | **no** | server down 2026-08-16 | still down 2026-09-04 |
+| `medplum` | **no** | server down; no credentials present | unchanged |
 
 - Pack: `docs/evidence/2026-08-16-set2-connectors.md` — **EVIDENCE PARTIAL**, 2 of 4.
+- Re-run: `docs/evidence/2026-09-04-set2-connectors-rerun.md` (#530). The
+  2026-08-16 runs came from an uncommitted script, so nobody but the author
+  could check them. The walkthrough is now `scripts/walkthrough-upstream.sh`,
+  the transcripts are in `docs/evidence/2026-09-04-set2-rerun/`, and QA re-ran
+  both kinds against the same two public servers. Every guardrail assertion
+  held again. One line changed: `$conformance` against HAPI graded **B 6/7**,
+  not the 2026-08-16 **F 1/7**, because #514 fixed the probe collision the pack
+  diagnosed. Still not proven: either kind with a credential (both sandboxes
+  are anonymous), and the MCP step, which needs Docker.
 - Four defects fixed today off this run:
   - `hapi` dropping its credentials (#512)
   - health lying about upstream mode (#513)
   - `$conformance` colliding on a shared server (#514)
   - an unknown kind booting then 500-ing (#518)
-- The example's Aidbox image is **unpinned** (`:edge`, `pull_policy: always`) with a dated exemption recorded in `tests/test_aidbox_example_tells_the_truth.py`.
+- The example's Aidbox image is **unpinned** (`:edge`, `pull_policy: always`) with a dated exemption recorded in `tests/test_aidbox_example_tells_the_truth.py`. As of 2026-09-04 that tag resolves to a different digest than the run the exemption cites (#602, `scripts/image-pin-digests.sh`), so the exemption's own reason has expired.
+- Three of those four fixes now have a run behind them, not just a diff. The rerun in `docs/evidence/2026-09-04-set2-sections-5-7-rerun.md` (#602) covers §5, §6 and §7 of the pack. It runs against both the tree that found them and the tree that fixed them. #514 is the one it does not cover; #601 does.
 
 ## 5. Known gaps — the open issues in this set
 
