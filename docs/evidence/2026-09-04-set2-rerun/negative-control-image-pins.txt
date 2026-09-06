@@ -1,0 +1,84 @@
+# Negative controls for scripts/image-pin-digests.sh
+# None of these may report a pass. Run 2026-09-04.
+
+$ scripts/image-pin-digests.sh /tmp/hc-qa-602/compose-missing-tag.yaml
+image-pin-digests.sh
+compose  /tmp/hc-qa-602/compose-missing-tag.yaml
+date     2026-09-04T10:19:10Z
+accept   application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json
+baseline docs/evidence/2026-08-16-set2-connectors.md §7 (2026-08-16)
+
+1. Manifest digests for every image the compose file names
+  image                                                digest today
+  ghcr.io/aks129/healthclaw-guardrails:9.9.9-not-a-real-tag (no digest)
+  FAIL ghcr.io/aks129/healthclaw-guardrails:9.9.9-not-a-real-tag: the registry returned no Docker-Content-Digest. This run measured nothing for this row.
+  FAIL ghcr.io/aks129/healthclaw-guardrails:1.10.0 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-missing-tag.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL ghcr.io/aks129/healthclaw-mcp-server:1.10.0 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-missing-tag.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL healthsamurai/aidboxone:edge is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-missing-tag.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL postgres:18 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-missing-tag.yaml no longer names it, so §7's question went unanswered for that row.
+
+2. The two observations §7 recorded next to the table
+  ghcr.io/aks129/healthclaw-guardrails tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-guardrails: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: latest still resolves to the same digest as 1.10.0 (sha256:57b345e0c8f6a6bf88690084f57fe863bd02882ade0e2c7b70002baa4c0e225b).
+  ghcr.io/aks129/healthclaw-mcp-server tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: latest still resolves to the same digest as 1.10.0 (sha256:d37c997ea15c73c715cdc2b90ea01aa6a49dc34cb6897913ce1691d8d012cd53).
+
+Result
+  at least one assertion failed
+(exit 1)
+
+$ scripts/image-pin-digests.sh /tmp/hc-qa-602/compose-no-images.yaml
+image-pin-digests.sh
+compose  /tmp/hc-qa-602/compose-no-images.yaml
+date     2026-09-04T10:19:11Z
+accept   application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json
+baseline docs/evidence/2026-08-16-set2-connectors.md §7 (2026-08-16)
+
+1. Manifest digests for every image the compose file names
+
+no image: lines in /tmp/hc-qa-602/compose-no-images.yaml — nothing was measured
+(exit 2)
+
+$ scripts/image-pin-digests.sh /nonexistent/compose.yaml
+
+no compose file at /nonexistent/compose.yaml (run from the repo root)
+(exit 2)
+
+# Mutation: the baseline comparison itself. A version-tag row is fed a
+# digest that is NOT its baseline, by pointing the compose at 1.9.0 while
+# the script still matches the ref string for 1.10.0 -> row falls to the
+# 'not in the 2026-08-16 table' branch, which must NOT read as a pass.
+
+$ scripts/image-pin-digests.sh /tmp/hc-qa-602/compose-wrong-digest.yaml
+image-pin-digests.sh
+compose  /tmp/hc-qa-602/compose-wrong-digest.yaml
+date     2026-09-04T10:19:11Z
+accept   application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json
+baseline docs/evidence/2026-08-16-set2-connectors.md §7 (2026-08-16)
+
+1. Manifest digests for every image the compose file names
+  image                                                digest today
+  ghcr.io/aks129/healthclaw-guardrails:1.9.0           sha256:815d8568daf3dde7e25ffa0e0b4ea8c437f080836ea2ef3d241bb34b9d9c1a12
+  NOTE ghcr.io/aks129/healthclaw-guardrails:1.9.0: not in the 2026-08-16 table, so there is nothing to compare it to.
+  FAIL ghcr.io/aks129/healthclaw-guardrails:1.10.0 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-wrong-digest.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL ghcr.io/aks129/healthclaw-mcp-server:1.10.0 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-wrong-digest.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL healthsamurai/aidboxone:edge is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-wrong-digest.yaml no longer names it, so §7's question went unanswered for that row.
+  FAIL postgres:18 is in §7's table but was not compared this run — /tmp/hc-qa-602/compose-wrong-digest.yaml no longer names it, so §7's question went unanswered for that row.
+
+2. The two observations §7 recorded next to the table
+  ghcr.io/aks129/healthclaw-guardrails tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-guardrails: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-guardrails: latest still resolves to the same digest as 1.10.0 (sha256:57b345e0c8f6a6bf88690084f57fe863bd02882ade0e2c7b70002baa4c0e225b).
+  ghcr.io/aks129/healthclaw-mcp-server tags: latest, v1.4.0, 1.5.0, 1.5, 1.6.0, 1.6, 1.7.0, 1.7, 1.8.0, 1.8, 1.9.0, 1.9, 1.10.0
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: tag list identical to 2026-08-16.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: still no 1.10 alias, unlike every prior minor.
+  NOTE ghcr.io/aks129/healthclaw-mcp-server: latest still resolves to the same digest as 1.10.0 (sha256:d37c997ea15c73c715cdc2b90ea01aa6a49dc34cb6897913ce1691d8d012cd53).
+
+Result
+  at least one assertion failed
+(exit 1)
