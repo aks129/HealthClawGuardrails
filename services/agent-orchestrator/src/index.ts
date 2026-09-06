@@ -28,6 +28,7 @@ import {
 import crypto from "crypto";
 import { FHIRTools } from "./tools";
 import { executeMCPTool } from "./mcp-tool-result";
+import { fetchWithTimeout } from "./fetch-timeout";
 
 const { version: SERVER_VERSION } = require("../package.json") as {
   version: string;
@@ -90,6 +91,106 @@ function isMCPBearerCredential(authorization: string | undefined): boolean {
   return Boolean(
     expectedToken && match && tokenMatches(match[1], expectedToken)
   );
+}
+
+// --- Phase 3: authorization-server tokens, behind MCP_OAUTH_ENABLED ---
+//
+// docs/specs/2026-08-16-mcp-authorization.md §3.5, §3.6 and §13.6. A bearer
+// that is not MCP_AUTH_TOKEN is a candidate OAuth access token. It is accepted
+// only when Flask's introspection says it is live, its audience is exactly
+// MCP_CANONICAL_RESOURCE, it carries a read scope and it has not expired.
+// Anything else is the same 401 as today. Off (the default), no introspection
+// happens and every non-static bearer is refused, which is R7's rollback.
+//
+// On this path the caller's own credentials never reach Flask: the tenant
+// comes from introspection and nowhere else, the Authorization header is
+// dropped, the tool-argument overrides are discarded, and the downstream
+// credential is a read-scoped step-up token this server mints for the
+// consented tenant (tools.ts). Introspection is a hard dependency and fails
+// closed: Flask unreachable means 401, never a guess.
+export interface OAuthGrant {
+  tenantId: string;
+  clientId: string;
+  scopes: string[];
+  tokenHash: string;
+  expiresAtMs: number;
+}
+
+const INTROSPECTION_CACHE = new Map<string, { grant: OAuthGrant; expiresAtMs: number }>();
+const INTROSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+const TENANT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+//: The internal marker extractHeaders sets on the OAuth path. Never copied
+//: from a request, so a client cannot supply it.
+export const OAUTH_GRANT_HEADER = "x-oauth-grant";
+
+function oauthEnabled(): boolean {
+  const raw = process.env.MCP_OAUTH_ENABLED;
+  return raw === "true" || raw === "1";
+}
+
+function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function introspectionURL(): string {
+  return `${FHIR_BASE_URL.replace(/\/$/, "")}/oauth/introspect`;
+}
+
+// Ask Flask. The answer is trusted only when every one of the conditions
+// holds; a missing or odd field is a refusal, not a default. 401 for every
+// failure, never 403: a wrong audience is a token that was never for us, and
+// 403 would tell the caller their token is recognised here (§3.5).
+async function introspect(token: string): Promise<OAuthGrant | null> {
+  const clientId = (process.env.MCP_INTROSPECTION_CLIENT_ID || "").trim();
+  const clientSecret = (process.env.MCP_INTROSPECTION_CLIENT_SECRET || "").trim();
+  const resource = (process.env.MCP_CANONICAL_RESOURCE || "").trim();
+  if (!clientId || !clientSecret || !resource) return null;
+  let body: Record<string, unknown>;
+  try {
+    const form = new URLSearchParams({ token, client_id: clientId, client_secret: clientSecret });
+    const resp = await fetchWithTimeout(introspectionURL(), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    if (!resp.ok) return null;
+    body = (await resp.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!body || body.active !== true) return null;
+  if (typeof body.aud !== "string" || body.aud !== resource) return null;
+  const scopes = typeof body.scope === "string" ? body.scope.split(/\s+/).filter(Boolean) : [];
+  if (!scopes.some((s) => RESOURCE_SCOPES.includes(s))) return null;
+  if (typeof body.exp !== "number" || body.exp * 1000 <= Date.now()) return null;
+  if (typeof body.tenant_id !== "string" || !TENANT_ID_PATTERN.test(body.tenant_id)) return null;
+  return {
+    tenantId: body.tenant_id,
+    clientId: typeof body.client_id === "string" ? body.client_id : "unknown",
+    scopes,
+    tokenHash: sha256Hex(token),
+    expiresAtMs: body.exp * 1000,
+  };
+}
+
+// Cached under the token's SHA-256 only, for at most five minutes and never
+// past the token's own expiry, so a revoked consent stops being served within
+// the window and the token value itself is never held (§9.7).
+async function resolveOAuthGrant(token: string): Promise<OAuthGrant | null> {
+  const key = sha256Hex(token);
+  const now = Date.now();
+  const cached = INTROSPECTION_CACHE.get(key);
+  if (cached && cached.expiresAtMs > now) return cached.grant;
+  INTROSPECTION_CACHE.delete(key);
+  const grant = await introspect(token);
+  if (!grant) return null;
+  const expiresAtMs = Math.min(now + INTROSPECTION_CACHE_TTL_MS, grant.expiresAtMs);
+  INTROSPECTION_CACHE.set(key, { grant, expiresAtMs });
+  return grant;
+}
+
+function resetOAuthStateForTests(): void {
+  INTROSPECTION_CACHE.clear();
 }
 
 // --- RFC 9728 protected-resource metadata (phase 1, behind the constant) ---
@@ -215,7 +316,7 @@ function challengeHeader(req: express.Request): string {
 
 // Health probes and CORS preflight remain public. When configured, every MCP
 // network transport requires the deployment-scoped bearer credential.
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const expectedToken = process.env.MCP_AUTH_TOKEN;
   if (
     req.method === "OPTIONS" ||
@@ -226,11 +327,25 @@ app.use((req, res, next) => {
     return next();
   }
 
-  if (!isMCPBearerCredential(req.headers.authorization)) {
-    res.setHeader("WWW-Authenticate", challengeHeader(req));
-    return res.status(401).json({ error: "Unauthorized" });
+  const authorization = req.headers.authorization;
+  if (isMCPBearerCredential(authorization)) return next();
+
+  const bearer = /^Bearer (.+)$/i.exec(authorization || "");
+  if (bearer && oauthEnabled()) {
+    const grant = await resolveOAuthGrant(bearer[1].trim());
+    if (grant) {
+      res.locals.oauthGrant = grant;
+      return next();
+    }
   }
-  next();
+
+  // The refusal is readable from a browser context (§9.4): it carries no
+  // secret, names no tenant and grants nothing, and a 401 a browser can read
+  // is still a 401. The transport's own origin allowlist is untouched.
+  res.setHeader("WWW-Authenticate", challengeHeader(req));
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Expose-Headers", "WWW-Authenticate");
+  return res.status(401).json({ error: "Unauthorized" });
 });
 
 // Railway / Heroku / Fly inject PORT; honor that first so the platform's
@@ -260,8 +375,17 @@ app.use((req, res, next) => {
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, X-Tenant-Id, X-Step-Up-Token, X-Agent-Id, X-Human-Confirmed, Mcp-Session-Id, X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID, X-FHIR-Refresh-Token, X-FHIR-Refresh-Url"
   );
-  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate");
   if (req.method === "OPTIONS") {
+    // A browser preflights POST /mcp; without an allow-origin here it never
+    // sends the request and never reads the 401 that says where to go
+    // (§9.4, part 2 of #523). Answering `*` on the preflight lets the request
+    // through to a refusal it can read; the actual response still carries an
+    // allow-origin only for an allowlisted origin, so nothing the transport
+    // returns becomes readable by any other page.
+    if (isMCPTransportPath(req.path) && !res.getHeader("Access-Control-Allow-Origin")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     return res.sendStatus(204);
   }
   next();
@@ -298,8 +422,25 @@ app.use((req, res, next) => {
 
 // --- Helper: extract forwarded headers from HTTP request ---
 
-function extractHeaders(req: express.Request): Record<string, string> {
+function extractHeaders(
+  req: express.Request,
+  grant?: OAuthGrant
+): Record<string, string> {
   const h: Record<string, string> = {};
+  if (grant) {
+    // §3.6: on the OAuth path the tenant comes from introspection and from
+    // nowhere else. The inbound Authorization header, any step-up token and
+    // the bring-your-own-FHIR (SHARP) headers are all dropped: a consented
+    // connection reaches one tenant through the guardrails and nothing else.
+    h["x-tenant-id"] = grant.tenantId;
+    h["x-agent-id"] = `oauth:${grant.clientId}`;
+    h[OAUTH_GRANT_HEADER] = JSON.stringify({
+      tenantId: grant.tenantId,
+      tokenHash: grant.tokenHash,
+      expiresAtMs: grant.expiresAtMs,
+    });
+    return h;
+  }
   if (isPublicDemo()) {
     // Open demo endpoint: pin to the synthetic demo tenant and ignore every
     // client-supplied tenant, step-up, or bring-your-own-FHIR header, so an
@@ -382,6 +523,60 @@ const SHARP_CAPABILITIES = {
   },
 };
 
+const CREDENTIAL_ARGUMENTS = [
+  "_tenantId",
+  "_stepUpToken",
+  "_authorization",
+  "_fhirServerUrl",
+  "_fhirAccessToken",
+  "_patientId",
+];
+
+function stripCredentialArguments(toolArgs: Record<string, unknown>): void {
+  for (const key of CREDENTIAL_ARGUMENTS) delete toolArgs[key];
+}
+
+// The SSE transport lets a client that cannot set HTTP headers pass tenant,
+// step-up, bearer and SHARP context as underscored tool arguments. On the
+// OAuth path (a session whose headers carry the grant marker) none of them is
+// honoured — they are removed, not applied — exactly as the public demo pins
+// them. Pure, so the property is asserted directly (R8 for this transport).
+function applyToolArgumentOverrides(
+  toolArgs: Record<string, unknown>,
+  sessionHeaders: Record<string, string>
+): Record<string, string> {
+  const toolHeaders: Record<string, string> = { ...sessionHeaders };
+  if (sessionHeaders[OAUTH_GRANT_HEADER]) {
+    stripCredentialArguments(toolArgs);
+    return toolHeaders;
+  }
+  if (typeof toolArgs._tenantId === "string") {
+    toolHeaders["x-tenant-id"] = toolArgs._tenantId as string;
+    delete toolArgs._tenantId;
+  }
+  if (typeof toolArgs._stepUpToken === "string") {
+    toolHeaders["x-step-up-token"] = toolArgs._stepUpToken as string;
+    delete toolArgs._stepUpToken;
+  }
+  if (typeof toolArgs._authorization === "string") {
+    toolHeaders["authorization"] = toolArgs._authorization as string;
+    delete toolArgs._authorization;
+  }
+  if (typeof toolArgs._fhirServerUrl === "string") {
+    toolHeaders["x-fhir-server-url"] = toolArgs._fhirServerUrl as string;
+    delete toolArgs._fhirServerUrl;
+  }
+  if (typeof toolArgs._fhirAccessToken === "string") {
+    toolHeaders["x-fhir-access-token"] = toolArgs._fhirAccessToken as string;
+    delete toolArgs._fhirAccessToken;
+  }
+  if (typeof toolArgs._patientId === "string") {
+    toolHeaders["x-patient-id"] = toolArgs._patientId as string;
+    delete toolArgs._patientId;
+  }
+  return toolHeaders;
+}
+
 function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
   const server = new Server(
     { name: "healthclaw-guardrails", version: SERVER_VERSION },
@@ -397,35 +592,11 @@ function createMCPServer(sessionHeaders: Record<string, string> = {}): Server {
     const toolArgs = (args ?? {}) as Record<string, unknown>;
 
     // Start with session-level headers (captured at connection time for SSE).
-    // Tool-arg headers (_tenantId, _stepUpToken, _authorization) override session
-    // headers, allowing per-call overrides without changing the connection.
-    const toolHeaders: Record<string, string> = { ...sessionHeaders };
-    if (typeof toolArgs._tenantId === "string") {
-      toolHeaders["x-tenant-id"] = toolArgs._tenantId as string;
-      delete toolArgs._tenantId;
-    }
-    if (typeof toolArgs._stepUpToken === "string") {
-      toolHeaders["x-step-up-token"] = toolArgs._stepUpToken as string;
-      delete toolArgs._stepUpToken;
-    }
-    if (typeof toolArgs._authorization === "string") {
-      toolHeaders["authorization"] = toolArgs._authorization as string;
-      delete toolArgs._authorization;
-    }
-    // SHARP-on-MCP tool-arg overrides (Claude Desktop & stdio clients can't
-    // set HTTP headers, so they pass SHARP context as underscored tool args).
-    if (typeof toolArgs._fhirServerUrl === "string") {
-      toolHeaders["x-fhir-server-url"] = toolArgs._fhirServerUrl as string;
-      delete toolArgs._fhirServerUrl;
-    }
-    if (typeof toolArgs._fhirAccessToken === "string") {
-      toolHeaders["x-fhir-access-token"] = toolArgs._fhirAccessToken as string;
-      delete toolArgs._fhirAccessToken;
-    }
-    if (typeof toolArgs._patientId === "string") {
-      toolHeaders["x-patient-id"] = toolArgs._patientId as string;
-      delete toolArgs._patientId;
-    }
+    // Tool-arg headers (_tenantId, _stepUpToken, _authorization, and the
+    // SHARP trio) override session headers, allowing per-call overrides
+    // without changing the connection — except on the OAuth path, where
+    // they are discarded (P3-a, R8).
+    const toolHeaders = applyToolArgumentOverrides(toolArgs, sessionHeaders);
 
     // Demo mode overrides every client-supplied header (incl. _tenantId tool
     // args) with the pinned synthetic tenant — an open caller stays boxed in.
@@ -473,7 +644,7 @@ app.post("/mcp", async (req, res) => {
     });
   }
 
-  const reqHeaders = extractHeaders(req);
+  const reqHeaders = extractHeaders(req, res.locals.oauthGrant as OAuthGrant | undefined);
   const { id, method, params } = body;
   const requestSessionId = req.headers["mcp-session-id"] as string | undefined;
   const existingSession = requestSessionId
@@ -586,6 +757,7 @@ app.post("/mcp", async (req, res) => {
           });
         }
         const toolInput = (rawToolInput ?? {}) as Record<string, unknown>;
+        if (reqHeaders[OAUTH_GRANT_HEADER]) stripCredentialArguments(toolInput);
 
         const result = await executeMCPTool(
           fhirTools,
@@ -690,18 +862,30 @@ const activeSessions = new Map<string, {
   transport: SSEServerTransport;
   headers: Record<string, string>;
   lastActivity: number;
+  credential: string;
 }>();
+
+// An SSE session captures its headers at connect and every later POST to
+// /messages rides on them, so the session is bound to the credential that
+// opened it: the static token, or one OAuth token's hash. A request that
+// authenticates as anything else is refused, or it would execute as the
+// tenant the session was opened for. Streamable HTTP needs no such binding:
+// its headers are resolved per request.
+function sessionCredential(grant: OAuthGrant | undefined): string {
+  return grant ? `oauth:${grant.tokenHash}` : "static";
+}
 
 app.get("/sse", async (req, res) => {
   // Capture headers from the SSE connection request and pass them into the
   // server instance so CallToolRequestSchema forwwards X-Tenant-ID on every tool call.
-  const reqHeaders = extractHeaders(req);
+  const reqHeaders = extractHeaders(req, res.locals.oauthGrant as OAuthGrant | undefined);
   const server = createMCPServer(reqHeaders);
   const transport = new SSEServerTransport("/messages", res);
   activeSessions.set(transport.sessionId, {
     transport,
     headers: reqHeaders,
     lastActivity: Date.now(),
+    credential: sessionCredential(res.locals.oauthGrant as OAuthGrant | undefined),
   });
 
   res.on("close", () => {
@@ -716,6 +900,9 @@ app.post("/messages", async (req, res) => {
   const session = activeSessions.get(sessionId);
   if (!session) {
     return res.status(400).json({ error: "Invalid or expired session" });
+  }
+  if (session.credential !== sessionCredential(res.locals.oauthGrant as OAuthGrant | undefined)) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
   session.lastActivity = Date.now();
   await session.transport.handlePostMessage(req, res, req.body);
@@ -742,7 +929,7 @@ app.post("/mcp/rpc", async (req, res) => {
   }
 
   const { id, method, params } = rpcRequest;
-  const reqHeaders = extractHeaders(req);
+  const reqHeaders = extractHeaders(req, res.locals.oauthGrant as OAuthGrant | undefined);
 
   try {
     switch (method) {
@@ -846,6 +1033,7 @@ app.get("/health", (_req, res) => {
       streamableHttp: streamableSessions.size,
       sse: activeSessions.size,
     },
+    oauth: { enabled: oauthEnabled() },
     cors: {
       mode: ALLOWED_ORIGINS.length > 0 ? "allowlist" : "deny-all",
       allowedOrigins: ALLOWED_ORIGINS.length,
@@ -894,9 +1082,31 @@ function assertMCPCanonicalResourceConfigured(
   }
 }
 
+// Enabled means every piece it depends on is present, or the server does not
+// start: a half-configured OAuth path would refuse every connector token in
+// production and look, from outside, like a deploy that worked (§7).
+function assertMCPOAuthConfigured(env: NodeJS.ProcessEnv = process.env): void {
+  const raw = env.MCP_OAUTH_ENABLED;
+  if (raw !== "true" && raw !== "1") return;
+  const missing = [
+    "MCP_CANONICAL_RESOURCE",
+    "MCP_INTROSPECTION_CLIENT_ID",
+    "MCP_INTROSPECTION_CLIENT_SECRET",
+    "INTERNAL_TOKEN_MINT_SECRET",
+  ].filter((name) => !env[name]?.trim());
+  if (missing.length > 0 || !parseCanonicalResource(env.MCP_CANONICAL_RESOURCE)) {
+    throw new Error(
+      "MCP_OAUTH_ENABLED=true requires a canonical MCP_CANONICAL_RESOURCE, " +
+        "MCP_INTROSPECTION_CLIENT_ID, MCP_INTROSPECTION_CLIENT_SECRET and " +
+        `INTERNAL_TOKEN_MINT_SECRET (missing: ${missing.join(", ") || "none, but the resource is not canonical"})`
+    );
+  }
+}
+
 if (require.main === module) {
   assertMCPAuthConfigured();
   assertMCPCanonicalResourceConfigured();
+  assertMCPOAuthConfigured();
   app.listen(PORT, () => {
     console.error(`FHIR R6 MCP Server v${SERVER_VERSION} running on port ${PORT}`);
     console.error(`FHIR Base URL: ${FHIR_BASE_URL}`);
@@ -935,6 +1145,10 @@ export {
   app,
   assertMCPAuthConfigured,
   assertMCPCanonicalResourceConfigured,
+  assertMCPOAuthConfigured,
+  applyToolArgumentOverrides,
+  resetOAuthStateForTests,
+  sessionCredential,
   cleanupExpiredRuntimeStateForTests,
   closeMCPServerForTests,
   getRuntimeStateForTests,
