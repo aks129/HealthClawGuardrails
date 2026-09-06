@@ -375,7 +375,8 @@ def _ingest_one(resource: dict, tenant_id: str,
 
     Returns ('ok', resource_id) on success, ('skipped', None) for unsupported
     types, ('forbidden', None) for a type excluded by `allowed_types`, or
-    ('invalid_id', None) for a caller-supplied id outside the FHIR id shape.
+    ('invalid_id', None) for a caller-supplied id outside the FHIR id shape
+    or not a string (an int is coerced; a bool, float, list or object is not).
     Raises on unexpected DB errors.
 
     `agent_id` and `detail` parameterize the audit event so a caller other
@@ -400,6 +401,12 @@ def _ingest_one(resource: dict, tenant_id: str,
 
     resource_id = resource.get('id')
     if resource_id is not None:
+        # An int keeps coercing to a string — pre-existing, and live on the
+        # Fasten connector. Any other non-string (bool, float, list, object)
+        # is refused BEFORE str(), because str(True) and str(1.5) both pass
+        # the id pattern. bool is a subclass of int, hence checked first (#286).
+        if isinstance(resource_id, bool) or not isinstance(resource_id, (str, int)):
+            return 'invalid_id', None
         resource_id = str(resource_id)
         if not _RESOURCE_ID_PATTERN.fullmatch(resource_id):
             return 'invalid_id', None

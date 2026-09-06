@@ -34,6 +34,12 @@ class Config:
 
         self.healthclaw_base = (e.get("HEALTHCLAW_BASE")
                                 or "https://app.healthclaw.io").rstrip("/")
+        # `healthclaw_base` is for server-to-server calls and may be an
+        # internal host (in production it is the Railway-private hostname).
+        # `healthclaw_public_base` is for anything rendered into a page a
+        # person will click — Terms, Privacy — and must stay public (#534).
+        self.healthclaw_public_base = (e.get("HEALTHCLAW_PUBLIC_BASE")
+                                       or "https://app.healthclaw.io").rstrip("/")
         self.session_secret = e.get("CARE_SESSION_SECRET", "")
 
         # Build provenance (#258) — telemetry, never a gate. Deliberately not
