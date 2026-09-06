@@ -1425,7 +1425,17 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # OperationOutcome cannot say, and that is the twelfth
                      # site the kernel spec §2.5 already calls out as
                      # blocked on a CTO ruling.
-                     'r6/sdc/routes.py'}
+                     'r6/sdc/routes.py',
+                     # playbook B2: the durable agent-run control plane's
+                     # audit. It imports `audit` and nothing else — its
+                     # step-up check still calls the validator directly and
+                     # is still counted by _STEP_UP_CALLSITES, because one
+                     # guard per PR is the protocol. The service layer rather
+                     # than the routes is the adopter on purpose: each of
+                     # these functions owns its own transaction, and the
+                     # kernel's audit() only keeps its promise when it flushes
+                     # inside the transaction it is evidence for.
+                     'r6/agent_runs/service.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
