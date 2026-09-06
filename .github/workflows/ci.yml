@@ -348,7 +348,11 @@ jobs:
         # repository access, so it gates too. If that ever becomes noisy,
         # narrow it on purpose and write the reason here — do not let it
         # narrow by accident.
-        run: uv run --with pip-audit==2.9.0 pip-audit --strict --format json --output audit.json
+        # Through scripts/audit_with_retry.py (#589): a registry outage is
+        # retried with backoff and, if it persists, fails with its own exit
+        # code and a message naming the outage; a finding is never retried
+        # and keeps pip-audit's exit code. Nothing is suppressed.
+        run: uv run python scripts/audit_with_retry.py -- uv run --with pip-audit==2.9.0 pip-audit --strict --format json --output audit.json
 
       - name: The audit examined the project, not an empty interpreter
         # The positive half, and the reason this gate is trustworthy now:
@@ -362,7 +366,7 @@ jobs:
         working-directory: services/agent-orchestrator
         run: |
           npm ci
-          npm audit --audit-level=high
+          python3 ../../scripts/audit_with_retry.py -- npm audit --audit-level=high
 
   # ─────────────────────────────────────────────
   # Compliance Gate 3: Guardrail enforcement checks
