@@ -224,10 +224,9 @@ class TestR6CRUD:
                          headers=tenant_headers)
         data = resp.get_json()
 
-        # Identifiers should be redacted
+        # Identifier values are removed (system/type may remain)
         for ident in data.get('identifier', []):
-            if 'value' in ident:
-                assert ident['value'].startswith('***')
+            assert 'value' not in ident
 
         # Address lines should be removed
         for addr in data.get('address', []):

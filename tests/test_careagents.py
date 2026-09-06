@@ -3961,6 +3961,50 @@ def test_auth_code_input_fits_minted_codes(app):
     assert f"{digits}-digit code" in body
 
 
+def _app_with_bases(svc, **env):
+    # Build a Config whose HealthClaw base looks like production: the
+    # server-to-server base is the internal Railway hostname (#534).
+    from careagents.app import create_app
+    cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                       "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
+                       "HEALTHCLAW_BASE": "https://internal.up.railway.app",
+                       **env})
+    a = create_app(config=cfg2, client=FakeClient(), accounts=svc)
+    a.config["TESTING"] = True
+    return a
+
+
+def test_terms_and_privacy_links_never_use_the_internal_base(svc, monkeypatch):
+    # #534: /auth and /home built their Terms and Privacy links from
+    # HEALTHCLAW_BASE, which in production is deliberately the internal
+    # Railway hostname (server-to-server calls must not loop through the
+    # public one). A link a person clicks has to use the public hostname.
+    c = _app_with_bases(svc).test_client()
+    auth = c.get("/auth").get_data(as_text=True)
+    assert 'href="https://app.healthclaw.io/terms"' in auth
+    assert 'href="https://app.healthclaw.io/privacy"' in auth
+    assert "up.railway.app" not in auth
+
+    _login(c, svc, monkeypatch)
+    home = c.get("/home").get_data(as_text=True)
+    assert 'href="https://app.healthclaw.io/terms"' in home
+    assert 'href="https://app.healthclaw.io/privacy"' in home
+    assert "up.railway.app" not in home
+
+
+def test_terms_and_privacy_links_follow_healthclaw_public_base(svc, monkeypatch):
+    c = _app_with_bases(
+        svc, HEALTHCLAW_PUBLIC_BASE="https://example.test/").test_client()
+    auth = c.get("/auth").get_data(as_text=True)
+    assert 'href="https://example.test/terms"' in auth
+    assert 'href="https://example.test/privacy"' in auth
+
+    _login(c, svc, monkeypatch)
+    home = c.get("/home").get_data(as_text=True)
+    assert 'href="https://example.test/terms"' in home
+    assert 'href="https://example.test/privacy"' in home
+
+
 def test_healthz_and_manifest(app):
     c = app.test_client()
     assert c.get("/healthz").get_json()["accounts"] is True
