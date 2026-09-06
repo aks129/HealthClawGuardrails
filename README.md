@@ -104,7 +104,7 @@ Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/r
 
 This is a **vendor-neutral guardrail proxy** that sits between any AI agent and any FHIR server. Every request passes through:
 
-- **PHI redaction** — Names truncated to initials, identifiers masked, addresses stripped, birth dates truncated to year
+- **PHI redaction** — Names truncated to initials, identifier values removed (system and type kept), addresses stripped, birth dates truncated to year
 - **Immutable audit trail** — Every read/write logged with tenant, agent, timestamp
 - **Step-up authorization** — HMAC-SHA256 tokens required for writes
 - **Human-in-the-loop** — Clinical writes blocked until a human confirms (HTTP 428); real-world actions (calls, SMS, forms) go further: `commit` only *submits*, and execution requires a **provably out-of-band** single-use approval the agent's own toolchain cannot satisfy
@@ -683,7 +683,7 @@ in-process cache when Redis is unavailable).
   assessment or third-party audit** — see
   [What this grade means](#what-this-grade-means-and-what-it-doesnt)
 - Local mode: JSON blob storage with table-scan search (no indexed fields)
-- **Redaction is HIPAA Safe-Harbor-*style* field redaction** (demographics), **not Expert Determination**. It's a compensating control that removes identifier-class fields; it is not a legal de-identification determination. Production de-id rigor (profile-specific recursive allowlists, an Expert-Determination path) is on the [roadmap](ROADMAP.md) ([#112](../../issues/112)).
+- **Redaction is HIPAA Safe-Harbor-*style* field redaction** (demographics), **not Expert Determination**. It's a compensating control that removes identifier-class fields (identifier values are removed outright, not truncated); it is not a legal de-identification determination. Production de-id rigor (profile-specific recursive allowlists, an Expert-Determination path) is on the [roadmap](ROADMAP.md) ([#112](../../issues/112)).
 - **Validation is structural**, not full StructureDefinition/profile conformance or terminology binding. What's demonstrated is the guardrail *contract* (redact + audit + step-up + human-confirm + tenant isolation + error fidelity), not production validation depth — that's tracked in [#112](../../issues/112).
 - SubscriptionTopic stored but notifications not dispatched
 - Clinical FHIR writes gate human-in-the-loop with a header flag (`X-Human-Confirmed`), not cryptographic confirmation — a compensating control for the demo, not proof a human acted. Real-world actions (phone/SMS/etc.) no longer use that header: `commit` only submits the action for out-of-band approval (202 `awaiting_confirmation`), and the patient's Approve tap consumes a single-use `ActionConfirmation` credential server-side before anything executes.

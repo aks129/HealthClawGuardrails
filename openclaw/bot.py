@@ -632,8 +632,9 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                                  'connect records first (/connect).', agent_id)
             return
         first = entries[0].get('resource', entries[0])
+        rtype = first.get('resourceType', 'Observation')
         result = _rpc('curatr_evaluate',
-                      resource_type=first.get('resourceType', 'Observation'),
+                      resource_type=rtype,
                       resource_id=first.get('id'))
         _chat_state.setdefault(chat_id, {})['last_curatr'] = result
 
@@ -643,8 +644,20 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         issues = result.get('issues', [])
         proposals = result.get('fix_proposals', result.get('proposals', []))
 
-        lines = [f'*Curatr Evaluation* — quality: {quality or "?"} '
-                 f'(score: {score})']
+        # One resource was graded, so the score is only ever shown beside the
+        # scope it belongs to (#458). N is the search Bundle's own `total` —
+        # a tenant-wide count. Never len(entries): this page asked for one, so
+        # falling back to it would print "1 of 1" and claim the record holds a
+        # single Observation.
+        total = search.get('total')
+        if not isinstance(total, int):
+            total = (search.get('bundle') or {}).get('total')
+        scope = (f'Checked 1 of {total} {rtype}s (most recent)'
+                 if isinstance(total, int)
+                 else f'Checked 1 of ? {rtype}s (most recent, count unknown)')
+
+        lines = [f'*Curatr Evaluation* — {scope} — '
+                 f'quality: {quality or "?"} (score: {score})']
         summary = result.get('summary')
         if summary:
             lines.append(summary)

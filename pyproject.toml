@@ -55,6 +55,7 @@ ignore = ["E402"]
 [tool.mypy]
 python_version = "3.11"
 files = [
+    "r6/constant_time.py",
     "r6/runtime_config.py",
     "r6/read_auth.py",
     "r6/actions/state.py",

@@ -6,7 +6,7 @@ shape.
 | # | Set | What "works" means | Measured state |
 |---|---|---|---|
 | [1](01-guardrail-core.md) | Guardrail core | conformance A local / B proxy, gap named | **A 7/7 local; proxy unmeasured** |
-| [2](02-connectors.md) | Upstream connectors | each kind runs its own live walkthrough | **2 of 4 proven live** |
+| [2](02-connectors.md) | Upstream connectors | each kind runs its own live walkthrough | **2 of 4 proven live**, and both re-run by a second person 2026-09-04 (#530) |
 | [3](03-consumer-journey.md) | CareAgents journey | a person finishes it without help | **unmeasured** |
 | [4](04-action-rail.md) | Action rail | nothing executes without an out-of-band human | **unmeasured; #215 says nothing could execute** |
 | [5](05-clinical-rails.md) | Clinical rails | a clinician does not have to correct it | **unmeasured** |

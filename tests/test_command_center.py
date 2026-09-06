@@ -655,7 +655,35 @@ class TestSignedLinkFlow:
     def test_login_page_renders(self, client):
         resp = client.get("/command-center/login")
         assert resp.status_code == 200
-        assert b"/dashboard" in resp.data
+        # The page must name a way to actually get a link. This asserted
+        # b"/dashboard" — the bot slash command that was the only documented
+        # route in, and could not be followed (#564).
+        assert b"support@healthclaw.io" in resp.data
+
+    def test_login_page_sends_nobody_to_an_unserved_surface(self, client):
+        """Both places this page states how to get in, in one test.
+
+        It told a private-tenant user to open their Telegram bot and send
+        /dashboard for a signed link, and the invalid-link 401 told them to
+        ask that agent for a fresh one. The surface is not served (council
+        ruling D6), so the only documented way in could not be followed and
+        the dashboard was unreachable while it is down (#564).
+
+        The 401 render is the second location of the one claim, and the
+        second location is where copy like this survives a fix.
+
+        MUTATION: restore "Ask your Telegram agent for a fresh one." in
+        r6/command_center/routes.py, or the "Open your HealthClaw Telegram
+        bot" step in templates/command_center_login.html -> reddens.
+        Verified 2026-09-04.
+        """
+        page = client.get("/command-center/login")
+        expired = client.get("/command-center", query_string={"t": "garbage"})
+        assert expired.status_code == 401
+        for resp in (page, expired):
+            assert b"Telegram" not in resp.data, (
+                "the command center login page routes a user through a "
+                "surface that is not served")
 
     def test_logout_clears_session(self, client):
         from r6.command_center import access

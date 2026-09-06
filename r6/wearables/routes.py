@@ -20,6 +20,7 @@ from flask import Blueprint, Response, current_app, jsonify, redirect, request
 from markupsafe import escape
 
 from models import db
+from r6 import constant_time
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
                        tenant_from_request)
 from r6.audit import record_audit_event
@@ -60,7 +61,7 @@ def _verify_state(state: str) -> dict | None:
     expected = hmac.new(
         _state_secret(), body.encode(), hashlib.sha256,
     ).hexdigest()
-    if not hmac.compare_digest(expected, sig):
+    if not constant_time.equal(sig, expected):
         return None
     try:
         padding = '=' * (-len(body) % 4)

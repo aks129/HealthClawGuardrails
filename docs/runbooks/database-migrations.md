@@ -17,8 +17,13 @@ uv run alembic current
 uv run alembic check
 ```
 
-Expected current revision: `0002_current_contract (head)`. `alembic check`
-must print `No new upgrade operations detected.`
+`alembic current` must name the same revision as `alembic heads` and print
+`(head)` beside it — `0007_agent_worker_presence` when last checked
+(2026-09-04). **Compare the two commands rather than trusting that literal**,
+which every new revision moves; a name pinned here once went stale four days
+after it was written and stayed wrong for seven weeks.
+
+`alembic check` must print `No new upgrade operations detected.`
 
 ## Existing v1.8.0 database (first Alembic deployment)
 
