@@ -68,7 +68,8 @@ def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
                 "resourceType": "Condition", "code": {"text": "Asthma"}}}]})
         if url.endswith("/healthz"):
             return _Resp(200, {"status": "ok", "provider": "openai",
-                               "accounts": True, "build": build,
+                               "accounts": True, "run_workers": True,
+                               "run_workers_state": "ready", "build": build,
                                "built_at": built_at})
         if url.endswith("/auth"):
             return _Resp(200, text='<input maxlength="8">')

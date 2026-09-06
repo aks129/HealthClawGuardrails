@@ -377,7 +377,7 @@ everywhere that matters:
 ```text
 GET /healthz -> 503
 {"accounts": true, "provider": "openai", "run_workers": false,
- "status": "degraded"}
+ "run_workers_state": "not_ready", "status": "degraded"}
 
 POST /api/chat -> run_workers_unavailable
 ```
@@ -386,6 +386,32 @@ That is readiness failing closed because no durable worker presence is fresh,
 not a regression. The fix is to add the worker service. Never relax the check:
 a green `/healthz` with nothing draining the queue is the state the fail-closed
 design exists to make visible.
+
+### Telling that apart from "we could not ask" (#219)
+
+`run_workers_state` names which of three things happened, and only one of them
+fails the endpoint:
+
+| `run_workers_state` | `run_workers` | `/healthz` | Means |
+| --- | --- | --- | --- |
+| `ready` | `true` | 200 | A worker's presence is fresh. The finish line above. |
+| `not_ready` | `false` | **503** | HealthClaw answered: nothing is draining the queue. The section above — fix the deployment. |
+| `rejected` | `false` | **503** | HealthClaw answered **4xx**: it refused this deployment's request. `HEALTHCLAW_MINT_SECRET` or `HEALTHCLAW_BASE` on the *CareAgents* service is wrong. |
+| `unknown` | `false` | 200 | We could not reach HealthClaw's worker-health endpoint within 2s. |
+
+`rejected` gates the deploy for the same reason `not_ready` does: HealthClaw
+answered, and what it said is that this container is wired wrong. A 403 from a
+stale mint secret and a 404 from a mistyped base URL both land here, and both
+produce a CareAgents that serves pages and cannot finish a single chat turn.
+Only a transport failure, a 5xx or a proxy interstitial is `unknown`.
+
+`unknown` is a statement about HealthClaw, not about this container, so it does
+not fail readiness: Railway probes only at the start of a deploy, and blocking
+a CareAgents deploy on a HealthClaw outage blocks the deploy that would fix it
+while traffic stays on a previous version with the same dependency. Chat still
+refuses (`run_workers_unknown`), so nobody is routed into a turn no worker can
+run. **The finish-line check is therefore `200` *and* `"run_workers": true`,
+not `200` alone.**
 
 ## Compose
 

@@ -74,7 +74,8 @@ class HealthClawClient:
     # `ingest_bundle` alone rather than for the boundary.
 
     def _send(self, method: str, url: str, *, what: str,
-              error: type[HealthClawError] = HealthClawError, **kwargs):
+              error: type[HealthClawError] = HealthClawError,
+              timeout=None, **kwargs):
         """Issue one request; a transport failure becomes `error`.
 
         Dispatches to `Session.get`/`Session.post` rather than
@@ -82,6 +83,11 @@ class HealthClawClient:
         here used before, and the relay doubles the cross-layer tests
         substitute for a Session keep working. Resolved lazily for the same
         reason: some of those doubles define only the verb they relay.
+
+        `timeout` bounds a single call instead of inheriting the
+        client-wide one. It exists for callers that have a budget of their
+        own: a probe answering inside a platform's health-check window cannot
+        wait the 25s a chat turn is allowed to (#219). `None` inherits.
 
         `error` exists for one caller and one reason (#220). Losing the answer
         to a *retryable* call means it did not happen, which is an ordinary
@@ -92,7 +98,7 @@ class HealthClawClient:
         """
         send = self.http.get if method == "GET" else self.http.post
         try:
-            return send(url, timeout=self.timeout, **kwargs)
+            return send(url, timeout=timeout or self.timeout, **kwargs)
         except requests.RequestException as exc:
             raise error(f"{what} failed", 0) from exc
 
@@ -749,12 +755,19 @@ class HealthClawClient:
                 f"run claim failed ({r.status_code})", r.status_code)
         return self._json_object(r, "run claim")
 
-    def agent_worker_health(self, max_age_seconds: int = 30) -> dict:
-        """Return queue-backed worker readiness, including unavailable/503."""
+    def agent_worker_health(self, max_age_seconds: int = 30, *,
+                            timeout=None) -> dict:
+        """Return queue-backed worker readiness, including unavailable/503.
+
+        `timeout` bounds this one call; `None` inherits the client's. The
+        readiness probe passes its own, because the answer is only useful
+        inside the window the platform gives it (#219).
+        """
         r = self._send(
             "GET", f"{self.base}/command-center/api/runs/workers/health",
             params={"max_age_seconds": max_age_seconds},
-            headers=self._internal_headers(), what="run worker health")
+            headers=self._internal_headers(), what="run worker health",
+            timeout=timeout)
         if r.status_code not in (200, 503):
             raise HealthClawError(
                 f"run worker health failed ({r.status_code})", r.status_code)

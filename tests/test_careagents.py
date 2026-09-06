@@ -656,6 +656,43 @@ def test_worker_health_client_accepts_fail_closed_503_projection():
     }
 
 
+def test_worker_health_uses_the_callers_timeout_and_otherwise_the_clients():
+    """The per-call budget reaches the wire, not just the signature (#219).
+
+    The app-level test pins that `/healthz` ASKS for a short timeout. This
+    pins that asking does anything: `_send` used to hard-code `self.timeout`
+    for every call, so a caller-supplied budget would have been accepted and
+    silently dropped — a fake would never have noticed.
+    """
+    import careagents.healthclaw as hcmod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"available": True, "active_workers": 1}
+
+    class _HTTP:
+        @staticmethod
+        def get(url, params=None, headers=None, timeout=None):
+            captured["timeout"] = timeout
+            return _Resp()
+
+    client = hcmod.HealthClawClient("http://local", "mint-secret",
+                                    timeout=25.0)
+    client.http = _HTTP()
+
+    client.agent_worker_health(30, timeout=(1.0, 1.0))
+    assert captured["timeout"] == (1.0, 1.0)
+
+    # Every other caller keeps the client-wide timeout it has always had.
+    client.agent_worker_health(30)
+    assert captured["timeout"] == 25.0
+
+
 def test_worker_container_probe_uses_authenticated_queue_readiness(monkeypatch):
     from careagents import healthcheck
 
@@ -1411,6 +1448,41 @@ def test_tool_loop_stops_at_the_budget_instead_of_spending_forever(
     assert events[-1] == {"type": "text", "text": "final answer"}
 
 
+def test_a_stream_that_fails_mid_run_says_so_instead_of_going_quiet(
+        cfg, svc, monkeypatch):
+    """A dead stream must state that it died (#219).
+
+    `_stream_run` had no `except` around the run-event poll, so a
+    HealthClawError killed the generator inside an open response: the
+    connection dropped with no `error` frame and the page just stopped, with
+    nothing to tell the person whether their question was lost.
+
+    What the terminal frame may say is bounded by the same rule as every
+    other failure surface — the generic sentence, never the exception. Real
+    engine errors carry connection strings and correlation ids.
+    """
+    from careagents.agent import GENERIC_FAILURE_TEXT
+
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.run_events_error = "OperationalError: could not connect to db-7"
+
+    response = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "what did my results say",
+        "request_id": "stream-dies-midway"}, buffered=False)
+    # An SSE body is a generator: without reading it the stream never runs.
+    body = response.get_data().decode()
+
+    frames = [json.loads(line[len("data: "):])
+              for line in body.splitlines() if line.startswith("data: ")]
+    assert response.status_code == 200
+    assert frames[0]["type"] == "accepted"
+    assert frames[-1] == {"type": "error", "text": GENERIC_FAILURE_TEXT}
+    assert len(frames) == 2, (
+        f"the error frame must be terminal, got {frames}")
+    assert "OperationalError" not in body and "db-7" not in body
+
+
 def test_healthz_reports_ok_when_the_account_store_answers(app):
     r = app.test_client().get("/healthz")
     assert r.status_code == 200
@@ -1464,6 +1536,16 @@ def test_an_unstamped_build_is_still_ready(app, cfg, monkeypatch):
 
 def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
         cfg, svc, monkeypatch):
+    """The deploy gate that is KEPT, and deliberately (#219).
+
+    HealthClaw answered: there is no fresh worker. That is a CareAgents
+    deployment which serves pages and cannot finish a chat turn — the
+    web-only deployment `docs/runbooks/careagents-durable-worker.md`
+    documents a 503 for. Railway only probes at the start of a deploy, so
+    503 here means that deploy does not go live, which is the wanted
+    outcome: the fault is in the thing being deployed. Contrast the
+    unreachable case below, where the fault is not ours.
+    """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_available = False
@@ -1477,6 +1559,7 @@ def test_healthz_and_chat_fail_fast_when_worker_presence_is_stale(
 
     assert health.status_code == 503
     assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "not_ready"
     assert refused.status_code == 503
     assert refused.get_json()["error"] == "run_workers_unavailable"
     assert fake.runs == {}
@@ -1501,23 +1584,36 @@ def test_chat_recovers_after_worker_queue_access_returns(
     assert len(fake.runs) == 1
 
 
-def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
+def test_unreachable_worker_control_plane_stops_admission_not_the_deploy(
         cfg, svc, monkeypatch):
-    """Both states still fail closed. The code says which one happened.
+    """Admission still fails closed. Readiness no longer does (#219).
 
-    Readiness and admission must refuse whether the workers reported
-    themselves absent or we could not reach the health endpoint at all — the
-    turn cannot be promised either way, and that half is unchanged. What
-    changed with #410 is the claim: this used to answer
-    `run_workers_unavailable`, filing "we could not ask" as "the workers are
-    down". The two are different incidents.
+    Admission is the gate that protects people, and it is unchanged: a turn
+    nobody can promise is refused whether the workers reported themselves
+    absent or we could not reach the health endpoint at all. #410 fixed the
+    *claim* — "we could not ask" stopped being filed as "the workers are
+    down" — and this changes what that claim is allowed to decide.
+
+    Readiness used to answer 503 here too. On Railway the health check runs
+    only at the start of a deploy, so that 503 blocked a CareAgents deploy
+    on a HealthClaw outage — including the deploy that would fix it — while
+    traffic stayed on a previous version with exactly the same dependency.
+    The state is still published, as `run_workers: false` with
+    `run_workers_state: "unknown"`; it just does not gate the status code.
+
+    MUTATION: restore `ready = accounts_ok and workers_ok` in
+    `careagents/app.py` and this fails on the 200.
     """
     app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
         cfg, svc, monkeypatch)
     fake.worker_health_error = True
 
-    assert client.get("/healthz").status_code == 503
-    assert client.get("/healthz").get_json()["run_workers"] is False
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.get_json()["run_workers"] is False
+    assert health.get_json()["run_workers_state"] == "unknown"
+    assert health.get_json()["accounts"] is True
+
     response = client.post("/api/chat", json={
         "agent_id": agent_id, "message": "upstream is unreachable"})
     assert response.status_code == 503
@@ -1525,6 +1621,139 @@ def test_unreachable_worker_control_plane_degrades_readiness_and_admission(
     # The sentence the patient reads is true in both states, so it does not
     # change with the code.
     assert "temporarily unavailable" in response.get_json()["message"]
+
+
+@pytest.mark.parametrize("status,why", [
+    (403, "a stale or wrong HEALTHCLAW_MINT_SECRET"),
+    (404, "a HEALTHCLAW_BASE pointed at the wrong path root"),
+    (400, "a request HealthClaw understood and rejected"),
+])
+def test_a_deployment_healthclaw_refuses_must_not_pass_the_deploy_gate(
+        cfg, svc, monkeypatch, status, why):
+    """A 4xx is an ANSWER about US, and it must gate the deploy.
+
+    `/healthz` gates a Railway deploy: 503 keeps traffic on the previous
+    version. #219 correctly stopped gating on "we could not reach HealthClaw",
+    because that blocks the deploy that would fix someone else's outage. But
+    it routed EVERY `HealthClawError` there, and the client raises one for any
+    status outside (200, 503) as well as for a dead socket. So a CareAgents
+    container carrying the wrong mint secret — which HealthClaw answers 403 —
+    was filed as "we could not ask" and admitted.
+
+    Measured against a running pair before this test existed: wrong mint
+    secret -> `/healthz` 200 `"status":"ok"`, and every chat turn refused. The
+    fault is in the artifact being deployed, which is precisely the case the
+    PR's own ruling says must stay blocked.
+
+    MUTATION: return WORKERS_UNKNOWN for every HealthClawError in
+    `careagents/app.py:_worker_state` and this goes red on the 503.
+    """
+    app, client, fake, agent_id, _tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 503, (
+        f"{why} left a chat-dead deployment passing the deploy gate")
+    body = health.get_json()
+    assert body["run_workers_state"] == "rejected"
+    assert body["run_workers"] is False
+    assert body["status"] == "degraded"
+    # The account store is fine; this is not a claim about our database.
+    assert body["accounts"] is True
+
+    # The state is named separately from "the workers are down", because the
+    # remedy is different: this sends an operator to the CareAgents service
+    # variables, not to the worker service (#410's lesson, one layer along).
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "rejected-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_rejected"
+
+
+@pytest.mark.parametrize("status", [0, 500, 502, 503, 504])
+def test_an_outage_that_is_not_ours_still_lets_the_fixing_deploy_through(
+        cfg, svc, monkeypatch, status):
+    """The other half of the same carve, pinned so it cannot be over-tightened.
+
+    A dead socket (status 0), a 5xx, and a gateway error are statements about
+    HealthClaw or the network to it. Gating on those blocks a CareAgents
+    deploy on someone else's outage — including the deploy that fixes it —
+    which is the ruling #219 made and this must not undo.
+
+    MUTATION: widen the 4xx test in `_worker_state` to any non-zero status and
+    this goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    fake.worker_health_error = True
+    fake.worker_health_error_status = status
+
+    health = client.get("/healthz")
+    assert health.status_code == 200, (
+        "a HealthClaw outage must not block the CareAgents deploy that fixes it")
+    assert health.get_json()["run_workers_state"] == "unknown"
+
+    # Admission still refuses — that is the gate that protects people.
+    refused = client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "unknown-1"})
+    assert refused.status_code == 503
+    assert refused.get_json()["error"] == "run_workers_unknown"
+
+
+def test_admission_bounds_its_dependency_call_too(cfg, svc, monkeypatch):
+    """The refusal path must not hold a thread for 25 seconds (#219).
+
+    `/healthz` got a bounded budget; `POST /api/chat` did not, so it inherited
+    the client's 25s CHAT timeout. Measured at 25.00s against a HealthClaw
+    that accepts the connection and never answers, versus 1.01s for the
+    bounded call. That is a gunicorn thread held for 25 seconds *to refuse a
+    turn*, during exactly the dependency outage `/healthz` now lets deploy —
+    and it spends the thread headroom the same change bought.
+
+    MUTATION: drop the `timeout=` argument at `careagents/app.py:958` and this
+    goes red.
+    """
+    app, client, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    client.post("/api/chat", json={
+        "agent_id": agent_id, "message": "hello", "request_id": "budget-1"})
+
+    asked = fake.worker_health_timeout
+    assert asked != "never called", "admission never asked about the workers"
+    assert asked is not None, (
+        "admission inherited the client-wide 25s chat timeout; a turn that is "
+        "about to be REFUSED must not hold a web thread that long")
+    connect, read = asked
+    assert connect + read <= 5.0, (
+        f"admission's worst-case wait is {connect + read}s, which is more "
+        "than a person waiting on a refusal should hold a thread for")
+
+
+def test_healthz_bounds_the_dependency_call_to_its_own_probe_budget(
+        cfg, svc, monkeypatch):
+    """The endpoint's answer about itself cannot wait on a dependency.
+
+    The probe measured `/healthz` taking 25.01s and returning 503 with
+    nothing running at all, because its worker-health call inherited the
+    client's 25s chat timeout
+    (`docs/evidence/2026-09-03-probe-219-thread-saturation.md` §8, PR #573).
+    The container probe gives it 4s (`careagents/healthcheck.py`) and the
+    Dockerfile's HEALTHCHECK 5s, so the dependency call gets a budget that
+    fits inside both.
+
+    Asserted rather than waited on: a test that actually hangs a socket for
+    25s to prove this would be the slowest test in the suite and would still
+    only prove it once.
+    """
+    app, client, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+
+    assert client.get("/healthz").status_code == 200
+
+    connect, read = fake.worker_health_timeout
+    assert connect + read <= 2.0, (
+        "the readiness probe's dependency call must answer inside a couple "
+        f"of seconds; worst case here is {connect + read}s")
 
 
 def test_ping_returns_false_instead_of_raising(svc, monkeypatch):
@@ -1645,6 +1874,18 @@ class FakeClient:
         self._event_id = 0
         self.worker_available = True
         self.worker_health_error = False
+        # The HTTP status the raised HealthClawError carries. 0 is a transport
+        # failure ("we could not ask"); a 4xx is HealthClaw ANSWERING that it
+        # refused this deployment's request, which is a different incident
+        # with a different owner. The client raises with `r.status_code`, so a
+        # fake that only ever raises 0 cannot tell the two apart.
+        self.worker_health_error_status = 0
+        # The timeout the caller asked for on the last worker-health call, so
+        # a test can pin that the readiness probe bounds it (#219).
+        self.worker_health_timeout = "never called"
+        # Set to a message to make the run-event poll raise, which is the
+        # mid-stream failure a browser used to see as a silent dead stream.
+        self.run_events_error = ""
         # Instance state, NOT a class attribute. `purged = []` at class scope
         # was mutated through `self.purged.append(...)`, so every FakeClient
         # in the session shared one list and a test's assertion on
@@ -1736,6 +1977,8 @@ class FakeClient:
         return dict(run)
 
     def agent_run_events(self, tenant, run_id, after=0, limit=100):
+        if self.run_events_error:
+            raise HealthClawError(self.run_events_error, 0)
         run = self.get_agent_run(tenant, run_id)
         if run["status"] == "queued":
             from datetime import datetime, timezone
@@ -1751,9 +1994,11 @@ class FakeClient:
                 "events": events,
                 "next_cursor": events[-1]["id"] if events else after}
 
-    def agent_worker_health(self, max_age_seconds=30):
+    def agent_worker_health(self, max_age_seconds=30, *, timeout=None):
+        self.worker_health_timeout = timeout
         if self.worker_health_error:
-            raise HealthClawError("worker health unavailable", 0)
+            raise HealthClawError("worker health unavailable",
+                                  self.worker_health_error_status)
         return {"available": self.worker_available,
                 "active_workers": 1 if self.worker_available else 0,
                 "max_age_seconds": max_age_seconds}
