@@ -35,7 +35,8 @@ from r6.models import R6Resource, ContextEnvelope, ContextItem, AuditEventRecord
 from r6.context_builder import ContextBuilder
 from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
-from r6.discovery_paths import _is_exempt_discovery_path
+from r6.discovery_paths import (_is_exempt_discovery_path,
+                                refuse_resource_rule_on_exempt_path)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -175,7 +176,7 @@ def enforce_tenant_id():
     # /mcp-apps/ HTML renders without a tenant header; the tenant arrives via
     # query string or the MCP client's outer session.
     if _is_exempt_discovery_path(request.path):
-        return None
+        return refuse_resource_rule_on_exempt_path()
     tenant_id = request.headers.get('X-Tenant-Id')
     # SHARP-on-MCP: requests bearing X-FHIR-Server-URL carry their own
     # FHIR-level identity (SMART access token). Synthesize a stable tenant
