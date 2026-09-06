@@ -620,7 +620,7 @@ def confirm_action(action_id):
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        detail='approved via %s; %s; payload_sha256=%s' % (
+        detail='approved via %s; %s; payload_digest=%s' % (
             approved_via, json.dumps(action.summary()), current),
     )
 

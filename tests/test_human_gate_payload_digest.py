@@ -73,7 +73,7 @@ def test_a_confirmation_is_minted_with_the_payload_digest_and_the_audit_says_so(
     approvals = [r for r in _audit_rows(app, tenant_id, action_id)
                  if r.detail and r.detail.startswith('approved via')]
     assert approvals and all(
-        'payload_sha256=%s' % expected in r.detail for r in approvals)
+        'payload_digest=%s' % expected in r.detail for r in approvals)
 
 
 def test_a_payload_changed_past_the_seal_after_approval_is_refused(
@@ -135,3 +135,59 @@ def test_issue_confirmation_requires_the_payload(app):
     with app.app_context():
         with pytest.raises(TypeError):
             issue_confirmation('x', approved_via='dashboard', ttl_minutes=1)
+
+
+def _plain_sha256(payload_json):
+    """What a writer with table access but no server secret can compute."""
+    import hashlib
+    canonical = json.dumps(json.loads(payload_json), sort_keys=True,
+                           separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def test_forging_the_payload_and_the_stored_digest_together_is_still_refused(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """The QA pass on #658: the digest sat in a row the same writer could
+    rewrite, so forging both walked through the check and the approval
+    audit line vouched for the forged hash. The digest is now keyed by a
+    secret the database does not hold, so the best a table-level writer can
+    do is a plain hash of the forged payload, which does not match.
+
+    MUTATION: key the digest with a constant, or drop the key -> red.
+    """
+    action_id = _propose(client, tenant_headers)
+    _commit(client, tenant_headers, auth_headers, action_id)
+    with app.app_context():
+        action = ProposedAction.query.get(action_id)
+        issue_confirmation(action_id, approved_via='review-page',
+                           ttl_minutes=15, payload_json=action.payload_json)
+        db.session.commit()
+        forged = json.dumps(dict(PROPOSE_BODY['payload'], phone='617-555-0199'))
+        ProposedAction.query.filter_by(id=action_id).update(
+            {'payload_json': forged}, synchronize_session=False)
+        ActionConfirmation.query.filter_by(action_id=action_id).update(
+            {'payload_digest': _plain_sha256(forged)}, synchronize_session=False)
+        db.session.commit()
+    resp = client.post('/r6/actions/%s/confirm' % action_id,
+                       headers=_approval_headers(auth_headers, action_id))
+    assert resp.status_code == 409
+    assert resp.get_json()['error_code'] == 'approved_payload_mismatch'
+    with app.app_context():
+        assert ProposedAction.query.get(action_id).status == 'failed'
+    rows = _audit_rows(app, tenant_id, action_id)
+    assert any(r.outcome == 'failure' and 'approved payload digest mismatch' in r.detail
+               for r in rows)
+    # The ledger never vouches for the forgery: no success line carries it.
+    assert not any(r.outcome == 'success' and 'approved via' in (r.detail or '')
+                   for r in rows)
+
+
+def test_the_digest_needs_the_secret(app, monkeypatch):
+    with app.app_context():
+        a = payload_digest('{"k": "v"}')
+        monkeypatch.setenv('STEP_UP_SECRET', 'a-different-secret')
+        assert payload_digest('{"k": "v"}') != a
+        monkeypatch.setenv('STEP_UP_SECRET', '')
+        with pytest.raises(ValueError):
+            payload_digest('{"k": "v"}')
+
