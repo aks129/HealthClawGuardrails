@@ -121,6 +121,26 @@ class Surface(Base):
     account = relationship("Account", back_populates="surfaces")
 
 
+class Grant(Base):
+    """A consent the person gave a third-party agent to read one connection
+    through HealthClaw's MCP server (spec §13.4). A pointer and a decision:
+    which tenant, which client, which scopes, when, and whether it was taken
+    back. `consent_id` is HealthClaw's key for the same consent; revoking here
+    revokes there. No PHI."""
+    __tablename__ = "ca_grants"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("grant"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    connection_id = Column(String(32), ForeignKey("ca_connections.id"),
+                           nullable=True)
+    tenant_id = Column(String(64), nullable=False)
+    client_id = Column(String(64), nullable=False)
+    client_name = Column(String(120), default="An agent")
+    scopes = Column(String(255), default="")
+    consent_id = Column(String(64), unique=True, nullable=False)
+    granted_at = Column(Float, default=now)
+    revoked_at = Column(Float, nullable=True)
+
+
 class UsageDay(Base):
     """Per-account daily LLM turn count — a durable spend ceiling.
 
