@@ -152,7 +152,7 @@ def test_record_count_zero_must_not_be_how_an_outage_is_reported(
         stub_base, reset_mode):
     """A 503 from the engine must not read as "you have no records".
 
-    `record_count` sums six `_summary=count` searches. It used to swallow
+    `record_count` sums five `_summary=count` searches. It used to swallow
     `HealthClawError` per type and carry on, so a total outage returned 0 —
     the same value as a genuinely empty tenant.
 
@@ -204,6 +204,7 @@ def _call(client, name):
         "interpret_labs": lambda: client.interpret_labs("t"),
         "care_gaps": lambda: client.care_gaps("t"),
         "record_count": lambda: client.record_count("t"),
+        "uncounted_record_count": lambda: client.uncounted_record_count("t"),
         "tenant_has_records": lambda: client.tenant_has_records("t"),
         "purge_tenant": lambda: client.purge_tenant("t"),
         "action_status": lambda: client.action_status("t", "a1"),
@@ -235,6 +236,13 @@ EVERY_SEAM_METHOD = [
     "ingest_bundle", "create_agent_run", "get_agent_run", "agent_run_events",
     "claim_agent_run", "agent_worker_health", "finalize_agent_run",
     "search", "read", "interpret_labs", "care_gaps", "record_count",
+    # QA addition (review of PR #561). The document probe is a seam method the
+    # poll catches BY EXCEPTION TYPE (`careagents/app.py` catches
+    # HealthClawError and only that). Left off this list, its typed-failure
+    # promise held by construction and was exercised by nothing — the #287
+    # ensemble gap. A raw requests exception here 500s the poll, and the
+    # patient gets neither the count nor the hedge this PR added.
+    "uncounted_record_count",
     "tenant_has_records", "purge_tenant", "action_status", "start_form_action",
     "confirm_action", "fetch_review_page", "submit_review", "seed",
     "mint_token", "bind_telegram", "conformance_badge",
@@ -367,6 +375,26 @@ def test_a_wrongly_shaped_count_body_is_a_typed_failure(body, stub_base,
         _client(stub_base).record_count("t")
 
 
+@pytest.mark.parametrize("body", WRONG_SHAPE)
+def test_a_wrongly_shaped_uncounted_body_is_a_typed_failure(body, stub_base,
+                                                            reset_mode):
+    """QA addition (review of PR #561). The sibling of the `record_count` case
+    above, for the probe added beside it.
+
+    `uncounted_record_count` calls `.get("total")` on whatever the 200 body
+    decoded to. A bare AttributeError is not a HealthClawError, and
+    `poll_connection` catches only HealthClawError — so the poll would 500 and
+    the patient would see neither the number nor the sentence naming what
+    could not be checked. The property comes from the boundary check inside
+    `search`, one layer down; this pins that the new caller inherits it.
+
+    MUTATION: drop the `isinstance(body, dict)` arm from `_json_object` -> red.
+    """
+    _set(status=200, body=body)
+    with pytest.raises(HealthClawError):
+        _client(stub_base).uncounted_record_count("t")
+
+
 def test_worker_health_type_checks_its_200_body(stub_base, reset_mode):
     """Kept green: where the check the rest of the seam now shares came
     from."""
@@ -424,8 +452,15 @@ def test_a_confirm_the_engine_declined_stays_a_refusal(status, stub_base,
                                                        reset_mode):
     """The other half, and the half that made the old bug invisible: a 4xx is
     an answer. Either the engine declined or an edge rejected the request
-    before delivering it — nothing ran either way, so "nothing has been sent,
-    try approving again" is true and must keep being said.
+    before delivering it — nothing ran either way, so this stays a refusal and
+    the route keeps answering `confirmed: False`.
+
+    What this test pins is the TYPE, and only the type. It used to add that
+    "nothing has been sent, try approving again" must keep being said; since
+    #528 sealed the payload that instruction is dead — the review route mints
+    a confirmation on the first submit, so the retry answers 409. The refusal
+    is still a refusal; the copy that acted on it moved on
+    (careagents/app.py, and tests/test_careagents.py pins the new wording).
     """
     _set(status=status, body=b'{"error": "not awaiting confirmation"}',
          mint_ok=True)
@@ -446,6 +481,76 @@ def test_a_confirm_answered_200_but_unreadable_is_not_a_refusal(stub_base,
     _set(status=200, body=NON_JSON_BODY, ctype="text/html", mint_ok=True)
     with pytest.raises(HealthClawUnconfirmed):
         _client(stub_base).confirm_action("t", "a1")
+
+
+# QA #566 (HIGH), filed as a strict xfail and fixed here, so the marker is
+# gone and the reason is kept as the record of what it caught:
+#
+#   `submit_review` was the one method that opted out of the rule
+#   `_json_object` exists to state. It substituted {'error': 'unexpected
+#   response'} for an unreadable body and returned the status unchanged, so on
+#   a 200 the relay believed the engine had saved the review and minted a
+#   confirmation when nothing reached the engine at all. careagents/app.py
+#   then called confirm_action, and the mint refusal landed in the
+#   HealthClawError branch, which told the patient "your review was saved and
+#   your approval is recorded" and disabled Approve. Reproduced against a
+#   running HealthClaw: ActionConfirmation rows [] and QuestionnaireResponse
+#   rows 0 for the action the patient was told carried their approval.
+
+def test_an_unreadable_200_review_is_not_a_saved_review(stub_base,
+                                                        reset_mode):
+    """A 200 nobody can decode is not the engine saying "saved".
+
+    Same rule the confirm path above already follows, one method over. This
+    is the seam a captive portal, an auth interstitial or a misrouted edge
+    sits on, and the repo has a documented history of the two services
+    drifting apart in exactly that way.
+
+    The engine's real answer here always carries `reviewed_qr_id` and
+    `approved_via: 'review-page'` — verified against a running instance — so
+    there is evidence available to require rather than a shape to guess at.
+
+    MUTATION: return `(r.status_code, {"error": "unexpected response"})` on
+    the ok path again -> red. Ran it, saw red.
+    """
+    _set(status=200, body=NON_JSON_BODY, ctype="text/html")
+    with pytest.raises(HealthClawError):
+        _client(stub_base).submit_review("t", "a1", {"nka": "true"})
+
+
+def test_an_unreadable_200_review_is_the_third_answer_not_a_failure(
+        stub_base, reset_mode):
+    """And it is `HealthClawUnconfirmed` specifically, which is what routes it.
+
+    The type is the whole fix. Plain `HealthClawError` reaches the relay arm
+    that answers "Nothing has been approved" — false in the other direction,
+    because this POST is what MINTS the confirmation (#528): if the engine
+    did receive it, an approval exists. Neither answer is knowable, which is
+    what `confirmed: null` means.
+
+    MUTATION: raise plain `HealthClawError` from the ok path -> red.
+    Ran it, saw red.
+    """
+    _set(status=200, body=NON_JSON_BODY, ctype="text/html")
+    with pytest.raises(HealthClawUnconfirmed):
+        _client(stub_base).submit_review("t", "a1", {"nka": "true"})
+
+
+def test_an_unreadable_refusal_still_reaches_the_page_as_a_refusal(
+        stub_base, reset_mode):
+    """The scope of the raise, pinned from the other side.
+
+    A 4xx is somebody's decision and nothing was minted by it, so it keeps
+    the (status, dict) contract and renders as the engine's answer. Raising
+    on every unreadable body instead would convert the engine's own refusal
+    — a 422 behind an edge that rewrites error bodies — into an unknown
+    outcome, which is #416 run backwards.
+
+    MUTATION: hoist the raise above the `r.ok` test -> red.
+    """
+    _set(status=422, body=NON_JSON_BODY, ctype="text/html")
+    status, body = _client(stub_base).submit_review("t", "a1", {})
+    assert status == 422 and isinstance(body, dict)
 
 
 def test_a_confirm_answered_by_nobody_stays_unconfirmed(stub_base,

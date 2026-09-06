@@ -1,6 +1,8 @@
-import { test, expect, Page } from '@playwright/test';
-import * as fs from 'fs';
+import { test, expect } from '@playwright/test';
 import { CARE_BASE_URL, CARE_LOG } from '../playwright.config';
+import {
+  blockThirdParty, codeFromLog, requestCode, uniqueEmail,
+} from './careagents-fixtures';
 
 /**
  * CareAgents core journey (issue #233) — the first browser-level coverage of
@@ -12,90 +14,26 @@ import { CARE_BASE_URL, CARE_LOG } from '../playwright.config';
  *          session · email-code sign-in reaches the hub · /healthz reports
  *          the account store reachable.
  *
- * NOT covered, on purpose: chat/LLM turns, any HealthClaw call, passkey
- *          registration or passkey sign-in (WebAuthn is not driven here —
- *          only the enrolment *prompt* is asserted, then skipped), and the
- *          connect/wearable/Telegram/iMessage dialogs (#224 is rebuilding
- *          those, so assertions there would collide and rot).
+ * NOT covered here, on purpose: chat/LLM turns, any HealthClaw call, and
+ *          passkey registration or passkey sign-in (WebAuthn is not driven —
+ *          only the enrolment *prompt* is asserted, then skipped). The
+ *          connect tiles, the beta banner and the Telegram surface are
+ *          covered in careagents-connect-tiles.spec.ts, which asserts what a
+ *          beta tester sees under CARE_REAL_RECORDS. Only the four sign-in
+ *          helpers moved out of this file (careagents-fixtures.ts).
  *
  * The app is booted by the second webServer entry in playwright.config.ts
  * with HEALTHCLAW_BASE pointed at a dead local port, so the server cannot
- * reach a real records service; blockThirdParty() below closes the same door
- * on the browser side.
+ * reach a real records service; blockThirdParty() closes the same door on the
+ * browser side.
  */
 
 // CareAgents runs on its own port; every test in this file targets it.
 test.use({ baseURL: CARE_BASE_URL });
 
-/**
- * Fail the journey shut at the network edge: only the app under test may be
- * contacted. This is both a determinism fix — base.html pulls Google Fonts,
- * and a slow or blocked CDN stalls the `load` event that page.goto waits on —
- * and a standing check that the covered journey needs no third party.
- */
-async function blockThirdParty(page: Page): Promise<void> {
-  await page.route('**/*', (route) => {
-    const url = route.request().url();
-    if (!url.startsWith('http')) return route.continue();
-    const host = new URL(url).hostname;
-    return host === 'localhost' || host === '127.0.0.1'
-      ? route.continue()
-      : route.abort();
-  });
-}
-
 test.beforeEach(async ({ page }) => {
   await blockThirdParty(page);
 });
-
-/**
- * Unique per test. Reusing an address breaks reruns: within RESEND_COOLDOWN
- * (30s, careagents/accounts.py:35) start_email_code mints nothing and
- * /api/auth/email answers {"sent": false, "reason": "cooldown"} (#262) — so
- * no new code would ever reach the log.
- */
-const uniqueEmail = () =>
-  `e2e-${Date.now()}-${Math.floor(Math.random() * 1e4)}@example.test`;
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/**
- * With no RESEND_API_KEY the mail stub (careagents/mail.py:19) logs
- *   "DEV email — <verb> for <email>: <8 digits>"
- * to stderr instead of sending, and the webServer command redirects that
- * into CARE_LOG. Match on this test's own address so a code minted for
- * another test can never satisfy this poll.
- */
-async function codeFromLog(email: string): Promise<string> {
-  let code = '';
-  await expect
-    .poll(
-      () => {
-        const log = fs.existsSync(CARE_LOG)
-          ? fs.readFileSync(CARE_LOG, 'utf8')
-          : '';
-        const re = new RegExp(
-          `DEV email — [^\\n]* for ${escapeRe(email)}: (\\d{8})`, 'g');
-        for (let m = re.exec(log); m !== null; m = re.exec(log)) code = m[1];
-        return code;
-      },
-      // The stub logs before /api/auth/email even responds, so this is
-      // generous; if it expires, the server was not booted through this
-      // harness (or a real RESEND_API_KEY leaked into its env).
-      { timeout: 10_000, message: `no DEV email code logged for ${email}` },
-    )
-    .toMatch(/^\d{8}$/);
-  return code;
-}
-
-/** Walk the auth UI up to the code-entry step for a fresh email. */
-async function requestCode(page: Page, email: string): Promise<void> {
-  await page.goto('/auth');
-  await page.locator('#email').fill(email);
-  await page.locator('#email-btn').click();
-  await expect(page.locator('#step-code')).toBeVisible();
-  await expect(page.locator('#code-email')).toHaveText(email);
-}
 
 test.describe('CareAgents landing', () => {
   test('renders the hero and its CTA reaches sign-in', async ({ page }) => {
@@ -131,7 +69,7 @@ test.describe('CareAgents auth', () => {
     await requestCode(page, email);
     // Derive a guaranteed-wrong code from the real one (flip the last
     // digit) — deterministic, unlike guessing a fixed 8-digit string.
-    const real = await codeFromLog(email);
+    const real = await codeFromLog(email, CARE_LOG);
     const wrong =
       real.slice(0, 7) + ((parseInt(real[7], 10) + 1) % 10).toString();
     await page.locator('#code').fill(wrong);
@@ -151,7 +89,7 @@ test.describe('CareAgents auth', () => {
   test('email-code sign-in reaches the hub', async ({ page }) => {
     const email = uniqueEmail();
     await requestCode(page, email);
-    const code = await codeFromLog(email);
+    const code = await codeFromLog(email, CARE_LOG);
     await page.locator('#code').fill(code);
     await page.locator('#verify-btn').click();
 

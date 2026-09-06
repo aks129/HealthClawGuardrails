@@ -349,6 +349,7 @@ def _step_up_token(*, also_bearer: bool, also_body_field: str | None) -> str:
     is opt-in for the same reason TenantSource is: a reader must be able to
     see which inputs an endpoint trusts without reading this helper.
     """
+    # Stripped uniformly at every source: a padded valid token is valid (#334).
     token = (request.headers.get('X-Step-Up-Token') or '').strip()
     if token:
         return token
