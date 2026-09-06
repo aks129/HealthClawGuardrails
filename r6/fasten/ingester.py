@@ -426,8 +426,12 @@ def _ingest_one(resource: dict, tenant_id: str,
         # soft-deleted: a fresh import of the same (tenant, type, id)
         # revives it rather than colliding with the tombstone.
         existing.update_resource(resource_json)
+        # Lifting a tombstone is recorded as such (#558): the audit row
+        # below says 'update' with the revive named, never a plain create.
+        revived = bool(existing.is_deleted)
         existing.is_deleted = False
     else:
+        revived = False
         new_res = R6Resource(
             resource_type=resource_type,
             resource_json=resource_json,
@@ -439,13 +443,14 @@ def _ingest_one(resource: dict, tenant_id: str,
     db.session.flush()
 
     add_audit_event(
-        event_type='create',
+        event_type='update' if revived else 'create',
         resource_type=resource_type,
         resource_id=resource_id,
         agent_id=agent_id,
         tenant_id=tenant_id,
         outcome='success',
-        detail=detail,
+        detail=(f'{detail}; tombstone lifted on re-ingest' if revived
+                else detail),
     )
 
     return 'ok', resource_id

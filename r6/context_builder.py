@@ -11,6 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from models import db
+from r6.audit import add_audit_event
 from r6.models import R6Resource, ContextEnvelope, ContextItem
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,16 @@ class ContextBuilder:
                 if existing:
                     existing.update_resource(resource_json)
                     # A re-ingest of a tombstoned (tenant, type, id) revives
-                    # it, as r6/fasten/ingester.py does (#509 defect 2).
+                    # it, as r6/fasten/ingester.py does (#509 defect 2), and
+                    # says so in the same transaction (#558): the bundle-level
+                    # event the route records afterwards cannot tell a revive
+                    # from a plain write. Resource type and id only; never
+                    # the resource.
+                    if existing.is_deleted:
+                        add_audit_event(
+                            'update', resource_type=resource_type,
+                            resource_id=resource_id, tenant_id=tenant_id,
+                            detail='tombstone lifted on re-ingest')
                     existing.is_deleted = False
                     r6_resource = existing
                 else:
