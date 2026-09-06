@@ -94,8 +94,10 @@ def _intake_like_questionnaire():
 
 def _intake_like_response():
     return {
+        # No subject on purpose: part 2 of #572 stops a subject-bound response
+        # from yielding a Patient at all, and these pins are about the
+        # allergen answer, not the subject.
         "resourceType": "QuestionnaireResponse", "status": "completed",
-        "subject": {"reference": "Patient/p-572"},
         "item": [
             {"linkId": "family", "answer": [{"valueString": "Synthetic"}]},
             {"linkId": "allergies", "item": [
