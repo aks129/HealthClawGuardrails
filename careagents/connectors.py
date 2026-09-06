@@ -72,8 +72,11 @@ _WEARABLE_IDS = {p["id"] for p in WEARABLE_PROVIDERS}
 # unless the deployment's CARE_REAL_RECORDS switch opens them for this
 # account (council ruling 2026-09-02, D3) — the beta runs on synthetic data.
 REAL_RECORD_SOURCES = ("fasten", "wearable", "direct")
-_REAL_RECORDS_CLOSED = ("real-records connect isn't open on this beta "
-                        "deployment yet — start with the sample records")
+# The one sentence a refused tester reads, so it is a sentence: patient-facing
+# copy here is plain, sentence-cased and em-dash-free. Parallel to the closed
+# tile's own blurb ("Not open in this beta — start with the sample records.").
+_REAL_RECORDS_CLOSED = ("Connecting your own records isn't open in this beta "
+                        "yet. Start with the sample records.")
 
 
 def catalog(cfg, real_records: bool = False) -> list[dict]:

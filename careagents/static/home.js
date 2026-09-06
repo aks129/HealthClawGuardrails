@@ -102,17 +102,30 @@
     if (anchor && el.previousElementSibling !== anchor) {
       anchor.insertAdjacentElement("afterend", el);
     }
-    el.textContent = text;
+    // #connect-msg is a live region, and a live region announces only a change
+    // made while it is IN the accessibility tree. Both things this function
+    // does take it out: `hidden` is display:none, and the move above is a
+    // remove-then-insert. Setting the text in the same task as either one is a
+    // change nothing is listening for — the refusal a closed tile gives would
+    // be read out by no screen reader at all. So show the empty region, let a
+    // frame paint, then write into it. Nested rAF because a single one runs
+    // BEFORE that paint, which is the same task as far as the a11y tree is
+    // concerned; two frames is ~32ms, under the threshold where an empty box
+    // is perceptible.
+    el.textContent = "";
     el.hidden = false;
-    // Only scrolls if it isn't already fully visible, and only as far as it
-    // has to — no jump when the message is already under the user's thumb.
-    // Never while a dialog is up: the message is behind the overlay, so the
-    // scroll moves nothing the user can see and everything they come back to
-    // (#269). Open state is the absence of `hidden` — that attribute is what
-    // openDialog() and the consent card toggle.
-    if (!document.querySelector(".modal:not([hidden])")) {
-      el.scrollIntoView({ block: "nearest" });
-    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.textContent = text;
+      // Only scrolls if it isn't already fully visible, and only as far as it
+      // has to — no jump when the message is already under the user's thumb.
+      // Never while a dialog is up: the message is behind the overlay, so the
+      // scroll moves nothing the user can see and everything they come back to
+      // (#269). Open state is the absence of `hidden` — that attribute is what
+      // openDialog() and the consent card toggle.
+      if (!document.querySelector(".modal:not([hidden])")) {
+        el.scrollIntoView({ block: "nearest" });
+      }
+    }));
   }
 
   // Scroll a section into view and pulse it — the in-page way to point at the
