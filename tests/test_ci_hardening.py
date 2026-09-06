@@ -183,3 +183,39 @@ def test_nothing_that_runs_on_a_pull_request_can_write_anything():
     # The loop above is vacuous if it matched nothing, and a workflow file
     # renamed out of the glob would make it so silently.
     assert sorted(checked) == ["ci.yml", "security-baseline.yml"], checked
+
+
+def test_every_event_a_job_condition_names_is_one_the_workflow_listens_for():
+    """A job whose `if:` tests `github.event_name == 'x'` while the workflow
+    never triggers on `x` can never run; it is skipped before its first step,
+    and a skipped job reads as green in a check list. That is how #643 shipped
+    with a reviewer that never reviewed: the trigger moved to
+    pull_request_target and the condition still said pull_request.
+
+    MUTATION: put `github.event_name == 'pull_request'` back into
+    pr-agent.yml's job `if:` -> red naming the workflow, the job and the event.
+    """
+    import re
+    workflow_dir = ROOT / ".github" / "workflows"
+    checked = 0
+    for path in sorted(workflow_dir.glob("*.y*ml")):
+        workflow = yaml.safe_load(path.read_text())
+        triggers = workflow.get(True) or workflow.get("on")
+        if isinstance(triggers, str):
+            triggers = [triggers]
+        if isinstance(triggers, list):
+            triggers = dict.fromkeys(triggers)
+        listens_for = set(triggers or {})
+        for job_name, job in workflow["jobs"].items():
+            condition = job.get("if")
+            if not isinstance(condition, str):
+                continue
+            named = set(re.findall(r"github\.event_name\s*==\s*'([a-z_]+)'", condition))
+            for event in sorted(named):
+                checked += 1
+                assert event in listens_for, (
+                    f"{path.name} job {job_name!r} runs only on "
+                    f"github.event_name == {event!r}, but the workflow never "
+                    f"triggers on {event!r} (it listens for "
+                    f"{sorted(listens_for)}); the job can never run")
+    assert checked >= 1, "no job condition names an event; the scan is broken"
