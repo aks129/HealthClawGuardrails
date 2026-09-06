@@ -44,14 +44,21 @@ problem it was written to solve.
 ## The four upstream connectors, and which are proven
 
 Measured 2026-08-16 by the set-2 evidence run
-(`docs/evidence/2026-08-16-set2-connectors.md`):
+(`docs/evidence/2026-08-16-set2-connectors.md`), and **re-run on 2026-09-04 by
+someone other than its author** (`docs/evidence/2026-09-04-set2-connectors-rerun.md`,
+#530). The two `yes` rows reproduced step for step.
 
 | Kind | Auth | Proven live against |
 |---|---|---|
-| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16** ✓ |
-| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ |
-| `aidbox` | HTTP Basic | **not run** — local server down |
-| `medplum` | OAuth2 client-credentials | **not run** — local server down |
+| `hapi` | Basic / anonymous | **HAPI FHIR 8.11.16-SNAPSHOT** ✓ twice — same build both days (`7e7129efb5`) |
+| `generic` | Basic / anonymous | **Firely Server 6.9.1** ✓ twice — same build both days |
+| `aidbox` | HTTP Basic | **not run** — local server down, both days |
+| `medplum` | OAuth2 client-credentials | **not run** — local server down, both days |
+
+Anyone can now re-run the two: `scripts/walkthrough-upstream.sh hapi|generic`,
+transcripts in `docs/evidence/2026-09-04-set2-rerun/`. Until 2026-09-04 the
+claim rested on an uncommitted script and could not be checked by anyone but
+its author, which is what #530 was.
 
 ## Architecture ratchets
 
