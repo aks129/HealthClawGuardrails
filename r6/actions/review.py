@@ -440,6 +440,19 @@ def review_submit(action_id):
                            '"No known allergies (patient confirmed)". No '
                            'known allergies is never assumed.')
 
+    # (3a) The two answers cannot both be true. "No known allergies" beside a
+    # confirmed allergy row is not a stricter reading of the same fact, it is
+    # a contradiction, and the reviewed response would carry both (#667). The
+    # extraction engine ignores the attestation structurally and writes the
+    # confirmed rows, so the record would hold an allergy while the response
+    # attests there are none. The message names both halves and neither the
+    # substance nor the reaction: the person is looking at the row.
+    if nka_affirmed and confirmed_allergy:
+        return _error(422, 'You confirmed an allergy and also checked "No '
+                           'known allergies (patient confirmed)". Both cannot '
+                           'be true: uncheck the box, or remove the allergy '
+                           'rows you confirmed.')
+
     # (4) Conditions are confirmable but not gating.
     condition_decisions = [
         submitted.get('condition-%d' % i, 'confirm').strip().lower()
