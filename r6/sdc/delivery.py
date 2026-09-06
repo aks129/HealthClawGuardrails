@@ -27,8 +27,14 @@ from r6 import constant_time
 from r6.sdc.documents import get_document_pdf_bytes
 from r6.audit import record_audit_event
 
-# One week — a patient/clinic link that is emailed and opened days later.
-DEFAULT_TTL_SECONDS = 7 * 24 * 3600  # 604800
+# 24 hours (council ruling D10, cut from one week). The link is a bearer
+# credential for a PDF of somebody's intake form: the signature in the URL is
+# the whole authorization, so anyone who ends up holding the URL — a
+# forwarded email, a shared screen, a mail archive — can open it for as long
+# as it lives. A day covers "sent this morning, opened this evening", which
+# is the case this exists for; a week was six extra days of exposure bought
+# for a case nobody measured.
+DEFAULT_TTL_SECONDS = 24 * 3600  # 86400
 
 
 def _link_secret():

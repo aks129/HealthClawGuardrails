@@ -19,6 +19,7 @@ from typing import Any
 
 import click
 from flask import Flask, g, request as flask_request
+from werkzeug.middleware.proxy_fix import ProxyFix
 from models import db
 from r6.database_migrations import upgrade_database
 from r6.runtime_config import validate_runtime_environment
@@ -357,6 +358,40 @@ def _register_request_hooks(flask_app: Flask) -> None:
         return response
 
 
+#: The only schemes this application is ever reachable over, and therefore
+#: the only values `X-Forwarded-Proto` may carry into `wsgi.url_scheme`.
+#: Anything else is either an injection or a scheme we do not serve, and both
+#: produce a published URL a partner cannot follow — which is the whole point
+#: of honouring the header in the first place.
+_SERVED_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def _drop_untrusted_forwarded_proto(wsgi_app):
+    """Remove `X-Forwarded-Proto` unless it names a scheme we serve.
+
+    Runs OUTSIDE ProxyFix (so before it), because ProxyFix modifies the
+    environ in place and then calls down — there is no "after" to inspect
+    from a wrapper. Sanitising the input is also the smaller change: ProxyFix
+    stays stock, and the rule is one comparison anyone can read.
+
+    See the comment at the ProxyFix call in `create_app` for the measurements
+    this exists to stop.
+    """
+    def middleware(environ, start_response):
+        raw = environ.get("HTTP_X_FORWARDED_PROTO")
+        if raw is not None:
+            # ProxyFix's trust depth of 1 reads the rightmost entry, so that
+            # is the one that has to be legitimate.
+            scheme = raw.rsplit(",", 1)[-1].strip().lower()
+            if scheme in _SERVED_URL_SCHEMES:
+                environ["HTTP_X_FORWARDED_PROTO"] = scheme
+            else:
+                del environ["HTTP_X_FORWARDED_PROTO"]
+        return wsgi_app(environ, start_response)
+
+    return middleware
+
+
 def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
     """Create and configure an independent Flask application instance."""
     supplied_settings = dict(settings or {})
@@ -390,6 +425,76 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
             SESSION_COOKIE_HTTPONLY=True,
             SESSION_COOKIE_SAMESITE="Lax",
         )
+
+    # Every URL this app publishes is built from ``request.host_url``: the
+    # SMART configuration, the OAuth discovery document, the
+    # CapabilityStatement, ``Bundle.entry.fullUrl`` and every search self
+    # link. The hosting platform terminates TLS and forwards to the container
+    # over plain HTTP, so without this Flask sees scheme "http" and we
+    # advertise http:// endpoints on a deployment reachable only over https
+    # (#567). One middleware fixes every call site at once, including ones
+    # nobody has written yet — the alternative, a helper applied per site,
+    # is only ever as complete as the last person to remember it.
+    #
+    # Trusting X-Forwarded-Proto is a proxy-trust decision. It is safe here
+    # because the platform's edge is the only route to the container (the
+    # container publishes no port of its own), because the header is trusted
+    # for exactly one hop so the value the edge appends is the one that wins
+    # over anything a client sends, and because nothing in this app keys a
+    # security decision on the request scheme — SESSION_COOKIE_SECURE above
+    # is static config, not derived from it. A deployment that ever exposes
+    # this container directly must drop this.
+    #
+    # EVERY OTHER FORWARDED HEADER IS UNTRUSTED, and the reason is evidence
+    # rather than taste. Both x_proto and x_host fail the same way when they
+    # are wrong — by publishing something a partner cannot use — so the
+    # tiebreaker is which one we have measured. The protocol is measurably
+    # wrong without the fix; the hostname was measured as already correct
+    # (production returns the custom domain, not an internal name), and what
+    # X-Forwarded-Host contains here has never been measured at all.
+    # Trusting an unmeasured header in preference to a measured one is the
+    # wrong direction, so x_host stays 0: it would buy nothing we do not
+    # already have, at the risk of publishing an internal hostname.
+    #
+    # x_for stays 0 for a different reason: r6/rate_limit.py does its own
+    # hop-counted X-Forwarded-For parse, and letting ProxyFix rewrite
+    # REMOTE_ADDR would give the limiter a second, differently-trusted
+    # answer to the same question.
+    flask_app.wsgi_app = ProxyFix(
+        flask_app.wsgi_app, x_for=0, x_proto=1, x_host=0, x_port=0, x_prefix=0
+    )
+    # ...but only when the value is a scheme we actually serve. ProxyFix
+    # copies the header into `wsgi.url_scheme` VERBATIM, with no validation,
+    # and every published URL is `scheme + "://" + host`. An arbitrary string
+    # there is not a scheme, it is a URL prefix. Measured on a running app:
+    #
+    #   X-Forwarded-Proto: https://evil.example/?
+    #     -> authorization_endpoint:
+    #        https://evil.example/?://127.0.0.1:5511/r6/fhir/oauth/authorize
+    #   X-Forwarded-Proto: javascript
+    #     -> javascript://127.0.0.1:5511/r6/fhir/oauth/authorize
+    #   X-Forwarded-Proto: ws
+    #     -> every route in the app answers 405, because werkzeug's router
+    #        treats a ws/wss scheme as a websocket request and no HTTP rule
+    #        matches
+    #
+    # That value reaches more than a document the caller is already reading:
+    # `app.py:485` builds the quickstart link in the welcome email from
+    # `request.url_root`, so a poisoned scheme is a link WE send to a third
+    # party from our own sender, and `r6/wearables/routes.py:138` builds the
+    # `redirect_uri` handed to an external OAuth provider.
+    #
+    # Whether a client can set this at all depends on the edge overwriting or
+    # appending the header, which has never been measured on this platform —
+    # the same "unmeasured, so do not trust it" standard that keeps x_host at
+    # 0 above. The allowlist makes the answer not matter.
+    #
+    # Judged on the RIGHTMOST value because that is the one ProxyFix takes
+    # with a trust depth of 1 (`X-Forwarded-Proto: https,http` yields `http`).
+    # Invalid means the header is dropped, not corrected: the app then falls
+    # back to the scheme the connection actually arrived on, which is exactly
+    # the pre-#567 behaviour and always safe.
+    flask_app.wsgi_app = _drop_untrusted_forwarded_proto(flask_app.wsgi_app)
 
     db_uri = flask_app.config["SQLALCHEMY_DATABASE_URI"]
     if (

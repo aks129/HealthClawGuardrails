@@ -71,6 +71,7 @@ from r6.curatr import (
     persist_curation_state as _persist_curation_state,
 )
 from r6.health_context import get as _hc_get
+from r6.caregaps.report import caller_reasons as _caregaps_caller_reasons
 
 _curatr_engine = CuratrEngine()
 
@@ -172,6 +173,7 @@ _EXEMPT_EXACT_PATHS = frozenset({
     f'{_R6_PREFIX}/metadata',       # CapabilityStatement
     f'{_R6_PREFIX}/health',         # health check
     f'{_R6_PREFIX}/$conformance',   # guardrail self-test (self-tenanted internally)
+    f'{_R6_PREFIX}/docs/privacy-policy',  # published in discovery + every _disclaimer; its reader has no tenant (#574)
 })
 
 # Genuinely-namespaced sub-trees exempt from tenant + read-auth enforcement.
@@ -3424,6 +3426,8 @@ def mcp_app_care_gaps():
     html = render_template(
         'mcp_apps/care_gaps.html',
         tenant_id=tenant_id,
+        # The engine's own "nothing was read" list; the page must not copy it (#538).
+        not_evaluated_reasons=_caregaps_caller_reasons(),
     )
     resp = Response(html, mimetype='text/html')
     resp.headers['Content-Type'] = 'text/html; profile=mcp-app'
