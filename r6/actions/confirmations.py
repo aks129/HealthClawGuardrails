@@ -4,6 +4,8 @@ authenticated Telegram/dashboard approve handler; The confirm route claims FIRST
 in the next transaction: the claim is the lock, this row is the durable consent
 record of who/when/via. TTL means an approval from Tuesday can't authorize a
 Thursday commit."""
+import hashlib
+import json
 import uuid
 from datetime import timedelta
 
@@ -22,13 +24,37 @@ class ActionConfirmation(db.Model):
     approved_at = db.Column(db.DateTime, default=_utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
     consumed_at = db.Column(db.DateTime, nullable=True)
+    # sha256 over the canonical form of the payload as the human approved it
+    # (#559, human-gate spec 8.3). Nullable only for rows minted before the
+    # column existed; the confirm route refuses to execute on such a row.
+    payload_digest = db.Column(db.String(64), nullable=True)
 
 
-def issue_confirmation(action_id, approved_via, ttl_minutes):
+def payload_digest(payload_json):
+    """sha256 hex over the canonical serialisation of a payload.
+
+    Canonical: parsed, then dumped with sorted keys and no whitespace, so
+    key order and formatting do not change what the human signed. The
+    payload column is always JSON; a value that is not parses as a defect
+    and raises rather than hashing bytes that mean nothing.
+    """
+    canonical = json.dumps(json.loads(payload_json), sort_keys=True,
+                           separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def issue_confirmation(action_id, approved_via, ttl_minutes, *, payload_json):
+    """Mint the consent record over the payload as it stands right now.
+
+    `payload_json` is required, keyword-only: a confirmation that does not
+    say what bytes were approved is the defect #559 names, so no caller
+    can mint one by forgetting the argument.
+    """
     if approved_via not in APPROVED_VIA_VALUES:
         raise ValueError('Unsupported approval channel: %s' % approved_via)
     c = ActionConfirmation(action_id=action_id, approved_via=approved_via,
-                           expires_at=_utcnow() + timedelta(minutes=ttl_minutes))
+                           expires_at=_utcnow() + timedelta(minutes=ttl_minutes),
+                           payload_digest=payload_digest(payload_json))
     db.session.add(c)
     return c
 
@@ -46,6 +72,18 @@ def has_confirmation(action_id):
     with db.session.no_autoflush:
         return ActionConfirmation.query.filter_by(
             action_id=action_id).first() is not None
+
+
+def open_confirmations(action_id):
+    """Every unconsumed, unexpired confirmation for action_id: the set the
+    confirm route is about to consume, and so the set whose digests must
+    all match the payload it is about to execute (#559)."""
+    now = _utcnow()
+    return ActionConfirmation.query.filter(
+        ActionConfirmation.action_id == action_id,
+        ActionConfirmation.consumed_at.is_(None),
+        ActionConfirmation.expires_at > now,
+    ).all()
 
 
 def consume_confirmation(action_id):
