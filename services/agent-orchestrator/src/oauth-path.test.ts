@@ -20,6 +20,7 @@ import {
   assertMCPOAuthConfigured,
   closeMCPServerForTests,
   resetOAuthStateForTests,
+  resetRateLimitForTests,
   sessionCredential,
 } from "./index";
 import { resetGrantReadTokenCacheForTests } from "./tools";
@@ -105,6 +106,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   installFlask();
   resetOAuthStateForTests();
+  resetRateLimitForTests();
   resetGrantReadTokenCacheForTests();
 });
 
@@ -446,5 +448,39 @@ describe("boot", () => {
         INTERNAL_TOKEN_MINT_SECRET: "c",
       })
     ).not.toThrow();
+  });
+});
+
+describe("the limiter runs before the credential check", () => {
+  // Resolving a bearer token costs a POST to the authorization server. If the
+  // limiter sat after that check, an unauthenticated flood would reach Flask
+  // once per request. Past the limit this server must answer alone.
+  const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
+
+  it("a caller past the limit is refused without an introspection call", async () => {
+    // Flask answers "not a live token", so every one of these costs a call.
+    introspection = { active: false };
+    for (let i = 0; i < RATE_LIMIT_MAX; i++) {
+      const res = await initialize("Bearer not-a-token-this-server-knows");
+      expect(res.status).toBe(401);
+    }
+    const spent = introspections().length;
+    expect(spent).toBe(RATE_LIMIT_MAX);
+
+    const refused = await initialize("Bearer not-a-token-this-server-knows");
+    expect(refused.status).toBe(429);
+    expect(introspections().length).toBe(spent);
+  });
+
+  it("preflight does not consume the allowance", async () => {
+    for (let i = 0; i < RATE_LIMIT_MAX + 5; i++) {
+      const res = await request(app)
+        .options("/mcp")
+        .set("Host", CANONICAL_HOST)
+        .set("Origin", "https://claude.ai");
+      expect(res.status).toBe(204);
+    }
+    const after = await initialize(`Bearer ${OAUTH_TOKEN}`);
+    expect(after.status).toBe(200);
   });
 });

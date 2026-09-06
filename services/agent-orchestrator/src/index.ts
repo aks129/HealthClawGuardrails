@@ -314,6 +314,44 @@ function challengeHeader(req: express.Request): string {
   return `Bearer ${params.join(", ")}`;
 }
 
+// --- Rate Limiting (in-memory, per IP) ---
+
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX;
+}
+
+app.use((req, res, next) => {
+  // Preflight answers below without reaching a handler, and it did not consume
+  // budget when the limiter sat further down the chain. Keep it that way: a
+  // browser client spends its allowance on requests, not on asking permission.
+  if (req.method === "OPTIONS") return next();
+  const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+  if (!checkRateLimit(clientIp)) {
+    return res.status(429).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Rate limit exceeded" },
+    });
+  }
+  next();
+});
+
+// Rate limiting comes before the credential check on purpose. The check now
+// makes a network call of its own (introspection), so a limiter placed after
+// it lets an unauthenticated flood drive unbounded requests at the
+// authorization server. A caller over the limit is refused here, having cost
+// this server one map lookup and Flask nothing.
 // Health probes and CORS preflight remain public. When configured, every MCP
 // network transport requires the deployment-scoped bearer credential.
 app.use(async (req, res, next) => {
@@ -387,35 +425,6 @@ app.use((req, res, next) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
     }
     return res.sendStatus(204);
-  }
-  next();
-});
-
-// --- Rate Limiting (in-memory, per IP) ---
-
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
-const SESSION_TTL_MS = 30 * 60 * 1000;
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  entry.count++;
-  return entry.count <= RATE_LIMIT_MAX;
-}
-
-app.use((req, res, next) => {
-  const clientIp = req.ip || req.socket.remoteAddress || "unknown";
-  if (!checkRateLimit(clientIp)) {
-    return res.status(429).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Rate limit exceeded" },
-    });
   }
   next();
 });
@@ -1120,6 +1129,10 @@ if (require.main === module) {
   });
 }
 
+function resetRateLimitForTests(): void {
+  rateLimitMap.clear();
+}
+
 function closeMCPServerForTests(): void {
   clearInterval(sessionCleanupInterval);
   rateLimitMap.clear();
@@ -1143,6 +1156,7 @@ function getRuntimeStateForTests(): {
 
 export {
   app,
+  resetRateLimitForTests,
   assertMCPAuthConfigured,
   assertMCPCanonicalResourceConfigured,
   assertMCPOAuthConfigured,
