@@ -31,7 +31,7 @@ from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
 from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
-from r6.sdc.extract import extract_resources
+from r6.sdc.extract import RAIL_ONLY_TYPES, extract_resources
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,23 @@ def register_sdc_routes(blueprint, deps):
                 "Questionnaire for the response could not be resolved"), 404
 
         bundle = extract_resources(qr, questionnaire)
+
+        if not dry_run and any(
+                e["resource"]["resourceType"] in RAIL_ONLY_TYPES
+                for e in bundle["entry"]):
+            # #572. Nothing on the human-gated path calls $extract, so commit
+            # mode here runs on a step-up token alone; a bundle carrying
+            # allergies, conditions or medications is refused rather than
+            # written on that, and rather than dropped silently after dryRun
+            # showed it. The form-fill rail commits those rows after the
+            # person confirms them. Measured on main before this: the legacy
+            # single-target engine wrote an AllergyIntolerance this way.
+            return operation_outcome(
+                "error", "business-rule",
+                "This bundle carries clinical rows (allergies, conditions or "
+                "medications). The form-fill rail commits those after human "
+                "confirmation; $extract does not. Use dryRun=true to preview "
+                "them."), 422
 
         if not dry_run:
             # H4 posture (deliberate): $extract commits clinical resources as a
