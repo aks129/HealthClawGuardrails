@@ -18,6 +18,14 @@ DEFINITION_EXTRACT_URL = (
 )
 
 
+#: The types the form-fill rail commits after human confirmation. Nothing on
+#: the human-gated path calls $extract, so commit mode on the raw endpoint
+#: refuses a bundle carrying them (r6/sdc/routes.py): a step-up token alone
+#: must not write clinical rows (#572).
+RAIL_ONLY_TYPES = frozenset({"AllergyIntolerance", "Condition",
+                             "MedicationRequest"})
+
+
 def extract_resources(questionnaire_response, questionnaire):
     """Return a FHIR transaction Bundle of resources extracted from `qr`."""
     subject_ref = questionnaire_response.get("subject")
