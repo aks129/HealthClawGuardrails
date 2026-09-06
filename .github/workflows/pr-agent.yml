@@ -1,0 +1,78 @@
+name: pr-agent
+
+# A second, independent AI review on every pull request, next to
+# claude-pr-review.yml. That workflow gates the merge: its verdict label is a
+# required check. This one gates nothing. It posts a review with a security
+# and test-coverage read, inline code suggestions, and it answers /review,
+# /improve, /ask and /describe typed into a PR comment. Two reviewers with
+# different prompts miss different things.
+#
+# Runs on `pull_request_target`, like claude-pr-review.yml, for the same
+# reason: tests/test_ci_hardening.py refuses write permissions on anything
+# triggered by `pull_request`, and this job needs `pull-requests: write` to
+# post a review. That is safe because the action never checks out or
+# executes pull-request code; it reads the diff through the GitHub API and
+# treats every byte of it as data under review.
+#
+# `synchronize` is deliberately absent from the trigger list: a review on
+# every push would re-run on each "update branch" during a long merge queue
+# and bury the thread. Ask for a fresh pass with a `/review` comment.
+#
+# The PR description is the evidence record in this repository, so
+# auto_describe stays off: the agent must not rewrite it.
+#
+# It needs the ANTHROPIC_API_KEY repository secret. That secret is not set
+# today (#608), which is also why claude-pr-review.yml skips its review
+# step. Until it is set, the first step here exits neutrally and the job
+# reports success without reviewing anything; the step's warning says so
+# on every run, so the green is never mistaken for a review.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-agent:
+    name: pr-agent
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (
+        (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip if the reviewer is unconfigured
+        id: keycheck
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          echo "has_key=$HAS_KEY" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set; The PR Agent did not run (#608)."
+          fi
+
+      - name: The PR Agent
+        if: steps.keycheck.outputs.has_key == 'true'
+        # v0.44.0 = ab6ec54bfeb37933ddb74259338752e9272016c6
+        uses: The-PR-Agent/pr-agent@v0.44.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same secret name claude-pr-review.yml reads; no OpenAI key.
+          ANTHROPIC.KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          config.model: "anthropic/claude-sonnet-5"
+          config.fallback_models: '["anthropic/claude-haiku-4-5-20251001"]'
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "true"
+          github_action_config.auto_describe: "false"

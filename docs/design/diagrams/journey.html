@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The synthetic track, first session</title>
+  <style>
+    @font-face { font-family: 'Archivo'; font-weight: 400 600; font-display: swap;
+                 src: url('../../../static/fonts/archivo-latin.woff2') format('woff2'); }
+    @font-face { font-family: 'Fragment Mono'; font-weight: 400; font-display: swap;
+                 src: url('../../../static/fonts/fragment-mono-latin.woff2') format('woff2'); }
+  </style>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --paper: #FAF9F5; --ink: #14140F; --muted: #55534B; --sans: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif; --mono: 'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace; }
+    body { font-family: var(--sans); background: var(--paper); color: var(--ink); min-height: 100vh;
+           display: flex; align-items: center; justify-content: center; padding: 3rem 2rem; }
+    .frame { max-width: 1240px; width: 100%; }
+    .eyebrow { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.18em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: 0.5rem; }
+    h1 { font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem); font-weight: 500; letter-spacing: -0.02em;
+          line-height: 1.15; margin-bottom: 1.5rem; }
+    p.note { font-size: 0.875rem; color: var(--muted); max-width: 64ch; margin-top: 1rem; line-height: 1.5; }
+    svg { width: 100%; min-width: 960px; display: block; }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">User journey &#183; CareAgents</p>
+    <h1>The synthetic track, first session</h1>
+    <div class="scroll">
+<svg viewBox="0 0 1200 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="journey-title journey-desc">
+<title id="journey-title">The synthetic track, first session</title>
+<desc id="journey-desc">One person's first session on the synthetic track, the track the first outside tester will walk; the real-record path is not walkable until #168 is decided. Walked once on 2026-09-05 by an agent over HTTP against the deployed app, not by a person in a browser: no dead ends, sign-up to first answer in under twenty seconds. The trough is approval: the reply says form generation is not built while the PDF is already generated and secured (#645). Sentiment is the team's reading of that walk. Replace this curve with the first human tester's.</desc>
+<rect width="100%" height="100%" fill="#FAF9F5"/>
+<text x="148" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 1</text>
+<text x="148" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Sign up</text>
+<text x="332" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 2</text>
+<text x="332" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Sample records</text>
+<text x="516" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 3</text>
+<text x="516" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Create an agent</text>
+<text x="700" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 4</text>
+<text x="700" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Ask</text>
+<text x="884" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 5</text>
+<text x="884" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Read the proposal</text>
+<text x="1068" y="40" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.14em">STAGE 6</text>
+<text x="1068" y="60" fill="#14140F" font-size="12" font-weight="600" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Approve</text>
+<line x1="64" y1="100" x2="1160" y2="100" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="56" y="104" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.10em">HIGH</text>
+<line x1="64" y1="180" x2="1160" y2="180" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="56" y="184" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.10em">NEUTRAL</text>
+<line x1="64" y1="260" x2="1160" y2="260" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="56" y="264" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.10em">LOW</text>
+<polyline points="148,140 332,100" fill="none" stroke="#55534B" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="332,100 516,180" fill="none" stroke="#55534B" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="516,180 700,100" fill="none" stroke="#55534B" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="700,100 884,180" fill="none" stroke="#55534B" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="884,180 1068,220" fill="none" stroke="#1B2FBF" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="148" cy="140" r="5" fill="#55534B"/>
+<circle cx="332" cy="100" r="5" fill="#55534B"/>
+<circle cx="516" cy="180" r="5" fill="#55534B"/>
+<circle cx="700" cy="100" r="5" fill="#55534B"/>
+<circle cx="884" cy="180" r="5" fill="#55534B"/>
+<circle cx="1068" cy="220" r="5" fill="#1B2FBF"/>
+<line x1="64" y1="280" x2="1160" y2="280" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<line x1="64" y1="384" x2="1160" y2="384" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<line x1="64" y1="440" x2="1160" y2="440" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="56" y="328" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.14em">ACTIONS</text>
+<text x="72" y="416" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.14em">TOUCHPOINTS</text>
+<text x="64" y="472" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="end" letter-spacing="0.14em">GUARDRAIL</text>
+<text x="148" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Email code, then passkey</text>
+<text x="148" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">careagents web</text>
+<text x="148" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">no PHI stored here</text>
+<text x="332" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Tap the sample patient</text>
+<text x="332" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">connect tiles</text>
+<text x="332" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">synthetic only, no consent</text>
+<text x="516" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Name, voice, specialty</text>
+<text x="516" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">new-agent modal</text>
+<text x="516" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">no PHI stored here</text>
+<text x="700" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Ask three plain questions</text>
+<text x="700" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">chat &#183; text</text>
+<text x="700" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">redacted read &#183; audit row</text>
+<text x="884" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Read the drafted form</text>
+<text x="884" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">action rail card</text>
+<text x="884" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">proposal only, no execution</text>
+<text x="1068" y="300" fill="#14140F" font-size="12" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">Confirm the intake form</text>
+<text x="1068" y="412" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">approve page</text>
+<text x="1068" y="468" fill="#55534B" font-size="9" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle">step-up &#183; human gate &#183; audit</text>
+<rect x="990.0" y="312" width="156" height="16" rx="2" fill="rgba(27,47,191,0.08)" stroke="rgba(27,47,191,0.50)" stroke-width="0.8" stroke-dasharray="3,3"/>
+<text x="1068" y="324" fill="#1B2FBF" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.04em">SAYS NOT BUILT, PDF EXISTS</text>
+<rect x="1000.0" y="332" width="136" height="16" rx="2" fill="rgba(27,47,191,0.08)" stroke="rgba(27,47,191,0.50)" stroke-width="0.8" stroke-dasharray="3,3"/>
+<text x="1068" y="344" fill="#1B2FBF" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.04em">PAGE REBRANDS MID-FLOW</text>
+<line x1="40" y1="512" x2="1160" y2="512" stroke="rgba(20,20,15,0.1)" stroke-width="0.8"/>
+<text x="40" y="528" fill="#55534B" font-size="8" font-family="'Fragment Mono', ui-monospace, 'SF Mono', Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+<line x1="40" y1="546" x2="56" y2="546" stroke="#55534B" stroke-width="1.5"/><circle cx="48" cy="546" r="3" fill="#55534B"/><text x="64" y="550" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Sentiment, one HTTP walk</text>
+<line x1="260" y1="546" x2="276" y2="546" stroke="#1B2FBF" stroke-width="1.5"/><circle cx="268" cy="546" r="3" fill="#1B2FBF"/><text x="284" y="550" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Trough stage</text>
+<rect x="424" y="542" width="16" height="8" rx="2" fill="rgba(27,47,191,0.08)" stroke="rgba(27,47,191,0.50)" stroke-width="0.8" stroke-dasharray="3,3"/><text x="448" y="550" fill="#55534B" font-size="8.5" font-family="'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif">Friction (#645)</text>
+</svg>
+    </div>
+    <p class="note">One person's first session on the synthetic track, the track the first outside tester will walk; the real-record path is not walkable until #168 is decided. Walked once on 2026-09-05 by an agent over HTTP against the deployed app, not by a person in a browser: no dead ends, sign-up to first answer in under twenty seconds. The trough is approval: the reply says form generation is not built while the PDF is already generated and secured (#645). Sentiment is the team's reading of that walk. Replace this curve with the first human tester's.</p>
+  </div>
+</body>
+</html>
