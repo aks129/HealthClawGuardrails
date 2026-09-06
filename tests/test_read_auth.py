@@ -94,6 +94,35 @@ def test_read_flag_on_token_wrong_tenant_401(client, monkeypatch):
     assert resp.get_json()['issue'][0]['code'] == 'security'
 
 
+def test_read_flag_on_malformed_token_401(client, monkeypatch):
+    """A token that is PRESENT but not valid, the branch the pair above
+    (absent, valid) never reached: a predicate that stopped validating and
+    merely checked for the header stayed green. Pinned before kernel slice
+    19 moves this branch.
+
+    MUTATION (pre-kernel shape): `if valid: return tenant_id` ->
+    `return tenant_id` -> this test and the wrong-tenant one go red while
+    the valid-token test stays green. Executed 2026-09-06.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', '1')
+    resp = client.get('/r6/fhir/Patient', headers={
+        'X-Tenant-Id': 'private-tenant',
+        'X-Step-Up-Token': 'not-a-real-token',
+    })
+    assert resp.status_code == 401
+
+
+def test_read_flag_on_malformed_bearer_401(client, monkeypatch):
+    """The bearer alias with garbage: not a step-up token, not an OAuth
+    token either, so both branches refuse."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', '1')
+    resp = client.get('/r6/fhir/Patient', headers={
+        'X-Tenant-Id': 'private-tenant',
+        'Authorization': 'Bearer not-a-real-token',
+    })
+    assert resp.status_code == 401
+
+
 def test_read_flag_on_public_tenant_no_token_200(client, monkeypatch):
     monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
     monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo,winters-demo')
