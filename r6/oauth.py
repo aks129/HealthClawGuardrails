@@ -14,7 +14,9 @@ OAuth provider (Auth0, Keycloak) via OAUTH_ISSUER configuration.
 
 import base64
 import hashlib
+import hmac
 import json
+import re
 import logging
 import os
 import secrets
@@ -26,6 +28,8 @@ from flask import request, jsonify, redirect
 from r6.runtime_config import resolve_app_env
 from r6.runtime_config import read_auth_enabled
 from r6.constant_time import equal as constant_time_equal
+from r6.internal_auth import internal_secret_authorized
+from r6.stepup import mark_nonce_used
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,12 @@ CLIENT_TTL_SECONDS = 30 * 24 * 3600
 #: RFC 7591 methods a client may register with. `none` is a public client:
 #: no secret is issued and `client_id` is required at the token endpoint.
 CLIENT_AUTH_METHODS = ('none', 'client_secret_post', 'client_secret_basic')
+#: A consent outlives every token issued under it; the refresh chain (§13.5)
+#: is 30 days, so the record lives a day longer than the last token could.
+CONSENT_TTL_SECONDS = 31 * 24 * 3600
+#: A parked authorization request waits this long for the person to decide.
+CONSENT_REQUEST_TTL_SECONDS = 600
+_TENANT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 #: Loopback hosts whose redirect URIs match on any port (RFC 8252 §7.3).
 #: Native clients such as Claude Code listen on an ephemeral port.
 _LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
@@ -69,8 +79,68 @@ def resource_policies():
     policies = {fhir_resource(): 'header'}
     mcp = os.environ.get('MCP_CANONICAL_RESOURCE', '').strip()
     if mcp:
-        policies[mcp] = 'demo'
+        # §13.3: with a consent surface configured the person chooses the
+        # tenant there; without one the MCP audience binds the demo tenant.
+        policies[mcp] = 'careagents' if consent_url() else 'demo'
     return policies
+
+
+def consent_url():
+    """Where a browser is sent to sign in and decide (spec §13.2). Unset
+    means no consent surface, and the MCP audience stays on the demo tenant."""
+    return os.environ.get('CAREAGENTS_CONSENT_URL', '').strip()
+
+
+def _handoff_key():
+    """The handoff key, derived from the secret both sides already hold with
+    domain separation (§13.3) — the way the confirmation digest derives from
+    STEP_UP_SECRET. Absent, the handoff cannot run and says so."""
+    secret = os.environ.get('INTERNAL_TOKEN_MINT_SECRET', '').strip()
+    if not secret:
+        raise RuntimeError('INTERNAL_TOKEN_MINT_SECRET is required for the consent handoff')
+    return hashlib.sha256(b'healthclaw-consent-handoff:' + secret.encode('utf-8')).digest()
+
+
+def handoff_tag(message):
+    """HMAC-SHA256 over `message` under the handoff key, hex."""
+    return hmac.new(_handoff_key(), message.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+
+def _unb64url(text):
+    padding = '=' * (-len(text) % 4)
+    return base64.urlsafe_b64decode(text + padding)
+
+
+def encode_grant(payload):
+    """The inbound message, `<base64url(JSON)>.<tag>` (§13.3). CareAgents
+    builds it with the same key; the tests build it the same way."""
+    body = _b64url(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8'))
+    return f'{body}.{handoff_tag(body)}'
+
+
+def decode_grant(grant):
+    """The payload of a grant whose tag verifies, else None. Nothing about
+    why is returned: a forged tag and a mangled body look the same."""
+    if not isinstance(grant, str) or grant.count('.') != 1:
+        return None
+    body, tag = grant.split('.')
+    if not body or not tag:
+        return None
+    try:
+        expected = handoff_tag(body)
+    except RuntimeError:
+        return None
+    if not constant_time_equal(tag, expected):
+        return None
+    try:
+        payload = json.loads(_unb64url(body))
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _loopback_form(uri):
@@ -194,10 +264,15 @@ _access_tokens = {}  # token -> {client_id, scopes, tenant_id, exp}
 _revoked_tokens = set()  # revoked token hashes
 _redis_client = None
 
+_consent_requests = {}  # request_id -> parked authorize parameters (§13.3)
+_consents = {}  # consent_id -> {tenant_id, client_id, scopes, granted_at, revoked_at}
+
 _OAUTH_STORES = {
     'client': _registered_clients,
     'auth-code': _auth_codes,
     'access-token': _access_tokens,
+    'consent-request': _consent_requests,
+    'consent': _consents,
 }
 
 
@@ -444,6 +519,34 @@ def register_oauth_routes(blueprint):
         policy = policies[audience]
 
         from r6.command_center.access import is_public
+        if policy == 'careagents':
+            # §13.3 outbound: park the request, send the browser to sign in
+            # and decide. Nothing about the client rides in the URL; the
+            # consent page fetches it back with the service secret.
+            request_id = secrets.token_urlsafe(24)
+            exp = int(time.time()) + CONSENT_REQUEST_TTL_SECONDS
+            try:
+                tag = handoff_tag(f'{request_id}.{exp}')
+            except RuntimeError:
+                return _redirect_to_client(redirect_uri, state,
+                                           error='temporarily_unavailable',
+                                           error_description='consent handoff not configured')
+            _oauth_store_set('consent-request', request_id, {
+                'client_id': client_id,
+                'client_name': registered_client.get('client_name', 'Unknown Client'),
+                'redirect_uri': redirect_uri,
+                'code_challenge': code_challenge,
+                'code_challenge_method': code_challenge_method,
+                'scopes': scope.split(),
+                'state': state,
+                'aud': audience,
+                'exp': exp,
+            }, ttl=CONSENT_REQUEST_TTL_SECONDS)
+            separator = '&' if '?' in consent_url() else '?'
+            response = redirect(f'{consent_url()}{separator}'
+                                f'{urlencode({"req": f"{request_id}.{exp}.{tag}"})}', code=302)
+            response.headers['Cache-Control'] = 'no-store'
+            return response
         if policy == 'demo':
             # P2-b: for the MCP audience the tenant is config, not a header.
             # The demo tenant must be public; anything else fails closed here
@@ -480,6 +583,7 @@ def register_oauth_routes(blueprint):
             'scopes': scope.split(),
             'tenant_id': requested_tenant,
             'aud': audience,
+            'consent_id': None,
             'exp': time.time() + 600,  # 10 minutes
         }, ttl=600)
 
@@ -487,6 +591,105 @@ def register_oauth_routes(blueprint):
         # redirect URI, with RFC 9207 `iss`. A JSON body here is a flow no
         # browser can finish (#568).
         return _redirect_to_client(redirect_uri, state, code=code)
+
+    # --- Consent handoff (spec §13.3, §13.4) ---
+
+    @blueprint.route('/oauth/consent/<request_id>', methods=['GET'])
+    def consent_request(request_id):
+        """What the consent page shows: who is asking and for what. Service
+        credential only — the page is the caller, never the browser."""
+        if not internal_secret_authorized():
+            return jsonify({'error': 'forbidden'}), 403
+        parked = _oauth_store_get('consent-request', request_id)
+        if not parked or parked['exp'] < time.time():
+            return jsonify({'error': 'not_found'}), 404
+        return jsonify({
+            'request_id': request_id,
+            'client_id': parked['client_id'],
+            'client_name': parked['client_name'],
+            'scopes': parked['scopes'],
+            'exp': parked['exp'],
+        })
+
+    @blueprint.route('/oauth/consent/return', methods=['GET'])
+    def consent_return():
+        """§13.3 inbound: the signed decision comes back through the browser.
+
+        Verified in this order, each refusal a plain 400 with no detail a
+        forger could use: the tag, the expiry, the nonce (never twice), the
+        parked request (popped exactly once), the tenant shape. A denial goes
+        back to the client as `access_denied`; an approval is audited under
+        the tenant before any code exists, and the code is bound to the
+        tenant the grant names and to the consent.
+        """
+        payload = decode_grant(request.args.get('grant', ''))
+        if payload is None:
+            return jsonify({'error': 'invalid_request'}), 400
+        exp = payload.get('exp')
+        if not isinstance(exp, (int, float)) or exp < time.time():
+            return jsonify({'error': 'invalid_request'}), 400
+        nonce = payload.get('nonce')
+        if not isinstance(nonce, str) or not nonce or not mark_nonce_used(nonce, exp):
+            return jsonify({'error': 'invalid_request'}), 400
+        parked = _oauth_store_pop('consent-request', str(payload.get('request_id', '')))
+        if not parked or parked['exp'] < time.time():
+            return jsonify({'error': 'invalid_request'}), 400
+
+        redirect_uri, state = parked['redirect_uri'], parked['state']
+        if payload.get('decision') != 'approved':
+            return _redirect_to_client(redirect_uri, state, error='access_denied')
+
+        tenant_id = payload.get('tenant_id')
+        consent_id = payload.get('consent_id')
+        if (not isinstance(tenant_id, str) or not _TENANT_ID_PATTERN.fullmatch(tenant_id)
+                or not isinstance(consent_id, str) or not consent_id):
+            return jsonify({'error': 'invalid_request'}), 400
+
+        from r6.audit import add_audit_event
+        from r6.models import db
+        _oauth_store_set('consent', consent_id, {
+            'tenant_id': tenant_id,
+            'client_id': parked['client_id'],
+            'scopes': parked['scopes'],
+            'granted_at': time.time(),
+            'revoked_at': None,
+        }, ttl=CONSENT_TTL_SECONDS)
+        # A consent is a tenant event (§13.4). PHI-free by construction: a
+        # client id, the scopes, and the channel. No account, no label.
+        add_audit_event('create', 'Consent', consent_id,
+                        agent_id=parked['client_id'], tenant_id=tenant_id,
+                        detail=f"client_id={parked['client_id']} "
+                               f"scopes={' '.join(parked['scopes'])} via=careagents")
+        db.session.commit()
+
+        code = secrets.token_urlsafe(32)
+        _oauth_store_set('auth-code', code, {
+            'client_id': parked['client_id'],
+            'redirect_uri': redirect_uri,
+            'code_challenge': parked['code_challenge'],
+            'code_challenge_method': parked['code_challenge_method'],
+            'scopes': parked['scopes'],
+            'tenant_id': tenant_id,
+            'aud': parked['aud'],
+            'consent_id': consent_id,
+            'exp': time.time() + 600,
+        }, ttl=600)
+        return _redirect_to_client(redirect_uri, state, code=code)
+
+    @blueprint.route('/oauth/consent/<consent_id>/revoke', methods=['POST'])
+    def consent_revoke(consent_id):
+        """Take a consent back (§13.4). Every token issued under it, access
+        or refresh, stops validating at once; introspection answers inactive.
+        Service credential only; idempotent."""
+        if not internal_secret_authorized():
+            return jsonify({'error': 'forbidden'}), 403
+        consent = _oauth_store_get('consent', consent_id)
+        if not consent:
+            return jsonify({'error': 'not_found'}), 404
+        if not consent.get('revoked_at'):
+            consent['revoked_at'] = time.time()
+            _oauth_store_set('consent', consent_id, consent, ttl=CONSENT_TTL_SECONDS)
+        return jsonify({'revoked': True, 'consent_id': consent_id})
 
     # --- Token Endpoint ---
 
@@ -569,6 +772,7 @@ def register_oauth_routes(blueprint):
             'scopes': auth_code['scopes'],
             'tenant_id': auth_code['tenant_id'],
             'aud': auth_code.get('aud'),
+            'consent_id': auth_code.get('consent_id'),
             'exp': time.time() + TOKEN_TTL_SECONDS,
         }, ttl=TOKEN_TTL_SECONDS)
 
@@ -652,7 +856,19 @@ def validate_bearer_token(token):
         _oauth_store_delete('access-token', token)
         return False, 'Token expired'
 
+    if not consent_is_live(token_info.get('consent_id')):
+        return False, 'Consent revoked'
+
     return True, token_info
+
+
+def consent_is_live(consent_id):
+    """True when the token was issued without a consent (the auto-approve
+    paths) or under one that exists and is not revoked (§13.4)."""
+    if not consent_id:
+        return True
+    consent = _oauth_store_get('consent', consent_id)
+    return bool(consent) and not consent.get('revoked_at')
 
 
 def require_scope(*required_scopes):
