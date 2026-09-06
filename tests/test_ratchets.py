@@ -143,7 +143,9 @@ def _report(sites, pin, what):
 #: 10 -> 9 (kernel slice 7c): bind-telegram, the body-tenant site, through
 #: require_grant with also_body_field. One direct site left in r6/routes.py:
 #: $ingest-context, waiting on #648.
-_STEP_UP_CALLSITES = 9
+#: 9 -> 8 (kernel slice 16): agent_runs' session-or-token predicate asks
+#: has_grant; no direct validator call is left in r6/agent_runs/.
+_STEP_UP_CALLSITES = 8
 
 
 def test_direct_step_up_validation_only_decreases():
