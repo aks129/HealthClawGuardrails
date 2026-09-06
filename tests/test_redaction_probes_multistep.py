@@ -76,9 +76,11 @@ reached the code it names.
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import re
+import textwrap
 import zlib
 from urllib.parse import parse_qs, urlparse
 
@@ -279,14 +281,19 @@ def test_the_pdf_text_extractor_actually_reads_text():
 # is the whole credential.
 # ---------------------------------------------------------------------------
 
-def _download_the_form(client, app, tenant_headers, auth_headers):
-    """propose -> commit -> review -> confirm -> GET the signed link.
+def _confirm_the_form(client, tenant_headers, auth_headers):
+    """propose -> commit -> review -> confirm.
 
-    Returns (docref_id, pdf_bytes). Asserts each hop, because a 4xx anywhere
-    would leave the caller asserting markers against an error page.
+    Returns (action_id, confirm_response). Split out of `_download_the_form`
+    because the confirm response is an exit in its own right: a completed
+    action is answered with `ProposedAction.to_dict()`
+    (r6/actions/routes.py:169), which carries `outcome_summary` verbatim —
+    so whatever the executor puts in its outcome goes on the wire.
+
+    Asserts each hop, because a 4xx anywhere would leave the caller asserting
+    markers against an error page.
     """
     from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
-    from r6.actions.models import ProposedAction
     from r6.stepup import generate_step_up_token
     tenant = tenant_headers["X-Tenant-Id"]
 
@@ -318,6 +325,17 @@ def _download_the_form(client, app, tenant_headers, auth_headers):
     assert confirm.status_code == 200, confirm.get_data(as_text=True)
     assert confirm.get_json()["status"] == "completed", \
         confirm.get_data(as_text=True)
+    return action_id, confirm
+
+
+def _download_the_form(client, app, tenant_headers, auth_headers):
+    """`_confirm_the_form`, then GET the signed link.
+
+    Returns (docref_id, pdf_bytes).
+    """
+    from r6.actions.models import ProposedAction
+    action_id, _confirm = _confirm_the_form(client, tenant_headers,
+                                            auth_headers)
 
     with app.app_context():
         row = db.session.get(ProposedAction, action_id)
@@ -401,13 +419,143 @@ def test_form_fill_pdf_carries_only_the_reviewed_answers_and_the_name(
 # where its content can leave.
 # ---------------------------------------------------------------------------
 
+def _strings_in(value):
+    """Every string anywhere in a parsed JSON value, nested JSON included.
+
+    `outcome_summary` is a JSON document stored as a string inside another
+    JSON document, so a walker that stops at the first string never reaches
+    the outcome's own fields.
+    """
+    if isinstance(value, str):
+        yield value
+        try:
+            nested = json.loads(value)
+        except (TypeError, ValueError):
+            return
+        if isinstance(nested, (dict, list)):
+            yield from _strings_in(nested)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings_in(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings_in(item)
+
+
+def _decoded_pdfs(value):
+    """Every base64 string anywhere in `value` that decodes to a PDF.
+
+    A property, not a phrase: it does not care which key carried the bytes,
+    what that key is called, or how deep the JSON is nested. It also cannot
+    be defeated by the thing that defeats a marker search — reportlab writes
+    Flate streams, so the patient's name is not present as text in the base64
+    OR in the decoded bytes until `pdf_text` decompresses them.
+    """
+    for text in _strings_in(value):
+        if len(text) < 64:
+            continue
+        try:
+            blob = base64.b64decode(text, validate=True)
+        except Exception:  # noqa: BLE001 — not base64; nothing to decode
+            continue
+        if blob[:4] == b"%PDF":
+            yield blob
+
+
+def test_the_document_detector_finds_a_base64_pdf():
+    """Control for the probe below, in the exact shape of its mutation.
+
+    `_decoded_pdfs` has to reach through JSON-inside-JSON and then through
+    Flate compression. If it cannot, "no document in the confirm response" is
+    a false negative, which is the defect class this whole file is about.
+    """
+    from r6.sdc.pdf import render_questionnaire_response_pdf
+    rendered = render_questionnaire_response_pdf(
+        {"resourceType": "QuestionnaireResponse", "status": "completed",
+         "item": []},
+        subject_label=SUBJECT_LABEL_MARKER)
+    body = {"id": "act-1", "status": "completed",
+            "outcome_summary": json.dumps({
+                "document_reference_id": "doc-1",
+                "document": {"resourceType": "DocumentReference",
+                             "content": [{"attachment": {
+                                 "contentType": "application/pdf",
+                                 "data": base64.b64encode(rendered).decode(),
+                             }}]}})}
+
+    assert SUBJECT_LABEL_MARKER not in json.dumps(body), (
+        "the marker is readable as text in the response, so this control "
+        "cannot distinguish a working detector from a marker search")
+    found = list(_decoded_pdfs(body))
+    assert len(found) == 1, (
+        "the detector did not find the embedded PDF; every 'no document "
+        "left' assertion below is unmeasured")
+    assert SUBJECT_LABEL_MARKER in pdf_text(found[0])
+
+
+def test_the_confirm_response_carries_no_rendered_document(
+        client, app, tenant_headers, auth_headers, action_registry,
+        form_fill_ready):
+    """The exit `persist_intake_document`'s return value would leave by.
+
+    form_fill hands the executor's `outcome` dict to the state machine, which
+    stores it as `outcome_summary` and answers the confirm POST with
+    `to_dict()` — outcome included. So "the return value reaches nobody"
+    holds only while the outcome carries ids, not the object.
+
+    Two assertions, deliberately different in kind:
+      (a) the PROPERTY — nothing anywhere in the response body decodes to a
+          PDF, whatever key it arrives under;
+      (b) the named pin — the outcome's key set, exactly, so a new field of
+          any kind has to be added here on purpose.
+
+    MUTATION (run 2026-09-04, both directions, see PR): add
+    `'document': docref,` to the success outcome in
+    `r6/actions/rails/form_fill.py` -> red on both. Under it this route
+    answers 200 with a base64 PDF whose title is the patient's name.
+    """
+    _action_id, confirm = _confirm_the_form(client, tenant_headers,
+                                            auth_headers)
+    body = confirm.get_json()
+
+    # Non-vacuity: the flow really completed and really produced a document.
+    assert body["status"] == "completed", confirm.get_data(as_text=True)[:300]
+    outcome = json.loads(body["outcome_summary"])
+    assert outcome.get("document_reference_id"), (
+        "no document was persisted, so 'the document did not leave' is not a "
+        "measurement: " + json.dumps(outcome)[:300])
+
+    leaked = [pdf_text(blob) for blob in _decoded_pdfs(body)]
+    assert not leaked, (
+        "the rendered intake PDF left through the confirm response; it "
+        "carries the patient's name and date of birth. markers found: %s"
+        % sorted({m for text in leaked for m in _markers_in(text)}))
+
+    assert set(outcome) == {"document_reference_id", "delivery_link",
+                            "questionnaire_response_id"}, (
+        "the form-fill outcome grew a field (%s). Everything in it goes on "
+        "the wire in the confirm response — add it here deliberately, with a "
+        "probe for whatever it carries" % sorted(outcome))
+
+    assert _markers_in(confirm.get_data(as_text=True)) == set()
+
+
 def test_persist_intake_document_return_value_reaches_no_caller():
-    """Evidence, not assertion: the call chain from the read to a response.
+    """The static half: form_fill touches nothing but the id.
 
     `grep -rn persist_intake_document --include='*.py'` finds exactly one
-    production caller. This pins that caller's use of the returned dict, so
-    the "nothing escapes" claim above stops being true loudly rather than
-    silently if someone starts returning more of it.
+    production caller, and this pins what that caller does with the returned
+    dict.
+
+    #630 F1 found the docstring here claiming the "nothing escapes"
+    statement above "stops being true loudly". It did not. The assertion was
+    a regex for `docref[...]` subscripts, so passing the whole dict BY NAME —
+    `outcome={'document': docref, ...}` — added no subscript and the row
+    stayed green, along with the rest of the suite. The AST assertion below
+    is the repair: it counts every LOAD of the name, not every subscript of
+    it. `test_the_confirm_response_carries_no_rendered_document` above is the
+    behavioural half, and is the one that would survive the function being
+    rewritten.
     """
     import inspect
     from r6.actions.rails import form_fill
@@ -417,6 +565,28 @@ def test_persist_intake_document_return_value_reaches_no_caller():
         "form_fill now reads more than the id off persist_intake_document's "
         "return value (%s); documents.py:72 may now be an exit point and "
         "needs its own probe" % sorted(uses))
+
+    tree = ast.parse(textwrap.dedent(source))
+    loads = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Name) and n.id == "docref"
+             and isinstance(n.ctx, ast.Load)]
+    id_subscripts = [n for n in ast.walk(tree)
+                     if isinstance(n, ast.Subscript)
+                     and isinstance(n.value, ast.Name)
+                     and n.value.id == "docref"
+                     and isinstance(n.slice, ast.Constant)
+                     and n.slice.value == "id"]
+    assert len(id_subscripts) == 1, (
+        "expected exactly one docref['id'] read; found %d, so the shape this "
+        "row measures changed" % len(id_subscripts))
+    # getsource() starts at the `def`, so an AST lineno is an offset into it.
+    offset = form_fill.FormFillExecutor.execute.__code__.co_firstlineno - 1
+    assert len(loads) == 1, (
+        "`docref` is read %d times in execute() but subscripted for 'id' "
+        "once — the dict itself is being passed somewhere, and every field "
+        "persist_intake_document built (including the base64 PDF) travels "
+        "with it. form_fill.py lines: %s"
+        % (len(loads), sorted({n.lineno + offset for n in loads})))
 
 
 def test_document_reference_read_drops_the_embedded_pdf(

@@ -16,7 +16,7 @@ def transition_action(action_id, from_states, to_state, actor, detail=None,
     (and writes one ActionEvent in the same commit), False if the WHERE matched
     nothing (concurrent claim / already advanced). Raises IllegalTransition if
     to_state isn't reachable from every from_state, if from_states is empty,
-    or if 'status' is passed via fields.
+    or if 'status' or 'payload_json' is passed via fields.
 
     extra_criteria: optional iterable of SQLAlchemy predicates appended to
     the guarded UPDATE's WHERE, making the claim STRICTER — e.g. the expiry
@@ -29,6 +29,14 @@ def transition_action(action_id, from_states, to_state, actor, detail=None,
     which apply atomically with the transition."""
     if 'status' in fields:
         raise IllegalTransition('status cannot be passed via fields')
+    if 'payload_json' in fields:
+        # The executable payload is what the human saw; no transition may
+        # rewrite it (#528). The bulk UPDATE below bypasses the model-level
+        # seal, so this is the only place this writer can be refused — and
+        # it is unconditional because the claim runs BEFORE the confirmation
+        # row is minted (see the confirm route), so "a confirmation exists"
+        # is not yet true at the one moment a swap would matter.
+        raise IllegalTransition('payload_json cannot be passed via fields')
     if not from_states:
         raise IllegalTransition('from_states must be non-empty')
     for fs in from_states:
