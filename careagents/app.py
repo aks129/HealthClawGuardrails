@@ -626,16 +626,20 @@ def create_app(config: Config | None = None,
             # this file for claims about what was sent, approved, recorded or
             # retried rather than by another report about one arm.
             #
-            # `deleted: False` stays and is not the same claim: it is what
-            # keeps the connection linked here, which is observed — the
-            # unlink below is not reached — and is the conservative half.
-            return jsonify({"error": "deletion_failed", "deleted": False,
+            # No `deleted` field here at all (#586). `purge_tenant` raises on
+            # any non-200 and on a lost answer, so on this branch the records
+            # may be gone or may not; a field named `deleted` saying False
+            # would be wrong on exactly the outcome where the purge ran. What
+            # IS observed is that the unlink below was not reached, and the
+            # field says that by its name: the connection is still linked.
+            return jsonify({"error": "deletion_failed", "unlinked": False,
                             "message": "We couldn't confirm your records were "
                                        "deleted. Your connection is still "
                                        "linked here — please try again."}), 502
         svc.delete_connection(acct.id, conn_id)
         return jsonify({
             "deleted": True,
+            "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
             "audit_retained": True,
