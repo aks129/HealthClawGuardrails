@@ -164,6 +164,42 @@ def test_agent_run_control_plane_migration_is_reversible(tmp_path):
     engine.dispose()
 
 
+def test_action_confirmation_payload_digest_migration_is_reversible(tmp_path):
+    url = f"sqlite:///{tmp_path / 'digest.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    def columns():
+        return {c["name"] for c in inspect(engine).get_columns("action_confirmations")}
+
+    command.upgrade(config, "head")
+    assert "payload_digest" in columns()
+    command.downgrade(config, "0007_agent_worker_presence")
+    assert "payload_digest" not in columns()
+    command.upgrade(config, "head")
+    assert "payload_digest" in columns()
+    engine.dispose()
+
+
+def test_every_revision_id_fits_the_alembic_version_column():
+    """alembic_version.version_num is VARCHAR(32). SQLite does not enforce
+    the length; Postgres does, and a longer id fails the upgrade with
+    'value too long for type character varying(32)' on the first deploy
+    that meets it. Found by the Postgres lane on #658, whose first id was
+    39 characters and green everywhere else.
+
+    MUTATION: rename any revision to 33 characters -> red naming it.
+    """
+    too_long = []
+    for path in sorted((ROOT / "migrations" / "versions").glob("*.py")):
+        for line in path.read_text().splitlines():
+            if line.startswith("revision = "):
+                rid = line.split("=", 1)[1].strip().strip("\"'")
+                if len(rid) > 32:
+                    too_long.append(f"{path.name}: {rid!r} is {len(rid)} chars")
+    assert not too_long, "\n".join(too_long)
+
+
 def test_migrations_are_explicit_and_never_delegate_to_create_all():
     migration_sources = "\n".join(
         path.read_text()
@@ -196,7 +232,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0007_agent_worker_presence"
+    assert revision == "0008_confirmation_digest"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -359,11 +395,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0007_agent_worker_presence"
+    assert revision == "0008_confirmation_digest"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0007_agent_worker_presence"
+    assert upgrade_database(engine) == "0008_confirmation_digest"
 
 
 def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
@@ -399,7 +435,7 @@ def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
 
     revision = upgrade_database(engine)
 
-    assert revision == "0007_agent_worker_presence"
+    assert revision == "0008_confirmation_digest"
     inspector = inspect(engine)
     assert {
         "action_confirmations", "action_events", "proposed_actions",
@@ -447,7 +483,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0007_agent_worker_presence"
+    assert revision == "0008_confirmation_digest"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -490,9 +526,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0007_agent_worker_presence"
+        assert revision == "0008_confirmation_digest"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0007_agent_worker_presence"  # idempotent
+        assert upgrade_database(engine) == "0008_confirmation_digest"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]

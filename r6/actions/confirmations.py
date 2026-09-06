@@ -4,6 +4,9 @@ authenticated Telegram/dashboard approve handler; The confirm route claims FIRST
 in the next transaction: the claim is the lock, this row is the durable consent
 record of who/when/via. TTL means an approval from Tuesday can't authorize a
 Thursday commit."""
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import timedelta
 
@@ -22,13 +25,61 @@ class ActionConfirmation(db.Model):
     approved_at = db.Column(db.DateTime, default=_utcnow)
     expires_at = db.Column(db.DateTime, nullable=False)
     consumed_at = db.Column(db.DateTime, nullable=True)
+    # Keyed digest (HMAC) over the canonical form of the payload as the human
+    # approved it (#559, human-gate spec 8.3); keyed so a writer with table
+    # access cannot forge it alongside the payload (QA on #658). Nullable only for rows minted before the
+    # column existed; the confirm route refuses to execute on such a row.
+    payload_digest = db.Column(db.String(64), nullable=True)
 
 
-def issue_confirmation(action_id, approved_via, ttl_minutes):
+_DIGEST_KEY_LABEL = b'healthclaw-confirmation-digest:'
+
+
+def _digest_key():
+    """A key the database does not hold.
+
+    The QA pass on #658 showed why a plain hash is not enough: the digest
+    lives in a row that the same writer who can swap the payload can also
+    rewrite, so a forged payload plus a forged digest walked through the
+    check and the audit line vouched for it. Keying the digest with the
+    step-up secret means recomputing it needs more than table access. The
+    secret is the one the whole human gate already stands on; without it
+    nothing can be approved here either, which is the right way to fail.
+    """
+    from r6.stepup import _get_secret
+    secret = _get_secret()
+    if not secret:
+        raise ValueError('STEP_UP_SECRET environment variable is required')
+    return hashlib.sha256(_DIGEST_KEY_LABEL + secret.encode('utf-8')).digest()
+
+
+def payload_digest(payload_json):
+    """HMAC-SHA256 hex over the canonical serialisation of a payload, keyed
+    by a key derived from the step-up secret (see _digest_key).
+
+    Canonical: parsed, then dumped with sorted keys and no whitespace, so
+    key order and formatting do not change what the human signed. The
+    payload column is always JSON; a value that is not parses as a defect
+    and raises rather than hashing bytes that mean nothing.
+    """
+    canonical = json.dumps(json.loads(payload_json), sort_keys=True,
+                           separators=(',', ':'), ensure_ascii=False)
+    return hmac.new(_digest_key(), canonical.encode('utf-8'),
+                    hashlib.sha256).hexdigest()
+
+
+def issue_confirmation(action_id, approved_via, ttl_minutes, *, payload_json):
+    """Mint the consent record over the payload as it stands right now.
+
+    `payload_json` is required, keyword-only: a confirmation that does not
+    say what bytes were approved is the defect #559 names, so no caller
+    can mint one by forgetting the argument.
+    """
     if approved_via not in APPROVED_VIA_VALUES:
         raise ValueError('Unsupported approval channel: %s' % approved_via)
     c = ActionConfirmation(action_id=action_id, approved_via=approved_via,
-                           expires_at=_utcnow() + timedelta(minutes=ttl_minutes))
+                           expires_at=_utcnow() + timedelta(minutes=ttl_minutes),
+                           payload_digest=payload_digest(payload_json))
     db.session.add(c)
     return c
 
@@ -46,6 +97,18 @@ def has_confirmation(action_id):
     with db.session.no_autoflush:
         return ActionConfirmation.query.filter_by(
             action_id=action_id).first() is not None
+
+
+def open_confirmations(action_id):
+    """Every unconsumed, unexpired confirmation for action_id: the set the
+    confirm route is about to consume, and so the set whose digests must
+    all match the payload it is about to execute (#559)."""
+    now = _utcnow()
+    return ActionConfirmation.query.filter(
+        ActionConfirmation.action_id == action_id,
+        ActionConfirmation.consumed_at.is_(None),
+        ActionConfirmation.expires_at > now,
+    ).all()
 
 
 def consume_confirmation(action_id):
