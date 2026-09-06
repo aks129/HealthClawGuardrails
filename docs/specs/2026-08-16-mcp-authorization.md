@@ -770,6 +770,9 @@ construction. The recording therefore needs no redaction and there is no
 **Artifact:** `services/agent-orchestrator/qa/oauth-walkthrough.sh`, in the
 pattern of `examples/aidbox-healthclaw-guardrails/scripts/walkthrough.sh` — it
 asserts, it fails loudly, and each failure names the guarantee that broke.
+**Written 2026-09-06** (#568): it runs the machine-checkable chain against a
+deployed pair under the demo policy, and says which of R4, R6 and R7 it
+defers to the server's own test suite and why.
 Plus a Playwright test in the pattern of
 `examples/aidbox-healthclaw-guardrails/qa/` that makes the same real calls and
 renders each result as it lands, so a video showing a pass cannot exist unless
