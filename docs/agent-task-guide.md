@@ -223,6 +223,15 @@ auditor.
   CodeQL here is GitHub default setup, which runs only against the default
   branch, so even once #588 has landed a stacked pull request gets 15 checks
   where one into `main` gets 19. Count the checks on a stacked pull request; don't read the tick.
+- **A `pull_request_target` fix cannot show on its own pull request.** That
+  event runs the base branch's copy of the workflow, never the PR's. #643
+  moved the second reviewer's trigger to `pull_request_target` and left its
+  job condition on `pull_request`. The job skipped itself on every pull
+  request, and a skipped job reads as green in a check list. #651 fixed the
+  token, and its own run was still decided by main's broken file. Verify such
+  a fix on the first pull-request event after it merges, not before. The
+  property is pinned: `tests/test_ci_hardening.py` refuses a job condition
+  that names an event its workflow never listens for.
 
 ---
 
