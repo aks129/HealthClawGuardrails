@@ -1132,8 +1132,18 @@ end-user run.
   port.
 - A manual client id and secret can be pasted under "Advanced settings"; that
   path is not designed for and not needed.
-- Whether Claude uses the refresh grant is not stated. The server offers it
-  (§13.5); the end-user run reports whether it was taken.
+- **Claude registers as a confidential client**: its registration body carries
+  `token_endpoint_auth_method: client_secret_post`, and at the token endpoint
+  it sends `client_id` and `client_secret` in the form body, as
+  `application/x-www-form-urlencoded`, for the code exchange and for refresh
+  (Anthropic's connector authentication notes, read 2026-09-06). The MCP
+  Python SDK's client, which Claude's user agent identifies, sends the
+  credential the way the registration answered, refuses a registration that
+  names a secret-bearing method without a secret, uses the refresh grant, and
+  sends RFC 8707 `resource` when the protocol version calls for it. So the
+  token endpoint's client authentication (P2-d, #669) is what Claude expects,
+  and the refresh chain (§13.5) will be exercised. Still measured only by the
+  §8.4 run.
 
 ### 13.2 The shape: Flask stays the issuer, CareAgents is the front door
 
