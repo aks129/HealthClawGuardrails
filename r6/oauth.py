@@ -41,6 +41,8 @@ CLIENT_TTL_SECONDS = 30 * 24 * 3600
 #: RFC 7591 methods a client may register with. `none` is a public client:
 #: no secret is issued and `client_id` is required at the token endpoint.
 CLIENT_AUTH_METHODS = ('none', 'client_secret_post', 'client_secret_basic')
+#: A refresh token lives this long and rotates on every use (§13.5).
+REFRESH_TTL_SECONDS = 30 * 24 * 3600
 #: A consent outlives every token issued under it; the refresh chain (§13.5)
 #: is 30 days, so the record lives a day longer than the last token could.
 CONSENT_TTL_SECONDS = 31 * 24 * 3600
@@ -199,7 +201,7 @@ def discovery_document():
         'revocation_endpoint': f'{base}/r6/fhir/oauth/revoke',
         'scopes_supported': list(SMART_SCOPES.keys()),
         'response_types_supported': ['code'],
-        'grant_types_supported': ['authorization_code'],
+        'grant_types_supported': ['authorization_code', 'refresh_token'],
         'token_endpoint_auth_methods_supported': list(CLIENT_AUTH_METHODS),
         'code_challenge_methods_supported': ['S256'],
         'authorization_response_iss_parameter_supported': True,
@@ -236,6 +238,134 @@ def introspection_client_authorized(body):
             and constant_time_equal(client_secret, expected_secret))
 
 
+def _issue_tokens(grant, chain_id):
+    """An access token and a fresh refresh token for `grant` (the code
+    record or the refresh record being rotated). Both carry the audience, the
+    tenant and the consent; the refresh token joins `chain_id`, the thread
+    that reuse detection cuts (§13.5)."""
+    access_token = secrets.token_urlsafe(48)
+    _oauth_store_set('access-token', access_token, {
+        'client_id': grant['client_id'],
+        'scopes': grant['scopes'],
+        'tenant_id': grant['tenant_id'],
+        'aud': grant.get('aud'),
+        'consent_id': grant.get('consent_id'),
+        'exp': time.time() + TOKEN_TTL_SECONDS,
+    }, ttl=TOKEN_TTL_SECONDS)
+    refresh_token = secrets.token_urlsafe(48)
+    refresh_exp = time.time() + REFRESH_TTL_SECONDS
+    _oauth_store_set('refresh-token', refresh_token, {
+        'client_id': grant['client_id'],
+        'scopes': grant['scopes'],
+        'tenant_id': grant['tenant_id'],
+        'aud': grant.get('aud'),
+        'consent_id': grant.get('consent_id'),
+        'chain_id': chain_id,
+        'exp': refresh_exp,
+    }, ttl=REFRESH_TTL_SECONDS)
+    chain = _oauth_store_get('refresh-chain', chain_id) or {}
+    access_hashes = list(chain.get('access_hashes') or [])[-64:]
+    access_hashes.append(hashlib.sha256(access_token.encode('utf-8')).hexdigest())
+    _oauth_store_set('refresh-chain', chain_id, {
+        'current': refresh_token, 'revoked': False, 'access_hashes': access_hashes,
+    }, ttl=REFRESH_TTL_SECONDS)
+    response = jsonify({
+        'access_token': access_token,
+        'token_type': 'Bearer',
+        'expires_in': TOKEN_TTL_SECONDS,
+        'refresh_token': refresh_token,
+        'scope': ' '.join(grant['scopes']),
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _client_authenticates(body, client_id_on_grant):
+    """The client presenting `body` is the one the grant was issued to,
+    authenticated the way it registered. Returns an error response or None."""
+    client_id, client_secret = _presented_client_credentials(body)
+    registered_client = _oauth_store_get('client', client_id_on_grant) or {}
+    auth_method = registered_client.get('token_endpoint_auth_method', 'client_secret_post')
+    if auth_method == 'none':
+        if not client_id:
+            return jsonify({'error': 'invalid_request',
+                          'error_description': 'client_id required for a public client'}), 400
+    else:
+        expected_secret = registered_client.get('client_secret') or ''
+        if not client_secret or not expected_secret or not constant_time_equal(
+                client_secret, expected_secret):
+            return jsonify({'error': 'invalid_client'}), 401
+    if client_id and client_id != client_id_on_grant:
+        return jsonify({'error': 'invalid_grant',
+                      'error_description': 'Client ID mismatch'}), 400
+    return None
+
+
+def _revoke_refresh_chain(chain_id):
+    """End a chain: the live refresh token and every access token the chain
+    issued die together. An access token minted beside a refresh token that
+    was just replayed is the same compromise with a shorter fuse."""
+    chain = _oauth_store_get('refresh-chain', chain_id)
+    if not chain:
+        return
+    current = chain.get('current')
+    if current:
+        _oauth_store_delete('refresh-token', current)
+    for token_hash in chain.get('access_hashes') or []:
+        _oauth_revoke_hash(token_hash, TOKEN_TTL_SECONDS)
+    _oauth_store_set('refresh-chain', chain_id, {'current': None, 'revoked': True,
+                                                 'access_hashes': []},
+                     ttl=REFRESH_TTL_SECONDS)
+
+
+def _refresh_grant(body):
+    """`grant_type=refresh_token` with rotation (OAuth 2.1 §4.3.1, §13.5).
+
+    The presenter is authenticated first; only then is the token spent. A
+    token that was already spent is a reuse: the whole chain is revoked,
+    access tokens included, because either the client or somebody holding a
+    copy of its token is replaying, and the server cannot tell which.
+    """
+    presented = (body.get('refresh_token') or '').strip()
+    if not presented:
+        return jsonify({'error': 'invalid_request',
+                      'error_description': 'refresh_token required'}), 400
+    presented_hash = hashlib.sha256(presented.encode('utf-8')).hexdigest()
+    record = _oauth_store_get('refresh-token', presented)
+    if not record:
+        spent_chain = _oauth_store_get('refresh-used', presented_hash)
+        if spent_chain:
+            _revoke_refresh_chain(spent_chain)
+        return jsonify({'error': 'invalid_grant'}), 400
+    # The presenter is authenticated against the client the token was issued
+    # to BEFORE the token is spent: a stranger who has the value but not the
+    # client's credential must not be able to burn it for the real client.
+    refused = _client_authenticates(body, record['client_id'])
+    if refused is not None:
+        return refused
+    if _oauth_store_pop('refresh-token', presented) is None:
+        # Spent between the read and now: a concurrent presentation. That is
+        # the reuse rule's territory, and the chain goes with it.
+        _revoke_refresh_chain(record['chain_id'])
+        return jsonify({'error': 'invalid_grant'}), 400
+    _oauth_store_set('refresh-used', presented_hash, record['chain_id'],
+                     ttl=max(1, int(record['exp'] - time.time())))
+    chain = _oauth_store_get('refresh-chain', record['chain_id']) or {}
+    if chain.get('revoked') or record['exp'] < time.time():
+        return jsonify({'error': 'invalid_grant'}), 400
+    if not consent_is_live(record.get('consent_id')):
+        return jsonify({'error': 'invalid_grant'}), 400
+    resource = (body.get('resource') or '').strip()
+    if resource and resource != record.get('aud'):
+        return jsonify({'error': 'invalid_target'}), 400
+    requested = (body.get('scope') or '').split()
+    if requested:
+        if not set(requested) <= set(record['scopes']):
+            return jsonify({'error': 'invalid_scope'}), 400
+        record = {**record, 'scopes': requested}
+    return _issue_tokens(record, chain_id=record['chain_id'])
+
+
 def _presented_client_credentials(body):
     """(client_id, client_secret) from the POST body, else HTTP Basic."""
     client_id = body.get('client_id')
@@ -266,6 +396,9 @@ _redis_client = None
 
 _consent_requests = {}  # request_id -> parked authorize parameters (§13.3)
 _consents = {}  # consent_id -> {tenant_id, client_id, scopes, granted_at, revoked_at}
+_refresh_tokens = {}  # refresh token -> {client_id, scopes, tenant_id, aud, consent_id, chain_id, exp}
+_refresh_used = {}  # sha256(rotated refresh token) -> chain_id, for reuse detection
+_refresh_chains = {}  # chain_id -> {current, revoked}
 
 _OAUTH_STORES = {
     'client': _registered_clients,
@@ -273,6 +406,9 @@ _OAUTH_STORES = {
     'access-token': _access_tokens,
     'consent-request': _consent_requests,
     'consent': _consents,
+    'refresh-token': _refresh_tokens,
+    'refresh-used': _refresh_used,
+    'refresh-chain': _refresh_chains,
 }
 
 
@@ -359,6 +495,20 @@ def _oauth_store_delete(kind, key):
 
 def _oauth_revoke(token, ttl):
     token_hash = hashlib.sha256(token.encode()).hexdigest()
+    client = _get_redis_client()
+    if client is not None:
+        try:
+            client.set(_oauth_key('revoked', token_hash), '1', ex=max(1, ttl))
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.error('OAuth Redis revoke failed: %s', type(exc).__name__)
+            if _is_production():
+                raise RuntimeError('OAuth state store unavailable') from None
+    _revoked_tokens.add(token_hash)
+
+
+def _oauth_revoke_hash(token_hash, ttl):
+    """Revoke by hash: the chain record keeps hashes, never token values."""
     client = _get_redis_client()
     if client is not None:
         try:
@@ -697,10 +847,12 @@ def register_oauth_routes(blueprint):
     def token():
         """OAuth 2.1 token endpoint."""
         grant_type = request.form.get('grant_type') or (request.get_json(silent=True) or {}).get('grant_type')
+        body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+        if grant_type == 'refresh_token':
+            return _refresh_grant(body)
         if grant_type != 'authorization_code':
             return jsonify({'error': 'unsupported_grant_type'}), 400
 
-        body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
         code = body.get('code')
         code_verifier = body.get('code_verifier')
         client_id, client_secret = _presented_client_credentials(body)
@@ -765,23 +917,7 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_target',
                           'error_description': 'resource does not match the authorization'}), 400
 
-        # Issue access token
-        access_token = secrets.token_urlsafe(48)
-        _oauth_store_set('access-token', access_token, {
-            'client_id': auth_code['client_id'],
-            'scopes': auth_code['scopes'],
-            'tenant_id': auth_code['tenant_id'],
-            'aud': auth_code.get('aud'),
-            'consent_id': auth_code.get('consent_id'),
-            'exp': time.time() + TOKEN_TTL_SECONDS,
-        }, ttl=TOKEN_TTL_SECONDS)
-
-        return jsonify({
-            'access_token': access_token,
-            'token_type': 'Bearer',
-            'expires_in': TOKEN_TTL_SECONDS,
-            'scope': ' '.join(auth_code['scopes']),
-        })
+        return _issue_tokens(auth_code, chain_id=secrets.token_urlsafe(16))
 
     # --- Token Introspection (RFC 7662) ---
 
@@ -826,6 +962,10 @@ def register_oauth_routes(blueprint):
         body = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
         token_value = body.get('token')
         if token_value:
+            refresh = _oauth_store_pop('refresh-token', token_value)
+            if refresh:
+                _revoke_refresh_chain(refresh['chain_id'])
+                return '', 200
             token_info = _oauth_store_get('access-token', token_value) or {}
             ttl = max(1, int(token_info.get('exp', time.time()) - time.time()))
             _oauth_store_delete('access-token', token_value)
