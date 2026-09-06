@@ -251,6 +251,18 @@ auditor.
   two seconds after a pull request opened, fired the reviewer's
   `issue_comment` run and cancelled the review it was supposed to leave
   alone (#653, fixed in #654 with a test).
+- **A hash stored beside the thing it attests attests nothing.** The first
+  human-gate digest (#658) was a sha256 in the same table a writer with
+  database access could rewrite; forge the payload and the digest together
+  and the audit line vouched for the forgery. An adversarial pass against a
+  live database found it in an hour. Key a digest with a secret the
+  database does not hold (the step-up secret), and ask for that kind of
+  pass on any guardrail change before it is armed.
+- **An SDC definition names its resource type twice.** The StructureDefinition
+  URL before `#` and the element path after it both carry a type, and a
+  check that reads one lets `AllergyIntolerance#Patient.name.given` file an
+  allergen into the Patient (#664). Check both where the URL names a type;
+  say plainly that a profile URL cannot be checked without resolving it.
 
 ---
 
