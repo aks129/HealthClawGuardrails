@@ -265,6 +265,29 @@ auditor.
   say plainly that a profile URL cannot be checked without resolving it.
 
 ---
+- **A mutation that does not compile reads as caught.** A TypeScript mutation
+  that broke the types made ts-jest fail before any test ran, and the runner
+  reported `Tests: 0 total` with a non-zero exit, which a script that checks
+  only the exit code prints as CAUGHT (2026-09-06, the MCP server's OAuth
+  path). Read the summary line: a mutation is caught when tests ran and some
+  failed, not when nothing ran. Write the mutation so it compiles (an
+  environment-variable guard instead of a literal `false` keeps the type
+  narrowing) and count the failures.
+- **SQLite also ignores foreign keys, and no test deletes the parent.** A
+  grant table pointed at the connections table; `delete_connection` removed
+  the connection row; every SQLite run passed and Railway Postgres would have
+  refused the first real delete (#670, found in review). The Postgres lane
+  only catches what a test exercises, so when a new row references an old
+  one, write the test that deletes the old one, on both lanes.
+- **An assertion joined with `or` may not be able to fail.** `assert a == b or
+  c.startswith(...)` passed for a reason that had nothing to do with the
+  property; the second clause was always true. Read every `or` in an assert
+  as "which half could ever be false here"; if the answer is neither, the
+  test measures nothing (found in review, 2026-09-06).
+- **`HealthClawClient` caches its `/r6/fhir` base at construction.** A test
+  that repoints `client.base` to a dead port to simulate an outage leaves
+  `client.fhir` pointing at the live one, and the outage never happens;
+  set both (Mac mini session, 2026-09-06, probing #670's revoke path).
 
 ## 7. Working style
 
