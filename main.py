@@ -291,6 +291,9 @@ def _register_request_hooks(flask_app: Flask) -> None:
     from r6.access import install_audit_assertions, register_error_handlers
 
     register_error_handlers(flask_app)
+    # The payload seal (#528) is a class of refusal, not one route's (#620).
+    from r6.actions.errors import register_error_handlers as register_seal_handler
+    register_seal_handler(flask_app)
     install_audit_assertions(flask_app)
 
     @flask_app.context_processor
