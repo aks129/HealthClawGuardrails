@@ -44,72 +44,90 @@ Telegram is the chat-app path.
 ## The 10-minute demo script (works in any connected agent)
 
 Say these to your agent, in order. Each one exercises a different part of the
-stack. Everything runs against the synthetic demo tenant.
+stack. Everything runs against the synthetic demo tenant. It contains several
+patients. Select one before asking clinical questions, and keep that patient
+throughout the walkthrough. Ten minutes is a planning estimate, not a measured
+setup time for every client.
 
 1. **Confirm the connection**
    > What HealthClaw tools do you have available? List them by group.
 
-2. **Record summary**
-   > Give me a summary of the health record — patients, conditions,
-   > observations, medications. Use the HealthClaw tools.
+2. **Choose a synthetic patient, then summarize their records**
+   > Use fhir_search with resource_type Patient. Show the returned patient
+   > references and ask me which one to use. Do not combine their records.
+
+   Choose a returned `Patient/<id>`. Then say:
+
+   > Use that patient for the rest of this demo. Search their conditions,
+   > observations, and medications with the patient filter. Summarize only
+   > those records and say what you could not establish.
 
 3. **Lab interpretation** (decision support, never diagnosis)
-   > Interpret the recent lab results. Anything out of range? Explain in
-   > plain language.
+   > Call fhir_interpret_labs with subject set to the selected Patient
+   > reference. Explain the recent lab results in plain language.
 
 4. **Preventive care gaps** — the "what am I due for?" question
-   > What preventive care is this patient due for? Check the care gaps.
+   > Call care_gaps with subject set to the same Patient reference. Explain
+   > what may be due and what could not be checked.
+
+   If the result says `ambiguous-patient`, no patient was evaluated. Repeat
+   the call with the selected reference. An empty result is not evidence that
+   nothing is overdue.
 
 5. **Data quality (Curatr)**
-   > Run a data-quality check on the observations and conditions in this
-   > record. Any coding problems?
+   > Run Curatr on an observation or condition returned for the selected
+   > patient. Use its returned resource type and id. Any coding problems?
 
 6. **Next-steps synthesis**
    > Based on everything you found — the labs, the care gaps, the data
    > quality — what are the recommended next steps? Note what needs a
    > clinician.
 
-7. **The guardrails money shot** — show safety is enforced, not promised
+7. **Inspect the guardrail self-test**
    > Run the guardrail conformance check and show me the grade.
 
-   (Returns a live A–F scorecard proving PHI redaction, audit, step-up,
-   human-in-the-loop, tenant isolation, disclaimers, and error fidelity are
-   active.)
+   The scorecard measures redaction, audit, step-up, the confirmation gate,
+   tenant isolation, disclaimers, and error fidelity on synthetic data.
+   Read its scope notes. It is not a clinical assessment or an independent
+   security audit. The direct-write confirmation check does not establish
+   human attestation, as its report explains.
 
 8. **Show that writes are gated**
-   > Try to write an observation to the record.
+   > Call fhir_commit_write to create a synthetic observation for the selected
+   > patient. Do not supply credentials. Show the refusal without retrying.
 
-   The agent will hit the step-up + human-confirmation gate — that 428 is
-   the feature. Nothing is written without cryptographic authorization and
-   an explicit human yes.
+   The keyless demo refuses this call with "Step-up authorization required".
+   The JSON-RPC bridge returns that refusal inside `result`, even with HTTP
+   200. Inspect the body. This proves a missing-credential refusal, not the
+   separate human approval and execution journey.
 
-9. **Share a record safely** (SMART Health Links)
-   > Generate a secure share link for this patient's record.
+9. **Inspect the share-link gate** (SMART Health Links)
+   > Call shl_generate without credentials. Show its refusal without retrying.
+
+   Sharing also requires step-up authorization. The keyless demo returns
+   "Step-up authorization required", not a working link. Creating a link is
+   a separate authorized workflow.
 
 ## Connecting your own health data (Fasten Connect)
 
-The demo tenant is synthetic. To put YOUR records behind the guardrails:
+**The demo connector cannot read your private records.** It ignores supplied
+tenant context and stays on synthetic data. Pasting a private tenant or token
+into chat does not change that. Do not paste credentials into the demo chat.
 
-1. Open `https://app.healthclaw.io/connect/<your-tenant-id>` — pick a long,
-   unguessable tenant id (e.g. `jane-k8f3q9w2`); it names your private,
-   isolated data space.
-2. Click connect. The Fasten Stitch widget walks you through **identity
-   verification (CLEAR or ID.me)** and connecting your providers — TEFCA
-   network access means one verification covers participating systems.
-3. When the connection completes, the page shows a one-time
-   **"Connect your AI assistant"** card: your tenant id + a **read-only
-   token** (30-day expiry). Click "Copy setup message" and paste it into
-   your assistant. That's it — your agent now reads your records, and only
-   reads: the token is cryptographically scoped so it can never write.
-4. Records stream in over the next 5–45 minutes.
+Real-record access needs a separately configured path:
 
-Treat the token like a password. Lost or expired tokens: email
-support@healthclaw.io for a re-issue (tokens are minted only once per
-connection, so a lost token is a support request, not a reconnect).
+- **CareAgents:** follow the [beta tester guide](../beta-tester-guide.md).
+  Real-record connections are closed for the current synthetic cohort.
+  If your account has separately authorized access, use the connection flow
+  offered in its hub. A "coming soon" tile does not start a connection.
+- **A local MCP client:** an operator must configure the production endpoint,
+  its deployment bearer credential, and the tenant-bound read credential.
+  See [tenancy and auth](mcp-generic.md#tenancy-and-auth). Credentials belong
+  in the client's protected configuration, not in a conversation.
 
-Other sources, same guardrails: **Health Bank One / HealthEx / MEDENT**
-(OAuth pulls with in-process PHI redaction — see `scripts/`), and
-**Apple Health / Fitbit** wearables sync.
+Hosted connector access to private records remains pending
+[#290](https://github.com/aks129/HealthClawGuardrails/issues/290). A successful
+demo connection does not prove that private-record access is configured.
 
 **If you are recording videos: stay on the synthetic demo tenant.** Never
 film real PHI, including your own.
