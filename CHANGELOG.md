@@ -7,6 +7,48 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+Work merged since 1.9.0 has not been cut as a release. The themes below are
+what a reader of the code will notice; the full list is the
+[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v1.9.0...main).
+
+### Added
+
+- **An access kernel.** `r6/access.py` is now the one tenant reader, step-up
+  gate, audit call and FHIR exit, and the blueprints adopt it a slice at a
+  time. `require_grant` raises rather than returning a tuple a caller can
+  mis-read; `has_grant` answers the same question where a route needs a
+  predicate rather than a gate. A refusal states its reason.
+- **A connector registry**, so adding an upstream FHIR server is a row rather
+  than a code path, with authenticated proxying to a real server.
+- **Measurement published rather than asserted**: the dashboard shows what the
+  conformance harness does *not* grade, alongside what it does.
+- Clinical reading surfaces: lab trends over time, chart answers in chat,
+  medication names followed through references, opt-in terminology lookup for
+  codes the static table lacks, and three years of synthetic home blood
+  pressure for the demo patients.
+
+### Changed
+
+- Tenant ids are validated at sites that previously accepted any string.
+- Agent runs are covered by the audit rule rather than exempt from it.
+
+### Fixed
+
+Most of the merged work is corrections, and the pattern is worth stating: each
+one adds the test that would have caught it, and several add a guard that
+fails when the shape returns. Where a fix could not be verified end to end,
+the gap is filed as an issue rather than described as closed.
+
+### Security
+
+- Direct clinical FHIR writes still gate on a client-supplied
+  `X-Human-Confirmed` header, which remains a
+  [known gap](https://github.com/aks129/HealthClawGuardrails/issues/214). The
+  action rail — propose, commit, approve out of band — is the mechanism that
+  actually keeps an agent from approving its own action, and new write paths
+  are expected to use it.
+
+
 ## [1.9.0] — 2026-07-19 — CareAgents Consumer App + Forms Rail End-to-End + Grade A (7/7)
 
 ### Added
