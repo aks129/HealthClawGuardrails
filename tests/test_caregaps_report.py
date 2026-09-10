@@ -84,6 +84,25 @@ def test_consumer_summary_up_to_date_line_mentions_last_done():
     assert "up to date" in line["message"].lower()
 
 
+def test_the_up_to_date_line_says_it_is_about_timing_not_the_result():
+    """A cadence statement that reads as a result statement is a false
+    reassurance. "Your blood pressure check looks up to date" reached a
+    patient whose every reading was stage 2 — accurate about when, taken as
+    a verdict about what.
+
+    MUTATION: drop the "not what it showed" clause -> red.
+    """
+    results = [_result(status="up_to_date", last_done="2026-03-01",
+                       title="Blood pressure check")]
+    message = build_consumer_summary(results)["lines"][0]["message"].lower()
+
+    assert "timing" in message or "when it was done" in message
+    assert "not what it showed" in message
+    for reassurance in ("looks fine", "is fine", "normal", "controlled",
+                        "no concern"):
+        assert reassurance not in message
+
+
 def test_an_undecided_screening_the_patient_is_eligible_for_gets_a_line():
     """#436 — an indeterminate screening used to give the patient no line.
 

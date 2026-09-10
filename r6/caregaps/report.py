@@ -93,9 +93,16 @@ def _consumer_line(r):
         return {"rule_id": r.get("rule_id"), "title": title, "status": status,
                 "message": f"You may be due for {title.lower()} ({cadence}). {note}"}
     if status == "up_to_date":
+        # "Up to date" is a statement about WHEN, and it was being read as a
+        # statement about WHAT. A recorded demo had the assistant tell a
+        # patient their blood pressure monitoring "looks up to date" while
+        # every reading on file was stage 2 — true about cadence, taken as
+        # reassurance about control. The line now says which of the two it
+        # is, in the sentence itself rather than a footnote nobody reads.
         return {"rule_id": r.get("rule_id"), "title": title, "status": status,
-                "message": (f"Your {title.lower()} looks up to date "
-                            f"(last on {r.get('last_done')}).")}
+                "message": (f"Your {title.lower()} is up to date on timing "
+                            f"(last on {r.get('last_done')}). This checks when "
+                            f"it was done, not what it showed.")}
     # An undecided screening the person is ELIGIBLE for (#436). #428 made
     # colorectal screening indeterminate rather than let it claim a gap it had
     # not checked for, and its PR said the prompt to act survived the status
