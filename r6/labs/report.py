@@ -113,9 +113,14 @@ def _unevaluated_marker(results):
     names = [_undecided_name(r) for r in undecided]
     causes = {r.get("indeterminate_reason") for r in undecided}
     causes.discard(None)
+    plural = len(undecided) > 1
     if len(causes) == 1:
         reason = causes.pop()
         why = _CAUSE_NOTES.get(reason, "it could not be interpreted")
+        if plural:
+            why = why.replace(" for it", " for them").replace(
+                "the result carried", "the results carried").replace(
+                "the value falls", "the values fall")
     else:
         reason = "partly-unevaluated"
         why = "they could not be interpreted, for more than one reason"
@@ -126,7 +131,7 @@ def _unevaluated_marker(results):
             "unevaluated_note": (
                 f"This check did not evaluate {listed}, because {why}. That is "
                 f"a limit on the check and not a statement about your health — "
-                f"ask your clinician to read {'them' if len(names) > 1 else 'it'}"
+                f"ask your clinician to read {'them' if plural else 'it'}"
                 f" directly.")}
 
 

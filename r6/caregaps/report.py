@@ -102,7 +102,8 @@ def _consumer_line(r):
         return {"rule_id": r.get("rule_id"), "title": title, "status": status,
                 "message": (f"Your {title.lower()} is up to date on timing "
                             f"(last on {r.get('last_done')}). This checks when "
-                            f"it was done, not what it showed.")}
+                            f"it was done, not what it showed or whether "
+                            f"anything has changed since.")}
     # An undecided screening the person is ELIGIBLE for (#436). #428 made
     # colorectal screening indeterminate rather than let it claim a gap it had
     # not checked for, and its PR said the prompt to act survived the status
