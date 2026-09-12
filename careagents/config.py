@@ -74,6 +74,12 @@ class Config:
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
         self.wearables_enabled = e.get(
             "CARE_WEARABLES_ENABLED", "").lower() in ("1", "true", "yes")
+        # Page-view counting for the pages anyone can open (careagents/
+        # analytics.py). Off unless asked for: it writes a row per day per
+        # page and nothing about a visitor, but a counter nobody switched on
+        # should not start counting because a deploy happened.
+        self.analytics_enabled = e.get(
+            "CARE_ANALYTICS", "").lower() in ("1", "true", "yes")
         # Real-record sources (Fasten, wearables, direct FHIR) for the beta
         # (council ruling 2026-09-02, D3). Gates NEW connections only: an
         # existing connection keeps refreshing, polling and deleting whatever

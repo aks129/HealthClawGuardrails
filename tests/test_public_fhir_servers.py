@@ -1,17 +1,23 @@
 """
-Integration tests against public FHIR servers.
+Integration tests against public FHIR servers. Opt-in, never default.
 
 Tests the FHIRUpstreamProxy and Flask route guardrails against real public
-FHIR servers. These tests require network access and may be slow.
+FHIR servers. They need network access, they are slow, and they assert
+against shared sandboxes nobody here controls, so they are not part of the
+default suite (#635): a default `pytest` run makes no network call, here or
+anywhere (tests/test_no_network_at_import.py pins the import-time half).
+The guardrail properties these exercise are pinned against a local server
+by tests/test_guardrail_conformance.py; this file checks the proxy against
+real upstreams and is evidence, not a gate.
 
 Tested servers:
   - HAPI FHIR R4: https://hapi.fhir.org/baseR4
   - SMART Health IT R4: https://r4.smarthealthit.org
 
 Run with:
-  python -m pytest tests/test_public_fhir_servers.py -v
-  python -m pytest tests/test_public_fhir_servers.py -v -k hapi
-  python -m pytest tests/test_public_fhir_servers.py -v -k smart
+  HEALTHCLAW_LIVE_FHIR_TESTS=1 python -m pytest tests/test_public_fhir_servers.py -v
+  HEALTHCLAW_LIVE_FHIR_TESTS=1 python -m pytest tests/test_public_fhir_servers.py -v -k hapi
+  HEALTHCLAW_LIVE_FHIR_TESTS=1 python -m pytest tests/test_public_fhir_servers.py -v -k smart
 """
 
 import json
@@ -19,6 +25,14 @@ import os
 import pytest
 
 from r6.fhir_proxy import FHIRUpstreamProxy, reset_proxy
+
+LIVE_FLAG = 'HEALTHCLAW_LIVE_FHIR_TESTS'
+
+# Every test in this module is skipped at collection unless the flag is set,
+# so the default suite never reaches the probes below.
+pytestmark = pytest.mark.skipif(
+    os.environ.get(LIVE_FLAG, '').strip().lower() not in ('1', 'true', 'yes'),
+    reason=f'live public FHIR servers; set {LIVE_FLAG}=1 to run')
 
 # --- Public FHIR servers ---
 HAPI_FHIR_R4 = 'https://hapi.fhir.org/baseR4'
@@ -37,12 +51,26 @@ def _server_reachable(url: str) -> bool:
         return False
 
 
-# Check reachability once at module load
-_hapi_available = _server_reachable(HAPI_FHIR_R4)
-_smart_available = _server_reachable(SMART_HEALTH_IT)
+# Reachability is probed lazily, once per session, by the first opted-in test
+# that asks; nothing runs at import. A probe that fails skips every test that
+# depends on that server, with the reason naming it. (The probe is still a
+# point-in-time answer: a server that goes away mid-run fails the tests that
+# reach it after that, which an opt-in run is allowed to report.)
 
-skip_hapi = pytest.mark.skipif(not _hapi_available, reason='HAPI FHIR R4 server unreachable')
-skip_smart = pytest.mark.skipif(not _smart_available, reason='SMART Health IT server unreachable')
+@pytest.fixture(scope='session')
+def hapi_reachable():
+    if not _server_reachable(HAPI_FHIR_R4):
+        pytest.skip('HAPI FHIR R4 server unreachable')
+
+
+@pytest.fixture(scope='session')
+def smart_reachable():
+    if not _server_reachable(SMART_HEALTH_IT):
+        pytest.skip('SMART Health IT server unreachable')
+
+
+skip_hapi = pytest.mark.usefixtures('hapi_reachable')
+skip_smart = pytest.mark.usefixtures('smart_reachable')
 
 
 # ============================================================================
@@ -220,8 +248,8 @@ class TestCrossServerComparison:
         self.hapi.close()
         self.smart.close()
 
-    @pytest.mark.skipif(not (_hapi_available and _smart_available),
-                        reason='Both FHIR servers must be reachable')
+    @skip_hapi
+    @skip_smart
     def test_both_servers_return_valid_bundles(self):
         """Both servers return structurally valid search Bundles."""
         hapi_result, _ = self.hapi.search('Patient', {'_count': '2'})
@@ -234,8 +262,8 @@ class TestCrossServerComparison:
             # offset paging can return a first page carrying only link.
             assert 'entry' in result or 'total' in result or 'link' in result
 
-    @pytest.mark.skipif(not (_hapi_available and _smart_available),
-                        reason='Both FHIR servers must be reachable')
+    @skip_hapi
+    @skip_smart
     def test_both_servers_metadata_connected(self):
         """Both servers report healthy via /metadata."""
         hapi_health = self.hapi.healthy()
@@ -244,8 +272,8 @@ class TestCrossServerComparison:
         assert hapi_health['status'] == 'connected'
         assert smart_health['status'] == 'connected'
 
-    @pytest.mark.skipif(not (_hapi_available and _smart_available),
-                        reason='Both FHIR servers must be reachable')
+    @skip_hapi
+    @skip_smart
     def test_url_rewriting_prevents_upstream_leakage(self):
         """Neither server's URLs leak through the proxy."""
         hapi_result, _ = self.hapi.search('Patient', {'_count': '1'})
