@@ -22,12 +22,13 @@ from collections import defaultdict, deque
 from functools import wraps
 from urllib.parse import quote
 
+import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
-from careagents import advisors, connectors
+from careagents import advisors, analytics, connectors
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
@@ -228,6 +229,29 @@ def create_app(config: Config | None = None,
         if request.query_string:
             target += "?" + request.query_string.decode("utf-8", "replace")
         return redirect(target, code=308)
+
+    # --- page-view counting (careagents/analytics.py) ------------------------
+
+    @app.after_request
+    def _count_a_public_page_view(response):
+        """One integer per day per public page, when the flag says so.
+
+        Deliberately narrow: only a page anyone can open, only a GET that
+        actually rendered, and the endpoint name rather than the URL, so
+        nothing a request supplies reaches the table. `record_view` refuses
+        any endpoint outside its own list, so a later hook in the wrong place
+        counts nothing rather than counting a signed-in person's pages.
+        """
+        if not cfg.analytics_enabled:
+            return response
+        if request.method != "GET" or response.status_code != 200:
+            return response
+        try:
+            analytics.record_view(svc.session, request.endpoint or "")
+        except Exception:                       # pragma: no cover - defensive
+            # A counter is never a reason a page fails to render.
+            logger.warning("page-view counting failed", exc_info=True)
+        return response
 
     # --- auth plumbing -------------------------------------------------------
 
@@ -626,16 +650,20 @@ def create_app(config: Config | None = None,
             # this file for claims about what was sent, approved, recorded or
             # retried rather than by another report about one arm.
             #
-            # `deleted: False` stays and is not the same claim: it is what
-            # keeps the connection linked here, which is observed — the
-            # unlink below is not reached — and is the conservative half.
-            return jsonify({"error": "deletion_failed", "deleted": False,
+            # No `deleted` field here at all (#586). `purge_tenant` raises on
+            # any non-200 and on a lost answer, so on this branch the records
+            # may be gone or may not; a field named `deleted` saying False
+            # would be wrong on exactly the outcome where the purge ran. What
+            # IS observed is that the unlink below was not reached, and the
+            # field says that by its name: the connection is still linked.
+            return jsonify({"error": "deletion_failed", "unlinked": False,
                             "message": "We couldn't confirm your records were "
                                        "deleted. Your connection is still "
                                        "linked here — please try again."}), 502
         svc.delete_connection(acct.id, conn_id)
         return jsonify({
             "deleted": True,
+            "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
             "audit_retained": True,
@@ -1675,5 +1703,26 @@ def create_app(config: Config | None = None,
                 "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
+
+    # --- reading the counter -------------------------------------------------
+
+    @app.cli.command("page-views")
+    @click.option("--days", default=7, show_default=True,
+                  help="How many UTC days back to print.")
+    def _page_views(days):
+        """Print the public-page view counts this app has recorded.
+
+        A command rather than a route on purpose: the numbers are for the
+        operator, and a new endpoint is a new thing to authorise, rate-limit
+        and get wrong.
+        """
+        rows = analytics.counts(svc.session, days=days)
+        if not rows:
+            click.echo("no page views recorded"
+                       + ("" if cfg.analytics_enabled
+                          else " (CARE_ANALYTICS is not set)"))
+            return
+        for day, endpoint, views in rows:
+            click.echo(f"{day}  {endpoint:<12} {views}")
 
     return app
