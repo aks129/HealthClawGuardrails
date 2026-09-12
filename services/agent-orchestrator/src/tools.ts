@@ -125,6 +125,38 @@ interface CachedReadToken {
 const READ_TOKEN_CACHE = new Map<string, CachedReadToken>();
 const READ_TOKEN_TTL_MS = 5 * 60 * 1000; // assume 5-min server TTL
 const READ_TOKEN_SKEW_MS = 30 * 1000; // re-mint 30s before expiry
+//: Read-scoped tokens minted for consented connections (spec §13.6), keyed
+//: by the SHA-256 of the OAuth token and never by tenant, so a revoked
+//: consent stops being served within the cache window.
+const GRANT_READ_TOKEN_CACHE = new Map<string, CachedReadToken>();
+const OAUTH_GRANT_HEADER = "x-oauth-grant";
+
+interface OAuthGrantMarker {
+  tenantId: string;
+  tokenHash: string;
+  expiresAtMs: number;
+}
+
+function parseGrantMarker(raw: string | undefined): OAuthGrantMarker | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<OAuthGrantMarker>;
+    if (
+      typeof parsed.tenantId === "string" &&
+      typeof parsed.tokenHash === "string" &&
+      typeof parsed.expiresAtMs === "number"
+    ) {
+      return parsed as OAuthGrantMarker;
+    }
+  } catch {
+    /* not a marker */
+  }
+  return null;
+}
+
+export function resetGrantReadTokenCacheForTests(): void {
+  GRANT_READ_TOKEN_CACHE.clear();
+}
 const PRIVILEGED_TOOL_NAMES = new Set(["fhir_get_token", "fhir_seed"]);
 
 export interface FHIRToolsOptions {
@@ -1134,6 +1166,11 @@ export class FHIRTools {
       return { error: `Unknown tool: ${toolName}` };
     }
 
+    const grant = parseGrantMarker(headers?.[OAUTH_GRANT_HEADER]);
+    if (grant) {
+      return this.executeAsGrant(tool, toolName, input, grant, headers?.["x-agent-id"]);
+    }
+
     // Preserve the stdio token tool's long-standing tenant fallback even
     // though its public schema requires tenant_id. HTTP never exposes this
     // privileged tool; local callers inherit the request/env demo tenant.
@@ -1206,6 +1243,89 @@ export class FHIRTools {
     }
 
     return tool.handler({ input: effectiveInput, headers: fwdHeaders, tenantId });
+  }
+
+  /**
+   * A tool call on behalf of a consented connection (spec §13.6). The tenant
+   * is the one introspection named; the only credential Flask sees is a
+   * read-scoped step-up token this server minted for it. A write-tier tool is
+   * refused before anything is sent: a consent to read is not a consent to
+   * write, and writes have their own human-approved rail.
+   */
+  private async executeAsGrant(
+    tool: RegisteredTool,
+    toolName: string,
+    input: Record<string, unknown>,
+    grant: OAuthGrantMarker,
+    agentId: string | undefined
+  ): Promise<Record<string, unknown>> {
+    if (tool.tier === "write") {
+      return {
+        error: "This connection is read-only",
+        tool: toolName,
+        message:
+          "A consented connection can read your records through the " +
+          "guardrails. Writes go through the human-approved action rail, " +
+          "never through this connection.",
+      };
+    }
+    if (!tool.validate(input)) {
+      return {
+        error: "Invalid tool input",
+        tool: toolName,
+        details: this.formatValidationErrors(tool.validate.errors),
+      };
+    }
+    const readToken = await this.ensureGrantReadToken(grant);
+    if (!readToken) {
+      // Fail closed: without a read credential the call is not made. A
+      // consented tenant is never reached with anything less than the
+      // credential its consent describes.
+      return {
+        error: "read_credential_unavailable",
+        tool: toolName,
+        message:
+          "The guardrail layer could not issue a read credential for this " +
+          "connection. Try again shortly.",
+      };
+    }
+    const fwdHeaders: Record<string, string> = {
+      "Content-Type": "application/fhir+json",
+      "X-Tenant-Id": grant.tenantId,
+      "X-Step-Up-Token": readToken,
+    };
+    if (agentId) fwdHeaders["X-Agent-Id"] = agentId;
+    return tool.handler({ input, headers: fwdHeaders, tenantId: grant.tenantId });
+  }
+
+  private async ensureGrantReadToken(grant: OAuthGrantMarker): Promise<string | null> {
+    const now = Date.now();
+    const cacheKey = `${this.serverRoot()}::${grant.tokenHash}`;
+    const cached = GRANT_READ_TOKEN_CACHE.get(cacheKey);
+    if (cached && cached.expiresAtMs - READ_TOKEN_SKEW_MS > now) return cached.token;
+    GRANT_READ_TOKEN_CACHE.delete(cacheKey);
+    const secret = process.env.INTERNAL_TOKEN_MINT_SECRET || "";
+    if (!secret) return null;
+    try {
+      const resp = await fetchWithTimeout(`${this.serverRoot()}/r6/fhir/internal/step-up-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Tenant-Id": grant.tenantId,
+          "X-Internal-Secret": secret,
+        },
+        body: JSON.stringify({ tenant_id: grant.tenantId, scope: "read" }),
+      });
+      if (!resp.ok) return null;
+      const data = (await resp.json()) as Record<string, unknown>;
+      const token = data.token;
+      if (typeof token !== "string" || !token || data.scope !== "read") return null;
+      const expiresAtMs = Math.min(now + READ_TOKEN_TTL_MS, grant.expiresAtMs);
+      GRANT_READ_TOKEN_CACHE.set(cacheKey, { token, expiresAtMs });
+      return token;
+    } catch {
+      return null;
+    }
   }
 
   async getContext(

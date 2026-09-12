@@ -19,6 +19,7 @@ Tests cover:
 import hashlib
 import base64
 import json
+from urllib.parse import parse_qs, urlsplit
 import secrets
 
 
@@ -318,6 +319,12 @@ class TestETagLifecycle:
 
 # ===== OAuth Complete Flow =====
 
+def _code_of(resp):
+    """The code rides in the 302 to the registered redirect URI (#568)."""
+    assert resp.status_code == 302, resp.get_data(as_text=True)
+    return parse_qs(urlsplit(resp.headers['Location']).query)['code'][0]
+
+
 class TestOAuthCompleteFlow:
     """Full OAuth 2.1 flow with error cases."""
 
@@ -349,7 +356,7 @@ class TestOAuthCompleteFlow:
             f'&redirect_uri=http://localhost/cb&scope=fhir.read'
             f'&code_challenge={challenge}&code_challenge_method=S256',
             headers=tenant_headers)
-        code = auth_resp.get_json()['code']
+        code = _code_of(auth_resp)
 
         # Use a DIFFERENT verifier
         token_resp = client.post('/r6/fhir/oauth/token',
@@ -357,6 +364,8 @@ class TestOAuthCompleteFlow:
                                     'grant_type': 'authorization_code',
                                     'code': code,
                                     'code_verifier': 'completely-wrong-verifier',
+                                    'client_id': reg['client_id'],
+                                    'client_secret': reg['client_secret'],
                                 }),
                                 content_type='application/json',
                                 headers=tenant_headers)
@@ -373,7 +382,7 @@ class TestOAuthCompleteFlow:
             f'&redirect_uri=http://localhost/cb&scope=fhir.read'
             f'&code_challenge={challenge}&code_challenge_method=S256',
             headers=tenant_headers)
-        code = auth_resp.get_json()['code']
+        code = _code_of(auth_resp)
 
         # First exchange succeeds
         client.post('/r6/fhir/oauth/token',
@@ -381,6 +390,8 @@ class TestOAuthCompleteFlow:
                         'grant_type': 'authorization_code',
                         'code': code,
                         'code_verifier': verifier,
+                        'client_id': reg['client_id'],
+                        'client_secret': reg['client_secret'],
                     }),
                     content_type='application/json',
                     headers=tenant_headers)
