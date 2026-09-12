@@ -22,12 +22,13 @@ from collections import defaultdict, deque
 from functools import wraps
 from urllib.parse import quote
 
+import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
-from careagents import advisors, connectors
+from careagents import advisors, analytics, connectors, consent
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
@@ -229,6 +230,29 @@ def create_app(config: Config | None = None,
             target += "?" + request.query_string.decode("utf-8", "replace")
         return redirect(target, code=308)
 
+    # --- page-view counting (careagents/analytics.py) ------------------------
+
+    @app.after_request
+    def _count_a_public_page_view(response):
+        """One integer per day per public page, when the flag says so.
+
+        Deliberately narrow: only a page anyone can open, only a GET that
+        actually rendered, and the endpoint name rather than the URL, so
+        nothing a request supplies reaches the table. `record_view` refuses
+        any endpoint outside its own list, so a later hook in the wrong place
+        counts nothing rather than counting a signed-in person's pages.
+        """
+        if not cfg.analytics_enabled:
+            return response
+        if request.method != "GET" or response.status_code != 200:
+            return response
+        try:
+            analytics.record_view(svc.session, request.endpoint or "")
+        except Exception:                       # pragma: no cover - defensive
+            # A counter is never a reason a page fails to render.
+            logger.warning("page-view counting failed", exc_info=True)
+        return response
+
     # --- auth plumbing -------------------------------------------------------
 
     def current_account():
@@ -284,12 +308,17 @@ def create_app(config: Config | None = None,
     @app.get("/home")
     @login_required
     def home():
+        # A consent request that was waiting on sign-in resumes here, once.
+        pending_req = session.pop("consent_req", None)
+        if pending_req:
+            return redirect(url_for("consent_authorize", req=pending_req))
         acct = current_account()
         data = svc.list_home(acct.id)
         return render_template(
             "home.html", me=acct, personas=PERSONAS,
             connections=data["connections"], agents=data["agents"],
             surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
+            grants=_grants_with_labels(svc.list_grants(acct.id), data["connections"]),
             telegram_bot=cfg.telegram_bot,
             imessage_handle=cfg.imessage_handle,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
@@ -399,6 +428,125 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "passkey sign-in failed"}), 400
         _login(acct)
         return jsonify({"ok": True})
+
+    # --- consent: a third-party agent asks to read one connection -----------
+    #
+    # HealthClaw parks the OAuth request and sends the browser here with a
+    # signed handle (spec §13.3). Nothing is fetched until the handle
+    # verifies; nothing is granted until a fresh, user-verified passkey says
+    # this person is present; and the decision goes back signed, single-use
+    # and short-lived. What is offered: the account's own connections, real
+    # ones only where CARE_REAL_RECORDS opens them (§13.7).
+
+    def _grants_with_labels(grants, connections):
+        labels = {c["id"]: c["label"] for c in connections}
+        return [{**g, "tenant_label": labels.get(g["connection_id"])} for g in grants]
+
+    def _consent_return(grant):
+        return (f"{cfg.healthclaw_public_base}/r6/fhir/oauth/consent/return"
+                f"?grant={grant}")
+
+    def _offered_connections(acct):
+        real_open = cfg.real_records_open_for(acct.email)
+        conns = svc.list_home(acct.id)["connections"]
+        return [c for c in conns
+                if c["status"] != "revoked"
+                and (c["kind"] == "sample" or real_open)], real_open
+
+    @app.get("/authorize")
+    def consent_authorize():
+        req = (request.args.get("req") or "").strip()
+        request_id = consent.parse_handle(req, cfg.mint_secret)
+        if request_id is None:
+            return render_template("consent.html", state="invalid",
+                                   me=current_account()), 400
+        if current_account() is None:
+            session["consent_req"] = req
+            return redirect(url_for("auth"))
+        parked = hc.consent_request(request_id)
+        if parked is None:
+            return render_template("consent.html", state="expired",
+                                   me=current_account()), 410
+        acct = current_account()
+        offered, real_open = _offered_connections(acct)
+        return render_template(
+            "consent.html", state="ask", req=req, me=acct,
+            client_name=parked.get("client_name") or "An agent",
+            scopes=[consent.describe_scope(x) for x in parked.get("scopes", [])],
+            connections=offered, real_open=real_open,
+            has_passkey=svc.has_passkey(acct.id),
+            privacy_url=f"{cfg.healthclaw_public_base}/privacy")
+
+    @app.post("/webauthn/consent/options")
+    @login_required
+    def wa_consent_options():
+        options, challenge = svc.authentication_options(require_uv=True)
+        session["wa_consent_challenge"] = challenge
+        return jsonify(options)
+
+    @app.post("/authorize/decide")
+    @login_required
+    def consent_decide():
+        body = request.get_json(force=True, silent=True) or {}
+        request_id = consent.parse_handle(body.get("req") or "", cfg.mint_secret)
+        if request_id is None:
+            return jsonify({"error": "This request is not valid any more."}), 400
+        if body.get("decision") != "approved":
+            grant, _ = consent.build_grant(cfg.mint_secret, request_id, "denied")
+            return jsonify({"redirect": _consent_return(grant)})
+
+        acct = current_account()
+        conn = svc.get_connection(acct.id, str(body.get("connection_id") or ""))
+        if conn is None or conn["status"] == "revoked":
+            return jsonify({"error": "unknown connection"}), 404
+        if conn["kind"] != "sample" and not cfg.real_records_open_for(acct.email):
+            return jsonify({"error": "Sharing real records is not open for "
+                                     "this account yet."}), 403
+
+        # The person, not the session: a fresh assertion with user
+        # verification, for this account.
+        challenge = session.pop("wa_consent_challenge", None)
+        if not challenge:
+            return jsonify({"error": "no challenge"}), 400
+        try:
+            verified = svc.finish_authentication(
+                body.get("passkey") or {}, challenge, require_uv=True)
+        except AuthError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception:  # noqa: BLE001
+            return jsonify({"error": "passkey check failed"}), 400
+        if verified.id != acct.id:
+            return jsonify({"error": "That passkey belongs to another account."}), 403
+
+        parked = hc.consent_request(request_id)
+        if parked is None:
+            return jsonify({"error": "This request has expired. Start again "
+                                     "from the app that asked."}), 410
+        grant, consent_id = consent.build_grant(
+            cfg.mint_secret, request_id, "approved", tenant_id=conn["tenant_id"])
+        svc.add_grant(acct.id, conn["id"], conn["tenant_id"],
+                      parked.get("client_id", ""), parked.get("client_name", ""),
+                      " ".join(parked.get("scopes", [])), consent_id)
+        return jsonify({"redirect": _consent_return(grant)})
+
+    @app.post("/api/grants/<grant_id>/revoke")
+    @login_required
+    def revoke_grant(grant_id):
+        """Take a consent back. HealthClaw first, the row here second, so a
+        revocation is never shown that did not happen."""
+        acct = current_account()
+        grant = svc.get_grant(acct.id, grant_id)
+        if grant is None:
+            return jsonify({"error": "unknown grant"}), 404
+        try:
+            hc.revoke_consent(grant["consent_id"])
+        except HealthClawError:
+            return jsonify({"error": "revocation_failed", "revoked": False,
+                            "message": "We couldn't confirm the access was "
+                                       "revoked. It is still shown here — "
+                                       "please try again."}), 502
+        svc.mark_grant_revoked(acct.id, grant_id)
+        return jsonify({"revoked": True, "grant_id": grant_id})
 
     # --- connections ---------------------------------------------------------
 
@@ -626,16 +774,41 @@ def create_app(config: Config | None = None,
             # this file for claims about what was sent, approved, recorded or
             # retried rather than by another report about one arm.
             #
-            # `deleted: False` stays and is not the same claim: it is what
-            # keeps the connection linked here, which is observed — the
-            # unlink below is not reached — and is the conservative half.
-            return jsonify({"error": "deletion_failed", "deleted": False,
+            # No `deleted` field here at all (#586). `purge_tenant` raises on
+            # any non-200 and on a lost answer, so on this branch the records
+            # may be gone or may not; a field named `deleted` saying False
+            # would be wrong on exactly the outcome where the purge ran. What
+            # IS observed is that the unlink below was not reached, and the
+            # field says that by its name: the connection is still linked.
+            return jsonify({"error": "deletion_failed", "unlinked": False,
                             "message": "We couldn't confirm your records were "
                                        "deleted. Your connection is still "
                                        "linked here — please try again."}), 502
+        # Anything still sharing these records is revoked at HealthClaw before
+        # the connection is unlinked (spec §13.4). A revoke that cannot be
+        # confirmed keeps the connection listed, so the person can see the
+        # grant still active and retry; the records are already gone either
+        # way, and this response says both halves plainly.
+        still_active = []
+        for grant in svc.grants_for_connection(acct.id, conn_id):
+            try:
+                hc.revoke_consent(grant["consent_id"])
+                svc.mark_grant_revoked(acct.id, grant["id"])
+            except HealthClawError:
+                still_active.append(grant["id"])
+        if still_active:
+            return jsonify({
+                "deleted": True, "unlinked": False, "grants_active": len(still_active),
+                "connection_id": conn_id,
+                "rows_deleted": purged.get("rows_deleted", 0),
+                "message": ("Your records were deleted, but we couldn't confirm "
+                            "that an app you shared them with was cut off. The "
+                            "connection stays listed so you can try again."),
+            }), 502
         svc.delete_connection(acct.id, conn_id)
         return jsonify({
             "deleted": True,
+            "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
             "audit_retained": True,
@@ -1675,5 +1848,26 @@ def create_app(config: Config | None = None,
                 "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
+
+    # --- reading the counter -------------------------------------------------
+
+    @app.cli.command("page-views")
+    @click.option("--days", default=7, show_default=True,
+                  help="How many UTC days back to print.")
+    def _page_views(days):
+        """Print the public-page view counts this app has recorded.
+
+        A command rather than a route on purpose: the numbers are for the
+        operator, and a new endpoint is a new thing to authorise, rate-limit
+        and get wrong.
+        """
+        rows = analytics.counts(svc.session, days=days)
+        if not rows:
+            click.echo("no page views recorded"
+                       + ("" if cfg.analytics_enabled
+                          else " (CARE_ANALYTICS is not set)"))
+            return
+        for day, endpoint, views in rows:
+            click.echo(f"{day}  {endpoint:<12} {views}")
 
     return app

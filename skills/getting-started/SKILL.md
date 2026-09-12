@@ -117,7 +117,7 @@ openclaw status                    # confirm "running"
 ```
 
 For an always-on Mac mini setup (LaunchAgent so it survives reboot), see
-[`docs/mac-mini-setup.md`](docs/mac-mini-setup.md) in this repo — it has the
+[`docs/always-on-gateway.md`](../../docs/always-on-gateway.md) in this repo — it has the
 full plist + `caffeinate` recipe.
 
 ### Persona workspaces
@@ -581,9 +581,12 @@ Your records — never leave this machine
 
 Once you've got a green Step 5 checklist:
 
-- **Add wearables** — see the `OPEN_WEARABLES_URL` env var and
-  [`docs/mac-mini-setup.md`](docs/mac-mini-setup.md) for the Open Wearables
-  sidecar (Fitbit / Oura / Whoop / Garmin / Apple Health).
+- **Add wearables** — point `OPEN_WEARABLES_URL` at an Open Wearables sidecar
+  (Fitbit / Oura / Whoop / Garmin / Apple Health); the client and poller that
+  read it are in [`r6/wearables/`](../../r6/wearables/). Keeping that sidecar
+  up across reboots is the same problem as the gateway, so
+  [`docs/always-on-gateway.md`](../../docs/always-on-gateway.md) applies to it
+  too.
 - **Run Curatr** — the `curatr_evaluate` MCP tool finds data quality issues
   (deprecated ICD-9 codes, contradictory smoking history, antibody titers
   flagged as pathology, etc.). See [`skills/curatr/SKILL.md`](../curatr/SKILL.md).

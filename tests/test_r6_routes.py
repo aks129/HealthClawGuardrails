@@ -3,6 +3,7 @@ Tests for R6 FHIR REST endpoints.
 """
 
 import json
+from urllib.parse import parse_qs, urlsplit
 
 
 class TestR6Metadata:
@@ -1038,10 +1039,10 @@ class TestOAuthFlow:
             f'&code_challenge_method=S256'
             f'&state=test-state',
             headers=tenant_headers)
-        assert auth_resp.status_code == 200
-        auth_data = auth_resp.get_json()
-        code = auth_data['code']
-        assert auth_data['state'] == 'test-state'
+        assert auth_resp.status_code == 302
+        auth_data = parse_qs(urlsplit(auth_resp.headers['Location']).query)
+        code = auth_data['code'][0]
+        assert auth_data['state'] == ['test-state']
 
         token_resp = client.post('/r6/fhir/oauth/token',
                                 data=json.dumps({
@@ -1049,6 +1050,7 @@ class TestOAuthFlow:
                                     'code': code,
                                     'code_verifier': code_verifier,
                                     'client_id': client_id,
+                                    'client_secret': reg_resp.get_json()['client_secret'],
                                 }),
                                 content_type='application/json',
                                 headers=tenant_headers)
@@ -1082,13 +1084,15 @@ class TestOAuthFlow:
             f'&redirect_uri=http://localhost/cb&scope=fhir.read'
             f'&code_challenge={code_challenge}&code_challenge_method=S256',
             headers=tenant_headers)
-        code = auth_resp.get_json()['code']
+        code = parse_qs(urlsplit(auth_resp.headers['Location']).query)['code'][0]
 
         token_resp = client.post('/r6/fhir/oauth/token',
                                 data=json.dumps({
                                     'grant_type': 'authorization_code',
                                     'code': code,
                                     'code_verifier': code_verifier,
+                                    'client_id': client_id,
+                                    'client_secret': reg_resp.get_json()['client_secret'],
                                 }),
                                 content_type='application/json',
                                 headers=tenant_headers)

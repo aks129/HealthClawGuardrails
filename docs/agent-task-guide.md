@@ -251,6 +251,107 @@ auditor.
 
 ---
 
+## 8. Working alongside the other agent
+
+Two agents work this repository, in different tools, on the same clock. They
+cannot see each other's sessions, and neither can read the other's local
+notes. What they share is git and GitHub, so every rule below is expressed in
+something both can read from a terminal.
+
+### Before you start: ask whether anybody is already in there
+
+```
+scripts/lane_check.py r6/access.py careagents/
+```
+
+It fetches, then reports every open pull request, every checked-out worktree
+and every claimed issue that already touches those paths, and exits non-zero
+when it finds one. Exit 2 means it could not answer — no `gh`, a failed fetch
+— which is not a green light.
+
+Run it before the first edit, not after. The expensive collision is not two
+commits on one line; it is two half-finished branches doing the same job,
+found at review time.
+
+### Lanes
+
+Ownership is by path, because that is what a diff collides on. The `area:`
+labels on issues already name the same split, so an issue's label tells you
+whose lane its work lands in.
+
+| Paths | Lane |
+| --- | --- |
+| `r6/access.py`, `r6/read_auth.py`, `r6/stepup.py`, `r6/oauth.py`, `r6/audit.py`, `r6/redaction.py` | guardrail core |
+| `services/agent-orchestrator/`, the OAuth spec and its runbook | connector chain |
+| `careagents/` | consumer app |
+| `docs/quickstarts/`, `docs/evidence/`, partner and ecosystem material | adoption |
+| `r6/sdc/`, `r6/actions/`, clinical rails | clinical |
+
+A lane is not a fence around a person. It says who to expect in a file, so
+that finding somebody else there is a signal rather than a surprise.
+
+**Shared surfaces** — `docs/`, `tests/`, CI workflows, the guide you are
+reading — belong to nobody and are touched by both. The rule there is
+narrower: name the shared file in the pull request body, so the other agent
+finds it by reading titles rather than by hitting a conflict.
+
+### Claiming
+
+The claim is the GitHub issue, because it is the only lock both tools can see
+and it survives a session ending.
+
+- Assign the issue to yourself before branching. No branch off `main` for
+  work you have not claimed.
+- A claim with no pushed branch after a few hours is stale; unassign it or say
+  on the issue why it is still yours.
+- Found something while working on something else? File the issue rather than
+  widening the branch. Two of today's findings were filed that way and neither
+  disturbed the pull request that produced them.
+
+### Branches and worktrees
+
+- **Prefix the branch with your lane**, so `git branch -r` reads as a
+  division of labour. `codex/` is taken.
+- **One worktree per branch, and the path says which**: `wt-<issue>` under
+  your own scratch directory. Never adopt a worktree you did not create, even
+  when the branch you want is already checked out in it — that is the
+  collision the rule exists to prevent.
+- **Push every branch you intend to keep.** An unpushed branch is invisible to
+  the other agent and to `lane_check.py`, and it is the one kind of work that
+  can be silently duplicated.
+- Remove your worktree when its pull request merges. Nobody else can tell
+  whether yours is finished.
+
+### Where the shared state lives
+
+Anything the other agent needs and cannot derive from the code — which
+branches are pushed but unopened, what they were cut from, the order they
+have to land in — goes on the board issue, **Held branches, fork points and
+the order they have to land in** (#685), not in a local note. Edit the issue
+when the state changes. A private file that only one agent reads is how two
+agents end up rebasing the same branch twice.
+
+### Staying current
+
+Start every working session, and every long turn, with the same two commands:
+
+```
+git fetch origin && git log --oneline -1 origin/main
+gh pr list --state open --json number,title,headRefName
+```
+
+Read the other agent's pull request titles, not only your own. That is what
+tells you a path has been taken since you last looked.
+
+### Reviewing each other
+
+Findings on the other agent's pull request go in a comment, with the
+reproduction that produced them. Do not approve it and do not merge it: the
+maintainer's approval is the gate (§7), and an agent approving an agent
+removes the only human step in the chain.
+
+---
+
 ## Related
 
 - [docs/constitution.md](constitution.md) — how we build: deep modules, seams,
