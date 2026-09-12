@@ -5430,6 +5430,53 @@ def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
     assert "Do NOT tell the person they have no screenings due" in out["note"]
 
 
+def test_labs_with_an_unevaluated_result_tell_the_model_what_zero_means(
+        cfg, svc):
+    """The marker reaching the model is necessary, not sufficient (#689).
+
+    Handed "high: 0, critical: 0" beside an unevaluated note, a model leads
+    with the zeros — that is how four stage 2 readings were summarised as
+    nothing flagged. Care gaps needed the same instruction (#417).
+
+    MUTATION: drop the note when `unevaluated` is set -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return {"summary": {}, "disclaimer": "d", "consumer": {
+                "lines": [], "unevaluated": "unknown-analyte",
+                "unevaluated_count": 2,
+                "unevaluated_analytes": ["Systolic blood pressure",
+                                         "Diastolic blood pressure"],
+                "unevaluated_note": "This check did not evaluate 2 results."}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    assert "INCOMPLETE" in out["note"]
+    assert "2" in out["note"]
+    assert "not that nothing is abnormal" in out["note"]
+    assert "unevaluated_note" in out["note"]
+
+
+def test_labs_with_every_result_scored_carry_no_note(cfg, svc):
+    """A note on a whole answer is noise, and noise gets ignored when it is
+    the one that matters."""
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return {"summary": {}, "disclaimer": "d",
+                    "consumer": {"lines": [{"analyte": "Potassium",
+                                            "flag": "N", "message": "ok"}]}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    assert "note" not in out
+
+
 def test_care_gaps_partial_result_reports_its_lines_and_says_what_is_missing(
         cfg, svc):
     """Some rules decided and some not (#417).
