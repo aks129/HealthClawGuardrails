@@ -1,6 +1,7 @@
 """OAuth state must survive worker changes when Redis is configured."""
 
 import base64
+from urllib.parse import parse_qs, urlsplit
 import hashlib
 
 from r6 import oauth
@@ -49,6 +50,7 @@ def test_oauth_flow_survives_process_local_state_loss(client, monkeypatch):
         "client_name": "Redis OAuth Client",
         "redirect_uris": ["https://client.example/callback"],
         "scope": "fhir.read",
+        "token_endpoint_auth_method": "none",
     }).get_json()
     _clear_process_local_oauth_state()
 
@@ -67,8 +69,8 @@ def test_oauth_flow_survives_process_local_state_loss(client, monkeypatch):
         },
         headers={"X-Tenant-Id": "desktop-demo"},
     )
-    assert authorized.status_code == 200
-    code = authorized.get_json()["code"]
+    assert authorized.status_code == 302
+    code = parse_qs(urlsplit(authorized.headers["Location"]).query)["code"][0]
     _clear_process_local_oauth_state()
 
     token_response = client.post("/r6/fhir/oauth/token", json={
