@@ -25,7 +25,23 @@ pressure is written).
 
 import pytest
 
+from r6.sdc import extract
 from r6.sdc.extract import COMMIT_WITHOUT_CONFIRMATION
+
+
+@pytest.fixture
+def engine_builds_these_types(monkeypatch):
+    """#681 stops a definition-based extraction for any type without an
+    element list, upstream of the commit gate, so on main the allergy,
+    Consent and Procedure cases below never reach it. Teach the engine
+    those types for the test: the commit gate's property — nothing is
+    written on a step-up token alone — must hold independently of which
+    types the engine happens to build."""
+    for target, element in (("AllergyIntolerance", "clinicalStatus"),
+                            ("Consent", "status"), ("Procedure", "status")):
+        monkeypatch.setitem(extract.DEFINITION_ELEMENTS, target,
+                            frozenset({element, "verificationStatus",
+                                       "patient", "code"}))
 
 SD = "http://hl7.org/fhir/StructureDefinition"
 DEF_EXTRACT = ("http://hl7.org/fhir/uv/sdc/StructureDefinition/"
@@ -118,13 +134,15 @@ def _assert_refused(resp, app, tenant_id, resource_type, before, secret):
 ], ids=["allergy-668", "pressure-679", "consent-679", "unenumerated",
         "demographics"])
 def test_commit_mode_refuses_every_row_on_a_step_up_token_alone(
-        client, app, auth_headers, tenant_id, resource_type, params, secret):
+        client, app, auth_headers, tenant_id, engine_builds_these_types,
+        resource_type, params, secret):
     before = _rows(app, tenant_id, resource_type)
     resp = client.post(EXTRACT, headers=auth_headers, json=params)
     _assert_refused(resp, app, tenant_id, resource_type, before, secret)
 
 
-def test_dry_run_still_previews_the_row(client, app, auth_headers, tenant_id):
+def test_dry_run_still_previews_the_row(client, app, auth_headers, tenant_id,
+                                        engine_builds_these_types):
     before = _rows(app, tenant_id, "AllergyIntolerance")
     resp = client.post(f"{EXTRACT}?dryRun=true", headers=auth_headers,
                        json=_allergy_params())
