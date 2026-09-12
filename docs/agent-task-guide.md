@@ -287,7 +287,7 @@ auditor.
 - **`HealthClawClient` caches its `/r6/fhir` base at construction.** A test
   that repoints `client.base` to a dead port to simulate an outage leaves
   `client.fhir` pointing at the live one, and the outage never happens;
-  set both (Mac mini session, 2026-09-06, probing #670's revoke path).
+  set both (live-probe session, 2026-09-06, probing #670's revoke path).
 
 ## 7. Working style
 
