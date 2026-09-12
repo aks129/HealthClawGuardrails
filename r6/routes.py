@@ -2132,19 +2132,18 @@ def record_connect_diagnostic():
 
 @r6_blueprint.route('/internal/step-up-token', methods=['POST'])
 def issue_step_up_token():
-    """
-    Issue a step-up token for the dashboard demo. Gated by
-    `_internal_mint_authorized` (fail-closed for non-public tenants).
-    """
+    """Mint a step-up token; `_internal_mint_authorized` gates it. A body
+    `scope` of "read" mints one that no write path accepts (H4, spec §13.6)."""
     body = request.get_json(silent=True) or {}
     tenant_id = body.get('tenant_id') or request.headers.get('X-Tenant-Id', 'default')
-
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
-
+    scope = body.get('scope')
+    if scope not in (None, 'read'):
+        return jsonify({'error': 'scope must be "read" or absent'}), 400
     try:
-        token = generate_step_up_token(tenant_id)
-        return jsonify({'token': token, 'tenant_id': tenant_id})
+        token = generate_step_up_token(tenant_id, scope=scope)
+        return jsonify({'token': token, 'tenant_id': tenant_id, 'scope': scope})
     except ValueError as e:
         return jsonify({'error': str(e)}), 500
 
