@@ -12,7 +12,7 @@ extraction semantics wrong" issue is as valuable as a PR.
 ## Who we'd especially love to hear from
 
 - **Implementers** building FHIR × MCP integrations — where do these patterns break in the real world?
-- **Clinicians & compliance/privacy folks** — challenge the redaction profiles, the audit model, and the documented HIPAA postures (see [`.claude/compliance/hipaa.md`](.claude/compliance/hipaa.md)).
+- **Clinicians & compliance/privacy folks** — challenge the redaction profiles, the audit model, and the documented postures (see [`SECURITY.md`](SECURITY.md) for the guarantees and the gaps we know about).
 - **Standards people** (HL7, SDC, SMART on FHIR, US Core) — tell us where we've diverged from the spec, especially on `$populate` / `$extract` and the R6 ballot resources.
 - **Anyone** — open an issue, file a correction, suggest a doc fix, or send a PR.
 
@@ -70,10 +70,20 @@ minimal code to pass it. PRs that add behavior without tests will be asked for t
 ## The bar for a change touching PHI, audit, redaction, or access control
 
 These are the load-bearing parts. Before changing any of them, read
-[`.claude/compliance/hipaa.md`](.claude/compliance/hipaa.md) and keep these invariants:
+[`SECURITY.md`](SECURITY.md) and [`docs/development.md`](docs/development.md#security-invariants-do-not-regress),
+and keep these invariants:
 
 - **Every FHIR resource access emits an `AuditEvent`** in the same transaction.
-- **Writes require a step-up token**; clinical writes additionally require human-in-the-loop confirmation (`X-Human-Confirmed`), except ingest-class bundle operations which are documented as exempt.
+- **Writes require a step-up token.** Clinical writes additionally require a
+  human. The mechanism that actually provides that is the action rail: `commit`
+  only submits the action, and a separate approval endpoint consumes a
+  single-use credential, so an agent cannot approve its own action. Direct
+  clinical FHIR writes still answer HTTP 428 until a client-supplied
+  `X-Human-Confirmed` header is present, which is spoofable by anyone holding a
+  write token and is a **known gap**
+  ([#214](https://github.com/aks129/HealthClawGuardrails/issues/214)) rather
+  than a control to build on. Do not add new write paths that rely on it.
+  Ingest-class bundle operations are documented as exempt.
 - **Reads of non-public tenants are authenticated**, not just tenant-scoped.
 - **No PHI in logs or audit `detail`** — counts, types, and tenant IDs only.
 - `validate_step_up_token` returns a `(bool, str)` tuple — **destructure both**; never coerce the tuple to a boolean (a non-empty tuple is truthy → silent auth bypass).
