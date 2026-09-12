@@ -145,7 +145,7 @@ def _report(sites, pin, what):
 #: $ingest-context, waiting on #648.
 #: 9 -> 8 (kernel slice 16): agent_runs' session-or-token predicate asks
 #: has_grant; no direct validator call is left in r6/agent_runs/.
-_STEP_UP_CALLSITES = 7
+_STEP_UP_CALLSITES = 6
 
 
 def test_direct_step_up_validation_only_decreases():
