@@ -31,7 +31,7 @@ from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
 from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
-from r6.sdc.extract import RAIL_ONLY_TYPES, extract_resources
+from r6.sdc.extract import COMMIT_WITHOUT_CONFIRMATION, extract_resources
 
 logger = logging.getLogger(__name__)
 
@@ -141,28 +141,29 @@ def register_sdc_routes(blueprint, deps):
         bundle = extract_resources(qr, questionnaire)
 
         if not dry_run and any(
-                e["resource"]["resourceType"] in RAIL_ONLY_TYPES
+                e["resource"]["resourceType"] not in COMMIT_WITHOUT_CONFIRMATION
                 for e in bundle["entry"]):
-            # #572. Nothing on the human-gated path calls $extract, so commit
-            # mode here runs on a step-up token alone; a bundle carrying
-            # allergies, conditions or medications is refused rather than
-            # written on that, and rather than dropped silently after dryRun
-            # showed it. The form-fill rail commits those rows after the
-            # person confirms them. Measured on main before this: the legacy
-            # single-target engine wrote an AllergyIntolerance this way.
+            # #572, #679. Nothing on the human-gated path calls $extract, so
+            # commit mode here runs on a step-up token alone. The target type
+            # is caller-chosen (definitionExtract's valueCode), so this is an
+            # allowlist, not a denylist: a bundle carrying any type not
+            # cleared to be written without a human is refused rather than
+            # written, and rather than dropped silently after dryRun showed
+            # it. The form-fill rail commits those rows after the person
+            # confirms them. Measured on main before this: AllergyIntolerance
+            # (#668), then Observation and Consent (#679), each stored on the
+            # step-up token alone.
             return operation_outcome(
                 "error", "business-rule",
-                "This bundle carries clinical rows (allergies, conditions or "
-                "medications). The form-fill rail commits those after human "
-                "confirmation; $extract does not. Use dryRun=true to preview "
-                "them."), 422
+                "This bundle carries rows $extract does not commit on a "
+                "step-up token alone. The form-fill rail commits them after "
+                "human confirmation; $extract does not. Use dryRun=true to "
+                "preview them."), 422
 
         if not dry_run:
-            # H4 posture (deliberate): $extract commits clinical resources as a
-            # structured bundle import, like Bundle/$ingest-context — both are
-            # exempt from the per-resource X-Human-Confirmed gate that direct
-            # writes (e.g. POST /Observation) require. Step-up + $validate gate
-            # the write here; the form-fill review IS the human-in-the-loop step.
+            # Only rows in COMMIT_WITHOUT_CONFIRMATION reach here (none
+            # today). Step-up + $validate gate the write; the audit row
+            # below records the commit even when there was nothing to write.
             for entry in bundle["entry"]:
                 result = validator.validate_resource(entry["resource"])
                 if not result["valid"]:
