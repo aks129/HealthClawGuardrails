@@ -22,12 +22,13 @@ from collections import defaultdict, deque
 from functools import wraps
 from urllib.parse import quote
 
+import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
-from careagents import advisors, connectors
+from careagents import advisors, analytics, connectors
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
@@ -228,6 +229,29 @@ def create_app(config: Config | None = None,
         if request.query_string:
             target += "?" + request.query_string.decode("utf-8", "replace")
         return redirect(target, code=308)
+
+    # --- page-view counting (careagents/analytics.py) ------------------------
+
+    @app.after_request
+    def _count_a_public_page_view(response):
+        """One integer per day per public page, when the flag says so.
+
+        Deliberately narrow: only a page anyone can open, only a GET that
+        actually rendered, and the endpoint name rather than the URL, so
+        nothing a request supplies reaches the table. `record_view` refuses
+        any endpoint outside its own list, so a later hook in the wrong place
+        counts nothing rather than counting a signed-in person's pages.
+        """
+        if not cfg.analytics_enabled:
+            return response
+        if request.method != "GET" or response.status_code != 200:
+            return response
+        try:
+            analytics.record_view(svc.session, request.endpoint or "")
+        except Exception:                       # pragma: no cover - defensive
+            # A counter is never a reason a page fails to render.
+            logger.warning("page-view counting failed", exc_info=True)
+        return response
 
     # --- auth plumbing -------------------------------------------------------
 
@@ -1679,5 +1703,26 @@ def create_app(config: Config | None = None,
                 "run_workers_state": workers_state,
                 "build": cfg.build_sha, "built_at": cfg.build_time}
         return jsonify(body), (200 if ready else 503)
+
+    # --- reading the counter -------------------------------------------------
+
+    @app.cli.command("page-views")
+    @click.option("--days", default=7, show_default=True,
+                  help="How many UTC days back to print.")
+    def _page_views(days):
+        """Print the public-page view counts this app has recorded.
+
+        A command rather than a route on purpose: the numbers are for the
+        operator, and a new endpoint is a new thing to authorise, rate-limit
+        and get wrong.
+        """
+        rows = analytics.counts(svc.session, days=days)
+        if not rows:
+            click.echo("no page views recorded"
+                       + ("" if cfg.analytics_enabled
+                          else " (CARE_ANALYTICS is not set)"))
+            return
+        for day, endpoint, views in rows:
+            click.echo(f"{day}  {endpoint:<12} {views}")
 
     return app
