@@ -229,3 +229,47 @@ def test_a_digest_keyed_with_a_guessed_secret_is_refused(
     assert resp.status_code == 409
     assert resp.get_json()['error_code'] == 'approved_payload_mismatch'
 
+
+
+def test_a_tamper_after_the_confirmation_lapses_is_still_refused(
+        client, app, tenant_headers, auth_headers, tenant_id):
+    """#678. The action's approval window is thirty minutes from propose; a
+    review-page confirmation lasts fifteen from submit. In the gap the
+    confirmation is expired but the action is still confirmable, and the
+    digest check compared only against OPEN confirmations — so it compared
+    against nothing, minted a fresh confirmation over the tampered bytes, and
+    executed. The ledger then said a human approved exactly the bytes the
+    human never saw.
+
+    An expired confirmation still records what was approved. It is evidence,
+    not a credential, and evidence does not lapse.
+
+    MUTATION: compare against open_confirmations again -> red (executes).
+    """
+    from datetime import timedelta
+    action_id = _propose(client, tenant_headers)
+    _commit(client, tenant_headers, auth_headers, action_id)
+    with app.app_context():
+        action = ProposedAction.query.get(action_id)
+        issue_confirmation(action_id, approved_via='review-page',
+                           ttl_minutes=15, payload_json=action.payload_json)
+        db.session.commit()
+        ActionConfirmation.query.filter_by(action_id=action_id).update(
+            {'expires_at': __import__('r6.actions.models',
+                                      fromlist=['_utcnow'])._utcnow()
+             - timedelta(minutes=1)}, synchronize_session=False)
+        swapped = dict(PROPOSE_BODY['payload'], phone='617-555-0199')
+        ProposedAction.query.filter_by(id=action_id).update(
+            {'payload_json': json.dumps(swapped)}, synchronize_session=False)
+        db.session.commit()
+
+    resp = client.post('/r6/actions/%s/confirm' % action_id,
+                       headers=_approval_headers(auth_headers, action_id))
+
+    assert resp.status_code == 409, resp.get_json()
+    assert resp.get_json()['error_code'] == 'approved_payload_mismatch'
+    with app.app_context():
+        assert ProposedAction.query.get(action_id).status == 'failed'
+        # No confirmation was minted over the tampered bytes.
+        rows = ActionConfirmation.query.filter_by(action_id=action_id).all()
+        assert len(rows) == 1 and rows[0].approved_via == 'review-page'
