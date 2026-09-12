@@ -63,11 +63,11 @@ class ContextBuilder:
         # medications in it (#377). Imported here rather than at module level
         # because `r6.fasten` pulls in its blueprint, which imports this
         # module back.
-        from r6.fasten.ingester import safe_skipped_type
+        from r6.fasten.ingester import _RESOURCE_ID_PATTERN, safe_skipped_type
         skipped_types: collections.Counter = collections.Counter()
 
         try:
-            for entry in entries:
+            for index, entry in enumerate(entries):
                 resource = entry.get('resource')
                 if not resource:
                     continue
@@ -81,8 +81,27 @@ class ContextBuilder:
                 # Store canonical JSON (redaction applied at read-time, not write-time)
                 resource_json = json.dumps(resource, separators=(',', ':'), sort_keys=True)
 
+                # A caller-supplied id is validated before use, the way the
+                # Fasten ingester validates it (#548, the #286 shape on this
+                # second path): `resource.get('id', uuid)` kept "" as an id,
+                # stored the row under (tenant, type, ""), and let the next
+                # blank-id resource of the same type upsert over it. Blank,
+                # bool, float, list or object refuses the whole bundle, the
+                # message names the entry and never echoes the value; an int
+                # is stored as its string; an absent id gets a UUID.
+                if 'id' in resource:
+                    raw_id = resource['id']
+                    if (isinstance(raw_id, bool)
+                            or not isinstance(raw_id, (str, int))
+                            or not _RESOURCE_ID_PATTERN.fullmatch(str(raw_id))):
+                        db.session.rollback()
+                        raise ValueError(
+                            f'entry {index}: {resource_type}.id is not a '
+                            f'valid FHIR id and was refused')
+                    resource_id = str(raw_id)
+                else:
+                    resource_id = str(uuid.uuid4())
                 # Create or update the resource (tenant-scoped)
-                resource_id = resource.get('id', str(uuid.uuid4()))
                 existing = R6Resource.query.filter_by(
                     id=resource_id, resource_type=resource_type,
                     tenant_id=tenant_id
