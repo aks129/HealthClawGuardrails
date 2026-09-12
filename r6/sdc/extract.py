@@ -22,12 +22,13 @@ DEFINITION_EXTRACT_URL = (
 )
 
 
-#: The types the form-fill rail commits after human confirmation. Nothing on
-#: the human-gated path calls $extract, so commit mode on the raw endpoint
-#: refuses a bundle carrying them (r6/sdc/routes.py): a step-up token alone
-#: must not write clinical rows (#572).
-RAIL_ONLY_TYPES = frozenset({"AllergyIntolerance", "Condition",
-                             "MedicationRequest"})
+#: The resource types commit mode may write on a step-up token alone, with
+#: no human confirming the row (r6/sdc/routes.py refuses every other type).
+#: Empty on purpose: nothing on the human-gated path calls $extract, so no
+#: caller has a legitimate reason to commit here; the form-fill rail writes
+#: extracted rows after the person confirms them. Clearing a type is a
+#: decision made in this line, with a test (#572, #679).
+COMMIT_WITHOUT_CONFIRMATION = frozenset()
 
 
 def extract_resources(questionnaire_response, questionnaire):

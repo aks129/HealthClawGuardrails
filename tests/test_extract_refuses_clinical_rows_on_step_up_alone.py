@@ -1,89 +1,149 @@
-"""$extract commit mode refuses to write allergies, conditions or
-medications on a step-up token alone (#572, the class the CTO design pass
-named worse than #214's header).
+"""$extract commit mode writes nothing on a step-up token alone (#572, #679).
 
 Nothing on the human-gated path calls $extract: the form-fill executor
 never extracts, and $extract's callers are the raw endpoint (step-up only)
-and the MCP write tool. Measured on main before this change: a
-Questionnaire whose root definitionExtract names AllergyIntolerance, with
-definitions for clinicalStatus, verificationStatus, patient and code.text,
-answered with plain strings, POSTed to commit mode with a step-up token
-and answered 200 with one AllergyIntolerance row stored, its statuses and
-patient reference written as bare strings the validator waved through by
-truthiness. A clinical write with no human confirmation, on the credential
-an agent holds.
+and the MCP write tool. #668 measured the AllergyIntolerance case: a
+Questionnaire whose root definitionExtract names AllergyIntolerance,
+answered with plain strings, POSTed to commit mode with a step-up token,
+answered 200 with one row stored. #679 measured the class around it —
+Observation (a systolic pressure of 191) and Consent both committed on the
+same credential, because the refusal was a denylist of three names over a
+resource type the caller chooses.
 
-Commit mode now refuses a bundle carrying any of the three types with a
-422 naming the form-fill rail and dryRun; dryRun still previews them. The
-refusal writes no audit row (consistent with the kernel's own refusals):
-the audit trail does not cover refused attempts here.
+Commit mode now refuses every resource type not explicitly cleared to be
+written without a human confirming it, and the cleared set is empty:
+there is no caller with a legitimate reason to write on a step-up token
+alone. A new extraction target arrives refused; clearing it is a one-line
+decision somebody makes on purpose, with a test. dryRun still previews.
+The refusal writes no audit row (consistent with the kernel's own
+refusals): the audit trail does not cover refused attempts here.
 
 MUTATION: r6/sdc/routes.py, drop the refusal -> red (the row is stored and
-the response is 200).
+the response is 200). r6/sdc/extract.py, clear "Observation" -> red (the
+pressure is written).
 """
 
-from r6.sdc.extract import RAIL_ONLY_TYPES
+import pytest
 
-SD = "http://hl7.org/fhir/StructureDefinition/AllergyIntolerance"
+from r6.sdc.extract import COMMIT_WITHOUT_CONFIRMATION
+
+SD = "http://hl7.org/fhir/StructureDefinition"
 DEF_EXTRACT = ("http://hl7.org/fhir/uv/sdc/StructureDefinition/"
                "sdc-questionnaire-definitionExtract")
+OBS_EXTRACT = ("http://hl7.org/fhir/uv/sdc/StructureDefinition/"
+               "sdc-questionnaire-observationExtract")
+EXTRACT = "/r6/fhir/QuestionnaireResponse/$extract"
 
 
-def _legacy_allergy_questionnaire():
+def _definition_questionnaire(target, elements):
     return {"resourceType": "Questionnaire", "status": "active",
-            "extension": [{"url": DEF_EXTRACT, "valueCode": "AllergyIntolerance"}],
-            "item": [
-                {"linkId": "cs", "type": "string", "definition": f"{SD}#AllergyIntolerance.clinicalStatus"},
-                {"linkId": "vs", "type": "string", "definition": f"{SD}#AllergyIntolerance.verificationStatus"},
-                {"linkId": "pt", "type": "string", "definition": f"{SD}#AllergyIntolerance.patient"},
-                {"linkId": "al", "type": "string", "definition": f"{SD}#AllergyIntolerance.code.text"},
-            ]}
+            "extension": [{"url": DEF_EXTRACT, "valueCode": target}],
+            "item": [{"linkId": link, "type": "string",
+                      "definition": f"{SD}/{target}#{target}.{path}"}
+                     for link, path in elements]}
 
 
-def _response():
+def _response(answers):
     return {"resourceType": "QuestionnaireResponse", "status": "completed",
-            "item": [{"linkId": "cs", "answer": [{"valueString": "active"}]},
-                     {"linkId": "vs", "answer": [{"valueString": "unconfirmed"}]},
-                     {"linkId": "pt", "answer": [{"valueString": "Patient/p-hole"}]},
-                     {"linkId": "al", "answer": [{"valueString": "peanut-hole"}]}]}
+            "item": [{"linkId": link, "answer": [{"valueString": value}]}
+                     for link, value in answers]}
 
 
-def _params():
+def _params(qr, questionnaire):
     return {"resourceType": "Parameters", "parameter": [
-        {"name": "questionnaire-response", "resource": _response()},
-        {"name": "questionnaire", "resource": _legacy_allergy_questionnaire()}]}
+        {"name": "questionnaire-response", "resource": qr},
+        {"name": "questionnaire", "resource": questionnaire}]}
 
 
-def _rows(app, tenant_id):
+def _allergy_params():
+    q = _definition_questionnaire("AllergyIntolerance", [
+        ("cs", "clinicalStatus"), ("vs", "verificationStatus"),
+        ("pt", "patient"), ("al", "code.text")])
+    qr = _response([("cs", "active"), ("vs", "unconfirmed"),
+                    ("pt", "Patient/p-hole"), ("al", "peanut-hole")])
+    return _params(qr, q)
+
+
+def _pressure_params():
+    # The #679 measurement: an observationExtract item answered 191.
+    q = {"resourceType": "Questionnaire", "status": "active",
+         "item": [{"linkId": "sbp", "type": "integer",
+                   "code": [{"system": "http://loinc.org", "code": "8480-6"}],
+                   "extension": [{"url": OBS_EXTRACT, "valueBoolean": True}]}]}
+    qr = {"resourceType": "QuestionnaireResponse", "status": "completed",
+          "subject": {"reference": "Patient/p-hole"},
+          "item": [{"linkId": "sbp", "answer": [{"valueInteger": 191}]}]}
+    return _params(qr, q)
+
+
+def _consent_params():
+    q = _definition_questionnaire("Consent", [("st", "status")])
+    return _params(_response([("st", "active")]), q)
+
+
+def _procedure_params():
+    # A type nobody enumerated anywhere: refused by default, not written.
+    q = _definition_questionnaire("Procedure", [("st", "status")])
+    return _params(_response([("st", "completed")]), q)
+
+
+def _patient_params():
+    q = _definition_questionnaire("Patient", [("fam", "name.family")])
+    return _params(_response([("fam", "Holefamily")]), q)
+
+
+def _rows(app, tenant_id, resource_type):
     from r6.models import R6Resource
     with app.app_context():
         return R6Resource.query.filter_by(
-            tenant_id=tenant_id, resource_type="AllergyIntolerance").count()
+            tenant_id=tenant_id, resource_type=resource_type).count()
 
 
-def test_commit_mode_refuses_a_clinical_row_on_a_step_up_token_alone(
-        client, app, auth_headers, tenant_id):
-    before = _rows(app, tenant_id)
-    resp = client.post("/r6/fhir/QuestionnaireResponse/$extract",
-                       headers=auth_headers, json=_params())
+def _assert_refused(resp, app, tenant_id, resource_type, before, secret):
     assert resp.status_code == 422, resp.get_data(as_text=True)[:200]
     outcome = resp.get_json()
     assert outcome["resourceType"] == "OperationOutcome"
     diag = outcome["issue"][0]["diagnostics"]
     assert "form-fill" in diag and "dryRun" in diag
-    assert "peanut-hole" not in diag
-    assert _rows(app, tenant_id) == before
+    assert secret not in diag
+    assert _rows(app, tenant_id, resource_type) == before
+
+
+@pytest.mark.parametrize("resource_type, params, secret", [
+    ("AllergyIntolerance", _allergy_params(), "peanut-hole"),
+    ("Observation", _pressure_params(), "191"),
+    ("Consent", _consent_params(), "p-hole"),
+    ("Procedure", _procedure_params(), "p-hole"),
+    ("Patient", _patient_params(), "Holefamily"),
+], ids=["allergy-668", "pressure-679", "consent-679", "unenumerated",
+        "demographics"])
+def test_commit_mode_refuses_every_row_on_a_step_up_token_alone(
+        client, app, auth_headers, tenant_id, resource_type, params, secret):
+    before = _rows(app, tenant_id, resource_type)
+    resp = client.post(EXTRACT, headers=auth_headers, json=params)
+    _assert_refused(resp, app, tenant_id, resource_type, before, secret)
 
 
 def test_dry_run_still_previews_the_row(client, app, auth_headers, tenant_id):
-    before = _rows(app, tenant_id)
-    resp = client.post("/r6/fhir/QuestionnaireResponse/$extract?dryRun=true",
-                       headers=auth_headers, json=_params())
+    before = _rows(app, tenant_id, "AllergyIntolerance")
+    resp = client.post(f"{EXTRACT}?dryRun=true", headers=auth_headers,
+                       json=_allergy_params())
     assert resp.status_code == 200
     assert "peanut-hole" in resp.get_data(as_text=True)
-    assert _rows(app, tenant_id) == before
+    assert _rows(app, tenant_id, "AllergyIntolerance") == before
 
 
-def test_the_refused_types_are_the_three_rail_only_types():
-    assert RAIL_ONLY_TYPES == frozenset({"AllergyIntolerance", "Condition",
-                                         "MedicationRequest"})
+def test_dry_run_previews_the_pressure_too(client, app, auth_headers,
+                                           tenant_id):
+    before = _rows(app, tenant_id, "Observation")
+    resp = client.post(f"{EXTRACT}?dryRun=true", headers=auth_headers,
+                       json=_pressure_params())
+    assert resp.status_code == 200
+    assert resp.get_json()["parameter"][0]["resource"]["entry"][0][
+        "resource"]["valueInteger"] == 191
+    assert _rows(app, tenant_id, "Observation") == before
+
+
+def test_nothing_is_cleared_to_commit_without_a_human():
+    # Clearing a type is a decision, made here, on purpose, with a test.
+    assert COMMIT_WITHOUT_CONFIRMATION == frozenset()
