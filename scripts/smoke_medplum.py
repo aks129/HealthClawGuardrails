@@ -122,7 +122,8 @@ def main():
 
     import requests
     base = args.base_url.rstrip("/")
-    read_hdr = {"X-Tenant-Id": args.tenant_id}
+    read_hdr = {"X-Tenant-Id": args.tenant_id,
+                "X-Step-Up-Token": args.step_up_token}
     write_hdr = {**read_hdr, "Content-Type": "application/fhir+json",
                  "X-Step-Up-Token": args.step_up_token,
                  "X-Human-Confirmed": "true"}
@@ -147,7 +148,9 @@ def _run_checks(run, requests, base, read_hdr, write_hdr):
     # the step-up gate this line is named after is never reached at all.
     # A malformed body is refused before authentication on purpose; this
     # check is about the credential, so it has to send a well-formed one.
-    no_step_up = {**read_hdr, "Content-Type": "application/fhir+json"}
+    # Allowlist the anonymous probe headers; never inherit read credentials.
+    no_step_up = {"X-Tenant-Id": read_hdr["X-Tenant-Id"],
+                  "Content-Type": "application/fhir+json"}
     r = requests.post(f"{base}/r6/fhir/Patient", headers=no_step_up,
                       data=json.dumps(SYNTHETIC_PATIENT))
     check("write blocked without step-up (401)", r.status_code == 401,
