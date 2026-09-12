@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Share your records? — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card" id="consent-card">
+  {% if state == "invalid" %}
+    <h1>This link is not valid</h1>
+    <p class="setup-sub">The request to share your records could not be
+    verified. Go back to the app that asked and start again.</p>
+    <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+  {% elif state == "expired" %}
+    <h1>This request has expired</h1>
+    <p class="setup-sub">Requests to share your records last ten minutes.
+    Go back to the app that asked and start again.</p>
+    <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+  {% else %}
+    <h1>{{ client_name }} wants to read your records</h1>
+    <p class="setup-sub">Through HealthClaw: every read redacted and audited,
+    nothing written. {{ client_name }} can never change your records or act
+    on your behalf; those still need your approval, one action at a time.</p>
+
+    <div id="err" class="form-error" hidden></div>
+
+    <h2 class="consent-h2">It would be able to</h2>
+    <ul class="consent-scopes">
+      {% for line in scopes %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+
+    <h2 class="consent-h2">Which records</h2>
+    {% if connections %}
+    <div class="consent-choices" id="consent-choices">
+      {% for c in connections %}
+      <label class="consent-choice">
+        <input type="radio" name="connection" value="{{ c.id }}"
+               {% if loop.first %}checked{% endif %}>
+        <span class="consent-choice-name">{{ c.label }}</span>
+        <span class="consent-choice-sub">{{ c.provider or c.kind }}{% if c.kind == 'sample' %} · sample records{% endif %}</span>
+      </label>
+      {% endfor %}
+    </div>
+    {% if not real_open %}
+    <p class="auth-fine">Only sample records can be shared from this account
+    for now. Your real records stay where they are.</p>
+    {% endif %}
+    {% else %}
+    <p class="auth-fine">You have no records connected yet.
+      <a href="/home">Connect records first</a>, then come back to the app
+      that asked.</p>
+    {% endif %}
+
+    {% if has_passkey and connections %}
+    <button class="btn-primary btn-block" id="approve-btn"
+            data-req="{{ req }}">Allow, with my passkey</button>
+    <p class="auth-fine">Your face, fingerprint or PIN confirms it is you,
+    now, not a remembered sign-in.</p>
+    {% elif connections %}
+    <p class="auth-fine">Allowing needs a passkey on this device, so that a
+    remembered sign-in is never enough to share your records.
+      <a href="/auth?enroll=1">Add a passkey</a>, then come back.</p>
+    {% endif %}
+    <button class="btn-secondary btn-block" id="deny-btn"
+            data-req="{{ req }}">Don't allow</button>
+    <p class="auth-fine">You can take this back any time from your hub.
+      <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
+      policy</a>.</p>
+  {% endif %}
+  </div>
+</main>
+<script src="{{ url_for('static', filename='consent.js') }}"></script>
+{% endblock %}

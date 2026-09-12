@@ -63,17 +63,18 @@ Restart Claude Desktop; the tools appear under the tools icon.
 > production endpoint, which needs a bearer header that hosted connectors
 > cannot attach ([#290](https://github.com/aks129/HealthClawGuardrails/issues/290)).
 > Until that lands, use your own records through
-> [CareAgents](https://careagents.cloud) or a local MCP client that can set
-> headers. The rest of this section describes the intended flow.
+> CareAgents only if your account has separately authorized real-record
+> access, or through an operator-configured local MCP client that can set
+> headers. The current synthetic beta cohort does not open real-record
+> connections.
 
-Connect your providers at `https://app.healthclaw.io/connect/<your-tenant-id>`
-(identity-verified via CLEAR/ID.me). When the connection completes, the page
-shows a one-time **"Connect your AI assistant"** card — click "Copy setup
-message" and paste it into your Claude chat (works on web, desktop, and
-mobile). From then on Claude passes your tenant and read-only token on every
-HealthClaw call. The token cannot write and expires in 30 days.
-See [Connecting your own health data](README.md#connecting-your-own-health-data-fasten-connect).
-Do not do this while screen-recording.
+Do not paste a private tenant token or a "Copy setup message" into this demo
+chat. The connector still reads synthetic records. Keep credentials in the
+client's protected configuration.
+
+See [Connecting your own health data](README.md#connecting-your-own-health-data-fasten-connect)
+for the separate paths and their prerequisites. Do not record private-record
+setup or credentials.
 
 ## Troubleshooting
 
