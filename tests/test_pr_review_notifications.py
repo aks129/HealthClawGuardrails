@@ -72,6 +72,13 @@ case "$1 $2" in
   "pr comment")
     for a in "$@"; do last="$a"; done
     printf '%s\n' "$last" >> "$FAKE_COMMENTS" ;;
+  "pr merge")
+    # The real workflow token is refused this call (#449). FAKE_ARM_FAILS
+    # reproduces the refusal verbatim.
+    if [ "${FAKE_ARM_FAILS:-0}" = "1" ]; then
+      echo "GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)" >&2
+      exit 1
+    fi ;;
 esac
 exit 0
 """
@@ -94,7 +101,8 @@ class _PullRequest:
             f.write_text("")
 
     def push(self, *, author: str = "contributor", approved: int = 0,
-             title: str = "") -> subprocess.CompletedProcess:
+             title: str = "", arm_fails: bool = False
+             ) -> subprocess.CompletedProcess:
         """One run of the workflow, as a push to this PR would trigger it."""
         before = len(self.calls())
         env = {
@@ -112,6 +120,7 @@ class _PullRequest:
             "FAKE_COMMENTS": str(self.comments),
             "FAKE_APPROVED": str(approved),
             "FAKE_TITLE": title,
+            "FAKE_ARM_FAILS": "1" if arm_fails else "0",
         }
         proc = subprocess.run(["bash", "-c", _arming_step()], env=env,
                               capture_output=True, text=True, cwd=self.dir)
@@ -304,3 +313,37 @@ def test_runs_on_one_pull_request_are_serialised():
         "other one")
     assert concurrency["cancel-in-progress"] is False, (
         "cancelling mid-run would abandon the arming step half-done")
+
+
+def test_an_arming_the_token_is_refused_does_not_fail_this_required_check(pr):
+    """#449. `auto-merge-when-satisfied` is a REQUIRED check, and the workflow
+    token is refused `enablePullRequestAutoMerge`. While that refusal exited
+    non-zero, every dependabot bump was unmergeable: the tests were green and
+    stopped mattering, because a required check could never pass.
+
+    The refusal still has to be said out loud — silence that cannot be told
+    from success is what this file exists to prevent — but it says it in the
+    state and the summary, not by failing.
+
+    MUTATION: call `gh pr merge` directly again instead of arm_automerge ->
+    red (the step exits 1).
+    """
+    proc = pr.push(author="dependabot[bot]",
+                   title="chore(deps): bump hono from 4.13.0 to 4.13.7",
+                   arm_fails=True)
+
+    assert proc.returncode == 0
+    assert "cannot-arm" in pr.summary.read_text()
+    said = pr.comment_text().lower()
+    assert "could not arm" in said or "not armed" in said
+    assert "449" in pr.comment_text()
+
+
+def test_an_arming_that_succeeds_still_reports_armed(pr):
+    """The guard must not swallow the ordinary path: a bump that arms says so,
+    and says nothing about a refusal."""
+    pr.push(author="dependabot[bot]",
+            title="chore(deps): bump hono from 4.13.0 to 4.13.7")
+
+    assert "armed-dependabot" in pr.summary.read_text()
+    assert "cannot-arm" not in pr.summary.read_text()

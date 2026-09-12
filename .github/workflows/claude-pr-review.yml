@@ -146,6 +146,22 @@ jobs:
           # tests/test_pr_review_notifications.py executes this block verbatim
           # against a stub `gh`, and that is the only place the logic runs
           # anywhere but a live PR.
+          # Arming is a request this token may be refused. A refusal is worth
+          # saying out loud, but it must not fail the job: this check is
+          # REQUIRED, and a required check that can never pass turns "I could
+          # not arm the merge" into "this pull request can never merge". Every
+          # dependabot bump sat blocked on exactly that (#449) — the token gets
+          # `Resource not accessible by integration (enablePullRequestAutoMerge)`
+          # and the tests, which were green, stopped mattering. Nothing here
+          # weakens a test gate: those are separate required contexts.
+          arm_automerge() {
+            if gh pr merge "$PR" --repo "$REPO" --squash --auto 2>/tmp/arm.err; then
+              return 0
+            fi
+            echo "::warning::could not arm auto-merge: $(tr -d '\n' < /tmp/arm.err)"
+            return 1
+          }
+
           STATE=""; HEADLINE=""
           # Tier 1: dependabot minor/patch -> full auto (merges when checks pass)
           if [ "$AUTHOR" = "dependabot[bot]" ]; then
@@ -161,9 +177,13 @@ jobs:
               STATE="held-unparsed-bump"
               HEADLINE="Not armed. This title carries no single from-X-to-Y version, so the minor/patch rule cannot be applied to it and nothing will merge on its own. A human has to review and merge it."
             elif [ "$FROM_MAJ" = "$TO_MAJ" ]; then
-              gh pr merge "$PR" --repo "$REPO" --squash --auto
-              STATE="armed-dependabot"
-              HEADLINE="Auto-merge is ARMED. Minor/patch bump, so it squash-merges by itself once the required checks are green, and no approval is asked for. To stop it: gh pr merge $PR -R $REPO --disable-auto"
+              if arm_automerge; then
+                STATE="armed-dependabot"
+                HEADLINE="Auto-merge is ARMED. Minor/patch bump, so it squash-merges by itself once the required checks are green, and no approval is asked for. To stop it: gh pr merge $PR -R $REPO --disable-auto"
+              else
+                STATE="cannot-arm"
+                HEADLINE="Not armed, and this job could not arm it: the workflow token is refused enablePullRequestAutoMerge. The bump itself is fine; somebody with a personal token has to run gh pr merge $PR -R $REPO --squash --auto. Tracked as #449."
+              fi
             else
               STATE="held-dependabot-major"
               HEADLINE="Not armed. This is a MAJOR version bump ($FROM_MAJ to $TO_MAJ), which never merges on its own here. A human has to read the changelog and merge it."
@@ -174,8 +194,11 @@ jobs:
             APPROVED=$(gh pr view "$PR" --repo "$REPO" --json reviews \
               --jq '[.reviews[] | select(.state=="APPROVED") | select(.authorAssociation=="OWNER" or .authorAssociation=="MEMBER" or .authorAssociation=="COLLABORATOR")] | length')
             if [ "$APPROVED" -gt 0 ] || [ "${AUTO_MERGE_EXTERNAL}" = "true" ]; then
-              gh pr merge "$PR" --repo "$REPO" --squash --auto
-              STATE="armed-approved"
+              if arm_automerge; then
+                STATE="armed-approved"
+              else
+                STATE="cannot-arm"
+              fi
               HEADLINE="Auto-merge is ARMED. This PR squash-merges by itself the moment the last required check goes green — including a check that is red now and gets fixed later, and including mid-review. To stop it: gh pr merge $PR -R $REPO --disable-auto"
             else
               STATE="waiting-approval"
@@ -199,8 +222,12 @@ jobs:
           # PR is waiting. This job runs on every push, and that sentence was
           # mailed 65 times across the 25 most recent PRs, six times on one of
           # them, four minutes apart on another.
+          # `cannot-arm` joins them: it is the one state where the job
+          # wanted to arm, was refused, and a person has to finish the job by
+          # hand. Leaving it to the summary would make an unmergeable pull
+          # request look like a quiet success (#449).
           case "$STATE" in
-            armed-*|held-*) ;;
+            armed-*|held-*|cannot-arm) ;;
             *) exit 0 ;;
           esac
 
