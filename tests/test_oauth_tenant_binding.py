@@ -4,6 +4,13 @@ import base64
 import hashlib
 import json
 import secrets
+from urllib.parse import parse_qs, urlsplit
+
+
+def _code_of(resp):
+    """The code rides in the 302 to the registered redirect URI (#568)."""
+    assert resp.status_code == 302, resp.get_data(as_text=True)
+    return parse_qs(urlsplit(resp.headers['Location']).query)['code'][0]
 
 
 def _register(client, tenant_headers):
@@ -11,6 +18,7 @@ def _register(client, tenant_headers):
                        data=json.dumps({
                            'client_name': 'Binding Test',
                            'redirect_uris': ['http://localhost/cb'],
+                           'token_endpoint_auth_method': 'none',
                        }),
                        content_type='application/json',
                        headers=tenant_headers)
@@ -44,8 +52,7 @@ def test_authorize_allows_public_tenant_when_read_auth_on(client, monkeypatch):
     monkeypatch.setenv('PUBLIC_TENANTS', 'desktop-demo')
     client_id = _register(client, {'X-Tenant-Id': 'desktop-demo'})
     resp = _authorize(client, client_id, 'desktop-demo')
-    assert resp.status_code == 200
-    assert 'code' in resp.get_json()
+    assert _code_of(resp)
 
 
 # --- What the code is BOUND to, not merely that one was issued ---------------
@@ -109,8 +116,7 @@ def test_the_granted_code_is_bound_to_the_header_tenant_not_a_query_param(
 
     resp = _authorize_claiming(client, client_id, 'desktop-demo', challenge,
                                tenant_id='victim-tenant')
-    assert resp.status_code == 200
-    token = _exchange(client, client_id, resp.get_json()['code'], verifier)
+    token = _exchange(client, client_id, _code_of(resp), verifier)
 
     # Destructured, never truthiness-tested — validate_bearer_token returns
     # a tuple whose first element is the answer.
@@ -139,7 +145,7 @@ def test_a_code_granted_to_a_public_tenant_cannot_read_a_private_one(
 
     resp = _authorize_claiming(client, client_id, 'desktop-demo', challenge,
                                tenant_id='victim-tenant')
-    token = _exchange(client, client_id, resp.get_json()['code'], verifier)
+    token = _exchange(client, client_id, _code_of(resp), verifier)
 
     read = client.get('/r6/fhir/Patient?_summary=count', headers={
         'X-Tenant-Id': 'victim-tenant',

@@ -38,6 +38,9 @@ def _oauth_token(tenant=PRIVATE_TENANT):
         "client_id": "boundary-test",
         "scopes": ["patient/*.read"],
         "tenant_id": tenant,
+        # RFC 8707: a read bearer is a credential only for the surface it was
+        # minted for (tests/test_oauth_as_conformance.py holds the refusals).
+        "aud": "http://localhost/r6/fhir",
         "exp": time.time() + 3600,
     }
     return token
