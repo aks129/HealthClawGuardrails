@@ -458,10 +458,11 @@ describe("the limiter runs before the credential check", () => {
   const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
 
   it("a caller past the limit is refused without an introspection call", async () => {
-    // Flask answers "not a live token", so every one of these costs a call.
+    // Flask answers "not a live token", so every one of these costs a call:
+    // a distinct token each time, since a repeated one is remembered (#675).
     introspection = { active: false };
     for (let i = 0; i < RATE_LIMIT_MAX; i++) {
-      const res = await initialize("Bearer not-a-token-this-server-knows");
+      const res = await initialize(`Bearer not-a-token-this-server-knows-${i}`);
       expect(res.status).toBe(401);
     }
     const spent = introspections().length;
@@ -482,5 +483,53 @@ describe("the limiter runs before the credential check", () => {
     }
     const after = await initialize(`Bearer ${OAUTH_TOKEN}`);
     expect(after.status).toBe(200);
+  });
+});
+
+describe("a rejected token is remembered (#675)", () => {
+  // Live grants were cached; a "no" was not, so a client looping on a stale
+  // token, or a scanner walking the endpoint, turned one useless request into
+  // one useless request plus one authorization-server round trip, up to the
+  // rate limit. The negative answer is now cached under the same key, for a
+  // window well under the shortest token lifetime.
+  let now = 1_700_000_000_000;
+  let nowSpy: jest.SpyInstance<number, []>;
+
+  beforeEach(() => {
+    now = 1_700_000_000_000;
+    nowSpy = jest.spyOn(Date, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+  });
+
+  it("a second presentation of a rejected token makes no second call", async () => {
+    introspection = { active: false };
+    expect((await initialize("Bearer stale-token")).status).toBe(401);
+    expect(introspections().length).toBe(1);
+    expect((await initialize("Bearer stale-token")).status).toBe(401);
+    expect(introspections().length).toBe(1);
+  });
+
+  it("the memory expires, so a token is never refused for longer than the window", async () => {
+    introspection = { active: false };
+    expect((await initialize("Bearer stale-token")).status).toBe(401);
+    now += 30 * 1000 + 1;
+    introspection = liveIntrospection();
+    expect((await initialize("Bearer stale-token")).status).toBe(200);
+    expect(introspections().length).toBe(2);
+  });
+
+  it("an authorization server that could not be asked is not remembered as a no", async () => {
+    // Fail closed now, ask again next time: an outage blip must not refuse a
+    // good token for the whole window.
+    introspection = () => {
+      throw new Error("ECONNREFUSED");
+    };
+    expect((await initialize(`Bearer ${OAUTH_TOKEN}`)).status).toBe(401);
+    introspection = liveIntrospection();
+    expect((await initialize(`Bearer ${OAUTH_TOKEN}`)).status).toBe(200);
+    expect(introspections().length).toBe(2);
   });
 });
