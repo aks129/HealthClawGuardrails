@@ -205,6 +205,12 @@ def _register_blueprints(flask_app: Flask) -> None:
     from r6.routes import r6_blueprint
 
     flask_app.register_blueprint(r6_blueprint)
+    # RFC 8414: the issuer is the host root (no path), so a client looks for
+    # the metadata at the root well-known path first. The prefixed copy under
+    # /r6/fhir stays for anything that already reads it (spec §3.3).
+    from r6.oauth import discovery_root_view
+    flask_app.add_url_rule('/.well-known/oauth-authorization-server',
+                           'oauth_discovery_root', discovery_root_view)
 
     from r6.fasten.routes import fasten_blueprint
 
