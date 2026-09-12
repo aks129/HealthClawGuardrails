@@ -118,6 +118,16 @@ export interface OAuthGrant {
 
 const INTROSPECTION_CACHE = new Map<string, { grant: OAuthGrant; expiresAtMs: number }>();
 const INTROSPECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+// A "no" is remembered too (#675), under the same key, so a client looping on
+// a stale token or a scanner walking the endpoint costs one authorization-
+// server round trip per window, not one per request. Thirty seconds: well
+// under the shortest token lifetime (the access token's OAUTH_TOKEN_TTL,
+// 3600s by default), so a token that becomes valid — nothing does today, a
+// token cannot go from inactive back to active, but the cache does not rely
+// on that — is refused for at most this long. Only an answer counts: a
+// server that could not be asked is a 401 now and a fresh question next time.
+const INTROSPECTION_NEGATIVE_CACHE = new Map<string, number>();
+const INTROSPECTION_NEGATIVE_TTL_MS = 30 * 1000;
 const TENANT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 //: The internal marker extractHeaders sets on the OAuth path. Never copied
 //: from a request, so a client cannot supply it.
@@ -140,11 +150,15 @@ function introspectionURL(): string {
 // holds; a missing or odd field is a refusal, not a default. 401 for every
 // failure, never 403: a wrong audience is a token that was never for us, and
 // 403 would tell the caller their token is recognised here (§3.5).
-async function introspect(token: string): Promise<OAuthGrant | null> {
+//
+// "rejected" is the server's answer, or a token whose answer fails a condition;
+// "unavailable" is no answer at all (not configured, unreachable, not 2xx,
+// unparseable). Both are 401 to the caller; only the first is remembered.
+async function introspect(token: string): Promise<OAuthGrant | "rejected" | "unavailable"> {
   const clientId = (process.env.MCP_INTROSPECTION_CLIENT_ID || "").trim();
   const clientSecret = (process.env.MCP_INTROSPECTION_CLIENT_SECRET || "").trim();
   const resource = (process.env.MCP_CANONICAL_RESOURCE || "").trim();
-  if (!clientId || !clientSecret || !resource) return null;
+  if (!clientId || !clientSecret || !resource) return "unavailable";
   let body: Record<string, unknown>;
   try {
     const form = new URLSearchParams({ token, client_id: clientId, client_secret: clientSecret });
@@ -153,17 +167,17 @@ async function introspect(token: string): Promise<OAuthGrant | null> {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) return "unavailable";
     body = (await resp.json()) as Record<string, unknown>;
   } catch {
-    return null;
+    return "unavailable";
   }
-  if (!body || body.active !== true) return null;
-  if (typeof body.aud !== "string" || body.aud !== resource) return null;
+  if (!body || body.active !== true) return "rejected";
+  if (typeof body.aud !== "string" || body.aud !== resource) return "rejected";
   const scopes = typeof body.scope === "string" ? body.scope.split(/\s+/).filter(Boolean) : [];
-  if (!scopes.some((s) => RESOURCE_SCOPES.includes(s))) return null;
-  if (typeof body.exp !== "number" || body.exp * 1000 <= Date.now()) return null;
-  if (typeof body.tenant_id !== "string" || !TENANT_ID_PATTERN.test(body.tenant_id)) return null;
+  if (!scopes.some((s) => RESOURCE_SCOPES.includes(s))) return "rejected";
+  if (typeof body.exp !== "number" || body.exp * 1000 <= Date.now()) return "rejected";
+  if (typeof body.tenant_id !== "string" || !TENANT_ID_PATTERN.test(body.tenant_id)) return "rejected";
   return {
     tenantId: body.tenant_id,
     clientId: typeof body.client_id === "string" ? body.client_id : "unknown",
@@ -182,15 +196,23 @@ async function resolveOAuthGrant(token: string): Promise<OAuthGrant | null> {
   const cached = INTROSPECTION_CACHE.get(key);
   if (cached && cached.expiresAtMs > now) return cached.grant;
   INTROSPECTION_CACHE.delete(key);
-  const grant = await introspect(token);
-  if (!grant) return null;
-  const expiresAtMs = Math.min(now + INTROSPECTION_CACHE_TTL_MS, grant.expiresAtMs);
-  INTROSPECTION_CACHE.set(key, { grant, expiresAtMs });
-  return grant;
+  const refusedUntil = INTROSPECTION_NEGATIVE_CACHE.get(key);
+  if (refusedUntil !== undefined && refusedUntil > now) return null;
+  INTROSPECTION_NEGATIVE_CACHE.delete(key);
+  const answer = await introspect(token);
+  if (answer === "unavailable") return null;
+  if (answer === "rejected") {
+    INTROSPECTION_NEGATIVE_CACHE.set(key, now + INTROSPECTION_NEGATIVE_TTL_MS);
+    return null;
+  }
+  const expiresAtMs = Math.min(now + INTROSPECTION_CACHE_TTL_MS, answer.expiresAtMs);
+  INTROSPECTION_CACHE.set(key, { grant: answer, expiresAtMs });
+  return answer;
 }
 
 function resetOAuthStateForTests(): void {
   INTROSPECTION_CACHE.clear();
+  INTROSPECTION_NEGATIVE_CACHE.clear();
 }
 
 // --- RFC 9728 protected-resource metadata (phase 1, behind the constant) ---
