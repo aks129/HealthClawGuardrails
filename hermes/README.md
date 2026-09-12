@@ -110,6 +110,6 @@ Hermes has built-in OpenClaw migration support: skills imported from an existing
 
 - [`../openclaw/`](../openclaw/) — the Telegram-bot integration (still the right choice if you only want one chat gateway and zero Hermes install)
 - [`../skills/`](../skills/) — shared skills library
-- [`../CLAUDE.md`](../CLAUDE.md) — full repo guide
+- [`../docs/agent-task-guide.md`](../docs/agent-task-guide.md) — full repo guide
 - [Hermes upstream](https://github.com/nousresearch/hermes-agent)
 - [agentskills.io](https://agentskills.io) — the open skills standard Hermes uses
