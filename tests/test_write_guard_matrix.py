@@ -617,6 +617,7 @@ NON_CLINICAL_MUTATORS = {
     "r6.register_client": "OAuth dynamic client registration (token store)",
     "r6.token": "OAuth token grant (token store)",
     "r6.introspect": "OAuth introspection (RFC 7662): reads the token store, writes nothing; service-client credential",
+    "r6.consent_revoke": "OAuth consent revocation (spec §13.4): flips a consent record in the token store; service credential",
     "r6.revoke": "OAuth revocation (token store)",
     # POSTs that persist nothing in this system.
     "r6.validate_resource": "$validate persists nothing; audits 'validate'",
@@ -634,6 +635,7 @@ NON_CLINICAL_MUTATORS = {
 # split a reviewer relies on; they are listed so a NEW one cannot arrive
 # unnoticed. S-10 in the audit names two of these six.
 KNOWN_GET_MUTATORS = {
+    "r6.consent_return": "spec §13.3: the consent decision lands as a browser redirect, a GET by protocol; it writes the consent audit row and an authorization code",
     "r6.curatr_evaluate": "S-10: persists curation_state + quality_score",
     "smbp.report": "S-10: inserts a DocumentReference on ?format=pdf",
     "fasten.agent_access": "mint-once claim on FastenConnection (deliberate)",
