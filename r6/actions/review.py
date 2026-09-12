@@ -470,7 +470,8 @@ def review_submit(action_id):
         payload['reviewed_qr_id'] = qr_row.id
         action.payload_json = json.dumps(payload)
         issue_confirmation(action_id, approved_via='review-page',
-                           ttl_minutes=15)
+                           ttl_minutes=15,
+                           payload_json=action.payload_json)
         db.session.commit()
     except PayloadSealed:
         db.session.rollback()
