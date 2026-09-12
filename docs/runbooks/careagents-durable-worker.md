@@ -89,8 +89,16 @@ what the site does rather than how fast the queue drains:
 | `CAREAGENTS_CANONICAL_HOST` | unset | The site's only public hostname. A request arriving under any other `Host` is answered 308 to the same path and query there; `/healthz` is exempt |
 | `CARE_REAL_RECORDS` | `off` | Whether an account may **start** a Fasten, wearable or direct-upload connection. One of `off`, `allowlist`, `on` |
 | `CARE_REAL_RECORDS_ALLOWLIST` | empty | The account emails `allowlist` mode admits — comma-separated, case-insensitive |
+| `CARE_ANALYTICS` | unset | Count views of the pages anyone can open. One row per UTC day per page, nothing about a visitor. Read it with `flask --app careagents.wsgi page-views` |
 
 What each does when it is **absent** is the part worth reading:
+
+- **`CARE_ANALYTICS` unset counts nothing at all.** Set it to `1` and the app
+  records one integer per UTC day per public page, named by its Flask endpoint
+  rather than its URL. No address, agent string, cookie, referrer or query is
+  stored, and the pages behind sign-in are never counted, so the table cannot
+  describe one person's use of their own records. The trade is that it counts
+  views and cannot count visitors.
 
 - **`CAREAGENTS_CANONICAL_HOST` unset installs no redirect**, and it is the one
   of the three that does not fail safe. The service then answers on the
