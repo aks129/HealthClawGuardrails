@@ -30,6 +30,24 @@ DEFINITION_EXTRACT_URL = (
 #: decision made in this line, with a test (#572, #679).
 COMMIT_WITHOUT_CONFIRMATION = frozenset()
 
+#: The elements a definition-based extraction may name, per target type.
+#: Only the types this engine is written to build have a list, and a type
+#: without one extracts nothing: a definition's element path is authored
+#: by whoever writes the questionnaire, so without this an answer lands in
+#: an element the type does not have (Patient.code.text holding an
+#: allergen, #681) and no validator catches it. Adding a type is a
+#: decision made here, with a test. Patient is FHIR R5/R6 Patient's
+#: element names; choice elements are listed by their stem (deceased, not
+#: deceasedBoolean), which is also how a definition path spells them.
+DEFINITION_ELEMENTS = {
+    "Patient": frozenset({
+        "identifier", "active", "name", "telecom", "gender", "birthDate",
+        "deceased", "address", "maritalStatus", "multipleBirth", "photo",
+        "contact", "communication", "generalPractitioner",
+        "managingOrganization", "link",
+    }),
+}
+
 
 def extract_resources(questionnaire_response, questionnaire):
     """Return a FHIR transaction Bundle of resources extracted from `qr`."""
@@ -121,6 +139,20 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
                 "(url) / %s (path) and this questionnaire extracts %s (#572)",
                 item.get("linkId"), defined_url_type or "none",
                 defined_path_type, target_type)
+            continue
+        # #681: both halves of a definition are authored by whoever writes
+        # the questionnaire, so a consistent type is not enough — the
+        # element after it must be one the target has, or the answer lands
+        # in an element the type does not have (Patient.code.text holding
+        # an allergen) and no validator catches it. Types this engine does
+        # not build have no element list and extract nothing.
+        element = path.split(".")[1] if "." in path else ""
+        if element not in DEFINITION_ELEMENTS.get(target_type, ()):
+            logger.warning(
+                "extract: item %r not extracted: %s.%s is not an element "
+                "this engine builds for %s (#681)",
+                item.get("linkId"), target_type, element or "<none>",
+                target_type)
             continue
         _value_key, value = _answer_value(item_answers[0])
         if value is None:

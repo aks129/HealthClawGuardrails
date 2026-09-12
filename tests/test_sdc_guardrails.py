@@ -128,9 +128,10 @@ def test_extract_invalid_step_up_token_is_401(client, tenant_id):
 
 def test_extract_validation_failure_does_not_commit(client, app, auth_headers,
                                                     tenant_id):
-    """A definitionExtract targeting an unsupported resourceType fails
-    $validate -> 422, and NOTHING is committed for that type."""
-    # valueCode 'Foobar' is not in R6_RESOURCE_TYPES -> structural error.
+    """A definitionExtract targeting a resourceType this engine does not
+    build extracts nothing (#681), so nothing reaches $validate and NOTHING
+    is committed for that type. Before #681 the same request built a
+    {"resourceType": "Foobar"} row and $validate refused it with 422."""
     q = {"resourceType": "Questionnaire", "status": "active",
          "extension": [{"url": DEFINITION_EXTRACT_URL, "valueCode": "Foobar"}],
          "item": [{"linkId": "x", "type": "string",
@@ -148,10 +149,10 @@ def test_extract_validation_failure_does_not_commit(client, app, auth_headers,
                   {"name": "questionnaire-response", "resource": qr},
                   {"name": "questionnaire", "resource": q}]},
     )
-    assert resp.status_code == 422
-    assert resp.get_json()["resourceType"] == "OperationOutcome"
+    assert resp.status_code == 200
+    assert resp.get_json()["parameter"][0]["resource"]["entry"] == []
     after = _count(app, "Foobar", tenant_id)
-    assert after == before  # no commit on validation failure
+    assert after == before  # nothing built, nothing committed
 
 
 def test_extract_dry_run_does_not_persist(client, app, auth_headers,
