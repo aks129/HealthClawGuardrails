@@ -3629,6 +3629,7 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
+    assert d["unlinked"] is True               # and the hub no longer lists it
     assert d["audit_retained"] is True          # says so to the patient
     assert len(fake.purged) == 1                # records purged, not just unlinked
     # connection is gone from the hub
@@ -3649,7 +3650,14 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
 
     r = c.delete(f"/api/connections/{conn}")
     assert r.status_code == 502
-    assert r.get_json()["deleted"] is False
+    body = r.get_json()
+    # #586: the purge raises on any non-200 and on a lost answer, so the
+    # records may or may not be gone. A field named `deleted` cannot say
+    # False here without lying on the outcome where they are gone; what
+    # is observed is that the connection was not unlinked.
+    assert "deleted" not in body
+    assert body["unlinked"] is False
+    assert body["error"] == "deletion_failed"
     # connection survives, so the patient can retry
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
 
