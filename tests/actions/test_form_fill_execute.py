@@ -183,9 +183,11 @@ def test_end_to_end_propose_review_confirm_download(client, app, tenant_headers,
     # separately minted action-bound token).
     from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
     from r6.stepup import generate_step_up_token
+    from tests.approval_helpers import bound_operation
     approval_headers = dict(auth_headers)
     approval_headers['X-Step-Up-Token'] = generate_step_up_token(
-        tenant, audience=ACTION_APPROVAL_AUDIENCE, operation=action_id)
+        tenant, audience=ACTION_APPROVAL_AUDIENCE,
+        operation=bound_operation(client.application, action_id))
     confirm = client.post('/r6/actions/%s/confirm' % action_id,
                           headers=approval_headers, json={})
     assert confirm.status_code == 200, confirm.get_data(as_text=True)

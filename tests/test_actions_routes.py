@@ -12,13 +12,10 @@ from r6.actions.models import ProposedAction
 
 
 def _approval_headers(auth_headers, action_id):
-    from r6.actions.confirmations import ACTION_APPROVAL_AUDIENCE
-    from r6.stepup import generate_step_up_token
-    headers = dict(auth_headers)
-    headers['X-Step-Up-Token'] = generate_step_up_token(
-        headers['X-Tenant-Id'], audience=ACTION_APPROVAL_AUDIENCE,
-        operation=action_id)
-    return headers
+    # Bound to the action AND its payload digest, as the approve surface
+    # mints it (#659); _propose captured the app so the payload can be read.
+    from tests.approval_helpers import approval_headers
+    return approval_headers(_LAST_APP, auth_headers, action_id)
 
 
 PROPOSE_BODY = {
@@ -93,7 +90,12 @@ def test_propose_oversize_payload_returns_400(client, tenant_headers):
 # Commit route tests
 # ---------------------------------------------------------------------------
 
+_LAST_APP = None
+
+
 def _propose(client, tenant_headers):
+    global _LAST_APP
+    _LAST_APP = client.application
     resp = client.post('/r6/actions/propose', json=PROPOSE_BODY,
                        headers=tenant_headers)
     return resp.get_json()['id']
