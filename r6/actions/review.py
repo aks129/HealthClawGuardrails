@@ -205,7 +205,12 @@ def _gather_content(tenant_id, patient, subject_ref=None):
 
     patient_id = patient['id']
     ref = 'Patient/%s' % patient_id
-    content = [patient]
+    # The Patient is NOT in this list (#581). populate_questionnaire takes
+    # the subject as its own argument; a copy in here was dead weight held
+    # beside a redaction boundary, the same door $populate closed in #578
+    # after proving nothing read it. Nothing reads it here either: the
+    # list reaches the engine and nowhere else.
+    content = []
     unanchored = False
     for resource_type, subject_field in _CONTENT_TYPES:
         for row in R6Resource.query.filter_by(
@@ -470,7 +475,8 @@ def review_submit(action_id):
         payload['reviewed_qr_id'] = qr_row.id
         action.payload_json = json.dumps(payload)
         issue_confirmation(action_id, approved_via='review-page',
-                           ttl_minutes=15)
+                           ttl_minutes=15,
+                           payload_json=action.payload_json)
         db.session.commit()
     except PayloadSealed:
         db.session.rollback()
