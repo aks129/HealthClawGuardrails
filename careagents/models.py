@@ -15,7 +15,8 @@ import secrets
 import time
 
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
-                        LargeBinary, String, create_engine, inspect, text)
+                        LargeBinary, String, UniqueConstraint, create_engine,
+                        inspect, text)
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 
@@ -156,6 +157,26 @@ class UsageDay(Base):
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
     turns = Column(Integer, default=0)
+
+
+class PageViewDay(Base):
+    """Per-page daily view count for the pages anyone can open.
+
+    Counts only, and deliberately the narrowest thing that answers "is
+    anybody coming": one row per UTC day per Flask endpoint name. The
+    endpoint name is written by us in this module's routes, so unlike a URL
+    it cannot carry a tenant id, a token or a person's data. Nothing about
+    the visitor is stored — no address, no agent string, no cookie, no
+    identifier of any kind — so this counts views and cannot count people,
+    which is the trade this table makes on purpose.
+    """
+    __tablename__ = "ca_page_view_days"
+    __table_args__ = (UniqueConstraint("day", "endpoint",
+                                       name="uq_ca_page_view_days_day_endpoint"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("pv"))
+    day = Column(String(10), nullable=False, index=True)    # UTC "YYYY-MM-DD"
+    endpoint = Column(String(64), nullable=False, index=True)
+    views = Column(Integer, default=0)
 
 
 class EmailToken(Base):
