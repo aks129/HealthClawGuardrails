@@ -182,8 +182,12 @@ def test_extract_dry_run_does_not_persist(client, app, auth_headers,
     assert after == before  # dryRun must not persist
 
 
-def test_extract_commit_persists(client, app, auth_headers, tenant_id):
-    """A valid commit-mode extract writes the Observation to the store."""
+def test_extract_commit_refuses_the_observation(client, app, auth_headers,
+                                                tenant_id):
+    """Commit mode does not write the Observation: no type is cleared to
+    commit on a step-up token alone (#679; the class around #668). The
+    row stays previewable with dryRun=true, tested in
+    tests/test_extract_refuses_clinical_rows_on_step_up_alone.py."""
     qr = {"resourceType": "QuestionnaireResponse", "status": "completed",
           "subject": {"reference": "Patient/p1"},
           "item": [{"linkId": "weight",
@@ -202,17 +206,8 @@ def test_extract_commit_persists(client, app, auth_headers, tenant_id):
                   {"name": "questionnaire-response", "resource": qr},
                   {"name": "questionnaire", "resource": q}]},
     )
-    assert resp.status_code == 200
-    after = _count(app, "Observation", tenant_id)
-    assert after == before + 1
-    # The committed Observation is retrievable and tenant-scoped.
-    with app.app_context():
-        rows = R6Resource.query.filter_by(
-            resource_type="Observation", tenant_id=tenant_id).all()
-        obs = [r.to_fhir_json() for r in rows]
-        assert any(
-            o.get("code", {}).get("coding", [{}])[0].get("code") == "29463-7"
-            for o in obs)
+    assert resp.status_code == 422
+    assert _count(app, "Observation", tenant_id) == before
 
 
 # --- Audit coverage ------------------------------------------------------
@@ -269,17 +264,17 @@ def test_extract_dry_run_emits_read_audit(client, app, auth_headers,
 
 def test_extract_commit_emits_create_audit(client, app, auth_headers,
                                            tenant_id):
-    """Commit-mode $extract writes a create AuditEvent for the QR."""
+    """Commit-mode $extract writes a create AuditEvent for the QR, even
+    when the bundle has nothing cleared to write (#679: today that is the
+    only commit that gets past the refusal — a plain item with no extract
+    extension yields an empty bundle)."""
     qr = {"resourceType": "QuestionnaireResponse", "id": "qr-commit",
           "status": "completed",
           "subject": {"reference": "Patient/p1"},
-          "item": [{"linkId": "weight",
-                    "answer": [{"valueQuantity": {"value": 70}}]}]}
+          "item": [{"linkId": "note",
+                    "answer": [{"valueString": "nothing to extract"}]}]}
     q = {"resourceType": "Questionnaire", "status": "active",
-         "item": [{"linkId": "weight", "type": "quantity",
-                   "code": [{"system": "http://loinc.org", "code": "29463-7"}],
-                   "extension": [{"url": OBSERVATION_EXTRACT_URL,
-                                  "valueBoolean": True}]}]}
+         "item": [{"linkId": "note", "type": "string"}]}
     resp = client.post(
         "/r6/fhir/QuestionnaireResponse/$extract",
         headers=auth_headers,
@@ -289,6 +284,7 @@ def test_extract_commit_emits_create_audit(client, app, auth_headers,
                   {"name": "questionnaire", "resource": q}]},
     )
     assert resp.status_code == 200
+    assert resp.get_json()["parameter"][0]["resource"]["entry"] == []
     with app.app_context():
         events = AuditEventRecord.query.filter_by(
             tenant_id=tenant_id, resource_type="QuestionnaireResponse",
