@@ -232,8 +232,62 @@ auditor.
   a fix on the first pull-request event after it merges, not before. The
   property is pinned: `tests/test_ci_hardening.py` refuses a job condition
   that names an event its workflow never listens for.
+- **A "pinned set" of tests is a guess about what you touched.** Twice on
+  2026-09-06 a change went green on the files named in the PR and red on the
+  full suite: `tests/actions/` is a subdirectory the pinned set never
+  listed, and a line-keyed allowlist in `tests/test_access_kernel.py` moved
+  when lines were added above the call it named (#660). Run the whole suite
+  before opening a pull request, in the background if it must be, and read
+  the exit code rather than the last line.
+- **Postgres enforces what SQLite ignores.** `alembic_version.version_num` is
+  `VARCHAR(32)`. A 39-character revision id upgraded cleanly on every SQLite
+  run and failed the Postgres lane on the first deploy-shaped test with
+  `value too long for type character varying(32)` (#658).
+  `tests/test_database_migrations.py` now refuses a revision id over 32
+  characters; read the Postgres lane on its own, not the aggregate green.
+- **A comment can cancel a review.** A workflow with several triggers and
+  `cancel-in-progress: true` puts every kind of run in one concurrency group
+  unless the group names the event. The Vercel bot's deployment comment,
+  two seconds after a pull request opened, fired the reviewer's
+  `issue_comment` run and cancelled the review it was supposed to leave
+  alone (#653, fixed in #654 with a test).
+- **A hash stored beside the thing it attests attests nothing.** The first
+  human-gate digest (#658) was a sha256 in the same table a writer with
+  database access could rewrite; forge the payload and the digest together
+  and the audit line vouched for the forgery. An adversarial pass against a
+  live database found it in an hour. Key a digest with a secret the
+  database does not hold (the step-up secret), and ask for that kind of
+  pass on any guardrail change before it is armed.
+- **An SDC definition names its resource type twice.** The StructureDefinition
+  URL before `#` and the element path after it both carry a type, and a
+  check that reads one lets `AllergyIntolerance#Patient.name.given` file an
+  allergen into the Patient (#664). Check both where the URL names a type;
+  say plainly that a profile URL cannot be checked without resolving it.
 
 ---
+- **A mutation that does not compile reads as caught.** A TypeScript mutation
+  that broke the types made ts-jest fail before any test ran, and the runner
+  reported `Tests: 0 total` with a non-zero exit, which a script that checks
+  only the exit code prints as CAUGHT (2026-09-06, the MCP server's OAuth
+  path). Read the summary line: a mutation is caught when tests ran and some
+  failed, not when nothing ran. Write the mutation so it compiles (an
+  environment-variable guard instead of a literal `false` keeps the type
+  narrowing) and count the failures.
+- **SQLite also ignores foreign keys, and no test deletes the parent.** A
+  grant table pointed at the connections table; `delete_connection` removed
+  the connection row; every SQLite run passed and Railway Postgres would have
+  refused the first real delete (#670, found in review). The Postgres lane
+  only catches what a test exercises, so when a new row references an old
+  one, write the test that deletes the old one, on both lanes.
+- **An assertion joined with `or` may not be able to fail.** `assert a == b or
+  c.startswith(...)` passed for a reason that had nothing to do with the
+  property; the second clause was always true. Read every `or` in an assert
+  as "which half could ever be false here"; if the answer is neither, the
+  test measures nothing (found in review, 2026-09-06).
+- **`HealthClawClient` caches its `/r6/fhir` base at construction.** A test
+  that repoints `client.base` to a dead port to simulate an outage leaves
+  `client.fhir` pointing at the live one, and the outage never happens;
+  set both (live-probe session, 2026-09-06, probing #670's revoke path).
 
 ## 7. Working style
 

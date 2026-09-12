@@ -133,6 +133,12 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   over the one account store is the passkey failure #264 exists to stop. It is
   kept, refusing, so the retired path can still be read.
 
+- **The MCP connector (OAuth path) is on `main` and off in production.** It is
+  gated by `MCP_OAUTH_ENABLED` on the MCP server and `CAREAGENTS_CONSENT_URL`
+  on Flask; turning it on is the owner's sequence — DNS, variables, two manual
+  deploys, then enable — in
+  [docs/runbooks/mcp-connector-enablement.md](runbooks/mcp-connector-enablement.md).
+
   Every deploy must stamp `careagents/BUILD_SHA`, the two-line marker
   (`<sha12>` / `<unix commit time>`) that `careagents/_build.py` reads once at
   import and `/healthz` reports as `build` / `built_at`. It is gitignored on
