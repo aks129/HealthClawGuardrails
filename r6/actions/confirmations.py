@@ -101,14 +101,32 @@ def has_confirmation(action_id):
 
 def open_confirmations(action_id):
     """Every unconsumed, unexpired confirmation for action_id: the set the
-    confirm route is about to consume, and so the set whose digests must
-    all match the payload it is about to execute (#559)."""
+    confirm route is about to consume."""
     now = _utcnow()
     return ActionConfirmation.query.filter(
         ActionConfirmation.action_id == action_id,
         ActionConfirmation.consumed_at.is_(None),
         ActionConfirmation.expires_at > now,
     ).all()
+
+
+def approved_digests(action_id):
+    """Every confirmation ever minted for action_id, expired or not.
+
+    This is the set the digest check compares against, and it is deliberately
+    wider than `open_confirmations`. A confirmation's TTL bounds how long it
+    can AUTHORISE an execution; it does not bound how long it is EVIDENCE of
+    what was approved. The two were conflated (#678): the review-page
+    confirmation lasts fifteen minutes and the action stays confirmable for
+    thirty, and in the gap the check compared against nothing, so a payload
+    tampered past the ORM seal executed, and a fresh confirmation was minted
+    over the tampered bytes as if a human had seen them.
+
+    An action executes once, so a consumed row here belongs to an execution
+    that already happened and the route will not reach the check again.
+    """
+    return ActionConfirmation.query.filter(
+        ActionConfirmation.action_id == action_id).all()
 
 
 def consume_confirmation(action_id):

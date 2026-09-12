@@ -32,7 +32,7 @@ from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
                                       consume_confirmation,
                                       issue_confirmation,
-                                      open_confirmations,
+                                      approved_digests,
                                       payload_digest)
 from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
 from r6.actions.registry import get_executor
@@ -579,14 +579,16 @@ def confirm_action(action_id):
     # (d) Consent record: issued + immediately consumed — same instant, one
     # transaction. The claim above is the lock; this row is the audit
     # artifact of who/when/via.
-    # (c2) Byte equality (#559, human-gate spec 8.3). Every open confirmation
-    # signed a digest of the payload as the human saw it; the payload about
+    # (c2) Byte equality (#559, human-gate spec 8.3). Every confirmation ever
+    # minted for this action — expired ones included, since an expired one is
+    # still evidence of what was approved (#678) — signed a digest of the
+    # payload as the human saw it; the payload about
     # to execute must hash to the same. The ORM seal (#528) cannot see a
     # bulk update, a Core statement or raw SQL; this can, after the fact,
     # which is the evidence the ledger promises. A row with no digest
     # (minted before the column existed) proves nothing and is refused too.
     current = payload_digest(action.payload_json)
-    stale = [c for c in open_confirmations(action_id)
+    stale = [c for c in approved_digests(action_id)
              if c.payload_digest != current]
     if stale:
         approved = stale[0].payload_digest or 'none (confirmation carries no digest)'
