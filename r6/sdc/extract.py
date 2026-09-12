@@ -30,22 +30,18 @@ DEFINITION_EXTRACT_URL = (
 #: decision made in this line, with a test (#572, #679).
 COMMIT_WITHOUT_CONFIRMATION = frozenset()
 
-#: The elements a definition-based extraction may name, per target type.
-#: Only the types this engine is written to build have a list, and a type
-#: without one extracts nothing: a definition's element path is authored
-#: by whoever writes the questionnaire, so without this an answer lands in
-#: an element the type does not have (Patient.code.text holding an
-#: allergen, #681) and no validator catches it. Adding a type is a
-#: decision made here, with a test. Patient is FHIR R5/R6 Patient's
-#: element names; choice elements are listed by their stem (deceased, not
-#: deceasedBoolean), which is also how a definition path spells them.
+#: The elements a definition-based extraction may name, per target type,
+#: and exactly the elements _set_path can give a FHIR shape (#666): the
+#: list and the setters are one set. Only the types this engine is written
+#: to build have a list, and a type without one extracts nothing: a
+#: definition's element path is authored by whoever writes the
+#: questionnaire, so without this an answer lands in an element the type
+#: does not have (Patient.code.text holding an allergen, #681) or in the
+#: wrong shape (Patient.telecom as a bare string, #666), and no validator
+#: catches either. Adding an element means adding its setter, with a test.
 DEFINITION_ELEMENTS = {
-    "Patient": frozenset({
-        "identifier", "active", "name", "telecom", "gender", "birthDate",
-        "deceased", "address", "maritalStatus", "multipleBirth", "photo",
-        "contact", "communication", "generalPractitioner",
-        "managingOrganization", "link",
-    }),
+    "Patient": frozenset({"name", "birthDate", "gender", "telecom",
+                          "address"}),
 }
 
 
@@ -157,7 +153,11 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
         _value_key, value = _answer_value(item_answers[0])
         if value is None:
             continue
-        _set_path(resource, path, value)
+        if not _set_path(resource, path, value):
+            logger.warning(
+                "extract: item %r not extracted: %s has no shape this engine "
+                "builds (#681)", item.get("linkId"), path)
+            continue
         populated = True
     if not populated:
         return []
@@ -186,37 +186,35 @@ def _definition_url_type(definition):
 
 
 def _set_path(resource, dotted_path, value):
-    """Set a value at an element path like 'Patient.name.family'.
+    """Write `value` at an element path like 'Patient.name.family' in the
+    shape FHIR gives that element, or return False and write nothing.
 
-    The leading resource-type segment is dropped.
-
-    v1 scope: only `name.*` (HumanName index 0; `given` appends) and
-    `birthDate` are mapped with correct FHIR cardinality. Any other path
-    falls through to a generic nested-dict scalar write — which is WRONG for
-    repeating elements (e.g. telecom, address, identifier are arrays). Such
-    paths are not part of the seeded-demo v1 surface; extending to arbitrary
-    US Core element paths is a future phase. Structural-only downstream
-    validation will NOT catch a malformed shape here.
+    Every element in DEFINITION_ELEMENTS has a shape here; there is no
+    generic fallback, because a nested-dict scalar write is wrong for
+    every repeating element and structural validation does not see it
+    (#666). Repeating elements get one entry per resource — this engine
+    builds one Patient from one submission — and `given` is replaced, not
+    appended, so a repopulated form does not accumulate names. A
+    ContactPoint built from telecom.value alone has no system (cpt-2); the
+    engine invents none, and the validator says so.
     """
     parts = dotted_path.split(".")[1:]  # drop resource type
-    if not parts:
-        return
-    if parts == ["birthDate"]:
-        resource["birthDate"] = value
-        return
-    if parts[:1] == ["name"] and len(parts) == 2:
-        names = resource.setdefault("name", [{}])
-        field = parts[1]
-        if field == "given":
-            names[0].setdefault("given", []).append(value)
-        else:
-            names[0][field] = value
-        return
-    # Generic fallback: nested dict path, scalar leaf.
-    cursor = resource
-    for segment in parts[:-1]:
-        cursor = cursor.setdefault(segment, {})
-    cursor[parts[-1]] = value
+    if len(parts) == 1 and parts[0] in ("birthDate", "gender"):
+        resource[parts[0]] = value
+        return True
+    if len(parts) == 2 and parts[0] == "name" and parts[1] in ("family", "given"):
+        entry = resource.setdefault("name", [{}])[0]
+        entry[parts[1]] = [value] if parts[1] == "given" else value
+        return True
+    if len(parts) == 2 and parts[0] == "telecom" and parts[1] in ("system", "value"):
+        resource.setdefault("telecom", [{}])[0][parts[1]] = value
+        return True
+    if len(parts) == 2 and parts[0] == "address" and parts[1] in (
+            "line", "city", "state", "postalCode", "country"):
+        entry = resource.setdefault("address", [{}])[0]
+        entry[parts[1]] = [value] if parts[1] == "line" else value
+        return True
+    return False
 
 
 def _answer_value(answer):

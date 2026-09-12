@@ -37,11 +37,26 @@ def engine_builds_these_types(monkeypatch):
     those types for the test: the commit gate's property — nothing is
     written on a step-up token alone — must hold independently of which
     types the engine happens to build."""
+    taught = ("AllergyIntolerance", "Consent", "Procedure")
     for target, element in (("AllergyIntolerance", "clinicalStatus"),
                             ("Consent", "status"), ("Procedure", "status")):
         monkeypatch.setitem(extract.DEFINITION_ELEMENTS, target,
                             frozenset({element, "verificationStatus",
                                        "patient", "code"}))
+    # #666: the setters shape Patient only; give the taught types a plain
+    # nested write so their rows exist to be refused at the gate.
+    real_set_path = extract._set_path
+
+    def set_path(resource, dotted_path, value):
+        if resource.get("resourceType") not in taught:
+            return real_set_path(resource, dotted_path, value)
+        cursor = resource
+        parts = dotted_path.split(".")[1:]
+        for segment in parts[:-1]:
+            cursor = cursor.setdefault(segment, {})
+        cursor[parts[-1]] = value
+        return True
+    monkeypatch.setattr(extract, "_set_path", set_path)
 
 SD = "http://hl7.org/fhir/StructureDefinition"
 DEF_EXTRACT = ("http://hl7.org/fhir/uv/sdc/StructureDefinition/"

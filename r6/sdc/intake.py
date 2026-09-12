@@ -136,7 +136,7 @@ INTAKE_QUESTIONNAIRE = {
                     "linkId": "demographics.phone",
                     "type": "string",
                     "text": "Phone number",
-                    "definition": f"{PATIENT_DEF}.telecom",
+                    "definition": f"{PATIENT_DEF}.telecom.value",
                     "extension": _initial_expr(
                         "%patient.telecom.where(system='phone').value.first()"),
                 },
