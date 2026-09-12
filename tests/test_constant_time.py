@@ -106,6 +106,11 @@ _COMPARE_DIGEST_HOMES = {
         'caller-supplied string reaches the comparison. CareAgents cannot '
         'import r6 either (tests/test_import_acyclicity.py), so routing it '
         'through the helper would mean duplicating the helper',
+    'careagents/consent.py':
+        'the handoff tag check (spec §13.3): both operands are bytes before '
+        'they meet — the presented tag encoded as ASCII with non-ASCII '
+        'dropped, and a hexdigest this process just computed — so the #557 '
+        'TypeError cannot arise. CareAgents cannot import r6, as above',
 }
 
 
