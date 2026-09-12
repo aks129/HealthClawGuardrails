@@ -76,6 +76,15 @@ LOINC_RANGES = {
 LOINC_SYSTEM = "http://loinc.org"
 
 
+#: Why a result could not be decided. Grouped by the report layer into what
+#: it tells a reader, so each one is a fact about the input rather than a
+#: sentence about it (#689).
+UNKNOWN_ANALYTE = "unknown-analyte"        #: no reference range for this code
+NO_NUMERIC_VALUE = "no-numeric-value"      #: nothing to compare
+UNIT_MISMATCH = "unit-mismatch"            #: units differ from the range's
+RANGE_NOT_ASSERTED = "range-not-asserted"  #: one-sided lab range, wrong side
+
+
 def _loinc(obs):
     for c in obs.get("code", {}).get("coding", []):
         if c.get("system") == LOINC_SYSTEM and c.get("code"):
@@ -123,10 +132,18 @@ def _flag(value, low, high, crit_low, crit_high):
     return "N"
 
 
-def _indeterminate(analyte, loinc, value, unit, reason):
+def _indeterminate(analyte, loinc, value, unit, reason, cause):
+    """`cause` is the machine-readable half of `reason`.
+
+    The prose is for a reader; a caller deciding how to describe an
+    undecided result must not have to parse it. r6/caregaps/report.py carries
+    `indeterminate_reason` for the same purpose, and the report layer here
+    groups on it (#689).
+    """
     return {"analyte": analyte, "loinc": loinc, "value": value, "unit": unit,
             "range_source": "none", "low": None, "high": None,
-            "flag": None, "critical": False, "note": f"indeterminate: {reason}"}
+            "flag": None, "critical": False, "indeterminate_reason": cause,
+            "note": f"indeterminate: {reason}"}
 
 
 def interpret_observation(obs, patient=None):
@@ -139,9 +156,11 @@ def interpret_observation(obs, patient=None):
 
     # value must be a real number (bool is an int subclass — exclude it).
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return _indeterminate(analyte, loinc, value, unit, "no numeric value")
+        return _indeterminate(analyte, loinc, value, unit, "no numeric value",
+                              NO_NUMERIC_VALUE)
     if loinc is None or entry is None:
-        return _indeterminate(analyte, loinc, value, unit, "unknown analyte")
+        return _indeterminate(analyte, loinc, value, unit, "unknown analyte",
+                              UNKNOWN_ANALYTE)
 
     crit_low, crit_high = entry.get("crit_low"), entry.get("crit_high")
 
@@ -154,7 +173,8 @@ def interpret_observation(obs, patient=None):
         # mismatched unit is indeterminate, never a guessed normal.
         if unit != entry["unit"]:
             return _indeterminate(analyte, loinc, value, unit,
-                                  f"unit {unit!r} != expected {entry['unit']!r}")
+                                  f"unit {unit!r} != expected {entry['unit']!r}",
+                                  UNIT_MISMATCH)
         low, high = _apply_sex(entry, patient)
         source = "table"
         note = "adult default range" + (
@@ -177,7 +197,8 @@ def interpret_observation(obs, patient=None):
             return _indeterminate(
                 analyte, loinc, value, unit,
                 "value is outside the population range on the side the "
-                "performing lab's one-sided reference range does not cover")
+                "performing lab's one-sided reference range does not cover",
+                RANGE_NOT_ASSERTED)
 
     return {"analyte": analyte, "loinc": loinc, "value": value, "unit": unit,
             "range_source": source, "low": low, "high": high,
