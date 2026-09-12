@@ -66,7 +66,7 @@ jobs:
       - name: The PR Agent
         if: steps.keycheck.outputs.has_key == 'true'
         # v0.44.0 = ab6ec54bfeb37933ddb74259338752e9272016c6
-        uses: The-PR-Agent/pr-agent@v0.44.0
+        uses: The-PR-Agent/pr-agent@v0.45.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The same secret name claude-pr-review.yml reads; no OpenAI key.
