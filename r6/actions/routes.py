@@ -31,13 +31,15 @@ from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
                                       consume_confirmation,
-                                      issue_confirmation)
+                                      issue_confirmation,
+                                      open_confirmations,
+                                      payload_digest)
 from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
 from r6.actions.registry import get_executor
 from r6.actions.rx_transfer import build_transfer_request
 from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.read_auth import authorize_tenant_read
 from r6.stepup import generate_step_up_token
@@ -577,7 +579,40 @@ def confirm_action(action_id):
     # (d) Consent record: issued + immediately consumed — same instant, one
     # transaction. The claim above is the lock; this row is the audit
     # artifact of who/when/via.
-    issue_confirmation(action_id, approved_via, ttl_minutes=15)
+    # (c2) Byte equality (#559, human-gate spec 8.3). Every open confirmation
+    # signed a digest of the payload as the human saw it; the payload about
+    # to execute must hash to the same. The ORM seal (#528) cannot see a
+    # bulk update, a Core statement or raw SQL; this can, after the fact,
+    # which is the evidence the ledger promises. A row with no digest
+    # (minted before the column existed) proves nothing and is refused too.
+    current = payload_digest(action.payload_json)
+    stale = [c for c in open_confirmations(action_id)
+             if c.payload_digest != current]
+    if stale:
+        approved = stale[0].payload_digest or 'none (confirmation carries no digest)'
+        summary = 'approved payload digest mismatch'
+        failed = transition_action(
+            action_id, from_states=('executing',), to_state='failed',
+            actor='confirm', outcome_summary=summary)
+        db.session.refresh(action)
+        if failed:
+            # Same-session audit (the post-commit shim is ratcheted): the
+            # transition above has committed, so this row lands in its own
+            # transaction only when the failure really happened.
+            add_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action.id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                outcome='failure',
+                detail='%s; approved=%s current=%s' % (summary, approved, current),
+            )
+            db.session.commit()
+        return jsonify({'id': action.id, 'status': action.status,
+                        'error_code': errors.APPROVED_PAYLOAD_MISMATCH,
+                        'error': 'The payload no longer matches what was '
+                                 'approved; nothing was executed.'}), 409
+
+    issue_confirmation(action_id, approved_via, ttl_minutes=15,
+                       payload_json=action.payload_json)
     db.session.flush()
     consume_confirmation(action_id)
     db.session.commit()
@@ -585,8 +620,8 @@ def confirm_action(action_id):
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        detail='approved via %s; %s' % (approved_via,
-                                        json.dumps(action.summary())),
+        detail='approved via %s; %s; payload_digest=%s' % (
+            approved_via, json.dumps(action.summary()), current),
     )
 
     # (e) A kind with no registered rail fails loud — never a fake success.
