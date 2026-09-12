@@ -1912,6 +1912,28 @@ class FakeClient:
         # `len(fake.purged)` depended on which tests ran before it.
         self.purged: list[str] = []
 
+        # Consent handoff (spec §13.3, §13.4): the parked request HealthClaw
+        # would answer for any request id, the ids asked about, the consents
+        # revoked, and a knob that makes the revoke fail the way a gateway
+        # 5xx would.
+        self.parked = {"request_id": "req-1", "client_id": "cid-claude",
+                       "client_name": "Claude",
+                       "scopes": ["fhir.read", "context.read"],
+                       "exp": 4102444800}
+        self.consent_requests: list[str] = []
+        self.revoked: list[str] = []
+        self.revoke_fails = False
+
+    def consent_request(self, request_id):
+        self.consent_requests.append(request_id)
+        return dict(self.parked) if self.parked else None
+
+    def revoke_consent(self, consent_id):
+        if self.revoke_fails:
+            raise HealthClawError("consent revoke failed (502)", 502)
+        self.revoked.append(consent_id)
+        return True
+
     @staticmethod
     def conversation_id(agent_id):
         return f"careagents:{agent_id}"
@@ -3629,6 +3651,7 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     assert r.status_code == 200
     d = r.get_json()
     assert d["deleted"] is True and d["rows_deleted"] == 42
+    assert d["unlinked"] is True               # and the hub no longer lists it
     assert d["audit_retained"] is True          # says so to the patient
     assert len(fake.purged) == 1                # records purged, not just unlinked
     # connection is gone from the hub
@@ -3649,7 +3672,14 @@ def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
 
     r = c.delete(f"/api/connections/{conn}")
     assert r.status_code == 502
-    assert r.get_json()["deleted"] is False
+    body = r.get_json()
+    # #586: the purge raises on any non-200 and on a lost answer, so the
+    # records may or may not be gone. A field named `deleted` cannot say
+    # False here without lying on the outcome where they are gone; what
+    # is observed is that the connection was not unlinked.
+    assert "deleted" not in body
+    assert body["unlinked"] is False
+    assert body["error"] == "deletion_failed"
     # connection survives, so the patient can retry
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 200
 
@@ -5428,6 +5458,53 @@ def test_care_gaps_that_could_not_run_forbids_reporting_no_screenings(
     out = _json.loads(_execute_tool(_HC(), "t", "get_care_gaps", {}, []))
     assert "no-patient" in out["note"]
     assert "Do NOT tell the person they have no screenings due" in out["note"]
+
+
+def test_labs_with_an_unevaluated_result_tell_the_model_what_zero_means(
+        cfg, svc):
+    """The marker reaching the model is necessary, not sufficient (#689).
+
+    Handed "high: 0, critical: 0" beside an unevaluated note, a model leads
+    with the zeros — that is how four stage 2 readings were summarised as
+    nothing flagged. Care gaps needed the same instruction (#417).
+
+    MUTATION: drop the note when `unevaluated` is set -> red.
+    """
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return {"summary": {}, "disclaimer": "d", "consumer": {
+                "lines": [], "unevaluated": "unknown-analyte",
+                "unevaluated_count": 2,
+                "unevaluated_analytes": ["Systolic blood pressure",
+                                         "Diastolic blood pressure"],
+                "unevaluated_note": "This check did not evaluate 2 results."}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    assert "INCOMPLETE" in out["note"]
+    assert "2" in out["note"]
+    assert "not that nothing is abnormal" in out["note"]
+    assert "unevaluated_note" in out["note"]
+
+
+def test_labs_with_every_result_scored_carry_no_note(cfg, svc):
+    """A note on a whole answer is noise, and noise gets ignored when it is
+    the one that matters."""
+    import json as _json
+
+    from careagents.agent import _execute_tool
+
+    class _HC:
+        def interpret_labs(self, _tenant):
+            return {"summary": {}, "disclaimer": "d",
+                    "consumer": {"lines": [{"analyte": "Potassium",
+                                            "flag": "N", "message": "ok"}]}}
+
+    out = _json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    assert "note" not in out
 
 
 def test_care_gaps_partial_result_reports_its_lines_and_says_what_is_missing(

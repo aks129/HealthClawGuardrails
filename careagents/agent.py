@@ -324,8 +324,24 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
-        return json.dumps({"consumer_summary": labs["consumer"],
-                           "disclaimer": labs["disclaimer"][:200]})
+        out = {"consumer_summary": labs["consumer"],
+               "disclaimer": labs["disclaimer"][:200]}
+        consumer = labs["consumer"] if isinstance(labs["consumer"], dict) else {}
+        if consumer.get("unevaluated"):
+            # The marker arriving is necessary and not sufficient. Care gaps
+            # learned that a model handed lines plus an unevaluated note leads
+            # with the lines (#417); handed "high: 0, critical: 0" plus a note,
+            # it leads with the zeros, which is how four stage 2 readings were
+            # summarised as nothing flagged (#689). Say what the zeros mean.
+            out["note"] = (
+                "This lab answer is INCOMPLETE: "
+                f"{consumer.get('unevaluated_count')} result(s) were not "
+                "evaluated. Zero flagged results here means nothing was "
+                "SCORED as abnormal, not that nothing is abnormal. Report the "
+                "lines you were given AND say, using unevaluated_note, which "
+                "results were not evaluated and why. Do not describe an "
+                "unevaluated result as normal, fine, or within range.")
+        return json.dumps(out)
     if name == "show_lab_timeline":
         topic = str(args.get("topic") or "")
         labs = hc.interpret_labs(tenant)

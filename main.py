@@ -205,6 +205,12 @@ def _register_blueprints(flask_app: Flask) -> None:
     from r6.routes import r6_blueprint
 
     flask_app.register_blueprint(r6_blueprint)
+    # RFC 8414: the issuer is the host root (no path), so a client looks for
+    # the metadata at the root well-known path first. The prefixed copy under
+    # /r6/fhir stays for anything that already reads it (spec §3.3).
+    from r6.oauth import discovery_root_view
+    flask_app.add_url_rule('/.well-known/oauth-authorization-server',
+                           'oauth_discovery_root', discovery_root_view)
 
     from r6.fasten.routes import fasten_blueprint
 
@@ -291,6 +297,9 @@ def _register_request_hooks(flask_app: Flask) -> None:
     from r6.access import install_audit_assertions, register_error_handlers
 
     register_error_handlers(flask_app)
+    # The payload seal (#528) is a class of refusal, not one route's (#620).
+    from r6.actions.errors import register_error_handlers as register_seal_handler
+    register_seal_handler(flask_app)
     install_audit_assertions(flask_app)
 
     @flask_app.context_processor

@@ -205,7 +205,12 @@ def _gather_content(tenant_id, patient, subject_ref=None):
 
     patient_id = patient['id']
     ref = 'Patient/%s' % patient_id
-    content = [patient]
+    # The Patient is NOT in this list (#581). populate_questionnaire takes
+    # the subject as its own argument; a copy in here was dead weight held
+    # beside a redaction boundary, the same door $populate closed in #578
+    # after proving nothing read it. Nothing reads it here either: the
+    # list reaches the engine and nowhere else.
+    content = []
     unanchored = False
     for resource_type, subject_field in _CONTENT_TYPES:
         for row in R6Resource.query.filter_by(
@@ -440,6 +445,19 @@ def review_submit(action_id):
                            '"No known allergies (patient confirmed)". No '
                            'known allergies is never assumed.')
 
+    # (3a) The two answers cannot both be true. "No known allergies" beside a
+    # confirmed allergy row is not a stricter reading of the same fact, it is
+    # a contradiction, and the reviewed response would carry both (#667). The
+    # extraction engine ignores the attestation structurally and writes the
+    # confirmed rows, so the record would hold an allergy while the response
+    # attests there are none. The message names both halves and neither the
+    # substance nor the reaction: the person is looking at the row.
+    if nka_affirmed and confirmed_allergy:
+        return _error(422, 'You confirmed an allergy and also checked "No '
+                           'known allergies (patient confirmed)". Both cannot '
+                           'be true: uncheck the box, or remove the allergy '
+                           'rows you confirmed.')
+
     # (4) Conditions are confirmable but not gating.
     condition_decisions = [
         submitted.get('condition-%d' % i, 'confirm').strip().lower()
@@ -470,7 +488,8 @@ def review_submit(action_id):
         payload['reviewed_qr_id'] = qr_row.id
         action.payload_json = json.dumps(payload)
         issue_confirmation(action_id, approved_via='review-page',
-                           ttl_minutes=15)
+                           ttl_minutes=15,
+                           payload_json=action.payload_json)
         db.session.commit()
     except PayloadSealed:
         db.session.rollback()
