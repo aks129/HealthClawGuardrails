@@ -51,8 +51,14 @@ class HealthClawUnconfirmed(HealthClawError):
 
 
 class HealthClawClient:
-    def __init__(self, base: str, mint_secret: str, timeout: float = 25.0):
+    def __init__(self, base: str, mint_secret: str, timeout: float = 25.0,
+                 public_base: str | None = None):
         self.base = base.rstrip("/")
+        # #539: `base` is the server-to-server address — in production the
+        # internal Railway hostname, on purpose (2026-08-06 fair-use block).
+        # A URL a person's browser will open must use the public hostname
+        # instead, so the two browser-facing builders read this.
+        self.public_base = (public_base or base).rstrip("/")
         self.fhir = f"{self.base}/r6/fhir"
         self.actions = f"{self.base}/r6/actions"
         self.mint_secret = mint_secret
@@ -482,7 +488,7 @@ class HealthClawClient:
         org_connection_id back to this tenant and ingests the records. We do
         NOT build a Fasten-hosted URL ourselves — the provider domain differs
         by TEFCA/mode and only the HealthClaw page has the verified key."""
-        return f"{self.base}/connect/{tenant}"
+        return f"{self.public_base}/connect/{tenant}"
 
     def wearables_connect_url(self, tenant: str, provider: str) -> str:
         """Route to HealthClaw's wearables OAuth kickoff for this tenant +
@@ -491,7 +497,7 @@ class HealthClawClient:
         503 there rather than leaking any credential."""
         from urllib.parse import urlencode
         q = urlencode({"provider": provider, "tenant_id": tenant})
-        return f"{self.base}/wearables/oauth/start?{q}"
+        return f"{self.public_base}/wearables/oauth/start?{q}"
 
     def tenant_has_records(self, tenant: str) -> bool:
         """Whether real records have landed (pending → active).

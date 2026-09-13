@@ -1082,7 +1082,7 @@ def test_worker_pool_creates_only_the_configured_number_of_slots(
     monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
 
     worker_mod.run_worker_pool(cfg, stop)
 
@@ -1180,7 +1180,7 @@ def _drive_pool(cfg, monkeypatch, outcomes):
     monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
     monkeypatch.setattr(worker_mod, "RunWorker", _ScriptedWorker)
     worker_mod.run_worker_pool(cfg, stop)
     return stop
@@ -1284,7 +1284,7 @@ def test_idle_backoff_sleep_stays_interruptible_so_shutdown_drains(
 
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
     monkeypatch.setattr(worker_mod, "RunWorker", _IdleWorker)
 
     stop = threading.Event()
@@ -5034,6 +5034,45 @@ def test_terms_and_privacy_links_never_use_the_internal_base(svc, monkeypatch):
     assert 'href="https://app.healthclaw.io/terms"' in home
     assert 'href="https://app.healthclaw.io/privacy"' in home
     assert "up.railway.app" not in home
+
+
+def test_connect_and_reauth_links_never_use_the_internal_base():
+    """#539: the two links that matter most — the Fasten connect page and
+    the wearables OAuth kickoff — were built from `self.base`, the internal
+    Railway hostname. A person's browser navigates to them at the moment
+    they are asked to trust us with their records. The client now carries
+    the public base for anything a browser will open; server-to-server
+    calls keep the internal one.
+
+    MUTATION: careagents/healthclaw.py, build either URL from self.base
+    -> red.
+    """
+    from careagents.healthclaw import HealthClawClient
+    client = HealthClawClient("https://internal.up.railway.app/", "m",
+                              public_base="https://app.healthclaw.io/")
+    assert client.fasten_connect_url("t-1") == (
+        "https://app.healthclaw.io/connect/t-1")
+    assert client.wearables_connect_url("t-1", "oura").startswith(
+        "https://app.healthclaw.io/wearables/oauth/start?")
+    # Server-to-server stays internal.
+    assert client.fhir == "https://internal.up.railway.app/r6/fhir"
+    # Without a public base the client behaves as before (tests, dev).
+    plain = HealthClawClient("https://internal.up.railway.app", "m")
+    assert plain.fasten_connect_url("t-1") == (
+        "https://internal.up.railway.app/connect/t-1")
+
+
+def test_the_app_builds_its_client_with_the_public_base(svc):
+    """The wiring, not just the builder: create_app hands the config's
+    public base to the client it constructs."""
+    from careagents.app import create_app
+    cfg2 = Config(env={"CARE_DATABASE_URL": "sqlite:///:memory:",
+                       "OPENAI_API_KEY": "k", "HEALTHCLAW_MINT_SECRET": "m",
+                       "HEALTHCLAW_BASE": "https://internal.up.railway.app",
+                       "HEALTHCLAW_PUBLIC_BASE": "https://example.test"})
+    a = create_app(config=cfg2, accounts=svc)
+    assert a.extensions["careagents_runtime"]["client"].public_base == (
+        "https://example.test")
 
 
 def test_terms_and_privacy_links_follow_healthclaw_public_base(svc, monkeypatch):

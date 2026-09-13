@@ -185,7 +185,8 @@ def create_app(config: Config | None = None,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
                       PERMANENT_SESSION_LIFETIME=90 * 24 * 3600)
-    hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret)
+    hc = client or HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
+                                    public_base=cfg.healthclaw_public_base)
     svc = accounts or AccountService(cfg)
     # Exposed for deterministic integration tests and process diagnostics.
     # Production Gunicorn never executes this worker object; the systemd/OCI

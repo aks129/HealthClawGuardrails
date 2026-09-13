@@ -497,7 +497,8 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
                            cfg.run_poll_max_seconds)
 
     def loop(slot: int) -> None:
-        hc = HealthClawClient(cfg.healthclaw_base, cfg.mint_secret)
+        hc = HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
+                              public_base=cfg.healthclaw_public_base)
         worker = RunWorker(cfg, hc, accounts, f"{base_id}-{slot}")
         while not stop.is_set():
             try:
