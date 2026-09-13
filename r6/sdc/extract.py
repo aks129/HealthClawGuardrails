@@ -97,6 +97,19 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
                                    "valueCode")
     if not target_type:
         return []
+    if target_type == "Patient" and subject_ref:
+        # #572 part 2A. A response bound to a subject does NOT yield a Patient
+        # entry. Each committed form used to POST a new Patient with a fresh
+        # uuid, so a tenant accumulated one per submission and every
+        # downstream check lost its subject. There is no human-confirmed
+        # demographic change to write back: the review page renders
+        # demographics read-only, and nothing commits here anyway (#679). A
+        # subject-less response still previews a Patient, as it always did;
+        # the review rail refuses a reviewed response without a subject, so
+        # a form never creates one.
+        logger.info("extract: response is bound to a subject; Patient not "
+                    "extracted (#572)")
+        return []
     resource = {"resourceType": target_type}
     populated = False
     for item in _walk_items(questionnaire.get("item", [])):
