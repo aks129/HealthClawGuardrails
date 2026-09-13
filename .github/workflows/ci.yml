@@ -127,9 +127,13 @@ jobs:
           # would miss Postgres-specific schema problems in its tables too.
           CARE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
         run: |
+          # The careagents files are a glob, not a name: the no-PHI guard
+          # (#639) does raw table reads, the analytics counter is a DB-side
+          # upsert, and the consent grant table carries a foreign key SQLite
+          # never enforces. Naming one file here kept the rest on SQLite (#638).
           uv run python -m pytest \
             tests/actions/ \
-            tests/test_careagents.py \
+            tests/test_careagents*.py \
             tests/test_ingest_resilience.py \
             tests/test_actions_models.py \
             tests/test_fasten_export_trigger.py \
