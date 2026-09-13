@@ -99,12 +99,12 @@ def test_full_populate_then_extract_roundtrip(client, app, tenant_id,
     assert ext.status_code == 200
     bundle = _return_param(ext.get_json())
     types = {e["resource"]["resourceType"] for e in bundle["entry"]}
-    # observation-based extract -> Observation; definition-based -> Patient
+    # observation-based extract -> Observation. The definition-based Patient
+    # is NOT extracted for a response bound to a subject (#572 part 2A):
+    # the record already has this patient, and a form never forks one.
     assert "Observation" in types
-    assert "Patient" in types
-    patient = next(e["resource"] for e in bundle["entry"]
-                   if e["resource"]["resourceType"] == "Patient")
-    assert patient["name"][0]["family"] == "Lovelace"
+    assert "Patient" not in types
+    assert "Lovelace" not in json.dumps(bundle)
 
 
 def _answer(qr, link_id):
