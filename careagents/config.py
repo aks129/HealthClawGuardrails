@@ -168,6 +168,12 @@ class Config:
             "CARE_RUN_WORKER_STALE_SECONDS", "30"))
         self.run_sse_poll_seconds = float(e.get(
             "CARE_RUN_SSE_POLL_SECONDS", "0.25"))
+        # #575: the event stream doubles its wait each time a page comes
+        # back empty, up to this, and snaps back to the base the moment an
+        # event arrives. The base keeps a token prompt; the cap keeps an
+        # idle run from polling HealthClaw four times a second for minutes.
+        self.run_sse_poll_max_seconds = float(e.get(
+            "CARE_RUN_SSE_POLL_MAX_SECONDS", "2.0"))
         self.run_sse_timeout_seconds = int(e.get(
             "CARE_RUN_SSE_TIMEOUT_SECONDS", "150"))
         if not 5 <= self.run_deadline_seconds <= 3600:
@@ -191,6 +197,10 @@ class Config:
                 "CARE_RUN_WORKER_STALE_SECONDS must be 5-300")
         if not 0.05 <= self.run_sse_poll_seconds <= 10:
             raise ConfigError("CARE_RUN_SSE_POLL_SECONDS must be 0.05-10")
+        if not self.run_sse_poll_seconds <= self.run_sse_poll_max_seconds <= 30:
+            raise ConfigError(
+                "CARE_RUN_SSE_POLL_MAX_SECONDS must be between "
+                "CARE_RUN_SSE_POLL_SECONDS and 30")
         if not 10 <= self.run_sse_timeout_seconds <= 3600:
             raise ConfigError("CARE_RUN_SSE_TIMEOUT_SECONDS must be 10-3600")
 
