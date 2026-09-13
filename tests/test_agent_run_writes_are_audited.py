@@ -600,31 +600,31 @@ def test_queue_chatter_is_deliberately_not_audited(app, client, auth_headers,
     assert _events(app) == []
 
 
-def test_the_deadline_sweep_writes_the_human_gate_and_audits_nothing(
+def test_the_deadline_sweep_entering_the_human_gate_is_audited(
         app, client, auth_headers, internal_headers):
-    """The other three exemptions, and the one asymmetry they cost.
+    """The one timer-driven write that is audited, and why (#596).
 
-    `test_queue_chatter_is_deliberately_not_audited` covers claim, heartbeat
-    and the event log — three of the six exempt endpoints. The other three are
-    the GETs, and calling them "reads" undersells what they do: the shared
-    deadline sweep runs inside them, and on a run holding a RUNNING tool call
-    it commits the run into `waiting_for_human` and the tool call into
-    `needs_reconciliation`. That is entry into the human gate, and it is the
-    same state `POST /transition` reaches — where it IS audited.
+    The shared deadline sweep runs inside the three GETs and inside
+    `_enforce_worker_fence`, and on a run holding a RUNNING tool call it
+    commits the run into `waiting_for_human` and the tool call into
+    `needs_reconciliation`. That is entry into the human gate — the same
+    state `POST /transition` reaches deliberately, where it is audited. This
+    test used to pin the asymmetry (the gate audited when a worker declared
+    it, silent when the deadline reached it) so that a change of mind would
+    be an edit here rather than drift. This is the edit: the trail answers
+    "how did this run enter the gate" with one row either way, and a
+    `reconcile` audit — the package's most evidence-worthy row — no longer
+    stands with no record of how its call became ambiguous.
 
-    So the classification is per-code-path, not per-route: the gate is audited
-    when a worker declares it and silent when the deadline reaches it. The
-    consequence is that a `reconcile` audit — the package's most
-    evidence-worthy row — can stand in the trail with no record of how its
-    call became ambiguous. The same sweep also runs inside
-    `_enforce_worker_fence`, so `/transition`, `/heartbeat`, `/tool-calls`,
-    `/finalize` and `POST /events` each have a path that commits this and then
-    answers 409.
+    The record is written at the sweep (`_preserve_ambiguous_tools`), so the
+    three GETs and the five fenced mutations share one implementation. It
+    names the reason (`deadline_with_running_tool`, `lease_expired_...`) and
+    the tool-call ids, never a tool argument. Every other timer write —
+    deadline failure with no running tool, lease recovery, claim redelivery,
+    heartbeats — stays out, per the line at the top of service.py.
 
-    This test does not argue that is wrong — `AgentRunEvent` holds the story
-    and a timer is not a principal. It pins it, so a change of mind is an edit
-    here rather than drift, and so the three GET exemptions are exercised at
-    the wire like the other three.
+    MUTATION: delete the `_audit_run_change` call in
+    `_preserve_ambiguous_tools` -> red (no row; the write still happens).
     """
     run_id = _claimed_run(client, auth_headers, internal_headers,
                           worker="lost-worker")
@@ -646,18 +646,43 @@ def test_the_deadline_sweep_writes_the_human_gate_and_audits_nothing(
                         headers=auth_headers)
     assert detail.status_code == 200, detail.get_data(as_text=True)
     body = detail.get_json()
-    # The write really happened, so "nothing was audited" is a decision about
-    # evidence and not an observation that nothing moved.
     assert body["status"] == "waiting_for_human", body
     assert [call["status"] for call in body["tool_calls"]] == [
         "needs_reconciliation"], body
 
-    # GET #2 and #3: the event replay and the readiness poll, both of which
-    # run the same sweep.
+    events = _events(app, "AgentRun")
+    assert len(events) == 1, events
+    assert events[0]["action"] == "update"
+    assert events[0]["resource_id"] == run_id
+    assert "from=running" in events[0]["detail"]
+    assert "status=waiting_for_human" in events[0]["detail"]
+    assert "reason=deadline_with_running_tool" in events[0]["detail"]
+    assert call_id in events[0]["detail"]
+
+    # GET #2 and #3: the event replay and the readiness poll run the same
+    # sweep, and the run is already at the gate, so nothing more is written.
     assert client.get(f"/command-center/api/runs/{run_id}/events",
                       headers=auth_headers).status_code == 200
     assert client.get(
         "/command-center/api/runs/workers/health",
         headers=internal_headers).status_code in (200, 503)
+    assert len(_events(app, "AgentRun")) == 1
 
+
+def test_a_deadline_with_no_running_tool_is_still_not_audited(
+        app, client, auth_headers, internal_headers):
+    """The exemption survives #596: a run that simply times out with no
+    tool in flight goes to `failed` on the timer and writes no audit row.
+    Only entry into the human gate is the exception."""
+    run_id = _claimed_run(client, auth_headers, internal_headers,
+                          worker="lost-worker")
+    with app.app_context():
+        run = db.session.get(AgentRun, run_id)
+        run.deadline_at = utcnow() - timedelta(seconds=1)
+        db.session.commit()
+    _clear(app)
+    detail = client.get(f"/command-center/api/runs/{run_id}",
+                        headers=auth_headers)
+    assert detail.status_code == 200
+    assert detail.get_json()["status"] == "failed"
     assert _events(app) == []
