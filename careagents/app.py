@@ -817,6 +817,53 @@ def create_app(config: Config | None = None,
                         "deletion was added to it."),
         })
 
+    @app.post("/api/account/delete")
+    @login_required
+    def delete_account():
+        """Delete the account itself, end to end (#554).
+
+        The connection delete above purges a tenant and leaves the account
+        row — email, passkey, consents — with no path to remove it. This is
+        that path. Same order and the same posture as the connection delete:
+        every connection's records are purged first and a purge the engine
+        cannot confirm stops everything, so a vanished account never hides
+        records still sitting in HealthClaw. The gate is the typed DELETE the
+        records purge uses; re-authentication for both is one change, if
+        wanted, and not a difference between them.
+        """
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if body.get("confirm") != "DELETE":
+            return jsonify({"error": "confirm_required",
+                            "message": "Type DELETE to confirm."}), 400
+        purged = 0
+        for conn in svc.list_home(acct.id)["connections"]:
+            try:
+                hc.purge_tenant(conn["tenant_id"])
+            except HealthClawError:
+                # As on the connection route: the purge may or may not have
+                # run, so no `deleted` field; what is observed is that the
+                # account still stands.
+                return jsonify({
+                    "error": "deletion_failed",
+                    "message": "We couldn't confirm your records were "
+                               "deleted. Your account is unchanged — please "
+                               "try again."}), 502
+            purged += 1
+            for grant in svc.grants_for_connection(acct.id, conn["id"]):
+                try:
+                    hc.revoke_consent(grant["consent_id"])
+                except HealthClawError:
+                    logger.warning("consent revoke unconfirmed during "
+                                   "account delete for account %s", acct.id)
+        svc.delete_account(acct.id)
+        session.clear()
+        # Account id only: never the email, never a tenant (#554 audit line).
+        logger.info("account deleted: %s (connections purged: %d)",
+                    acct.id, purged)
+        return jsonify({"deleted": True, "connections_purged": purged,
+                        "audit_retained": True})
+
     @app.post("/api/connections/<conn_id>/refresh")
     @login_required
     def refresh_connection(conn_id):

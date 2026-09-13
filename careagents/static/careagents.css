@@ -617,3 +617,11 @@ textarea:focus-visible {
 .consent-choice-sub { font-size: 13px; opacity: .7; }
 .grant-revoke { margin-top: 8px; }
 .grant-msg { display: block; font-size: 13px; margin-top: 6px; }
+
+/* Leaving (#554): the account delete sits last, plainly, and looks like the
+   records delete it runs before. */
+.leaving { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--hairline); }
+.leaving h2 { font-size: 16px; margin-bottom: 6px; }
+.leaving p { color: var(--ink-soft); font-size: 13.5px; max-width: 60ch; }
+.pill.danger { border-style: dashed; color: var(--clay-deep); }
+.pill.danger:hover { border-style: solid; border-color: var(--clay-deep); }

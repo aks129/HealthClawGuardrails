@@ -4,6 +4,9 @@
 {% include "_beta_banner.html" %}
 <main class="hero">
   <div class="hero-inner">
+    {% if request.args.get("deleted") == "1" %}
+    <p class="inline-msg" role="status">Your account is deleted. The records behind every connection were deleted first; the PHI-free audit trail is kept.</p>
+    {% endif %}
     <p class="kicker">Your health, with someone finally on your side of the desk</p>
     <h1>An agent that actually<br>knows your health —<br><em>and asks before it acts.</em></h1>
     <p class="sub">

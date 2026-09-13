@@ -171,9 +171,11 @@ You can stop at any time and you don't owe us an explanation.
   purges that connection's records straight away and tells you how many rows
   went. You don't have to ask us, and you don't have to wait.
 - **Delete the account** — your account is a separate record (email, passkey,
-  and which sources you connected; no health data). There's no self-serve
-  button for it yet. Email support@healthclaw.io and we'll remove it and
-  confirm when it's done.
+  and which sources you connected; no health data). **Delete my account** at
+  the bottom of the hub deletes the records behind every connection first,
+  then the account, and signs you out. You type DELETE to confirm, the same
+  as for records. If any purge can't be confirmed, nothing is deleted and it
+  says so, so you can try again.
 - **Just stop using it** — nothing will contact you.
 
 If deleting is ever harder than connecting was, that's a bug. Tell us.
