@@ -30,11 +30,13 @@ from r6.access import (
     Grant,
     Profile,
     Scope,
+    StepUpDecision,
     StepUpDenied,
     Tenant,
     TenantRejected,
     TenantSource,
     audit,
+    decide_grant,
     fhir_response,
     has_grant,
     install_audit_assertions,
@@ -591,6 +593,72 @@ def test_has_grant_returns_the_same_grant_require_grant_returns(
             scope=scope, tenant=tenant)
 
 
+@pytest.mark.parametrize('label,marker,kwargs', _REFUSALS,
+                         ids=[row[0] for row in _REFUSALS])
+def test_decide_grant_refuses_wherever_require_grant_refuses_and_says_why(
+        app, tenant_id, label, marker, kwargs):
+    """#655: the reason-carrying, non-raising surface answers exactly what
+    require_grant would raise, and carries the classified reason it would
+    have rendered — never the validator's raw text.
+
+    MUTATION: make decide_grant skip any check require_grant makes -> the
+    row goes red on the decide_grant half while require_grant still refuses.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    headers = _refusal_headers(marker, tenant_id)
+    with app.test_request_context(headers=headers):
+        decision = decide_grant(scope=Scope.WRITE, tenant=tenant, **kwargs)
+        assert decision.grant is None and decision.granted is False
+        with pytest.raises(StepUpDenied) as raised:
+            require_grant(scope=Scope.WRITE, tenant=tenant, **kwargs)
+        assert decision.reason == str(raised.value)
+        # `absent` means no token was READ: none sent, or only a bearer the
+        # endpoint did not opt into — the same two cases that answer 401 via
+        # absent_status in require_grant.
+        assert decision.absent is (label in ('no token at all',
+                                             'a bearer the endpoint did not opt into'))
+
+
+@pytest.mark.parametrize('scope', [Scope.WRITE, Scope.TENANT_BOUND])
+def test_decide_grant_returns_the_grant_require_grant_returns(
+        app, tenant_id, scope):
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(token)):
+        decision = decide_grant(scope=scope, tenant=tenant)
+        assert decision.granted is True and decision.reason == ''
+        assert decision.grant == require_grant(scope=scope, tenant=tenant)
+
+
+def test_a_step_up_decision_cannot_be_truth_tested(app, tenant_id):
+    """The tuple trap, closed at the type: `if decision:` is a bypass for a
+    refused decision (an object is truthy), so both a granted and a refused
+    decision raise on the first request rather than answer.
+
+    MUTATION: delete StepUpDecision.__bool__ -> red (the refused decision
+    reads as True).
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(None)):
+        refused = decide_grant(scope=Scope.WRITE, tenant=tenant)
+    with app.test_request_context(
+            headers=_headers(generate_step_up_token(tenant_id))):
+        granted = decide_grant(scope=Scope.WRITE, tenant=tenant)
+    for decision in (refused, granted):
+        assert isinstance(decision, StepUpDecision)
+        with pytest.raises(TypeError, match='granted'):
+            bool(decision)
+        with pytest.raises(TypeError):
+            if decision:  # pragma: no cover - the raise is the assertion
+                pass
+    assert refused.granted is False and granted.granted is True
+
+
+def test_decide_grant_cannot_be_asked_to_consume_a_nonce():
+    import inspect
+    assert 'consume_nonce' not in inspect.signature(decide_grant).parameters
+
+
 def test_has_grant_reads_the_opted_in_sources_the_same_way(app, tenant_id):
     """also_bearer / also_body_field mean the same thing in both.
 
@@ -792,8 +860,14 @@ def _holder_of(spans, lineno):
     return holding[-1] if holding else '<module>'
 
 
-def _has_grant_calls():
-    """(path:function, is_discarded) for every production call to has_grant."""
+#: decide_grant (#655) shares has_grant's hazard and its guards. Empty in the
+#: kernel PR; each of the three reason-publishing sites adds itself in the
+#: PR that adopts it, after the owner's ruling.
+_DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset()
+
+
+def _has_grant_calls(name='has_grant'):
+    """(path:function, is_discarded) for every production call to `name`."""
     for path in _production_python_files():
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
         spans = _definition_spans(tree)
@@ -803,9 +877,9 @@ def _has_grant_calls():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            name = (getattr(node.func, 'id', None)
-                    or getattr(node.func, 'attr', None))
-            if name == 'has_grant':
+            called = (getattr(node.func, 'id', None)
+                      or getattr(node.func, 'attr', None))
+            if called == name:
                 yield (f'{path.relative_to(REPO_ROOT)}:'
                        f'{_holder_of(spans, node.lineno)}',
                        node.lineno in discarded)
@@ -836,6 +910,33 @@ def test_every_listed_call_site_still_holds_a_call():
     assert not stale, (
         'listed in _HAS_GRANT_CALLSITES but holding no call to has_grant; '
         'remove the entry or restore the call: ' + ', '.join(stale))
+
+
+def test_decide_grant_is_adopted_only_where_listed():
+    """MUTATION: call decide_grant from any production module -> red."""
+    sites = sorted(site for site, _ in _has_grant_calls('decide_grant'))
+    unexpected = [s for s in sites if s not in _DECIDE_GRANT_CALLSITES]
+    assert not unexpected, (
+        'decide_grant is a non-raising check with has_grant\'s hazard; each '
+        'call site is listed deliberately in _DECIDE_GRANT_CALLSITES by the '
+        'PR that adopts it. Unlisted: ' + ', '.join(unexpected))
+
+
+def test_every_listed_decide_grant_site_still_holds_a_call():
+    sites = {site for site, _ in _has_grant_calls('decide_grant')}
+    stale = sorted(_DECIDE_GRANT_CALLSITES - sites)
+    assert not stale, (
+        'listed in _DECIDE_GRANT_CALLSITES but holding no call: '
+        + ', '.join(stale))
+
+
+def test_a_decide_grant_call_may_never_have_its_answer_thrown_away():
+    """MUTATION: write a bare `decide_grant(...)` statement anywhere -> red."""
+    thrown_away = [site for site, discarded
+                   in _has_grant_calls('decide_grant') if discarded]
+    assert not thrown_away, (
+        'the decision is the only thing decide_grant does; discarding it is '
+        'a guard that checks nothing: ' + ', '.join(thrown_away))
 
 
 def test_no_call_site_key_is_ambiguous():
