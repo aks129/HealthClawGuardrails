@@ -1082,7 +1082,7 @@ def test_worker_pool_creates_only_the_configured_number_of_slots(
     monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
 
     worker_mod.run_worker_pool(cfg, stop)
 
@@ -1180,7 +1180,7 @@ def _drive_pool(cfg, monkeypatch, outcomes):
     monkeypatch.setattr(worker_mod.threading, "Thread", _Thread)
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
     monkeypatch.setattr(worker_mod, "RunWorker", _ScriptedWorker)
     worker_mod.run_worker_pool(cfg, stop)
     return stop
@@ -1284,7 +1284,7 @@ def test_idle_backoff_sleep_stays_interruptible_so_shutdown_drains(
 
     monkeypatch.setattr(worker_mod, "AccountService", lambda _cfg: object())
     monkeypatch.setattr(worker_mod, "HealthClawClient",
-                        lambda *_args: object())
+                        lambda *_args, **_kw: object())
     monkeypatch.setattr(worker_mod, "RunWorker", _IdleWorker)
 
     stop = threading.Event()
