@@ -42,6 +42,13 @@ from r6.command_center.models import Conversation, ConversationMessage
 # redelivery, heartbeats and the run's own event log stay out — they are
 # already fully recorded in AgentRunEvent, and putting them here would bury
 # the records an auditor needs under queue chatter.
+#
+# One exception, decided in #596: a timer that puts a run INTO the human gate
+# (a deadline or lease expiry with a tool call still running) is audited, at
+# the sweep, because the same destination reached by POST /transition is
+# audited, and the trail must answer "how did this run enter the gate" with
+# one answer. The reconcile row that follows would otherwise stand with no
+# record of how its call became ambiguous.
 # tests/test_agent_run_writes_are_audited.py classifies all fourteen routes
 # and proves each audited one at the wire.
 
@@ -194,6 +201,7 @@ def _preserve_ambiguous_tools(
         call.error_class = "AmbiguousToolOutcome"
         call.finished_at = now
         tool_call_ids.append(call.id)
+    previous_status = run.status
     require_run_transition(run.status, "waiting_for_human")
     run.status = "waiting_for_human"
     run.error_class = "AmbiguousToolOutcome"
@@ -205,6 +213,11 @@ def _preserve_ambiguous_tools(
         "tool_call_ids": tool_call_ids,
         "cancel_requested": bool(run.cancel_requested),
     })
+    # #596: entry into the human gate is audited whoever caused it. The
+    # reason is one of this module's own constants and the ids are the
+    # kernel's; no tool argument or result is anywhere near this line.
+    _audit_run_change(run, previous_status, reason=reason,
+                      tool_calls=",".join(tool_call_ids))
     if commit:
         db.session.commit()
     return True
