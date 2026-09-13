@@ -379,10 +379,11 @@ def _populate_list_group(item, resource_type, subject, context, observations,
 #: one. Row-level, so it is invisible to the leaves (_resolve_answer), the
 #: PDF walk (which reads linkId, text, answer and item) and the answer index
 #: (_index_answers reads answers). The review page carries rows verbatim
-#: into the reviewed response, so it survives to extraction, where part 2B2
-#: skips a marked row and writes only an unsourced one. A row from a
-#: resource without an id carries no marker. The marker is caller-visible
-#: and forgeable, which is harmless while marked rows are skipped; a future
+#: into the reviewed response, so it survives to whatever extracts it: a
+#: marked row IS a stored resource and is never written again as a new one;
+#: only an unsourced row is new. A row from a resource without an id
+#: carries no marker. The marker is caller-visible and forgeable, which is
+#: harmless while nothing writes from it (#679 commits nothing); a future
 #: PUT must check the reference exists, in this tenant, for this subject.
 POPULATED_ROW_SOURCE_URL = (
     "http://healthclaw.io/fhir/StructureDefinition/populated-row-source")
