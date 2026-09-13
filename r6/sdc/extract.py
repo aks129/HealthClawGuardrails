@@ -103,9 +103,8 @@ def _extract_by_definition(questionnaire, answers, subject_ref):
         # uuid, so a tenant accumulated one per submission and every
         # downstream check lost its subject. There is no human-confirmed
         # demographic change to write back: the review page renders
-        # demographics read-only, and _set_path's shapes for telecom and
-        # address are not safe to write over a real record (#666). A
-        # subject-less response still creates a Patient, as it always did;
+        # demographics read-only, and nothing commits here anyway (#679). A
+        # subject-less response still previews a Patient, as it always did;
         # the review rail refuses a reviewed response without a subject, so
         # a form never creates one.
         logger.info("extract: response is bound to a subject; Patient not "
