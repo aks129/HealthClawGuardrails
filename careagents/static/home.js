@@ -498,6 +498,27 @@
     });
   });
 
+  // --- delete the account itself (#554): the same typed gate, then the
+  // server purges every connection before the row goes. ---
+  const acctBtn = $("account-delete");
+  if (acctBtn) acctBtn.addEventListener("click", async () => {
+    const msg = $("account-msg");
+    const agreed = await askToDelete("your account and all its records");
+    if (!agreed) return;
+    acctBtn.disabled = true;
+    announce(msg, "Deleting…");
+    const r = await fetch("/api/account/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: "DELETE" }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      acctBtn.disabled = false;
+      announce(msg, d.message || "We couldn't confirm your records were deleted.");
+      return;
+    }
+    location.assign("/?deleted=1");
+  });
+
   // Resolves true only after the patient types DELETE exactly. Two gates on
   // purpose: the button ships disabled and is only enabled on an exact match,
   // and the click handler checks the value again — so a future markup change

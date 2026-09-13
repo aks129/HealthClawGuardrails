@@ -361,6 +361,28 @@ class AccountService:
             s.delete(c)
             return True
 
+    def delete_account(self, account_id: str) -> bool:
+        """Remove the account and every row keyed to it (#554).
+
+        Called only AFTER every connection's tenant is confirmed purged at
+        HealthClaw, for the same reason delete_connection is: a failed purge
+        must never leave records in the engine behind a vanished account.
+        Grants go too — with the account gone there is nobody they describe
+        a consent for, and HealthClaw keeps the PHI-free audit trail of what
+        was shared and revoked. Email codes for the address are removed so
+        one in a mailbox cannot mint a session for an account that is gone.
+        """
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            if acct is None:
+                return False
+            for model in (Surface, Agent, Grant, Connection, Passkey,
+                          UsageDay):
+                s.query(model).filter_by(account_id=account_id).delete()
+            s.query(EmailToken).filter_by(email=acct.email).delete()
+            s.delete(acct)
+            return True
+
     # --- grants: consents given to third-party agents (spec §13.4) ---------
 
     def add_grant(self, account_id: str, connection_id: str | None,
