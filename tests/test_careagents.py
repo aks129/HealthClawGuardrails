@@ -3716,6 +3716,82 @@ def test_delete_purges_records_then_removes_the_connection(cfg, svc, monkeypatch
     assert c.post(f"/api/connections/{conn}/disconnect").status_code == 404
 
 
+def test_deleting_the_account_purges_every_tenant_then_removes_the_row(
+        cfg, svc, monkeypatch):
+    """#554: the connection delete purged the tenant and left the account
+    row (email, passkey, consent) with no route to remove it. Delete works
+    end to end now: every connection's tenant is purged first (the existing
+    path, which never claims a deletion that did not happen), then the
+    account and everything keyed to it, then the session.
+
+    MUTATION: careagents/accounts.py, skip deleting the Account row -> red.
+    """
+    from careagents.app import create_app
+    from careagents.models import (Account, Agent, Connection, EmailToken,
+                                   Grant, Passkey)
+    fake = FakeClient()
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_a = c.post("/api/connections/sample").get_json()["id"]
+    conn_b = c.post("/api/connections/sample").get_json()["id"]
+    with c.session_transaction() as sess:
+        account_id = sess["account_id"]
+    with svc.session() as s:
+        s.add(Grant(account_id=account_id, connection_id=conn_a,
+                    tenant_id="t", client_id="cid", client_name="An agent",
+                    scopes="fhir.read", consent_id="consent-554"))
+
+    # Typed confirmation, the same gate the records purge uses.
+    refused = c.post("/api/account/delete", json={"confirm": "delete"})
+    assert refused.status_code == 400
+    assert len(fake.purged) == 0
+
+    r = c.post("/api/account/delete", json={"confirm": "DELETE"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body == {"deleted": True, "connections_purged": 2,
+                    "audit_retained": True}
+    assert len(fake.purged) == 2
+    with svc.session() as s:
+        assert s.get(Account, account_id) is None
+        for model in (Passkey, Connection, Agent, Grant):
+            assert s.query(model).filter_by(account_id=account_id).count() == 0
+        assert s.query(EmailToken).filter_by(email="gene@example.com").count() == 0
+        assert not any(cid in (conn_a, conn_b)
+                       for (cid,) in s.query(Connection.id).all())
+    # The old cookie is an ended session, not a 500 (#265).
+    home = c.get("/home")
+    assert home.status_code in (302, 303)
+    assert "/auth" in home.headers["Location"]
+
+
+def test_deleting_the_account_stops_at_a_purge_that_cannot_be_confirmed(
+        cfg, svc, monkeypatch):
+    """Never claim a deletion that did not happen: a purge the engine could
+    not confirm stops everything, the account stays, and the person can
+    retry. Same posture as the connection delete (#586)."""
+    from careagents.app import create_app
+    from careagents.models import Account
+    fake = FakeClient()
+    fake.purge_fails = True
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    c.post("/api/connections/sample")
+    with c.session_transaction() as sess:
+        account_id = sess["account_id"]
+    r = c.post("/api/account/delete", json={"confirm": "DELETE"})
+    assert r.status_code == 502
+    assert r.get_json()["error"] == "deletion_failed"
+    assert "deleted" not in r.get_json()
+    with svc.session() as s:
+        assert s.get(Account, account_id) is not None
+    assert c.get("/home").status_code == 200
+
+
 def test_delete_does_not_unlink_when_the_purge_fails(cfg, svc, monkeypatch):
     # Never leave a clean-looking hub while the data still sits in the engine,
     # and never tell the patient it's deleted when it isn't.
@@ -6034,8 +6110,14 @@ def test_the_tester_guide_matches_what_the_switch_actually_does():
     assert "**Delete** button" in leaving
     # ...and the account is named as a separate thing that survives it.
     assert "Delete the account" in leaving
-    assert "no self-serve" in leaving
-    assert "support@healthclaw.io" in leaving
+    # #554: self-serve now. The guide must not send anyone to email support
+    # for something the hub does, and must say the two things the route
+    # does — records first, and nothing at all if a purge cannot be confirmed.
+    assert "Delete my account" in leaving
+    assert "no self-serve" not in leaving
+    assert "support@healthclaw.io" not in leaving
+    assert "records behind every connection first" in leaving
+    assert "nothing is deleted" in leaving
 
 
 # --- browser pass over the beta batch (#553) ---------------------------------
