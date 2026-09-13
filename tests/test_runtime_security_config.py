@@ -224,6 +224,28 @@ def test_vercel_read_only_cold_start_needs_no_stateful_secrets():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize(
+    "half",
+    [
+        {"VERCEL": "1"},                   # Vercel, but not declared read-only
+        {"READ_ONLY_DEPLOYMENT": "1"},     # declared read-only, but not Vercel
+    ],
+    ids=["vercel-alone", "read-only-alone"],
+)
+def test_the_stateful_secret_bypass_needs_both_halves(half):
+    """#634 F7: the read-only Vercel cold start above proves the permit;
+    this proves the denial. The bypass is the conjunction of VERCEL and
+    READ_ONLY_DEPLOYMENT, and either half alone is a production boot that
+    must still refuse to run without its session secret. Dropping either
+    conjunct in r6/runtime_config.py turns its row here red."""
+    result = _startup(
+        {**half, "PUBLIC_TENANTS": "desktop-demo", "DISABLE_COMMAND_CENTER": "1"},
+        removed=("SESSION_SECRET",),
+    )
+    assert result.returncode != 0
+    assert "SESSION_SECRET" in (result.stdout + result.stderr)
+
+
 def test_vercel_contract_has_only_nonsecret_security_flags():
     repo_root = os.path.dirname(os.path.dirname(__file__))
     with open(os.path.join(repo_root, "vercel.json"), encoding="utf-8") as handle:
