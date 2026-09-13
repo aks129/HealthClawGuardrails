@@ -1170,6 +1170,11 @@ def create_app(config: Config | None = None,
         """Replay durable UI events. Disconnecting only stops this projection."""
         cursor = max(0, after)
         started = time.monotonic()
+        # #575: the wait after a page with events is the base; after the k-th
+        # consecutive empty page it is base * 2**(k-1), capped. A run idling
+        # at 90 seconds is no likelier to finish in the next 250ms than one
+        # at 5, and a token that just arrived is likely followed by another.
+        empty_streak = 0
         yield "data: " + json.dumps({
             "type": "accepted", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"
@@ -1209,7 +1214,10 @@ def create_app(config: Config | None = None,
                 yield (f"id: {cursor}\n"
                        f"data: {json.dumps(done)}\n\n")
                 return
-            time.sleep(cfg.run_sse_poll_seconds)
+            empty_streak = 0 if events else empty_streak + 1
+            time.sleep(cfg.run_sse_poll_seconds if not empty_streak else min(
+                cfg.run_sse_poll_seconds * 2 ** (empty_streak - 1),
+                cfg.run_sse_poll_max_seconds))
         yield "data: " + json.dumps({
             "type": "reconnect", "run_id": run_id,
             "next_cursor": cursor}) + "\n\n"

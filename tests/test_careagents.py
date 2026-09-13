@@ -912,6 +912,64 @@ def test_terminal_sse_drains_every_event_page_before_done(
     assert body.index('"text": "part-100"') < body.index('"type": "done"')
 
 
+def test_the_event_stream_backs_off_while_nothing_arrives_and_snaps_back(
+        cfg, svc, monkeypatch):
+    """#575: every open chat turn polled HealthClaw four times a second for
+    the life of the run — 31 requests a second at eight concurrent turns,
+    against the instance serving the clinician. The poll now doubles each
+    time a page comes back empty, up to CARE_RUN_SSE_POLL_MAX_SECONDS, and
+    snaps back to the base interval the moment an event arrives, so a
+    token still renders promptly and a run idling at 90 seconds costs one
+    request every two seconds rather than four every one.
+
+    MUTATION: careagents/app.py, sleep cfg.run_sse_poll_seconds
+    unconditionally -> red (every wait is 0.25).
+    """
+    import itertools
+
+    app, c, fake, agent_id, tenant, _conn_id = _chat_app(
+        cfg, svc, monkeypatch)
+    created, message_id = fake.claim_inbound_message(
+        tenant, "slow run", agent_id, fake.conversation_id(agent_id),
+        "web", "slow-run")
+    assert created is True
+    run = fake.create_agent_run(tenant, message_id)
+    run_id = run["id"]
+
+    # The first page carries run.queued (an event). Then six empty pages,
+    # one event, three empty pages, and the run finishes.
+    script = iter(itertools.chain(
+        ["queued"], ["empty"] * 6, ["event"], ["empty"] * 3, ["done"]))
+    real = fake.agent_run_events
+
+    def scripted(tenant_id, rid, after=0, limit=100):
+        step = next(script)
+        if step == "event":
+            fake._append_run_event(rid, "agent.text", {"text": "part"})
+        elif step == "done":
+            fake.runs[rid]["status"] = "completed"
+        return real(tenant_id, rid, after=after, limit=limit)
+    monkeypatch.setattr(fake, "agent_run_events", scripted)
+
+    waits = []
+    monkeypatch.setattr("careagents.app.time.sleep",
+                        lambda seconds: waits.append(seconds))
+
+    response = c.get(f"/api/chat/runs/{run_id}/events",
+                     query_string={"agent_id": agent_id, "after": 0})
+    body = response.get_data(as_text=True)
+    assert '"type": "done"' in body
+
+    base, cap = cfg.run_sse_poll_seconds, cfg.run_sse_poll_max_seconds
+    assert base == 0.25 and cap == 2.0
+    assert waits == [
+        0.25,                            # the run.queued page: base
+        0.25, 0.5, 1.0, 2.0, 2.0, 2.0,   # six empty pages: doubling, capped
+        0.25,                            # the event page: straight back
+        0.25, 0.5, 1.0,                  # empty again: climbing again
+    ]
+
+
 def test_worker_enforces_claimed_run_deadline_before_inference(
         cfg, svc, monkeypatch):
     from datetime import datetime, timedelta, timezone
