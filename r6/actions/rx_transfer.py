@@ -45,11 +45,15 @@ SCHEDULE_II_TERMS = (
 )
 
 
-# RxNorm ingredient-level RxCUIs for the same substances, so a coded order
-# is caught even when nothing names it. Ingredient level, because that is
-# what a static list can hold; product-level codes (a specific tablet) are
-# caught by name wherever the feed or our label table carries one. Not
-# authoritative, same caveat as the terms above.
+# RxNorm ingredient-level RxCUIs (TTY=IN) for the same substances, so a
+# coded order is caught even when nothing names it. Ingredient level,
+# because that is what a static list can hold; product-level codes (a
+# specific tablet) are caught by name wherever the feed or our label table
+# carries one. Not authoritative, same caveat as the terms above. Every
+# entry was checked against RxNav on 2026-09-14
+# (https://rxnav.nlm.nih.gov/REST/rxcui/<id>/properties.json); the first
+# draft carried one code that resolved to nothing, a silent miss rather
+# than a false positive, which is why the check is written down here.
 SCHEDULE_II_RXCUI = frozenset({
     "7804",    # oxycodone
     "5489",    # hydrocodone
@@ -59,12 +63,16 @@ SCHEDULE_II_RXCUI = frozenset({
     "7814",    # oxymorphone
     "6813",    # methadone
     "6754",    # meperidine
-    "2670",    # codeine
+    "2670",    # codeine (code only: the word is on transferable III-V combos)
     "725",     # amphetamine
     "3288",    # dextroamphetamine
     "6901",    # methylphenidate
-    "700449",  # lisdexamfetamine
+    "352372",  # dexmethylphenidate
+    "700810",  # lisdexamfetamine
     "787390",  # tapentadol
+    "8004",    # pentobarbital
+    "9624",    # secobarbital
+    "2653",    # cocaine
 })
 
 UNVERIFIABLE_REASON = (

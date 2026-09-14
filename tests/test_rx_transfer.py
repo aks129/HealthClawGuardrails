@@ -275,3 +275,29 @@ class TestNameFilterReadsEveryName:
                                             "medication_names": ["metformin"]}))
         assert resp.status_code == 201, resp.get_data(as_text=True)
         assert [m["name"] for m in resp.get_json()["allowed"]] == ["Metformin"]
+
+
+def test_every_schedule_ii_term_with_an_ingredient_has_a_code():
+    """The code set and the term list describe the same substances. A term
+    with no ingredient code is a gap a coded, unnamed order walks through;
+    brand and product terms (Percocet, Adderall) are name-only by design."""
+    from r6.actions.rx_transfer import SCHEDULE_II_RXCUI
+    ingredients = {
+        "oxycodone": "7804", "hydrocodone": "5489", "fentanyl": "4337",
+        "morphine": "7052", "hydromorphone": "3423", "oxymorphone": "7814",
+        "methadone": "6813", "meperidine": "6754", "codeine": "2670",
+        "amphetamine": "725", "dextroamphetamine": "3288",
+        "methylphenidate": "6901", "dexmethylphenidate": "352372",
+        "lisdexamfetamine": "700810", "tapentadol": "787390",
+        "pentobarbital": "8004", "secobarbital": "9624", "cocaine": "2653",
+    }
+    # Codeine is code-only on purpose: the single-entity ingredient is
+    # Schedule II, but the word appears on Schedule III-V combination
+    # products (acetaminophen/codeine) that are transferable, so a keyword
+    # would refuse the common case. The ingredient RxCUI never appears on a
+    # combination product's coding, so the code catches only the II case.
+    code_only = {"codeine"}
+    for term, code in ingredients.items():
+        assert term in SCHEDULE_II_TERMS or term in code_only, term
+        assert code in SCHEDULE_II_RXCUI, (term, code)
+    assert "700449" not in SCHEDULE_II_RXCUI, "the code that resolved to nothing"
