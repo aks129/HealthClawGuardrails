@@ -165,8 +165,12 @@ class FormFillExecutor:
             if not names:
                 return None
             name = names[0]
-            if name.get('text'):
-                return name['text']
+            # Never `name.text`: it is the field the redacting read pops
+            # outright (r6/redaction.py) because upstream feeds put junk
+            # there, and it is the one branch that could print arbitrary
+            # upstream free text on a title a patient signs (#367). The
+            # structured parts are what the populate step fills the same
+            # form from, so the two paths now agree.
             given = ' '.join(name.get('given') or [])
             label = ('%s %s' % (given, name.get('family') or '')).strip()
             return label or None

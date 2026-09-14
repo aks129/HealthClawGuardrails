@@ -143,11 +143,12 @@ def _marked_patient():
 
     `name[0].family` is what the SDC populate step copies into the intake
     QuestionnaireResponse (`%patient.name.family`, r6/sdc/intake.py:104).
-    `name[0].text` is what `FormFillExecutor._subject_label` prefers
-    (form_fill.py:157) and the populate step never touches. Splitting them is
-    what lets the form_fill probe below attribute a hit to line 153 rather
-    than to the questionnaire body — with one marker the probe stays green
-    when line 153 is deleted, which is how it was caught here.
+    `name[0].text` is what `FormFillExecutor._subject_label` used to prefer
+    (#367, fixed) and the populate step never touches. Keeping a marker
+    there is what lets the probes below say "name.text reached nobody"
+    without being fooled by the structured name arriving through the
+    questionnaire body — with one marker a probe stays green whichever path
+    rendered it, which is how the original leak was caught here.
     """
     return {
         "resourceType": "Patient", "id": PROBE_PATIENT_ID,
@@ -278,7 +279,8 @@ def test_the_pdf_text_extractor_actually_reads_text():
 # Site 1: r6/actions/rails/form_fill.py — _subject_label reads Patient.name
 # with no redaction and puts it in the rendered PDF's title. The PDF leaves
 # over a signed link that carries NO tenant or step-up header: the signature
-# is the whole credential.
+# is the whole credential. Since #367 it reads only the structured parts
+# (given + family), never `name.text`.
 # ---------------------------------------------------------------------------
 
 def _confirm_the_form(client, tenant_headers, auth_headers):
@@ -362,33 +364,45 @@ def form_fill_ready(app, tenant_headers, monkeypatch):
             _store(resource, tenant_headers["X-Tenant-Id"])
 
 
-def test_form_fill_subject_label_puts_the_patient_name_in_the_pdf(
+def test_subject_label_is_built_from_the_structured_name_never_text(
+        app, tenant_headers, form_fill_ready):
+    """`FormFillExecutor._subject_label` reads `given + family`, never
+    `name[0].text` (#367).
+
+    `name.text` is the field the redacting read pops outright
+    (r6/redaction.py) because upstream feeds put junk there; it was the one
+    branch that could print arbitrary upstream free text on a title the
+    patient signs. Pinned on the function directly, because the PDF cannot
+    attribute the name: the populate step copies `given` and `family` into
+    the questionnaire body too, so a PDF-level check stays green whichever
+    path rendered them (the trap the issue records).
+    """
+    from r6.actions.rails.form_fill import FormFillExecutor
+    with app.app_context():
+        label = FormFillExecutor._subject_label(
+            "Patient/" + PROBE_PATIENT_ID, tenant_headers["X-Tenant-Id"])
+    assert label == "Josephine " + NAME_MARKER, label
+    assert SUBJECT_LABEL_MARKER not in label
+
+
+def test_form_fill_pdf_title_carries_the_structured_name_not_name_text(
         client, app, tenant_headers, auth_headers, action_registry,
         form_fill_ready):
-    """CHARACTERIZATION — content DOES reach a caller from form_fill.py:153.
+    """The end-to-end half of #367: `name[0].text` no longer reaches the
+    delivery link at all, and the form still carries the patient's name.
 
-    `FormFillExecutor._subject_label` loads the subject Patient, takes
-    `name[0].text` verbatim with no redaction in between, and
-    `r6/sdc/pdf.py::_title` renders it as "<questionnaire title> — <label>".
-    The PDF leaves over the signed delivery link, which carries no tenant and
-    no step-up header — the signature is the whole credential.
-
-    The marker is `name[0].text`, a field the populate step never reads, so a
-    hit here can only have come from line 153. The redacting single-resource
-    read drops `name.text` outright (r6/redaction.py:55), so the two paths
-    disagree about the same field. Whether the patient's own name belongs on
-    the patient's own intake form is a product call, not a test's; this row
-    exists so the call gets made deliberately.
+    A form with no name on it is not a form, so the NAME_MARKER assertion is
+    the regression guard against "fixing" this by dropping the label.
     """
     _, pdf = _download_the_form(client, app, tenant_headers, auth_headers)
     text = pdf_text(pdf)
     assert "Intake" in text, (
         "the extracted text does not look like the intake form, so a marker "
         "search over it proves nothing: " + text[:300])
-    assert SUBJECT_LABEL_MARKER in text, (
-        "expected the unredacted Patient.name.text in the PDF title; not "
-        "finding it means the flow changed and this probe stopped measuring "
-        "form_fill.py:153 — re-derive it rather than deleting the row")
+    assert SUBJECT_LABEL_MARKER not in text, (
+        "Patient.name.text reached the PDF; _subject_label is reading the "
+        "free-text field again (#367)")
+    assert NAME_MARKER in text
 
 
 def test_form_fill_pdf_carries_only_the_reviewed_answers_and_the_name(
@@ -396,11 +410,12 @@ def test_form_fill_pdf_carries_only_the_reviewed_answers_and_the_name(
         form_fill_ready):
     """Pins the full marker set that reaches the delivery link.
 
-    `NAME_MARKER` (the family name) arrives through the SDC populate step —
-    `demographics.family-name` is an item of the intake questionnaire — not
-    through form_fill's Patient read. Medication and allergy free text is
-    there because a human confirmed each row on the review page. All three
-    are the form's content.
+    `NAME_MARKER` (the family name) arrives twice, through the SDC populate
+    step — `demographics.family-name` is an item of the intake questionnaire
+    — and through form_fill's structured-name title (#367). Medication and
+    allergy free text is there because a human confirmed each row on the
+    review page. All three are the form's content; `SUBJECT_LABEL_MARKER`
+    (`name.text`) is not, and its absence here is part of the pin.
 
     Asserting the set EXACTLY is the point: a future change that starts
     rendering some other upstream field (a code `display`, say) fails here
@@ -408,8 +423,7 @@ def test_form_fill_pdf_carries_only_the_reviewed_answers_and_the_name(
     """
     _, pdf = _download_the_form(client, app, tenant_headers, auth_headers)
     assert _markers_in(pdf_text(pdf)) == {
-        NAME_MARKER, SUBJECT_LABEL_MARKER, MED_TEXT_MARKER,
-        ALLERGY_TEXT_MARKER}
+        NAME_MARKER, MED_TEXT_MARKER, ALLERGY_TEXT_MARKER}
 
 
 # ---------------------------------------------------------------------------
