@@ -1643,6 +1643,46 @@ def create_app(config: Config | None = None,
             body["confirmed"] = True
         return jsonify(body), status
 
+    @app.post("/review/<agent_id>/<action_id>/decline")
+    @login_required
+    def review_decline(agent_id, action_id):
+        """The person read the form and said no (#520). Recorded as a
+        decline, never as a timeout, on the same credential as Approve."""
+        try:
+            tenant = _agent_owns_action(agent_id, action_id)
+        except OwnershipUnknown:
+            return jsonify({"error": "review_unavailable",
+                            "message": _REVIEW_UNCHECKABLE}), 503
+        if not tenant:
+            return jsonify({"error": "not yours"}), 404
+        try:
+            status, body = hc.decline_action(tenant, action_id)
+        except HealthClawError:
+            logger.exception("decline failed for %s", action_id)
+            return jsonify({
+                "error": "review_unavailable",
+                "declined": None,
+                "message": ("We couldn't record your answer just now. "
+                            "Reload this page to see where this request "
+                            "stands."),
+            }), 503
+        body = dict(body) if isinstance(body, dict) else {}
+        if status == 200:
+            body["declined"] = True
+            return jsonify(body), 200
+        if HealthClawClient._answered_about_data(status):
+            # The engine answered: already approved, lapsed, or not ours.
+            # The page reads the status to say which.
+            body.setdefault("error", "not_declined")
+            body["declined"] = False
+            return jsonify(body), status
+        return jsonify({
+            "error": "review_unavailable",
+            "declined": None,
+            "message": ("We couldn't tell whether your answer was recorded. "
+                        "Reload this page to see where this request stands."),
+        }), 503
+
     # --- surfaces ------------------------------------------------------------
 
     @app.post("/api/surfaces/telegram")

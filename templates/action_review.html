@@ -167,6 +167,8 @@
 
       <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve &amp; generate
       </button>
+      <button type="button" id="decline-btn" class="btn btn-outline-secondary btn-lg ms-2">Decline
+      </button>
     </form>
   </div>
 </div>
@@ -656,6 +658,50 @@
     }
 
     evaluate();
+
+    // Decline (#520): an explicit no, recorded as one. Never armed by the
+    // gate above, because saying no needs no attestation; a person who
+    // has not reviewed the rows can still refuse the whole request. One
+    // POST on the same single-use credential the relay mints for Approve.
+    // The same rule as the submit handler on what to do afterwards: only a
+    // branch where the engine answered about THIS request reads the status
+    // back; a request that never arrived (status 0) or a gateway speaking
+    // for a silent engine sends the person to a reload instead.
+    var declineBtn = document.getElementById('decline-btn');
+    declineBtn.addEventListener('click', function () {
+      declineBtn.disabled = true;
+      btn.disabled = true;
+      var target = form.getAttribute('action').replace(/\/submit$/, '/decline');
+      fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: '{}'
+      })
+        .then(function (r) { return r.json().then(function (b) {
+          return { status: r.status, b: b }; }, function () {
+          return { status: r.status, b: {} }; }); }, function () {
+          return { status: 0, b: {} }; })
+        .then(function (res) {
+          if (res.status === 200 && res.b.declined === true) {
+            gateMsg.className = 'alert alert-secondary';
+            gateMsg.textContent =
+              'This request was declined and will not be carried out. ' +
+              'If you change your mind, ask for it to be proposed again.';
+            return;
+          }
+          if (res.b && res.b.declined === false) {
+            // The engine answered: already approved, lapsed, or moved on.
+            // The status says which.
+            checkStatus();
+            return;
+          }
+          gateMsg.className = 'alert alert-warning';
+          gateMsg.textContent =
+            'We could not record your answer. Reload this page to see ' +
+            'where this request stands.';
+        });
+    });
   })();
 </script>
 {% endblock %}

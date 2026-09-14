@@ -2252,6 +2252,9 @@ class FakeClient:
     def confirm_action(self, tenant, action_id):
         return {"status": "completed"}
 
+    def decline_action(self, tenant, action_id):
+        return 200, {"id": action_id, "status": "declined"}
+
     def fetch_review_page(self, tenant, action_id):
         return 200, f"<html>/r6/actions/{action_id}/review</html>"
 
@@ -6362,3 +6365,115 @@ def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
         r = c.post(f"/api/connections/{tile}", json=payload)
         assert r.status_code == 503, tile
         assert r.get_json()["error"] == msg, tile
+
+
+# --- decline relay (#520) ---------------------------------------------------
+
+def _agent_with_review(app, svc, monkeypatch, email="user@example.com"):
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email=email)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
+                                        "connection_id": conn}
+                   ).get_json()["id"]
+    return c, agent
+
+
+def test_decline_relay_records_the_answer_and_is_agent_scoped(app, svc,
+                                                              monkeypatch):
+    c, agent = _agent_with_review(app, svc, monkeypatch)
+    r = c.post(f"/review/{agent}/act-1/decline", json={})
+    assert r.status_code == 200
+    assert r.get_json()["declined"] is True
+    assert r.get_json()["status"] == "declined"
+    assert c.post(f"/review/{agent}/not-mine/decline", json={}).status_code == 404
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="mallory@example.com")
+    assert other.post(f"/review/{agent}/act-1/decline",
+                      json={}).status_code == 404
+
+
+def test_decline_relay_passes_the_engines_refusal_through(cfg, svc,
+                                                          monkeypatch):
+    """Already approved, lapsed, moved on: the engine's own 4xx is the answer,
+    and `declined: false` is what routes the page to the status."""
+    from careagents.app import create_app
+
+    class _Fake(FakeClient):
+        def decline_action(self, tenant, action_id):
+            return 409, {"error": "Action is executing, not awaiting_confirmation"}
+
+    app = create_app(config=cfg, client=_Fake(), accounts=svc)
+    app.config["TESTING"] = True
+    c, agent = _agent_with_review(app, svc, monkeypatch)
+    r = c.post(f"/review/{agent}/act-1/decline", json={})
+    assert r.status_code == 409
+    assert r.get_json()["declined"] is False
+
+
+def test_decline_relay_never_claims_an_answer_it_could_not_deliver(
+        cfg, svc, monkeypatch):
+    """A failed mint or a dead socket is not a decline and not a refusal:
+    `declined` is null and the person is sent to the status."""
+    from careagents.app import create_app
+
+    class _Fake(FakeClient):
+        def decline_action(self, tenant, action_id):
+            raise HealthClawError("approval token mint failed (503)", 503)
+
+    app = create_app(config=cfg, client=_Fake(), accounts=svc)
+    app.config["TESTING"] = True
+    c, agent = _agent_with_review(app, svc, monkeypatch)
+    r = c.post(f"/review/{agent}/act-1/decline", json={})
+    assert r.status_code == 503
+    body = r.get_json()
+    assert body["declined"] is None
+    assert "Reload this page" in body["message"]
+
+
+def test_decline_relay_treats_a_gateway_answer_as_no_answer(cfg, svc,
+                                                            monkeypatch):
+    from careagents.app import create_app
+
+    class _Fake(FakeClient):
+        def decline_action(self, tenant, action_id):
+            return 504, {}
+
+    app = create_app(config=cfg, client=_Fake(), accounts=svc)
+    app.config["TESTING"] = True
+    c, agent = _agent_with_review(app, svc, monkeypatch)
+    r = c.post(f"/review/{agent}/act-1/decline", json={})
+    assert r.status_code == 503
+    assert r.get_json()["declined"] is None
+
+
+def test_the_client_declines_on_a_freshly_minted_credential(cfg, monkeypatch):
+    """The real client: mint first, then POST /decline with the token, the
+    review-page surface, and no execution-class error type."""
+    from careagents.healthclaw import HealthClawClient
+
+    calls = []
+
+    class _Resp:
+        def __init__(self, status, body):
+            self.status_code, self._body, self.ok = status, body, status < 400
+            self.text = json.dumps(body)
+
+        def json(self):
+            return self._body
+
+    def fake_send(method, url, headers=None, json=None, what="", error=None,
+                  **_kw):
+        calls.append((method, url.rsplit("/", 1)[-1], headers or {}, json))
+        if url.endswith("/approval-token"):
+            return _Resp(200, {"token": "tok-not-real"})
+        return _Resp(200, {"id": "act-1", "status": "declined"})
+
+    hc = HealthClawClient("http://engine.test", "mint-not-real")
+    monkeypatch.setattr(hc, "_send", fake_send)
+    status, body = hc.decline_action("tenant-1", "act-1")
+    assert (status, body["status"]) == (200, "declined")
+    assert [c[1] for c in calls] == ["approval-token", "decline"]
+    _, _, headers, sent = calls[1]
+    assert headers["X-Step-Up-Token"] == "tok-not-real"
+    assert sent == {"declined_via": "review-page"}

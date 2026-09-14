@@ -434,6 +434,37 @@ class HealthClawClient:
             raise HealthClawUnconfirmed("confirm returned invalid data",
                                         r.status_code) from exc
 
+    def decline_action(self, tenant: str, action_id: str) -> tuple[int, dict]:
+        """The person's explicit no (#520). Same single-use credential as
+        Approve, minted server-side and spent on use, so only this surface
+        can record the answer. Returns (status, body) for any engine answer;
+        raises only when the mint or the transport fails. Nothing executes on
+        this path, so a lost answer is not the #220 shape: the page checks
+        the status afterwards either way.
+        """
+        mint = self._send(
+            "POST", f"{self.actions}/{action_id}/approval-token",
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="approval token mint")
+        token = (self._json_object(mint, "approval token mint").get("token")
+                 if mint.ok else None)
+        if not token:
+            raise HealthClawError(
+                f"approval token mint failed ({mint.status_code})",
+                mint.status_code)
+        r = self._send("POST", f"{self.actions}/{action_id}/decline",
+                       headers={"X-Tenant-Id": tenant,
+                                "X-Step-Up-Token": token,
+                                "X-Agent-Id": "careagents"},
+                       json={"declined_via": "review-page"},
+                       what="decline")
+        try:
+            body = self._json_object(r, "decline")
+        except HealthClawError:
+            body = {}
+        return r.status_code, body
+
     # --- review-page relay (credential-injecting proxy) ----------------------
 
     def fetch_review_page(self, tenant: str, action_id: str) -> tuple[int, str]:
