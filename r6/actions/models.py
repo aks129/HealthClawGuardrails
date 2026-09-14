@@ -33,12 +33,16 @@ VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call',
 # but outcome unconfirmable (carries evidence). unknown = post-possible-send.
 _TRANSITIONS = {
     'proposed': {'awaiting_confirmation', 'expired'},
-    'awaiting_confirmation': {'executing', 'expired'},
+    'awaiting_confirmation': {'executing', 'declined', 'expired'},
     'executing': {'completed', 'failed', 'needs_review', 'unknown'},
     'completed': set(),
     'failed': set(),
     'needs_review': set(),
     'expired': set(),
+    # A person who read the proposal and said no. Terminal, reachable only
+    # from awaiting_confirmation, and only through the decline route: never
+    # synthesized from a timeout, which is what `expired` records (#520).
+    'declined': set(),
     'unknown': {'completed', 'failed', 'needs_review'},
 }
 
