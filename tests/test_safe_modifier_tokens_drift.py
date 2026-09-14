@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from r6.routes import _SAFE_MODIFIER_TOKENS
+from r6.search_fidelity import _SAFE_MODIFIER_TOKENS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TS_BACKEND_FAILURE = (
@@ -68,7 +68,7 @@ def test_safe_modifier_tokens_match_python_and_typescript():
 
     assert not only_in_python and not only_in_typescript, (
         "SAFE_MODIFIER_TOKENS allowlists drifted between Python and TypeScript.\n"
-        f"  only in Python (r6/routes.py): {only_in_python}\n"
+        f"  only in Python (r6/search_fidelity.py): {only_in_python}\n"
         f"  only in TypeScript (backend-failure.ts): {only_in_typescript}\n"
         "Keep both lists identical so MCP does not drop specific corrective "
         "messages for unknown modifier tokens."
