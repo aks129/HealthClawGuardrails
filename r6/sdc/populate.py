@@ -293,7 +293,7 @@ def _populate_item(item, subject, context, observations, issues,
             return []
         return [{"linkId": link_id, "item": children}]
 
-    answer_value, value_key = _resolve_answer(
+    answer_value, value_key, source = _resolve_answer(
         item, item_type, context, observations, issues, link_id, warned,
         in_repeating_group)
     # Leaf items are always emitted so the response mirrors the questionnaire's
@@ -301,6 +301,17 @@ def _populate_item(item, subject, context, observations, issues,
     answer_item = {"linkId": link_id}
     if answer_value is not None:
         answer_item["answer"] = [{value_key: answer_value}]
+        # "From your records" (D10, #570): the same marker the repeating
+        # rows carry (#719), on the answer item, naming the record it came
+        # from. Absent on an item nobody populated, so its absence means
+        # "typed or empty", never "we forgot".
+        if source is _SUBJECT_SOURCE:
+            source = (_reference(subject) or {}).get("reference")
+        if source:
+            answer_item["extension"] = [{
+                "url": POPULATED_ROW_SOURCE_URL,
+                "valueReference": {"reference": source},
+            }]
     return [answer_item]
 
 
@@ -469,7 +480,7 @@ def _populate_list_children(items, resource_type, config, resource, context,
             # depend on. A leaf carrying both a matching definition and an
             # expression is author-pathological and resolves record-first;
             # nothing in the intake form or the fixtures has one.
-            value, value_key = _resolve_answer(
+            value, value_key, _source = _resolve_answer(
                 child, child.get("type"), context, observations, issues,
                 link_id, warned, in_repeating_group=True)
         child_item = {"linkId": link_id}
@@ -491,8 +502,18 @@ def _references_subject(resource, subject_field, subject_ref):
     return ref == subject_ref.get("reference")
 
 
+#: Sentinel: the value came from the subject Patient. The caller turns it
+#: into the Patient reference, which the resolver does not hold.
+_SUBJECT_SOURCE = object()
+
+
 def _resolve_answer(item, item_type, context, observations, issues, link_id,
                     warned, in_repeating_group):
+    """Returns (value, value_key, source): `source` is `_SUBJECT_SOURCE` for
+    an expression over the subject, `Observation/<id>` for a code match, or
+    None when nothing resolved. D10's "from your records" marker rides on it
+    (#570), so a reader can tell a populated answer from a typed one.
+    """
     value_key = _ANSWER_KEY_BY_TYPE.get(item_type, "valueString")
 
     expr = _initial_expression(item)
@@ -503,9 +524,9 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
         value = evaluate(expr, context.get("patient"), context,
                          link_id=link_id, warned=warned)
         if value is not None:
-            return _coerce(value, item_type), value_key
+            return _coerce(value, item_type), value_key, _SUBJECT_SOURCE
         _report_unpopulated(issues, link_id)
-        return None, value_key
+        return None, value_key, None
 
     codes = item.get("code") or []
     if codes:
@@ -513,11 +534,12 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
         # population that resolved nothing, exactly like the expression above.
         # The intake Questionnaire has no item.code items, so this is
         # invisible today — another Questionnaire will have them.
-        value = _observation_answer(codes, observations)
+        value, obs = _observation_answer(codes, observations)
         if value is not None:
-            return value, value_key
+            oid = (obs or {}).get("id")
+            return value, value_key, ("Observation/%s" % oid if oid else None)
         _report_unpopulated(issues, link_id)
-        return None, value_key
+        return None, value_key, None
 
     # No initialExpression and no code. Two cases, and the difference between
     # them is finding 1 of the QA review of #576.
@@ -538,7 +560,7 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
     # fourth type cannot change who reports.
     if in_repeating_group and item.get("definition"):
         _report_unpopulated(issues, link_id)
-        return None, value_key
+        return None, value_key, None
 
     # (b) NOTHING WAS ATTEMPTED, so nothing is reported. THIS IS THE
     # EXCLUSION AND IT IS LOAD-BEARING —
@@ -553,7 +575,7 @@ def _resolve_answer(item, item_type, context, observations, issues, link_id,
     # repeating `<section>.item` group rather than children of it. Pinned by
     # tests/test_populate_lists.py::
     # test_the_attestation_items_never_appear_in_the_issue_list.
-    return None, value_key
+    return None, value_key, None
 
 
 def _report_unpopulated(issues, link_id):
@@ -589,7 +611,8 @@ def _report_unpopulated(issues, link_id):
 
 
 def _observation_answer(item_codes, observations):
-    """Return the most recent Observation value matching any item code."""
+    """Return (value, observation) for the most recent Observation matching
+    any item code, or (None, None)."""
     wanted = {(c.get("system"), c.get("code")) for c in item_codes}
     matches = []
     for obs in observations:
@@ -598,17 +621,17 @@ def _observation_answer(item_codes, observations):
                 matches.append(obs)
                 break
     if not matches:
-        return None
+        return None, None
     # Recency by effectiveDateTime only; other effective[x] types sort as oldest (v1).
     matches.sort(key=lambda o: o.get("effectiveDateTime", ""), reverse=True)
     best = matches[0]
     if "valueQuantity" in best:
-        return best["valueQuantity"]
+        return best["valueQuantity"], best
     if "valueString" in best:
-        return best["valueString"]
+        return best["valueString"], best
     if "valueCodeableConcept" in best:
-        return best["valueCodeableConcept"].get("text")
-    return None
+        return best["valueCodeableConcept"].get("text"), best
+    return None, None
 
 
 def _initial_expression(item):
