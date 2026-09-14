@@ -205,7 +205,30 @@ def test_unsupported_resource_type_is_skipped_with_reason(client):
     err = result["errors"][0]
     assert err["index"] == 0
     assert err["code"] == "unsupported_resource_type"
-    assert "GarbageType" in err["message"]
+    # The caller's own word for the type is not quoted back (#408): a type
+    # outside the code-owned nameable set is reported as "other". The index
+    # and the code already say which entry failed and why.
+    assert err["resourceType"] == "other"
+    assert "GarbageType" not in json.dumps(result)
+
+
+def test_the_callers_resource_type_is_never_reflected(client):
+    """Proof #408 asked for: whatever a caller puts in `resourceType`
+    (a name, a date of birth, an MRN) is not anywhere in the response."""
+    planted = "Jane Doe 1980-01-01 MRN 12345"
+    r = _post(client, {"bundle": _bundle([
+        {"resourceType": planted, "id": "p-1"},
+        {"resourceType": "MedicationStatement", "id": "m-1"},
+        {"resourceType": "Patient", "id": "'; DROP TABLE r6_resource; --"},
+    ])})
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    for fragment in ("Jane", "Doe", "1980", "12345", "DROP TABLE"):
+        assert fragment not in body, fragment
+    named = [e["resourceType"] for e in r.get_json()["errors"]]
+    # A skippable type stays nameable, a stored type stays nameable, and
+    # the planted text collapses to the constant.
+    assert named == ["other", "MedicationStatement", "Patient"]
 
 
 def test_partial_bundle_reports_per_entry(client):
