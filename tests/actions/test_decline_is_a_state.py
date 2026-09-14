@@ -133,3 +133,21 @@ def test_decline_rejects_an_unknown_surface(client, tenant_headers,
     with app.app_context():
         assert db.session.get(ProposedAction, action_id).status == (
             'awaiting_confirmation')
+
+
+def test_a_window_that_lapses_between_the_check_and_the_claim_is_expired(
+        client, tenant_headers, auth_headers, app, monkeypatch):
+    """TOCTOU closure, mirroring confirm: the claim's WHERE re-checks
+    expires_at, and a refused claim on a still-awaiting row is reported as
+    the timeout it is, never as a 409 that names the same state twice."""
+    action_id = _propose(client, tenant_headers)
+    _commit(client, auth_headers, action_id)
+    with app.app_context():
+        row = db.session.get(ProposedAction, action_id)
+        row.expires_at = _past()
+        db.session.commit()
+    monkeypatch.setattr(ProposedAction, 'is_expired', lambda self: False)
+    resp = _decline(client, auth_headers, action_id)
+    assert resp.status_code == 410
+    with app.app_context():
+        assert db.session.get(ProposedAction, action_id).status == 'expired'
