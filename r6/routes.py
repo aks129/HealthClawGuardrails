@@ -498,7 +498,7 @@ def create_resource(resource_type):
                        agent_id=request.headers.get('X-Agent-Id'),
                        tenant_id=tenant_id)
 
-    fhir_json = resource.to_fhir_json()
+    fhir_json = apply_redaction(resource.to_fhir_json())  # #380: like a read
     fhir_json = add_disclaimer(fhir_json, resource_type)
     response = jsonify(fhir_json)
     response.status_code = 201
@@ -693,7 +693,7 @@ def update_resource(resource_type, resource_id):
                        agent_id=request.headers.get('X-Agent-Id'),
                        tenant_id=tenant_id)
 
-    fhir_json = resource.to_fhir_json()
+    fhir_json = apply_redaction(resource.to_fhir_json())  # #380: like a read
     fhir_json = add_disclaimer(fhir_json, resource_type)
     response = jsonify(fhir_json)
     response.headers['ETag'] = f'W/"{resource.version_id}"'
