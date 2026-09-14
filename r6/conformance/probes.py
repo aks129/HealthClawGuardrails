@@ -671,13 +671,30 @@ def probe_phi_redaction(client, ctx) -> ProbeResult:
     # table, so this needs no network and no feature flag — it fails when the
     # relabel step stops running, which is the half of the contract nothing
     # else measures.
-    status, body, _ = client.request(
+    status, body, ctext = client.request(
         "POST", "/Observation", ctx.write_headers(), _synthetic_labelled_obs())
     oid = body.get("id") if isinstance(body, dict) else None
     if not oid:
         r.checks.append(Check("labelled observation created", False,
                               f"create returned {status}"))
     else:
+        # The create response is an access too (#380). For a long time the
+        # read below was clean while the 201 body echoed the feed's own text
+        # straight back, and this probe posted that very Observation without
+        # looking at what came back. The caller already held the text, so
+        # nothing new was disclosed; but the property is stated without an
+        # exception, and an agent that feeds its own write response back into
+        # context was holding unredacted upstream text under a badge that
+        # said A. Both halves, for the same reason as the read: absence
+        # alone is satisfied by a body that carries no display at all.
+        cblob = ctext or json.dumps(body or {})
+        r.checks += [
+            Check("the create response is re-labelled, not echoed",
+                  _EXPECTED_LABEL in cblob,
+                  f"expected {_EXPECTED_LABEL!r} in the 201 body"),
+            Check("the upstream display did not survive the create response",
+                  _UPSTREAM_JUNK not in cblob),
+        ]
         status, obody, otext = client.request(
             "GET", f"/Observation/{oid}", ctx.read_headers())
         oblob = otext or json.dumps(obody or {})
