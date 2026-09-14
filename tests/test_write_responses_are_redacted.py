@@ -58,3 +58,40 @@ def test_the_create_response_is_re_labelled_not_echoed(client, auth_headers):
     assert resp.status_code == 201, text
     assert JUNK not in text
     assert LABEL in text
+
+
+def _proxied(upstream_body, status):
+    from unittest.mock import MagicMock, patch
+    proxy = MagicMock()
+    proxy.create.return_value = (upstream_body, status)
+    proxy.update.return_value = (upstream_body, status)
+    return patch("r6.routes.get_proxy_for_request", return_value=proxy), proxy
+
+
+def test_the_proxied_create_response_is_redacted_too(client, auth_headers):
+    """Same rule on the upstream branch: what a real FHIR server echoes back
+    is redacted and re-labelled before it leaves, or the conformance probe
+    added in #725 would score B against a live upstream for a reason the
+    local run never showed."""
+    upstream = dict(_obs(188), id="up-1")
+    patcher, proxy = _proxied(upstream, 201)
+    with patcher:
+        resp, text = _write(client, "post", "/r6/fhir/Observation", _obs(188),
+                            auth_headers)
+    assert resp.status_code == 201, text
+    assert proxy.create.called
+    assert JUNK not in text
+    assert LABEL in text
+    assert resp.get_json()["_source"] == "upstream"
+
+
+def test_the_proxied_update_response_is_redacted_too(client, auth_headers):
+    upstream = dict(_obs(190), id="up-1")
+    patcher, proxy = _proxied(upstream, 200)
+    with patcher:
+        resp, text = _write(client, "put", "/r6/fhir/Observation/up-1",
+                            dict(_obs(190), id="up-1"), auth_headers)
+    assert resp.status_code == 200, text
+    assert proxy.update.called
+    assert JUNK not in text
+    assert LABEL in text
