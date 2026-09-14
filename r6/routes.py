@@ -38,6 +38,10 @@ from r6.audit import add_audit_event, record_audit_event
 from r6.discovery_paths import (_is_exempt_discovery_path,
                                 refuse_resource_rule_on_exempt_path)
 from r6.resource_ids import refuse_malformed_resource_id
+from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
+                                _SUPPORTED_SEARCH_PARAMS, classify_search_args,
+                                error_fidelity_outcome, lenient_search_warnings,
+                                unsupported_input_text)
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -123,31 +127,6 @@ _VALID_BUNDLE_TYPES = {
 
 # Valid FHIR search patient reference pattern
 _PATIENT_REF_PATTERN = re.compile(r'^Patient/[A-Za-z0-9\-.]{1,64}$')
-
-# Local-search contract: discovery, validation, corrective messages, and self
-# links all derive from this ordered registry.
-_SEARCH_PARAMETER_SPECS = (
-    {'name': 'patient', 'type': 'reference',
-     'documentation': 'Filter by subject.reference (Patient/{id})'},
-    {'name': 'code', 'type': 'token',
-     'documentation': 'Filter by code.coding[].code (JSON string match)'},
-    {'name': 'status', 'type': 'token',
-     'documentation': 'Filter by status field'},
-    {'name': '_lastUpdated', 'type': 'date',
-     'documentation': 'Filter by last updated (ge/le/gt/lt prefix)'},
-    {'name': '_count', 'type': 'number',
-     'documentation': 'Max results (0-200)'},
-    {'name': '_sort', 'type': 'string',
-     'documentation': '_lastUpdated or -_lastUpdated'},
-    {'name': '_summary', 'type': 'token',
-     'documentation': 'count'},
-    {'name': 'context-id', 'type': 'token',
-     'documentation': 'Filter by local context envelope'},
-)
-_SUPPORTED_SEARCH_PARAMS = frozenset(
-    spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
-_SUPPORTED_PARAMS_TEXT = ', '.join(
-    spec['name'] for spec in _SEARCH_PARAMETER_SPECS)
 
 _AUDIT_SEARCH_PARAMETER_SPECS = (
     {'name': 'context-id', 'type': 'token',
@@ -700,73 +679,6 @@ def update_resource(resource_type, resource_id):
     return response
 
 
-# Query keys are untrusted input too. Only these locally defined semantic
-# aliases may be named in responses or audit evidence; every other unsupported
-# key gets a generic corrective message.
-_SAFE_UNSUPPORTED_SEARCH_KEYS = frozenset({'date', 'datetime'})
-_SAFE_MODIFIER_TOKENS = frozenset({
-    'above', 'below', 'contains', 'exact', 'identifier', 'in', 'iterate',
-    'missing', 'not', 'not-in', 'of-type', 'text', 'type',
-    # Fixed synthetic token used by the public issue contract.
-    'frobnicate',
-})
-
-
-def _safe_unsupported_key(key):
-    if key in _SAFE_UNSUPPORTED_SEARCH_KEYS:
-        return key
-    if ':' in key:
-        base, modifier = key.split(':', 1)
-        if (base in _SUPPORTED_SEARCH_PARAMS
-                and modifier in _SAFE_MODIFIER_TOKENS):
-            return key
-    return None
-
-
-def _unsupported_input_text(kind, key):
-    safe_key = _safe_unsupported_key(key)
-    return f'{kind}: {safe_key}' if safe_key else kind
-
-
-def _error_fidelity_outcome(severity, code, text):
-    """Build an OperationOutcome shaped for the error-fidelity contract.
-
-    Unlike _operation_outcome (which uses `diagnostics`), the failure-path
-    contract requires `details.text` and an issue carrying nothing else, so a
-    consuming agent gets a machine-checkable, corrective message.
-    """
-    return {
-        'resourceType': 'OperationOutcome',
-        'issue': [{'severity': severity, 'code': code,
-                   'details': {'text': text}}],
-    }
-
-
-def _lenient_search_warning_entries(ignored_params, supported_params_text):
-    """Build bounded, value-free warnings for ignored local search keys."""
-    safe_ignored = sorted({key for key in ignored_params
-                           if _safe_unsupported_key(key)})
-    has_unnamed = any(not _safe_unsupported_key(key)
-                      for key in ignored_params)
-    warning_keys = [*safe_ignored]
-    if has_unnamed:
-        warning_keys.append(None)
-
-    entries = []
-    for ignored in warning_keys:
-        ignored_text = ('Unknown parameter' if ignored is None else
-                        f'Unknown parameter: {ignored}')
-        entries.append({
-            'search': {'mode': 'outcome'},
-            'resource': _error_fidelity_outcome(
-                'warning', 'not-supported',
-                f'{ignored_text}. '
-                f'Supported parameters: {supported_params_text}.',
-            ),
-        })
-    return entries, safe_ignored, has_unnamed
-
-
 def _reject_local_search(resource_type, agent_id, tenant_id, code, message):
     """Return and audit a static, value-free local-search rejection."""
     audit_detail = {
@@ -776,7 +688,7 @@ def _reject_local_search(resource_type, agent_id, tenant_id, code, message):
     record_audit_event('read', resource_type, None, agent_id=agent_id,
                        tenant_id=tenant_id, outcome='failure',
                        detail=audit_detail)
-    return jsonify(_error_fidelity_outcome(
+    return jsonify(error_fidelity_outcome(
         'error', code, message)), 400
 
 
@@ -818,19 +730,52 @@ def search_resources(resource_type):
         return search_audit_events()
 
     if not R6Resource.is_supported_type(resource_type):
-        return jsonify(_error_fidelity_outcome(
+        return jsonify(error_fidelity_outcome(
             'error', 'not-supported',
             'Resource type is not supported.')), 400
 
     tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
+    # --- Error fidelity: tell the agent the truth about unsupported inputs,
+    # on both paths (#498). The proxy path used to forward the query whole,
+    # so the caller got the upstream's 404 or 502 instead of this.
+    handling = _parse_prefer_handling()
+    agent_id = request.headers.get('X-Agent-Id')
+    modifier_keys, ignored_params = classify_search_args(
+        request.args, _SUPPORTED_SEARCH_PARAMS)
+
+    # An unsupported search modifier is always rejected (none are implemented):
+    # silently dropping it would change the query's meaning unbeknownst to the
+    # caller. Audited as a failure, in every handling mode.
+    if modifier_keys:
+        modifier = sorted(modifier_keys)[0]
+        modifier_text = unsupported_input_text('Unsupported modifier', modifier)
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'not-supported',
+            f'{modifier_text}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
+        )
+
+    # An unknown parameter under strict handling is rejected; under lenient
+    # handling (the default) it is ignored but reported — a warning entry in
+    # the bundle, an audit note, and kept out of the self link — never
+    # silently swallowed.
+    if ignored_params and handling == 'strict':
+        unknown = sorted(ignored_params)[0]
+        unknown_text = unsupported_input_text('Unknown parameter', unknown)
+        return _reject_local_search(
+            resource_type, agent_id, tenant_id, 'not-supported',
+            f'{unknown_text}. '
+            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
+        )
+
     # --- Upstream proxy mode: forward search to real FHIR server ---
     proxy = get_proxy_for_request()
     if proxy:
-        # Forward all query params to upstream (patient, code, status, _count, etc.)
-        params = dict(request.args)
-        # Remove context-id (local concept, not upstream)
-        params.pop('context-id', None)
+        # Only the parameters this layer supports go upstream; an ignored
+        # key is reported below, never forwarded. context-id is local.
+        params = {k: v for k, v in request.args.items()
+                  if k in _SUPPORTED_SEARCH_PARAMS and k != 'context-id'}
         bundle, upstream_status = proxy.search(resource_type, params)
         if upstream_status != 200:
             # Surface the (sanitized) upstream rejection with its real status —
@@ -886,53 +831,24 @@ def search_resources(resource_type):
                     new_entry['search'] = allowed
             entries.append(new_entry)
 
+        warning_entries, audit_note, outcome_code = lenient_search_warnings(
+            ignored_params, _SUPPORTED_PARAMS_TEXT)
         result = {
             'resourceType': 'Bundle',
             'type': 'searchset',
             'total': bundle.get('total', len(entries)),
             'link': bundle.get('link', []),
-            'entry': entries,
+            'entry': entries + warning_entries,
             '_source': 'upstream',
         }
 
         record_audit_event('read', resource_type, None,
-                           agent_id=request.headers.get('X-Agent-Id'),
-                           tenant_id=tenant_id,
-                           detail=f'search (upstream): {len(entries)} results')
+                           agent_id=agent_id, tenant_id=tenant_id,
+                           detail=f'search (upstream): {len(entries)} results'
+                                  f'{audit_note}',
+                           outcome_detail_code=outcome_code)
 
         return jsonify(result)
-
-    # --- Error fidelity: tell the agent the truth about unsupported inputs ---
-    handling = _parse_prefer_handling()
-    agent_id = request.headers.get('X-Agent-Id')
-    modifier_keys = [k for k in request.args if ':' in k]
-    ignored_params = [k for k in request.args
-                      if ':' not in k and k not in _SUPPORTED_SEARCH_PARAMS]
-
-    # An unsupported search modifier is always rejected (none are implemented):
-    # silently dropping it would change the query's meaning unbeknownst to the
-    # caller. Audited as a failure, in every handling mode.
-    if modifier_keys:
-        modifier = sorted(modifier_keys)[0]
-        modifier_text = _unsupported_input_text('Unsupported modifier', modifier)
-        return _reject_local_search(
-            resource_type, agent_id, tenant_id, 'not-supported',
-            f'{modifier_text}. '
-            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
-        )
-
-    # An unknown parameter under strict handling is rejected; under lenient
-    # handling (the default) it is ignored but reported — a warning entry in
-    # the bundle, an audit note, and kept out of the self link — never
-    # silently swallowed.
-    if ignored_params and handling == 'strict':
-        unknown = sorted(ignored_params)[0]
-        unknown_text = _unsupported_input_text('Unknown parameter', unknown)
-        return _reject_local_search(
-            resource_type, agent_id, tenant_id, 'not-supported',
-            f'{unknown_text}. '
-            f'Supported parameters: {_SUPPORTED_PARAMS_TEXT}.',
-        )
 
     repeated_control = next((
         spec['name'] for spec in _SEARCH_PARAMETER_SPECS
@@ -1098,20 +1014,9 @@ def search_resources(resource_type):
     # entry (search.mode=outcome) naming the ignored parameter + the supported
     # set. The self link already omits unknown params (built from the supported
     # set above), so the caller can see exactly which query actually ran.
-    audit_note = ''
-    if ignored_params:
-        # The allowlist has two unknown semantic aliases, plus at most one
-        # generic warning for every other key. This caps attacker-controlled
-        # warning growth at three entries regardless of query size.
-        warning_entries, safe_ignored, has_unnamed = (
-            _lenient_search_warning_entries(
-                ignored_params, _SUPPORTED_PARAMS_TEXT))
-        entries.extend(warning_entries)
-
-        ignored_count = len(ignored_params)
-        audit_note = ('; unsupported search parameter ignored'
-                      if ignored_count == 1 else
-                      f'; {ignored_count} unsupported search parameters ignored')
+    warning_entries, audit_note, outcome_code = lenient_search_warnings(
+        ignored_params, _SUPPORTED_PARAMS_TEXT)
+    entries.extend(warning_entries)
 
     bundle = {
         'resourceType': 'Bundle',
@@ -1127,10 +1032,7 @@ def search_resources(resource_type):
                        context_id=context_id,
                        tenant_id=tenant_id,
                        detail=f'search: {total} results{audit_note}',
-                       outcome_detail_code=(
-                           AuditEventRecord.ignored_parameters_outcome_code(
-                               safe_ignored, has_unnamed)
-                           if ignored_params else None))
+                       outcome_detail_code=outcome_code)
 
     return jsonify(bundle)
 
@@ -1307,13 +1209,12 @@ def search_audit_events():
     """Search AuditEvent records, optionally filtered by context-id."""
     tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
     agent_id = request.headers.get('X-Agent-Id')
-    modifier_keys = [key for key in request.args if ':' in key]
-    ignored_params = [key for key in request.args
-                      if ':' not in key and key not in _AUDIT_SEARCH_PARAMS]
+    modifier_keys, ignored_params = classify_search_args(
+        request.args, _AUDIT_SEARCH_PARAMS)
 
     if modifier_keys:
         modifier = sorted(modifier_keys)[0]
-        modifier_text = _unsupported_input_text(
+        modifier_text = unsupported_input_text(
             'Unsupported modifier', modifier)
         return _reject_local_search(
             'AuditEvent', agent_id, tenant_id, 'not-supported',
@@ -1322,7 +1223,7 @@ def search_audit_events():
 
     if ignored_params and _parse_prefer_handling() == 'strict':
         unknown = sorted(ignored_params)[0]
-        unknown_text = _unsupported_input_text('Unknown parameter', unknown)
+        unknown_text = unsupported_input_text('Unknown parameter', unknown)
         return _reject_local_search(
             'AuditEvent', agent_id, tenant_id, 'not-supported',
             f'{unknown_text}. Supported parameters: {_AUDIT_PARAMS_TEXT}.',
@@ -1379,19 +1280,9 @@ def search_audit_events():
         for event in events
     ]
 
-    safe_ignored = []
-    has_unnamed = False
-    audit_note = ''
-    if ignored_params:
-        warning_entries, safe_ignored, has_unnamed = (
-            _lenient_search_warning_entries(
-                ignored_params, _AUDIT_PARAMS_TEXT))
-        entries.extend(warning_entries)
-
-        ignored_count = len(ignored_params)
-        audit_note = ('; unsupported search parameter ignored'
-                      if ignored_count == 1 else
-                      f'; {ignored_count} unsupported search parameters ignored')
+    warning_entries, audit_note, outcome_code = lenient_search_warnings(
+        ignored_params, _AUDIT_PARAMS_TEXT)
+    entries.extend(warning_entries)
 
     search_params = []
     for spec in _AUDIT_SEARCH_PARAMETER_SPECS:
@@ -1414,10 +1305,7 @@ def search_audit_events():
     record_audit_event(
         'read', 'AuditEvent', None, agent_id=agent_id,
         tenant_id=tenant_id, detail=f'search: {total} results{audit_note}',
-        outcome_detail_code=(
-            AuditEventRecord.ignored_parameters_outcome_code(
-                safe_ignored, has_unnamed)
-            if ignored_params else None),
+        outcome_detail_code=outcome_code,
     )
 
     return jsonify(bundle)
