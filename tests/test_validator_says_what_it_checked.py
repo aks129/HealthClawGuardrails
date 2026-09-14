@@ -91,8 +91,12 @@ class TestTheListIsDerivedNotTyped:
         A hand-kept list of "what we check" is a second source of truth, and
         it drifts in the direction of claiming coverage that is not there.
         """
+        # effective[x] joined the list when #485 added its presence check
+        # (a warning, not an error); the list grew without anyone editing
+        # it, which is what this pin exists to prove.
         assert _checked_expressions('Observation') == (
-            'Observation.code', 'Observation.status')
+            'Observation.code', 'Observation.effective[x]',
+            'Observation.status')
         # A type with more checks, to prove the extraction is not hardcoded.
         condition = _checked_expressions('Condition')
         assert 'Condition.subject' in condition
