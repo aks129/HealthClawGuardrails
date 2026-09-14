@@ -1036,3 +1036,39 @@ def test_every_terminal_arm_of_the_poll_offers_a_way_forward(page):
         assert "Reload this page" in body[at:at + 400], (
             "a terminal arm reports an unknown outcome and offers nothing "
             "the patient can do about it")
+
+
+def _decline_handler(page: str) -> str:
+    start = page.index("declineBtn.addEventListener('click'")
+    return page[start:page.index("})();\n</script>", start)]
+
+
+def test_the_decline_handler_reads_the_status_only_where_the_engine_answered(
+        page):
+    """The submit handler's rule, applied to Decline (#520): a status lookup
+    describes the request the person just acted on only when something
+    answered about it. `declined === false` is the relay saying the engine
+    refused (already approved, lapsed, moved on); a lost request (status 0)
+    or a gateway 503 is not, and those send the person to a reload.
+
+    MUTATION: call checkStatus() from the final fallback branch -> red.
+    """
+    body = _code_only(_decline_handler(page))
+    sites = _checkstatus_call_sites(body)
+    assert sites, "Decline never reads the status back; this guard reads nothing"
+    block = _block(body, "res.b.declined === false")
+    off = body.index(block, body.index("res.b.declined === false"))
+    for site in sites:
+        assert off <= site < off + len(block), (
+            "checkStatus is called from a Decline branch where nothing "
+            "answered about this request")
+
+
+def test_decline_never_claims_the_answer_was_recorded_without_seeing_it(page):
+    """The success sentence is printed only on the relay's own `declined:
+    true`, never on a bare 200 or a parse failure."""
+    body = _code_only(_decline_handler(page))
+    sentence = "This request was declined and will not be carried out."
+    block = _block(body, "res.status === 200 && res.b.declined === true")
+    assert sentence.split(" and ")[0] in _as_printed(block)
+    assert _as_printed(body).count(sentence.split(" and ")[0]) == 1
