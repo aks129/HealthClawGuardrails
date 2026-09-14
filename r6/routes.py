@@ -37,6 +37,7 @@ from r6.validator import R6Validator
 from r6.audit import add_audit_event, record_audit_event
 from r6.discovery_paths import (_is_exempt_discovery_path,
                                 refuse_resource_rule_on_exempt_path)
+from r6.resource_ids import refuse_malformed_resource_id
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
@@ -199,14 +200,10 @@ def enforce_tenant_id():
         }), 400
     # Validate tenant_id format
     if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
-        return jsonify({
-            'resourceType': 'OperationOutcome',
-            'issue': [{
-                'severity': 'error',
-                'code': 'invalid',
-                'diagnostics': 'X-Tenant-Id must match [a-zA-Z0-9_-]{1,64}'
-            }]
-        }), 400
+        return _operation_outcome(
+            'error', 'invalid', 'X-Tenant-Id must match [a-zA-Z0-9_-]{1,64}'), 400
+    # The path id, only once the tenant is known to be well-formed (#279).
+    return refuse_malformed_resource_id()
 
 
 def authenticate_tenant_read(tenant_id):
