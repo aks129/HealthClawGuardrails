@@ -14,6 +14,15 @@ Guardrails:
   conservative keyword match, NOT an authoritative DEA schedule lookup;
   false positives are acceptable (the patient can still call themselves),
   false negatives are caught by the receiving pharmacist.
+- The match is not keyed on the feed's word for the drug. It used to read
+  `medicationCodeableConcept.text` first and stop there, so RxNorm 7804
+  (oxycodone) with `text: "pain reliever"` was proposed for transfer, and
+  so was a code-only order, which is exactly what a redacted read yields for
+  a code the label table does not know. Every name-bearing signal is now
+  checked (our own label for the code, the text, every coding display), the
+  RxNorm ingredient codes below are checked directly, and an order that
+  carries no name at all is refused as unverifiable rather than transferred
+  as "unnamed medication".
 - Only active medication orders are included.
 - The phone number rides in payload.phone (never in audit output);
   payload.to carries the recipient label only. summary() redaction rules
@@ -21,6 +30,8 @@ Guardrails:
 """
 
 from __future__ import annotations
+
+from r6.terminology import RXNORM, canonical_system, lookup
 
 # Conservative Schedule II keyword deny-list (lowercase). Not authoritative.
 SCHEDULE_II_TERMS = (
@@ -34,19 +45,69 @@ SCHEDULE_II_TERMS = (
 )
 
 
-def _med_name(med: dict) -> str:
+# RxNorm ingredient-level RxCUIs for the same substances, so a coded order
+# is caught even when nothing names it. Ingredient level, because that is
+# what a static list can hold; product-level codes (a specific tablet) are
+# caught by name wherever the feed or our label table carries one. Not
+# authoritative, same caveat as the terms above.
+SCHEDULE_II_RXCUI = frozenset({
+    "7804",    # oxycodone
+    "5489",    # hydrocodone
+    "4337",    # fentanyl
+    "7052",    # morphine
+    "3423",    # hydromorphone
+    "7814",    # oxymorphone
+    "6813",    # methadone
+    "6754",    # meperidine
+    "2670",    # codeine
+    "725",     # amphetamine
+    "3288",    # dextroamphetamine
+    "6901",    # methylphenidate
+    "700449",  # lisdexamfetamine
+    "787390",  # tapentadol
+})
+
+UNVERIFIABLE_REASON = (
+    "This order carries no medication name and no code the guardrail "
+    "recognises, so it cannot be checked against the Schedule II rule and "
+    "is not transferred. Ask the prescriber's office or the pharmacy directly."
+)
+
+
+def _codings(med: dict) -> list[dict]:
     concept = med.get("medicationCodeableConcept") or {}
-    if concept.get("text"):
-        return concept["text"]
-    for coding in concept.get("coding", []):
-        if coding.get("display"):
-            return coding["display"]
-    return "unnamed medication"
+    return [c for c in (concept.get("coding") or []) if isinstance(c, dict)]
 
 
-def _is_schedule_ii(name: str) -> bool:
-    lowered = name.lower()
-    return any(term in lowered for term in SCHEDULE_II_TERMS)
+def medication_names(med: dict) -> list[str]:
+    """Every name the order carries, our own label for the code first.
+
+    The order matters for display only: the first entry is what the review
+    page and the call script show. The Schedule II check reads all of them.
+    """
+    concept = med.get("medicationCodeableConcept") or {}
+    names: list[str] = []
+    for coding in _codings(med):
+        label = lookup(coding.get("system"), coding.get("code"))
+        if label:
+            names.append(label)
+    if isinstance(concept.get("text"), str) and concept["text"].strip():
+        names.append(concept["text"].strip())
+    for coding in _codings(med):
+        display = coding.get("display")
+        if isinstance(display, str) and display.strip():
+            names.append(display.strip())
+    seen: set[str] = set()
+    return [n for n in names if not (n.lower() in seen or seen.add(n.lower()))]
+
+
+def _is_schedule_ii(med: dict, names: list[str]) -> bool:
+    for coding in _codings(med):
+        if (canonical_system(coding.get("system")) == RXNORM
+                and str(coding.get("code")) in SCHEDULE_II_RXCUI):
+            return True
+    return any(term in name.lower()
+               for name in names for term in SCHEDULE_II_TERMS)
 
 
 def _call_script(allowed, to_pharmacy, from_pharmacy) -> str:
@@ -77,16 +138,20 @@ def build_transfer_request(medication_requests, to_pharmacy,
     for med in medication_requests or []:
         if (med.get("status") or "active") != "active":
             continue
-        name = _med_name(med)
-        if _is_schedule_ii(name):
+        names = medication_names(med)
+        if _is_schedule_ii(med, names):
             refused.append({
-                "name": name,
+                "name": names[0] if names else "unnamed medication",
                 "reason": ("Schedule II medications cannot be transferred "
                            "between pharmacies under federal rules — a new "
                            "prescription from the prescriber is required."),
             })
             continue
-        allowed.append({"name": name})
+        if not names:
+            refused.append({"name": "unnamed medication",
+                            "reason": UNVERIFIABLE_REASON})
+            continue
+        allowed.append({"name": names[0]})
 
     if not allowed:
         return {"allowed": [], "refused": refused, "action_payload": None}

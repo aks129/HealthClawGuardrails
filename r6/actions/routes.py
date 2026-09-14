@@ -37,7 +37,7 @@ from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       payload_digest)
 from r6.actions.models import ProposedAction, VALID_KINDS, _utcnow
 from r6.actions.registry import get_executor
-from r6.actions.rx_transfer import build_transfer_request
+from r6.actions.rx_transfer import build_transfer_request, medication_names
 from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
 from r6.audit import add_audit_event, record_audit_event
@@ -259,8 +259,7 @@ def propose_rx_transfer():
     if isinstance(name_filter, list) and name_filter:
         wanted = {n.lower() for n in name_filter if isinstance(n, str)}
         meds = [m for m in meds
-                if (m.get('medicationCodeableConcept') or {}).get('text', '')
-                .lower() in wanted]
+                if wanted & {n.lower() for n in medication_names(m)}]
 
     result = build_transfer_request(meds, to_pharmacy,
                                     from_pharmacy=from_pharmacy)
