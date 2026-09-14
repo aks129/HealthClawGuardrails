@@ -461,6 +461,98 @@ def commit_action(action_id):
     }), 202
 
 
+@actions_blueprint.route('/<action_id>/decline', methods=['POST'])
+def decline_action(action_id):
+    """The human's out-of-band Decline: an explicit no, recorded as one.
+
+    Until #520 a person who read the proposal and refused it landed in the
+    same record as a person who never opened it (`expired`). The audit trail
+    could prove nobody approved; it could not prove somebody objected. This
+    route is on the same footing as Approve: the same action-bound,
+    payload-bound, single-use credential, so only the surface that showed
+    the person the card can record their answer, and a declined credential
+    cannot be turned around to approve. Body optional:
+    {'declined_via': 'dashboard' | 'telegram' | 'review-page'}.
+
+    Terminal. A declined action is re-proposed, never revived. Nothing here
+    is ever inferred: a lapsed window stays `expired`.
+    """
+    tenant = _tenant_or_none()
+    if tenant is None:
+        return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
+
+    body = request.get_json(silent=True) or {}
+    declined_via = body.get('declined_via', 'dashboard')
+    if declined_via not in APPROVED_VIA_VALUES:
+        return _error(400, 'declined_via must be one of: %s'
+                      % ', '.join(APPROVED_VIA_VALUES))
+
+    # Same gate as confirm, for the same reasons (see confirm_action): bound
+    # to the action and to the payload the person was shown, spent on use.
+    bound = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    require_grant(
+        scope=Scope.WRITE,
+        tenant=tenant,
+        audience=ACTION_APPROVAL_AUDIENCE,
+        operation=(approval_operation(action_id, bound.payload_json)
+                   if bound is not None else None),
+        consume_nonce=bound is not None,
+        absent_status=401,
+        rejected_status=401,
+    )
+
+    action = ProposedAction.query.filter_by(
+        id=action_id, tenant_id=tenant_id).first()
+    if action is None:
+        return _error(404, 'Unknown action')
+
+    # A lapsed window is a timeout, not a refusal; it stays `expired` even
+    # when the person taps Decline after the fact, so the record never says
+    # "declined" about an action nobody could still have approved.
+    if action.status == 'awaiting_confirmation' and action.is_expired():
+        lapsed = transition_action(
+            action_id, from_states=('awaiting_confirmation',),
+            to_state='expired', actor='decline',
+            detail='approval window lapsed')
+        db.session.refresh(action)
+        if lapsed:
+            # Same-session audit (the post-commit shim is ratcheted): the
+            # transition has committed, so this row lands in its own
+            # transaction only when the lapse really happened.
+            add_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action_id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                detail='approval window lapsed',
+            )
+            db.session.commit()
+        return _error(410, 'Approval window lapsed; nothing to decline')
+
+    moved = transition_action(
+        action_id, from_states=('awaiting_confirmation',),
+        to_state='declined', actor='decline',
+        detail='declined via %s' % declined_via,
+        extra_criteria=[ProposedAction.expires_at > _utcnow()])
+    db.session.refresh(action)
+    if not moved:
+        if action.status == 'expired':
+            return _error(410, 'Approval window lapsed; nothing to decline')
+        return _error(409, 'Action is %s, not awaiting_confirmation'
+                      % action.status)
+
+    # PHI-free: the surface and the digest of what was refused, never the
+    # payload. A decline is evidence on the same footing as an approval.
+    add_audit_event(
+        'update', resource_type='ProposedAction', resource_id=action.id,
+        agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+        detail='declined via %s; payload_digest=%s' % (
+            declined_via, payload_digest(action.payload_json)),
+    )
+    db.session.commit()
+    return jsonify({'id': action.id, 'status': action.status}), 200
+
+
 @actions_blueprint.route('/<action_id>/confirm', methods=['POST'])
 def confirm_action(action_id):
     """The human's out-of-band Approve — the ONLY place an action executes.

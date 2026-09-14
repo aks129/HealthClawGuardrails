@@ -625,6 +625,13 @@
                 'cannot be approved now.';
               return;
             }
+            if (status === 'declined') {
+              gateMsg.className = 'alert alert-secondary';
+              gateMsg.textContent =
+                'This request was declined and will not be carried out. ' +
+                'If you change your mind, ask for it to be proposed again.';
+              return;
+            }
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
             // Still unknown after four tries. Say that, and point at the one
             // thing that can still resolve it. This used to end "Please do
