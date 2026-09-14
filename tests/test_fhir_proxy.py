@@ -578,15 +578,63 @@ class TestProxyRouteIntegration:
             mock_proxy.search.return_value = (upstream_bundle, 200)
             mock_get.return_value = mock_proxy
 
-            resp = self.client.get('/r6/fhir/Patient?name=Smith',
+            resp = self.client.get('/r6/fhir/Patient?_count=2',
                                    headers=self.tenant_headers)
             assert resp.status_code == 200
             data = resp.get_json()
             assert data['total'] == 2
             assert len(data['entry']) == 2
+            mock_proxy.search.assert_called_once_with('Patient', {'_count': '2'})
             # Identifier value removed on upstream data
             assert 'value' not in data['entry'][0]['resource']['identifier'][0]
             assert data.get('_source') == 'upstream'
+
+    def _proxy_search(self, query, headers=None, upstream=None):
+        os.environ['FHIR_UPSTREAM_URL'] = 'https://hapi.fhir.org/baseR4'
+        upstream = upstream or {'resourceType': 'Bundle', 'type': 'searchset',
+                                'total': 0, 'entry': []}
+        with patch('r6.routes.get_proxy_for_request') as mock_get:
+            mock_proxy = MagicMock()
+            mock_proxy.search.return_value = (upstream, 200)
+            mock_get.return_value = mock_proxy
+            resp = self.client.get(f'/r6/fhir/Patient?{query}',
+                                   headers={**self.tenant_headers,
+                                            **(headers or {})})
+        return resp, mock_proxy
+
+    def test_proxy_search_keeps_the_error_fidelity_contract_lenient(self):
+        """#498: an unknown parameter is not forwarded; it is reported in a
+        warning entry and noted in the audit row, exactly as in local mode.
+        The caller used to get the upstream's 404 instead."""
+        resp, proxy = self._proxy_search('name=Smith&_count=5')
+        assert resp.status_code == 200
+        proxy.search.assert_called_once_with('Patient', {'_count': '5'})
+        data = resp.get_json()
+        warnings = [e for e in data['entry']
+                    if e.get('search', {}).get('mode') == 'outcome']
+        assert len(warnings) == 1
+        text = warnings[0]['resource']['issue'][0]['details']['text']
+        assert text.startswith('Unknown parameter')
+        assert 'Smith' not in text and 'name' not in text.split('.')[0]
+        from r6.models import AuditEventRecord
+        row = AuditEventRecord.query.order_by(
+            AuditEventRecord.id.desc()).first()
+        assert 'unsupported search parameter ignored' in row.detail
+        assert row.detail.startswith('search (upstream)')
+
+    def test_proxy_search_rejects_an_unknown_parameter_under_strict(self):
+        resp, proxy = self._proxy_search('name=Smith',
+                                         headers={'Prefer': 'handling=strict'})
+        assert resp.status_code == 400
+        assert resp.get_json()['issue'][0]['code'] == 'not-supported'
+        proxy.search.assert_not_called()
+
+    def test_proxy_search_rejects_an_unsupported_modifier(self):
+        resp, proxy = self._proxy_search('code:text=chol')
+        assert resp.status_code == 400
+        text = resp.get_json()['issue'][0]['details']['text']
+        assert text.startswith('Unsupported modifier: code:text')
+        proxy.search.assert_not_called()
 
     def test_local_mode_when_proxy_not_configured(self):
         """Routes use local SQLite when no upstream is configured."""
