@@ -66,6 +66,7 @@ class TestR6Metadata:
             '_sort': '_lastUpdated',
             '_summary': 'count',
             'context-id': 'test-context',
+            '_id': 'obs-1',
         }
 
         bundle = client.get(
