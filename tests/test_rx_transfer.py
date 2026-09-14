@@ -9,7 +9,18 @@ deny-list, documented as not authoritative).
 
 import json
 
-from r6.actions.rx_transfer import build_transfer_request, SCHEDULE_II_TERMS
+from r6.actions.rx_transfer import (SCHEDULE_II_TERMS, UNVERIFIABLE_REASON,
+                                    build_transfer_request)
+
+
+def _refused_as_schedule_ii(res):
+    """The refusal class, not a substring: the unverifiable reason also
+    mentions the Schedule II rule, so `"Schedule II" in reason` proves
+    nothing about which check fired."""
+    reasons = [r["reason"] for r in res["refused"]]
+    return (res["allowed"] == [] and len(reasons) == 1
+            and reasons[0].startswith("Schedule II medications cannot")
+            and reasons[0] != UNVERIFIABLE_REASON)
 
 
 def _med(text, status="active"):
@@ -171,3 +182,86 @@ class TestProposeStepUpGate:
                      "Content-Type": "application/json"},
             data=self._body())
         assert resp.status_code == 401, resp.get_data(as_text=True)
+
+
+RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
+
+
+def _coded(code, text=None, display=None, system=RXNORM):
+    coding = {"system": system, "code": code}
+    if display:
+        coding["display"] = display
+    concept = {"coding": [coding]}
+    if text:
+        concept["text"] = text
+    return {"resourceType": "MedicationRequest", "status": "active",
+            "intent": "order", "medicationCodeableConcept": concept}
+
+
+class TestScheduleIIIsNotKeyedOnFeedText:
+    """The refusal used to read `text` first and stop there (#727).
+
+    RxNorm 7804 is oxycodone. A feed that says "pain reliever" in `text`
+    was proposed for transfer; so was a code-only order, which is what a
+    redacted read yields for a code the label table does not know.
+    """
+
+    def test_the_feeds_word_for_the_drug_does_not_override_its_display(self):
+        res = build_transfer_request(
+            [_coded("7804", text="pain reliever", display="Oxycodone")],
+            TO_PHARMACY)
+        assert _refused_as_schedule_ii(res)
+
+    def test_a_coded_order_with_no_name_is_caught_by_its_code(self):
+        res = build_transfer_request([_coded("7804")], TO_PHARMACY)
+        assert _refused_as_schedule_ii(res)
+
+    def test_the_code_check_honours_the_oid_form_of_the_system(self):
+        res = build_transfer_request(
+            [_coded("4337", system="urn:oid:2.16.840.1.113883.6.88")],
+            TO_PHARMACY)
+        assert _refused_as_schedule_ii(res)
+
+    def test_an_order_nothing_names_is_refused_as_unverifiable(self):
+        res = build_transfer_request([_coded("999999")], TO_PHARMACY)
+        assert res["allowed"] == []
+        assert res["action_payload"] is None
+        assert res["refused"][0]["name"] == "unnamed medication"
+        assert res["refused"][0]["reason"] == UNVERIFIABLE_REASON
+
+    def test_our_own_label_names_a_recognised_code_first(self):
+        # RxNorm 6809 is Metformin in r6/terminology.py's static table; the
+        # feed's text is what the pharmacy would have been read otherwise.
+        res = build_transfer_request(
+            [_coded("6809", text="the little white ones")], TO_PHARMACY)
+        assert [m["name"] for m in res["allowed"]] == ["Metformin"]
+        assert "Metformin" in res["action_payload"]["body"]
+
+    def test_every_display_is_checked_not_only_the_first(self):
+        med = _coded("999999", display="Something else")
+        med["medicationCodeableConcept"]["coding"].append(
+            {"system": "http://example.org/local", "code": "x",
+             "display": "Hydromorphone 2 mg"})
+        res = build_transfer_request([med], TO_PHARMACY)
+        assert _refused_as_schedule_ii(res)
+
+
+class TestNameFilterReadsEveryName:
+    def _seed(self, client, auth_headers, med):
+        med = {**med, "subject": {"reference": "Patient/rx-test-pt"}}
+        return client.post(
+            "/r6/fhir/MedicationRequest",
+            headers={**auth_headers, "X-Human-Confirmed": "true",
+                     "Content-Type": "application/fhir+json"},
+            data=json.dumps(med))
+
+    def test_medication_names_matches_our_label_for_a_coded_order(
+            self, client, auth_headers):
+        assert self._seed(client, auth_headers, _coded("6809")).status_code == 201
+        resp = client.post("/r6/actions/rx-transfer/propose",
+                           headers={**auth_headers,
+                                    "Content-Type": "application/json"},
+                           data=json.dumps({"to_pharmacy": TO_PHARMACY,
+                                            "medication_names": ["metformin"]}))
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert [m["name"] for m in resp.get_json()["allowed"]] == ["Metformin"]
