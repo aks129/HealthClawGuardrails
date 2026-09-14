@@ -22,6 +22,17 @@ open it in Telegram, and send:
 The `/curatr` → `/approve` pair is the guardrail showcase: the bot proposes,
 a human approves, and only then does anything change.
 
+**Where `/approve` works today: the demo environment, not production.** In
+production `$curatr-apply-fix` demands a step-up token bound to the fix
+(`audience=curatr`, one operation), and no client can mint one: the only
+mint endpoint issues a plain tenant token, so the bot's `/approve` is
+answered "Token audience mismatch" there (#413). That is the gate doing its
+job against a credential that is not an approval. The production path for a
+data-quality fix is the action rail (propose, then the person approves on
+their own review surface); until the fix rides that rail, `/approve` is a
+demo-environment feature and this page says so rather than implying
+otherwise.
+
 ## Run your own bot (5 minutes, any machine with Python)
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and
