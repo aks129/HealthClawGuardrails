@@ -2982,12 +2982,12 @@ def curatr_apply_fix(resource_type, resource_id):
         )
     except RuntimeError as exc:
         logger.error('curatr_apply_fix failed: %s', type(exc).__name__)
-        return _operation_outcome(
-            'error', 'exception', 'Curatr fix could not be applied'
-        ), 500
+        return _operation_outcome('error', 'exception',
+                                  'Curatr fix could not be applied'), 500
 
-    if 'error' in result:
-        return _operation_outcome('error', 'not-found', result['error']), 404
+    if 'error' in result:  # a refused fix (#739) is invalid, not not-found
+        code, status = ('invalid', 422) if result.get('refused') else ('not-found', 404)
+        return _operation_outcome('error', code, result['error']), status
 
     # After a successful fix, re-evaluate and promote curation_state -> curated.
     try:
