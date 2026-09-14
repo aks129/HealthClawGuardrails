@@ -79,26 +79,58 @@ def _codings(med: dict) -> list[dict]:
     return [c for c in (concept.get("coding") or []) if isinstance(c, dict)]
 
 
-def medication_names(med: dict) -> list[str]:
-    """Every name the order carries, our own label for the code first.
+def _dedupe(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    return [n for n in names if not (n.lower() in seen or seen.add(n.lower()))]
 
-    The order matters for display only: the first entry is what the review
-    page and the call script show. The Schedule II check reads all of them.
-    """
-    concept = med.get("medicationCodeableConcept") or {}
-    names: list[str] = []
+
+def _label_names(med: dict) -> list[str]:
+    """Our own labels for the order's codes (r6/terminology.py)."""
+    names = []
     for coding in _codings(med):
         label = lookup(coding.get("system"), coding.get("code"))
         if label:
             names.append(label)
+    return _dedupe(names)
+
+
+def _feed_names(med: dict) -> list[str]:
+    """What the feed itself calls the order: `text`, then every display."""
+    concept = med.get("medicationCodeableConcept") or {}
+    names = []
     if isinstance(concept.get("text"), str) and concept["text"].strip():
         names.append(concept["text"].strip())
     for coding in _codings(med):
         display = coding.get("display")
         if isinstance(display, str) and display.strip():
             names.append(display.strip())
-    seen: set[str] = set()
-    return [n for n in names if not (n.lower() in seen or seen.add(n.lower()))]
+    return _dedupe(names)
+
+
+def medication_names(med: dict) -> list[str]:
+    """Every name the order carries, our own label for the code first.
+
+    The Schedule II check reads all of them; `display_name` decides what a
+    person sees.
+    """
+    return _dedupe(_label_names(med) + _feed_names(med))
+
+
+def display_name(med: dict) -> str | None:
+    """What the review page shows and the call script says.
+
+    Our label identifies the drug, junk-proof and keyed by code. The feed's
+    own text rides along as "recorded as" when it says more, because it is
+    the order as written (dose, form, frequency) and that is what the
+    pharmacist needs and what the person confirms. When we have no label,
+    the feed's text is the name. None when nothing names the order.
+    """
+    labels, feed = _label_names(med), _feed_names(med)
+    if not labels:
+        return feed[0] if feed else None
+    if feed and feed[0].lower() != labels[0].lower():
+        return "%s (recorded as: %s)" % (labels[0], feed[0])
+    return labels[0]
 
 
 def _is_schedule_ii(med: dict, names: list[str]) -> bool:
@@ -139,9 +171,10 @@ def build_transfer_request(medication_requests, to_pharmacy,
         if (med.get("status") or "active") != "active":
             continue
         names = medication_names(med)
+        shown = display_name(med) or "unnamed medication"
         if _is_schedule_ii(med, names):
             refused.append({
-                "name": names[0] if names else "unnamed medication",
+                "name": shown,
                 "reason": ("Schedule II medications cannot be transferred "
                            "between pharmacies under federal rules — a new "
                            "prescription from the prescriber is required."),
@@ -151,7 +184,7 @@ def build_transfer_request(medication_requests, to_pharmacy,
             refused.append({"name": "unnamed medication",
                             "reason": UNVERIFIABLE_REASON})
             continue
-        allowed.append({"name": names[0]})
+        allowed.append({"name": shown})
 
     if not allowed:
         return {"allowed": [], "refused": refused, "action_payload": None}

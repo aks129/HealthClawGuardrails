@@ -230,12 +230,22 @@ class TestScheduleIIIsNotKeyedOnFeedText:
         assert res["refused"][0]["reason"] == UNVERIFIABLE_REASON
 
     def test_our_own_label_names_a_recognised_code_first(self):
-        # RxNorm 6809 is Metformin in r6/terminology.py's static table; the
-        # feed's text is what the pharmacy would have been read otherwise.
+        # RxNorm 6809 is Metformin in r6/terminology.py's static table. The
+        # label identifies the drug; the feed's text is the order as written,
+        # so it rides along as "recorded as" rather than being dropped: the
+        # pharmacist needs the dose and form, and the person confirms the
+        # whole line.
         res = build_transfer_request(
-            [_coded("6809", text="the little white ones")], TO_PHARMACY)
+            [_coded("6809", text="Metformin 500 mg tablet twice daily")],
+            TO_PHARMACY)
+        assert [m["name"] for m in res["allowed"]] == [
+            "Metformin (recorded as: Metformin 500 mg tablet twice daily)"]
+        assert "500 mg" in res["action_payload"]["body"]
+
+    def test_a_label_that_matches_the_feed_is_not_repeated(self):
+        res = build_transfer_request([_coded("6809", text="metformin")],
+                                     TO_PHARMACY)
         assert [m["name"] for m in res["allowed"]] == ["Metformin"]
-        assert "Metformin" in res["action_payload"]["body"]
 
     def test_every_display_is_checked_not_only_the_first(self):
         med = _coded("999999", display="Something else")
