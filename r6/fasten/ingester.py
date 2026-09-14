@@ -120,6 +120,25 @@ def safe_skipped_type(resource: dict) -> str:
     return UNNAMED_SKIPPED_TYPE
 
 
+def safe_type_name(resource: dict) -> str:
+    """The name we are willing to return for ANY entry, stored or not.
+
+    The bundle path's per-entry error list names the entry's type back to
+    the caller for every outcome, including the ones a supported type can
+    reach (forbidden, invalid id, persistence failure), so the nameable set
+    is the stored types plus the skippable ones. Anything else is 'other':
+    a caller who put a name, a date of birth or 400 characters of prose in
+    `resourceType` gets it back as a count and an index, never as text
+    (#408, same rule as `safe_skipped_type` on the streaming path).
+    """
+    from r6.models import R6Resource
+    name = resource.get('resourceType')
+    if isinstance(name, str) and (R6Resource.is_supported_type(name)
+                                  or name in _NAMEABLE_SKIPPED_TYPES):
+        return name
+    return UNNAMED_SKIPPED_TYPE
+
+
 def skipped_type_summary(counts) -> str:
     """Render `Type:n` pairs, most-skipped first, bounded.
 

@@ -2340,7 +2340,7 @@ def ingest_bundle():
 
     # Reuse the same code path Fasten/SHC take — a change to ingest semantics
     # cannot silently diverge for the upload path — with honest provenance.
-    from r6.fasten.ingester import _ingest_one
+    from r6.fasten.ingester import _ingest_one, safe_type_name
 
     correlation_id = uuid.uuid4().hex[:12]
 
@@ -2356,7 +2356,7 @@ def ingest_bundle():
                            'message': 'entry.resource must be a JSON object'})
             continue
         resource = entry['resource']
-        rtype = resource.get('resourceType') or ''
+        rtype = safe_type_name(resource)  # code-owned, never quoted (#408)
         # SAVEPOINT per entry — a driver-level failure on this row is
         # rolled back inside the savepoint, so previous flushed rows in
         # the outer transaction remain and the reported `ingested` count
@@ -2391,8 +2391,8 @@ def ingest_bundle():
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,
                            'code': 'forbidden_type',
-                           'message': f'{rtype!r} may not be authored via '
-                                      'direct upload'})
+                           'message': 'This resource type may not be '
+                                      'authored via direct upload'})
         elif result == 'invalid_id':
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,
@@ -2403,7 +2403,7 @@ def ingest_bundle():
             skipped += 1
             errors.append({'index': idx, 'resourceType': rtype,
                            'code': 'unsupported_resource_type',
-                           'message': f'{rtype!r} is not a supported type'})
+                           'message': 'Not a supported resource type'})
 
     try:
         db.session.commit()
