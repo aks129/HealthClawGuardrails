@@ -536,6 +536,22 @@ def decline_action(action_id):
         extra_criteria=[ProposedAction.expires_at > _utcnow()])
     db.session.refresh(action)
     if not moved:
+        if action.status == 'awaiting_confirmation':
+            # Still awaiting means the expiry predicate refused the claim
+            # (the window lapsed between the snapshot check and the UPDATE):
+            # flip it, guarded, and report the timeout, mirroring confirm.
+            lapsed = transition_action(
+                action_id, from_states=('awaiting_confirmation',),
+                to_state='expired', actor='decline',
+                detail='approval window lapsed')
+            db.session.refresh(action)
+            if lapsed:
+                add_audit_event(
+                    'update', resource_type='ProposedAction',
+                    resource_id=action_id,
+                    agent_id=request.headers.get('X-Agent-Id'),
+                    tenant_id=tenant_id, detail='approval window lapsed')
+                db.session.commit()
         if action.status == 'expired':
             return _error(410, 'Approval window lapsed; nothing to decline')
         return _error(409, 'Action is %s, not awaiting_confirmation'
