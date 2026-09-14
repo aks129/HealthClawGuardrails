@@ -16,6 +16,7 @@ source is always traceable.
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -976,6 +977,73 @@ def persist_curation_state(
 # Fix application (writes to DB)                                      #
 # ------------------------------------------------------------------ #
 
+# What a data-quality fix may touch, per type: the elements the evaluator
+# above can propose an issue on, and nothing else (#739). A path outside
+# this vocabulary is not a data-quality fix, whatever the card said; the
+# apply side used to walk any dot path and create what was missing, so an
+# approved "fix" could rewrite `subject.reference`, `id`, `meta` or
+# `extension`. The linkage fields (`subject`, `patient`) are the evaluator's
+# too, but only as MISSING: a record that already names its patient is not
+# re-pointed under a fix label.
+FIXABLE_ROOTS = {
+    "Condition": frozenset({"code", "subject", "clinicalStatus",
+                            "verificationStatus", "category", "onsetDateTime",
+                            "recordedDate"}),
+    "AllergyIntolerance": frozenset({"code", "patient", "clinicalStatus",
+                                     "verificationStatus", "reaction"}),
+    "MedicationRequest": frozenset({"status", "intent",
+                                    "medicationCodeableConcept"}),
+    "Immunization": frozenset({"status", "vaccineCode",
+                               "occurrenceDateTime"}),
+    "Procedure": frozenset({"status", "code"}),
+    "DiagnosticReport": frozenset({"status", "code"}),
+}
+_LINKAGE_ROOTS = frozenset({"subject", "patient"})
+_PATIENT_REF = re.compile(r"^Patient/[A-Za-z0-9\-.]{1,255}$")
+
+
+def _fix_root(field_path: str) -> str:
+    """The first element of a fix path with the resource-type prefix and any
+    index stripped: ``Condition.code.coding[0].display`` -> ``code``."""
+    parts = [p for p in str(field_path or "").split(".") if p]
+    if parts and parts[0][:1].isupper():
+        parts = parts[1:]
+    if not parts:
+        return ""
+    return parts[0].split("[", 1)[0]
+
+
+def fix_refusal(resource_type: str, current: dict, fixes: list,
+                tenant_id: str) -> str | None:
+    """Why this set of fixes is refused as a whole, or None when every fix is
+    one the evaluator could have proposed. Checked before any mutation, so a
+    refusal applies nothing."""
+    roots = FIXABLE_ROOTS.get(resource_type)
+    if roots is None:
+        return f"{resource_type} has no data-quality fixes"
+    for fix in fixes or ():
+        if not isinstance(fix, dict):
+            return "each fix must be an object"
+        root = _fix_root(fix.get("field_path"))
+        if root not in roots:
+            return ("fix outside the data-quality vocabulary for "
+                    f"{resource_type}: {root or '(empty path)'}")
+        if root in _LINKAGE_ROOTS:
+            if current.get(root):
+                return f"{root} is already set; a fix does not re-point a record"
+            value = fix.get("new_value")
+            ref = value.get("reference") if isinstance(value, dict) else value
+            if not isinstance(ref, str) or not _PATIENT_REF.fullmatch(ref):
+                return f"{root} must be a Patient/<id> reference"
+            from r6.models import R6Resource
+            exists = R6Resource.query.filter_by(
+                resource_type="Patient", id=ref.split("/", 1)[1],
+                tenant_id=tenant_id, is_deleted=False).first()
+            if exists is None:
+                return f"{root} must name a Patient in this tenant"
+    return None
+
+
 def apply_fix(
     resource_type: str,
     resource_id: str,
@@ -1010,6 +1078,10 @@ def apply_fix(
         return {"error": f"{resource_type}/{resource_id} not found"}
 
     fhir_json = json.loads(resource.resource_json)
+    refusal = fix_refusal(resource_type, fhir_json, approved_fixes, tenant_id)
+    if refusal:
+        return {"error": refusal, "refused": True,
+                "fixes_attempted": len(approved_fixes or ())}
     changes_applied = []
 
     for fix in approved_fixes:
