@@ -172,6 +172,7 @@ def _setup_fasten_connection(app):
 # POST /r6/actions/rx-transfer/propose     |  x  | x | x  | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/commit             |  x  | x |    | x  |    |      |  x   |  x
 # POST /r6/actions/<id>/confirm            |  x  | x |    | x  | x  |      |  x   |  x
+# POST /r6/actions/<id>/decline            |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/<id>/approval-token     |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/actions/<id>/review             |  x  | x |    | x  | x  |      |  x   |  x
 # POST /r6/actions/callback/<provider>     |     |   |    |    |    |  x   |  x   |  x
@@ -400,6 +401,20 @@ MATRIX: tuple = (
              "only through the internal-secret approval-token endpoint. This "
              "is the gate CLAUDE.md contrasts with the spoofable "
              "X-Human-Confirmed header.",
+    ),
+    Row(
+        id="actions-decline",
+        method="POST", path="/r6/actions/{action_id}/decline",
+        endpoint="actions.decline_action",
+        guards=frozenset({TENANT_HEADER, TENANT_FORMAT, STEP_UP, HITL,
+                          TENANT_FILTER, AUDIT}),
+        anon_refusal=(400,), step_up_missing_status=401,
+        body={"declined_via": "dashboard"},
+        note="The human's explicit no (#520), on the same single-use, "
+             "action-bound, payload-bound credential as confirm, so only the "
+             "surface that showed the card can record the answer and a "
+             "declined credential cannot be replayed to approve. Mutates "
+             "status only, to a terminal state; nothing executes.",
     ),
     Row(
         id="actions-approval-token",

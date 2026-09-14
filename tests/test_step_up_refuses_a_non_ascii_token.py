@@ -132,6 +132,8 @@ ROWS = [
         'POST', '/r6/actions/no-such-action/commit', 401, body={}),
     Row('actions-confirm', 'r6/actions/routes.py:confirm_action',
         'POST', '/r6/actions/no-such-action/confirm', 401, body={}),
+    Row('actions-decline', 'r6/actions/routes.py:decline_action',
+        'POST', '/r6/actions/no-such-action/decline', 401, body={}),
     Row('actions-review-get', 'r6/actions/review.py:_require_step_up',
         'GET', '/r6/actions/no-such-action/review', 401),
     Row('actions-review-post', 'r6/actions/review.py:_require_step_up',
