@@ -549,3 +549,60 @@ def test_the_marker_never_reaches_the_pdf():
     text = " ".join(getattr(el, "text", "") for el in rendered)
     assert "peanut" in text
     assert "a-one" not in text and POPULATED_ROW_SOURCE_URL not in text
+
+
+# ---------------------------------------------------------------------------
+# D10 bullet 5, decided on #570: the tool stays, and every populated answer
+# says where it came from, scalars included. #719 covered the repeating rows;
+# these cover the demographics and a code-matched observation.
+# ---------------------------------------------------------------------------
+
+def test_every_populated_scalar_answer_names_the_patient_it_came_from():
+    """MUTATION: r6/sdc/populate.py, drop the extension on scalar answers
+    -> red."""
+    q = intake_questionnaire()
+    qr, _issues = populate_questionnaire(q, PATIENT, [])
+    family = _all_by_link_id(qr, "demographics.family-name")
+    assert len(family) == 1
+    assert family[0]["answer"][0]["valueString"] == "Lovelace"
+    assert _source_of(family[0]) == "Patient/p1"
+    dob = _all_by_link_id(qr, "demographics.birth-date")
+    assert dob and _source_of(dob[0]) == "Patient/p1"
+
+
+def test_an_unpopulated_leaf_carries_no_marker():
+    """Absence means typed-or-empty, never "we forgot": an item nothing
+    resolved has no answer and no source."""
+    q = intake_questionnaire()
+    patient = {"resourceType": "Patient", "id": "p1"}
+    qr, _issues = populate_questionnaire(q, patient, [])
+    family = _all_by_link_id(qr, "demographics.family-name")
+    assert family and "answer" not in family[0]
+    assert _source_of(family[0]) is None
+
+
+def test_a_code_matched_answer_names_the_observation():
+    q = {"resourceType": "Questionnaire", "status": "active", "item": [
+        {"linkId": "weight", "type": "quantity",
+         "code": [{"system": "http://loinc.org", "code": "29463-7"}]}]}
+    obs = {"resourceType": "Observation", "id": "obs-w1", "status": "final",
+           "code": {"coding": [{"system": "http://loinc.org",
+                                "code": "29463-7"}]},
+           "effectiveDateTime": "2026-09-01",
+           "valueQuantity": {"value": 70, "unit": "kg"}}
+    qr, _issues = populate_questionnaire(q, PATIENT, [obs])
+    weight = _all_by_link_id(qr, "weight")
+    assert weight and weight[0]["answer"][0]["valueQuantity"]["value"] == 70
+    assert _source_of(weight[0]) == "Observation/obs-w1"
+
+
+def test_the_scalar_marker_never_reaches_the_pdf():
+    from reportlab.lib.styles import getSampleStyleSheet
+    from r6.sdc.pdf import _render_items
+    from r6.sdc.populate import POPULATED_ROW_SOURCE_URL
+    q = intake_questionnaire()
+    qr, _issues = populate_questionnaire(q, PATIENT, [])
+    rendered = _render_items(qr["item"], {}, getSampleStyleSheet(), 0)
+    text = " ".join(getattr(el, "text", "") for el in rendered)
+    assert "Lovelace" in text
+    assert "Patient/p1" not in text and POPULATED_ROW_SOURCE_URL not in text
