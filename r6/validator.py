@@ -327,7 +327,9 @@ class R6Validator:
 
         has_errors = any(i['severity'] in ('error', 'fatal') for i in issues)
 
-        if not issues:
+        # On every ACCEPTED resource, not only a clean one: a warning (#485)
+        # must not cost the caller the disclosure of what was not examined.
+        if not has_errors:
             issues.append({
                 'severity': 'information',
                 'code': 'informational',
@@ -370,6 +372,22 @@ class R6Validator:
                 'code': 'required',
                 'diagnostics': 'Observation.code is required',
                 'expression': ['Observation.code']
+            })
+        # Decided on #485 (option 2): an Observation with no effective[x] is
+        # accepted and told so. A reading with no time cannot be trended,
+        # compared to a threshold, or shown to a clinician with the one
+        # piece of context that makes it meaningful, and US Core requires it
+        # for laboratory results; but rejecting is a wire-contract change
+        # with no deprecation window for callers that omit it today. The
+        # warning makes the gap visible the way #484 made coverage visible.
+        if not any(key.startswith('effective') for key in resource):
+            issues.append({
+                'severity': 'warning',
+                'code': 'incomplete',
+                'diagnostics': ('Observation has no effective[x]: an undated '
+                                'reading is accepted but cannot be trended, '
+                                'compared or dated for a clinician'),
+                'expression': ['Observation.effective[x]']
             })
         return issues
 
