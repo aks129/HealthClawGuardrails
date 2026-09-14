@@ -35,6 +35,8 @@ _SEARCH_PARAMETER_SPECS = (
      'documentation': 'count'},
     {'name': 'context-id', 'type': 'token',
      'documentation': 'Filter by local context envelope'},
+    {'name': '_id', 'type': 'token',
+     'documentation': 'Filter by resource id'},
 )
 _SUPPORTED_SEARCH_PARAMS = frozenset(
     spec['name'] for spec in _SEARCH_PARAMETER_SPECS)

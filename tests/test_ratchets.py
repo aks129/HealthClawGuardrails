@@ -408,7 +408,10 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: 3917 -> 3916 (kernel slice 7c).
 #: 3915 -> 3870: the exempt discovery paths moved to r6/discovery_paths.py, then
 #: the resource routes stopped being candidates for them (#591).
-_GOD_MODULE_LINES = 3870
+#: 3870 -> 3761: path ids moved to r6/resource_ids.py (#726) and the search
+#: error-fidelity contract to r6/search_fidelity.py (#730); the _id filter
+#: and the proxy write redaction came back in (#380).
+_GOD_MODULE_LINES = 3761
 
 
 def test_the_god_module_only_shrinks():
