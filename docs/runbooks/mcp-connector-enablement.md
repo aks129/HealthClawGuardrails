@@ -130,3 +130,55 @@ returns the MCP audience to the demo tenant. Neither step opens anything.
   refusal keeps refusing until its cache expires.
 - CareAgents' consent page shows only connection labels, provider names and
   the client's name. It never shows records.
+
+## 7. Third-party agent harnesses are clients, not surfaces
+
+Reviewed 13 September 2026: the OpenAI Agents API (public beta, 10 Sep),
+xAI's Grok Bot (early beta, 11 Aug) and Meta's Muse (8 Sep). None needs a
+new server. Each consumes the same Streamable HTTP endpoint with the same
+bearer or OAuth token, and every call still passes redaction, audit,
+step-up and the human gate on our side. What differs between them is how
+they hold the credential, how they surface approvals, and where the
+returned data goes afterwards. Those three things decide which tenant
+class each may see.
+
+| Harness | Reaches us how | Holds the credential | Approval model | Data after it leaves us |
+|---|---|---|---|---|
+| OpenAI Agents API | `type: mcp`, HTTP transport, `connection_origin: service` | Inline `transport.authorization` (encrypted, not echoed) or a reusable vault | Developer-defined; the harness sees our "pending approval" and waits | Session state retained by OpenAI; US residency only; **no ZDR**, and a self-hosted sandbox does not change that |
+| Grok Bot | Remote MCP over the public internet only | On a cloud computer that **all of one user's bots share** | Prompt rules plus "Auto Review" | Not stated in the public material |
+| Meta Muse | "Credentials the user provides" for a public API, or its own browser against the consumer app | A Sentinel agent injects the real secret at the network boundary; the agent sees a placeholder | Sentinel approves every connector action; sensitive actions pause for the user | Stated not shared with ads systems; no MCP and no third-party connector program yet |
+
+The Agents API tool block, for the walkthrough in §4 run from there instead
+of claude.ai:
+
+```json
+{
+  "type": "mcp",
+  "server_label": "healthclaw",
+  "transport": {
+    "type": "http",
+    "server_url": "https://mcp.healthclaw.io/mcp",
+    "authorization": "Bearer <token from the consent flow>"
+  },
+  "connection_origin": "service",
+  "required": true
+}
+```
+
+Rules that follow from the table:
+
+- **Real-records tenants stay off every harness that retains session state
+  without ZDR** until a BAA covers it. Synthetic tenants and the supervised
+  beta (#718) are fine today. This is the same ruling the claude.ai
+  connector needs; it is tracked on #701, not here.
+- **No static deployment token goes into a harness vault or onto a shared
+  cloud computer.** The OAuth path is the credential for these surfaces:
+  per-agent, short-lived, revocable from the consent page. Long sessions
+  ("days") outlive a step-up token by design; the refresh token (#698) is
+  what keeps them alive, and revoking it is what ends them.
+- **A harness's own approval controls are not our human gate.** They are
+  welcome, but the action rail's approval endpoint is the mechanism; a
+  harness that skips its own prompt still cannot commit a clinical write.
+- **The browser path is the one to watch.** An agent driving the consumer
+  app through a signed-in browser reads what that account can read. The
+  consumer app's own consent and beta flags govern that, not this runbook.
