@@ -438,7 +438,7 @@ def create_resource(resource_type):
                                agent_id=request.headers.get('X-Agent-Id'),
                                tenant_id=tenant_id,
                                detail='source=upstream')
-            result = add_disclaimer(result, resource_type)
+            result = add_disclaimer(apply_redaction(result), resource_type)  # #380
             result['_source'] = 'upstream'
             response = jsonify(result)
             response.status_code = status_code
@@ -622,7 +622,7 @@ def update_resource(resource_type, resource_id):
                                agent_id=request.headers.get('X-Agent-Id'),
                                tenant_id=tenant_id,
                                detail='source=upstream')
-            result = add_disclaimer(result, resource_type)
+            result = add_disclaimer(apply_redaction(result), resource_type)  # #380
             result['_source'] = 'upstream'
             return jsonify(result)
         # Upstream rejected the update — audit the failure and surface the
@@ -903,6 +903,12 @@ def search_resources(resource_type):
                 R6Resource.resource_json.contains(f'"reference": "{patient_ref}"'),
             )
         )
+
+    # --- _id filter: the row itself, so a search-by-id proves which row it
+    # found rather than passing because every row came back ---
+    id_param = request.args.get('_id')
+    if id_param:
+        query = query.filter(R6Resource.id == id_param)
 
     # --- code filter (matches code.coding[].code in JSON) ---
     code_param = request.args.get('code')
