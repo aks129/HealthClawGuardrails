@@ -1083,3 +1083,27 @@ def test_decline_never_claims_the_answer_was_recorded_without_seeing_it(page):
     block = _block(body, "res.status === 200 && res.b.declined === true")
     assert sentence.split(" and ")[0] in _as_printed(block)
     assert _as_printed(body).count(sentence.split(" and ")[0]) == 1
+
+
+def test_every_element_the_handler_dereferences_exists_on_the_page(page):
+    """The shared handler runs on two pages with different forms. An
+    element it reaches for and uses in the same expression —
+    `form.querySelector('#nka').checked` — throws on the page without that
+    element, before `fetch` is called, and the button silently does nothing.
+    A lookup assigned to a variable and null-checked is fine.
+
+    MUTATION: in _review_handlers.html, `if (nka && nka.checked)` ->
+    `if (nka.checked)` with `var nka = form.querySelector('#nka')` inlined
+    back into the expression -> red on action_approve.html.
+    """
+    code = _code_only(page)
+    dereferenced = set()
+    for m in re.finditer(
+            r"(?:getElementById\('([\w-]+)'\)|querySelector\('#([\w-]+)'\))\s*\.",
+            code):
+        dereferenced.add(m.group(1) or m.group(2))
+    present = set(re.findall(r'\bid="([\w-]+)"', page))
+    missing = sorted(dereferenced - present)
+    assert not missing, (
+        "the handler dereferences elements this page does not have: %s"
+        % missing)
