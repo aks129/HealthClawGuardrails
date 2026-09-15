@@ -48,10 +48,10 @@ class _Resp:
 
 def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
               demo_patients=None, landing='<a href="/auth">start</a>',
-              home=None):
+              home=None, flask_build="c937c180319c"):
     def get(url, timeout, **kw):
         if url.endswith("/r6/fhir/health"):
-            return _Resp(200)
+            return _Resp(200, {"status": "healthy", "build": flask_build})
         if "$conformance" in url:
             return _Resp(200, {"grade": grade})
         if "Patient" in url:
@@ -689,7 +689,7 @@ def _payload_for(code: int) -> dict:
     import argparse
     import json as _json
     ns = argparse.Namespace(timeout=1.0, json=False, json_out=None,
-                            expect_sha=["a" * 40])
+                            expect_sha=["a" * 40], expect_flask_sha=[])
     real_run, real_parse = prod_watch.run, argparse.ArgumentParser.parse_args
     written = {}
     try:
@@ -796,8 +796,8 @@ def test_the_scheduled_run_still_pins_the_build_it_alarms_about():
     # `asserted` is false so nothing can close it, and prod_watch never returns
     # 2 so the independent trigger never fires either. Everything stays green.
     # The same class of hole as dropping `--json-out`, which is already pinned.
-    assert 'EXPECT="--expect-sha $TIP"' in WORKFLOW
-    assert 'EXPECT="$EXPECT --expect-sha $sha"' in WORKFLOW
+    assert 'EXPECT="--expect-sha $TIP --expect-flask-sha $TIP"' in WORKFLOW
+    assert 'EXPECT="$EXPECT --expect-sha $sha --expect-flask-sha $sha"' in WORKFLOW
 
 
 def test_the_workflow_only_reads_fields_the_script_actually_writes(
@@ -1008,3 +1008,47 @@ def test_the_fingerprint_is_the_failing_set_not_its_details():
     assert "c.ok !== true).map(c => c.name)" in WORKFLOW, (
         "the outage fingerprint should be built from failing check NAMES")
     assert "checks:${failingNames}" in WORKFLOW
+
+
+# --- the Flask build (#745, #703 §0) ------------------------------------------
+
+FLASK_TIP = "c937c180319c8f1e2a4b6d0e9f3c5a7b1d2e4f60"
+
+
+def test_the_flask_build_is_reported_not_asserted_without_an_expectation():
+    assert prod_watch.run(1.0, [TIP]) == 0
+    assert _named(prod_watch.FLASK_BUILD_CHECK) == []
+    assert prod_watch.FLASK_BUILD_CHECK in prod_watch.reported
+
+
+def test_an_expected_flask_build_passes():
+    assert prod_watch.run(1.0, [TIP], [FLASK_TIP]) == 0
+    (_, ok, detail), = _named(prod_watch.FLASK_BUILD_CHECK)
+    assert ok is True and "c937c180319c" in detail
+
+
+def test_a_stale_flask_build_exits_2_and_says_it_auto_deploys():
+    assert prod_watch.run(1.0, [TIP], ["0" * 40]) == 2
+    (_, ok, detail), = _named(prod_watch.FLASK_BUILD_CHECK)
+    assert ok is False
+    assert "c937c180319c" in detail and "auto-deploys" in detail
+    assert "0000000" in detail
+
+
+def test_an_unknown_flask_build_is_never_accepted(monkeypatch):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(flask_build="unknown"))
+    assert prod_watch.run(1.0, [TIP], [FLASK_TIP]) == 2
+
+
+def test_a_flask_health_without_a_marker_is_never_accepted(monkeypatch):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(flask_build=None))
+    assert prod_watch.run(1.0, [TIP], [FLASK_TIP]) == 2
+    (_, ok, detail), = _named(prod_watch.FLASK_BUILD_CHECK)
+    assert ok is False and "unreadable" in detail
+
+
+def test_a_stale_flask_build_is_not_an_outage(monkeypatch):
+    # Exit 2 (stale), never 1: the outage alarm must not learn to fire on it.
+    assert prod_watch.run(1.0, [TIP], ["0" * 40]) == 2
+    monkeypatch.setattr(prod_watch, "get", _fake_get(grade="B"))
+    assert prod_watch.run(1.0, [TIP], ["0" * 40]) == 1

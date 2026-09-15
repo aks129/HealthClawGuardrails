@@ -192,7 +192,8 @@ def test_an_unasserted_check_counts_as_decided_not_as_missing(capsys):
     assert prod_watch.BUILD_CHECK in prod_watch.reported
     assert prod_watch.BUILD_CHECK not in {n for n, _, _ in prod_watch.results}
     out = capsys.readouterr().out
-    assert "1 reported without assertion" in out
+    # Two since #745: the Flask build is reported the same way.
+    assert "2 reported without assertion" in out
     assert "all accounted for" in out
 
 
@@ -296,7 +297,9 @@ def test_a_complete_run_still_closes_it(monkeypatch, tmp_path):
     code, payload = _payload(monkeypatch, tmp_path, ["--expect-sha", TIP])
     assert code == 0
     assert payload["complete"] is True and payload["hard_ok"] is True
-    assert payload["missing"] == [] and payload["reported"] == []
+    assert payload["missing"] == []
+    # Only the Flask build is unasserted here: no --expect-flask-sha given.
+    assert payload["reported"] == [prod_watch.FLASK_BUILD_CHECK]
 
 
 def test_a_stale_build_alone_still_closes_the_outage_alarm(monkeypatch,
