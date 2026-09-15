@@ -160,3 +160,18 @@ def test_the_plan_never_touches_the_record_it_was_given():
 def test_more_than_twenty_fixes_is_refused():
     with pytest.raises(FixRefused):
         plan_fixes("Condition", _record(), [GOOD] * 21, "t")
+
+
+def test_a_null_is_refused_as_a_removal_not_as_a_wrong_shape(app, tenant_id, seeded):
+    result = _apply(app, tenant_id, [GOOD, BAD_CASES["null-value"]])
+    assert result["refused"] is True
+    assert "removing a field is not an operation" in result["error"]
+
+
+def test_the_summary_is_the_normalised_path_not_the_submitted_spelling(
+        app, tenant_id, seeded):
+    result = _apply(app, tenant_id, [{"field_path": "Condition.clinicalStatus.coding[00].code",
+                                      "new_value": "resolved"}])
+    assert "error" not in result, result
+    assert result["change_summary"] == "Condition.clinicalStatus.coding[0].code updated"
+    assert "[00]" not in json.dumps(result["provenance"])
