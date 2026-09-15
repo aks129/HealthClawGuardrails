@@ -202,3 +202,47 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
 - Seed demo data: `POST /r6/fhir/internal/seed`
 - Guardrail scorecard: `GET /r6/fhir/$conformance?format=text`
 - Skill discovery index: `GET /.well-known/agent-skills/index.json`
+
+## A local CareAgents stack, for the acceptance script
+
+`scripts/beta_acceptance.py` (#749) drives the signed-in sample-record
+journey. Against a local stack it reads the one-time code from the
+CareAgents log, so nothing needs a real inbox. Three processes, three
+terminals, all from the repo root; every value below is local-only:
+
+```bash
+# 1. the engine (SQLite), on a port that does not collide with AirPlay
+export SQLALCHEMY_DATABASE_URI=sqlite:////tmp/hc-local/engine.db
+export INTERNAL_TOKEN_MINT_SECRET=local-mint STEP_UP_SECRET=local-step-up-secret-32chars-long
+PORT=5099 uv run flask --app main init-db && PORT=5099 uv run python main.py
+
+# 2. CareAgents web — the Flask dev server, not gunicorn (see below)
+export CARE_ENV=development CARE_DATABASE_URL=sqlite:////tmp/hc-local/careagents.db
+export CARE_SESSION_SECRET=local-session-secret-at-least-32-chars
+export HEALTHCLAW_BASE=http://127.0.0.1:5099 HEALTHCLAW_PUBLIC_BASE=http://127.0.0.1:5099
+export HEALTHCLAW_MINT_SECRET=local-mint CARE_ORIGIN=http://127.0.0.1:8600
+export RESEND_API_KEY= TELEGRAM_BOT_TOKEN=          # see the second trap
+uv run flask --app careagents.wsgi:app run --port 8600 2>&1 | tee /tmp/hc-local/careagents.log
+
+# 3. the run worker (chat turns are durable runs; without it /api/chat is 503)
+uv run python -m careagents.worker
+
+uv run python scripts/beta_acceptance.py --base http://127.0.0.1:8600 \
+    --code-log /tmp/hc-local/careagents.log
+```
+
+Two traps, both found 2026-09-15:
+
+- **gunicorn dies at the first request on macOS** (`objc ... fork()` then
+  `Worker was sent SIGKILL`). The dev server is fine locally; production is
+  Linux. `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` is the other way out.
+- **The Flask CLI auto-loads `.env`.** A checkout with a real `RESEND_API_KEY`
+  in `.env` will send the sign-in code as a real email (to `example.com`, a
+  422 from Resend, and a 502 from `/api/auth/email`). Export the variable
+  empty — a set-but-empty value wins over `.env` — and `mail.send_code` logs
+  the code instead. The same applies to any other live credential in `.env`.
+
+The chat turn needs a model key (`OPENAI_API_KEY` or the Anthropic one); with
+none, or a rate-limited one, the script records that step as `UNAVAILABLE`
+and the sourced-answer checks do not run — that is the honest result, not a
+pass.
