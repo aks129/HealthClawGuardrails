@@ -146,6 +146,7 @@ jobs:
             tests/test_audit_transactions.py \
             tests/test_curatr_one_transaction.py \
             tests/test_curatr_complete_set_or_refuse.py \
+            tests/test_curatr_conditional_write.py \
             -v --tb=short
 
   node-tests:
