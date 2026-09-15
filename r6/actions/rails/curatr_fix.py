@@ -31,7 +31,7 @@ import os
 
 from r6.actions import errors
 from r6.actions.registry import ExecutionResult, register_executor
-from r6.curatr import FIXABLE_ROOTS, _fix_root, apply_fix
+from r6.curatr import FIXABLE_ROOTS, FixRefused, _parse_fix, apply_fix
 from r6.resource_ids import _PATH_RESOURCE_ID_PATTERN
 
 FLAG = 'CURATR_FIX_RAIL_ENABLED'
@@ -66,13 +66,13 @@ def _spec_errors(payload):
     fixes = spec.get('fixes')
     if not isinstance(fixes, list) or not fixes or len(fixes) > MAX_FIXES:
         return [errors.PAYLOAD_INVALID]
-    for fix in fixes:
-        if not isinstance(fix, dict) or 'new_value' not in fix:
-            return [errors.PAYLOAD_INVALID]
-        path = fix.get('field_path')
-        if not isinstance(path, str) or not path.startswith(rtype + '.'):
-            return [errors.PAYLOAD_INVALID]
-        if _fix_root(path) not in roots:
+    # The same grammar the executor applies, minus what needs the record
+    # (index bounds, linkage). A fix the evaluator could not have proposed
+    # is refused here, before a person is asked to approve it.
+    for n, fix in enumerate(fixes, start=1):
+        try:
+            _parse_fix(n, rtype, fix)
+        except FixRefused:
             return [errors.PAYLOAD_INVALID]
     return []
 

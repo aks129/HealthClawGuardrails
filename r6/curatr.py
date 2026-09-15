@@ -14,6 +14,7 @@ Fixes are applied with a linked FHIR Provenance resource so the original
 source is always traceable.
 """
 
+import copy
 import json
 import logging
 import re
@@ -987,8 +988,8 @@ def persist_curation_state(
 # re-pointed under a fix label.
 FIXABLE_ROOTS = {
     "Condition": frozenset({"code", "subject", "clinicalStatus",
-                            "verificationStatus", "category", "onsetDateTime",
-                            "recordedDate"}),
+                            "verificationStatus", "category",
+                            "onsetDateTime", "recordedDate"}),
     "AllergyIntolerance": frozenset({"code", "patient", "clinicalStatus",
                                      "verificationStatus", "reaction"}),
     "MedicationRequest": frozenset({"status", "intent",
@@ -1000,6 +1001,41 @@ FIXABLE_ROOTS = {
 }
 _LINKAGE_ROOTS = frozenset({"subject", "patient"})
 _PATIENT_REF = re.compile(r"^Patient/[A-Za-z0-9\-.]{1,255}$")
+
+# The shape of every fix the evaluator can propose, by root (#413 P1-B).
+# A path is `Type.root`, optionally `.coding`, `.coding[i]`,
+# `.coding[i].leaf`; which of those a root admits, and what value each
+# admits, is fixed here in code. Anything else is refused as a whole, before
+# any mutation, and the refusal names the fix by position — never by the
+# text that was submitted.
+_CODEABLE_ROOTS = frozenset({"code", "clinicalStatus", "verificationStatus",
+                             "vaccineCode", "medicationCodeableConcept"})
+_TOKEN_ROOTS = frozenset({"status", "intent"})
+_DATE_ROOTS = frozenset({"onsetDateTime", "recordedDate",
+                         "occurrenceDateTime"})
+_CODING_LEAVES = frozenset({"system", "code", "display"})
+_CODING_KEYS = _CODING_LEAVES
+_REACTION_KEYS = frozenset({"substance", "manifestation", "severity"})
+_REACTION_SEVERITY = frozenset({"mild", "moderate", "severe"})
+_PATH_RE = re.compile(
+    r"^(?P<type>[A-Z][A-Za-z]+)\.(?P<root>[a-zA-Z]+)"
+    r"(?P<coding>\.coding(?:\[(?P<idx>\d{1,3})\]"
+    r"(?:\.(?P<leaf>[a-zA-Z]+))?)?)?$")
+_DATE_RE = re.compile(
+    r"^\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?"
+    r"(Z|[+-]\d{2}:\d{2})?)?)?)?$")
+_MAX_STRING = 512
+_MAX_TOKEN = 64
+_MAX_FIXES = 20
+
+
+class FixRefused(Exception):
+    """The whole set is refused; ``reason`` is code-owned text that names a
+    fix by position and a vocabulary word, never submitted content."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _fix_root(field_path: str) -> str:
@@ -1013,34 +1049,177 @@ def _fix_root(field_path: str) -> str:
     return parts[0].split("[", 1)[0]
 
 
-def fix_refusal(resource_type: str, current: dict, fixes: list,
-                tenant_id: str) -> str | None:
-    """Why this set of fixes is refused as a whole, or None when every fix is
-    one the evaluator could have proposed. Checked before any mutation, so a
-    refusal applies nothing."""
+def _is_text(value, limit=_MAX_STRING):
+    return (isinstance(value, str) and 0 < len(value) <= limit
+            and value.isprintable())
+
+
+def _is_coding(value):
+    return (isinstance(value, dict) and value
+            and set(value) <= _CODING_KEYS
+            and _is_text(value.get("code"))
+            and all(_is_text(v) for v in value.values()))
+
+
+def _is_codeable(value):
+    # No `text`: free text on a coded element is the field the redacting
+    # read strips, and a fix must not become the way it gets written.
+    return (isinstance(value, dict) and set(value) == {"coding"}
+            and isinstance(value["coding"], list) and value["coding"]
+            and all(_is_coding(c) for c in value["coding"]))
+
+
+def _is_reaction(value):
+    if not isinstance(value, dict) or not value or not set(value) <= _REACTION_KEYS:
+        return False
+    if "substance" in value and not _is_codeable(value["substance"]):
+        return False
+    if "manifestation" in value and not (
+            isinstance(value["manifestation"], list) and value["manifestation"]
+            and all(_is_codeable(m) for m in value["manifestation"])):
+        return False
+    if "severity" in value and value["severity"] not in _REACTION_SEVERITY:
+        return False
+    return True
+
+
+def _parse_fix(n, resource_type, fix):
+    """(root, coding?, idx?, leaf?, value) for one fix, or FixRefused."""
     roots = FIXABLE_ROOTS.get(resource_type)
     if roots is None:
-        return f"{resource_type} has no data-quality fixes"
-    for fix in fixes or ():
-        if not isinstance(fix, dict):
-            return "each fix must be an object"
-        root = _fix_root(fix.get("field_path"))
-        if root not in roots:
-            return ("fix outside the data-quality vocabulary for "
-                    f"{resource_type}: {root or '(empty path)'}")
+        raise FixRefused(f"{resource_type} has no data-quality fixes")
+    if not isinstance(fix, dict):
+        raise FixRefused(f"fix {n} is not an object")
+    if "new_value" not in fix or fix.get("new_value") is None:
+        raise FixRefused(f"fix {n} carries no value; removing a field is not "
+                         "an operation in the data-quality vocabulary")
+    m = _PATH_RE.match(fix.get("field_path") or "") if isinstance(
+        fix.get("field_path"), str) else None
+    if m is None or m.group("type") != resource_type:
+        raise FixRefused(f"fix {n} is not a path on {resource_type}")
+    root = m.group("root")
+    if root not in roots:
+        raise FixRefused(f"fix {n} is outside the data-quality vocabulary for "
+                         f"{resource_type}")
+    coding = bool(m.group("coding"))
+    idx = int(m.group("idx")) if m.group("idx") is not None else None
+    leaf = m.group("leaf")
+    value = fix["new_value"]
+    if coding and root not in _CODEABLE_ROOTS:
+        raise FixRefused(f"fix {n}: {root} has no codings")
+    if leaf is not None and leaf not in _CODING_LEAVES:
+        raise FixRefused(f"fix {n}: not a coding field")
+
+    if root in _CODEABLE_ROOTS:
+        if leaf is not None:
+            ok = _is_text(value)
+        elif idx is not None:
+            ok = _is_coding(value)
+        elif coding:
+            ok = (isinstance(value, list) and value
+                  and all(_is_coding(c) for c in value))
+        else:
+            ok = _is_codeable(value)
+    elif root in _TOKEN_ROOTS:
+        ok = _is_text(value, _MAX_TOKEN) and " " not in value
+    elif root in _DATE_ROOTS:
+        ok = isinstance(value, str) and bool(_DATE_RE.match(value))
+    elif root in _LINKAGE_ROOTS:
+        ref = value.get("reference") if isinstance(value, dict) else value
+        ok = ((not isinstance(value, dict) or set(value) == {"reference"})
+              and isinstance(ref, str) and bool(_PATIENT_REF.fullmatch(ref)))
+        value = {"reference": ref} if ok else value
+    elif root == "category":
+        ok = (isinstance(value, list) and value
+              and all(_is_codeable(c) for c in value))
+    elif root == "reaction":
+        ok = (isinstance(value, list) and value
+              and all(_is_reaction(r) for r in value))
+    else:  # pragma: no cover — every root above is classified
+        ok = False
+    if not ok:
+        raise FixRefused(f"fix {n}: the value is not the right shape for "
+                         f"{root}")
+    return root, coding, idx, leaf, value
+
+
+def _normal_path(resource_type, root, coding, idx, leaf):
+    path = f"{resource_type}.{root}"
+    if coding:
+        path += ".coding"
+        if idx is not None:
+            path += f"[{idx}]"
+            if leaf is not None:
+                path += f".{leaf}"
+    return path
+
+
+def plan_fixes(resource_type: str, current: dict, fixes: list,
+               tenant_id: str):
+    """Every approved fix applied to a copy of ``current``, or FixRefused.
+
+    Returns ``(new_resource, paths)`` where ``paths`` are the normalised,
+    code-owned paths that changed, in order. Nothing is written here; the
+    caller persists the copy once, or nothing.
+    """
+    if not isinstance(fixes, list) or not fixes:
+        raise FixRefused("no fixes were given")
+    if len(fixes) > _MAX_FIXES:
+        raise FixRefused(f"more than {_MAX_FIXES} fixes in one request")
+    if FIXABLE_ROOTS.get(resource_type) is None:
+        raise FixRefused(f"{resource_type} has no data-quality fixes")
+
+    work = copy.deepcopy(current)
+    paths = []
+    for n, fix in enumerate(fixes, start=1):
+        root, coding, idx, leaf, value = _parse_fix(n, resource_type, fix)
+        path = _normal_path(resource_type, root, coding, idx, leaf)
+        for seen in paths:
+            if seen == path or path.startswith(seen + ".") \
+                    or path.startswith(seen + "[") \
+                    or seen.startswith(path + ".") or seen.startswith(path + "["):
+                raise FixRefused(f"fix {n} overlaps an earlier fix")
+
         if root in _LINKAGE_ROOTS:
-            if current.get(root):
-                return f"{root} is already set; a fix does not re-point a record"
-            value = fix.get("new_value")
-            ref = value.get("reference") if isinstance(value, dict) else value
-            if not isinstance(ref, str) or not _PATIENT_REF.fullmatch(ref):
-                return f"{root} must be a Patient/<id> reference"
+            if work.get(root):
+                raise FixRefused(f"fix {n}: {root} is already set; a fix does "
+                                 "not re-point a record")
             from r6.models import R6Resource
             exists = R6Resource.query.filter_by(
-                resource_type="Patient", id=ref.split("/", 1)[1],
+                resource_type="Patient",
+                id=value["reference"].split("/", 1)[1],
                 tenant_id=tenant_id, is_deleted=False).first()
             if exists is None:
-                return f"{root} must name a Patient in this tenant"
+                raise FixRefused(f"fix {n}: {root} must name a Patient in "
+                                 "this tenant")
+
+        if idx is not None:
+            codings = (work.get(root) or {}).get("coding") \
+                if isinstance(work.get(root), dict) else None
+            if not isinstance(codings, list) or idx >= len(codings):
+                raise FixRefused(f"fix {n}: no coding at that position")
+            if leaf is not None and not isinstance(codings[idx], dict):
+                raise FixRefused(f"fix {n}: no coding at that position")
+        elif coding and not isinstance(work.get(root), dict):
+            work[root] = {}
+
+        if not _apply_field_fix(work, path, value):  # pragma: no cover
+            raise FixRefused(f"fix {n} could not be applied")
+        paths.append(path)
+
+    if work == current:
+        raise FixRefused("the fixes change nothing")
+    return work, paths
+
+
+def fix_refusal(resource_type: str, current: dict, fixes: list,
+                tenant_id: str) -> str | None:
+    """Why this set of fixes is refused as a whole, or None when every fix
+    applies. Checked before any mutation, so a refusal applies nothing."""
+    try:
+        plan_fixes(resource_type, current, fixes, tenant_id)
+    except FixRefused as exc:
+        return exc.reason
     return None
 
 
@@ -1090,35 +1269,21 @@ def apply_fix(
                 "stale": True, "current_version": resource.version_id}
 
     fhir_json = json.loads(resource.resource_json)
-    refusal = fix_refusal(resource_type, fhir_json, approved_fixes, tenant_id)
-    if refusal:
-        return {"error": refusal, "refused": True,
-                "fixes_attempted": len(approved_fixes or ())}
-    changes_applied = []
+    try:
+        fixed, changed_paths = plan_fixes(resource_type, fhir_json,
+                                          approved_fixes, tenant_id)
+    except FixRefused as exc:
+        return {"error": exc.reason, "refused": True,
+                "fixes_attempted": len(approved_fixes)
+                if isinstance(approved_fixes, list) else 0}
+    changes_applied = changed_paths
 
-    for fix in approved_fixes:
-        field_path = fix.get("field_path", "")
-        new_value = fix.get("new_value")
-        if new_value is None:
-            continue
-        if _apply_field_fix(fhir_json, field_path, new_value):
-            changes_applied.append(fix)
-
-    if not changes_applied:
-        return {
-            "error": "No valid fixes could be applied",
-            "fixes_attempted": len(approved_fixes),
-        }
-
-    new_json = json.dumps(
-        fhir_json, separators=(",", ":"), sort_keys=True
-    )
+    new_json = json.dumps(fixed, separators=(",", ":"), sort_keys=True)
     resource.update_resource(new_json)
 
-    change_summary = "; ".join(
-        f.get("field_path", "?") + " updated"
-        for f in changes_applied
-    )
+    # The summary names the normalised paths the plan changed — every one of
+    # them, and nothing that was submitted verbatim.
+    change_summary = "; ".join(p + " updated" for p in changed_paths)
 
     # Build Provenance resource
     provenance_id = str(uuid.uuid4())

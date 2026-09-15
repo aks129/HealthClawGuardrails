@@ -265,7 +265,7 @@ def test_an_approved_relink_of_a_linked_record_is_refused_whole_at_execute(
     before any mutation, as a whole."""
     body = _body(fixes=[
         {'field_path': 'Condition.clinicalStatus.coding[0].code', 'new_value': 'resolved'},
-        {'field_path': 'Condition.subject.reference', 'new_value': 'Patient/mallory'}])
+        {'field_path': 'Condition.subject', 'new_value': {'reference': 'Patient/mallory'}}])
     action_id = _staged(client, tenant_headers, auth_headers, body)
     r = _confirm(client, app, auth_headers, action_id)
     assert r.status_code == 502, r.get_data(as_text=True)
