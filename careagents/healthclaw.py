@@ -369,6 +369,20 @@ class HealthClawClient:
                                   r.status_code)
         return aid
 
+    def pending_actions(self, tenant: str) -> list[dict]:
+        """The tenant's proposals awaiting a person's answer (#215) — PHI-safe
+        summaries from the engine's own list. Raises on any non-200: an
+        outage must never read as an empty inbox."""
+        r = self._send("GET", self.actions, headers=self._headers(tenant),
+                       params={"status": "awaiting_confirmation"},
+                       what="pending actions")
+        if r.status_code != 200:
+            raise HealthClawError(f"pending actions failed ({r.status_code})",
+                                  r.status_code)
+        body = self._json_object(r, "pending actions")
+        items = body.get("actions")
+        return [a for a in items if isinstance(a, dict)] if isinstance(items, list) else []
+
     def action_status(self, tenant: str, action_id: str) -> dict:
         r = self._send("GET", f"{self.actions}/{action_id}",
                        headers=self._headers(tenant), what="action status")

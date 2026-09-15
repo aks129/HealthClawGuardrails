@@ -165,6 +165,11 @@ def _load_awaiting_action(action_id, tenant_id):
         return None
     if action.status != 'awaiting_confirmation':
         return None
+    # A lapsed request is not one a person can still answer; the confirm
+    # route's claim would refuse it, but the page must not render it as
+    # open or record a confirmation over it (#215).
+    if action.is_expired():
+        return None
     return action
 
 

@@ -94,6 +94,15 @@ _UPLOAD_MIME_TYPES = frozenset({
 _BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
 
 
+#: What a pending request is called on the approvals page, by engine kind.
+_KIND_LABELS = {
+    "phone-call": "Phone call", "sms": "Text message",
+    "insurance-call": "Call to your insurer", "form-fill": "Intake form",
+    "webhook-poster": "Message to a connected service",
+    "curatr-fix": "Correction to your health record",
+}
+
+
 def _engine_said_absent(exc: HealthClawError) -> bool:
     """Whether the engine answered "there is no such thing".
 
@@ -1357,12 +1366,25 @@ def create_app(config: Config | None = None,
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
 
+    def _live_agent_context(acct, agent_id):
+        """The agent's context when the account owns it AND its connection
+        is still live. One rule for every approval surface (#215): the
+        pending list, the review page, its submit/decline, and the status
+        view all resolve ownership here, on the server. A revoked
+        connection is not a pathway to the tenant's requests."""
+        ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
+        if not ctx:
+            return None
+        if (ctx.get("connection") or {}).get("status") == "revoked":
+            return None
+        return ctx
+
     @app.get("/api/form/<action_id>")
     @login_required
     def form_status(action_id):
         acct = current_account()
         agent_id = request.args.get("agent", "")
-        ctx = svc.get_agent_context(acct.id, agent_id)
+        ctx = _live_agent_context(acct, agent_id)
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
         try:
@@ -1408,6 +1430,37 @@ def create_app(config: Config | None = None,
             "disclaimer": labs.get("disclaimer") or "",
         })
 
+    # --- pending approvals (#215) --------------------------------------------
+
+    _APPROVALS_UNCHECKABLE = ("We couldn't check for requests right now. "
+                              "Nothing has been approved or declined — "
+                              "please try again in a moment.")
+
+    @app.get("/agents/<agent_id>/approvals")
+    @login_required
+    def approvals(agent_id):
+        """Everything proposed on this agent's records that is waiting for the
+        person's answer, each linking to the review relay. Ownership is the
+        account's connection to the tenant, resolved server-side — which is
+        how a request proposed over MCP, with no CareAgents agent id of its
+        own, reaches the person who owns those records. Nothing here is
+        stored: the list is the engine's answer, fetched on every visit."""
+        acct = current_account()
+        ctx = _live_agent_context(acct, agent_id)
+        if not ctx:
+            return render_template("chat_error.html",
+                                   message="That agent isn't yours."), 404
+        try:
+            pending = hc.pending_actions(ctx["tenant"])
+        except HealthClawError:
+            # An unanswered question is not an empty inbox.
+            logger.exception("pending actions failed for %s", agent_id)
+            return render_template("chat_error.html",
+                                   message=_APPROVALS_UNCHECKABLE), 503
+        return render_template("approvals.html", me=ctx["agent"],
+                               agent_id=agent_id, pending=pending,
+                               kind_labels=_KIND_LABELS)
+
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
     def _agent_owns_action(agent_id, action_id):
@@ -1420,7 +1473,7 @@ def create_app(config: Config | None = None,
         guarantee (#410).
         """
         acct = current_account()
-        ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
+        ctx = _live_agent_context(acct, agent_id)
         if not ctx:
             return None
         try:

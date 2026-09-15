@@ -835,6 +835,42 @@ def issue_action_approval_token(action_id):
                     'action_id': action_id})
 
 
+_LIST_CAP = 50
+
+
+def _read_auth_error(tenant_id):
+    """The one import of the god module's read gate for both action reads;
+    lazy, to keep r6.routes <-> r6.actions acyclic (ratchet: importers)."""
+    from r6.routes import authenticate_tenant_read
+    return authenticate_tenant_read(tenant_id)
+
+
+@actions_blueprint.route('', methods=['GET'])
+def list_pending_actions():
+    """The tenant's proposals awaiting a person's answer (#215): the one
+    engine read a pending-approvals surface needs. Summaries only — the
+    PHI-safe shape action_status already answers unaudited — so this route
+    persists nothing: no lazy expiry (a lapsed row is simply not listed),
+    no audit commit. Auth mirrors action_status."""
+    tenant = _tenant_or_none()
+    if tenant is None:
+        return _error(400, 'X-Tenant-Id header is required')
+    tenant_id = tenant.id
+    auth_err = _read_auth_error(tenant_id)
+    if auth_err is not None:
+        return auth_err
+    status = request.args.get('status', 'awaiting_confirmation')
+    if status != 'awaiting_confirmation':
+        return _error(400, 'status must be awaiting_confirmation')
+    rows = (ProposedAction.query
+            .filter_by(tenant_id=tenant_id, status=status)
+            .filter(ProposedAction.expires_at > _utcnow())
+            .order_by(ProposedAction.created_at.desc())
+            .limit(_LIST_CAP).all())
+    return jsonify({'actions': [a.summary() for a in rows],
+                    'count': len(rows)}), 200
+
+
 @actions_blueprint.route('/<action_id>', methods=['GET'])
 def action_status(action_id):
     tenant = _tenant_or_none()
@@ -844,8 +880,7 @@ def action_status(action_id):
 
     # Read-auth: for non-public tenants (when the flag is on) require a
     # tenant-bound token/bearer, same posture as FHIR + SMBP reads.
-    from r6.routes import authenticate_tenant_read
-    auth_err = authenticate_tenant_read(tenant_id)
+    auth_err = _read_auth_error(tenant_id)
     if auth_err is not None:
         return auth_err
 

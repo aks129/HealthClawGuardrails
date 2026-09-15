@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Waiting for you — CareAgents{% endblock %}
+{% block bodyclass %}page-home{% endblock %}
+{% block content %}
+<main class="hub">
+  <div class="hub-head">
+    <div>
+      <h1>Waiting for you</h1>
+      <p class="hub-sub">Requests proposed on {{ me.name }}'s records. Nothing on
+        this list has happened yet; each one waits for your answer.</p>
+    </div>
+    <a class="pill" href="/chat?agent={{ agent_id }}">← back to {{ me.name }}</a>
+  </div>
+
+  <section class="hub-section">
+    <div class="section-head"><h2>Pending requests</h2></div>
+    <div class="card-grid" id="pending">
+      {% for a in pending %}
+      <a class="hub-card agent-card" href="/review/{{ agent_id }}/{{ a.id }}">
+        <div class="hub-card-name">{{ kind_labels.get(a.kind, a.kind) }}</div>
+        <div class="hub-card-sub">{% if a.to %}To: {{ a.to }}{% else %}&nbsp;{% endif %}</div>
+        <span class="open-hint">Review and answer →</span>
+      </a>
+      {% endfor %}
+      {% if not pending %}
+      <div class="empty">Nothing is waiting for you right now. When an agent
+        proposes something on these records, it appears here for you to
+        approve or decline.</div>
+      {% endif %}
+    </div>
+  </section>
+</main>
+{% endblock %}
