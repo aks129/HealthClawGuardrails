@@ -1051,6 +1051,7 @@ def apply_fix(
     patient_intent: str,
     tenant_id: str,
     agent_id: str = "curatr",
+    expected_version: int | None = None,
 ) -> dict:
     """
     Apply patient-approved data quality fixes to a FHIR resource.
@@ -1059,6 +1060,11 @@ def apply_fix(
     "new_value": "Type 2 diabetes mellitus without complications"}``.
 
     Creates a linked Provenance resource and immutable AuditEvents.
+
+    ``expected_version`` is the ``meta.versionId`` the fixes were proposed
+    against (#413). When given and the record has moved on since, nothing is
+    applied and the result says so (``stale``): a human approved a change to
+    the record they saw, not to whatever it has become.
 
     Returns dict with 'updated_resource', 'provenance', 'issues_fixed'.
     """
@@ -1076,6 +1082,12 @@ def apply_fix(
 
     if not resource:
         return {"error": f"{resource_type}/{resource_id} not found"}
+
+    if expected_version is not None and resource.version_id != expected_version:
+        return {"error": f"{resource_type}/{resource_id} is at version "
+                         f"{resource.version_id}; the fixes were proposed "
+                         f"against version {expected_version}",
+                "stale": True, "current_version": resource.version_id}
 
     fhir_json = json.loads(resource.resource_json)
     refusal = fix_refusal(resource_type, fhir_json, approved_fixes, tenant_id)
