@@ -2243,6 +2243,10 @@ class FakeClient:
     def start_form_action(self, tenant):
         return "act-1"
 
+    def pending_actions(self, tenant):
+        return [{"id": "act-1", "kind": "form-fill", "to": None,
+                 "status": "awaiting_confirmation"}]
+
     def action_status(self, tenant, action_id):
         if action_id != "act-1":
             raise HealthClawError("not found", 404)
