@@ -162,7 +162,9 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   deployed. `scripts/prod_watch.py --expect-sha <sha>` asserts the same thing,
   and the scheduled prod-watch accepts any commit merged to `main` in the last
   24h, exiting `2` (a separate, less urgent alarm than `1`) when the deployed
-  build matches none of them. The marker is telemetry only — nothing branches
+  build matches none of them. Flask answers the same question at
+  `/r6/fhir/health` (`build`, from Railway's injected commit) and
+  `--expect-flask-sha <sha>` asserts it the same way. The marker is telemetry only — nothing branches
   on it, and a missing one reports `unknown` and still serves normally.
 
 - **CareAgents: migrating from SQLite to Postgres.** CareAgents keeps its own

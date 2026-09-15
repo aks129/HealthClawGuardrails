@@ -39,7 +39,10 @@ Copy this into the release PR/issue and check items off.
 ### 4. Deploy
 
 - [ ] Flask + marketing auto-deploy on push (Railway `HealthClawGuardrails`, Vercel) — verify
-      `https://app.healthclaw.io/r6/fhir/metadata` returns 200 post-deploy
+      `https://app.healthclaw.io/r6/fhir/metadata` returns 200 post-deploy **and**
+      `GET /r6/fhir/health` reports `build` = the released commit (a 200 alone says
+      nothing about which `main` is running): `scripts/prod_watch.py
+      --expect-flask-sha <sha>` asserts it
 - [ ] **mcp-server does NOT auto-deploy** — staging-dir `railway up` (see
       [docs/development.md](docs/development.md) deploy notes), then verify `POST /mcp/rpc tools/list` returns the expected tool count
 - [ ] **CareAgents does NOT auto-deploy** — staging-dir `railway up` for the web *and*
