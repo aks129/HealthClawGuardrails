@@ -209,7 +209,9 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: test_no_new_get_route_mutates_the_store. Slice 12 takes read
 #: audits as a group; adding one shim call site now is the honest
 #: cost of not shipping an unaudited read.
-_POST_COMMIT_AUDIT_CALLSITES = 89
+#: 89 -> 87: r6/curatr.py apply_fix (#413 P1-A) — the record, the
+#: Provenance and both audit rows now commit in one transaction.
+_POST_COMMIT_AUDIT_CALLSITES = 87
 
 
 def test_post_commit_audit_callsites_only_decrease():

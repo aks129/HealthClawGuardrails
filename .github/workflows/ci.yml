@@ -144,6 +144,8 @@ jobs:
             tests/test_agent_runs.py \
             tests/test_write_guard_matrix.py \
             tests/test_audit_transactions.py \
+            tests/test_curatr_one_transaction.py \
+            tests/test_curatr_complete_set_or_refuse.py \
             -v --tb=short
 
   node-tests:

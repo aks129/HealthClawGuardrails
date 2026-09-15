@@ -31,7 +31,8 @@ import os
 
 from r6.actions import errors
 from r6.actions.registry import ExecutionResult, register_executor
-from r6.curatr import FIXABLE_ROOTS, FixRefused, _parse_fix, apply_fix
+from r6.curatr import (FIXABLE_ROOTS, FixRefused, _parse_fix, apply_fix,
+                       find_fix_provenance)
 from r6.resource_ids import _PATH_RESOURCE_ID_PATTERN
 
 FLAG = 'CURATR_FIX_RAIL_ENABLED'
@@ -101,14 +102,23 @@ class CuratrFixExecutor:
         ref = payload['to']
         version = spec['record_version']
 
-        # (3) One call mutates, audits and writes Provenance — or refuses
-        # whole. An exception must never read as success; its text may name
-        # the record, so only its class is kept.
+        # (3) Durable evidence first. If an earlier attempt for this action
+        # committed — and then the action row could not be updated, or the
+        # process died — the Provenance naming this action is still there.
+        # Report that outcome; never apply the fix a second time.
+        earlier = find_fix_provenance(action.tenant_id, action.id)
+        if earlier is not None:
+            return self._completed(ref, earlier, version, recovered=True)
+
+        # (4) One call mutates, audits and writes Provenance in one
+        # transaction — or refuses whole. An exception must never read as
+        # success; its text may name the record, so only its class is kept.
         try:
             result = apply_fix(
                 spec['resource_type'], spec['resource_id'], spec['fixes'],
                 spec['patient_intent'], action.tenant_id,
-                agent_id='curatr-fix', expected_version=version)
+                agent_id='curatr-fix', expected_version=version,
+                action_ref=action.id)
         except Exception as exc:  # noqa: BLE001 — fail loud, never fake success
             return ExecutionResult(status='failed', error=errors.PROVIDER_ERROR,
                                    outcome={'resource': ref,
@@ -128,24 +138,48 @@ class CuratrFixExecutor:
                 status='failed', error=errors.PROVIDER_ERROR,
                 outcome={'resource': ref, 'reason': result.get('error')})
 
-        # (4) Success: the Provenance id is the provider ref. Field paths
+        # (5) Success: the Provenance id is the provider ref. Field paths
         # only — the changed record stays in the record store.
-        provenance_id = (result.get('provenance') or {}).get('id')
-        return ExecutionResult(
-            status='completed', provider_ref=provenance_id,
-            outcome={'resource': ref,
-                     'issues_fixed': result.get('issues_fixed'),
-                     'provenance_id': provenance_id,
-                     'version_before': version,
-                     'version_after': version + 1,
-                     'fields': [f.get('field_path') for f in spec['fixes']]})
+        return self._completed(ref, result.get('provenance') or {}, version)
+
+    @staticmethod
+    def _completed(ref, provenance, version, recovered=False):
+        """The completed outcome, read from the committed Provenance so a
+        recovered attempt and a fresh one report the same facts."""
+        ext = {}
+        for outer in (provenance.get('extension') or []):
+            for inner in (outer.get('extension') or []):
+                ext[inner.get('url')] = inner
+        summary = (ext.get('change_summary') or {}).get('valueString') or ''
+        outcome = {'resource': ref,
+                   'issues_fixed': (ext.get('changes_applied') or {}).get('valueInteger'),
+                   'provenance_id': provenance.get('id'),
+                   'version_before': version,
+                   'version_after': version + 1,
+                   'fields': [p[:-len(' updated')] for p in summary.split('; ')
+                              if p.endswith(' updated')]}
+        if recovered:
+            outcome['recovered'] = True
+        return ExecutionResult(status='completed',
+                               provider_ref=provenance.get('id'),
+                               outcome=outcome)
 
     def reconcile(self, action):
-        # execute() is synchronous and terminal; there is no provider to ask.
+        # There is no provider to ask, but there is durable evidence: the
+        # Provenance that names this action. Found: the fix was applied,
+        # once. Not found: nothing committed, and this is not the place to
+        # apply it — needs_review, never a second execution.
+        payload = action.payload or {}
+        spec = payload.get('curatr_fix') or {}
+        earlier = find_fix_provenance(action.tenant_id, action.id)
+        if earlier is not None:
+            return self._completed(payload.get('to'), earlier,
+                                   spec.get('record_version') or 0,
+                                   recovered=True)
         return ExecutionResult(
             status='needs_review',
-            outcome={'reason': 'curatr-fix execute() is synchronous and '
-                               'terminal — nothing to reconcile'})
+            outcome={'reason': 'no committed Provenance names this action; '
+                               'the fix was not applied'})
 
 
 def register():
