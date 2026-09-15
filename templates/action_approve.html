@@ -1,0 +1,111 @@
+{% extends "review_base.html" %}
+{% block title %}Approve this request — HealthClaw Guardrails{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+
+    <div class="d-flex align-items-center mb-3"><div>
+        <h2 class="mb-0">Approve this request?</h2>
+        <p class="text-muted mb-0">
+          Nothing happens until you approve. What is shown here is exactly
+          what will be carried out — it cannot change after you approve.
+        </p>
+      </div>
+    </div>
+
+    <form id="review-form" method="post"
+          action="/r6/actions/{{ action_id }}/review">
+
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>{{ kind_label }}</span>
+          <span class="badge bg-secondary">proposed by an agent · awaiting your answer</span>
+        </div>
+        <div class="card-body">
+          <dl class="row mb-0">
+            {% if to %}
+            <dt class="col-sm-4 text-muted">To</dt>
+            <dd class="col-sm-8">{{ to }}</dd>
+            {% endif %}
+            {% if phone %}
+            <dt class="col-sm-4 text-muted">Number</dt>
+            <dd class="col-sm-8">{{ phone }}</dd>
+            {% endif %}
+            <dt class="col-sm-4 text-muted">{{ body_label }}</dt>
+            <dd class="col-sm-8"><pre class="mb-0">{{ body }}</pre></dd>
+          </dl>
+        </div>
+      </div>
+
+      {% if fixes %}
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Changes to {{ fix_record }}</span>
+          <span class="badge bg-secondary">record version {{ fix_version }}</span>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">
+            Only these fields change, and only if the record is still at the
+            version shown. A record that has changed since is left alone.
+          </p>
+          <table class="table mb-0">
+            <thead><tr><th>Field</th><th>New value</th></tr></thead>
+            <tbody>
+              {% for fix in fixes %}
+              <tr>
+                <td><code>{{ fix.field_path }}</code></td>
+                <td><code>{{ fix.new_value|tojson }}</code></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="form-check mt-2 p-3 bg-body-secondary rounded">
+        <input class="form-check-input" type="checkbox" id="ack" name="ack" value="true">
+        <label class="form-check-label" for="ack">
+          I have read what this request will do and I want it carried out.
+        </label>
+      </div>
+
+      <div id="review-gate-msg" class="alert alert-secondary" role="alert">
+        Read the request above, then tick the box to continue.
+      </div>
+
+      <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve
+      </button>
+      <button type="button" id="decline-btn" class="btn btn-outline-secondary btn-lg ms-2">Decline
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Client-side UX only. The server issues the consent record over the
+  // sealed payload; the relay supplies every credential (see
+  // r6/actions/review.py and the note in action_review.html).
+  (function () {
+    var form = document.getElementById('review-form');
+    var btn = document.getElementById('approve-btn');
+    var gateMsg = document.getElementById('review-gate-msg');
+
+    function evaluate() {
+      var ok = form.querySelector('#ack').checked;
+      btn.disabled = !ok;
+      gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';
+      gateMsg.textContent = ok
+        ? 'Ready. Approve carries out exactly what is shown above.'
+        : 'Read the request above, then tick the box to continue.';
+      return ok;
+    }
+    form.addEventListener('change', evaluate);
+
+    {% include "_review_handlers.html" %}
+  })();
+</script>
+{% endblock %}

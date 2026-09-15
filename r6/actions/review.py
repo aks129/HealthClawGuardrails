@@ -25,6 +25,13 @@ Two routes on the actions blueprint:
        ActionConfirmation (approved_via='review-page'), and stores the reviewed
        QR id on the action for Task 8's execute().
 
+Every other kind (#215, #413) renders action_approve.html from the SEALED
+payload — kind, recipient, the verbatim body, and for a curatr-fix the
+field-by-field change list with the record version it was proposed against.
+Its POST issues the same review-page ActionConfirmation over that payload
+and nothing else; the confirm route's claim is still the only place an
+action executes. What the person saw is what the digest binds.
+
 Auth mirrors /confirm: X-Tenant-Id + a tenant-bound X-Step-Up-Token. The token
 is validated multi-use (not nonce-consumed) so the page can be re-opened and
 submitted with the same credential; the load-bearing gate here is the
@@ -148,19 +155,48 @@ def _require_step_up(tenant):
     )
 
 
-def _load_form_fill_action(action_id, tenant_id):
-    """Load a form-fill action that is tenant-scoped and awaiting_confirmation.
-    Returns the action or None (caller maps None -> 404). A wrong tenant, wrong
-    kind, or wrong status all collapse to 'not found' — no information leak."""
+def _load_awaiting_action(action_id, tenant_id):
+    """Load an action that is tenant-scoped and awaiting_confirmation, of any
+    kind. Returns the action or None (caller maps None -> 404). A wrong
+    tenant or wrong status collapse to 'not found' — no information leak."""
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
     if action is None:
         return None
-    if action.kind != 'form-fill':
-        return None
     if action.status != 'awaiting_confirmation':
         return None
     return action
+
+
+_KIND_LABELS = {
+    'phone-call': 'Phone call', 'sms': 'Text message',
+    'insurance-call': 'Phone call to your insurer',
+    'webhook-poster': 'Message to a connected service',
+    'curatr-fix': 'Correction to your health record',
+}
+_BODY_LABELS = {'phone-call': 'What will be said',
+                'insurance-call': 'What will be said',
+                'sms': 'Message', 'curatr-fix': 'Why'}
+
+
+def _approve_context(action):
+    """Template values for action_approve.html, read from the sealed payload
+    and nothing else — the page shows the proposal, never the record."""
+    payload = action.payload or {}
+    spec = payload.get('curatr_fix') if action.kind == 'curatr-fix' else None
+    spec = spec if isinstance(spec, dict) else {}
+    return {
+        'action_id': action.id,
+        'kind_label': _KIND_LABELS.get(action.kind, action.kind),
+        'body_label': _BODY_LABELS.get(action.kind, 'Request'),
+        'to': payload.get('to'),
+        'phone': payload.get('phone'),
+        'body': payload.get('body'),
+        'fixes': [f for f in (spec.get('fixes') or []) if isinstance(f, dict)],
+        'fix_record': '%s/%s' % (spec.get('resource_type'),
+                                 spec.get('resource_id')) if spec else None,
+        'fix_version': spec.get('record_version'),
+    }
 
 
 def _resolve_questionnaire(action, tenant_id):
@@ -338,32 +374,37 @@ def review_form(action_id):
     tenant_id = tenant.id
     _require_step_up(tenant)
 
-    action = _load_form_fill_action(action_id, tenant_id)
+    action = _load_awaiting_action(action_id, tenant_id)
     if action is None:
         return _error(404, 'Unknown action')
 
-    _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
-    demographics = _demographics(draft_qr)
-    meds, allergies, conditions = _view_rows(draft_qr)
+    if action.kind == 'form-fill':
+        _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
+        demographics = _demographics(draft_qr)
+        meds, allergies, conditions = _view_rows(draft_qr)
+        # The reasons are fixed strings from this module, never record text,
+        # so the detail stays PHI-free. Without this, the state that renders
+        # the unreadable notice is invisible in production.
+        detail = ('review page rendered' if content.resolved else
+                  'review page rendered; record unreadable: %s' % content.reason)
+        template, context = 'action_review.html', dict(
+            action_id=action_id, demographics=demographics,
+            meds=meds, allergies=allergies, conditions=conditions,
+            record_readable=content.resolved, record_reason=content.reason)
+    else:
+        detail = 'approve page rendered; kind=%s' % action.kind
+        template, context = 'action_approve.html', _approve_context(action)
 
     record_audit_event(
         'read', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        # The reasons are fixed strings from this module, never record text,
-        # so the detail stays PHI-free. Without this, the state that renders
-        # the unreadable notice is invisible in production.
-        detail=('review page rendered' if content.resolved else
-                'review page rendered; record unreadable: %s' % content.reason),
+        detail=detail,
     )
-    html = render_template(
-        'action_review.html', action_id=action_id, demographics=demographics,
-        meds=meds, allergies=allergies, conditions=conditions,
-        record_readable=content.resolved, record_reason=content.reason,
-        # step_up_token is deliberately NOT passed. It is a write credential,
-        # and handing it to a template is how it reached the patient's browser
-        # across an origin boundary (#395). The submit path supplies its own
-        # credentials server-side; nothing in the page needs this.
-        tenant_id=tenant_id)
+    # step_up_token is deliberately NOT passed to either template. It is a
+    # write credential, and handing it to a template is how it reached the
+    # patient's browser across an origin boundary (#395). The submit path
+    # supplies its own credentials server-side; nothing in the page needs it.
+    html = render_template(template, tenant_id=tenant_id, **context)
     return html, 200
 
 
@@ -387,9 +428,12 @@ def review_submit(action_id):
     tenant_id = tenant.id
     _require_step_up(tenant)
 
-    action = _load_form_fill_action(action_id, tenant_id)
+    action = _load_awaiting_action(action_id, tenant_id)
     if action is None:
         return _error(404, 'Unknown action')
+
+    if action.kind != 'form-fill':
+        return _approve_submit(action, tenant_id)
 
     # A submitted review is final. This route does NOT transition the action
     # (the confirm route's claim does), so the loader above keeps accepting an
@@ -497,33 +541,63 @@ def review_submit(action_id):
                            'answers were recorded and approved; nothing '
                            'further is needed.')
 
+    return _reviewed(action, tenant_id,
+                     detail='reviewed via review-page; qr=%s' % qr_row.id,
+                     response={'id': action.id, 'status': action.status,
+                               'reviewed_qr_id': qr_row.id,
+                               'approved_via': 'review-page',
+                               'next_step': _FORM_NEXT_STEP})
+
+
+_FORM_NEXT_STEP = ('Review recorded and approval issued. The form is '
+                   'generated once the confirmation above is claimed and '
+                   'executed — check the action\'s own status for the '
+                   'outcome.')
+_APPROVE_NEXT_STEP = ('Approval recorded over exactly what the page showed. '
+                      'The request is carried out once that approval is '
+                      'claimed and executed — check the action\'s own status '
+                      'for the outcome.')
+_ALREADY_APPROVED = ('This request has already been approved from this page; '
+                     'nothing further is needed.')
+
+
+def _approve_submit(action, tenant_id):
+    """POST for every kind but form-fill: the consent record over the sealed
+    payload, and nothing else. No decisions to re-derive — the page showed
+    the payload verbatim, and the payload is what the digest binds."""
+    if has_confirmation(action.id):
+        return _error(409, _ALREADY_APPROVED)
+    try:
+        issue_confirmation(action.id, approved_via='review-page',
+                           ttl_minutes=15, payload_json=action.payload_json)
+        db.session.commit()
+    except PayloadSealed:
+        db.session.rollback()
+        return _error(409, _ALREADY_APPROVED)
+    return _reviewed(action, tenant_id,
+                     detail='approved via review-page; kind=%s' % action.kind,
+                     response={'id': action.id, 'status': action.status,
+                               'approved_via': 'review-page',
+                               'next_step': _APPROVE_NEXT_STEP})
+
+
+def _reviewed(action, tenant_id, detail, response):
+    """The one audit call and answer for a recorded review, either kind."""
     record_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
-        detail='reviewed via review-page; qr=%s' % qr_row.id,
+        detail=detail,
     )
 
     # #645: this response used to assert the executor's OUTCOME — "the
     # form-fill executor currently returns an honest needs_review
     # placeholder" — as if this handler could see it. It can't: this handler
-    # only stages a confirmation row (issue_confirmation, above); execution
-    # happens on a separate call (r6/actions/routes.py's confirm route),
-    # which this function returns before. A caller reading only this
-    # response has no way to know the true outcome yet, and the old string
-    # was itself only ever a guess — one that outlived being true, so a
-    # tester who generated a real PDF was told nothing had been generated.
-    # Say only what this handler actually knows: the review was recorded.
+    # only stages a confirmation row (issue_confirmation); execution happens
+    # on a separate call (r6/actions/routes.py's confirm route), which this
+    # function returns before. Say only what this handler actually knows:
+    # the review was recorded.
     from flask import jsonify
-    return jsonify({
-        'id': action.id,
-        'status': action.status,
-        'reviewed_qr_id': qr_row.id,
-        'approved_via': 'review-page',
-        'next_step': ('Review recorded and approval issued. The form is '
-                      'generated once the confirmation above is claimed and '
-                      'executed — check the action\'s own status for the '
-                      'outcome.'),
-    }), 200
+    return jsonify(response), 200
 
 
 def _build_reviewed_qr(draft_qr, patient, med_rows, med_decisions,
