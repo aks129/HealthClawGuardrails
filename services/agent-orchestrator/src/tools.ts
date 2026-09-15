@@ -2148,7 +2148,7 @@ export class FHIRTools {
     headers: Record<string, string>
   ): Promise<Record<string, unknown>> {
     // Approve-is-the-commit: this request only SUBMITS the proposal for the
-    // patient's out-of-band approval (dashboard/Telegram). The MCP server
+    // patient's out-of-band approval (their CareAgents review page). The MCP server
     // must never self-attest human confirmation — no X-Human-Confirmed
     // header is minted here, and none is accepted as a tool argument. Flask
     // returns 202 {status: 'awaiting_confirmation'}; nothing executes on
@@ -2164,7 +2164,7 @@ export class FHIRTools {
       const status = (result.status as string) || "awaiting_confirmation";
       const nextStep =
         (result.next_step as string) ||
-        "The patient must approve out of band (dashboard/Telegram); the action executes only on their approval.";
+        "The patient must approve out of band, on their CareAgents review page (\"Waiting for you\"); the action executes only on their approval.";
       result._mcp_summary =
         `Submitted for the patient's approval. Status: ${status}. This is terminal for your turn — ` +
         `${nextStep} You may poll action_status or end your turn. Do not call action_commit again.`;

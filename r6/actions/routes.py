@@ -448,16 +448,20 @@ def commit_action(action_id):
 
     # Telegram push: summary-level ONLY (kind + recipient label)
     label = action.summary().get('to') or 'recipient'
+    # The surface that exists (#215, #748): the person's CareAgents agent
+    # page, "Waiting for you". There is no HealthClaw dashboard to approve
+    # in, and this chat cannot approve either (#738).
     notify_tenant(tenant_id,
-                  '🔔 Approval needed: %s to %s. Review and approve in your '
-                  'HealthClaw dashboard.' % (action.kind, label))
+                  '🔔 Approval needed: %s to %s. Open CareAgents — it is '
+                  'under "Waiting for you" on your agent.' % (action.kind, label))
 
     return jsonify({
         'id': action.id,
         'status': 'awaiting_confirmation',
         'next_step': ('Terminal for this turn: the patient must approve out '
-                      'of band (dashboard/Telegram). Poll GET /r6/actions/%s '
-                      'or end your turn. Do not retry commit.' % action.id),
+                      'of band, on their CareAgents review page ("Waiting '
+                      'for you"). Poll GET /r6/actions/%s or end your turn. '
+                      'Do not retry commit.' % action.id),
     }), 202
 
 
