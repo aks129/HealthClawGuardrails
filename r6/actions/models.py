@@ -24,7 +24,7 @@ from models import db
 PROPOSAL_TTL_MINUTES = 30
 
 VALID_KINDS = ('phone-call', 'sms', 'form-fill', 'insurance-call',
-               'webhook-poster')
+               'webhook-poster', 'curatr-fix')
 
 # Legal status transitions. awaiting_confirmation is the out-of-band gate:
 # commit submits (proposed->awaiting_confirmation), the human's approval claims

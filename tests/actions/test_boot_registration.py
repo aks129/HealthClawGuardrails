@@ -33,7 +33,7 @@ def test_action_events_table_registered_by_importing_main_alone():
         "from r6.actions.registry import all_kinds\n"
         "kinds = set(all_kinds())\n"
         "missing = {'phone-call', 'sms', 'insurance-call', "
-        "'webhook-poster'} - kinds\n"
+        "'webhook-poster', 'curatr-fix'} - kinds\n"
         "assert not missing, "
         "'Rail executors not registered at boot: %s — main.py must call "
         "r6.actions.rails.register_all()' % sorted(missing)\n"
