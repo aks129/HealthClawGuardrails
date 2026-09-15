@@ -222,7 +222,37 @@ def main():
              "the question is on the page" if reopened else
              ("no turn to reopen" if conversation is None else "the earlier turn is not on the page"))
 
-    # 7. Pending approvals: reachable and honest (empty is fine; an outage is not).
+    # 7. The appointment brief: every field it shows names its source record,
+    #    and a missing section says so — never a fabricated negative.
+    r = s.get(f"{base}/brief", params={"agent": agent}, timeout=30)
+    html = r.text if r.status_code == 200 else ""
+    sourced = html.count("brief-source-id")
+    missing = html.count("Not available from your connected records")
+    unreachable = "could not reach your records" in html
+    if r.status_code != 200:
+        run.step("appointment brief", "FAIL", f"HTTP {r.status_code}")
+    elif unreachable:
+        run.step("appointment brief", "UNAVAILABLE", "the brief could not read the records")
+    else:
+        run.step("appointment brief", "PASS" if sourced else "FAIL",
+                 f"{sourced} sourced fields, {missing} sections honestly missing"
+                 if sourced else "no field on the brief names a source record",
+                 sourced_fields=sourced, missing_sections=missing)
+
+    # 8. Labs: the timeline is read from records with its disclaimer attached.
+    r = s.get(f"{base}/api/labs/timeline", params={"agent": agent}, timeout=30)
+    body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code == 502:
+        run.step("labs timeline", "UNAVAILABLE", "labs unavailable from the engine")
+    elif r.status_code != 200:
+        run.step("labs timeline", "FAIL", f"HTTP {r.status_code}")
+    else:
+        series = body.get("series") or []
+        run.step("labs timeline", "PASS" if isinstance(series, list) and body.get("disclaimer") else "FAIL",
+                 f"{len(series)} series, disclaimer {'present' if body.get('disclaimer') else 'MISSING'}",
+                 series=len(series))
+
+    # 9. Pending approvals: reachable and honest (empty is fine; an outage is not).
     r = s.get(f"{base}/agents/{agent}/approvals", timeout=20)
     run.step("pending approvals page", "PASS" if r.status_code == 200 else "FAIL",
              f"HTTP {r.status_code}" + (" (says nothing is waiting)"
