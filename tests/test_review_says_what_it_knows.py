@@ -36,13 +36,24 @@ import re
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PAGE = ROOT / "templates/action_review.html"
-SHELL = ROOT / "templates/review_base.html"
+TEMPLATES = ROOT / "templates"
+#: Both relayed pages share one submit/decline handler
+#: (templates/_review_handlers.html); every guard below runs over each page
+#: with that include inlined, so neither can drift from the other.
+PAGES = ("action_review.html", "action_approve.html")
+SHELL = TEMPLATES / "review_base.html"
 
 
-@pytest.fixture(scope="module")
-def page() -> str:
-    return PAGE.read_text(encoding="utf-8")
+def _with_includes(name: str) -> str:
+    raw = (TEMPLATES / name).read_text(encoding="utf-8")
+    return re.sub(r'{%\s*include\s+"([^"]+)"\s*%}',
+                  lambda m: (TEMPLATES / m.group(1)).read_text(encoding="utf-8"),
+                  raw)
+
+
+@pytest.fixture(scope="module", params=PAGES)
+def page(request) -> str:
+    return _with_includes(request.param)
 
 
 @pytest.fixture(scope="module")
