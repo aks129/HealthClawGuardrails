@@ -15,6 +15,7 @@ source is always traceable.
 """
 
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -1290,7 +1291,36 @@ def apply_fix(
     changes_applied = changed_paths
 
     new_json = json.dumps(fixed, separators=(",", ":"), sort_keys=True)
-    resource.update_resource(new_json)
+    loaded_version = resource.version_id
+    _between_load_and_write()
+
+    # The write is conditional on the version this plan was made against,
+    # enforced by the database, not by the check above (#413 P2). A writer
+    # that committed between our load and this statement — another approved
+    # fix, an ordinary update — changes the version, this UPDATE matches no
+    # row, and the whole transaction is abandoned. The version sequence and
+    # last_updated are set exactly as update_resource() sets them.
+    from sqlalchemy import update as _update
+    written = db.session.execute(
+        _update(R6Resource)
+        .where(R6Resource.tenant_id == tenant_id,
+               R6Resource.resource_type == resource_type,
+               R6Resource.id == resource_id,
+               R6Resource.is_deleted.is_(False),
+               R6Resource.version_id == loaded_version)
+        .values(resource_json=new_json,
+                sha256=hashlib.sha256(new_json.encode("utf-8")).hexdigest(),
+                version_id=loaded_version + 1,
+                last_updated=datetime.now(timezone.utc))
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if written != 1:
+        db.session.rollback()
+        db.session.refresh(resource)
+        return {"error": f"{resource_type}/{resource_id} changed while the "
+                         f"fixes were being applied; nothing was changed",
+                "stale": True, "current_version": resource.version_id}
+    db.session.expire(resource)
 
     # The summary names the normalised paths the plan changed — every one of
     # them, and nothing that was submitted verbatim.
@@ -1397,6 +1427,12 @@ def apply_fix(
         "issues_fixed": len(changes_applied),
         "change_summary": change_summary,
     }
+
+
+def _between_load_and_write():
+    """Test seam: called after the record is loaded and planned, before the
+    conditional write. Production leaves it empty; a concurrency test patches
+    it to let another writer commit in the gap."""
 
 
 def find_fix_provenance(tenant_id: str, action_ref: str) -> dict | None:
