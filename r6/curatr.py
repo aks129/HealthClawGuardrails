@@ -1231,6 +1231,7 @@ def apply_fix(
     tenant_id: str,
     agent_id: str = "curatr",
     expected_version: int | None = None,
+    action_ref: str | None = None,
 ) -> dict:
     """
     Apply patient-approved data quality fixes to a FHIR resource.
@@ -1245,12 +1246,22 @@ def apply_fix(
     applied and the result says so (``stale``): a human approved a change to
     the record they saw, not to whatever it has become.
 
+    ``action_ref`` names the rail action this fix executes for (#413 P1-A).
+    It is written into the Provenance so a later attempt can find durable
+    evidence of this one — see ``find_fix_provenance`` — instead of applying
+    the fix twice.
+
+    This function owns the transaction: the record, the Provenance and both
+    mandatory audit rows commit together or not at all. A failure anywhere
+    before the commit leaves the store untouched and raises; nothing is
+    reported as applied that was not committed.
+
     Returns dict with 'updated_resource', 'provenance', 'issues_fixed'.
     """
     # Import here to avoid circular imports at module load time
     from models import db
     from r6.models import R6Resource
-    from r6.audit import record_audit_event
+    from r6.audit import add_audit_event
 
     resource = R6Resource.query.filter_by(
         id=resource_id,
@@ -1341,7 +1352,8 @@ def apply_fix(
                     "url": "change_summary",
                     "valueString": change_summary,
                 },
-            ],
+            ] + ([{"url": "action", "valueString": action_ref}]
+                 if action_ref else []),
         }],
     }
 
@@ -1355,25 +1367,29 @@ def apply_fix(
         tenant_id=tenant_id,
     )
 
+    # One transaction. add_audit_event flushes inside it and never commits,
+    # so an audit that cannot be written takes the record change and the
+    # Provenance down with it (r6/audit.py). Only the exception class is
+    # kept: its text can carry the record.
     try:
         db.session.add(prov_resource)
+        add_audit_event(
+            "update", resource_type, resource_id,
+            agent_id=agent_id, tenant_id=tenant_id,
+            detail=f"curatr-fix: {change_summary}",
+        )
+        add_audit_event(
+            "create", "Provenance", provenance_id,
+            agent_id=agent_id, tenant_id=tenant_id,
+            detail=f"curatr-provenance for {resource_type}/{resource_id}",
+        )
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
         raise RuntimeError(
-            f"Failed to commit fix and provenance: {exc}"
+            "Failed to commit fix, provenance and audit: %s"
+            % type(exc).__name__
         ) from exc
-
-    record_audit_event(
-        "update", resource_type, resource_id,
-        agent_id=agent_id, tenant_id=tenant_id,
-        detail=f"curatr-fix: {change_summary}",
-    )
-    record_audit_event(
-        "create", "Provenance", provenance_id,
-        agent_id=agent_id, tenant_id=tenant_id,
-        detail=f"curatr-provenance for {resource_type}/{resource_id}",
-    )
 
     return {
         "updated_resource": resource.to_fhir_json(),
@@ -1381,6 +1397,31 @@ def apply_fix(
         "issues_fixed": len(changes_applied),
         "change_summary": change_summary,
     }
+
+
+def find_fix_provenance(tenant_id: str, action_ref: str) -> dict | None:
+    """The committed Provenance of an earlier apply_fix for this action, or
+    None. This is what a retry consults before touching the record: a
+    Provenance that names the action is durable proof the fix was applied
+    once, whatever happened to the action row afterwards (#413 P1-A)."""
+    from r6.models import R6Resource
+    if not action_ref:
+        return None
+    # The marker is one JSON object with sorted keys and no spaces (that is
+    # how apply_fix serialises), so a substring match is exact.
+    marker = json.dumps({"url": "action", "valueString": action_ref},
+                        separators=(",", ":"), sort_keys=True)
+    rows = R6Resource.query.filter_by(
+        resource_type="Provenance", tenant_id=tenant_id, is_deleted=False,
+    ).filter(R6Resource.resource_json.contains(marker)).all()
+    for row in rows:
+        prov = json.loads(row.resource_json)
+        for ext in (prov.get("extension") or []):
+            for inner in (ext.get("extension") or []):
+                if inner.get("url") == "action" \
+                        and inner.get("valueString") == action_ref:
+                    return prov
+    return None
 
 
 def _apply_field_fix(resource: dict, field_path: str, new_value) -> bool:
