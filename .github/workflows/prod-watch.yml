@@ -67,9 +67,11 @@ jobs:
             echo "exit=1" >> "$GITHUB_OUTPUT"
             exit 0;;
           esac
-          EXPECT="--expect-sha $TIP"
+          # Flask auto-deploys main, so the same set pins its build (#745):
+          # the tip, or anything merged in the last 24h still rolling out.
+          EXPECT="--expect-sha $TIP --expect-flask-sha $TIP"
           for sha in $(git log --since=24.hours --format=%H origin/main); do
-            EXPECT="$EXPECT --expect-sha $sha"
+            EXPECT="$EXPECT --expect-sha $sha --expect-flask-sha $sha"
           done
           uv run --with requests python scripts/prod_watch.py $EXPECT \
             --json-out status.json > result.txt 2>&1

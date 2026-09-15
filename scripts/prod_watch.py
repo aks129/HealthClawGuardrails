@@ -112,6 +112,9 @@ DEMO_PATIENTS = (
     "demo-ray",
 )
 BUILD_CHECK = "careagents: running the current build"
+#: Flask auto-deploys main, so its build is a different question from CareAgents'
+#: (#703 §0): the packet records both; this asserts it only when asked to.
+FLASK_BUILD_CHECK = "healthclaw: running the expected build"
 TELEGRAM_CHECK = "careagents: telegram not advertised as live"
 # Same shape careagents/_build.py enforces on the way out. A "-dirty" marker
 # deliberately fails it: a build stamped from an uncommitted tree has no
@@ -355,7 +358,8 @@ def post(url: str, timeout: float, **kw):
         return type(exc).__name__
 
 
-def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
+def _run_checks(timeout: float, expect_sha: list[str],
+                expect_flask_sha: list[str] | None = None) -> bool:
     """Run every check; return whether the build check found a stale build.
 
     Split out of `run` so the summary and the completeness guard cannot be
@@ -375,11 +379,36 @@ def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
     # stale module state the reset above exists for.
     results.clear()
     reported.clear()
+    stale = False   # set by either build check below; a stale build is exit 2
 
     # --- the guardrail engine ------------------------------------------------
     r = get(f"{HEALTHCLAW}/r6/fhir/health", timeout)
     check("healthclaw: alive", getattr(r, "status_code", None) == 200,
           str(getattr(r, "status_code", r)))
+    # Which main is Flask running? /health carries `build` since #745. The
+    # same rules as the CareAgents marker: a real sha prefix that matches an
+    # expected commit passes; "unknown", "-dirty" and a missing field never do.
+    flask_build = None
+    if getattr(r, "status_code", None) == 200:
+        try:
+            flask_build = str((r.json() or {}).get("build") or "").lower() or None
+        except ValueError:
+            flask_build = None
+    if not expect_flask_sha:
+        report(FLASK_BUILD_CHECK,
+               (flask_build or "no build marker read")
+               + " (informational — no --expect-flask-sha given)")
+    else:
+        flask_ok = bool(flask_build and _SHA_RE.fullmatch(flask_build)
+                        and any(full.startswith(flask_build)
+                                for full in expect_flask_sha))
+        stale = not check(
+            FLASK_BUILD_CHECK, flask_ok,
+            flask_build if flask_ok else
+            f"deployed build {flask_build or 'unreadable'} is not one of the "
+            f"{len(expect_flask_sha)} commit(s) this run accepts (tip "
+            f"{expect_flask_sha[0][:7]}). Flask auto-deploys main — a deploy "
+            "may be in flight, or the auto-deploy failed; check Railway.") or stale
 
     r = get(f"{HEALTHCLAW}/r6/fhir/$conformance", timeout)
     grade = None
@@ -529,7 +558,6 @@ def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
     # satisfied just as well by a months-old build — in #258 both CareAgents
     # deployments were running code older than PR #241 while this script
     # reported 9/9 green. This asks the one question the others cannot.
-    stale = False
     if not healthz_read:
         # Nothing was read, so there is no marker to have a verdict about, and
         # `deployed` below would be this script's own "unknown" default —
@@ -573,7 +601,7 @@ def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
                 + (f" (built {built})" if built else "")
                 + f" is not one of the {len(expect_sha)} commit(s) this run "
                 f"accepts (tip {expect_sha[0][:7]}). CareAgents does not "
-                "auto-deploy — redeploy per RELEASING.md §4.")
+                "auto-deploy — redeploy per RELEASING.md §4.") or stale
             build_info.update(asserted=True, ok=ok)
 
     # The Railway hostname, readiness only: everything user-facing above and
@@ -724,8 +752,9 @@ def _run_checks(timeout: float, expect_sha: list[str]) -> bool:
     return stale
 
 
-def run(timeout: float, expect_sha: list[str]) -> int:
-    stale = _run_checks(timeout, expect_sha)
+def run(timeout: float, expect_sha: list[str],
+        expect_flask_sha: list[str] | None = None) -> int:
+    stale = _run_checks(timeout, expect_sha, expect_flask_sha)
 
     # Did this run actually run? `all N checks passing` counted what happened
     # to execute, so a check that stopped running — moved inside a condition
@@ -754,7 +783,7 @@ def run(timeout: float, expect_sha: list[str]) -> int:
                         missing=missing, unreadable=unreadable)
 
     failed = [n for n, ok, _ in results if not ok]
-    hard = [n for n in failed if n != BUILD_CHECK]
+    hard = [n for n in failed if n not in (BUILD_CHECK, FLASK_BUILD_CHECK)]
     print(file=_human())
     if failed:
         print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed),
@@ -810,6 +839,13 @@ def main() -> int:
                          "the last 24h plus the tip, so a deploy in flight is "
                          "still accepted. Omit it and the deployed build is "
                          "reported but not asserted.")
+    ap.add_argument("--expect-flask-sha", action="append", default=[],
+                    metavar="SHA",
+                    help="full commit sha the Flask service may be running "
+                         "(it auto-deploys main, so this is usually the main "
+                         "tip and the last 24h of merges). Repeatable or "
+                         "comma-separated. Omit it and the build is reported "
+                         "but not asserted.")
     args = ap.parse_args()
 
     # Assigned unconditionally, not only under --json: this is module state,
@@ -829,7 +865,14 @@ def main() -> int:
     if args.expect_sha and not expect:
         print(f"{R}--expect-sha was given but contains no sha{X}", file=sys.stderr)
         return 1
-    code = run(args.timeout, expect)
+    expect_flask = list(dict.fromkeys(
+        s.strip().lower() for arg in args.expect_flask_sha
+        for s in arg.split(",") if s.strip()))
+    if args.expect_flask_sha and not expect_flask:
+        print(f"{R}--expect-flask-sha was given but contains no sha{X}",
+              file=sys.stderr)
+        return 1
+    code = run(args.timeout, expect, expect_flask)
     payload = {"ok": code == 0,
                # "nothing is wrong" and "nothing an outage alarm speaks for is
                # wrong" are different questions, and the outage alarm needs the
