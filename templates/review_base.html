@@ -166,6 +166,14 @@
       /* Decline (#520): the quiet twin of Approve, same size, no fill. */
       .btn-outline-secondary { color: var(--ink); }
       .ms-2 { margin-left: .5rem; }
+      /* action_approve.html: a fix list and verbatim request text */
+      .table { width: 100%; border-collapse: collapse; }
+      .table th, .table td { text-align: left; padding: .5rem .4rem;
+        border-bottom: 1px solid var(--hairline); vertical-align: top; }
+      .table thead th { color: var(--ink-soft); font-weight: 600; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 0; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: .95em; overflow-wrap: anywhere; }
       .btn-outline-success:hover { border-color: var(--sage); }
       .btn-outline-warning:hover { border-color: var(--warn); }
       .btn-outline-danger:hover  { border-color: var(--danger); }

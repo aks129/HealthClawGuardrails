@@ -33,12 +33,21 @@ import re
 
 import r6.actions.review as review_module
 
-TEMPLATE = (pathlib.Path(__file__).resolve().parent.parent
-            / "templates" / "action_review.html")
+TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "templates"
+#: Both relayed pages; the submit handler they share lives in an include,
+#: inlined here so the guards read what the browser runs.
+PAGES = ("action_review.html", "action_approve.html")
 
 
 def _template() -> str:
-    return TEMPLATE.read_text(encoding="utf-8")
+    out = []
+    for name in PAGES:
+        raw = (TEMPLATES / name).read_text(encoding="utf-8")
+        out.append(re.sub(
+            r'{%\s*include\s+"([^"]+)"\s*%}',
+            lambda m: (TEMPLATES / m.group(1)).read_text(encoding="utf-8"),
+            raw))
+    return "\n".join(out)
 
 
 def test_the_page_renders_no_step_up_token():

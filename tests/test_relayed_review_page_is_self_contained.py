@@ -36,10 +36,12 @@ from __future__ import annotations
 import pathlib
 import re
 
+import pytest
+
 TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "templates"
 
 #: Pages served from an origin other than the one that renders them.
-RELAYED_PAGES = ("action_review.html",)
+RELAYED_PAGES = ("action_review.html", "action_approve.html")
 
 #: The shell they must use. `base.html` is the site chrome and is correct for
 #: every page NOT relayed.
@@ -58,8 +60,12 @@ _COMMENTS = re.compile(r"{#.*?#}|/\*.*?\*/|^\s*//.*$", re.S | re.M)
 
 
 def _read(name: str) -> str:
-    """Template source with comments stripped."""
+    """Template source with comments stripped and `{% include %}`s inlined —
+    the shared submit handler is part of every page that includes it."""
     raw = (TEMPLATES / name).read_text(encoding="utf-8")
+    raw = re.sub(r'{%\s*include\s+"([^"]+)"\s*%}',
+                 lambda m: (TEMPLATES / m.group(1)).read_text(encoding="utf-8"),
+                 raw)
     return _COMMENTS.sub("", raw)
 
 
@@ -70,11 +76,12 @@ def _rendered_chain(name: str) -> str:
     return source + (_read(match.group(1)) if match else "")
 
 
-def test_the_review_page_uses_the_relay_shell():
+@pytest.mark.parametrize("name", RELAYED_PAGES)
+def test_the_review_page_uses_the_relay_shell(name):
     """MUTATION: extend base.html again -> red, and every check below with it."""
     pattern = r'{%\s*extends\s+"' + re.escape(RELAY_SHELL) + '"'
-    assert re.search(pattern, _read("action_review.html")), (
-        "action_review.html must extend review_base.html; base.html carries "
+    assert re.search(pattern, _read(name)), (
+        f"{name} must extend review_base.html; base.html carries "
         "a navbar and a same-origin stylesheet that only exist on HealthClaw")
 
 
@@ -126,7 +133,8 @@ def test_no_relayed_page_shows_another_products_navigation():
                 f"careagents.cloud")
 
 
-def test_every_class_the_page_uses_is_defined_by_the_shell():
+@pytest.mark.parametrize("name", RELAYED_PAGES)
+def test_every_class_the_page_uses_is_defined_by_the_shell(name):
     """The load-bearing one, because Bootstrap is no longer loaded.
 
     The shell hand-implements the Bootstrap class names this page uses. A name
@@ -142,7 +150,7 @@ def test_every_class_the_page_uses_is_defined_by_the_shell():
     style = "\n".join(re.findall(r"<style>(.*?)</style>", shell, re.S))
     assert style.strip(), "the relay shell has no inlined stylesheet"
 
-    page = _read("action_review.html")
+    page = _read(name)
     used: set[str] = set()
     for attr in re.findall(r'class="([^"]*)"', page):
         for token in attr.split():
@@ -156,7 +164,7 @@ def test_every_class_the_page_uses_is_defined_by_the_shell():
         and not re.search(r"\." + re.escape(tok) + r"(?![\w-])", style)
     )
     assert not undefined, (
-        "action_review.html uses classes review_base.html does not define, and "
+        f"{name} uses classes review_base.html does not define, and "
         "Bootstrap is not loaded, so they style nothing:\n  "
         + "\n  ".join(undefined)
         + "\nAdd a rule to the shell's inlined <style>, or stop using the class.")

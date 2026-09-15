@@ -273,7 +273,11 @@ def test_get_review_requires_step_up(client, app, tenant_headers, auth_headers):
     assert resp.status_code == 401
 
 
-def test_get_review_non_form_fill_404(client, app, tenant_headers, auth_headers):
+def test_get_review_non_form_fill_renders_the_approve_page(
+        client, app, tenant_headers, auth_headers):
+    """Until #215 this answered 404: every kind but form-fill had no page a
+    person could approve from. tests/actions/test_action_approve_page.py
+    holds that page to the payload it renders."""
     r = client.post('/r6/actions/propose', json={
         'kind': 'sms',
         'payload': {'to': 'Dr. Smith', 'phone': '617-555-0100',
@@ -281,7 +285,8 @@ def test_get_review_non_form_fill_404(client, app, tenant_headers, auth_headers)
     action_id = r.get_json()['id']
     client.post('/r6/actions/%s/commit' % action_id, headers=auth_headers)
     resp = _get(client, auth_headers, action_id)
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert 'Approve this request?' in resp.get_data(as_text=True)
 
 
 def test_get_review_wrong_tenant_404(client, app, tenant_headers, auth_headers,
