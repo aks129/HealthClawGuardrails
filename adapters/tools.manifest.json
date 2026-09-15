@@ -578,8 +578,8 @@
     },
     {
       "name": "curatr_apply_fix",
-      "title": "Apply Data Quality Fix",
-      "description": "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token); in production the token must be audience- and operation-bound to this fix. This tool never asserts human confirmation on the patient's behalf — approval is proved by the token, not by a header.",
+      "title": "Propose Data Quality Fix",
+      "description": "Propose data quality fixes to a FHIR resource as a 'curatr-fix' action on the action rail. Nothing changes when this is called: it returns a draft (action id) the patient must submit with action_commit and then approve out of band on their own review page; only that approval carries the fix out, once, with a linked Provenance record. The proposal is pinned to the record's current meta.versionId — pass record_version from the record you read, or omit it and the tool reads it for you — and is refused at execution if the record has changed since. Only fields the Curatr evaluator can propose are accepted.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -611,6 +611,15 @@
           "patient_intent": {
             "type": "string",
             "description": "Plain-language reason for the fix, provided by the patient (recorded in Provenance)."
+          },
+          "record_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The record's meta.versionId as you read it. Omit to have the tool read the current version before proposing."
+          },
+          "reason": {
+            "type": "string",
+            "description": "What the fix does, in words the patient will read on the approval page. Defaults to a description built from the field paths."
           }
         },
         "required": [
@@ -621,7 +630,7 @@
         ]
       },
       "annotations": {
-        "readOnlyHint": false,
+        "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": false
       }

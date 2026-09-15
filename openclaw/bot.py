@@ -11,8 +11,8 @@ Commands
 /conditions     List Conditions for the configured tenant
 /labs           Recent lab results (Observation search)
 /curatr         Run Curatr clinical evaluation on current Conditions
-/curatr fix     Apply the first fix proposal from the last Curatr evaluation
-/approve        Confirm a pending step-up write (sets X-Human-Confirmed)
+/curatr fix     Propose the first fix from the last Curatr evaluation (nothing changes here)
+/approve        Where to approve a proposed fix (CareAgents review page, not this chat)
 /token          Display the current step-up token (for debugging)
 
 Environment variables
@@ -25,7 +25,6 @@ FHIR_BASE_URL        Flask FHIR base URL. Default: http://localhost:5000/r6/fhir
 STEP_UP_SECRET       HMAC secret for step-up tokens.
 """
 
-import json
 import logging
 import re
 import os
@@ -448,8 +447,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/conditions — list Conditions\n'
         '/labs — recent lab results\n'
         '/curatr — run Curatr data-quality evaluation\n'
-        '/curatr\\_fix — apply first Curatr fix proposal\n'
-        '/approve — confirm pending write\n'
+        '/curatr\\_fix — propose first Curatr fix (approved elsewhere)\n'
+        '/approve — where a proposed fix gets approved\n'
         '/health — stack health check\n'
         '/token — show current step-up token\n\n'
         f'Tenant: `{TENANT_ID}`'
@@ -675,76 +674,76 @@ async def cmd_curatr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Propose the first suggested fix through the action rail (#413).
+
+    Nothing changes here. The MCP tool stages a 'curatr-fix' action; the
+    person approves it on their own review page, and only that approval
+    carries the fix out. This chat cannot mint that approval and does not
+    try to (#738: /approve was a demo-environment path).
+    """
     agent_id = await _log_incoming(update, 'curatr_fix')
     chat_id = update.effective_chat.id
-    state = _chat_state.get(chat_id, {})
+    state = _chat_state.setdefault(chat_id, {})
     last = state.get('last_curatr')
 
     if not last:
         await _reply(update, 'No Curatr result in memory. Run /curatr first.', agent_id)
         return
 
-    proposals = last.get('fix_proposals', last.get('proposals', []))
-    if not proposals:
-        await _reply(update, 'No fix proposals in last Curatr result.', agent_id)
+    issues = [i for i in last.get('issues', [])
+              if i.get('field_path') and i.get('suggested_value') is not None]
+    if not issues:
+        await _reply(update, 'The last Curatr result suggested no fix.', agent_id)
         return
 
-    fix = proposals[0]
-    description = fix.get('description', str(fix))
-    await _reply(
-        update,
-        f'Applying fix: {description}\n\nConfirm with /approve',
-        agent_id,
-    )
-    state['pending_fix'] = fix
-    state['pending_token'] = None  # will be set on /approve
-
-    # Create a pending task in the command center so the dashboard surfaces it
+    issue = issues[0]
+    description = issue.get('title') or issue.get('plain_language') or issue['field_path']
     try:
-        requests.post(
-            f'{CC_API_BASE}/tasks',
-            json={
-                'tenant_id': TENANT_ID,
-                'agent_id': agent_id,
-                'title': f'Approve curatr fix: {description[:120]}',
-                'description': json.dumps(fix)[:1000],
-                'priority': 'high',
-                'source': 'telegram',
-                'resource_ref': fix.get('resource_ref'),
-            },
-            timeout=2,
+        result = _rpc(
+            'curatr_apply_fix',
+            resource_type=last.get('resource_type'),
+            resource_id=last.get('resource_id'),
+            fixes=[{'field_path': issue['field_path'],
+                    'new_value': issue['suggested_value']}],
+            patient_intent='requested from Telegram /curatr_fix',
+            reason=description,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.debug('Could not create task: %s', exc)
+        logger.error('curatr_fix propose error: %s', exc)
+        await _reply(update, f'Could not propose the fix: {exc}', agent_id)
+        return
+    if result.get('error'):
+        await _reply(update, f"Could not propose the fix: {result['error']}", agent_id)
+        return
+
+    action_id = result.get('id')
+    state['pending_action'] = action_id
+    await _reply(
+        update,
+        f'Proposed: {description}\n\n'
+        f'Action `{action_id}`. Nothing has changed yet. Submit it and '
+        f'approve it on your CareAgents review page; only that approval '
+        f'carries the fix out. /approve explains where.',
+        agent_id,
+        parse_mode='Markdown',
+    )
 
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """This chat is not an approval surface. Say where one is (#215, #413)."""
     agent_id = await _log_incoming(update, 'approve')
     chat_id = update.effective_chat.id
-    state = _chat_state.get(chat_id, {})
-    fix = state.get('pending_fix')
-
-    if not fix:
-        await _reply(update, 'No pending fix to approve.', agent_id)
-        return
-
-    await _reply(update, 'Obtaining step-up token and applying fix…', agent_id)
-    try:
-        token = _get_step_up_token()
-        result = _rpc(
-            'curatr_apply_fix',
-            fix=fix,
-            step_up_token=token,
-            human_confirmed=True,
-        )
-        state.pop('pending_fix', None)
-        state.pop('pending_token', None)
-
-        status = result.get('status', result.get('resourceType', 'ok'))
-        await _reply(update, f'Fix applied. Status: `{status}`', agent_id, parse_mode='Markdown')
-    except Exception as exc:
-        logger.error('approve error: %s', exc)
-        await _reply(update, f'Error applying fix: {exc}', agent_id)
+    action_id = _chat_state.get(chat_id, {}).get('pending_action')
+    which = f'Action `{action_id}` is waiting. ' if action_id else ''
+    await _reply(
+        update,
+        f'{which}Approvals do not happen in this chat: a message here cannot '
+        f'prove you read what will change. Open the request on your '
+        f'CareAgents review page ({DASHBOARD_BASE_URL}) and approve or '
+        f'decline it there.',
+        agent_id,
+        parse_mode='Markdown',
+    )
 
 
 async def cmd_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -2185,25 +2185,85 @@ describe("Backend Timeout Guardrails", () => {
     );
   });
 
-  it("curatr_apply_fix uses a 30s budget (re-evaluates via external terminology after fix)", async () => {
-    mockFetch.mockResolvedValueOnce(fakeResponse({ issues_fixed: 1 }));
+  it("curatr_apply_fix proposes a curatr-fix action pinned to the version it was given, and changes nothing", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ id: "act-9", status: "proposed" }, 201));
 
-    await tools.executeTool(
+    const result = await tools.executeTool(
       "curatr_apply_fix",
       {
         resource_type: "Condition",
         resource_id: "c-1",
-        fixes: [{ field_path: "Condition.code.coding[0].system", new_value: "x" }],
-        patient_intent: "fix my record",
+        fixes: [{ field_path: "Condition.clinicalStatus.coding[0].code", new_value: "resolved" }],
+        patient_intent: "it cleared up",
+        record_version: 3,
+        reason: "Mark this condition as resolved.",
       },
       { "x-step-up-token": "tok-1" }
     );
 
-    expect(helperSpy).toHaveBeenCalledWith(
-      expect.stringContaining("$curatr-apply-fix"),
-      expect.anything(),
-      30_000
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/r6/actions/propose");
+    expect(url).not.toContain("$curatr-apply-fix");
+    const sent = JSON.parse(opts.body);
+    expect(sent.kind).toBe("curatr-fix");
+    expect(sent.payload.to).toBe("Condition/c-1");
+    expect(sent.payload.body).toBe("Mark this condition as resolved.");
+    expect(sent.payload.curatr_fix).toEqual({
+      resource_type: "Condition",
+      resource_id: "c-1",
+      record_version: 3,
+      fixes: [{ field_path: "Condition.clinicalStatus.coding[0].code", new_value: "resolved" }],
+      patient_intent: "it cleared up",
+    });
+    const summary = result._mcp_summary as Record<string, unknown>;
+    expect(summary.changed).toBe(false);
+    expect(summary.proposed).toBe(true);
+    expect(summary.action_id).toBe("act-9");
+    expect(summary.record_version_source).toBe("caller");
+    expect(JSON.stringify(result)).not.toMatch(/applied|provenance_created|patient_rights/);
+  });
+
+  it("curatr_apply_fix reads meta.versionId itself when the caller did not pin one", async () => {
+    mockFetch
+      .mockResolvedValueOnce(fakeResponse({ resourceType: "Condition", id: "c-1", meta: { versionId: "7" } }))
+      .mockResolvedValueOnce(fakeResponse({ id: "act-10", status: "proposed" }, 201));
+
+    const result = await tools.executeTool(
+      "curatr_apply_fix",
+      {
+        resource_type: "Condition",
+        resource_id: "c-1",
+        fixes: [{ field_path: "Condition.clinicalStatus.coding[0].code", new_value: "resolved" }],
+        patient_intent: "it cleared up",
+      },
+      { "x-step-up-token": "tok-1" }
     );
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[0][0]).toContain("/Condition/c-1");
+    expect(mockFetch.mock.calls[0][1].method).toBe("GET");
+    const sent = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(sent.payload.curatr_fix.record_version).toBe(7);
+    expect((result._mcp_summary as Record<string, unknown>).record_version_source).toBe("read now");
+  });
+
+  it("curatr_apply_fix refuses to propose against a record it cannot version", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Condition", id: "c-1" }));
+
+    const result = await tools.executeTool(
+      "curatr_apply_fix",
+      {
+        resource_type: "Condition",
+        resource_id: "c-1",
+        fixes: [{ field_path: "Condition.clinicalStatus.coding[0].code", new_value: "resolved" }],
+        patient_intent: "it cleared up",
+      },
+      { "x-step-up-token": "tok-1" }
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.error).toMatch(/meta.versionId/);
   });
 });
 

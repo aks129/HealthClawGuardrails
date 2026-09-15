@@ -828,9 +828,9 @@ export class FHIRTools {
       },
       {
         name: "curatr_apply_fix",
-        title: "Apply Data Quality Fix",
+        title: "Propose Data Quality Fix",
         description:
-          "Apply patient-approved data quality fixes to a FHIR resource. Creates a linked Provenance record with full attribution. Requires step-up authorization (X-Step-Up-Token); in production the token must be audience- and operation-bound to this fix. This tool never asserts human confirmation on the patient's behalf — approval is proved by the token, not by a header.",
+          "Propose data quality fixes to a FHIR resource as a 'curatr-fix' action on the action rail. Nothing changes when this is called: it returns a draft (action id) the patient must submit with action_commit and then approve out of band on their own review page; only that approval carries the fix out, once, with a linked Provenance record. The proposal is pinned to the record's current meta.versionId — pass record_version from the record you read, or omit it and the tool reads it for you — and is refused at execution if the record has changed since. Only fields the Curatr evaluator can propose are accepted.",
         tier: "write",
         handler: ({ input, headers }) =>
           this.curatrApplyFix(
@@ -838,9 +838,11 @@ export class FHIRTools {
             input.resource_id as string,
             input.fixes as Array<{ field_path: string; new_value: unknown }>,
             input.patient_intent as string,
-            headers
+            headers,
+            input.record_version as number | undefined,
+            input.reason as string | undefined
           ),
-        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         inputSchema: {
           type: "object",
           properties: {
@@ -869,6 +871,17 @@ export class FHIRTools {
               type: "string",
               description:
                 "Plain-language reason for the fix, provided by the patient (recorded in Provenance).",
+            },
+            record_version: {
+              type: "integer",
+              minimum: 1,
+              description:
+                "The record's meta.versionId as you read it. Omit to have the tool read the current version before proposing.",
+            },
+            reason: {
+              type: "string",
+              description:
+                "What the fix does, in words the patient will read on the approval page. Defaults to a description built from the field paths.",
             },
           },
           required: ["resource_type", "resource_id", "fixes", "patient_intent"],
@@ -2014,52 +2027,74 @@ export class FHIRTools {
     resourceId: string,
     fixes: Array<{ field_path: string; new_value: unknown }>,
     patientIntent: string,
-    headers: Record<string, string>
+    headers: Record<string, string>,
+    recordVersion?: number,
+    reason?: string
   ): Promise<Record<string, unknown>> {
-    // No local step-up check: executeToolInner gates every write-tier tool,
-    // and curatr_apply_fix is write tier. The check that used to live here
-    // read a differently-cased header than the central gate, which is how two
-    // controls that look like one drift apart.
+    // Since #413 this tool PROPOSES: it stages a 'curatr-fix' action on the
+    // rail and changes nothing. The record is changed once, by the engine's
+    // executor, after the patient's own out-of-band approval — the same
+    // gate every phone call and text goes through. The old direct call to
+    // $curatr-apply-fix is unreachable in production by design.
     //
-    // Nor does this call mint X-Human-Confirmed. The MCP client cannot know
-    // whether a human confirmed a clinical write; asserting it upstream on the
-    // human's behalf is the guardrail inverted. Flask ignores the header here
-    // and requires an audience-bound, operation-bound, single-use token
-    // instead, so removing it costs nothing and removes a standing lie.
-
-    // 30s budget: after applying, Flask re-evaluates the fixed resource via
-    // the same external terminology services as $curatr-evaluate
-    // (r6/routes.py calls _curatr_engine.evaluate(fresh)), so the stacked
-    // 5s-per-service calls can legitimately exceed 15s.
-    const resp = await fetchWithTimeout(
-      `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}/$curatr-apply-fix`,
-      {
-        method: "POST",
-        headers: { ...headers },
-        body: JSON.stringify({ fixes, patient_intent: patientIntent }),
-      },
-      30_000
-    );
-    if (!resp.ok) {
-      return { error: `Curatr apply-fix failed with status ${resp.status}` };
+    // No X-Human-Confirmed, ever: the MCP client cannot know that a human
+    // confirmed a clinical write, and the rail does not read the header.
+    const ref = `${resourceType}/${resourceId}`;
+    let version = recordVersion;
+    let versionSource = "caller";
+    if (version === undefined) {
+      // The proposal is pinned to the version the fixes were written
+      // against. When the caller did not say, read it now and say so.
+      const read = await fetchWithTimeout(
+        `${this.baseUrl}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`,
+        { method: "GET", headers: { ...headers } }
+      );
+      if (!read.ok) {
+        return { error: `Could not read ${ref} to pin its version (status ${read.status})` };
+      }
+      const record = (await read.json()) as { meta?: { versionId?: string } };
+      const parsed = parseInt(record?.meta?.versionId ?? "", 10);
+      if (!Number.isFinite(parsed) || parsed < 1) {
+        return { error: `${ref} carries no meta.versionId to pin the proposal to` };
+      }
+      version = parsed;
+      versionSource = "read now";
     }
-    const result = (await resp.json()) as Record<string, unknown>;
 
-    const fixed = result.issues_fixed as number ?? 0;
-    (result as Record<string, unknown>)._mcp_summary = {
-      resource: `${resourceType}/${resourceId}`,
-      fixes_applied: fixed,
-      provenance_created: !!(result.provenance),
-      note: `${fixed} fix(es) applied. A Provenance resource was created to document the change with full patient attribution.`,
-      patient_rights: [
-        "This change was initiated and approved by the patient",
-        "The original source data is preserved in the audit trail",
-        "A Provenance record links this fix to the patient's intent",
-        "The patient can request their provider correct the source record",
-      ],
+    const paths = (fixes || []).map((f) => f.field_path).filter(Boolean);
+    const body =
+      reason && reason.trim()
+        ? reason.trim()
+        : `Correct ${paths.length} field(s) on ${ref}: ${paths.join(", ")}`;
+    const draft = await this.proposeAction(
+      "curatr-fix",
+      {
+        to: ref,
+        body,
+        curatr_fix: {
+          resource_type: resourceType,
+          resource_id: resourceId,
+          record_version: version,
+          fixes,
+          patient_intent: patientIntent,
+        },
+      },
+      headers
+    );
+    if (draft.error) return draft;
+
+    draft._mcp_summary = {
+      proposed: true,
+      changed: false,
+      action_id: draft.id,
+      resource: ref,
+      record_version: version,
+      record_version_source: versionSource,
+      fields: paths,
+      next_step:
+        "Nothing has changed. Submit this draft with action_commit; the patient then approves it on their own review page. Only that approval carries the fix out, once, with a Provenance record. If the record changes before then, the fix is refused.",
     };
-
-    return result;
+    return draft;
   }
 
   // --- Real-world action tools ---
