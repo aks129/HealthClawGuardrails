@@ -1824,9 +1824,9 @@ def health_check():
     health = {
         'status': 'healthy',
         'version': __version__,
+        'build': (os.environ.get('RAILWAY_GIT_COMMIT_SHA') or 'unknown')[:12],  # #703
         'fhirVersion': R6_FHIR_VERSION,
-        'mode': 'upstream' if is_proxy_enabled() else 'local',
-        'checks': {}
+        'mode': 'upstream' if is_proxy_enabled() else 'local', 'checks': {},
     }
 
     # Check database connectivity
