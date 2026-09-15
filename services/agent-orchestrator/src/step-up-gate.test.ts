@@ -35,6 +35,7 @@ const VALID_INPUT: Record<string, Record<string, unknown>> = {
     resource_id: "c-1",
     fixes: [{ field_path: "Condition.code.coding[0].system", new_value: "x" }],
     patient_intent: "fix my record",
+    record_version: 1,
   },
   action_propose: {
     kind: "phone-call",
@@ -128,14 +129,14 @@ describe("step-up gate follows the declared tier", () => {
   //
   // curatr_apply_fix used to attach `X-Human-Confirmed: true` to every
   // upstream call. The MCP client cannot know that a human confirmed a
-  // clinical write; asserting it on the human's behalf is the whole defect,
-  // even though Flask ignores the header on $curatr-apply-fix and requires an
-  // audience-bound, operation-bound, nonce-consumed token instead.
+  // clinical write; asserting it on the human's behalf is the whole defect.
+  // Since #413 the tool proposes a 'curatr-fix' action on the rail instead
+  // of calling $curatr-apply-fix; the rail reads no such header either.
   it("curatr_apply_fix never sends X-Human-Confirmed upstream", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      status: 200,
-      json: jest.fn().mockResolvedValue({ issues_fixed: 1 }),
+      status: 201,
+      json: jest.fn().mockResolvedValue({ id: "act-1", status: "proposed" }),
       text: jest.fn().mockResolvedValue("{}"),
     });
 
@@ -146,7 +147,7 @@ describe("step-up gate follows the declared tier", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("$curatr-apply-fix");
+    expect(url).toContain("/r6/actions/propose");
     expect(opts.headers).not.toHaveProperty("X-Human-Confirmed");
     expect(Object.keys(opts.headers).map((k) => k.toLowerCase())).not.toContain(
       "x-human-confirmed"
