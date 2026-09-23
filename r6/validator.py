@@ -52,6 +52,7 @@ R6_RESOURCE_TYPES = [
     'Condition', 'Provenance',
     # Phase 4 — US Core v9 R4 clinical resources (stable)
     'AllergyIntolerance', 'Immunization', 'MedicationRequest',
+    'MedicationStatement',
     'Medication', 'MedicationDispense',
     'Procedure', 'DiagnosticReport',
     'CarePlan', 'CareTeam', 'Goal',
@@ -310,6 +311,8 @@ class R6Validator:
             issues.extend(self._validate_immunization(resource))
         elif resource_type == 'MedicationRequest':
             issues.extend(self._validate_medication_request(resource))
+        elif resource_type == 'MedicationStatement':
+            issues.extend(self._validate_medication_statement(resource))
         elif resource_type == 'Procedure':
             issues.extend(self._validate_procedure(resource))
         elif resource_type == 'DiagnosticReport':
@@ -686,6 +689,41 @@ class R6Validator:
                 'code': 'required',
                 'diagnostics': 'MedicationRequest.subject is required',
                 'expression': ['MedicationRequest.subject']
+            })
+        return issues
+
+    def _validate_medication_statement(self, resource):
+        """Validate MedicationStatement (US Core v9).
+
+        MedicationRequest's checks minus `intent`, which a statement does not
+        carry: it records what the person takes, not an order (#377).
+        """
+        issues = []
+        if not resource.get('status'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationStatement.status is required',
+                'expression': ['MedicationStatement.status']
+            })
+        has_medication = (
+            resource.get('medicationCodeableConcept') or
+            resource.get('medicationReference') or
+            resource.get('medication')
+        )
+        if not has_medication:
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationStatement.medication[x] is required (US Core)',
+                'expression': ['MedicationStatement.medication[x]']
+            })
+        if not resource.get('subject'):
+            issues.append({
+                'severity': 'error',
+                'code': 'required',
+                'diagnostics': 'MedicationStatement.subject is required',
+                'expression': ['MedicationStatement.subject']
             })
         return issues
 

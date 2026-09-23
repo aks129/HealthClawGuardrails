@@ -308,6 +308,7 @@ export class FHIRTools {
                 "AllergyIntolerance",
                 "Immunization",
                 "MedicationRequest",
+                "MedicationStatement",
                 "Medication",
                 "MedicationDispense",
                 "Procedure",
@@ -380,6 +381,7 @@ export class FHIRTools {
                 "AllergyIntolerance",
                 "Immunization",
                 "MedicationRequest",
+                "MedicationStatement",
                 "Medication",
                 "MedicationDispense",
                 "Procedure",
@@ -1456,6 +1458,7 @@ export class FHIRTools {
     const clinicalTypes = new Set([
       "Observation", "Condition", "MedicationRequest", "DiagnosticReport",
       "AllergyIntolerance", "Procedure", "CarePlan", "Immunization",
+      "MedicationStatement",
       "NutritionIntake", "DeviceAlert",
     ]);
     const requiresHumanConfirmation = clinicalTypes.has(resourceType);

@@ -218,7 +218,7 @@ def test_the_callers_resource_type_is_never_reflected(client):
     planted = "Jane Doe 1980-01-01 MRN 12345"
     r = _post(client, {"bundle": _bundle([
         {"resourceType": planted, "id": "p-1"},
-        {"resourceType": "MedicationStatement", "id": "m-1"},
+        {"resourceType": "MedicationAdministration", "id": "m-1"},
         {"resourceType": "Patient", "id": "'; DROP TABLE r6_resource; --"},
     ])})
     assert r.status_code == 200
@@ -228,7 +228,7 @@ def test_the_callers_resource_type_is_never_reflected(client):
     named = [e["resourceType"] for e in r.get_json()["errors"]]
     # A skippable type stays nameable, a stored type stays nameable, and
     # the planted text collapses to the constant.
-    assert named == ["other", "MedicationStatement", "Patient"]
+    assert named == ["other", "MedicationAdministration", "Patient"]
 
 
 def test_partial_bundle_reports_per_entry(client):
