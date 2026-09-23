@@ -256,3 +256,108 @@ def test_curatr_evaluate_does_not_quote_the_upstream_display(
 
     assert CURATR_DISPLAY_MARKER not in body, (
         "$curatr-evaluate quoted the stored coding.display back to the caller")
+
+
+# Free-text sweep, 2026-09-23 (#282). Every `string`/`markdown` element of
+# every type in `R6Resource.SUPPORTED_TYPES` was taken from the published
+# StructureDefinitions, given its own marker, stored, and read back through
+# `GET /<type>/<id>` and `GET /<type>`. The profile strips by field name, so
+# a free-text string whose name was not on a list came back verbatim. These
+# rows are the survivors that are clinician or feed free text; the ones kept
+# (definitional titles, units, versions, lot numbers, linkIds) are argued in
+# the PR that added them.
+# ---------------------------------------------------------------------------
+
+FREE_TEXT_MARKER = "PHIFREETEXTMARKER"
+SUBJECT = {"reference": f"Patient/{PATIENT_ID}"}
+FMH_CODE = {"coding": [{"system": "http://snomed.info/sct",
+                        "code": "38341003"}]}
+
+
+@pytest.mark.parametrize("field, resource", [
+    ("MedicationRequest.dosageInstruction.patientInstruction", {
+        "resourceType": "MedicationRequest", "status": "active",
+        "intent": "order", "subject": SUBJECT,
+        "dosageInstruction": [{"patientInstruction": FREE_TEXT_MARKER}]}),
+    ("MedicationDispense.dosageInstruction.patientInstruction", {
+        "resourceType": "MedicationDispense", "status": "completed",
+        "subject": SUBJECT,
+        "dosageInstruction": [{"patientInstruction": FREE_TEXT_MARKER}]}),
+    ("ServiceRequest.patientInstruction", {
+        "resourceType": "ServiceRequest", "status": "active",
+        "intent": "order", "subject": SUBJECT,
+        "patientInstruction": FREE_TEXT_MARKER}),
+    ("Condition.onsetString", {
+        "resourceType": "Condition", "subject": SUBJECT,
+        "onsetString": FREE_TEXT_MARKER}),
+    ("Condition.abatementString", {
+        "resourceType": "Condition", "subject": SUBJECT,
+        "abatementString": FREE_TEXT_MARKER}),
+    ("AllergyIntolerance.onsetString", {
+        "resourceType": "AllergyIntolerance", "patient": SUBJECT,
+        "onsetString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.condition.onsetString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT,
+        "condition": [{"code": FMH_CODE, "onsetString": FREE_TEXT_MARKER}]}),
+    ("FamilyMemberHistory.ageString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "ageString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.bornString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "bornString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.deceasedString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "deceasedString": FREE_TEXT_MARKER}),
+    ("Immunization.occurrenceString", {
+        "resourceType": "Immunization", "status": "completed",
+        "patient": SUBJECT, "occurrenceString": FREE_TEXT_MARKER}),
+    ("Procedure.performedString", {
+        "resourceType": "Procedure", "status": "completed",
+        "subject": SUBJECT, "performedString": FREE_TEXT_MARKER}),
+    ("CarePlan.activity.detail.scheduledString", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT,
+        "activity": [{"detail": {"status": "scheduled",
+                                 "scheduledString": FREE_TEXT_MARKER}}]}),
+    # Annotation.authorString is the author's NAME, in an Annotation that is
+    # not under `note`, so the note replacement never reached it.
+    ("CarePlan.activity.progress.authorString", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT,
+        "activity": [{"progress": [{"authorString": FREE_TEXT_MARKER,
+                                    "text": "progress"}]}]}),
+    ("CarePlan.title", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT, "title": FREE_TEXT_MARKER}),
+    ("Goal.statusReason", {
+        "resourceType": "Goal", "lifecycleStatus": "cancelled",
+        "subject": SUBJECT, "description": {"text": "goal"},
+        "statusReason": FREE_TEXT_MARKER}),
+    ("Goal.target.detailString", {
+        "resourceType": "Goal", "lifecycleStatus": "active",
+        "subject": SUBJECT, "description": {"text": "goal"},
+        "target": [{"detailString": FREE_TEXT_MARKER}]}),
+])
+def test_free_text_string_is_redacted(client, tenant_id, tenant_headers,
+                                      field, resource):
+    """Each row is a free-text string the sweep found on the standard read
+    path. Both the read and the search must bring the record back, or the
+    marker assertion measures nothing."""
+    rid = "redaction-probe-" + field.replace(".", "-").lower()
+    db.session.add(R6Resource(
+        resource_type=resource["resourceType"],
+        resource_json=json.dumps({**resource, "id": rid}),
+        resource_id=rid, tenant_id=tenant_id))
+    db.session.commit()
+    rtype = resource["resourceType"]
+
+    for path in (f"/r6/fhir/{rtype}/{rid}", f"/r6/fhir/{rtype}"):
+        response = client.get(path, headers=tenant_headers)
+        body = response.get_data(as_text=True)
+        assert response.status_code == 200, body[:200]
+        assert rid in body, (
+            f"{path} never returned the record, so the assertion below "
+            "measures nothing: " + body[:200])
+        assert FREE_TEXT_MARKER not in body, (
+            f"{field} reached the caller unredacted via {path}")

@@ -139,6 +139,18 @@ def _redact_fields(resource, narrative=True):
                 ca.pop('district', None)
                 ca.pop('postalCode', None)
 
+    # CarePlan.title is written per patient by whoever made the plan. `title`
+    # elsewhere (Questionnaire, Requirements) is a definition's own label and
+    # stays, so this one is scoped by resource type (#282).
+    if resource.get('resourceType') == 'CarePlan' and \
+            isinstance(resource.get('title'), str):
+        resource.pop('title')
+
+    # Goal.statusReason is free text. On other resources the same key is a
+    # CodeableConcept or a list of them, which must keep its codes (#282).
+    if isinstance(resource.get('statusReason'), str):
+        resource.pop('statusReason')
+
     # Remove notes/comments. DiagnosticReport.conclusion is the same kind of
     # clinician free text and leaked on the standard read path until #282.
     for field in ['note', 'comment', 'conclusion']:
@@ -152,6 +164,13 @@ def _redact_fields(resource, narrative=True):
 _FREE_TEXT_KEYS = {
     'display', 'description', 'valueString', 'valueMarkdown', 'valueUrl',
     'valueUri', 'valueCanonical', 'valueBase64Binary',
+    # Free-text strings that survived a sweep of every string/markdown
+    # element of the supported types (#282). Each key is a string wherever
+    # FHIR uses it. authorString is Annotation's author NAME.
+    'patientInstruction', 'onsetString', 'abatementString',
+    'occurrenceString', 'performedString', 'scheduledString',
+    'authorString', 'detailString', 'ageString', 'bornString',
+    'deceasedString',
 }
 _DATE_KEYS = {
     'birthDate', 'deceasedDateTime', 'valueDate', 'valueDateTime',
