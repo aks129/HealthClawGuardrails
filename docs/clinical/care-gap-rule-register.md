@@ -231,7 +231,9 @@ what a verdict above means.
   says so.
 - Every screening the patient is eligible for gets a patient-facing line,
   including one that could not be decided — labelled *"could not check"* rather
-  than folded in with the due items (#436).
+  than folded in with the due items (#436). The appointment brief carries the
+  same line in its care-gaps section, with that label, and CareAgents shows it
+  under a note that the review is incomplete.
 - Cadences are **population-level adult defaults**. Individual risk — family
   history, prior abnormal results, pregnancy — legitimately changes them, and
   nothing in this engine reads any of it.

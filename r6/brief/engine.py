@@ -294,16 +294,28 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     if not isinstance(consumer, dict) or "lines" not in consumer:
         return CareGapsSection(reason=CARE_GAPS_REASON_UNREADABLE)
 
-    # `lines` carries due AND up-to-date; this section is gaps only. Listing
-    # an up-to-date screening under "care gaps" tells a patient to chase one
-    # they have already had.
+    # `lines` carries due, up-to-date AND could-not-check; this section is
+    # gaps only. Listing an up-to-date screening under "care gaps" tells a
+    # patient to chase one they have already had.
+    #
+    # A could-not-check line stays (#436). The producer emits one only for a
+    # screening the person is eligible for and the rules could not decide;
+    # keeping `due` alone dropped it here, one layer after #563 stopped
+    # dropping it in report.py. Its label says it was not decided, so it is
+    # never read as a due verdict.
     lines = consumer.get("lines") or []
     out = []
     for item in lines:
-        if not isinstance(item, dict) or item.get("status") != "due":
+        if not isinstance(item, dict):
             continue
+        status = item.get("status")
+        if status not in ("due", "indeterminate"):
+            continue
+        label = item.get("title") or "Screening"
+        if status == "indeterminate":
+            label = f"{label} ({item.get('status_label') or 'could not check'})"
         out.append(BriefField(
-            label=item.get("title") or "Screening",
+            label=label,
             value=item.get("message") or "Due",
             source_type="MeasureReport",
             source_id=item.get("rule_id", ""),
