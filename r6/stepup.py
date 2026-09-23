@@ -42,9 +42,12 @@ READ_TOKEN_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 # the first such validation records the nonce, and any later validation of the
 # same nonce is rejected as a replay.
 #
-# Process-local only (resets on restart, not shared across workers). For a
-# multi-worker deployment this should be backed by Redis; the in-memory map is
-# adequate for the single-process reference deployment and for tests.
+# Backed by Redis (SET NX EX) when REDIS_URL is set. Without it the map below
+# is process-local: it resets on restart and is not shared across workers, so
+# a token consumed on one worker replays on a sibling. That is adequate for a
+# single-process dev server and for tests, and for nothing else — production
+# refuses to fall back to it (#212), at boot (r6/runtime_config.py) and again
+# here, for the paths that skip the boot gate.
 # ---------------------------------------------------------------------------
 _seen_nonces: dict[str, float] = {}  # nonce -> exp (unix seconds)
 _nonce_lock = threading.Lock()
@@ -101,6 +104,14 @@ def mark_nonce_used(nonce, exp):
                          type(exc).__name__)
             if _is_production():
                 return False
+    elif _is_production():
+        # Absence, not failure. Raised rather than answered False: a missing
+        # store has decided nothing, and False would reach the caller as
+        # 'Token already used (replay)' — a config fault filed as an auth
+        # result. r6.access._evaluate lets it out as the error it is.
+        raise RuntimeError(
+            'REDIS_URL is required in production: single-use nonces need a '
+            'store shared by every worker')
 
     # Development/testing fallback: bounded and atomic within this process.
     with _nonce_lock:
