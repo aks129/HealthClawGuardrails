@@ -41,8 +41,9 @@ def _store(app, resource, tenant_id):
 
 
 def _rows(app, tenant_id):
+    # The id is the column's: a forked row's JSON carries none.
     with app.app_context():
-        return [(r.resource_type, json.loads(r.resource_json))
+        return [(r.resource_type, r.id, json.loads(r.resource_json))
                 for r in R6Resource.query.filter_by(tenant_id=tenant_id)]
 
 
@@ -87,8 +88,8 @@ def test_submitting_the_intake_twice_leaves_one_patient_and_no_allergen_on_it(
         assert bundle["entry"] == []
     after = _rows(app, tenant_id)
 
-    patients = [r for t, r in after if t == "Patient"]
-    assert [p["id"] for p in patients] == ["p-572"]      # never forked
-    assert "code" not in patients[0]                     # no Patient.code
+    patients = [(rid, r) for t, rid, r in after if t == "Patient"]
+    assert [rid for rid, _ in patients] == ["p-572"]     # never forked
+    assert all("code" not in r for _, r in patients)     # no Patient.code
     assert after == before                               # nothing written
     assert ALLERGEN not in json.dumps(after)
