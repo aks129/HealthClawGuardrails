@@ -25,7 +25,12 @@ Sites not covered here (`r6/actions/rails/form_fill.py`, `r6/sdc/documents.py`,
 an approval, a questionnaire, an enrolment — rather than one request, so they
 need their own probes and are NOT silently claimed as clean by this file.
 They are measured in `tests/test_redaction_probes_multistep.py`, which names
-its own uncovered sites in turn.
+its own uncovered sites in turn. `Questionnaire/$populate` is measured in
+`tests/test_sdc_populate_bounded.py`.
+
+The rows at the end of the file come from a later sweep of every read route
+(2026-09-23), which found two leaks: `DiagnosticReport.conclusion` on the
+standard read path, and `$curatr-evaluate` quoting the stored display.
 """
 
 from __future__ import annotations
@@ -156,3 +161,203 @@ def test_the_redacting_read_path_still_strips_all_three_markers(
     assert NAME_MARKER not in response.get_data(as_text=True), (
         "the redacted single-resource read leaked the family name — the "
         "guard this whole inventory is measured against is broken")
+
+
+# ---------------------------------------------------------------------------
+# Re-measured 2026-09-23 on main after #725/#732, by driving every read route
+# with a record whose name, text, display, note and narrative each carried a
+# marker. Two leaks came back that neither the code-reading inventory nor the
+# rows above had found; these rows pin both closed.
+# ---------------------------------------------------------------------------
+
+CONCLUSION_MARKER = "PHICONCLUSIONMARKER"
+CURATR_DISPLAY_MARKER = "PHICURATRDISPLAYMARKER"
+SNOMED = "http://snomed.info/sct"
+HYPERTENSION = "38341003"
+CANONICAL = "Hypertensive disorder"
+
+
+def _store(resource, tenant_id):
+    db.session.add(R6Resource(
+        resource_type=resource["resourceType"],
+        resource_json=json.dumps(resource),
+        resource_id=resource["id"],
+        tenant_id=tenant_id))
+    db.session.commit()
+
+
+@pytest.mark.parametrize("path", [
+    "/r6/fhir/DiagnosticReport/redaction-probe-dr",
+    "/r6/fhir/DiagnosticReport",
+])
+def test_diagnostic_report_conclusion_is_redacted(client, tenant_id,
+                                                  tenant_headers, path):
+    """`DiagnosticReport.conclusion` is the clinician's free-text reading of
+    the report, the same kind of field as `note`. apply_redaction stripped
+    `note` and `comment` but not `conclusion`, so the standard read path
+    returned it verbatim. That was a hole in the profile, not a route that
+    skipped it, which is why only a probe of the response could find it."""
+    _store({
+        "resourceType": "DiagnosticReport", "id": "redaction-probe-dr",
+        "status": "final",
+        "code": {"coding": [{"system": LOINC, "code": "24331-1"}]},
+        "subject": {"reference": f"Patient/{PATIENT_ID}"},
+        "conclusion": CONCLUSION_MARKER,
+    }, tenant_id)
+
+    response = client.get(path, headers=tenant_headers)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200, body[:200]
+    assert "redaction-probe-dr" in body, (
+        "the report never came back, so the assertion below measures "
+        "nothing: " + body[:200])
+    assert CONCLUSION_MARKER not in body, (
+        "DiagnosticReport.conclusion reached the caller unredacted")
+
+
+def test_curatr_evaluate_does_not_quote_the_upstream_display(
+        client, tenant_id, tenant_headers):
+    """`$curatr-evaluate` reported a display mismatch by quoting the stored
+    `coding.display` back ("The description says '<display>' ..."). That is
+    the upstream display reaching the caller, and the realistic caller is the
+    `curatr_evaluate` MCP tool, so it landed in a model's context.
+
+    The terminology lookup is patched so the mismatch branch fires without
+    the network. The issue must still be raised and still carry the
+    canonical label, which comes from the terminology service keyed by code:
+    an evaluator that stopped reporting the mismatch would also pass the
+    marker assertion, so that is checked first.
+    """
+    from unittest.mock import patch
+
+    _store({
+        "resourceType": "Condition", "id": "redaction-probe-cond",
+        "code": {"coding": [{"system": SNOMED, "code": HYPERTENSION,
+                             "display": CURATR_DISPLAY_MARKER}]},
+        "subject": {"reference": f"Patient/{PATIENT_ID}"},
+    }, tenant_id)
+
+    with patch("r6.curatr.CuratrEngine._lookup_code",
+               return_value={"valid": True, "display": CANONICAL,
+                             "message": None}):
+        response = client.get(
+            "/r6/fhir/Condition/redaction-probe-cond/$curatr-evaluate",
+            headers=tenant_headers)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200, body[:200]
+
+    mismatch = [i for i in response.get_json()["issues"]
+                if i["field_path"].endswith(".display")]
+    assert len(mismatch) == 1, (
+        "the display-mismatch issue was not raised, so the marker assertion "
+        "below would pass without measuring anything: " + body[:400])
+    assert mismatch[0]["suggested_value"] == {"display": CANONICAL}
+    assert CANONICAL in mismatch[0]["plain_language"]
+
+    assert CURATR_DISPLAY_MARKER not in body, (
+        "$curatr-evaluate quoted the stored coding.display back to the caller")
+
+
+# Free-text sweep, 2026-09-23 (#282). Every `string`/`markdown` element of
+# every type in `R6Resource.SUPPORTED_TYPES` was taken from the published
+# StructureDefinitions, given its own marker, stored, and read back through
+# `GET /<type>/<id>` and `GET /<type>`. The profile strips by field name, so
+# a free-text string whose name was not on a list came back verbatim. These
+# rows are the survivors that are clinician or feed free text; the ones kept
+# (definitional titles, units, versions, lot numbers, linkIds) are argued in
+# the PR that added them.
+# ---------------------------------------------------------------------------
+
+FREE_TEXT_MARKER = "PHIFREETEXTMARKER"
+SUBJECT = {"reference": f"Patient/{PATIENT_ID}"}
+FMH_CODE = {"coding": [{"system": "http://snomed.info/sct",
+                        "code": "38341003"}]}
+
+
+@pytest.mark.parametrize("field, resource", [
+    ("MedicationRequest.dosageInstruction.patientInstruction", {
+        "resourceType": "MedicationRequest", "status": "active",
+        "intent": "order", "subject": SUBJECT,
+        "dosageInstruction": [{"patientInstruction": FREE_TEXT_MARKER}]}),
+    ("MedicationDispense.dosageInstruction.patientInstruction", {
+        "resourceType": "MedicationDispense", "status": "completed",
+        "subject": SUBJECT,
+        "dosageInstruction": [{"patientInstruction": FREE_TEXT_MARKER}]}),
+    ("ServiceRequest.patientInstruction", {
+        "resourceType": "ServiceRequest", "status": "active",
+        "intent": "order", "subject": SUBJECT,
+        "patientInstruction": FREE_TEXT_MARKER}),
+    ("Condition.onsetString", {
+        "resourceType": "Condition", "subject": SUBJECT,
+        "onsetString": FREE_TEXT_MARKER}),
+    ("Condition.abatementString", {
+        "resourceType": "Condition", "subject": SUBJECT,
+        "abatementString": FREE_TEXT_MARKER}),
+    ("AllergyIntolerance.onsetString", {
+        "resourceType": "AllergyIntolerance", "patient": SUBJECT,
+        "onsetString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.condition.onsetString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT,
+        "condition": [{"code": FMH_CODE, "onsetString": FREE_TEXT_MARKER}]}),
+    ("FamilyMemberHistory.ageString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "ageString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.bornString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "bornString": FREE_TEXT_MARKER}),
+    ("FamilyMemberHistory.deceasedString", {
+        "resourceType": "FamilyMemberHistory", "status": "completed",
+        "patient": SUBJECT, "deceasedString": FREE_TEXT_MARKER}),
+    ("Immunization.occurrenceString", {
+        "resourceType": "Immunization", "status": "completed",
+        "patient": SUBJECT, "occurrenceString": FREE_TEXT_MARKER}),
+    ("Procedure.performedString", {
+        "resourceType": "Procedure", "status": "completed",
+        "subject": SUBJECT, "performedString": FREE_TEXT_MARKER}),
+    ("CarePlan.activity.detail.scheduledString", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT,
+        "activity": [{"detail": {"status": "scheduled",
+                                 "scheduledString": FREE_TEXT_MARKER}}]}),
+    # Annotation.authorString is the author's NAME, in an Annotation that is
+    # not under `note`, so the note replacement never reached it.
+    ("CarePlan.activity.progress.authorString", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT,
+        "activity": [{"progress": [{"authorString": FREE_TEXT_MARKER,
+                                    "text": "progress"}]}]}),
+    ("CarePlan.title", {
+        "resourceType": "CarePlan", "status": "active", "intent": "plan",
+        "subject": SUBJECT, "title": FREE_TEXT_MARKER}),
+    ("Goal.statusReason", {
+        "resourceType": "Goal", "lifecycleStatus": "cancelled",
+        "subject": SUBJECT, "description": {"text": "goal"},
+        "statusReason": FREE_TEXT_MARKER}),
+    ("Goal.target.detailString", {
+        "resourceType": "Goal", "lifecycleStatus": "active",
+        "subject": SUBJECT, "description": {"text": "goal"},
+        "target": [{"detailString": FREE_TEXT_MARKER}]}),
+])
+def test_free_text_string_is_redacted(client, tenant_id, tenant_headers,
+                                      field, resource):
+    """Each row is a free-text string the sweep found on the standard read
+    path. Both the read and the search must bring the record back, or the
+    marker assertion measures nothing."""
+    rid = "redaction-probe-" + field.replace(".", "-").lower()
+    db.session.add(R6Resource(
+        resource_type=resource["resourceType"],
+        resource_json=json.dumps({**resource, "id": rid}),
+        resource_id=rid, tenant_id=tenant_id))
+    db.session.commit()
+    rtype = resource["resourceType"]
+
+    for path in (f"/r6/fhir/{rtype}/{rid}", f"/r6/fhir/{rtype}"):
+        response = client.get(path, headers=tenant_headers)
+        body = response.get_data(as_text=True)
+        assert response.status_code == 200, body[:200]
+        assert rid in body, (
+            f"{path} never returned the record, so the assertion below "
+            "measures nothing: " + body[:200])
+        assert FREE_TEXT_MARKER not in body, (
+            f"{field} reached the caller unredacted via {path}")
