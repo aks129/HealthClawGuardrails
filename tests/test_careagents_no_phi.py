@@ -89,11 +89,12 @@ _READ_TOOLS = ("get_health_summary", "get_labs", "show_lab_timeline",
 
 def test_no_record_content_reaches_a_careagents_table_on_any_surface(
         cfg, svc, monkeypatch):  # noqa: F811
-    """MUTATION (careagents/app.py `approvals`, before `render_template`):
-    copy the engine's answer into the account layer, e.g.
-    `svc.rename_connection`-style `Connection.label = pending[0]["to"]` for
-    the agent's tenant. The #639 chat-text guard stays green, because it
-    never visits this page; this one goes red.
+    """MUTATIONS, each applied alone (careagents/app.py): right after the
+    engine call in `approvals`, set the tenant's `Connection.label` to
+    `pending[0]["to"]`; or right after the one in `labs_timeline`, set its
+    `Connection.provider` to `str(labs["consumer"])`. Either way
+    tests/test_careagents.py, tests/test_careagents_census_gaps.py and
+    tests/test_pending_approvals.py stay green (294 passed); this goes red.
     """
     from careagents import agent as agent_mod
     from careagents.app import create_app
