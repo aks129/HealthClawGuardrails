@@ -16,8 +16,13 @@ person typing an allergen into the populated form, and commit-mode
 MUTATION: r6/sdc/extract.py, drop the `target_type == "Patient" and
 subject_ref` early return in _extract_by_definition -> red (the bundle
 carries a Patient; commit mode refuses it with 422, since nothing is
-cleared to commit without a human). With the refusal also dropped, a second
-Patient is stored.
+cleared to commit without a human). Drop the refusal in r6/sdc/routes.py
+too -> red (each submission stores a new Patient). Drop, as well, the
+definition type check and the element list, and let any path write as a
+nested dict -> red, and the forked Patient carries `code.text` holding the
+allergen: the defect as filed. The refusal dropped alone stays green: for a
+subject-bound response the subject check is what holds, and the refusal
+is the second line behind it.
 """
 
 import json
