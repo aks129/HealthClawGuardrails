@@ -493,7 +493,9 @@ def test_the_god_module_only_shrinks():
 #: of quoting. This was decoration, not a ratchet: a migration touching
 #: only double-quoted single-line call sites could have lowered the count
 #: while the true number stayed flat.
-_RAW_TENANT_READS = 27
+#: 27 -> 24, 23 Sep: measured 24 on main (kernel slices moved three), so the
+#: pin had three units of slack and its own MUTATION line stayed green.
+_RAW_TENANT_READS = 24
 
 
 def _is_tenant_header_read(node):

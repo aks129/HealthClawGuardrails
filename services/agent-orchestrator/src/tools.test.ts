@@ -1511,6 +1511,122 @@ describe("Tool Execution Tests", () => {
     expect(result.proposal_status).toBe("ready");
   });
 
+  // -- propose_write reads a failed $validate as a failure --
+  //
+  // The engine answers 422 for an invalid resource. A non-ok answer goes
+  // through backendFailureResult, so its issues sit under `error.issue`, not
+  // `issue`. Reading only `issue` saw no errors and told the agent a resource
+  // that failed validation was ready to commit.
+
+  const proposeObservation = () =>
+    tools.executeTool(
+      "fhir_propose_write",
+      {
+        resource: { resourceType: "Observation", status: "final" },
+        operation: "create",
+      },
+      { "x-step-up-token": "tok-1" }
+    );
+
+  it("fhir.propose_write is not ready when $validate answers 422", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "required",
+              diagnostics: "Observation.code missing for Jane Synthetic-Patient",
+            },
+          ],
+        },
+        422
+      )
+    );
+
+    const result = await proposeObservation();
+    const validation = result.validation_result as Record<string, unknown>;
+
+    expect(result.proposal_status).toBe("invalid");
+    expect(validation.passed).toBe(false);
+    expect(validation.error_count).toBe(1);
+    expect(result.next_steps).not.toHaveProperty("requires_step_up");
+    expect(JSON.stringify(result.next_steps)).toContain("Validation failed");
+    // The error path's sanitisation still applies: the raw backend
+    // diagnostics never reach the agent.
+    expect(JSON.stringify(result)).not.toContain("Jane Synthetic-Patient");
+  });
+
+  it("fhir.propose_write is not ready when $validate fails with an unreadable body", async () => {
+    mockFetch.mockResolvedValueOnce(fakeTextResponse("<html>bad gateway</html>", 502));
+
+    const result = await proposeObservation();
+
+    expect(result.proposal_status).toBe("invalid");
+    expect((result.validation_result as Record<string, unknown>).passed).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("bad gateway");
+  });
+
+  it("fhir.propose_write is not ready when $validate answers something other than an OperationOutcome", async () => {
+    mockFetch.mockResolvedValueOnce(fakeResponse({ resourceType: "Bundle" }));
+
+    const result = await proposeObservation();
+
+    expect(result.proposal_status).toBe("invalid");
+    expect((result.validation_result as Record<string, unknown>).passed).toBe(false);
+    expect(JSON.stringify(result.next_steps)).toContain("could not be completed");
+  });
+
+  it("fhir.propose_write never resolves as ready when $validate cannot be reached", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+
+    await expect(proposeObservation()).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("fhir.propose_write is not ready when the resource has no resourceType", async () => {
+    const result = await tools.executeTool(
+      "fhir_propose_write",
+      { resource: { status: "final" }, operation: "create" },
+      { "x-step-up-token": "tok-1" }
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result.proposal_status).toBe("invalid");
+    expect((result.validation_result as Record<string, unknown>).passed).toBe(false);
+  });
+
+  it("fhir.propose_write is not ready when a 200 $validate carries an error issue", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({
+        resourceType: "OperationOutcome",
+        issue: [{ severity: "fatal", code: "structure" }],
+      })
+    );
+
+    const result = await proposeObservation();
+
+    expect(result.proposal_status).toBe("invalid");
+    expect((result.validation_result as Record<string, unknown>).error_count).toBe(1);
+  });
+
+  it("fhir.propose_write is ready with warnings when $validate only warns", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse({
+        resourceType: "OperationOutcome",
+        issue: [{ severity: "warning", code: "business-rule" }],
+      })
+    );
+
+    const result = await proposeObservation();
+    const validation = result.validation_result as Record<string, unknown>;
+
+    expect(result.proposal_status).toBe("ready");
+    expect(validation.passed).toBe(true);
+    expect(validation.warning_count).toBe(1);
+    expect(result.next_steps).toHaveProperty("requires_step_up", true);
+  });
+
   // -- action_propose --
 
   it("action_propose forwards tenant header and posts to /r6/actions/propose", async () => {

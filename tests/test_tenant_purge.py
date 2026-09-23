@@ -125,3 +125,74 @@ def test_purge_endpoint_refuses_non_public_tenants_without_the_secret(
 def test_purge_endpoint_needs_a_tenant(client):
     resp = client.post("/r6/fhir/internal/purge-tenant", json={})
     assert resp.status_code == 400
+
+
+def _seed_action_with_children(tenant, to="Synthetic Pharmacy"):
+    """A proposed action with a lifecycle event and an approval record.
+
+    Events and confirmations carry no tenant_id — they link to the action by
+    action_id only — which is what lets a tenant-keyed purge miss them.
+    """
+    from r6.actions.confirmations import issue_confirmation
+    from r6.actions.events import ActionEvent
+    from r6.actions.models import ProposedAction
+
+    action = ProposedAction(tenant, "sms", {"to": to, "body": "synthetic"})
+    db.session.add(action)
+    db.session.flush()
+    db.session.add(ActionEvent(action_id=action.id, from_status=None,
+                               to_status="proposed", actor="commit-route",
+                               detail="synthetic"))
+    issue_confirmation(action.id, "dashboard", 10,
+                       payload_json=action.payload_json)
+    db.session.commit()
+    return action.id
+
+
+def _action_rows(action_id):
+    from r6.actions.confirmations import ActionConfirmation
+    from r6.actions.events import ActionEvent
+    from r6.actions.models import ProposedAction
+
+    return (ProposedAction.query.filter_by(id=action_id).count(),
+            ActionEvent.query.filter_by(action_id=action_id).count(),
+            ActionConfirmation.query.filter_by(action_id=action_id).count())
+
+
+def test_purge_takes_action_events_and_confirmations_with_their_actions(
+        client, tenant_id):
+    # #217: events and confirmations link by action_id, not tenant, so a
+    # tenant-keyed delete of the actions alone orphans them forever.
+    mine = _seed_action_with_children(tenant_id)
+    theirs = _seed_action_with_children("someone-elses-tenant")
+    assert _action_rows(mine) == (1, 1, 1)
+
+    deleted = purge_tenant(tenant_id)
+    db.session.commit()
+
+    assert _action_rows(mine) == (0, 0, 0)
+    assert deleted["action_events"] == 1
+    assert deleted["action_confirmations"] == 1
+    # Another tenant's action and its children are untouched.
+    assert _action_rows(theirs) == (1, 1, 1)
+
+
+def test_purge_endpoint_removes_action_children_and_audits_once(
+        client, tenant_id):
+    # The route path: children go in the same commit as the deletion's own
+    # audit entry, and that entry's detail stays PHI-free.
+    mine = _seed_action_with_children(tenant_id)
+    before = AuditEventRecord.query.filter_by(
+        tenant_id=tenant_id, event_type="delete",
+        resource_type="Tenant").count()
+
+    resp = client.post("/r6/fhir/internal/purge-tenant",
+                       json={"tenant_id": tenant_id})
+
+    assert resp.status_code == 200
+    assert _action_rows(mine) == (0, 0, 0)
+    audits = AuditEventRecord.query.filter_by(
+        tenant_id=tenant_id, event_type="delete",
+        resource_type="Tenant").all()
+    assert len(audits) == before + 1
+    assert "Synthetic Pharmacy" not in (audits[-1].detail or "")
