@@ -1519,6 +1519,9 @@ export class FHIRTools {
       return { error: `Unknown operation: ${operation}` };
     }
 
+    if (!resp.ok) {
+      return backendFailureResult(resp);
+    }
     return (await resp.json()) as Record<string, unknown>;
   }
 
