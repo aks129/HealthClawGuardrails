@@ -221,18 +221,14 @@ class TestTheActivationGateCanActuallyGate:
             "a server that answers nothing.")
 
 
-#: Floating tags that are allowed, each with a reason and a way out. An
-#: allowlist is where a defect class comes back, so this one is a single
-#: entry, dated, and pointed at the work that removes it.
-#:
-#: healthsamurai/aidboxone:edge — the example is verified end to end against
-#: `edge` as of 2026-08-16, and against nothing else. Aidbox publishes proper
-#: release tags (2607.0 is current, 2026-08-06), so the fix is one line. What
-#: is missing is the RUN: pinning the partner-facing example to a version
-#: nobody has started it on trades an unreproducible example for a possibly
-#: broken one, which is the worse trade. It needs a live Aidbox, and the
-#: local stack is down. Tracked so the exemption cannot become the answer.
-_FLOATING_EXEMPT = frozenset({"healthsamurai/aidboxone:edge"})
+#: There is no floating-tag exemption. There was one, for
+#: healthsamurai/aidboxone:edge, justified as "verified end to end against
+#: `edge` as of 2026-08-16, and against nothing else". By 2026-09-04 `edge`
+#: resolved to a different image, and by 2026-09-23 to a third — the reason
+#: had expired while the exemption kept being relied on (#604). The example
+#: now pins the digest `edge` resolved to on the day it was verified, so the
+#: rule below holds for every image with nothing left to exempt. Re-adding an
+#: exemption means re-running the walkthrough against what it would pull.
 
 
 class TestTheImagePinMatchesThisRepo:
@@ -286,35 +282,12 @@ class TestTheImagePinMatchesThisRepo:
         offenders = []
         for image in re.findall(r"image:\s*(\S+)", text):
             tag = image.rsplit(":", 1)[1] if ":" in image else "latest"
-            if tag in floating and image not in _FLOATING_EXEMPT:
+            if tag in floating:
                 offenders.append(image)
         assert not offenders, (
             "a floating tag makes this example unreproducible — the same "
             "compose file starts a different system tomorrow: "
             + ", ".join(offenders))
-
-
-def test_the_floating_exemption_is_one_entry_and_stays_visible():
-    """An allowlist that can grow silently is the defect class coming back.
-
-    The exemption exists because the fix needs a live Aidbox to verify, not
-    because floating tags are acceptable. This pins the shape of that
-    admission: one entry, and the reason next to it.
-
-    MUTATION: add a second exemption -> red. The second one is where this
-    stops being a note and starts being a policy.
-    """
-    assert _FLOATING_EXEMPT == frozenset({"healthsamurai/aidboxone:edge"}), (
-        "the floating-tag exemption list changed. It is meant to shrink to "
-        "empty when the example is verified against a pinned Aidbox release, "
-        "not to grow")
-
-    source = Path(__file__).read_text()
-    block = source.split("_FLOATING_EXEMPT")[0].rsplit("#:", 1)[-1]
-    assert "2607" in source.split("_FLOATING_EXEMPT")[0], (
-        "the exemption must name the release it should move to, or nobody "
-        "reading it knows what removing it involves")
-    assert block.strip(), "the exemption lost its reason"
 
 
 def test_the_floating_detector_actually_detects(tmp_path):
@@ -326,11 +299,11 @@ def test_the_floating_detector_actually_detects(tmp_path):
     floating = {"latest", "edge", "dev", "main", "master", "nightly",
                 "stable", "rolling"}
 
-    def offenders(text, exempt=frozenset()):
+    def offenders(text):
         found = []
         for image in re.findall(r"image:\s*(\S+)", text):
             tag = image.rsplit(":", 1)[1] if ":" in image else "latest"
-            if tag in floating and image not in exempt:
+            if tag in floating:
                 found.append(image)
         return found
 
@@ -341,5 +314,5 @@ def test_the_floating_detector_actually_detects(tmp_path):
     assert offenders("image: postgres") == ["postgres"]
     assert offenders("image: postgres:18") == []
     assert offenders("image: ghcr.io/aks129/healthclaw-guardrails:1.10.0") == []
-    assert offenders("image: healthsamurai/aidboxone:edge",
-                     exempt=frozenset({"healthsamurai/aidboxone:edge"})) == []
+    # A digest reference is pinned whatever tag it once came from.
+    assert offenders("image: healthsamurai/aidboxone@sha256:" + "0" * 64) == []
