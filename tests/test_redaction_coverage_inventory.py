@@ -545,3 +545,10 @@ def test_shapes_the_product_needs_are_not_mistaken_for_phi():
     assert out["valueQuantity"]["value"] == 244
     assert out["code"]["coding"][0]["code"] == TOTAL_CHOL
     assert out["component"][0]["valueSampledData"]["data"] == "1 2 3"
+
+    # A definition resource has a `url` and a `title` of its own.
+    questionnaire = apply_redaction({
+        "resourceType": "Questionnaire", "status": "active",
+        "url": "http://example.org/Questionnaire/phq9", "title": "PHQ-9"})
+    assert questionnaire["url"] == "http://example.org/Questionnaire/phq9"
+    assert questionnaire["title"] == "PHQ-9"
