@@ -2,8 +2,8 @@ name: claude-pr-review
 
 # AI standards review, when it is configured. With ANTHROPIC_API_KEY set, every
 # PR gets a standards review, and `claude-standards-review` succeeds only on a
-# claude:approve verdict against .github/REVIEW_STANDARDS.md. Auto-merge arms
-# when:
+# claude:approve verdict against .github/REVIEW_STANDARDS.md. A PR merges by
+# itself only when all of these hold:
 #   required CI checks green
 #   + the review did not fail
 #   + trust tier (dependabot minor/patch OR a human maintainer approval)
