@@ -119,6 +119,46 @@ def _rail_validation_or_none(kind, payload):
     return None
 
 
+#: Kinds that reach a person through a paid provider: a call or a text per
+#: approval. The cap bounds how many one approval surface can turn into
+#: provider requests in a day, which the per-action human gate cannot.
+DAILY_CAPPED_KINDS = ('phone-call', 'insurance-call', 'sms')
+
+#: A product default, not an architecture one (human-gate spec 6.1).
+DEFAULT_DAILY_CAP = 10
+
+
+def daily_cap():
+    """ACTIONS_DAILY_CAP: executions per tenant, per capped kind, per UTC
+    day. 0 refuses every capped action. Anything unreadable falls back to
+    the default rather than to no cap."""
+    raw = os.environ.get('ACTIONS_DAILY_CAP', '').strip()
+    if raw.isdigit():
+        return int(raw)
+    if raw:
+        logger.warning('ACTIONS_DAILY_CAP is not a non-negative integer; '
+                       'using the default of %d', DEFAULT_DAILY_CAP)
+    return DEFAULT_DAILY_CAP
+
+
+def _over_daily_cap(action):
+    """True when this action's claim takes its tenant past the cap for its
+    kind today. Counts claims (claimed_at is stamped only by the confirm
+    claim), never proposals, so an agent cannot spend a person's cap without
+    a human tap. Runs after the claim, so the count includes this action.
+    Two different actions approved in the same instant can both pass the
+    boundary; the cap bounds a flood, not a race of two."""
+    if action.kind not in DAILY_CAPPED_KINDS:
+        return False
+    midnight = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    claimed_today = ProposedAction.query.filter(
+        ProposedAction.tenant_id == action.tenant_id,
+        ProposedAction.kind == action.kind,
+        ProposedAction.claimed_at >= midnight,
+    ).count()
+    return claimed_today > daily_cap()
+
+
 def _resolve_from_executing(action, result):
     """Map an executor verdict onto the state machine for an action just
     claimed into 'executing'. The never-clobber rule lives HERE and only
@@ -742,6 +782,30 @@ def confirm_action(action_id):
                         'error_code': errors.APPROVED_PAYLOAD_MISMATCH,
                         'error': 'The payload no longer matches what was '
                                  'approved; nothing was executed.'}), 409
+
+    # (c3) Daily cap (#216, human-gate spec 6.1). Authoritative here, after
+    # the claim, so the count includes this action and a refused one never
+    # reaches the provider. The approval credential is already spent above,
+    # so `failed` is the honest end state, not a return to awaiting.
+    if _over_daily_cap(action):
+        summary = errors.DAILY_CAP_REACHED
+        failed = transition_action(
+            action_id, from_states=('executing',), to_state='failed',
+            actor='confirm', outcome_summary=summary)
+        db.session.refresh(action)
+        if failed:
+            add_audit_event(
+                'update', resource_type='ProposedAction', resource_id=action.id,
+                agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                outcome='failure',
+                detail='%s; kind=%s cap=%d' % (summary, action.kind, daily_cap()),
+            )
+            db.session.commit()
+        return jsonify({'id': action.id, 'status': action.status,
+                        'error_code': errors.DAILY_CAP_REACHED,
+                        'error': 'The daily limit for %s actions has been '
+                                 'reached; nothing was executed. Try again '
+                                 'tomorrow (UTC).' % action.kind}), 429
 
     issue_confirmation(action_id, approved_via, ttl_minutes=15,
                        payload_json=action.payload_json)

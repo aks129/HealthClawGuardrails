@@ -3,7 +3,7 @@ from r6.actions import errors
 
 def test_taxonomy_is_frozen_and_complete():
     expected = {
-        'provider_not_configured', 'contact_not_allowlisted', 'daily_cap_reached',
+        'provider_not_configured', 'daily_cap_reached',
         'payload_invalid', 'provider_error', 'extraction_ambiguous',
         'emergency_indicated', 'stale_source_data',
         # #559: the payload about to execute does not hash to what was approved.

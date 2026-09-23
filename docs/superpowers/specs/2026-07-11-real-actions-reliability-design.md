@@ -77,6 +77,8 @@ class ActionExecutor(Protocol):
 ```
 Error taxonomy: `provider_not_configured`, `contact_not_allowlisted`, `daily_cap_reached`, `payload_invalid`, `provider_error`, `extraction_ambiguous`, `emergency_indicated`, `stale_source_data`.
 
+> **Status (#216):** `contact_not_allowlisted` was removed from the taxonomy, not built — no store of person-attested contacts exists (human-gate spec §6.2). `daily_cap_reached` is enforced at confirm, per tenant, per kind, per UTC day (§6.1). `r6/actions/errors.py` is the live taxonomy; this list is the July design.
+
 **8. Audit + provenance contract (bindings pinned so FSH can't garble):**
 FHIR REST: IHE BALP (`type=rest`, `subtype` from restful-interaction). Real-world actions: own CodeSystem (IG-published), never repurposed DCM. Two agents per committed action: AuditEvent agent[0] = AI Device `requestor=true`; agent[1] = human confirmer `requestor=false`. One Provenance per action: Device `agent.type=performer`, human `agent.type=verifier` (provenance-participant-type), `onBehalfOf`=Patient, transcript DocumentReference at `entity.role=source`, target = QuestionnaireResponse/Appointment. **QR authorship: post-attestation `author`=Patient** (responsible for the answers), Device's population role carried in Provenance — resolves the v2 contradiction.
 
