@@ -139,8 +139,9 @@ def _redact_fields(resource, narrative=True):
                 ca.pop('district', None)
                 ca.pop('postalCode', None)
 
-    # Remove notes/comments
-    for field in ['note', 'comment']:
+    # Remove notes/comments. DiagnosticReport.conclusion is the same kind of
+    # clinician free text and leaked on the standard read path until #282.
+    for field in ['note', 'comment', 'conclusion']:
         if field in resource:
             if isinstance(resource[field], list):
                 resource[field] = [{'text': '[Redacted]'}]
