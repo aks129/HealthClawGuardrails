@@ -532,11 +532,14 @@ def _run_fasten_ingest(app, task_id, resources, caplog):
         ingester_mod.record_audit_event = original
 
 
-def test_a_skipped_medication_statement_is_named_in_the_import_summary(
+def test_a_skipped_medication_type_is_named_in_the_import_summary(
         app, caplog):
     """#377. An EHR that records "what the patient is actually taking" as
     MedicationStatement — many do, because a statement of current use is not
-    a prescription — has every one of those resources dropped at ingest.
+    a prescription — had every one of those resources dropped at ingest.
+    MedicationStatement is stored now (tests/test_medication_statement.py);
+    MedicationAdministration is the medication type still skipped, so it
+    carries this test.
 
     The drop itself is a policy question. The SILENCE is not: the patient
     asks their agent what they are taking and gets a confident answer over a
@@ -547,7 +550,7 @@ def test_a_skipped_medication_statement_is_named_in_the_import_summary(
     job, detail = _run_fasten_ingest(app, "skip-named-job", [
         {"resourceType": "Observation", "id": "skipnamed-ok-1",
          "status": "final", "code": {"coding": [{"code": "x"}]}},
-        {"resourceType": "MedicationStatement", "id": "skipnamed-ms-1",
+        {"resourceType": "MedicationAdministration", "id": "skipnamed-ms-1",
          "status": "recorded"},
         {"resourceType": "ExplanationOfBenefit", "id": "skipnamed-eob-1"},
         {"resourceType": "ExplanationOfBenefit", "id": "skipnamed-eob-2"},
@@ -556,14 +559,14 @@ def test_a_skipped_medication_statement_is_named_in_the_import_summary(
     assert job.ingested_resources == 1
     assert job.skipped_resources == 3
 
-    assert "MedicationStatement:1" in detail, (
+    assert "MedicationAdministration:1" in detail, (
         "the import summary counted three skips and named none of them — "
         "#377's own precondition ('check the ingest counters') cannot be "
         f"answered from {detail!r}")
     assert "ExplanationOfBenefit:2" in detail, (
         "a per-type count is what separates 'this feed sends medications we "
         "drop' from 'this export was mostly billing'")
-    assert "MedicationStatement" in caplog.text, (
+    assert "MedicationAdministration" in caplog.text, (
         "an operator reading the job's completion log still cannot see it")
 
 
@@ -579,7 +582,7 @@ def test_the_skipped_type_summary_cannot_carry_a_name_from_the_feed(
     """
     job, detail = _run_fasten_ingest(app, "skip-unnamed-job", [
         {"resourceType": "Jane Doe 1980-01-01 MRN 12345", "id": "un-1"},
-        {"resourceType": "MedicationStatement", "id": "un-ms-1"},
+        {"resourceType": "MedicationAdministration", "id": "un-ms-1"},
     ], caplog)
 
     assert job.skipped_resources == 2, "an unnameable type still gets counted"
@@ -612,16 +615,16 @@ def test_the_shc_path_names_skipped_types_the_same_way(app, tenant_id):
             app,
             [{"resourceType": "Observation", "id": "shc-skipnamed-1",
               "status": "final", "code": {"coding": [{"code": "x"}]}},
-             {"resourceType": "MedicationStatement", "id": "shc-ms-1"}],
+             {"resourceType": "MedicationAdministration", "id": "shc-ms-1"}],
             tenant_id, "flexpa", "job377")
     finally:
         shcmod.record_audit_event = original
 
     assert counts["ingested"] == 1 and counts["skipped"] == 1
-    assert counts["skipped_types"] == {"MedicationStatement": 1}, (
+    assert counts["skipped_types"] == {"MedicationAdministration": 1}, (
         "the returned counts are the assertable surface (#293); a per-type "
         "breakdown no test can read is the next version of the same defect")
-    assert "MedicationStatement:1" in seen.get("detail", "")
+    assert "MedicationAdministration:1" in seen.get("detail", "")
 
 
 def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers):
@@ -638,7 +641,7 @@ def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers)
             'resourceType': 'Bundle', 'type': 'collection',
             'entry': [
                 {'resource': {'resourceType': 'Patient', 'id': 'ctx-pt-377'}},
-                {'resource': {'resourceType': 'MedicationStatement',
+                {'resource': {'resourceType': 'MedicationAdministration',
                               'id': 'ctx-ms-377'}},
             ],
         }),
@@ -650,4 +653,4 @@ def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers)
     assert body['skipped_count'] == 1, (
         "one of two entries was discarded and the response reported only "
         "what it kept")
-    assert body['skipped_types'] == {'MedicationStatement': 1}
+    assert body['skipped_types'] == {'MedicationAdministration': 1}
