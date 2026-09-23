@@ -138,6 +138,17 @@
     }, ANNOUNCE_DELAY_MS));
   }
 
+  // The one sentence for "how many records you can now read", shared by the
+  // refresh poll and the upload card so the two counters on this page cannot
+  // drift again (#226). `note` is the server's uncounted_note, a complete
+  // sentence about documents the number leaves out.
+  function readableCountLine(n, note) {
+    const lead = n > 0
+      ? `${n} new record${n === 1 ? "" : "s"} added.`
+      : note ? "No new records you can read." : "No new records added.";
+    return lead + (note ? ` ${note}` : "");
+  }
+
   // Inline message: shown in the page beside what the user touched.
   //
   // The element is MOVED next to `anchor` before it is shown. A message that
@@ -426,10 +437,13 @@
       // opaque correlation ids from `errors[]` (never the raw messages
       // or objects — they can carry PHI-shaped SQL fragments) so the
       // user has a support-quotable code per distinct failure.
+      // `ingested` also counts documents nothing here can open, so the line
+      // leads with `records_added` and the same sentence a refresh uses.
       const ing = d.ingested | 0;
       const skp = d.skipped | 0;
       const fld = d.failed | 0;
-      const parts = [`${ing} record${ing === 1 ? "" : "s"} added`];
+      const readable = typeof d.records_added === "number" ? d.records_added : ing;
+      const parts = [readableCountLine(readable, d.uncounted_note)];
       if (skp) parts.push(`${skp} not saved (unsupported record types)`);
       if (fld) parts.push(`${fld} could not be saved`);
       if (fld > 0) {
@@ -562,11 +576,7 @@
       // nothing (#226). `uncounted_note` is a complete sentence the server
       // sends only when it established something worth saying.
       if (d.new_records === 0 && !d.uncounted_note) return;   // genuinely quiet
-      const lead = d.new_records > 0
-        ? `${d.new_records} new record` +
-          (d.new_records === 1 ? "" : "s") + " added."
-        : "No new records you can read.";
-      announce(msg, lead + (d.uncounted_note ? ` ${d.uncounted_note}` : ""));
+      announce(msg, readableCountLine(d.new_records, d.uncounted_note));
       // Only a readable record ends the watch. The document-only and
       // could-not-check messages are interim: readable records may still
       // land, and the message should upgrade rather than freeze.
