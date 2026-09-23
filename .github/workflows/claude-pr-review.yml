@@ -1,10 +1,19 @@
 name: claude-pr-review
 
-# Always-on AI review: every PR gets a standards review within minutes, and
-# merges happen automatically ONLY when everything is satisfied:
+# AI standards review, when it is configured. With ANTHROPIC_API_KEY set, every
+# PR gets a standards review, and `claude-standards-review` succeeds only on a
+# claude:approve verdict against .github/REVIEW_STANDARDS.md. Auto-merge arms
+# when:
 #   required CI checks green
-#   + claude:approve verdict against .github/REVIEW_STANDARDS.md
+#   + the review did not fail
 #   + trust tier (dependabot minor/patch OR a human maintainer approval)
+#
+# With the key UNSET, no review runs and the check says so (#608):
+# `claude-standards-review` is SKIPPED, not green, and the preflight job's
+# summary reads "not run". Branch protection lets a skipped job through, so a
+# missing secret does not block PRs, and auto-merge still arms on the trust
+# tier alone. That is not a review. Setting the key, or removing the check
+# from the required set, is the owner's decision.
 #
 # Security notes (deliberate):
 # - pull_request_target so fork PRs get the API-key secret, but we NEVER
@@ -39,28 +48,46 @@ env:
   AUTO_MERGE_EXTERNAL: "false"
 
 jobs:
-  claude-standards-review:
-    name: claude-standards-review
+  # Decides whether a review CAN run. `secrets` is not readable in a job-level
+  # `if:`, so the answer is computed here and handed to the review job as an
+  # output. It used to be a step inside the review job. That skipped the
+  # review and the verdict gate and let the job succeed anyway: a green
+  # `claude-standards-review` on every PR, with no review behind any of them
+  # (#608). A skipped JOB shows as skipped; a job of skipped steps shows green.
+  reviewer-preflight:
+    name: standards-reviewer-preflight
     runs-on: ubuntu-latest
     if: ${{ !github.event.pull_request.draft }}
+    outputs:
+      has_key: ${{ steps.keycheck.outputs.has_key }}
     steps:
-      # Base ref ONLY — never the PR head (pull_request_target safety).
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Skip gracefully if reviewer is unconfigured
+      - name: Is the reviewer configured
         id: keycheck
         env:
           HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
           echo "has_key=$HAS_KEY" >> "$GITHUB_OUTPUT"
           if [ "$HAS_KEY" != "true" ]; then
-            echo "::warning::ANTHROPIC_API_KEY secret not set — AI review skipped (passing neutrally so PRs aren't blocked)."
+            echo "::warning::ANTHROPIC_API_KEY is not set. The standards review did not run; claude-standards-review is skipped, not passed."
+            printf '### claude-standards-review: not run\n\nNo review happened on this push: the ANTHROPIC_API_KEY secret is unset. The check shows as skipped, which branch protection lets through. It is not a verdict (#608).\n' \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  claude-standards-review:
+    name: claude-standards-review
+    runs-on: ubuntu-latest
+    needs: reviewer-preflight
+    # Every step below is unconditional. If this job succeeds, the verdict
+    # gate ran and found claude:approve; there is no path to green without a
+    # review. Pinned by tests/test_pr_review_notifications.py.
+    if: ${{ !github.event.pull_request.draft && needs.reviewer-preflight.outputs.has_key == 'true' }}
+    steps:
+      # Base ref ONLY — never the PR head (pull_request_target safety).
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
       - name: Claude standards review
-        if: steps.keycheck.outputs.has_key == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -109,7 +136,6 @@ jobs:
             --model claude-sonnet-5
 
       - name: Gate on verdict label
-        if: steps.keycheck.outputs.has_key == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -125,7 +151,13 @@ jobs:
   auto-merge:
     name: auto-merge-when-satisfied
     runs-on: ubuntu-latest
-    needs: claude-standards-review
+    needs: [reviewer-preflight, claude-standards-review]
+    # Without a status function here GitHub adds an implicit `success()`,
+    # which is false when the review job is skipped, so dependabot bumps would
+    # stop arming the moment the key is unset. So this runs unless cancelled,
+    # unless a draft, unless the preflight itself broke, and unless the review
+    # FAILED. A request-changes verdict still blocks arming, as before.
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.reviewer-preflight.result == 'success' && needs.claude-standards-review.result != 'failure' }}
     steps:
       - name: Decide trust tier and arm auto-merge
         env:
