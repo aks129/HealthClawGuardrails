@@ -300,10 +300,11 @@ def test_a_correction_proposed_the_way_the_mcp_tool_sends_it_is_found_reviewed_a
     assert c.get(f"/review/{agent}/{action_id}").status_code == 404
 
     # 6. CareAgents stored none of it.
-    from sqlalchemy import text
+    # Dialect-neutral table list: svc follows CARE_TEST_DATABASE_URL, so on
+    # the Postgres lane there is no sqlite_master to read (#232).
+    from sqlalchemy import inspect, text
     with svc.engine.connect() as cx:
-        for (table,) in cx.execute(text(
-                "select name from sqlite_master where type='table'")).fetchall():
+        for table in inspect(svc.engine).get_table_names():
             for row in cx.execute(text(f'select * from "{table}"')).fetchall():
                 blob = json.dumps([str(v) for v in row])
                 assert CANARY not in blob, table

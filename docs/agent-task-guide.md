@@ -127,7 +127,13 @@ passes locally.
 
 **There is a Postgres CI lane** because SQLite masks a real bug class (varchar
 length limits). If you add a column, match its width to real values — and know
-that a local SQLite-only run does **not** prove the Postgres lane passes.
+that a local SQLite-only run does **not** prove the Postgres lane passes. The
+lane runs the whole suite (#232), so there is no list to add your test to. To
+reproduce it locally, start a throwaway `postgres:16` container on a free port
+(not 5432) and export `SQLALCHEMY_DATABASE_URI`, `MIGRATION_TEST_DATABASE_URL`
+and `CARE_TEST_DATABASE_URL` pointing at it before running pytest. A test that
+builds its own engine or `AccountService` must dispose it in teardown, or the
+suite runs out of Postgres connections partway through.
 
 Revert incidental `uv.lock` churn before committing.
 
