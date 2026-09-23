@@ -443,7 +443,9 @@
       // and only when token-shaped: the payload is not a published contract.
       // We cannot say WHY it failed (that lives in Fasten's account), so the
       // message says what we know and what to do, never a guessed cause.
-      if (evtType === 'widget.config_error') backdrop.classList.remove('open');
+      // Close the modal: #stitch-status sits under the backdrop, so the id
+      // is unreadable while the widget is still covering the page.
+      backdrop.classList.remove('open');
       var failed = (evt.data && typeof evt.data === 'object') ? evt.data : evt;
       var token = /^[A-Za-z0-9._:-]{1,128}$/;
       var code = token.test(failed.error || failed.error_type || '')
