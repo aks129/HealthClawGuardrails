@@ -682,3 +682,40 @@ def test_display_and_text_do_not_survive_to_the_read_back(client, app,
     read = client.get("/r6/fhir/Patient/canary-1", headers=tenant_headers)
     text = read.get_data(as_text=True)
     assert "Secretname" not in text
+
+
+def test_a_medication_statement_is_stored_and_read_back_redacted(
+        client, app, tenant_headers):
+    """#377 on the upload path. The allowlist here is computed from
+    SUPPORTED_TYPES, so a statement should be stored once the type is
+    supported. This test shows it is, rather than inferring it.
+
+    MUTATION: drop 'MedicationStatement' from SUPPORTED_TYPES -> red
+    (skipped, not ingested).
+    """
+    planted = "Jane Q Synthetic MRN 000-SYN"
+    statement = {
+        "resourceType": "MedicationStatement", "id": "ms-377-upload",
+        "status": "recorded", "subject": {"reference": "Patient/p-1"},
+        "medicationCodeableConcept": {
+            "text": f"metformin per {planted}",
+            "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                        "code": "860975", "display": f"{planted} metformin"}]},
+    }
+    r = _post(client, {"bundle": _bundle([statement])})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    result = r.get_json()
+    assert result["ingested"] == 1 and result["skipped"] == 0, result
+    assert result["errors"] == []
+
+    with app.app_context():
+        assert R6Resource.query.filter_by(
+            tenant_id="test-tenant", resource_type="MedicationStatement",
+            id="ms-377-upload").first() is not None
+
+    read = client.get("/r6/fhir/MedicationStatement/ms-377-upload",
+                      headers=tenant_headers)
+    assert read.status_code == 200
+    assert planted not in read.get_data(as_text=True)
+    concept = read.get_json()["medicationCodeableConcept"]
+    assert concept["coding"][0]["display"] == "Metformin 500 mg"
