@@ -48,3 +48,25 @@ def test_assistant_card_says_up_front_that_hosted_assistants_refuse(
     assert page.index(warning) < page.index("Read token:"), (
         "the warning must come before the values, not after the tester has "
         "already copied them")
+
+
+def test_faq_does_not_send_desktop_clients_to_the_hosted_endpoint(client):
+    """The FAQ made the same claim in a second place (#600 gate review).
+
+    It told Claude Desktop / Claude Code users to use "the hosted Railway
+    URL" — the endpoint measured refusing them above. It must say what the
+    card says: hosted assistants cannot connect during the beta, and the
+    token works with a HealthClaw MCP server run on your own computer.
+
+    MUTATION: restore "or the hosted Railway URL" in templates/faq.html and
+    drop the beta sentence -> red.
+    """
+    resp = client.get("/faq")
+    assert resp.status_code == 200
+    page = resp.get_data(as_text=True)
+
+    assert "hosted Railway URL" not in page, (
+        "the FAQ points desktop clients at a hosted endpoint that refuses "
+        "them (#290, #600)")
+    assert "cannot connect to HealthClaw during the beta" in page, (
+        "the FAQ must say the same thing the connect card says")
