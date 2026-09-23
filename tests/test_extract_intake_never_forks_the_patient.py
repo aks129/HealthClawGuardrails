@@ -46,10 +46,13 @@ def _store(app, resource, tenant_id):
 
 
 def _rows(app, tenant_id):
-    # The id is the column's: a forked row's JSON carries none.
+    # The id is the column's: a forked row's JSON carries none. Sorted, since
+    # a query without ORDER BY promises no order and the Postgres lane runs.
     with app.app_context():
-        return [(r.resource_type, r.id, json.loads(r.resource_json))
-                for r in R6Resource.query.filter_by(tenant_id=tenant_id)]
+        return sorted(
+            ((r.resource_type, r.id, json.loads(r.resource_json))
+             for r in R6Resource.query.filter_by(tenant_id=tenant_id)),
+            key=lambda row: (row[0], row[1]))
 
 
 def _walk(items):
