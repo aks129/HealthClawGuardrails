@@ -50,9 +50,12 @@ def _bundle(conditions, documents):
     return {"resourceType": "Bundle", "type": "collection", "entry": entries}
 
 
-def _upload(cfg, svc, monkeypatch, bundle, result=None):
+def _upload(cfg, svc, monkeypatch, bundle, result=None, tenant_documents=0):
+    """Upload `bundle`; `tenant_documents` is the tenant's document total the
+    engine reports afterwards (what `uncounted_record_count` answers)."""
     from careagents.app import create_app
     fake = FakeClient()
+    fake.uncounted = tenant_documents
     if result is not None:
         fake.ingest_bundle_result = result
     app = create_app(config=cfg, client=fake, accounts=svc)
@@ -73,7 +76,7 @@ def test_upload_of_conditions_and_documents_counts_only_the_readable(
 
     The issue's own measured shape: 5 Conditions + 12 DocumentReferences.
     """
-    d = _upload(cfg, svc, monkeypatch, _bundle(5, 12))
+    d = _upload(cfg, svc, monkeypatch, _bundle(5, 12), tenant_documents=12)
     assert d["ingested"] == 17          # the engine's fact, unchanged
     assert d["records_added"] == 5      # what the patient can reach
     assert d["uncounted_note"] == (
@@ -87,7 +90,7 @@ def test_upload_of_only_documents_says_they_arrived_unreadable(
     "0 records added" alone is indistinguishable from an upload that did
     nothing, for a person who just watched twelve notes go in.
     """
-    d = _upload(cfg, svc, monkeypatch, _bundle(0, 12))
+    d = _upload(cfg, svc, monkeypatch, _bundle(0, 12), tenant_documents=12)
     assert d["records_added"] == 0
     assert d["uncounted_note"] == (
         "Notes and documents arrived, and they are not readable here yet.")
@@ -98,6 +101,43 @@ def test_upload_without_documents_carries_no_clause(cfg, svc, monkeypatch):
     d = _upload(cfg, svc, monkeypatch, _bundle(5, 0))
     assert d["records_added"] == 5
     assert "uncounted_note" not in d, d
+
+
+def test_upload_to_a_tenant_already_holding_notes_carries_the_caveat(
+        cfg, svc, monkeypatch):
+    """MUTATION: pass the upload's own document count as `uncounted` instead
+    of the tenant total -> red.
+
+    The poll carries the standing caveat whenever the tenant holds notes; the
+    upload card must say the same thing, or the next refresh contradicts it.
+    """
+    d = _upload(cfg, svc, monkeypatch, _bundle(5, 0), tenant_documents=12)
+    assert d["records_added"] == 5
+    assert d["uncounted_note"] == (
+        "Notes and documents are not yet readable here.")
+
+
+def test_upload_hedges_when_the_document_total_cannot_be_read(
+        cfg, svc, monkeypatch):
+    """Unknown is never zero (#403): a failed probe is named, not hidden."""
+    from careagents.app import create_app
+    from careagents.healthclaw import HealthClawError
+    fake = FakeClient()
+
+    def down(_tenant):
+        raise HealthClawError("search DocumentReference failed (503)", 503)
+    fake.uncounted_record_count = down
+    app = create_app(config=cfg, client=fake, accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn_id = _make_direct_conn(c)
+    r = c.post(f"/api/connections/{conn_id}/upload",
+               data=json.dumps(_bundle(5, 0)),
+               headers={"Content-Type": "application/fhir+json"})
+    assert r.status_code == 200
+    assert r.get_json()["uncounted_note"] == (
+        "We could not check whether notes or documents were left out.")
 
 
 def test_a_document_the_engine_refused_is_not_counted_as_arrived(
@@ -221,6 +261,10 @@ def test_home_js_renders_the_upload_with_the_refresh_wording():
     assert "`${ing} record${ing === 1" not in js
     # One sentence builder for both counters.
     assert js.count("readableCountLine(") == 3   # one def, two callers
+    # The lead is a whole sentence now, so the upload parts are joined as
+    # sentences; " · " after a full stop rendered "added. · 3 not saved".
+    assert 'parts.join(" · ")' not in js
+    assert 'parts.join(" ")' in js
 
 
 # --- the read a tool gets ----------------------------------------------------

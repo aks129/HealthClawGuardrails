@@ -189,8 +189,10 @@ def _uncounted_note(new_records: int, new_documents: int | None,
     """The one sentence about documents a count leaves out (#226).
 
     Shared by the refresh poll and the upload card, so the two counters on
-    the same page cannot say different things again. `uncounted` None means
-    the document probe failed; `new_documents` None means arrival is unknown.
+    the same page cannot say different things again. Both pass the same
+    meanings: `new_records` and `new_documents` are what this sync or upload
+    added (None: arrival unknown), `uncounted` is the tenant's document total
+    afterwards (None: the probe failed).
     """
     if uncounted is None:
         return "We could not check whether notes or documents were left out."
@@ -777,15 +779,20 @@ def create_app(config: Config | None = None,
         # both key on `ingested > 0` so an all-failed / all-skipped bundle
         # never fakes sync freshness (crista #227 release condition 4).
         landed = int(result.get("ingested") or 0)
+        # The tenant's document total after this upload, for the same
+        # standing caveat the poll carries. None when it could not be read.
+        uncounted = 0
         if landed > 0:
             try:
                 svc.set_connection_status(conn["tenant_id"], "active")
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
+            uncounted = None
             try:
-                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
-                                hc.uncounted_record_count(conn["tenant_id"]))
+                readable_total = hc.record_count(conn["tenant_id"])
+                uncounted = hc.uncounted_record_count(conn["tenant_id"])
+                svc.mark_synced(conn_id, readable_total, uncounted)
             except HealthClawError:
                 logger.warning("record_count after upload failed for %s",
                                conn_id)
@@ -800,7 +807,7 @@ def create_app(config: Config | None = None,
         # what the patient can reach, and the same sentence the poll uses.
         documents = _documents_landed(bundle, result, landed)
         response["records_added"] = landed - documents
-        note = _uncounted_note(landed - documents, documents, documents)
+        note = _uncounted_note(landed - documents, documents, uncounted)
         if note:
             response["uncounted_note"] = note
         return jsonify(response), 200

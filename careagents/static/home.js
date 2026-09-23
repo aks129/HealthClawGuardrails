@@ -444,8 +444,9 @@
       const fld = d.failed | 0;
       const readable = typeof d.records_added === "number" ? d.records_added : ing;
       const parts = [readableCountLine(readable, d.uncounted_note)];
-      if (skp) parts.push(`${skp} not saved (unsupported record types)`);
-      if (fld) parts.push(`${fld} could not be saved`);
+      // Every part is a whole sentence, because the lead is one.
+      if (skp) parts.push(`${skp} not saved (unsupported record types).`);
+      if (fld) parts.push(`${fld} could not be saved.`);
       if (fld > 0) {
         const codes = Array.from(new Set(
           (d.errors || [])
@@ -453,10 +454,10 @@
             .filter(Boolean)));
         if (codes.length) {
           parts.push("Support code" + (codes.length === 1 ? "" : "s")
-                     + ": " + codes.join(", "));
+                     + ": " + codes.join(", ") + ".");
         }
       }
-      sayUpload(msg, parts.join(" · "),
+      sayUpload(msg, parts.join(" "),
           (fld || skp) ? "form-warn" : "form-ok");
       if (ing > 0) {
         // Reload so the card flips from `empty` to `active` and the
