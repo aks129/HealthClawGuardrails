@@ -25,7 +25,12 @@ Sites not covered here (`r6/actions/rails/form_fill.py`, `r6/sdc/documents.py`,
 an approval, a questionnaire, an enrolment — rather than one request, so they
 need their own probes and are NOT silently claimed as clean by this file.
 They are measured in `tests/test_redaction_probes_multistep.py`, which names
-its own uncovered sites in turn.
+its own uncovered sites in turn. `Questionnaire/$populate` is measured in
+`tests/test_sdc_populate_bounded.py`.
+
+The rows at the end of the file come from a later sweep of every read route
+(2026-09-23), which found two leaks: `DiagnosticReport.conclusion` on the
+standard read path, and `$curatr-evaluate` quoting the stored display.
 """
 
 from __future__ import annotations
@@ -156,3 +161,98 @@ def test_the_redacting_read_path_still_strips_all_three_markers(
     assert NAME_MARKER not in response.get_data(as_text=True), (
         "the redacted single-resource read leaked the family name — the "
         "guard this whole inventory is measured against is broken")
+
+
+# ---------------------------------------------------------------------------
+# Re-measured 2026-09-23 on main after #725/#732, by driving every read route
+# with a record whose name, text, display, note and narrative each carried a
+# marker. Two leaks came back that neither the code-reading inventory nor the
+# rows above had found; these rows pin both closed.
+# ---------------------------------------------------------------------------
+
+CONCLUSION_MARKER = "PHICONCLUSIONMARKER"
+CURATR_DISPLAY_MARKER = "PHICURATRDISPLAYMARKER"
+SNOMED = "http://snomed.info/sct"
+HYPERTENSION = "38341003"
+CANONICAL = "Hypertensive disorder"
+
+
+def _store(resource, tenant_id):
+    db.session.add(R6Resource(
+        resource_type=resource["resourceType"],
+        resource_json=json.dumps(resource),
+        resource_id=resource["id"],
+        tenant_id=tenant_id))
+    db.session.commit()
+
+
+@pytest.mark.parametrize("path", [
+    "/r6/fhir/DiagnosticReport/redaction-probe-dr",
+    "/r6/fhir/DiagnosticReport",
+])
+def test_diagnostic_report_conclusion_is_redacted(client, tenant_id,
+                                                  tenant_headers, path):
+    """`DiagnosticReport.conclusion` is the clinician's free-text reading of
+    the report, the same kind of field as `note`. apply_redaction stripped
+    `note` and `comment` but not `conclusion`, so the standard read path
+    returned it verbatim. That was a hole in the profile, not a route that
+    skipped it, which is why only a probe of the response could find it."""
+    _store({
+        "resourceType": "DiagnosticReport", "id": "redaction-probe-dr",
+        "status": "final",
+        "code": {"coding": [{"system": LOINC, "code": "24331-1"}]},
+        "subject": {"reference": f"Patient/{PATIENT_ID}"},
+        "conclusion": CONCLUSION_MARKER,
+    }, tenant_id)
+
+    response = client.get(path, headers=tenant_headers)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200, body[:200]
+    assert "redaction-probe-dr" in body, (
+        "the report never came back, so the assertion below measures "
+        "nothing: " + body[:200])
+    assert CONCLUSION_MARKER not in body, (
+        "DiagnosticReport.conclusion reached the caller unredacted")
+
+
+def test_curatr_evaluate_does_not_quote_the_upstream_display(
+        client, tenant_id, tenant_headers):
+    """`$curatr-evaluate` reported a display mismatch by quoting the stored
+    `coding.display` back ("The description says '<display>' ..."). That is
+    the upstream display reaching the caller, and the realistic caller is the
+    `curatr_evaluate` MCP tool, so it landed in a model's context.
+
+    The terminology lookup is patched so the mismatch branch fires without
+    the network. The issue must still be raised and still carry the
+    canonical label, which comes from the terminology service keyed by code:
+    an evaluator that stopped reporting the mismatch would also pass the
+    marker assertion, so that is checked first.
+    """
+    from unittest.mock import patch
+
+    _store({
+        "resourceType": "Condition", "id": "redaction-probe-cond",
+        "code": {"coding": [{"system": SNOMED, "code": HYPERTENSION,
+                             "display": CURATR_DISPLAY_MARKER}]},
+        "subject": {"reference": f"Patient/{PATIENT_ID}"},
+    }, tenant_id)
+
+    with patch("r6.curatr.CuratrEngine._lookup_code",
+               return_value={"valid": True, "display": CANONICAL,
+                             "message": None}):
+        response = client.get(
+            "/r6/fhir/Condition/redaction-probe-cond/$curatr-evaluate",
+            headers=tenant_headers)
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200, body[:200]
+
+    mismatch = [i for i in response.get_json()["issues"]
+                if i["field_path"].endswith(".display")]
+    assert len(mismatch) == 1, (
+        "the display-mismatch issue was not raised, so the marker assertion "
+        "below would pass without measuring anything: " + body[:400])
+    assert mismatch[0]["suggested_value"] == {"display": CANONICAL}
+    assert CANONICAL in mismatch[0]["plain_language"]
+
+    assert CURATR_DISPLAY_MARKER not in body, (
+        "$curatr-evaluate quoted the stored coding.display back to the caller")
