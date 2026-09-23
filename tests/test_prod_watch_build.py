@@ -1150,15 +1150,21 @@ def test_an_mcp_server_that_is_down_is_an_outage_not_a_stale_build(
     assert prod_watch.MCP_DEMO_VERSION_CHECK in prod_watch.reported
 
 
-def test_an_unreadable_package_json_is_reported_not_asserted(monkeypatch):
+def test_an_unreadable_package_json_is_reported_not_asserted(monkeypatch,
+                                                             capsys):
     # Nothing to compare against is not a mismatch: without the declared
     # version this run has no honest assertion to make about either server.
-    monkeypatch.setattr(prod_watch, "get", _fake_get(mcp_version="0.0.1"))
+    # Both servers name a version, so both reach the package.json branch.
+    monkeypatch.setattr(prod_watch, "get", _fake_get(mcp_version="0.0.1",
+                                                     demo_mcp_version="0.0.1"))
     monkeypatch.setattr(prod_watch, "_declared_mcp_version", lambda: None)
     assert prod_watch.run(1.0, [TIP]) == 0
     for const in _MCP_CHECKS:
         assert _named(getattr(prod_watch, const)) == []
         assert getattr(prod_watch, const) in prod_watch.reported
+    out = capsys.readouterr().out
+    assert out.count("could not read the version from services/"
+                     "agent-orchestrator/package.json") == 2
 
 
 def test_the_declared_version_is_read_from_the_checkout(monkeypatch, tmp_path):
