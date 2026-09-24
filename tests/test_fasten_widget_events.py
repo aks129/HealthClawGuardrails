@@ -30,9 +30,13 @@ import re
 TEMPLATE = (pathlib.Path(__file__).resolve().parent.parent
             / "templates" / "fasten_connect.html")
 
-#: Every event name the v4 bundle emits. If Fasten adds one, this list is
-#: what to update — and the assertion below is what will notice.
-FASTEN_WIDGET_EVENTS = ("widget.close", "widget.complete", "widget.config_error")
+#: Every event name the embed bundle emits (its event-type enum, read out of
+#: embed.connect.fastenhealth.com's main bundle for #461). If Fasten adds
+#: one, this list is what to update — and the assertion below will notice.
+FASTEN_WIDGET_EVENTS = ("widget.close", "widget.complete", "widget.config_error",
+                        "patient.connection_pending",
+                        "patient.connection_success",
+                        "patient.connection_failed", "search.query")
 
 
 def _source() -> str:

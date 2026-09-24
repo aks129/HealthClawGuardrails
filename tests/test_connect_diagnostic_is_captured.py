@@ -27,11 +27,12 @@ import json
 
 _ENDPOINT = "/r6/fhir/internal/connect-diagnostic"
 
-#: The payload Fasten actually emitted, from the FAS-864 report.
+#: What the connect page posts for the FAS-864 failure: the event name, the
+#: error code and Fasten's request id, and nothing else from the event
+#: (#461; tests/test_fasten_widget_error_reference.py pins the page side).
 _REAL_PAYLOAD = {
-    "type": "widget.config_error",
-    "error_type": "fasten_unauthorized_client",
-    "message": "An error occurred while retrieving vault profile",
+    "event_type": "patient.connection_failed",
+    "error": "fasten_unauthorized_client",
     "request_id": "req_01J8XKQ2M4YB3",
 }
 
