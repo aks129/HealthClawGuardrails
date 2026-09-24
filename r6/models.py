@@ -64,7 +64,8 @@ class R6Resource(db.Model):
     is_deleted = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Curator promotion pipeline (action_policy.yaml: curation_policy)
+    # Curator promotion pipeline — transitions live in r6/curatr.py
+    # persist_curation_state.
     # States: raw | in_review | curated | rejected
     curation_state = db.Column(db.String(32), nullable=True, default='raw')
     quality_score = db.Column(db.Float, nullable=True)   # 0.0–1.0
@@ -88,6 +89,7 @@ class R6Resource(db.Model):
         'Condition', 'Provenance',
         # Phase 4 — US Core v9 R4 clinical resources
         'AllergyIntolerance', 'Immunization', 'MedicationRequest',
+        'MedicationStatement',  # #377 — stored apart, never merged
         'Medication', 'MedicationDispense',
         'Procedure', 'DiagnosticReport',
         'CarePlan', 'CareTeam', 'Goal',

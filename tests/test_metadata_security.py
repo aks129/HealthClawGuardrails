@@ -8,13 +8,28 @@ Reconciliation tests for the security disclosure work:
   2. The privacy policy renders the reconciled (honest) security claims:
      the reference-implementation note and the messaging-platforms posture.
   3. The OpenClaw bot's /start welcome carries the one-time chat-channel
-     risk acknowledgment. openclaw/bot.py imports the telegram SDK, which is
-     not a test dependency, so this is a source-content assertion rather than
-     a live handler invocation.
+     risk acknowledgment. This used to be a source-content assertion on the
+     grounds that the telegram SDK was not a test dependency; it is one now
+     (pyproject.toml), so the handler is driven and its reply read (#634 F8).
 """
 
+import asyncio
+import os
+import re
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+
+def _privacy_prose(client):
+    """/privacy as a reader sees it: tags dropped, case folded, and every run
+    of whitespace, hyphens or dashes collapsed to one space. A banned claim
+    must not walk back in by a line wrap, an <em>, or 'summary only' written
+    without its hyphen (#634 F8)."""
+    body = client.get('/privacy').get_data(as_text=True)
+    text = re.sub(r'<[^>]+>', ' ', body).lower()
+    return re.sub(r'[\s \-‐-―]+', ' ', text)
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +106,11 @@ class TestPrivacyReconciliation:
         assert resp.status_code == 200
 
     def test_no_universal_authenticated_tenant_claim(self, client):
-        body = client.get('/privacy').get_data(as_text=True)
+        """MUTATION: write 'scoped to the\\n<em>authenticated</em> tenant' into
+        templates/privacy.html -> red. The raw-body check it replaced stayed
+        green: a template line wrap was enough to reinstate the claim."""
         # The old overclaiming phrasing must be gone.
-        assert 'scoped to the authenticated tenant' not in body
+        assert 'scoped to the authenticated tenant' not in _privacy_prose(client)
 
     def test_reference_implementation_note_present(self, client):
         body = client.get('/privacy').get_data(as_text=True)
@@ -159,13 +176,43 @@ class TestCareAgentsSurfaceCopy:
 # ---------------------------------------------------------------------------
 
 class TestBotStartDisclosure:
-    def test_start_has_risk_acknowledgment(self):
-        src = (
-            Path(__file__).resolve().parent.parent / 'openclaw' / 'bot.py'
-        ).read_text(encoding='utf-8')
-        assert 'cmd_start' in src
-        assert 'risk_line' in src
-        assert 'chat apps aren' in src  # apostrophe variant tolerant
+    def test_start_reply_leads_with_the_risk_acknowledgment(self):
+        """The welcome a user actually receives states the channel risk, and
+        states it before the command list rather than under it.
+
+        MUTATION: drop f'{risk_line}\\n\\n' from cmd_start's text -> red. The
+        source-substring check this replaced ('cmd_start', 'risk_line',
+        'chat apps aren' all present in bot.py) stayed green, because the
+        variable is still defined — it just never reaches the user.
+        """
+        os.environ.setdefault('TELEGRAM_BOT_TOKEN', 'test-token-for-start')
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'openclaw'))
+        import bot
+
+        replies = []
+
+        async def fake_reply(update, text, agent_id=None, **kw):
+            replies.append(text)
+
+        async def fake_log_incoming(update, command):
+            return 'agent-x'
+
+        update = SimpleNamespace(
+            effective_message=SimpleNamespace(text='/start'),
+            effective_chat=SimpleNamespace(id=6340),
+            effective_user=SimpleNamespace(username='tester', id=1),
+        )
+        with patch.object(bot, '_reply', fake_reply), \
+                patch.object(bot, '_log_incoming', fake_log_incoming), \
+                patch.object(bot, '_bind_chat_to_tenant',
+                             lambda chat_id, username: (True, 'bound')):
+            asyncio.run(bot.cmd_start(update, None))
+
+        assert len(replies) == 1
+        assert 'Commands:' in replies[0], 'the command list moved or was renamed'
+        before_commands = replies[0].split('Commands:')[0]
+        assert re.search(r"chat apps aren.t encrypted", before_commands)
+        assert 'shared by everyone' in before_commands
 
     def test_start_promises_no_unimplemented_privacy_control(self):
         """The disclosure must not offer a control that does not exist.
@@ -188,8 +235,13 @@ class TestBotStartDisclosure:
             'until a toggle is implemented and gates the read formatters')
 
     def test_privacy_policy_lists_no_unimplemented_mitigation(self, client):
-        """Same claim, second location — the policy is a legal document."""
-        body = client.get('/privacy').get_data(as_text=True)
-        assert 'summary-only mode' not in body.lower(), (
+        """Same claim, second location — the policy is a legal document.
+
+        Still a phrase ban, not a property: nothing enumerates the mitigations
+        that exist to check the list against. It is at least a tolerant one.
+        MUTATION: add a '<li>Summary only mode</li>' mitigation to
+        templates/privacy.html -> red (the hyphen-exact check stayed green).
+        """
+        assert 'summary only' not in _privacy_prose(client), (
             'privacy policy lists summary-only mode as a mitigation, but it '
             'is not implemented')
