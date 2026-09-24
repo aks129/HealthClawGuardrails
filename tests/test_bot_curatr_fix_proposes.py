@@ -37,6 +37,7 @@ def _update():
     )
 
 
+PARSE_MODES: list = []
 PROPOSED = {'id': 'act-77', 'status': 'proposed'}
 COMMITTED = {'id': 'act-77', 'status': 'awaiting_confirmation'}
 
@@ -46,9 +47,11 @@ def _run_with(state, results, commands=('curatr_fix', 'approve')):
     Exception to raise)."""
     bot._chat_state[5151] = dict(state)
     replies = []
+    PARSE_MODES.clear()
 
-    async def fake_reply(update, text, agent_id=None, **kw):
+    async def fake_reply(update, text, agent_id=None, parse_mode=None):
         replies.append(text)
+        PARSE_MODES.append(parse_mode)
 
     calls = []
 
@@ -90,8 +93,10 @@ def test_curatr_fix_proposes_and_says_nothing_changed():
                    'new_value': 'resolved'}],
         'patient_intent': 'requested from Telegram /curatr_fix',
         'reason': 'Status is stale'})
-    # Proposing needs no credential; nothing about it is an approval.
-    assert headers is None
+    # curatr_apply_fix is write-tier on the MCP server, which refuses it with
+    # no step-up — the bot used to send none, so every /curatr_fix failed.
+    assert headers == {'X-Step-Up-Token': 'stepup-xyz',
+                       'X-Tenant-Id': bot.TENANT_ID}
     assert 'act-77' in replies[0]
     assert 'Nothing has changed' in replies[0]
     assert 'applied' not in replies[0].lower()
@@ -120,6 +125,9 @@ def test_a_failed_submit_is_reported_and_never_called_waiting():
     assert 'not submitted' in replies[0].lower()
     assert 'Waiting for you' not in replies[0]
     assert 'pending_action' not in bot._chat_state[5151]
+    # "action_commit" has an unpaired underscore; under Telegram Markdown the
+    # message would be refused and the person would hear nothing at all.
+    assert PARSE_MODES[0] is None
     # /approve must not claim a request is waiting when none is.
     assert 'act-77' not in replies[1]
     assert 'is waiting' not in replies[1]
