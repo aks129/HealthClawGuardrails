@@ -143,8 +143,11 @@ def report(session_id):
     if session is None:
         return jsonify(_oo("error", "not-found", "session not found")), 404
 
+    # Live rows only: a reading the patient deleted must not reach the
+    # clinician's report as a row, an average or a flag.
     rows = R6Resource.query.filter_by(resource_type="Observation",
-                                      tenant_id=tenant_id).all()
+                                      tenant_id=tenant_id,
+                                      is_deleted=False).all()
     observations = []
     for r in rows:
         obs = r.to_fhir_json()
