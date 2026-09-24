@@ -131,6 +131,8 @@ Run each prompt in a fresh conversation. Tick the box when the described behavio
 
   ✓ Expected: `fhir_commit_write` returns HTTP 428 Precondition Required until `_humanConfirmed: true` is in the args.
 
+  This checks that the 428 fires, not that a human acted: the flag becomes the `X-Human-Confirmed` header, which the caller sets about itself. It is a known gap ([#214](https://github.com/aks129/HealthClawGuardrails/issues/214)), not a human gate.
+
 - [ ] **Curatr data-quality check**
   > Use `curatr_evaluate` on any Condition resource. It should return issues + quality_score.
 
