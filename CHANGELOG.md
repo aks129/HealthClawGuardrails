@@ -7,7 +7,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
-## [2.0.0] — 2026-09-XX — The synthetic-beta release
+## [2.0.0] — 2026-09-24 — The synthetic-beta release
 
 2.0 is the synthetic-beta release. The guardrails are on by default and
 Grade A holds. The docs claim only what is true on `main`. The refactor
@@ -15,7 +15,7 @@ ratchets continue as 2.x; the definition and today's numbers are in
 [the playbook's §5](docs/2026-08-05-healthclaw-2.0-playbook.md#5-definition-of-done-for-20).
 The user-facing summary and what is *not* in 2.0 are in
 [docs/releases/2.0.0.md](docs/releases/2.0.0.md). The full list is the
-[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v1.9.0...main).
+[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v1.9.0...v2.0.0).
 Version 1.10.0 was a release candidate and was never tagged, so its work is
 part of 2.0.0.
 
@@ -24,8 +24,10 @@ part of 2.0.0.
 - **An access kernel.** `r6/access.py` is now the one tenant reader, step-up
   gate, audit call and FHIR exit. The blueprints adopt it one slice at a time.
   `require_grant` raises rather than returning a tuple a caller can mis-read.
-  `has_grant` and `decide_grant` answer the same question as a predicate.
-  A refusal states its reason.
+  `has_grant` answers the same question as a predicate, and `decide_grant`
+  keeps the reason (#788). A refusal states its reason. `$ingest-context`,
+  the last direct step-up check in `routes.py`, now goes through
+  `require_grant` with its refusal body unchanged (#800).
 - **Tenant isolation, closed where it leaked.** `/r6/ops/*` authenticates as
   infrastructure (#304). `/demo/agent-loop` was an anonymous cross-tenant
   write and is now gated (#210). Wearables sync is scoped to the
@@ -37,7 +39,10 @@ part of 2.0.0.
 - **Audit.** `command_center` and `agent_runs` writes are audited (B1, B2).
   A timer that moves a run into the human gate is audited (#596). Un-deleting
   a record on re-ingest leaves a trace (#558). An audit failure no longer
-  discards the caller's work.
+  discards the caller's work. The kernel writes one PHI-free audit row for
+  every step-up refusal it renders, capped per client (#797). During a
+  Redis outage the rows are still written, under the same cap kept in
+  process (#799).
 - **Conformance.** The grade had measured resemblance to this codebase, not
   conformance; it now measures conformance (#525). The dashboard publishes
   what the harness does *not* grade (#401).
@@ -62,15 +67,26 @@ part of 2.0.0.
 - Readable labels come from `r6/terminology.py` after redaction, never from
   the feed's own `display` (#207). SNOMED CT labels cover the codes the
   product carries (#577).
+- A canary scan ingests one synthetic bundle with a marked value in every
+  field real feeds leak through, then searches the body of every agent read
+  tool (#792). It found one leak: the `$compiled-truth` timeline read
+  Provenance raw. That timeline is now redacted like the read path (#794).
+- The `$share-bundle` intake strips upstream `display`, `text` and other
+  free text, then relabels coded fields from `r6/terminology.py`. Only the
+  Patient's name, birthDate, address and telecom are kept, since the share
+  is identified for a clinician (#801). `$populate` now answers through the
+  counted unredacted exit and redacts record content before population.
 
 ### Clinical tools
 
-- Appointment brief with a source for each field (#228, #250).
+- Appointment brief with a source for each field (#228, #250). It now
+  evaluates care gaps for the tenant's own Patient instead of none (#795).
 - Lab trends over time, as an MCP App and as a chart in chat.
 - Care gaps: a screening that cannot be fully checked is no longer reported
   as due or as clear (#389, #417, #425).
 - SDC forms: `$populate` reads a bounded, redacted `%patient` projection.
   `$extract` commit mode is an allowlist, and nothing is on it (#572, #679).
+  The `%patient` bound is pinned on the review page and delivery link (#785).
 - Prescription transfer: the Schedule II code set is verified against RxNav,
   and the refusal does not key on the feed's free text (#727).
 - `MedicationStatement` is stored and read instead of skipped (#377).
@@ -97,6 +113,9 @@ part of 2.0.0.
   (`CARE_REAL_RECORDS`).
 - An outage reads as an outage, never as "you have no records".
 - A signed-in person can find what is waiting for their answer (#215).
+  A Curatr fix proposed from OpenClaw reaches that list (#787).
+- The brief shows due screenings when one screening cannot be checked, with
+  the reason that one was left out (#798).
 
 ### CI and operations
 
@@ -105,9 +124,20 @@ part of 2.0.0.
   flags an MCP server older than `main` (#703, #155).
 - `/health` reports which commit it runs (#703).
 - `scripts/beta_acceptance.py` walks the synthetic-beta journey and says
-  what it could not run (#677).
+  what it could not run (#677). Rows 7-12 cover SMBP, care gaps, the intake
+  form, the signed PDF, restart and deletion (#793).
 - Table-stakes checks and a defect catalogue gate every PR.
 - The VPS deploy path is retired.
+
+### Documentation
+
+- The docs claim only what is true on `main` (#786). Hosts that do not
+  answer are no longer named (#784).
+- The action rail is named as the human gate and `X-Human-Confirmed` as the
+  gap (#789). Agent-facing text no longer tells an agent to set that header
+  on a 428; a test fails on any line that does (#791).
+- `FASTEN_TEFCA_MODE` is documented as opt-in, and its unset default is
+  pinned by a render test (#790).
 
 ### Removed
 
