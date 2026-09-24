@@ -101,10 +101,14 @@ TOOLS = [
                      "or coming due (USPSTF/ACIP/ADA guidance)."),
      "parameters": {"type": "object", "properties": {}, "required": []}},
     {"name": "search_records",
-     "description": "Search the person's FHIR records by type.",
+     "description": ("Search the person's FHIR records by type. "
+                     "MedicationRequest is what was prescribed; "
+                     "MedicationStatement is what the record says they "
+                     "take. Keep the two apart."),
      "parameters": {"type": "object", "properties": {
          "resource_type": {"type": "string", "enum": [
              "Condition", "Observation", "MedicationRequest",
+             "MedicationStatement",
              "AllergyIntolerance", "Immunization", "Procedure"]},
      }, "required": ["resource_type"]}},
     {"name": "start_intake_form",
@@ -137,6 +141,10 @@ TOOL_LABELS = {
 # separately audited read; a pathological bundle must not turn one chat
 # message into an unbounded fan-out.
 MAX_MEDICATION_DEREFS = 10
+
+# Types whose name may live behind a medicationReference. A statement carries
+# one exactly as a request does (#377).
+_MEDICATION_TYPES = ("MedicationRequest", "MedicationStatement")
 
 
 def _medication_resolver(hc: HealthClawClient, tenant: str):
@@ -315,12 +323,16 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
+        # Statements get their own key and are never folded into
+        # "medications": a merged list needs a dedup rule that code cannot
+        # supply (#377, docs/2026-08-05-medicationstatement-support-decision.md).
         for rt, key in (("Condition", "conditions"),
                         ("MedicationRequest", "medications"),
+                        ("MedicationStatement", "medication_statements"),
                         ("AllergyIntolerance", "allergies")):
             parts[key] = _summarize_bundle(
                 hc.search(tenant, rt),
-                resolve_ref=med_resolver if rt == "MedicationRequest" else None)
+                resolve_ref=med_resolver if rt in _MEDICATION_TYPES else None)
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
@@ -402,7 +414,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(_summarize_bundle(
             hc.search(tenant, rt),
             resolve_ref=(_medication_resolver(hc, tenant)
-                         if rt == "MedicationRequest" else None)))
+                         if rt in _MEDICATION_TYPES else None)))
     if name == "start_intake_form":
         action_id = hc.start_form_action(tenant)
         events.append({"type": "card", "kind": "review",

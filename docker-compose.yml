@@ -119,6 +119,7 @@ services:
     ports:
       - "127.0.0.1:${CAREAGENTS_PORT:-8600}:8600"
     environment:
+      - CARE_ROLE=web
       - CARE_ENV=development
       - CARE_DATABASE_URL=sqlite:////data/careagents.db
       - HEALTHCLAW_BASE=http://fhir-mcp-guardrails:5000
@@ -142,7 +143,8 @@ services:
     build:
       context: .
       dockerfile: deploy/careagents/Dockerfile
-    command: ["python", "-m", "careagents.worker"]
+    # No `command:` — CARE_ROLE picks the process through the image's own CMD
+    # dispatch, exactly as production does (#276).
     environment:
       - CARE_ROLE=worker
       - CARE_ENV=development
