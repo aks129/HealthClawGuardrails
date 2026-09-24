@@ -26,6 +26,7 @@ step-up authorization, and tenant isolation.
 | `FASTEN_PRIVATE_KEY` | Yes | Fasten API private key — never expose client-side |
 | `FASTEN_WEBHOOK_SECRET` | Recommended | Standard-Webhooks HMAC secret from Fasten portal |
 | `FASTEN_CURATR_SCAN` | No | Set `true` to run Curatr quality scan after each import |
+| `FASTEN_TEFCA_MODE` | No | Default `false`. Set `true` only when Fasten has enabled TEFCA IAS for the account; the `/connect` page then adds `tefca-mode=true` to the widget |
 
 ---
 
@@ -132,7 +133,7 @@ a resource is ingested, all existing guardrails apply automatically:
 
 ## TEFCA IAS Specifics
 
-- Enable with `tefca-mode="true"` on the Stitch widget
+- Enable with `tefca-mode="true"` on the Stitch widget. HealthClaw's `/connect` page sends it only when `FASTEN_TEFCA_MODE=true`; live mode needs Fasten to enable TEFCA IAS for the account, and the embed needs third-party cookies
 - Use `tefca_directory_id` (not `endpoint_id`) as the stable identifier
 - Scope is always `patient/*.read` — no narrower scope negotiation
 - Identity verification via CLEAR (phone + email) or ID.me (username/password)

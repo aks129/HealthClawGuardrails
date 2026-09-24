@@ -131,6 +131,19 @@ class TestConnectPage:
         assert 'tefca-mode=true' not in html
         assert 'public-id=public_test_XYZ' in html
 
+    def test_omits_tefca_when_unset(self, client, monkeypatch):
+        """TEFCA IAS is opt-in (#326): a deployment that never set the
+        variable must not request it. Rendered, not read from source, so an
+        inverted comparison is caught as well as a flipped default."""
+        monkeypatch.setenv('FASTEN_PUBLIC_KEY', 'public_test_XYZ')
+        monkeypatch.delenv('FASTEN_TEFCA_MODE', raising=False)
+        resp = client.get('/connect/test-tenant')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'tefca-mode=true' not in html
+        assert 'search-only=false' not in html
+        assert 'public-id=public_test_XYZ' in html
+
     def test_shows_warning_when_key_missing(self, client, monkeypatch):
         monkeypatch.delenv('FASTEN_PUBLIC_KEY', raising=False)
         resp = client.get('/connect/test-tenant')
