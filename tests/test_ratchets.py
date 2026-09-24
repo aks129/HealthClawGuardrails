@@ -349,7 +349,11 @@ def test_no_new_package_mutates_without_auditing():
 #: clinical content ($populate's Observation / MedicationRequest /
 #: AllergyIntolerance / Condition sweep). A tombstoned row reaching an
 #: intake form is the form_fill shape again, one hop upstream.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 9
+#: 9 -> 8 (#630, measured 2026-09-23): the count had already fallen to 8 and
+#: the pin never followed it. That one unit of slack meant a file newly
+#: dropping its only filter stayed green — verified by stripping
+#: r6/smbp/trend_routes.py's `is_deleted=False` against the old pin.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 8
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
@@ -358,7 +362,17 @@ _SOFT_DELETE_EXEMPT = ('r6/purge.py',)
 
 
 def test_soft_delete_blind_query_files_only_decrease():
-    """MUTATION: strip is_deleted from a query in r6/routes.py -> red."""
+    """MUTATION: strip `is_deleted=False` from r6/smbp/trend_routes.py, its
+    only mention -> red. Executed 2026-09-23 (#630).
+
+    This is a per-FILE presence check, not per-query: any mention of
+    `is_deleted` anywhere in a file counts it clean — a comment, the column
+    declaration (r6/models.py), a write (r6/context_builder.py). So this
+    docstring used to say "strip is_deleted from a query in r6/routes.py ->
+    red", and that stays GREEN here: 22 other mentions remain. That read path
+    is pinned by behaviour instead, in tests/test_context_builder.py's
+    test_a_revived_row_is_readable_again_through_the_read_path.
+    """
     def collect(tree, path):
         source = path.read_text(encoding='utf-8')
         if 'R6Resource' not in source or 'query' not in source:
@@ -493,7 +507,9 @@ def test_the_god_module_only_shrinks():
 #: of quoting. This was decoration, not a ratchet: a migration touching
 #: only double-quoted single-line call sites could have lowered the count
 #: while the true number stayed flat.
-_RAW_TENANT_READS = 27
+#: 27 -> 24, 23 Sep: measured 24 on main (kernel slices moved three), so the
+#: pin had three units of slack and its own MUTATION line stayed green.
+_RAW_TENANT_READS = 24
 
 
 def _is_tenant_header_read(node):

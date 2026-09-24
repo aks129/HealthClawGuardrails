@@ -500,20 +500,18 @@ def test_upstream_free_text_never_reaches_an_answer(
         "Type 2 diabetes mellitus, without complications")
 
 
-def test_an_allergen_the_server_cannot_label_populates_empty(
+def test_a_snomed_allergen_the_server_knows_populates_with_its_label(
         client, app, tenant_id, tenant_headers):
-    """The cost of the bound, pinned rather than left to be discovered.
+    """The coverage gap this test used to pin, closed deliberately (#577).
 
-    r6/terminology.py has no allergen vocabulary — no SNOMED entries at all —
-    so once the upstream `code.text` is stripped there is nothing to put
-    back, and the allergen row populates with no answer. The repeat is still
-    emitted, so the form says "an allergy is on file that I could not name"
-    rather than dropping it, and `no-known-allergies` is still never touched.
-
-    This is a terminology-coverage gap, not a guard defect. It is written
-    down here so that closing it (adding allergen codes, or an allergen
-    resolver) is a deliberate change with a test that goes green, instead of
-    a surprise on an intake form.
+    It used to assert the allergen row populated EMPTY: r6/terminology.py had
+    no SNOMED entries, so once the upstream `code.text` was stripped there was
+    nothing to put back. #577 added SNOMED labels for the codes the product
+    carries, penicillin allergy among them, so the row now fills — with the
+    server's label, keyed by code, and never with the upstream text (the
+    marker must not reach the response). `no-known-allergies` is still never
+    touched. An allergen the table does not know still populates empty; that
+    is test_populate_lists.py's row-count invariant.
     """
     _store(app, _patient(), tenant_id)
     _store(app, {
@@ -531,12 +529,14 @@ def test_an_allergen_the_server_cannot_label_populates_empty(
     allergen_items = [i for i in _walk(qr.get("item", []))
                       if i["linkId"] == "allergies.item.allergen"]
     assert len(allergen_items) == 1, "the allergy repeat itself was dropped"
-    assert "answer" not in allergen_items[0]
+    assert _answers(qr)["allergies.item.allergen"] == "Allergy to penicillin"
+    assert ALLERGEN_NAME_MARKER not in json.dumps(body), (
+        "the upstream allergen text survived; the label must be the server's")
     nka = [i for i in _walk(qr.get("item", []))
            if i["linkId"] == "allergies.no-known-allergies"]
     assert nka and "answer" not in nka[0], (
-        "no-known-allergies must never be inferred, least of all from an "
-        "allergy we failed to label")
+        "no-known-allergies must never be inferred, least of all from a "
+        "recorded allergy")
 
 
 def test_the_most_recent_observation_still_wins_after_redaction(

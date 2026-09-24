@@ -102,3 +102,18 @@ Sequenced:
 
 Not recommended: a merged medication list, a dedup rule keyed on RxNorm, or
 any path that lets a statement stand in for a request.
+
+## Update — step 2 shipped (2026-09-23)
+
+`MedicationStatement` is now in `SUPPORTED_TYPES`, with its own validator
+case, and in `CLINICAL_RESOURCE_TYPES` so a direct write needs the same human
+confirmation as a `MedicationRequest`. Every ingest path stores it; the
+guarded read and search routes serve it redacted and labelled by code. The
+agent reads it through `search_records` and gives it its own key
+(`medication_statements`) in `get_health_summary`. It is never merged into
+`medications`.
+
+Still on `MedicationRequest` only, as recommended above: the SDC intake form,
+the appointment brief, rx-transfer `medication_names`, and the CareAgents
+"N medications" greeting count. Each one needs a clinician or Product
+ruling before it changes.
