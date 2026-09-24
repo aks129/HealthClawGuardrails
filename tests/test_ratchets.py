@@ -152,16 +152,24 @@ def _report(sites, pin, what):
 #: byte-identical; the missing-header one is still decided at the site.
 #: 2 -> 1 (#655): the command centre's _authz_write asks decide_grant and
 #: keeps its JSON refusal, byte-identical, reason included.
-_STEP_UP_CALLSITES = 1
+#: 1 -> 0 (#655): the dashboard-link mint the same way; the public-tenant
+#: exemption stays ahead of it.
+#:
+#: The count is ZERO, so this is no longer a ratchet but a tripwire
+#: (playbook A7's shape, per test_no_ratchet_is_already_at_zero): a direct
+#: validate_step_up_token() call anywhere outside r6/access.py is red on
+#: arrival. A gate asks require_grant; a predicate asks has_grant; a site
+#: that publishes the refusal reason asks decide_grant.
 
 
-def test_direct_step_up_validation_only_decreases():
+def test_no_direct_step_up_validation_outside_the_kernel():
     """MUTATION: add a validate_step_up_token() call anywhere -> red."""
     sites, _ = _scan(_calls_to('validate_step_up_token'),
                      skip=('r6/access.py',))
-    assert len(sites) <= _STEP_UP_CALLSITES, _report(
-        sites, _STEP_UP_CALLSITES,
-        'Direct step-up validation should route through r6.access.require_grant.')
+    assert not sites, _report(
+        sites, 0,
+        'Direct step-up validation is forbidden outside r6/access.py: use '
+        'require_grant, has_grant or decide_grant.')
 
 
 #: Modules that reach into r6/routes.py for a symbol. Every one of these is a
@@ -578,7 +586,7 @@ def test_every_ratchet_names_its_playbook_chunk():
     """A pin without a migration plan is a number nobody will ever lower."""
     source = pathlib.Path(__file__).read_text(encoding='utf-8')
     assert 'docs/2026-08-05-healthclaw-2.0-playbook.md' in source
-    for pin in ('_STEP_UP_CALLSITES', '_ROUTES_IMPORTERS',
+    for pin in ('_ROUTES_IMPORTERS',
                 '_RAW_TENANT_READS',
                 '_POST_COMMIT_AUDIT_CALLSITES',
                 '_FILES_QUERYING_WITHOUT_SOFT_DELETE',
@@ -587,7 +595,6 @@ def test_every_ratchet_names_its_playbook_chunk():
 
 
 @pytest.mark.parametrize('pin,value', [
-    ('step-up callsites', _STEP_UP_CALLSITES),
     ('routes.py importers', _ROUTES_IMPORTERS),
     ('post-commit audit callsites', _POST_COMMIT_AUDIT_CALLSITES),
     ('soft-delete-blind files', _FILES_QUERYING_WITHOUT_SOFT_DELETE),

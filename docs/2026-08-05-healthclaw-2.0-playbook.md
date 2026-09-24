@@ -246,7 +246,7 @@ The live pins, read from `tests/test_ratchets.py`:
 |---|---|---|---|---|
 | Post-commit audit call sites | `_POST_COMMIT_AUDIT_CALLSITES` | 88 | 86 | 0 |
 | Raw tenant-header reads | `_RAW_TENANT_READS` | 55 | 24 | 0 |
-| Direct step-up validation | `_STEP_UP_CALLSITES` | 20 | 3 | 0 |
+| Direct step-up validation | tripwire since #655 (was `_STEP_UP_CALLSITES`) | 20 | 0 | 0 |
 | Soft-delete-blind files | `_FILES_QUERYING_WITHOUT_SOFT_DELETE` | 12 | 8 | 0 |
 | Imports out of `routes.py` | `_ROUTES_IMPORTERS` | 4 | 4 | 1 |
 | `routes.py` lines, a ceiling | `_GOD_MODULE_LINES` | 3,930 | 3,750 | shrinks |

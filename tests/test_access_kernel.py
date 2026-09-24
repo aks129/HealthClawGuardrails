@@ -897,6 +897,9 @@ _DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset({
     # #655: session-or-token write gate; answers its own JSON refusal with
     # the classified reason, byte-identical to before the move.
     'r6/command_center/routes.py:_authz_write',
+    # #655: the dashboard-link mint, the same JSON refusal; a public tenant
+    # still mints without being asked for a token.
+    'r6/command_center/routes.py:api_generate_link',
 })
 
 
@@ -1808,10 +1811,9 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # tests/test_ratchets.py::_RAW_TENANT_READS.
                      'r6/routes.py',
                      # #508 first imported `public_step_up_reason` here, a
-                     # ruling rather than a gate. #655 moves the step-up
-                     # checks one PR each: _authz_write asks decide_grant;
-                     # the dashboard-link mint still calls the validator
-                     # directly and is still counted by _STEP_UP_CALLSITES.
+                     # ruling rather than a gate. #655 moved both step-up
+                     # checks, one PR each: _authz_write and the
+                     # dashboard-link mint ask decide_grant.
                      'r6/command_center/routes.py',
                      # Council ruling D10, and NOT a migration slice: the
                      # ruling directs $populate to read its tenant through
@@ -1827,9 +1829,9 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      'r6/sdc/routes.py',
                      # playbook B2: the durable agent-run control plane's
                      # audit. It imports `audit` and nothing else — its
-                     # step-up check still calls the validator directly and
-                     # is still counted by _STEP_UP_CALLSITES, because one
-                     # guard per PR is the protocol. The service layer rather
+                     # step-up check then still called the validator
+                     # directly (since moved to has_grant, slice 16), because
+                     # one guard per PR is the protocol. The service layer rather
                      # than the routes is the adopter on purpose: each of
                      # these functions owns its own transaction, and the
                      # kernel's audit() only keeps its promise when it flushes

@@ -48,7 +48,6 @@ from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
                        decide_grant, has_grant, public_step_up_reason,
                        tenant_from_request)
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
-from r6.stepup import validate_step_up_token
 
 logger = logging.getLogger(__name__)
 
@@ -645,12 +644,18 @@ def api_generate_link():
             return jsonify({
                 "error": "X-Step-Up-Token required for non-public tenants"
             }), 401
-        valid, err = validate_step_up_token(step_up, tenant_id)
-        if not valid:
-            # Classified, not raw (#508). See _authz_write above.
-            return jsonify({
-                "error": f"step-up token rejected: {public_step_up_reason(err)}"
-            }), 401
+        # #655: the kernel decides, as in _authz_write above — the same
+        # padded-token answers kept, the same tenant bound as given, and
+        # the reason already classified (#508).
+        reason = _padded_token_reason(step_up)
+        if reason is None:
+            decision = decide_grant(
+                scope=Scope.WRITE,
+                tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT))
+            if not decision.granted:
+                reason = decision.reason
+        if reason is not None:
+            return jsonify({"error": f"step-up token rejected: {reason}"}), 401
 
     import os
     base_url = (
