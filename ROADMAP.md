@@ -37,7 +37,7 @@ The consumer track, tracked in **[#134](../../issues/134)** (milestone *Aug 18 �
 
 Making the first two actions *real* — the epic is [#161](../../issues/161):
 
-- **Phone calls** (AI voice) and **SMS** to allowlisted, patient-registered contacts — real, fail-loud, transcript-in-a-minute, behind the out-of-band gate.
+- **Phone calls** (AI voice) and **SMS** — real, fail-loud, transcript-in-a-minute, behind the out-of-band gate, with a per-person daily cap. A saved-contacts allowlist is not built: it needs a store of contacts the person attested, which does not exist yet ([#216](../../issues/216)).
 - Two-phase call scripts (verify you've reached a human before disclosing anything; AI + recording disclosure), contact-by-reference (the model never handles a raw phone number), and RxNorm→DEA schedule awareness for prescription-related calls.
 - Action observability: a dashboard panel + daily digest so a 2am failure is known by breakfast.
 
