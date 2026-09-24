@@ -15,14 +15,29 @@ because the failure mode is worth remembering: every gate passed, every test
 was green, and the feature had never once run for a patient.
 """
 
+import json
+
 from r6.brief.engine import (
     CARE_GAPS_OK,
     CARE_GAPS_REASON_ENGINE_ERROR,
     CARE_GAPS_UNAVAILABLE,
 )
+from r6.caregaps.report import _NOT_EVALUATED_NOTES
+from r6.models import R6Resource, db
+from r6.seed import seed_demo_data
 
 _URL = "/r6/fhir/AppointmentBrief"
 _SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+
+
+def _store(app, resource, tenant_id):
+    with app.app_context():
+        db.session.add(R6Resource(
+            resource_type=resource["resourceType"],
+            resource_json=json.dumps(resource),
+            resource_id=resource.get("id"),
+            tenant_id=tenant_id))
+        db.session.commit()
 
 
 def _section(body, name):
@@ -43,11 +58,16 @@ def _fields(section):
     return [e for e in section.get("extension", []) if e.get("url") == "field"]
 
 
-def test_care_gaps_engine_failure_is_marked_unavailable(client, tenant_headers,
+def test_care_gaps_engine_failure_is_marked_unavailable(app, client, tenant_id,
+                                                        tenant_headers,
                                                         monkeypatch):
     def _boom(**kwargs):
         raise RuntimeError("screening rule table is corrupt")
 
+    # A Patient on record, so the rules are actually reached: with none the
+    # brief never calls them and says so instead (see the no-patient test).
+    _store(app, {"resourceType": "Patient", "id": "p-boom",
+                 "birthDate": "1970-01-01", "gender": "female"}, tenant_id)
     monkeypatch.setattr("r6.caregaps.evaluate.evaluate_care_gaps", _boom)
 
     r = client.get(_URL, headers=tenant_headers)
@@ -116,3 +136,78 @@ def test_the_route_serves_the_url_its_client_requests(app):
         f"the client requests {path}, which the app does not serve. "
         f"Brief-ish routes registered: "
         f"{sorted(r for r in served if 'Brief' in r)}")
+
+
+# --- #435: the brief evaluates the tenant's own Patient ----------------------
+
+def _due_rule_ids_from_the_operation(client, headers):
+    r = client.post("/r6/fhir/Patient/$care-gaps", headers=headers, json={})
+    assert r.status_code == 200
+    params = {p["name"]: p["valueString"] for p in r.get_json()["parameter"]}
+    summary = json.loads(params["summary"])
+    return {g["rule_id"] for g in summary["gaps"]}
+
+
+def test_brief_shows_the_screenings_due_for_the_sample_patient(
+        app, client, tenant_id, tenant_headers):
+    """The brief called the rules with patient=None, so every brief said the
+    screening review had nothing to read — while Patient/$care-gaps found
+    four screenings due for the same synthetic patient. A clinician walking
+    through the brief saw "did not run" every time.
+
+    Asserted against the operation's own answer as well as the literal four,
+    so the two cannot drift apart again.
+
+    MUTATION: pass patient=None in r6/brief/routes.py::_care_gap_result -> red.
+    """
+    with app.app_context():
+        seed_demo_data(tenant_id=tenant_id)
+
+    r = client.get(_URL, headers=tenant_headers)
+    assert r.status_code == 200
+    gaps = _section(r.get_json(), "care-gaps")
+    assert _sub(gaps, "status") == CARE_GAPS_OK, _sub(gaps, "reason")
+    assert _sub(gaps, "reason") is None
+
+    shown = {json.loads(f["valueString"])["sourceId"] for f in _fields(gaps)}
+    assert shown == {"lipid-screening", "cervical-screening", "mammography",
+                     "flu-immunization"}
+    assert shown == _due_rule_ids_from_the_operation(client, tenant_headers)
+
+    # The Patient row reaches the rules unredacted; nothing of it may reach
+    # the brief. Name, address, phone and MRN are all on the seeded row.
+    body = r.get_data(as_text=True)
+    for leaked in ("Rivera", "Maria", "Clinical Ave", "617-555", "MRN-2026"):
+        assert leaked not in body
+
+
+def test_brief_with_no_patient_says_there_is_none_rather_than_nothing_due(
+        client, tenant_headers):
+    """No Patient on record: the review does not run, and the reason says
+    why. Never an empty OK section — that reads as nothing due."""
+    r = client.get(_URL, headers=tenant_headers)
+    gaps = _section(r.get_json(), "care-gaps")
+    assert _sub(gaps, "status") == CARE_GAPS_UNAVAILABLE
+    assert _sub(gaps, "reason") == _NOT_EVALUATED_NOTES["no-patient"]
+    assert _fields(gaps) == []
+
+
+def test_brief_with_two_patients_does_not_guess_between_them(
+        app, client, tenant_id, tenant_headers, monkeypatch):
+    """Two Patients and no way to tell whose brief this is: nobody is picked,
+    the rules are never run, and the reason says so."""
+    for pid in ("p-one", "p-two"):
+        _store(app, {"resourceType": "Patient", "id": pid,
+                     "birthDate": "1970-01-01", "gender": "female"}, tenant_id)
+
+    def _must_not_run(**kwargs):
+        raise AssertionError("the rules ran for an unidentified patient")
+
+    monkeypatch.setattr("r6.caregaps.evaluate.evaluate_care_gaps",
+                        _must_not_run)
+
+    r = client.get(_URL, headers=tenant_headers)
+    gaps = _section(r.get_json(), "care-gaps")
+    assert _sub(gaps, "status") == CARE_GAPS_UNAVAILABLE
+    assert _sub(gaps, "reason") == _NOT_EVALUATED_NOTES["ambiguous-patient"]
+    assert _fields(gaps) == []

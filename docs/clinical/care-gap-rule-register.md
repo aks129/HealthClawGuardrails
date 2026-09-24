@@ -255,10 +255,11 @@ what a verdict above means.
    `entered-in-error` result can report a patient as up to date.
 4. **`diabetes-a1c` decides before it knows the patient's age.** The diagnosis
    gate precedes the age gate, so an unknown date of birth yields
-   `not_applicable` rather than `indeterminate`. `Patient/$care-gaps` no longer
-   reaches this — since #542 it evaluates no rules at all for a subject it
-   could not resolve — but the appointment brief calls the evaluator directly
-   with no patient, and lands here every time.
+   `not_applicable` rather than `indeterminate`. Neither caller reaches this
+   today: since #542 `Patient/$care-gaps` evaluates no rules at all for a
+   subject it could not resolve, and the appointment brief now resolves its
+   subject through the same functions and does the same. The ordering is
+   still wrong in the engine, for any future caller that passes no patient.
 
 ---
 

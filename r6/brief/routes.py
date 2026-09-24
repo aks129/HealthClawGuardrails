@@ -97,7 +97,7 @@ def _brief_to_extension(result: BriefResult) -> list[dict]:
     ]
 
 
-def _care_gap_result(conditions: list[dict], observations: list[dict]) -> dict:
+def _care_gap_result(tenant_id: str) -> dict:
     """Run care-gaps evaluation; on failure say so rather than returning {}.
 
     The brief must not 500 when the screening rules break, but the old empty
@@ -110,26 +110,38 @@ def _care_gap_result(conditions: list[dict], observations: list[dict]) -> dict:
     try:
         from r6.caregaps.evaluate import evaluate_care_gaps
         from r6.caregaps.report import build_consumer_summary
+        from r6.caregaps.routes import (
+            patient_for, resolve_subject, subject_resources)
+
+        # The subject, the demographics and the evidence come from the same
+        # three functions Patient/$care-gaps uses, so the brief and the
+        # operation cannot disagree about one person. The brief used to pass
+        # patient=None, and every brief said the review had nothing to read
+        # while $care-gaps found screenings due on the same record (#435).
+        subject, state = resolve_subject(None, tenant_id)
+        if state in ("no-patient", "ambiguous-patient"):
+            # Not guessed and not evaluated: with no one identified, the rules
+            # would report on nobody (#542). The caller reason says which.
+            return {"consumer": build_consumer_summary(
+                [], not_evaluated=state)}
+
+        # Unredacted, as in $care-gaps: the rules read birthDate and gender.
+        # It goes to the evaluator and nowhere else — the lines it produces
+        # are the rules' own titles and messages, never record text.
+        patient = patient_for(subject, tenant_id)
+        if patient is None:
+            return {"consumer": build_consumer_summary(
+                [], not_evaluated="check-incomplete")}
+
         results = evaluate_care_gaps(
-            patient=None,
-            conditions=conditions,
-            observations=observations,
+            patient=patient,
+            conditions=subject_resources("Condition", subject, tenant_id),
+            observations=subject_resources("Observation", subject, tenant_id),
+            immunizations=subject_resources("Immunization", subject, tenant_id),
+            procedures=subject_resources("Procedure", subject, tenant_id),
             as_of=date.today().isoformat(),
         )
-        # We KNOW we passed patient=None, and the caller reason outranks the
-        # rules' own causes for exactly this situation: with no record in
-        # front of them, every demographics-gated rule reports the date of
-        # birth as unknown, which is an artefact of this call and not a fact
-        # about the person (r6/caregaps/report.py::_unevaluated_marker, #417).
-        # Declaring it here is what stops the brief telling a patient their
-        # demographics are missing from a record that holds them.
-        #
-        # This is a stopgap, not the destination: the brief has no subject
-        # resolution at all, so no demographics-gated screening can be
-        # evaluated for anyone. Resolving a Patient for the brief is tracked
-        # separately (#435); until then the section says truthfully that it
-        # had nothing to read.
-        consumer = build_consumer_summary(results, not_evaluated="no-patient")
+        consumer = build_consumer_summary(results)
         return {"consumer": consumer}
     except Exception as exc:
         logger.warning("appointment brief: care-gaps evaluation failed (%s)",
@@ -170,7 +182,7 @@ def register_brief_routes(blueprint, deps):
         observations = _resources_for(tenant_id, "Observation")
         encounters = _resources_for(tenant_id, "Encounter")
 
-        care_gap = _care_gap_result(conditions, observations)
+        care_gap = _care_gap_result(tenant_id)
 
         result = generate_brief(
             conditions=conditions,

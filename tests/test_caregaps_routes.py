@@ -97,7 +97,7 @@ def test_care_gaps_with_no_subject_uses_the_tenants_own_patient(
     every subject.reference against None, nothing matches, and the evaluator
     is handed an empty record.
 
-    MUTATION: delete the fallback branch in _resolve_subject (return the
+    MUTATION: delete the fallback branch in resolve_subject (return the
     supplied subject unconditionally) -> both asserts red.
     """
     _seed_patient(app, tenant_id, pid="p-solo")
@@ -213,7 +213,7 @@ def test_a_soft_deleted_patient_no_longer_makes_the_match_ambiguous(
     """#422, stated as the operator's experience: they deleted the duplicate,
     and the symptom must move.
 
-    MUTATION: drop `is_deleted=False` from _resolve_subject -> red, and the
+    MUTATION: drop `is_deleted=False` from resolve_subject -> red, and the
     answer goes back to "ambiguous-patient" for a tenant with one live
     Patient.
     """
@@ -251,7 +251,7 @@ def test_the_last_patient_being_deleted_reads_as_no_patient_not_a_default(
 
 def test_a_supplied_subject_naming_a_deleted_patient_gets_no_demographics(
         client, app, tenant_id, tenant_headers):
-    """The half `_resolve_subject` cannot cover: a supplied subject never
+    """The half `resolve_subject` cannot cover: a supplied subject never
     passes through the resolver, so `_patient_for` needs its own filter.
 
     The route already knows what to do with a subject it cannot read — #417
