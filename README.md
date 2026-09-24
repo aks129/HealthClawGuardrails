@@ -125,7 +125,7 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
 
 | | Typical FHIR MCP server | HealthClaw |
 | --- | --- | --- |
-| Redaction before the model | Returns the record as the server stores it | Names cut to initials; identifier values, addresses and free text removed before the agent sees the record |
+| Redaction before the model | Returns the record as the server stores it | Before the agent sees the record: names cut to initials, identifier values removed, addresses stripped, birth dates cut to the year |
 | Audit of every access | Left to the FHIR server behind it | Every read and write records an AuditEvent, with a PHI-free detail |
 | Step-up for writes | The session credential covers writes | Each write needs a tenant-bound HMAC step-up token |
 | Out-of-band approval for calls, texts and forms | Not in scope | The agent only proposes. A person approves on a separate page, bound to the payload they were shown |
