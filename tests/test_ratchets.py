@@ -385,7 +385,10 @@ def test_no_new_package_mutates_without_auditing():
 #: 3 -> 2: r6/actions/routes.py filters rx-transfer/propose's
 #: MedicationRequest sweep, so a deleted medication is never drafted into a
 #: transfer call awaiting approval. Its other queries read ProposedAction.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 2
+#: 2 -> 1: r6/smbp/scheduler_routes.py filters the readings behind
+#: /reminders/due, so a deleted reading neither counts toward the course nor
+#: passes for the latest one and silences a due reminder.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 1
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
