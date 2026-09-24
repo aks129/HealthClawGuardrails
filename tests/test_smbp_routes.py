@@ -83,3 +83,30 @@ def test_report_html_and_pdf(client, app, tenant_id, auth_headers, tenant_header
     pdf = client.get(f"/r6/smbp/report/{session_id}?format=pdf", headers=tenant_headers)
     assert pdf.status_code == 200
     assert pdf.data[:4] == b"%PDF"
+
+
+def test_report_skips_a_deleted_reading(client, app, tenant_id, auth_headers,
+                                        tenant_headers):
+    """A soft-deleted reading is not in the clinician report: not a row, not
+    in the averages, not a flag.
+
+    MUTATION: drop `is_deleted=False` from the report's query -> red."""
+    enroll = client.post("/r6/smbp/enroll", headers=auth_headers,
+                         json={"patient_ref": "Patient/p1", "language": "en"})
+    session_id = enroll.get_json()["id"]
+    with app.app_context():
+        for s, d, when, deleted in [(128, 78, "2026-06-01T08:00:00Z", False),
+                                    (188, 118, "2026-06-01T20:00:00Z", True)]:
+            row = R6Resource(resource_type="Observation",
+                             resource_json=json.dumps(build_bp_observation(
+                                 "Patient/p1", s, d, when)),
+                             tenant_id=tenant_id)
+            row.is_deleted = deleted
+            db.session.add(row)
+        db.session.commit()
+
+    html = client.get(f"/r6/smbp/report/{session_id}", headers=tenant_headers)
+    assert html.status_code == 200
+    assert b"128/78" in html.data
+    assert b"188/118" not in html.data, (
+        "a reading the patient deleted is in the clinician's report")

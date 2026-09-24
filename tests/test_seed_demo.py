@@ -58,3 +58,31 @@ def test_reseed_is_idempotent_for_fixed_id_resources(app):
             resource_type="Questionnaire", id="healthclaw-intake",
             tenant_id="t-seed-3").all()
         assert len(qs) == 1
+
+
+def test_a_tenant_holding_only_tombstones_is_seeded(app):
+    """seed_demo_tenant's "already has data" gate counts live rows only.
+
+    A tenant whose every row is soft-deleted is empty. seed_demo_data's
+    per-resource check already reads it that way; the gate in front of it
+    did not, so such a tenant was skipped on every boot and stayed empty.
+
+    MUTATION: drop `is_deleted=False` from seed_demo_tenant's gate -> 0 -> red.
+    """
+    import json
+
+    from main import seed_demo_tenant
+    from r6.models import db
+    with app.app_context():
+        row = R6Resource(
+            resource_type="Observation",
+            resource_json=json.dumps({"resourceType": "Observation",
+                                      "id": "old-obs", "status": "final"}),
+            resource_id="old-obs", tenant_id="t-seed-4")
+        row.is_deleted = True
+        db.session.add(row)
+        db.session.commit()
+
+    assert seed_demo_tenant(app, "t-seed-4") > 0
+    with app.app_context():
+        assert _get("Patient", "demo-patient-rivera", "t-seed-4") is not None

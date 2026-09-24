@@ -61,10 +61,13 @@ def register_scheduler_routes(blueprint, deps):
 
         # Per-patient reading activity, computed from the tenant's Observations.
         # completed = reading count; last_reading_at = latest effectiveDateTime.
+        # Live rows only: a deleted reading must not count toward the course
+        # or pass for the latest one and silence a due reminder.
         counts = {}
         latest = {}
         for row in R6Resource.query.filter_by(
-                resource_type="Observation", tenant_id=tenant_id).all():
+                resource_type="Observation", tenant_id=tenant_id,
+                is_deleted=False).all():
             obs = row.to_fhir_json()
             ref = obs.get("subject", {}).get("reference")
             if not ref:

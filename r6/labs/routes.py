@@ -38,9 +38,16 @@ def register_labs_routes(blueprint, deps):
         return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _stored_observations(tenant_id):
-        """The tenant's own Observations, newest first, capped."""
+        """The tenant's own live Observations, newest first, capped.
+
+        Every read in this module skips soft-deleted rows (is_deleted=False):
+        a tombstoned result must not be interpreted back to the patient, and
+        a tombstoned Patient must not choose a reference range. Filtered
+        before the cap, so tombstones cannot take a live row's slot.
+        """
         rows = (R6Resource.query
-                .filter_by(resource_type="Observation", tenant_id=tenant_id)
+                .filter_by(resource_type="Observation", tenant_id=tenant_id,
+                           is_deleted=False)
                 .order_by(R6Resource.last_updated.desc())
                 .limit(STORED_OBSERVATION_CAP)
                 .all())
@@ -88,7 +95,8 @@ def register_labs_routes(blueprint, deps):
         observations, ignored = [], 0
         if subject:
             rows = R6Resource.query.filter_by(
-                resource_type="Observation", tenant_id=tenant_id).all()
+                resource_type="Observation", tenant_id=tenant_id,
+                is_deleted=False).all()
             for row in rows:
                 obs = row.to_fhir_json()
                 if obs.get("subject", {}).get("reference") == subject:
@@ -116,7 +124,7 @@ def register_labs_routes(blueprint, deps):
             return cache[ref]
         row = R6Resource.query.filter_by(
             resource_type="Patient", id=ref.split("/", 1)[1],
-            tenant_id=tenant_id).first()
+            tenant_id=tenant_id, is_deleted=False).first()
         cache[ref] = row.to_fhir_json() if row else None
         return cache[ref]
 

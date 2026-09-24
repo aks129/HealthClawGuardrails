@@ -373,7 +373,29 @@ def test_no_new_package_mutates_without_auditing():
 #: 8 -> 7: r6/actions/review.py filters all four of its queries — the
 #: Questionnaire and Patient that a review draft is built from, and the
 #: clinical sweep populated into it (D10's shape, one hop downstream).
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 7
+#: 7 -> 6: r6/labs/routes.py filters all three reads behind $interpret — the
+#: stored fallback CareAgents' get_labs drives, the ?subject sweep, and the
+#: Patient whose sex picks a reference range.
+#: 6 -> 5: r6/smbp/routes.py filters the clinician report's readings, so a
+#: deleted blood pressure is not a row, an average or a flag in it.
+#: 5 -> 4: r6/quality/routes.py filters the one loader behind NQF 0018's
+#: $evaluate-measure — Patients, Conditions and Observations alike.
+#: 4 -> 3: r6/sdc/documents.py filters the intake-PDF getter, so a signed
+#: download link minted before the delete stops serving the PDF.
+#: 3 -> 2: r6/actions/routes.py filters rx-transfer/propose's
+#: MedicationRequest sweep, so a deleted medication is never drafted into a
+#: transfer call awaiting approval. Its other queries read ProposedAction.
+#: 2 -> 1: r6/smbp/scheduler_routes.py filters the readings behind
+#: /reminders/due, so a deleted reading neither counts toward the course nor
+#: passes for the latest one and silences a due reminder.
+#: 1 -> 0: main.py's seed_demo_tenant gate counts live rows only, matching
+#: seed_demo_data's per-resource check, so a tenant holding nothing but
+#: tombstones is seeded rather than skipped as "already has data".
+#:
+#: At 0 the pin is gone and this is a tripwire (playbook A7's shape, per
+#: test_no_ratchet_is_already_at_zero): a file that queries R6Resource and
+#: never mentions is_deleted is red on arrival. A query that must see
+#: tombstones goes in _SOFT_DELETE_EXEMPT with its reason, as purge does.
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
@@ -381,9 +403,10 @@ _FILES_QUERYING_WITHOUT_SOFT_DELETE = 7
 _SOFT_DELETE_EXEMPT = ('r6/purge.py',)
 
 
-def test_soft_delete_blind_query_files_only_decrease():
+def test_no_resource_query_file_ignores_soft_delete():
     """MUTATION: strip `is_deleted=False` from r6/smbp/trend_routes.py, its
-    only mention -> red. Executed 2026-09-23 (#630).
+    only mention -> red. Executed 2026-09-23 (#630) against the old ratchet,
+    and again at the tripwire.
 
     This is a per-FILE presence check, not per-query: any mention of
     `is_deleted` anywhere in a file counts it clean — a comment, the column
@@ -405,9 +428,11 @@ def test_soft_delete_blind_query_files_only_decrease():
             return []
         return [f'{_rel(path)}:{queries[0].lineno}']
     sites, _ = _scan(collect, skip=_SOFT_DELETE_EXEMPT)
-    assert len(sites) <= _FILES_QUERYING_WITHOUT_SOFT_DELETE, _report(
-        sites, _FILES_QUERYING_WITHOUT_SOFT_DELETE,
-        'A resource query that ignores is_deleted reads deleted rows.')
+    assert not sites, _report(
+        sites, 0,
+        'A resource query that ignores is_deleted reads deleted rows: filter '
+        'is_deleted=False, or add the file to _SOFT_DELETE_EXEMPT with the '
+        'reason it must see tombstones.')
 
 
 #: r6/routes.py, in lines. The 08-02 audit's Workstream B is to decompose it
@@ -589,7 +614,6 @@ def test_every_ratchet_names_its_playbook_chunk():
     for pin in ('_ROUTES_IMPORTERS',
                 '_RAW_TENANT_READS',
                 '_POST_COMMIT_AUDIT_CALLSITES',
-                '_FILES_QUERYING_WITHOUT_SOFT_DELETE',
                 '_GOD_MODULE_LINES'):
         assert f'{pin} = ' in source, f'{pin} lost its pin'
 
@@ -597,7 +621,6 @@ def test_every_ratchet_names_its_playbook_chunk():
 @pytest.mark.parametrize('pin,value', [
     ('routes.py importers', _ROUTES_IMPORTERS),
     ('post-commit audit callsites', _POST_COMMIT_AUDIT_CALLSITES),
-    ('soft-delete-blind files', _FILES_QUERYING_WITHOUT_SOFT_DELETE),
     ('god-module lines', _GOD_MODULE_LINES),
 ])
 def test_no_ratchet_is_already_at_zero(pin, value):

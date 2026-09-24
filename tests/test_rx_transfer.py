@@ -301,3 +301,34 @@ def test_every_schedule_ii_term_with_an_ingredient_has_a_code():
         assert term in SCHEDULE_II_TERMS or term in code_only, term
         assert code in SCHEDULE_II_RXCUI, (term, code)
     assert "700449" not in SCHEDULE_II_RXCUI, "the code that resolved to nothing"
+
+
+def test_a_deleted_medication_is_not_offered_for_transfer(
+        app, client, auth_headers, tenant_id):
+    """#805's shape on the transfer rail: a MedicationRequest the patient
+    deleted must not be drafted into a call a human is asked to approve.
+
+    MUTATION: drop `is_deleted=False` from propose_rx_transfer's query -> red.
+    """
+    from r6.models import R6Resource, db
+    with app.app_context():
+        for rid, text, deleted in [("rx-live", "Metformin 500 mg tablet", False),
+                                   ("rx-gone", "Lisinopril 10 mg tablet", True)]:
+            row = R6Resource(
+                resource_type="MedicationRequest",
+                resource_json=json.dumps({**_med(text), "id": rid}),
+                resource_id=rid, tenant_id=tenant_id)
+            row.is_deleted = deleted
+            db.session.add(row)
+        db.session.commit()
+
+    resp = client.post("/r6/actions/rx-transfer/propose",
+                       headers={**auth_headers,
+                                "Content-Type": "application/json"},
+                       data=json.dumps({"to_pharmacy": TO_PHARMACY}))
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    body = resp.get_json()
+    names = [m["name"] for m in body["allowed"]]
+    assert names == ["Metformin 500 mg tablet"]
+    assert "Lisinopril" not in json.dumps(body), (
+        "a deleted medication was drafted into the transfer call")
