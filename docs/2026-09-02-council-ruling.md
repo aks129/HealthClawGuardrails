@@ -184,6 +184,9 @@ Three seats independently called this a live non-negotiable violation. Bound it:
 - Auto-loaded clinical content goes through `apply_redaction`, then terminology labels by
   code. `is_deleted` rows are filtered in `r6/sdc/routes.py`.
 - The route exits through the access kernel with the INTAKE profile so it is counted.
+  *Changed 2026-09-24:* the exit is now `unredacted_response` on the allowlist. The intent,
+  a counted kernel exit, is unchanged. Intake started redacting nested fields, which would
+  delete the populated answers (#282, #801).
 - Negative test: `%patient.identifier`, `%patient.photo`, `%resources.code.text` produce
   no answer and an OperationOutcome issue naming the `linkId`.
 - Pull `questionnaire_populate` from the model-facing read tier for the beta, unless the

@@ -1191,6 +1191,7 @@ _UNREDACTED_EXITS: frozenset[str] = frozenset({
     # populated slice by slice; each entry names its reason in the test
     'r6.subscription_topics',   # SubscriptionTopic is server metadata (routes.py:1671)
     'r6.audit_search',          # AuditEventRecord is PHI-free by construction
+    'r6.sdc_populate',          # content redacted before population (#282)
 })
 
 

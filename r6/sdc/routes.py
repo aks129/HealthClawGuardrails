@@ -26,7 +26,7 @@ import logging
 
 from flask import request, jsonify
 
-from r6.access import Profile, TenantSource, fhir_response, tenant_from_request
+from r6.access import TenantSource, tenant_from_request, unredacted_response
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
@@ -88,14 +88,18 @@ def register_sdc_routes(blueprint, deps):
         if issues:
             response_params["parameter"].append(
                 {"name": "issues", "resource": _issues_outcome(issues)})
-        # Exit through the kernel so this operation is COUNTED as a shaped
-        # FHIR exit rather than a bare jsonify (spec §1.4). Say plainly what
-        # that buys and what it does not: Profile.INTAKE runs _intake_profile,
-        # which pops top-level note/text/SSN-identifiers and does not recurse,
-        # so on this Parameters wrapper it changes nothing. What actually
-        # bounds the payload is upstream — the %patient projection in
-        # r6/sdc/expressions.py and apply_redaction in _gather_content below.
-        return fhir_response(response_params, profile=Profile.INTAKE)
+        # Exit through the kernel so this operation is COUNTED, not a bare
+        # jsonify (spec §1.4). Until #282 this was fhir_response with
+        # Profile.INTAKE, which then popped top-level fields only and changed
+        # nothing here. Intake now runs apply_redaction, which would delete
+        # every populated answer, so the exit says what bounds the payload:
+        # the %patient projection in r6/sdc/expressions.py and
+        # apply_redaction in _gather_content, both BEFORE population. A strip
+        # afterwards cannot tell a record answer from one the caller typed.
+        return unredacted_response(
+            response_params, endpoint=request.endpoint,
+            reason="content redacted before population; subject bounded "
+                   "by the D10 %patient projection")
 
     @blueprint.route("/QuestionnaireResponse/$extract", methods=["POST"])
     @blueprint.route("/QuestionnaireResponse/<qr_id>/$extract",
@@ -317,9 +321,10 @@ def _redacted_for_populate(resources):
     — the two fields real feeds put patient names in — and then re-applies
     labels from r6/terminology.py keyed by code (r6/redaction.py:22-38). That
     is the profile the ruling's own words name ("apply_redaction, then
-    terminology labels by code"). Profile.INTAKE is NOT usable here: its
-    _intake_strip pops note/text/SSN identifiers at the top level only and
-    leaves `code.text` untouched, which is the leak rather than the fix.
+    terminology labels by code"). Profile.INTAKE was NOT usable here when
+    this was written: _intake_strip then popped note/text/SSN identifiers at
+    the top level only and left `code.text` untouched. Since #282 intake runs
+    apply_redaction too, but it also keeps a Patient's identity fields.
 
     Redacting BEFORE population, not after, is what makes this bound hold for
     every mechanism at once. The engine copies free text into answers from
