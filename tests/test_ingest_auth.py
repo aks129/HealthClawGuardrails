@@ -12,9 +12,11 @@ The two tests at the bottom count rows before and after rather than
 asserting a row exists, so they cannot pass on audit rows some other test
 left behind.
 
-MUTATION: delete the `record_audit_event` call on the deny path
-(r6/routes.py:1251) -> the deny test fails; delete the one on the success
-path (:1269) -> the success test fails. Both executed 2026-09-05.
+MUTATION: delete the `record_audit_event` call on the success path in
+`ingest_context` -> the success test fails (executed 2026-09-05). The deny
+path's row is written by the kernel since #648 PR 2, not by the route: drop
+the `require_grant` call -> every refusal test fails; delete
+`_audit_refusal(exc)` in r6/access.py -> the deny tests fail.
 """
 
 from r6.models import AuditEventRecord
@@ -82,6 +84,46 @@ def test_a_refused_ingest_is_audited(app, client, sample_bundle, monkeypatch):
         'the refused ingest wrote no AuditEvent, so a credential probe '
         'against this tenant leaves no trace'
     )
+
+
+def test_a_refused_ingest_writes_one_row_and_no_agent_id(
+        app, client, sample_bundle, monkeypatch):
+    """Exactly one row per refusal — the kernel's — and the caller's
+    X-Agent-Id is not in it: that header is caller-controlled, not identity
+    (owner ruling on #648).
+
+    MUTATION: put the old site-level record_audit_event back, before
+    require_grant -> 2 rows; pass agent_id=request.headers.get('X-Agent-Id')
+    to the kernel's audit -> the agent id is stored.
+    """
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    tenant = 'one-row-refusal-tenant'
+    with app.app_context():
+        before = {r.id for r in AuditEventRecord.query.filter_by(
+            tenant_id=tenant)}
+
+    refused = client.post(
+        '/r6/fhir/Bundle/$ingest-context',
+        json=sample_bundle,
+        headers={'X-Tenant-Id': tenant,
+                 'X-Step-Up-Token': generate_step_up_token(tenant) + 'x',
+                 'X-Agent-Id': 'caller-chosen-agent-id'},
+    )
+    assert refused.status_code == 401
+
+    with app.app_context():
+        new = [r for r in AuditEventRecord.query.filter_by(tenant_id=tenant)
+               if r.id not in before]
+        assert len(new) == 1, [(r.event_type, r.detail) for r in new]
+        row = new[0]
+        assert row.outcome == 'failure'
+        assert row.event_type == 'create'
+        assert row.detail == ('step-up refused (rejected) at '
+                              'r6.ingest_context: Invalid token signature')
+        # agent_id is the audit layer's own default, never the header.
+        assert 'caller-chosen-agent-id' not in ' '.join(
+            str(v) for v in (row.agent_id, row.resource_type,
+                             row.resource_id, row.context_id, row.detail))
 
 
 def test_an_accepted_ingest_is_audited(app, client, sample_bundle, monkeypatch):

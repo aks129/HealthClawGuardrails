@@ -1098,28 +1098,17 @@ def ingest_context():
         return _operation_outcome('error', 'invalid',
                                   f'Bundle.type "{bundle_type}" is not a valid FHIR Bundle type'), 400
 
-    tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+    tenant_id = tenant.id
 
     # In hardened deployments, bundle ingestion is a write boundary—not a
     # read-shaped convenience operation. Public/demo tenants remain usable in
     # local compatibility mode, while production enables this gate at startup.
+    # Access kernel (#648): the kernel audits the refusal, and the sentence is
+    # a client-visible contract, so it is passed rather than the reason.
     if _read_auth_enabled():
-        step_up_token = request.headers.get('X-Step-Up-Token', '').strip()
-        valid, _error = validate_step_up_token(
-            step_up_token, tenant_id, require_scope='write'
-        )
-        if not valid:
-            record_audit_event(
-                'create', 'Bundle', None,
-                agent_id=request.headers.get('X-Agent-Id'),
-                tenant_id=tenant_id,
-                outcome='failure',
-                detail='ingest-context authorization rejected',
-            )
-            return _operation_outcome(
-                'error', 'security',
-                'Bundle ingestion requires a tenant-bound write token',
-            ), 401
+        require_grant(scope=Scope.WRITE, tenant=tenant, denied_message=(
+            'Bundle ingestion requires a tenant-bound write token'))
 
     try:
         from r6.fasten.ingester import skipped_type_summary
