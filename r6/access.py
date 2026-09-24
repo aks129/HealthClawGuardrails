@@ -1,11 +1,11 @@
 """Access kernel — one tenant reader, one step-up gate, one audit call, one
 FHIR exit.
 
-Implements `docs/2026-08-03-access-kernel-spec.md` §1. This module is slice 1
-of the migration: it is **adopted by nothing**. No production module imports
-it yet (pinned by `tests/test_access_kernel.py`), so it cannot change any
-behavior. Adoption happens one guard and one blueprint at a time, per
-`docs/2026-08-03-refactor-working-protocol.md`.
+Implements `docs/2026-08-03-access-kernel-spec.md` §1. It landed as slice 1
+adopted by nothing, and production modules have been adopting it since, one
+guard and one blueprint at a time, per
+`docs/2026-08-03-refactor-working-protocol.md`. The sites that still call
+`validate_step_up_token` directly are counted by `tests/test_ratchets.py`.
 
 Each primitive below enforces exactly ONE property, named in its docstring.
 Anything the primitive does not promise stays the caller's job — the point of
@@ -265,16 +265,21 @@ class StepUpDenied(Exception):
     ``tenant_id`` and ``absent`` travel with the refusal so the errorhandler
     can audit it (#648) without re-reading a request header: the tenant is
     the one require_grant was handed, already through tenant_from_request.
+
+    ``denied_message``, when set, is what the caller is shown in place of
+    ``reason``; ``reason`` is still what the audit row records.
     """
 
     def __init__(self, reason: str, *, http_status: int, checked: bool = False,
-                 tenant_id: str | None = None, absent: bool = False):
+                 tenant_id: str | None = None, absent: bool = False,
+                 denied_message: str | None = None):
         super().__init__(reason)
         self.reason = reason
         self.http_status = http_status
         self.checked = checked
         self.tenant_id = tenant_id
         self.absent = absent
+        self.denied_message = denied_message
 
 
 _DENIED_ABSENT = 'Step-up token required'
@@ -490,6 +495,7 @@ def require_grant(
     also_body_field: str | None = None,
     absent_status: int = 401,
     rejected_status: int = 401,
+    denied_message: str | None = None,
 ) -> Grant:
     """Require a step-up token bound to ``tenant`` and return the Grant.
 
@@ -508,6 +514,16 @@ def require_grant(
     call, not this migration's; each migrated site passes the status it
     answers TODAY.
 
+    ``denied_message`` exists for the same reason. By default a refusal
+    states its classified reason (the 2026-08-10 ruling). A site whose
+    refusal sentence is already a contract clients see passes that sentence,
+    and it is rendered for every refusal kind in place of the reason. It
+    changes the body only: the audit row still records the classified
+    reason, and the status still comes from the two parameters above.
+    $ingest-context is the one site that passes it (#648, owner ruling:
+    the move keeps that body byte-identical). The sentence must be fixed
+    wording, never request-derived.
+
     Raises StepUpDenied with the checked flag set. Never returns None, never
     returns False, never returns a tuple.
     """
@@ -523,7 +539,8 @@ def require_grant(
     # The ONLY place in the repository that sets the checked flag. Pinned by
     # test_the_checked_flag_is_set_in_exactly_one_place.
     raise StepUpDenied(outcome.reason, http_status=status, checked=True,
-                       tenant_id=tenant.id, absent=outcome.absent)
+                       tenant_id=tenant.id, absent=outcome.absent,
+                       denied_message=denied_message)
 
 
 def has_grant(
@@ -795,7 +812,8 @@ def _render_step_up_denied(exc: StepUpDenied):
         # make an unrelated bug look exactly like a working guard.
         raise exc
     _audit_refusal(exc)
-    return outcome_response('error', 'security', exc.reason,
+    shown = exc.reason if exc.denied_message is None else exc.denied_message
+    return outcome_response('error', 'security', shown,
                             status=exc.http_status)
 
 
