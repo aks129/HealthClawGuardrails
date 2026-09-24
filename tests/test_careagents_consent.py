@@ -83,7 +83,9 @@ def cfg():
 @pytest.fixture
 def svc(cfg):
     from careagents.accounts import AccountService
-    return AccountService(cfg)
+    service = AccountService(cfg)
+    yield service
+    service.engine.dispose()  # see tests/test_careagents.py svc (#232)
 
 
 @pytest.fixture

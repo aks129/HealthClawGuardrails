@@ -2492,7 +2492,11 @@ def cfg():
 @pytest.fixture
 def svc(cfg):
     from careagents.accounts import AccountService
-    return AccountService(cfg)
+    service = AccountService(cfg)
+    yield service
+    # Release its pooled connections now, not at some later GC — on the
+    # Postgres lane they otherwise pile up past max_connections (#232).
+    service.engine.dispose()
 
 
 @pytest.fixture

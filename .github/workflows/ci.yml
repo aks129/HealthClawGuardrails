@@ -71,22 +71,21 @@ jobs:
           --cov-fail-under=80
 
   # ─────────────────────────────────────────────
-  # Postgres CI lane — the full suite above runs on sqlite:///:memory:
-  # (tests/conftest.py), which does not enforce VARCHAR length or PK
-  # subtleties the way Postgres (prod) does. This repo has shipped 3
+  # Postgres CI lane — the python-tests job above runs on sqlite:///:memory:
+  # (tests/conftest.py), which does not enforce VARCHAR length, foreign keys
+  # or PK subtleties the way Postgres (prod) does. This repo has shipped 3
   # Postgres-only truncation bugs that sqlite-based CI could never catch:
   # oversized Epic resource ids, a narrower AuditEventRecord.resource_id
   # column poisoning the shared transaction, and an under-width status
   # column (see tests/test_ingest_resilience.py and
-  # tests/actions/test_state_transitions.py docstrings). Run just the
-  # DB-shape-sensitive subset against real Postgres to close that gap
-  # without doubling total CI time.
+  # tests/actions/test_state_transitions.py docstrings).
   #
-  # test_write_guard_matrix.py and test_audit_transactions.py are in the
-  # subset because the access-kernel migration moves audit from an ambient
-  # commit to a caller-owned flush at 41 call sites, and SQLite and Postgres
-  # differ on savepoint and flush visibility. Measuring that migration on
-  # SQLite alone would be measuring the wrong lane.
+  # It runs the WHOLE suite, not a list of files (#232). A hand-kept list
+  # leaked: a foreign-key violation passed on SQLite and failed only once the
+  # careagents files were added to it (#206), and every new DB-touching test
+  # ran SQLite-only until someone remembered to name it here. The full run
+  # takes about as long as python-tests (which carries coverage), and the two
+  # run in parallel, so it adds no wall time to a PR.
   # ─────────────────────────────────────────────
   postgres-tests:
     runs-on: ubuntu-latest
@@ -99,7 +98,11 @@ jobs:
           POSTGRES_DB: test
         ports:
           - 5432:5432
+        # tmpfs data dir: every test creates and drops the whole schema, and
+        # that DDL is fsync-bound on disk (full suite 622s -> 388s locally).
+        # The database is throwaway, so durability buys nothing here.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
@@ -119,35 +122,14 @@ jobs:
           pip install uv
           uv sync --extra test
 
-      - name: Run DB-shape-sensitive tests against Postgres
+      - name: Run the full suite against Postgres
         env:
           SQLALCHEMY_DATABASE_URI: postgresql://postgres:postgres@localhost:5432/test
           MIGRATION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
           # careagents keeps its own engine + metadata, so SQLite-only coverage
           # would miss Postgres-specific schema problems in its tables too.
           CARE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
-        run: |
-          # The careagents files are a glob, not a name: the no-PHI guard
-          # (#639) does raw table reads, the analytics counter is a DB-side
-          # upsert, and the consent grant table carries a foreign key SQLite
-          # never enforces. Naming one file here kept the rest on SQLite (#638).
-          uv run python -m pytest \
-            tests/actions/ \
-            tests/test_careagents*.py \
-            tests/test_ingest_resilience.py \
-            tests/test_actions_models.py \
-            tests/test_fasten_export_trigger.py \
-            tests/test_fasten_webhook_shape.py \
-            tests/test_fasten_verify_signature.py \
-            tests/test_fasten_job_recovery.py \
-            tests/test_database_migrations.py \
-            tests/test_agent_runs.py \
-            tests/test_write_guard_matrix.py \
-            tests/test_audit_transactions.py \
-            tests/test_curatr_one_transaction.py \
-            tests/test_curatr_complete_set_or_refuse.py \
-            tests/test_curatr_conditional_write.py \
-            -v --tb=short
+        run: uv run python -m pytest tests/ -v --tb=short
 
   node-tests:
     runs-on: ubuntu-latest
