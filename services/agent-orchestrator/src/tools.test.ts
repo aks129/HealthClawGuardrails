@@ -978,6 +978,54 @@ describe("Tool Execution Tests", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  // Issue #153: the write path forwarded a rejected write's body verbatim.
+  it("fhir.commit_write failure does not forward backend URL, stack or record text", async () => {
+    mockFetch.mockResolvedValueOnce(
+      fakeResponse(
+        {
+          resourceType: "OperationOutcome",
+          issue: [
+            {
+              severity: "error",
+              code: "invalid",
+              diagnostics:
+                'Traceback (most recent call last):\n  File "/app/r6/routes.py", line 412, in create_resource',
+              details: {
+                text: "Patient Jane Doe rejected at https://internal-fhir.example.com/r6/fhir/Observation?tenant_id=ev-personal",
+              },
+            },
+          ],
+        },
+        422
+      )
+    );
+
+    const result = await tools.executeTool(
+      "fhir_commit_write",
+      { resource: { resourceType: "Observation", status: "final" }, operation: "create" },
+      { "x-step-up-token": "valid-token-123" }
+    );
+
+    expect(result).toEqual({
+      status: 422,
+      error: {
+        resourceType: "OperationOutcome",
+        issue: [
+          {
+            severity: "error",
+            code: "invalid",
+            details: { text: "The FHIR backend rejected the request as invalid." },
+          },
+        ],
+      },
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("Jane Doe");
+    expect(serialized).not.toContain("internal-fhir.example.com");
+    expect(serialized).not.toContain("Traceback");
+    expect(serialized).not.toContain("routes.py");
+  });
+
   // -- fhir.validate --
 
   it("fhir.validate posts to $validate endpoint", async () => {

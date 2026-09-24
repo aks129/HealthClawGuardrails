@@ -228,8 +228,9 @@ Provenance-backed answer, and escalates cleanly when it needs a human.
 
 The action rail exists and the forms rail proves it end-to-end. Extend it.
 
-- Comms rail (calls/SMS to allowlisted, patient-registered contacts) — already
-  "Now" on the main roadmap.
+- Comms rail (calls/SMS behind the out-of-band gate and a per-person daily
+  cap; no saved-contacts allowlist yet, #216) — already "Now" on the main
+  roadmap.
 - Refill requests through the rail rather than a bare tool call.
 - Appointment prep + booking.
 - **Every one** behind propose → 202 → out-of-band approval → audit →
