@@ -52,7 +52,6 @@ Demonstrated means: a recording in which execution is blocked, a human acts some
 | 255 | resume human-waiting runs and expose PHI-safe operations | architecture |
 | 217 | purge leaves ActionEvent and ActionConfirmation orphaned | data lifecycle |
 | 413 | `$curatr-apply-fix` is unreachable in production | dead path |
-| 95 | make `action_policy.yaml` authoritative before exposing a describe contract | policy drift |
 | 485 | should propose-stage accept an Observation with no `effective[x]`? | decision |
 | 228 | meds-schedule and appointment-prep tools (no new connectors needed) | sibling of #163 |
 | 61 | SMBP phase 2: reminder scheduler + cuff photo OCR | enhancement |
@@ -69,7 +68,14 @@ the known hole in this set's own headline claim.
 
 ## 6. Specifications
 
-- `action_policy.yaml` — the policy file, **not yet authoritative** (#95).
+- **There is no policy file; the policy is the enforcing code.** The action
+  rail's states, confirmations and executors are `r6/actions/`; which resource
+  types count as clinical writes is `CLINICAL_RESOURCE_TYPES` in
+  `r6/health_compliance.py`; which MCP tools demand step-up is each tool's
+  `tier` in `services/agent-orchestrator/src/tools.ts`; and which controls
+  guard which mutating route is asserted in `tests/test_write_guard_matrix.py`.
+  A hand-written YAML policy file that nothing read was deleted (#95); a
+  describe contract, if one is wanted, should be generated from these.
 - `docs/2026-08-03-refactor-working-protocol.md` for per-PR rules.
 - **Missing, and a SOW item:** a written specification of the human gate
   itself. It must define what counts as out-of-band, what a Tier-2 approval

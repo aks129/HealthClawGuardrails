@@ -356,14 +356,24 @@
   function _showAgentAccess(access) {
     // One-time handoff of the read-scoped connect token. Shown once, never
     // stored client-side beyond this page render, never sent anywhere else.
+    //
+    // It told the tester to paste these into Claude, Perplexity or any MCP
+    // agent. The hosted MCP endpoint refuses every credential but the
+    // operator's (#290), so each hosted assistant it named turned the tester
+    // away with no next step (#600). The card stays — the token is mint-once and would be lost —
+    // but says who will refuse it before showing it.
     var el = document.createElement('div');
     el.className = 'stitch-card';
     el.style.marginTop = '18px';
     el.innerHTML =
       '<h3 style="margin:0 0 10px">Connect your AI assistant</h3>' +
-      '<p style="margin:0 0 10px">Copy these two values into your assistant ' +
-      '(Claude, Perplexity, or any MCP agent) so it can read <strong>your</strong> ' +
-      'records. The token is read-only — it can never change anything — ' +
+      '<p style="margin:0 0 10px"><strong>Before you copy anything:</strong> ' +
+      'assistants you use in a browser or app — Claude.ai, ChatGPT, ' +
+      'Perplexity — cannot connect to HealthClaw during the beta, and will ' +
+      'refuse these values. They work only with a HealthClaw MCP server you ' +
+      'run on your own computer.</p>' +
+      '<p style="margin:0 0 10px">These two values let that assistant read ' +
+      '<strong>your</strong> records. The token is read-only — it can never change anything — ' +
       'and expires in 30 days. Treat it like a password and save it now: ' +
       'it is shown only once.</p>' +
       '<p style="margin:0 0 6px"><strong>Tenant:</strong> <code></code></p>' +
