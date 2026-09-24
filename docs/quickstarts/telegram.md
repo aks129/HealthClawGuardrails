@@ -15,7 +15,7 @@ open it in Telegram, and send:
 /labs         recent lab results
 /curatr       data-quality scan (`/curatr fix` proposes fixes)
 /approve      approve a pending fix — the human-in-the-loop step
-/connect      pull your records (Fasten + TEFCA)
+/connect      pull your records (Fasten; TEFCA when enabled)
 /dashboard    signed 24-hour command-center link
 ```
 
