@@ -260,7 +260,20 @@ def _check(tenant_id, max_requests, window_seconds, now):
                 raise RateLimitUnavailable(type(exc).__name__) from None
             logger.error('Redis rate-limit check failed: %s',
                          type(exc).__name__)
+    return _memory_check(tenant_id, max_requests, window_seconds, now)
 
+
+def check_rate_limit_in_process(tenant_id, max_requests=DEFAULT_RATE_LIMIT,
+                                window_seconds=DEFAULT_WINDOW_SECONDS):
+    """
+    The bounded in-memory store alone, never Redis: the budget a caller of
+    check_rate_limit_or_raise can still enforce when Redis is unavailable.
+    Per process, so N workers allow up to N budgets per client.
+    """
+    return _memory_check(tenant_id, max_requests, window_seconds, time.time())
+
+
+def _memory_check(tenant_id, max_requests, window_seconds, now):
     # Development/testing fallback is bounded and protected from thread races.
     with _rate_limits_lock:
         _prune_memory_buckets(now)

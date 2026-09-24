@@ -228,8 +228,7 @@ def test_a_limiter_outage_still_audits_the_refusal(app, tenant_id,
     """Before, check_rate_limit answered a production Redis outage as "over
     budget", so while Redis was down no refusal was audited at all.
 
-    MUTATION: in _audit_refusal, return early on 'unavailable' as on None
-    -> 0 rows.
+    MUTATION: answer RateLimitUnavailable with None (not audited) -> 0 rows.
     """
     client = _production_redis(app, monkeypatch, _RedisDown())
     before = {r.id for r in _rows()}
@@ -250,10 +249,38 @@ def test_a_limiter_outage_still_audits_the_refusal(app, tenant_id,
     outage = [r.getMessage() for r in caplog.records
               if 'unavailable' in r.getMessage()
               or 'Redis' in r.getMessage()]
-    assert outage == ['step-up refusal audited without its budget: limiter '
+    assert outage == ['step-up refusal audit budget kept in process: limiter '
                       'store unavailable (ConnectionError)'], outage
     assert 'secret-host' not in caplog.text
     assert step_up_token not in caplog.text
+
+
+def test_a_limiter_outage_keeps_the_budget_in_process(app, tenant_id,
+                                                      monkeypatch, caplog):
+    """Failing open must not mean unbounded: during the outage the same
+    per-client budget is kept in process memory — refusal rows up to it, the
+    one budget row, then nothing — and each refusal still answers.
+
+    MUTATION: drop the in-process fallback (treat the outage as allowed)
+    -> 6 refusal rows, no budget row.
+    """
+    monkeypatch.setattr(access, '_REFUSAL_AUDIT_BUDGET', 3)
+    client = _production_redis(app, monkeypatch, _RedisDown())
+    before = {r.id for r in _rows()}
+
+    with caplog.at_level(logging.WARNING, logger='r6.access'):
+        for _ in range(6):
+            resp = client.post('/kernel/refuse',
+                               headers={'X-Tenant-Id': tenant_id})
+            assert resp.status_code == 401
+            assert resp.get_json() == _ABSENT_BODY
+
+    details = sorted(r.detail for r in _new_rows(before))
+    assert details == sorted(
+        ['step-up refused (absent) at refuse: Step-up token required'] * 3
+        + [access._BUDGET_DETAIL]), details
+    outage = [r for r in caplog.records if 'kept in process' in r.getMessage()]
+    assert len(outage) == 6, 'the outage is logged once per occurrence'
 
 
 def test_over_budget_is_still_capped_with_redis_in_production(

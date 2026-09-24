@@ -164,3 +164,21 @@ def test_or_raise_matches_check_rate_limit_on_every_other_path(monkeypatch):
     memory = run(rate_limit.check_rate_limit)
     assert run(rate_limit.check_rate_limit_or_raise) == memory
     assert memory == fallback
+
+
+def test_in_process_check_never_asks_redis(monkeypatch):
+    """The outage budget: the memory store only, even with Redis configured
+    (and failing), in production."""
+    fake = FakeRedis(error=ConnectionError("down"))
+    monkeypatch.setenv("REDIS_URL", "redis://example.invalid/0")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setattr(rate_limit, "_redis_client", fake, raising=False)
+    rate_limit._rate_limits.clear()
+
+    answers = [rate_limit.check_rate_limit_in_process(
+        "step-up-refusal:ip", max_requests=2, window_seconds=60)[0:2]
+        for _ in range(3)]
+
+    assert answers == [(True, 1), (True, 0), (False, 0)]
+    assert fake.calls == []
+    assert set(rate_limit._rate_limits) == {"step-up-refusal:ip"}

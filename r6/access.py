@@ -676,8 +676,8 @@ _UNAUDITED_REFUSALS = {
         'not the kernel; each audits (or not) at the site until it migrates',
     'over the refusal-audit budget':
         'bounded per client; the refusal is still rendered, and the one row '
-        'at the budget says the rest were not stored. A limiter outage is '
-        'not "over": while Redis is down every refusal is audited, unbounded',
+        'at the budget says the rest were not stored. While Redis is down '
+        'the same budget is kept in process memory, so per worker',
     'audit storage failure':
         'the refusal is still rendered; the failure is logged by type name',
 }
@@ -689,8 +689,9 @@ _UNAUDITED_REFUSALS = {
 #: REDIS_URL is set, the bounded in-memory store otherwise — rather than a
 #: second limiter. The request limiter alone does not bound it:
 #: smbp_blueprint and wearables_blueprint do not mount it. When the limiter
-#: store is down the budget fails OPEN: an unbounded audit write for the
-#: length of an outage is the lesser loss than no record of any probe.
+#: store is down the audit still fails OPEN (a refusal is recorded, not
+#: dropped) but stays bounded: the same budget is kept in this process's
+#: memory store, so an outage costs at most one budget per client per worker.
 _REFUSAL_AUDIT_BUDGET = 120
 _REFUSAL_AUDIT_WINDOW_SECONDS = 60
 
@@ -710,8 +711,7 @@ _EVENT_TYPE_BY_METHOD = {
 
 
 def _refusal_audit_allowance() -> str | None:
-    """'refusal', 'budget' (the one row at the limit), 'unavailable' (the
-    limiter store could not answer), or None (over the budget).
+    """'refusal', 'budget' (the one row at the limit), or None (over it).
 
     Keyed by client, as the request limiter keys any request whose tenant
     claim is unproven — and a refused step-up is unproven by definition.
@@ -720,15 +720,17 @@ def _refusal_audit_allowance() -> str | None:
     """
     from r6 import rate_limit as _rate_limit_mod
     key = f'step-up-refusal:{_rate_limit_mod._client_ip()}'
+    budget = {'max_requests': _REFUSAL_AUDIT_BUDGET + 1,
+              'window_seconds': _REFUSAL_AUDIT_WINDOW_SECONDS}
     try:
         allowed, remaining, _reset = _rate_limit_mod.check_rate_limit_or_raise(
-            key, max_requests=_REFUSAL_AUDIT_BUDGET + 1,
-            window_seconds=_REFUSAL_AUDIT_WINDOW_SECONDS)
+            key, **budget)
     except _rate_limit_mod.RateLimitUnavailable as exc:
         # Once per occurrence, by the store exception's type name only.
-        logger.warning('step-up refusal audited without its budget: '
+        logger.warning('step-up refusal audit budget kept in process: '
                        'limiter store unavailable (%s)', exc)
-        return 'unavailable'
+        allowed, remaining, _reset = (
+            _rate_limit_mod.check_rate_limit_in_process(key, **budget))
     if not allowed:
         return None
     return 'budget' if remaining == 0 else 'refusal'
