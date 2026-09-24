@@ -4984,6 +4984,48 @@ def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):
     assert "https://careagents.cloud/review/agent_1/act-1" in reply
 
 
+def test_review_card_url_resolves_to_the_review_route(cfg, svc, monkeypatch):
+    """The review card's `review_url` names a page that exists. It used to
+    be `/review/<action_id>`, but the only route is
+    `/review/<agent_id>/<action_id>`, so the link 404'd. Driven through the
+    worker — the live chat path — and matched against the app's own URL map
+    rather than a hand-typed string.
+
+    MUTATION: emit `/review/{action_id}` again -> NotFound here."""
+    from werkzeug.exceptions import NotFound
+
+    from careagents.llm import LLMTurn, ToolCall
+    from careagents.worker import RunWorker
+
+    app, c, fake, agent_id, _tenant, _conn = _chat_app(cfg, svc, monkeypatch)
+    response = c.post("/api/chat", json={
+        "agent_id": agent_id, "message": "fill my intake form",
+        "request_id": "review-url"}, buffered=False)
+    next(iter(response.response))
+    response.close()
+
+    seq = iter([LLMTurn(tool_calls=[ToolCall("1", "start_intake_form", {})]),
+                LLMTurn(text="Review card is up.")])
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: next(seq))
+    RunWorker(cfg, fake, svc, "review-url-worker").run_once()
+
+    cards = [ev for events in fake.events.values() for event in events
+             if event["type"] == "agent.tool_result"
+             for ev in event["payload"].get("ui_events") or []
+             if ev.get("kind") == "review"]
+    assert len(cards) == 1
+    url = cards[0]["review_url"]
+    assert url == f"/review/{agent_id}/act-1"
+    adapter = app.url_map.bind("localhost")
+    try:
+        endpoint, values = adapter.match(url, method="GET")
+    except NotFound:
+        raise AssertionError(f"{url} matches no registered route") from None
+    assert values == {"agent_id": agent_id, "action_id": "act-1"}
+    assert c.get(url).status_code == 200
+
+
 # --- agent loop (unchanged contract) -----------------------------------------
 
 def test_agent_loop_emits_chip_card_then_text(monkeypatch, cfg):

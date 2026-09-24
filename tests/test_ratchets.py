@@ -358,7 +358,10 @@ def test_no_new_package_mutates_without_auditing():
 #: the pin never followed it. That one unit of slack meant a file newly
 #: dropping its only filter stayed green — verified by stripping
 #: r6/smbp/trend_routes.py's `is_deleted=False` against the old pin.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 8
+#: 8 -> 7: r6/actions/review.py filters all four of its queries — the
+#: Questionnaire and Patient that a review draft is built from, and the
+#: clinical sweep populated into it (D10's shape, one hop downstream).
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 7
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the

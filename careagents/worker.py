@@ -380,7 +380,8 @@ class RunWorker:
             side_events: list[dict] = []
             try:
                 content = _execute_tool(
-                    self.hc, tenant, tool_name, arguments, side_events)
+                    self.hc, tenant, tool_name, arguments, side_events,
+                    agent_id=str(run.get("agent_id") or ""))
             except HealthClawError as exc:
                 content = json.dumps({"error": str(exc)})
             envelope = {"content": content, "ui_events": side_events}
