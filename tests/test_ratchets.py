@@ -178,16 +178,14 @@ def test_no_direct_step_up_validation_outside_the_kernel():
 #:
 #: A1 moved the two that formed import cycles — the env predicates now live in
 #: r6/runtime_config, the body guard in r6/body_guard — and
-#: tests/test_import_acyclicity.py holds that line directly. What is left is
-#: main.py importing the blueprint, which is the point, and three imports of
-#: `authenticate_tenant_read`.
+#: tests/test_import_acyclicity.py holds that line directly.
 #:
-#: That one is deliberately still here. It needs an OperationOutcome builder,
-#: which is `r6.access.outcome_response` — so moving it is kernel slice work
-#: (A2-A5) rather than a cut-and-paste, and doing it here would either
-#: duplicate the builder or adopt the kernel outside its own slice. Ratchet
-#: reaches 1, not 0.
-_ROUTES_IMPORTERS = 4
+#: 4 -> 1: the three imports of `authenticate_tenant_read` (r6/actions,
+#: r6/smbp twice) went when the function moved next to the
+#: `authorize_tenant_read` it wraps, in r6/read_auth.py. What is left is
+#: main.py importing the blueprint, which is the point. Ratchet reaches 1,
+#: not 0.
+_ROUTES_IMPORTERS = 1
 
 
 def test_imports_out_of_the_god_module_only_decrease():
@@ -476,7 +474,8 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: audit call replaced by one require_grant.
 #: 3750 -> 3749 (#655): the validator no longer rides into the SDC routes
 #: as a dependency, so neither the entry nor its import is left.
-_GOD_MODULE_LINES = 3749
+#: 3749 -> 3730: authenticate_tenant_read moved to r6/read_auth.py.
+_GOD_MODULE_LINES = 3730
 
 
 def test_the_god_module_only_shrinks():

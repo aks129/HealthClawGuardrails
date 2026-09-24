@@ -248,8 +248,8 @@ The live pins, read from `tests/test_ratchets.py`:
 | Raw tenant-header reads | `_RAW_TENANT_READS` | 55 | 24 | 0 |
 | Direct step-up validation | tripwire since #655 (was `_STEP_UP_CALLSITES`) | 20 | 0 | 0 |
 | Soft-delete-blind files | tripwire since 2026-09-24 (was `_FILES_QUERYING_WITHOUT_SOFT_DELETE`) | 12 | 0 | 0 |
-| Imports out of `routes.py` | `_ROUTES_IMPORTERS` | 4 | 4 | 1 |
-| `routes.py` lines, a ceiling | `_GOD_MODULE_LINES` | 3,930 | 3,750 | shrinks |
+| Imports out of `routes.py` | `_ROUTES_IMPORTERS` (at target: only `main.py`) | 4 | 1 | 1 |
+| `routes.py` lines, a ceiling | `_GOD_MODULE_LINES` | 3,930 | 3,730 | shrinks |
 
 Two of the original eight have no live pin. Step-up sites without a nonce
 wait on A6: `consume_nonce` still defaults to `False`. The "nothing read as
