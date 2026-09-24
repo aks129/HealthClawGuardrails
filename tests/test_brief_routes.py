@@ -16,6 +16,7 @@ was green, and the feature had never once run for a patient.
 """
 
 import json
+from datetime import date
 
 from r6.brief.engine import (
     CARE_GAPS_OK,
@@ -24,10 +25,16 @@ from r6.brief.engine import (
 )
 from r6.caregaps.report import _NOT_EVALUATED_NOTES
 from r6.models import R6Resource, db
-from r6.seed import seed_demo_data
+from r6.seed import _built_in_resources, seed_demo_data
 
 _URL = "/r6/fhir/AppointmentBrief"
 _SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+
+
+def _birth_date_for_age(years):
+    """A birthDate that is `years` old whichever day the suite runs — the
+    route evaluates as of date.today() (tests/test_caregaps_routes.py)."""
+    return f"{date.today().year - years}-01-01"
 
 
 def _store(app, resource, tenant_id):
@@ -160,8 +167,14 @@ def test_brief_shows_the_screenings_due_for_the_sample_patient(
 
     MUTATION: pass patient=None in r6/brief/routes.py::_care_gap_result -> red.
     """
+    # The sample record, held at 41 whichever year the suite runs. Its fixed
+    # 1985 birthDate turns 45 in 2030, where colorectal screening goes
+    # undecided (#428) and the section would flip to unavailable.
+    resources = _built_in_resources()
+    patient = next(r for r in resources if r["resourceType"] == "Patient")
+    patient["birthDate"] = _birth_date_for_age(41)
     with app.app_context():
-        seed_demo_data(tenant_id=tenant_id)
+        seed_demo_data(tenant_id=tenant_id, resources=resources)
 
     r = client.get(_URL, headers=tenant_headers)
     assert r.status_code == 200
