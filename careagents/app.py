@@ -164,6 +164,22 @@ def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
 _CARE_GAPS_OK = "ok"
 
 
+def _care_gaps_marker(resource: dict | None, key: str) -> str:
+    """One `status`/`reason` sub-extension of the brief's care-gaps section,
+    or "" when the brief, the section or the marker is missing or unreadable."""
+    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
+    try:
+        for ext in (resource or {}).get("extension", []):
+            if ext.get("url") != care_gaps_url:
+                continue
+            for sub in ext.get("extension", []):
+                if sub.get("url") == key:
+                    return sub.get("valueString") or ""
+    except (AttributeError, TypeError):
+        pass
+    return ""
+
+
 def _parse_care_gaps_status(resource: dict | None) -> str:
     """Whether the screening review ran, from the brief's care-gaps section.
 
@@ -171,17 +187,14 @@ def _parse_care_gaps_status(resource: dict | None) -> str:
     marker, an unparseable payload — is not an evaluation, and the page must
     not render it as "nothing due" (#381). Callers get "" for all of those.
     """
-    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
-    try:
-        for ext in (resource or {}).get("extension", []):
-            if ext.get("url") != care_gaps_url:
-                continue
-            for sub in ext.get("extension", []):
-                if sub.get("url") == "status":
-                    return sub.get("valueString") or ""
-    except (AttributeError, TypeError):
-        pass
-    return ""
+    return _care_gaps_marker(resource, "status")
+
+
+def _parse_care_gaps_reason(resource: dict | None) -> str:
+    """The engine's own sentence for why the review is not whole — which
+    screenings could not be checked and why. Rendered as-is, never stored:
+    it is rule titles and fixed prose from r6/caregaps/report.py."""
+    return _care_gaps_marker(resource, "reason")
 
 
 def _uncounted_note(new_records: int, new_documents: int | None,
@@ -1175,7 +1188,8 @@ def create_app(config: Config | None = None,
                                agent_id=agent_id, sections=sections,
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
-                                             == _CARE_GAPS_OK))
+                                             == _CARE_GAPS_OK),
+                               care_gaps_note=_parse_care_gaps_reason(raw))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
