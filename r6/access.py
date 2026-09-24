@@ -580,11 +580,13 @@ def has_grant(
     of it.
 
     The $extract reason no longer holds: require_grant takes a
-    ``denied_message`` (#648). That site asks decide_grant instead, because
-    it answers two sentences. A missing or empty header gets the dryRun one,
-    decided at the site on the raw header. Every other refusal gets "Invalid
-    step-up token", a whitespace-only header included, which the kernel
-    strips and calls absent.
+    ``denied_message`` (#648). The site asks decide_grant, not require_grant,
+    because require_grant audits every refusal it renders and this site
+    writes no row for one today, so the move stays a move. It answers two
+    sentences. A missing or empty header gets the dryRun one, decided at the
+    site on the raw header. Every other refusal gets "Invalid step-up token",
+    a whitespace-only header included, which the kernel strips and calls
+    absent.
 
     Returns the Grant, or None. Not a bool: the Grant carries the tenant it
     was proved for, so a caller scopes its next query to grant.tenant_id
