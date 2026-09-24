@@ -198,6 +198,27 @@ def test_route_unknown_docref_is_404(app, client):
     assert resp.status_code == 404
 
 
+def test_route_deleted_docref_is_404_even_with_a_live_link(app, client):
+    """A link minted before the document was deleted must stop working: the
+    signature proves who the link was for, not that the PDF still exists.
+
+    MUTATION: drop `is_deleted=False` from get_document_pdf_bytes -> 200."""
+    from r6.models import R6Resource, db
+    docref_id = _persist(app)
+    link = build_document_link('test-tenant', docref_id)
+    path, query = _route_path_and_query(link)
+    with app.app_context():
+        row = R6Resource.query.filter_by(
+            tenant_id='test-tenant', resource_type='DocumentReference',
+            id=docref_id).one()
+        row.is_deleted = True
+        db.session.commit()
+
+    resp = client.get(path, query_string=query)
+    assert resp.status_code == 404
+    assert resp.data != PDF_BYTES
+
+
 def test_route_missing_query_params_is_400(app, client):
     resp = client.get('/r6/sdc/documents/docref-1')
     assert resp.status_code == 400

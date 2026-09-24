@@ -380,7 +380,9 @@ def test_no_new_package_mutates_without_auditing():
 #: deleted blood pressure is not a row, an average or a flag in it.
 #: 5 -> 4: r6/quality/routes.py filters the one loader behind NQF 0018's
 #: $evaluate-measure — Patients, Conditions and Observations alike.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 4
+#: 4 -> 3: r6/sdc/documents.py filters the intake-PDF getter, so a signed
+#: download link minted before the delete stops serving the PDF.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 3
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
