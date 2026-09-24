@@ -241,6 +241,56 @@ def test_the_rail_is_dark_until_the_operator_turns_it_on(
     assert _status(app, action_id) == 'failed'
 
 
+def test_while_the_rail_is_off_nothing_reaches_the_approval_list(
+        client, app, tenant_headers, auth_headers, tenant_id, rail, monkeypatch):
+    """With the flag off, a proposal is refused at propose with a reason that
+    says so. It used to be staged, shown under "Waiting for you", approved by
+    the person, and only THEN fail as provider_not_configured.
+
+    MUTATION: drop the flag check from CuratrFixExecutor.validate -> red."""
+    monkeypatch.delenv('CURATR_FIX_RAIL_ENABLED')
+    r = _propose(client, tenant_headers)
+    assert r.status_code == 503, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body['error_code'] == errors.PROVIDER_NOT_CONFIGURED
+    assert 'turned off' in body['error']
+    assert 'curatr-fix' in body['error']
+    with app.app_context():
+        assert ProposedAction.query.filter_by(
+            tenant_id=tenant_id, kind='curatr-fix').count() == 0
+    pending = client.get('/r6/actions', headers=auth_headers)
+    assert pending.status_code == 200, pending.get_data(as_text=True)
+    assert pending.get_json()['count'] == 0
+    assert _version(client, tenant_headers) == 1
+
+    # And the same proposal goes through once the operator turns it on.
+    monkeypatch.setenv('CURATR_FIX_RAIL_ENABLED', '1')
+    assert _propose(client, tenant_headers).status_code == 201
+
+
+def test_validate_names_the_switch_before_the_payload():
+    """The flag is checked first, so an off rail says "off" rather than
+    reporting a payload problem, and a malformed payload on an off rail is
+    still refused."""
+    import os
+
+    from r6.actions.rails.curatr_fix import FLAG, CuratrFixExecutor
+    good = _body()['payload']
+    saved = os.environ.pop(FLAG, None)
+    try:
+        assert CuratrFixExecutor().validate(good) == [
+            errors.PROVIDER_NOT_CONFIGURED]
+        assert CuratrFixExecutor().validate({}) == [
+            errors.PROVIDER_NOT_CONFIGURED]
+        os.environ[FLAG] = '1'
+        assert CuratrFixExecutor().validate(good) == []
+        assert CuratrFixExecutor().validate({}) == [errors.PAYLOAD_INVALID]
+    finally:
+        os.environ.pop(FLAG, None)
+        if saved is not None:
+            os.environ[FLAG] = saved
+
+
 @pytest.mark.parametrize('body', [
     _body(fixes=[{'field_path': 'Condition.note', 'new_value': [{'text': 'x'}]}]),
     _body(fixes=[{'field_path': 'Patient.name', 'new_value': []}]),

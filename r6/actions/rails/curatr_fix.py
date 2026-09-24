@@ -85,10 +85,18 @@ class CuratrFixExecutor:
     required_env = (FLAG,)
 
     def validate(self, payload):
+        # The switch first, at propose too. Checked only at execute, an off
+        # rail still staged the proposal, showed it under "Waiting for you",
+        # let the person approve it, and only then failed. Nothing is staged
+        # that cannot run.
+        if not os.environ.get(FLAG):
+            return [errors.PROVIDER_NOT_CONFIGURED]
         return _spec_errors(payload if isinstance(payload, dict) else {})
 
     def execute(self, action):
-        # (1) The switch, before anything payload-specific.
+        # (1) The switch, before anything payload-specific. Kept although
+        # validate checks it too: the flag can be turned off between a
+        # proposal and its approval.
         if not os.environ.get(FLAG):
             return ExecutionResult(status='failed',
                                    error=errors.PROVIDER_NOT_CONFIGURED)

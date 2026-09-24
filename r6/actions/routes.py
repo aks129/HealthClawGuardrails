@@ -111,6 +111,12 @@ def _rail_validation_or_none(kind, payload):
     if ex is None:
         return None
     errs = ex.validate(payload)
+    if errors.PROVIDER_NOT_CONFIGURED in errs:
+        # The rail is switched off on this server. Say that, not "invalid
+        # payload": nothing about the request is wrong, and nothing is staged.
+        return jsonify({'error_code': errors.PROVIDER_NOT_CONFIGURED,
+                        'error': 'The %s rail is turned off on this server, '
+                                 'so nothing was proposed.' % kind}), 503
     if errs:
         return jsonify({'error_code': errors.PAYLOAD_INVALID,
                         'error': 'Action payload failed %s rail validation.'
