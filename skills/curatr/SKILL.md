@@ -107,7 +107,7 @@ Apply patient-approved fixes to a FHIR resource. Creates a linked Provenance rec
 }
 ```
 
-**Requires:** `X-Step-Up-Token` header + `X-Human-Confirmed: true`
+**Requires:** `X-Step-Up-Token` header. `curatr_apply_fix` sends no human-confirmation header. If the write returns 428, stop and tell the patient a human must confirm; never set `X-Human-Confirmed` yourself.
 
 **Output:** Updated resource + linked Provenance resource documenting the change.
 

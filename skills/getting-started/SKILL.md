@@ -570,7 +570,7 @@ Your records — never leave this machine
 | `/health` shows FHIR upstream **down** | HAPI / Medplum container not running | `docker ps`; restart the container |
 | `/export` says "HEALTHEX_AUTH_TOKEN not set" | Token never made it to env or Keychain | `security add-generic-password -s healthex -a me -w '<token>'` |
 | HealthClaw write returns 401 | Step-up token expired (5-min TTL) | Call `fhir_get_token` immediately before the write |
-| HealthClaw write returns 428 | Human-in-the-loop required for clinical write | Add `X-Human-Confirmed: true` after reviewing the proposal |
+| HealthClaw write returns 428 | Human-in-the-loop required for clinical write | Stop and tell the person a human must confirm; an agent never sets the confirmation header itself |
 | MCP tools missing in Claude Desktop | Config file not loaded | Fully quit & relaunch Claude; verify `.mcp.json` JSON validity |
 | `curl :8080/fhir/metadata` hangs | HAPI still booting | Wait 30–60s on first start |
 | Records ingested but PHI not redacted | `--no-redact` was set OR proxy mode without server | Re-export without `--no-redact`; default is `--redact-mode local` |
