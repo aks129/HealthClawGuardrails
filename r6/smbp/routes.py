@@ -57,8 +57,7 @@ def enroll():
     tenant_id = tenant.id
     # enroll is a WRITE guarded by the tenant header alone (see the matrix
     # row), so this parse is reachable with no credential. No gate to move
-    # above it; the depth bound is the fix (#312). Lazy import to keep the
-    # r6.routes <-> r6.smbp import graph acyclic, as the report handler does.
+    # above it; the depth bound is the fix (#312).
     body, too_deep = json_body_within_depth()
     if too_deep:
         return jsonify(_oo("error", "invalid",
