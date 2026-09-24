@@ -520,8 +520,10 @@ function extractHeaders(
 //
 // Two parallel declarations so both ecosystems auto-detect compliance:
 //
-//   1. SHARP-on-MCP (https://sharponmcp.com) — vendor-neutral. Lives under
-//      capabilities.experimental.{fhir_context_required, sharp}.
+//   1. SHARP-on-MCP — vendor-neutral. Lives under
+//      capabilities.experimental.{fhir_context_required, sharp}. No `spec`
+//      URL: the domain the spec was published at lapsed and is unregistered,
+//      so anyone could serve content under it (#626).
 //
 //   2. PromptOpinion FHIR extension
 //      (https://docs.promptopinion.ai/fhir-context/mcp-fhir-context) — lives
@@ -549,7 +551,6 @@ const SHARP_CAPABILITIES = {
     sharp: {
       version: "1.0",
       headers: ["X-FHIR-Server-URL", "X-FHIR-Access-Token", "X-Patient-ID"],
-      spec: "https://sharponmcp.com",
     },
   },
 };
@@ -1073,7 +1074,6 @@ app.get("/health", (_req, res) => {
       compliant: true,
       version: "1.0",
       headers: ["X-FHIR-Server-URL", "X-FHIR-Access-Token", "X-Patient-ID"],
-      spec: "https://sharponmcp.com",
     },
     timestamp: new Date().toISOString(),
   });
