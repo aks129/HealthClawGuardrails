@@ -264,9 +264,14 @@ def test_deploy_configs_run_migrations_before_web_processes():
         "condition": "service_completed_successfully"
     }
     assert "careagents-worker" in services
-    assert "CARE_ROLE=worker" in services["careagents-worker"]["environment"]
-    assert services["careagents-worker"]["command"] == [
-        "python", "-m", "careagents.worker"]
+    # Compose picks each CareAgents role the way production does: by
+    # CARE_ROLE alone, through the image's own CMD dispatch. A `command:`
+    # override would bypass that dispatch, so a regression in it could never
+    # be reproduced locally (#276).
+    for name, role in (("careagents", "web"), ("careagents-worker", "worker")):
+        assert f"CARE_ROLE={role}" in services[name]["environment"]
+        assert "command" not in services[name], (
+            f"{name} overrides the image CMD, bypassing the CARE_ROLE dispatch")
     assert any(
         value.startswith("CARE_RUN_WORKER_STALE_SECONDS=")
         for value in services["careagents-worker"]["environment"])
