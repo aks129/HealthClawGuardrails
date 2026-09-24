@@ -185,6 +185,101 @@ def test_refusal_audits_are_bounded_per_client(app, client, tenant_id,
 
 
 # ---------------------------------------------------------------------------
+# A limiter outage is not an exhausted budget: the refusal is still audited
+# ---------------------------------------------------------------------------
+
+class _RedisDown:
+    def eval(self, *_args):
+        raise ConnectionError('redis://secret-host:6379 refused')
+
+
+class _RedisCounter:
+    """INCR with a fixed TTL: enough of the Lua script to spend a budget."""
+
+    def __init__(self):
+        self.counts = {}
+
+    def eval(self, _script, _nkeys, key, _window):
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return [self.counts[key], 60]
+
+
+def _production_redis(app, monkeypatch, fake):
+    """Redis configured, production semantics, and a route the request
+    limiter does not mount — so the only limiter call is the audit budget's.
+    """
+    from r6 import rate_limit
+    monkeypatch.setenv('REDIS_URL', 'redis://example.invalid/0')
+    monkeypatch.setattr(rate_limit, '_redis_client', fake, raising=False)
+    monkeypatch.setattr(rate_limit, '_is_production', lambda: True)
+
+    @app.route('/kernel/refuse', methods=['POST'])
+    def refuse():
+        tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+        require_grant(scope=Scope.WRITE, tenant=tenant)
+        return 'unreachable', 201
+
+    return app.test_client()
+
+
+def test_a_limiter_outage_still_audits_the_refusal(app, tenant_id,
+                                                   step_up_token,
+                                                   monkeypatch, caplog):
+    """Before, check_rate_limit answered a production Redis outage as "over
+    budget", so while Redis was down no refusal was audited at all.
+
+    MUTATION: in _audit_refusal, return early on 'unavailable' as on None
+    -> 0 rows.
+    """
+    client = _production_redis(app, monkeypatch, _RedisDown())
+    before = {r.id for r in _rows()}
+
+    with caplog.at_level(logging.DEBUG):
+        resp = client.post('/kernel/refuse',
+                           headers={'X-Tenant-Id': tenant_id,
+                                    'X-Step-Up-Token': step_up_token + 'x'})
+
+    assert resp.status_code == 401
+    assert resp.get_json() == _REJECTED_BODY
+    new = _new_rows(before)
+    assert [(r.tenant_id, r.outcome, r.event_type, r.detail) for r in new] == [
+        (tenant_id, 'failure', 'create',
+         'step-up refused (rejected) at refuse: Invalid token signature')]
+
+    # Logged once per occurrence, by type name: no host, no token.
+    outage = [r.getMessage() for r in caplog.records
+              if 'unavailable' in r.getMessage()
+              or 'Redis' in r.getMessage()]
+    assert outage == ['step-up refusal audited without its budget: limiter '
+                      'store unavailable (ConnectionError)'], outage
+    assert 'secret-host' not in caplog.text
+    assert step_up_token not in caplog.text
+
+
+def test_over_budget_is_still_capped_with_redis_in_production(
+        app, tenant_id, monkeypatch):
+    """Telling the two apart must not open the budget: a healthy Redis that
+    says "over" still stops the rows.
+
+    MUTATION: treat None (over budget) like 'unavailable' -> 6 refusal rows.
+    """
+    monkeypatch.setattr(access, '_REFUSAL_AUDIT_BUDGET', 3)
+    client = _production_redis(app, monkeypatch, _RedisCounter())
+    before = {r.id for r in _rows()}
+
+    for _ in range(6):
+        resp = client.post('/kernel/refuse',
+                           headers={'X-Tenant-Id': tenant_id})
+        assert resp.status_code == 401
+        assert resp.get_json() == _ABSENT_BODY
+
+    details = sorted(r.detail for r in _new_rows(before))
+    assert details == sorted(
+        ['step-up refused (absent) at refuse: Step-up token required'] * 3
+        + [access._BUDGET_DETAIL]), details
+
+
+# ---------------------------------------------------------------------------
 # Audit storage failure: the refusal still answers, nothing leaks
 # ---------------------------------------------------------------------------
 

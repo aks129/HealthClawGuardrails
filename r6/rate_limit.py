@@ -195,32 +195,71 @@ def rate_limit_key():
     return f'ip:{_client_ip()}'
 
 
+class RateLimitUnavailable(Exception):
+    """The production limiter store could not answer. Not "over budget".
+
+    Its message is the store exception's type name and nothing else, and it
+    is raised `from None`, so logging it cannot carry a Redis URL or host.
+    """
+
+
+def _redis_check(client, tenant_id, max_requests, window_seconds, now):
+    digest = hashlib.sha256(tenant_id.encode('utf-8')).hexdigest()
+    key = f'healthclaw:rate-limit:{digest}'
+    count, ttl = client.eval(
+        _RATE_LIMIT_SCRIPT, 1, key, int(window_seconds)
+    )
+    count = int(count)
+    ttl = max(0, int(ttl))
+    remaining = max(0, max_requests - count)
+    return count <= max_requests, remaining, now + ttl
+
+
 def check_rate_limit(tenant_id, max_requests=DEFAULT_RATE_LIMIT,
                      window_seconds=DEFAULT_WINDOW_SECONDS):
     """
     Check if a tenant has exceeded their rate limit.
 
+    In production a Redis failure is answered as a deny — the same tuple as
+    an exhausted budget. A caller that must tell the two apart uses
+    check_rate_limit_or_raise.
+
     Returns:
         tuple: (allowed: bool, remaining: int, reset_at: float)
     """
     now = time.time()
+    try:
+        return _check(tenant_id, max_requests, window_seconds, now)
+    except RateLimitUnavailable as exc:
+        logger.error('Redis rate-limit check failed: %s', exc)
+        return False, 0, now + window_seconds
+
+
+def check_rate_limit_or_raise(tenant_id, max_requests=DEFAULT_RATE_LIMIT,
+                              window_seconds=DEFAULT_WINDOW_SECONDS):
+    """
+    check_rate_limit, except that a production Redis failure raises
+    RateLimitUnavailable instead of answering "over budget" (#648).
+
+    Every other answer is check_rate_limit's tuple. That includes a Redis
+    failure outside production, which is logged and falls back to the memory
+    store in both. The raising case is not logged here: the caller decides
+    what an outage means for its budget, and says so once.
+    """
+    return _check(tenant_id, max_requests, window_seconds, time.time())
+
+
+def _check(tenant_id, max_requests, window_seconds, now):
     client = _get_redis_client()
     if client is not None:
-        digest = hashlib.sha256(tenant_id.encode('utf-8')).hexdigest()
-        key = f'healthclaw:rate-limit:{digest}'
         try:
-            count, ttl = client.eval(
-                _RATE_LIMIT_SCRIPT, 1, key, int(window_seconds)
-            )
-            count = int(count)
-            ttl = max(0, int(ttl))
-            remaining = max(0, max_requests - count)
-            return count <= max_requests, remaining, now + ttl
+            return _redis_check(client, tenant_id, max_requests,
+                                window_seconds, now)
         except Exception as exc:  # noqa: BLE001 - Redis client errors vary
+            if _is_production():
+                raise RateLimitUnavailable(type(exc).__name__) from None
             logger.error('Redis rate-limit check failed: %s',
                          type(exc).__name__)
-            if _is_production():
-                return False, 0, now + window_seconds
 
     # Development/testing fallback is bounded and protected from thread races.
     with _rate_limits_lock:
