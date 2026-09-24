@@ -98,7 +98,7 @@ services:
     # authentication and therefore ignored the two FHIR_UPSTREAM_CLIENT_*
     # variables set below. The example read as correct and could not work.
     # A pin makes that class of drift a pull failure instead of a silent one.
-    image: ghcr.io/aks129/healthclaw-guardrails:1.10.0
+    image: ghcr.io/aks129/healthclaw-guardrails:2.0.0
     depends_on:
       aidbox:
         condition: service_healthy
@@ -151,7 +151,7 @@ services:
 
   # What the agent actually connects to.
   mcp:
-    image: ghcr.io/aks129/healthclaw-mcp-server:1.10.0
+    image: ghcr.io/aks129/healthclaw-mcp-server:2.0.0
     depends_on:
       healthclaw:
         condition: service_healthy
