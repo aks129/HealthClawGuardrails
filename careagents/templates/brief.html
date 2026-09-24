@@ -77,10 +77,13 @@
     {% set fields = sections.get('care-gaps', []) %}
     {# Three states, not two. An empty list only means "nothing due" when the
        screening review actually ran, so care_gaps_ok is checked first — an
-       unset value falls through to unavailable, never to reassurance. #}
+       unset value falls through to unavailable, never to reassurance.
+       Not ok WITH fields is a partial review: the due items are real and are
+       shown, under the engine's own note naming what it could not check. #}
+    {% if fields %}
     {% if not care_gaps_ok %}
-    <p class="brief-empty">Screening review unavailable — ask your clinician which preventive care you are due for.</p>
-    {% elif fields %}
+    <p class="brief-empty">{% if care_gaps_note %}{{ care_gaps_note }}{% else %}Some screenings could not be checked, so this list may not be complete.{% endif %}</p>
+    {% endif %}
     <div class="brief-section">
       {% for f in fields %}
       <div class="brief-field">
@@ -90,6 +93,8 @@
       </div>
       {% endfor %}
     </div>
+    {% elif not care_gaps_ok %}
+    <p class="brief-empty">Screening review unavailable — ask your clinician which preventive care you are due for.</p>
     {% else %}
     <p class="brief-empty">We found no preventive care items based on your current records.</p>
     {% endif %}

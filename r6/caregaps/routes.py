@@ -30,6 +30,87 @@ _DISCLAIMER = ("Preventive-care decision support based on published guidelines "
               "certified measure engines.")
 
 
+def resolve_subject(supplied, tenant_id):
+    """Return (subject_reference, state).
+
+    Both production callers — CareAgents' get_care_gaps and the care-gaps
+    MCP App page — post an empty body with no subject, so `supplied` was
+    None and `subject_resources` compared every stored subject.reference
+    against None. Nothing matched, the evaluator saw an empty record, and
+    the patient was told nothing was due (#389). The tenant already scopes
+    the read, so the tenant's own Patient is the default here as it is
+    elsewhere (r6/actions/review.py `_load_patient`).
+
+    A fallback that cannot land is its OWN outcome and never an empty
+    list. No Patient row and more than one Patient row each return a
+    state, which travels to the caller in the consumer summary — the
+    engine itself cannot tell the difference afterwards, because an
+    unidentifiable patient produces exactly the rule results a healthy
+    one does.
+
+    `is_deleted=False` is #422, and the honest version of it: this count
+    decides whether the operation may pick a subject at all, and a count
+    that includes tombstones decides on a set nobody can see. A tenant
+    that deleted its duplicate Patient would still read as ambiguous, the
+    symptom would not move, and the only apparent next move would be a
+    hard delete against production.
+
+    WOULD, not did. Verified 2026-08-16: `is_deleted = True` is written on
+    one line in this repository (r6/routes.py:2824, the demo walkthrough,
+    on Permission rows) and no route accepts DELETE, so no Patient row can
+    carry a tombstone today. This is a reader fixed ahead of its writer —
+    which is the only order in which it can be fixed quietly. Every read
+    path in r6/routes.py has filtered since the column existed; the
+    feature modules added later did not.
+    """
+    if supplied:
+        return supplied, "supplied"
+    # Two rows is all it takes to know the match is ambiguous.
+    rows = R6Resource.query.filter_by(
+        resource_type="Patient", tenant_id=tenant_id,
+        is_deleted=False).limit(2).all()
+    if not rows:
+        return None, "no-patient"
+    if len(rows) > 1:
+        return None, "ambiguous-patient"
+    return f"Patient/{rows[0].id}", "tenant-default"
+
+def patient_for(subject, tenant_id):
+    """The demographics the rules read age and sex from.
+
+    Filtered for the same reason, and it is the half `resolve_subject`
+    cannot cover: a caller may SUPPLY `?subject=Patient/<deleted-id>`,
+    which never passes through the resolver above. Without this, a deleted
+    patient's date of birth still selects which preventive rules fire.
+    """
+    if not subject or not subject.startswith("Patient/"):
+        return None
+    row = R6Resource.query.filter_by(
+        resource_type="Patient", id=subject.split("/", 1)[1],
+        tenant_id=tenant_id, is_deleted=False).first()
+    return row.to_fhir_json() if row else None
+
+def subject_resources(resource_type, subject, tenant_id):
+    """The clinical evidence a gap is evaluated against.
+
+    The most consequential of the three. These rows are what CLOSES a
+    gap — a Procedure closes a screening, an Immunization closes a
+    vaccine, an Observation closes A1c monitoring. Counting a
+    soft-deleted row here tells a patient they are covered by a record
+    the system considers deleted, which is the failure direction that
+    matters: it withholds a due item rather than repeating one.
+    """
+    rows = R6Resource.query.filter_by(
+        resource_type=resource_type, tenant_id=tenant_id,
+        is_deleted=False).all()
+    out = []
+    for row in rows:
+        res = row.to_fhir_json()
+        if res.get("subject", {}).get("reference") == subject:
+            out.append(res)
+    return out
+
+
 def register_caregaps_routes(blueprint, deps):
     operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
@@ -48,86 +129,6 @@ def register_caregaps_routes(blueprint, deps):
                         subject = ref.get("reference") or subject
         return subject
 
-    def _resolve_subject(supplied, tenant_id):
-        """Return (subject_reference, state).
-
-        Both production callers — CareAgents' get_care_gaps and the care-gaps
-        MCP App page — post an empty body with no subject, so `supplied` was
-        None and `_resources_for` compared every stored subject.reference
-        against None. Nothing matched, the evaluator saw an empty record, and
-        the patient was told nothing was due (#389). The tenant already scopes
-        the read, so the tenant's own Patient is the default here as it is
-        elsewhere (r6/actions/review.py `_load_patient`).
-
-        A fallback that cannot land is its OWN outcome and never an empty
-        list. No Patient row and more than one Patient row each return a
-        state, which travels to the caller in the consumer summary — the
-        engine itself cannot tell the difference afterwards, because an
-        unidentifiable patient produces exactly the rule results a healthy
-        one does.
-
-        `is_deleted=False` is #422, and the honest version of it: this count
-        decides whether the operation may pick a subject at all, and a count
-        that includes tombstones decides on a set nobody can see. A tenant
-        that deleted its duplicate Patient would still read as ambiguous, the
-        symptom would not move, and the only apparent next move would be a
-        hard delete against production.
-
-        WOULD, not did. Verified 2026-08-16: `is_deleted = True` is written on
-        one line in this repository (r6/routes.py:2824, the demo walkthrough,
-        on Permission rows) and no route accepts DELETE, so no Patient row can
-        carry a tombstone today. This is a reader fixed ahead of its writer —
-        which is the only order in which it can be fixed quietly. Every read
-        path in r6/routes.py has filtered since the column existed; the
-        feature modules added later did not.
-        """
-        if supplied:
-            return supplied, "supplied"
-        # Two rows is all it takes to know the match is ambiguous.
-        rows = R6Resource.query.filter_by(
-            resource_type="Patient", tenant_id=tenant_id,
-            is_deleted=False).limit(2).all()
-        if not rows:
-            return None, "no-patient"
-        if len(rows) > 1:
-            return None, "ambiguous-patient"
-        return f"Patient/{rows[0].id}", "tenant-default"
-
-    def _patient_for(subject, tenant_id):
-        """The demographics the rules read age and sex from.
-
-        Filtered for the same reason, and it is the half `_resolve_subject`
-        cannot cover: a caller may SUPPLY `?subject=Patient/<deleted-id>`,
-        which never passes through the resolver above. Without this, a deleted
-        patient's date of birth still selects which preventive rules fire.
-        """
-        if not subject or not subject.startswith("Patient/"):
-            return None
-        row = R6Resource.query.filter_by(
-            resource_type="Patient", id=subject.split("/", 1)[1],
-            tenant_id=tenant_id, is_deleted=False).first()
-        return row.to_fhir_json() if row else None
-
-    def _resources_for(resource_type, subject, tenant_id):
-        """The clinical evidence a gap is evaluated against.
-
-        The most consequential of the three. These rows are what CLOSES a
-        gap — a Procedure closes a screening, an Immunization closes a
-        vaccine, an Observation closes A1c monitoring. Counting a
-        soft-deleted row here tells a patient they are covered by a record
-        the system considers deleted, which is the failure direction that
-        matters: it withholds a due item rather than repeating one.
-        """
-        rows = R6Resource.query.filter_by(
-            resource_type=resource_type, tenant_id=tenant_id,
-            is_deleted=False).all()
-        out = []
-        for row in rows:
-            res = row.to_fhir_json()
-            if res.get("subject", {}).get("reference") == subject:
-                out.append(res)
-        return out
-
     @blueprint.route("/Patient/$care-gaps", methods=["GET", "POST"])
     def care_gaps():
         tenant_id = _tenant()
@@ -139,7 +140,7 @@ def register_caregaps_routes(blueprint, deps):
             return auth_err[0], auth_err[1]
 
         supplied = _subject_from_request()
-        subject, state = _resolve_subject(supplied, tenant_id)
+        subject, state = resolve_subject(supplied, tenant_id)
         not_evaluated = (state if state in ("no-patient", "ambiguous-patient")
                          else None)
 
@@ -158,7 +159,7 @@ def register_caregaps_routes(blueprint, deps):
         # unreviewed: A1c monitoring is patient-visible today and no clinician
         # has passed on its cadence. Tracked on #389; do not let this comment
         # be read as clearance.
-        patient = _patient_for(subject, tenant_id)
+        patient = patient_for(subject, tenant_id)
 
         # `check-incomplete` (#417) covered the window in which a resolved
         # Patient was held back from the evaluator: every rule reported the
@@ -173,7 +174,7 @@ def register_caregaps_routes(blueprint, deps):
         # No subject means nothing to compare against, so we do not pretend to
         # have read anything.
         def _for(resource_type):
-            return _resources_for(resource_type, subject, tenant_id) if subject else []
+            return subject_resources(resource_type, subject, tenant_id) if subject else []
 
         as_of = date.today().isoformat()
         # A subject we could not resolve is not evaluated, full stop (#542).
