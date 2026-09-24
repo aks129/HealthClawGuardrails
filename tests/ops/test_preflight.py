@@ -101,6 +101,33 @@ class TestInternalMintSecret:
         assert r['ok'] is True
 
 
+# ------------------------------------------------------ nonce store (#212)
+
+class TestNonceStore:
+    def test_missing_outside_production_is_warning(self, monkeypatch):
+        monkeypatch.delenv('REDIS_URL', raising=False)
+        monkeypatch.delenv('FLASK_ENV', raising=False)
+        r = checks.check_nonce_store()
+        _assert_shape(r)
+        assert r['name'] == 'nonce_store'
+        assert r['ok'] is False
+        assert r['fatal'] is False
+
+    def test_missing_in_production_is_fatal(self, monkeypatch):
+        monkeypatch.delenv('REDIS_URL', raising=False)
+        monkeypatch.setenv('FLASK_ENV', 'production')
+        r = checks.check_nonce_store()
+        assert r['ok'] is False
+        assert r['fatal'] is True
+
+    def test_set_is_green(self, monkeypatch):
+        monkeypatch.setenv('REDIS_URL', 'redis://redis.example.invalid:6379/0')
+        r = checks.check_nonce_store()
+        assert r['ok'] is True
+        # The detail never echoes the URL: it can carry a password.
+        assert 'example.invalid' not in r['detail']
+
+
 # ------------------------------------------------------- actions webhook
 
 class TestActionsWebhook:
@@ -315,7 +342,7 @@ class TestPreflightEndpoint:
         names = {c['name'] for c in body['checks']}
         assert {'step_up_secret', 'fasten_webhook_secret',
                 'internal_mint_secret', 'actions_webhook', 'database',
-                'telegram_admin', 'reaper_heartbeat'} <= names
+                'telegram_admin', 'reaper_heartbeat', 'nonce_store'} <= names
         assert any(n.startswith('rail:') for n in names)
 
     def test_nonfatal_failures_do_not_flip_overall_ok(

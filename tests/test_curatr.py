@@ -394,6 +394,21 @@ class TestCuratrApplyFixEndpoint:
             "new_value": "E11.9",
         }]}
         monkeypatch.setenv('APP_ENV', 'production')
+        # Production refuses the per-process nonce map (#212); it consumes
+        # through a shared store, so this test gives it one.
+        import r6.stepup as stepup_mod
+
+        class _SharedNonceStore:
+            def __init__(self):
+                self.keys = set()
+
+            def set(self, key, value, *, nx, ex):
+                if key in self.keys:
+                    return None
+                self.keys.add(key)
+                return True
+
+        monkeypatch.setattr(stepup_mod, '_redis_client', _SharedNonceStore())
 
         generic = client.post(
             url,

@@ -23,7 +23,10 @@ For each change, in order:
    to `main` by itself.
 
 The standards review has not run on any open change: the API-key secret is
-unset, so the job skips and reports green (#608). With the secret set, the
+unset. Until #608 the job then reported green anyway. It now shows
+`claude-standards-review` as skipped, which branch protection lets through
+but `wait_checks` below does not: it treats anything but SUCCESS as a stop,
+and that is the point. With the secret set, the
 update-branch push in step 2 runs it, and step 3 waits for it. Merging
 without it is a decision, not a default; the script below makes it one.
 
