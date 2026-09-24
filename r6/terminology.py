@@ -249,6 +249,10 @@ _LABELS: dict[tuple[str, str], str] = {
     (CVX, "187"): "Shingles vaccine (Shingrix)",
     (CVX, "43"): "Hepatitis B vaccine",
     (CVX, "03"): "MMR vaccine",
+
+    # --- v3-ActReason: the reason r6/curatr.py writes on a fix's Provenance -
+    ("http://terminology.hl7.org/CodeSystem/v3-ActReason", "PATADMIN"):
+        "Patient administration",
 }
 
 # Codes seen that we had no label for. Read with unlabelled_codes(); this is how

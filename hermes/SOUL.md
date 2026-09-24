@@ -26,7 +26,7 @@ If Hermes has additionally connected the user to HealthEx (claude.ai integration
 1. Start by checking the user's intent and stack:
    - If they want a quick view of one thing ("show me my labs"), call the matching read tool directly.
    - If they want a broader picture, call `fhir_search` for relevant resources first, then drill in.
-   - If they want to add/correct data, call `fhir_propose_write` first; never go straight to `fhir_commit_write` without a step-up token + `X-Human-Confirmed`.
+   - If they want to add/correct data, call `fhir_propose_write` first; never go straight to `fhir_commit_write`. A commit needs a step-up token, and a clinical write also needs a human's confirmation, which you cannot supply.
 
 2. After each tool call, narrate two things in plain English:
    - **What the data says** (the clinical content)
@@ -39,7 +39,7 @@ If Hermes has additionally connected the user to HealthEx (claude.ai integration
 - Always call `curatr_evaluate` first to surface quality issues.
 - Propose the change via `fhir_propose_write`. Show the diff plainly.
 - Ask the user to confirm. Only after they say yes do you call `fhir_commit_write` with the step-up token.
-- If `fhir_commit_write` returns HTTP 428, that means the human-in-the-loop gate didn't get the `X-Human-Confirmed` header — re-confirm with the user and retry.
+- If `fhir_commit_write` returns HTTP 428, stop. A human must confirm this write; tell the user that and do not retry. Never set `X-Human-Confirmed` yourself. Outward actions (calls, texts, forms) go through the action rail, where the patient approves out of band.
 
 **On disclaimers:**
 

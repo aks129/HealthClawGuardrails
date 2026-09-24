@@ -3101,7 +3101,7 @@ def compiled_truth(resource_type, resource_id):
     timeline = []
     for p in prov_rows:
         try:
-            prov = json.loads(p.resource_json)
+            prov = apply_redaction(json.loads(p.resource_json))  # as a read
         except Exception:
             continue
         targets = prov.get('target') or []
@@ -3122,7 +3122,7 @@ def compiled_truth(resource_type, resource_id):
             codings = reasons[0].get('coding') or []
             if codings:
                 reason = codings[0].get('display', '') or ''
-        # Extract curatr-correction extension summary if present
+        # curatr-correction strings: empty while redaction strips valueString
         summary = ''
         intent = ''
         for ext in prov.get('extension', []) or []:
