@@ -382,7 +382,10 @@ def test_no_new_package_mutates_without_auditing():
 #: $evaluate-measure — Patients, Conditions and Observations alike.
 #: 4 -> 3: r6/sdc/documents.py filters the intake-PDF getter, so a signed
 #: download link minted before the delete stops serving the PDF.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 3
+#: 3 -> 2: r6/actions/routes.py filters rx-transfer/propose's
+#: MedicationRequest sweep, so a deleted medication is never drafted into a
+#: transfer call awaiting approval. Its other queries read ProposedAction.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 2
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the
