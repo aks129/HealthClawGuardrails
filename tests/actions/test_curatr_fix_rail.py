@@ -268,27 +268,20 @@ def test_while_the_rail_is_off_nothing_reaches_the_approval_list(
     assert _propose(client, tenant_headers).status_code == 201
 
 
-def test_validate_names_the_switch_before_the_payload():
+def test_validate_names_the_switch_before_the_payload(monkeypatch):
     """The flag is checked first, so an off rail says "off" rather than
     reporting a payload problem, and a malformed payload on an off rail is
     still refused."""
-    import os
-
     from r6.actions.rails.curatr_fix import FLAG, CuratrFixExecutor
     good = _body()['payload']
-    saved = os.environ.pop(FLAG, None)
-    try:
-        assert CuratrFixExecutor().validate(good) == [
-            errors.PROVIDER_NOT_CONFIGURED]
-        assert CuratrFixExecutor().validate({}) == [
-            errors.PROVIDER_NOT_CONFIGURED]
-        os.environ[FLAG] = '1'
-        assert CuratrFixExecutor().validate(good) == []
-        assert CuratrFixExecutor().validate({}) == [errors.PAYLOAD_INVALID]
-    finally:
-        os.environ.pop(FLAG, None)
-        if saved is not None:
-            os.environ[FLAG] = saved
+    monkeypatch.delenv(FLAG, raising=False)
+    assert CuratrFixExecutor().validate(good) == [
+        errors.PROVIDER_NOT_CONFIGURED]
+    assert CuratrFixExecutor().validate({}) == [
+        errors.PROVIDER_NOT_CONFIGURED]
+    monkeypatch.setenv(FLAG, '1')
+    assert CuratrFixExecutor().validate(good) == []
+    assert CuratrFixExecutor().validate({}) == [errors.PAYLOAD_INVALID]
 
 
 @pytest.mark.parametrize('body', [
