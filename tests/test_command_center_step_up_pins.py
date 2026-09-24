@@ -193,3 +193,77 @@ def test_authz_write_on_a_stored_task_uses_the_rows_tenant(
     assert response.status_code == status
     if expected is not None:
         assert response.get_data() == expected
+
+
+# --- the dashboard-link mint -----------------------------------------------
+
+GENERATE_LINK = '/command-center/api/generate-link'
+MINT_REQUIRED = b'{"error":"X-Step-Up-Token required for non-public tenants"}\n'
+
+_MINT_REFUSALS = [
+    # (row, tenant_id, token kind, extra headers, expected body)
+    ('absent token', PRIVATE, 'absent', None, MINT_REQUIRED),
+    ('empty header', PRIVATE, 'empty', None, MINT_REQUIRED),
+    ('whitespace-only token', PRIVATE, 'whitespace', None, MALFORMED_TOKEN),
+    ('padded valid token', PRIVATE, 'padded', None, BAD_SIGNATURE),
+    ('leading-padded valid token', PRIVATE, 'leading-pad', None,
+     BAD_SIGNATURE),
+    ('padded junk', PRIVATE, 'padded-junk', None, MALFORMED_TOKEN),
+    ('junk token', PRIVATE, 'junk', None, MALFORMED_TOKEN),
+    ('wrong-tenant token', PRIVATE, 'wrong-tenant', None, GENERIC),
+    ('read-scoped token', PRIVATE, 'read-scoped', None, READ_SCOPED),
+    ('bearer is not an alias here', PRIVATE, 'absent',
+     {'Authorization': 'Bearer ' + generate_step_up_token(PRIVATE)},
+     MINT_REQUIRED),
+    ('malformed tenant, no token', MALFORMED, 'absent', None, MINT_REQUIRED),
+    ('malformed tenant, another tenant\'s token', MALFORMED, 'wrong-tenant',
+     None, GENERIC),
+    ('non-string tenant, a token', 123, 'wrong-tenant', None, GENERIC),
+]
+
+
+@pytest.mark.parametrize(
+    'row, tenant, kind, extra, expected', _MINT_REFUSALS,
+    ids=[r[0] for r in _MINT_REFUSALS])
+def test_mint_refusal_is_byte_identical(
+        client, row, tenant, kind, extra, expected):
+    response = client.post(GENERATE_LINK, json={'tenant_id': tenant},
+                           headers=_headers(kind, extra))
+    assert (response.status_code, response.get_data()) == (401, expected), row
+
+
+@pytest.mark.parametrize('row, tenant, kind', [
+    ('valid token', PRIVATE, 'valid'),
+    ('malformed tenant, a token minted for exactly that id', MALFORMED,
+     'malformed-own'),
+])
+def test_mint_grants(client, row, tenant, kind):
+    response = client.post(GENERATE_LINK, json={'tenant_id': tenant},
+                           headers=_headers(kind))
+    assert response.status_code == 200, row
+    assert response.get_json()['tenant_id'] == tenant
+
+
+@pytest.mark.parametrize('kind', ['absent', 'whitespace', 'junk'])
+def test_mint_skips_step_up_for_a_public_tenant(client, kind):
+    """The demo carve-out: a public tenant mints with no token at all, and a
+    bad token is never looked at."""
+    assert access.is_public('desktop-demo')
+    response = client.post(GENERATE_LINK, json={'tenant_id': 'desktop-demo'},
+                           headers=_headers(kind))
+    assert response.status_code == 200
+    assert response.get_json()['tenant_id'] == 'desktop-demo'
+
+
+@pytest.mark.parametrize('kind, expected', [
+    ('absent', MINT_REQUIRED),
+    ('empty', MINT_REQUIRED),
+    ('whitespace', MALFORMED_TOKEN),
+])
+def test_mint_never_consults_the_session(app, kind, expected):
+    """Unlike _authz_write, a signed-in browser cannot mint without a token."""
+    with app.test_client() as client:
+        _login(client, PRIVATE)
+        response = client.post(GENERATE_LINK, json={'tenant_id': PRIVATE},
+                               headers=_headers(kind))
+    assert (response.status_code, response.get_data()) == (401, expected)
