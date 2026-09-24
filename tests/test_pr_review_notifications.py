@@ -347,3 +347,127 @@ def test_an_arming_that_succeeds_still_reports_armed(pr):
 
     assert "armed-dependabot" in pr.summary.read_text()
     assert "cannot-arm" not in pr.summary.read_text()
+
+
+# --- the review check reports whether a review happened (#608) --------------
+#
+# With ANTHROPIC_API_KEY unset, the key check used to be a STEP inside
+# `claude-standards-review`. It skipped the review and the verdict gate, the
+# job succeeded, and every pull request showed a green standards review that
+# never ran. A job made of skipped steps is green; a skipped job is shown as
+# skipped. The check now lives in its own job, and the review job is skipped
+# as a whole when there is nothing to review with.
+
+def _jobs() -> dict:
+    return WORKFLOW["jobs"]
+
+
+def _preflight_step() -> str:
+    steps = _jobs()["reviewer-preflight"]["steps"]
+    blocks = [s["run"] for s in steps if "run" in s]
+    assert len(blocks) == 1, f"expected one shell step, found {len(blocks)}"
+    return blocks[0]
+
+
+def _run_preflight(tmp_path: Path, has_key: str) -> tuple[str, str]:
+    summary = tmp_path / "summary.md"
+    output = tmp_path / "output.txt"
+    summary.write_text("")
+    output.write_text("")
+    env = {
+        "PATH": os.environ["PATH"],
+        "HAS_KEY": has_key,
+        "GITHUB_STEP_SUMMARY": str(summary),
+        "GITHUB_OUTPUT": str(output),
+    }
+    proc = subprocess.run(["bash", "-c", _preflight_step()], env=env,
+                          capture_output=True, text=True, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    return summary.read_text(), output.read_text()
+
+
+def test_the_review_check_cannot_succeed_unless_the_review_ran():
+    """The invariant the check's name promises: green means the verdict gate
+    ran and found claude:approve.
+
+    MUTATION: put `if: steps.keycheck.outputs.has_key == 'true'` back on the
+    review step or the gate -> red. Drop the job-level `has_key` condition ->
+    red.
+    """
+    job = _jobs()["claude-standards-review"]
+    assert job["name"] == "claude-standards-review", (
+        "branch protection requires this exact name")
+    needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+    assert "reviewer-preflight" in needs
+    assert "needs.reviewer-preflight.outputs.has_key == 'true'" in job["if"], (
+        "without the key the job must be SKIPPED, not run to a green")
+
+    conditional = [s.get("name", s.get("uses")) for s in job["steps"]
+                   if "if" in s]
+    assert conditional == [], (
+        f"steps that can skip inside the review job: {conditional}. A job "
+        "whose steps all skip reports success, which is the #608 hole")
+
+    uses = [s.get("uses", "") for s in job["steps"]]
+    assert any(u.startswith("anthropics/claude-code-action") for u in uses)
+    gate = [s["run"] for s in job["steps"]
+            if s.get("name") == "Gate on verdict label"]
+    assert len(gate) == 1
+    assert "*claude:approve*" in gate[0] and "exit 1" in gate[0]
+
+
+def test_an_unconfigured_reviewer_says_not_run(tmp_path):
+    """The skip has to be said somewhere a person reads, in words that cannot
+    be read as a verdict.
+
+    MUTATION: drop the summary printf -> red.
+    """
+    step = _preflight_step()
+    assert "${{" not in step, "the block is no longer executable outside Actions"
+
+    summary, output = _run_preflight(tmp_path, "false")
+    assert "has_key=false" in output
+    assert "claude-standards-review: not run" in summary
+    assert "approve" not in summary.lower()
+
+
+def test_a_configured_reviewer_writes_no_not_run_line(tmp_path):
+    """The guard must not fire on the ordinary path, or "not run" becomes
+    noise nobody reads."""
+    summary, output = _run_preflight(tmp_path, "true")
+    assert "has_key=true" in output
+    assert summary == ""
+    assert _jobs()["reviewer-preflight"]["outputs"]["has_key"] == (
+        "${{ steps.keycheck.outputs.has_key }}")
+
+
+def test_auto_merge_still_runs_when_the_review_is_skipped():
+    """A skipped `needs` job skips its dependants unless the `if:` carries a
+    status function. Without one, the moment the key is unset dependabot bumps
+    stop arming, and `auto-merge-when-satisfied` (also required) is skipped on
+    every PR for a reason nobody would guess.
+
+    A request-changes verdict is a FAILED review job and must still stop
+    arming; a draft must still run nothing.
+
+    MUTATION: delete the auto-merge `if:` -> red. Change `!= 'failure'` to
+    `== 'success'` -> red.
+    """
+    job = _jobs()["auto-merge"]
+    assert "claude-standards-review" in job["needs"]
+    cond = job["if"]
+    assert "!cancelled()" in cond
+    assert "needs.claude-standards-review.result != 'failure'" in cond
+    assert "!github.event.pull_request.draft" in cond
+    assert "needs.reviewer-preflight.result == 'success'" in cond
+
+
+def test_the_header_no_longer_promises_a_verdict_it_does_not_enforce():
+    """#608: the header listed the claude:approve verdict as a merge
+    condition while no review was running. It now has to name the unset-key
+    case.
+
+    MUTATION: restore "Always-on AI review" -> red.
+    """
+    assert "Always-on AI review" not in WORKFLOW_TEXT
+    assert "SKIPPED, not green" in WORKFLOW_TEXT

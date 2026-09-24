@@ -199,6 +199,41 @@ _LABELS: dict[tuple[str, str], str] = {
     (RXNORM, "3616"): "Gabapentin",
     (RXNORM, "8640"): "Prednisone",
 
+    # --- SNOMED CT: codes the product carries (#577) -------------------------
+    # Only codes found in our seed/demo data, fixtures or rule sets
+    # (tests/test_terminology_snomed.py enforces that). Each label is the
+    # display tx.fhir.org's $lookup returned, verbatim, from the International
+    # edition 20250201 — not a paraphrase.
+    (SNOMED, "91936005"): "Allergy to penicillin",
+    (SNOMED, "91935009"): "Allergy to peanut",
+    (SNOMED, "227493005"): "Cashew nut",
+    (SNOMED, "73211009"): "Diabetes mellitus",
+    (SNOMED, "44054006"): "Type 2 diabetes mellitus",
+    (SNOMED, "46635009"): "Type 1 diabetes mellitus",
+    (SNOMED, "190330002"): "Hyperosmolar coma due to type 1 diabetes mellitus",
+    (SNOMED, "422034002"): "Retinopathy due to type 2 diabetes mellitus",
+    (SNOMED, "38341003"): "Hypertensive disorder",
+    (SNOMED, "59621000"): "Essential hypertension",
+    (SNOMED, "1201005"): "Benign essential hypertension",
+    (SNOMED, "46177005"): "End-stage renal disease",
+    (SNOMED, "236434000"): (
+        "End stage renal failure untreated by renal replacement therapy"),
+    (SNOMED, "77386006"): "Pregnancy",
+    (SNOMED, "72892002"): "Normal pregnancy",
+    (SNOMED, "9014002"): "Psoriasis",
+    (SNOMED, "6142004"): "Influenza",
+    (SNOMED, "82272006"): "Common cold",
+    (SNOMED, "118944007"): "Disorder of shoulder",
+    (SNOMED, "80146002"): "Appendectomy",
+    (SNOMED, "26643006"): "Oral route",
+    (SNOMED, "77176002"): "Smoker",
+    (SNOMED, "65568007"): "Cigarette smoker",
+    (SNOMED, "8517006"): "Ex-smoker",
+    (SNOMED, "449868002"): "Smokes tobacco daily",
+    (SNOMED, "428041000124106"): "Occasional tobacco smoker",
+    (SNOMED, "266919005"): "Never smoked tobacco",
+    (SNOMED, "221000119102"): "Never smoked any substance",
+
     # --- CVX: vaccines ------------------------------------------------------
     (CVX, "140"): "Influenza vaccine",
     (CVX, "150"): "Influenza vaccine",

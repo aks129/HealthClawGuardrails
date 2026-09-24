@@ -23,7 +23,7 @@ name: pr-agent
 #
 # It needs the ANTHROPIC_API_KEY repository secret. That secret is not set
 # today (#608), which is also why claude-pr-review.yml skips its review
-# step. Until it is set, the first step here exits neutrally and the job
+# job. Until it is set, the first step here exits neutrally and the job
 # reports success without reviewing anything; the step's warning says so
 # on every run, so the green is never mistaken for a review.
 
