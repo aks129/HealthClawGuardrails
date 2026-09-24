@@ -96,7 +96,7 @@ def _script(client, monkeypatch) -> str:
     r = client.get("/connect/demo-tenant")
     assert r.status_code == 200, r.status_code
     html = r.get_data(as_text=True)
-    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    scripts = re.findall(r"<script\b[^>]*>(.*?)</script\s*>", html, re.S | re.I)
     handler = [s for s in scripts if "stitch-status" in s]
     assert len(handler) == 1, "expected exactly one widget handler script"
     return handler[0]
