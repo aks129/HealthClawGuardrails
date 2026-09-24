@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from flask import g, has_app_context, jsonify, request, session
+from sqlalchemy.exc import SQLAlchemyError
 
 from models import db
 from r6 import audit as _audit_mod
@@ -260,13 +261,20 @@ class StepUpDenied(Exception):
     from inside `except Exception` in full_dispatch_request, so a
     BaseException subclass would bypass the errorhandler entirely and reach
     the WSGI server.
+
+    ``tenant_id`` and ``absent`` travel with the refusal so the errorhandler
+    can audit it (#648) without re-reading a request header: the tenant is
+    the one require_grant was handed, already through tenant_from_request.
     """
 
-    def __init__(self, reason: str, *, http_status: int, checked: bool = False):
+    def __init__(self, reason: str, *, http_status: int, checked: bool = False,
+                 tenant_id: str | None = None, absent: bool = False):
         super().__init__(reason)
         self.reason = reason
         self.http_status = http_status
         self.checked = checked
+        self.tenant_id = tenant_id
+        self.absent = absent
 
 
 _DENIED_ABSENT = 'Step-up token required'
@@ -514,7 +522,8 @@ def require_grant(
     status = absent_status if outcome.absent else rejected_status
     # The ONLY place in the repository that sets the checked flag. Pinned by
     # test_the_checked_flag_is_set_in_exactly_one_place.
-    raise StepUpDenied(outcome.reason, http_status=status, checked=True)
+    raise StepUpDenied(outcome.reason, http_status=status, checked=True,
+                       tenant_id=tenant.id, absent=outcome.absent)
 
 
 def has_grant(
@@ -642,11 +651,150 @@ def register_error_handlers(app) -> None:
     app.register_error_handler(TenantRejected, _render_tenant_rejected)
 
 
+#: Refusals that write NO audit row, each with the reason. Being on this list
+#: is a decision; tests/test_kernel_audits_refusals.py pins the keys, so a new
+#: exclusion is a two-file change a reviewer sees. "Every refusal is audited"
+#: is only true of the refusals this kernel RENDERS, and these are the ones
+#: it does not, or cannot attribute (#648, Astra's "name those exclusions").
+_UNAUDITED_REFUSALS = {
+    'has_grant':
+        'a predicate, not a refusal: the caller decides what None means, and '
+        'the rate limiter asks it on every request — auditing there would '
+        'write a row per anonymous hit',
+    'decide_grant':
+        "has_grant's reason: the caller renders its own answer and owns "
+        'whatever it records',
+    'unchecked StepUpDenied':
+        'not a decision this kernel made; it is re-raised as a 500 before '
+        'the audit is reached',
+    'validator exception':
+        '_evaluate propagates it, so there is no refusal — the request fails',
+    'TenantRejected':
+        'no validated tenant exists to attribute the row to, and recording '
+        'the malformed header would persist untrusted input as identity',
+    'direct validate_step_up_token sites':
+        'not the kernel; each audits (or not) at the site until it migrates',
+    'over the refusal-audit budget':
+        'bounded per client; the refusal is still rendered, and the one row '
+        'at the budget says the rest were not stored. check_rate_limit '
+        'answers a production Redis outage as "over", so while Redis is '
+        'down no refusal is audited — it cannot tell this module which',
+    'audit storage failure':
+        'the refusal is still rendered; the failure is logged by type name',
+}
+
+#: Rendered refusals one client may have audited per window, before the one
+#: budget row. A refusal is by definition unauthenticated, so mandatory audit
+#: is a storage write anyone can trigger; without a bound it is also an
+#: unbounded one. Reuses r6/rate_limit.check_rate_limit — Redis when
+#: REDIS_URL is set, the bounded in-memory store otherwise — rather than a
+#: second limiter. The request limiter alone does not bound it:
+#: smbp_blueprint and wearables_blueprint do not mount it.
+_REFUSAL_AUDIT_BUDGET = 120
+_REFUSAL_AUDIT_WINDOW_SECONDS = 60
+
+#: Fixed, code-owned wording. Nothing request-derived goes in the detail but
+#: the endpoint name (routing-derived, never the path, which carries
+#: caller-supplied ids) and the reason, already public-safe.
+_REFUSAL_DETAIL = 'step-up refused ({kind}) at {endpoint}: {reason}'
+_BUDGET_DETAIL = ('step-up refusal audit budget reached for this client; '
+                  'further refusals this window are logged, not stored')
+
+#: The refusal is audited as the operation it refused, so the $ingest-context
+#: row stays 'create' when that site migrates (#648 PR 2).
+_EVENT_TYPE_BY_METHOD = {
+    'GET': 'read', 'HEAD': 'read', 'POST': 'create', 'PUT': 'update',
+    'PATCH': 'update', 'DELETE': 'delete',
+}
+
+
+def _refusal_audit_allowance() -> str | None:
+    """'refusal', 'budget' (the one row at the limit), or None (over it).
+
+    Keyed by client, as the request limiter keys any request whose tenant
+    claim is unproven — and a refused step-up is unproven by definition.
+    Resolved by module attribute (§1.0); imported here because r6.rate_limit
+    imports this module.
+    """
+    from r6 import rate_limit as _rate_limit_mod
+    key = f'step-up-refusal:{_rate_limit_mod._client_ip()}'
+    allowed, remaining, _reset = _rate_limit_mod.check_rate_limit(
+        key, max_requests=_REFUSAL_AUDIT_BUDGET + 1,
+        window_seconds=_REFUSAL_AUDIT_WINDOW_SECONDS)
+    if not allowed:
+        return None
+    return 'budget' if remaining == 0 else 'refusal'
+
+
+def _audit_refusal(exc: StepUpDenied) -> None:
+    """Record exactly one PHI-free AuditEvent for a refusal being rendered.
+
+    Rolls back FIRST. The handler that raised may have staged work before
+    its gate; committing the audit row would commit that too, behind a
+    401. Teardown discarded it before this existed, so rolling back keeps
+    that and leaves the refusal row as the only thing this commit carries.
+
+    Never raises on a STORAGE failure (SQLAlchemyError). The fail-closed
+    state of a read is "no data", which is why a read that cannot be
+    audited propagates AuditWriteError (r6/audit.py:17-24, 112). The
+    fail-closed state of a refusal is the
+    refusal itself: turning it into a 500 would withhold nothing more, lose
+    the pinned wording, and tell a prober the audit store is down. So the
+    refusal is still rendered, the failure is logged by exception type only
+    (the record_audit_event idiom, r6/audit.py:99), and the transaction is
+    rolled back so no half-written row is left pending.
+    """
+    try:
+        db.session.rollback()
+        allowance = _refusal_audit_allowance()
+        if allowance is None:
+            # check_rate_limit returns the same answer for "over budget"
+            # and, in production, for "Redis unreachable", so the log says
+            # both rather than asserting the one it cannot know.
+            logger.warning('step-up refusal not audited: refusal-audit '
+                           'budget exhausted or limiter store unavailable')
+            return
+        if allowance == 'budget':
+            detail = _BUDGET_DETAIL
+        else:
+            detail = _REFUSAL_DETAIL.format(
+                kind='absent' if exc.absent else 'rejected',
+                endpoint=request.endpoint or 'unknown',
+                reason=exc.reason)
+        audit(
+            tenant=exc.tenant_id,
+            event_type=_EVENT_TYPE_BY_METHOD.get(request.method, 'read'),
+            outcome='failure',
+            detail=detail,
+        )
+        db.session.commit()
+    except SQLAlchemyError as audit_exc:
+        # Storage failure only. Anything else is a bug and propagates: the
+        # broad-except guard (tests/test_access_kernel.py) forbids swallowing
+        # around audit(), and a bug here should be as loud as anywhere else.
+        logger.error('step-up refusal audit write failed: %s',
+                     type(audit_exc).__name__)
+        try:
+            db.session.rollback()
+        except SQLAlchemyError:
+            pass  # the connection is gone; teardown discards the session
+
+
 def _render_step_up_denied(exc: StepUpDenied):
+    """Render a refusal require_grant decided, and audit it once (#648).
+
+    Every refusal rendered here writes one AuditEvent: outcome 'failure',
+    the tenant require_grant was handed, and a detail line naming the
+    endpoint and the public reason — no token, no path, no header. The
+    status and body are exactly what they were before the audit existed,
+    whatever the audit store does. _UNAUDITED_REFUSALS names what this does
+    not cover.
+    """
     if not exc.checked:
         # Not a decision this kernel made. Rendering it as a clean 401 would
         # make an unrelated bug look exactly like a working guard.
         raise exc
+    _audit_refusal(exc)
     return outcome_response('error', 'security', exc.reason,
                             status=exc.http_status)
 

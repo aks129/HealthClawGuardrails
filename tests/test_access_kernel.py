@@ -1165,15 +1165,15 @@ def _handler_app():
     return handler_app
 
 
-def test_a_checked_denial_renders_as_an_operation_outcome():
-    handler_app = _handler_app()
-
-    @handler_app.route('/denied')
+def test_a_checked_denial_renders_as_an_operation_outcome(app, tenant_id):
+    # The real app, not _handler_app(): a rendered refusal now writes its
+    # audit row (#648), which needs the database a bare Flask app lacks.
+    @app.route('/kernel/denied')
     def denied():
         raise StepUpDenied('Step-up token required', http_status=401,
-                           **{'checked': True})
+                           tenant_id=tenant_id, **{'checked': True})
 
-    response = handler_app.test_client().get('/denied')
+    response = app.test_client().get('/kernel/denied')
     assert response.status_code == 401
     body = response.get_json()
     assert body['resourceType'] == 'OperationOutcome'
