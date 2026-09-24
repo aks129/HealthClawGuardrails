@@ -107,7 +107,7 @@ This is a **vendor-neutral guardrail proxy** that sits between any AI agent and 
 - **PHI redaction** — Names truncated to initials, identifier values removed (system and type kept), addresses stripped, birth dates truncated to year
 - **Immutable audit trail** — Every read/write logged with tenant, agent, timestamp
 - **Step-up authorization** — HMAC-SHA256 tokens required for writes
-- **Human-in-the-loop** — real-world actions (calls, SMS, forms): `commit` only *submits*. Execution requires a **provably out-of-band** single-use approval bound to the action, which the agent's own toolchain cannot satisfy. Direct clinical FHIR writes answer HTTP 428 until an `X-Human-Confirmed` header is present, but the caller sets that header, so it is not a human gate: a known gap tracked in [#214](../../issues/214)
+- **Human-in-the-loop** — real-world actions (calls, SMS, forms): `commit` only *submits*. Execution requires a **provably out-of-band** single-use approval bound to the action, which the agent's own toolchain cannot satisfy. Direct clinical FHIR writes answer HTTP 428 until an `X-Human-Confirmed` header is present. The caller sets that header, so it is not a human gate: a known gap tracked in [#214](../../issues/214)
 - **Tenant isolation** — Every query scoped to tenant, cross-tenant access blocked
 - **Medical disclaimers** — Injected on all clinical resource reads
 - **Compiled Truth** — Current state + append-only evidence trail for every resource
