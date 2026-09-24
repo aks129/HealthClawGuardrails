@@ -15,9 +15,8 @@ now carries `records_added` — what the patient can reach — and the same
 DocumentReference and return the standard redacted read. These tests pin what
 that read hands over for a document with a patient's name planted in every
 free-text slot: metadata only (status, type code, date, author reference) and
-no attachment body. The attachment strip in r6/redaction.py keys on
-`contentType`, and an Attachment without one is pinned below as a known leak
-(strict xfail) — this PR may not touch r6/redaction.py.
+no attachment body — including an Attachment with no `contentType`, which
+leaked until #782 taught r6/redaction.py to recognise Attachments by shape.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from __future__ import annotations
 import base64
 import json
 
-import pytest
 
 from tests.test_careagents import FakeClient, _login, _make_direct_conn
 from tests.test_careagents import cfg as _cfg_fixture
@@ -326,11 +324,6 @@ def test_a_document_reaches_a_tool_as_metadata_only(
     assert doc["date"].startswith("2025-01-02")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN LEAK (#226): r6/redaction.py strips attachment data/url/title only "
-    "when the Attachment carries `contentType`, which FHIR makes optional. "
-    "Fixing the guard in r6/redaction.py turns this red: delete this marker "
-    "then."))
 def test_an_attachment_without_content_type_is_stripped_too(
         client, auth_headers, tenant_id):
     read, search = _store_and_read(client, auth_headers, tenant_id, {
