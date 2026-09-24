@@ -373,7 +373,10 @@ def test_no_new_package_mutates_without_auditing():
 #: 8 -> 7: r6/actions/review.py filters all four of its queries — the
 #: Questionnaire and Patient that a review draft is built from, and the
 #: clinical sweep populated into it (D10's shape, one hop downstream).
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 7
+#: 7 -> 6: r6/labs/routes.py filters all three reads behind $interpret — the
+#: stored fallback CareAgents' get_labs drives, the ?subject sweep, and the
+#: Patient whose sex picks a reference range.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 6
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the

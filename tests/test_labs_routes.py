@@ -172,3 +172,70 @@ def test_the_stored_fallback_is_tenant_scoped(
                     headers=tenant_headers, json={})
     summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
     assert summary["total"] == 1
+
+
+# --- a soft-deleted row is not a lab result --------------------------------
+#
+# A row with is_deleted=True is a tombstone. Each of the three reads behind
+# $interpret must skip it, or a result the patient deleted comes back in
+# answer to "what do my labs say?".
+
+def _tombstone(app, tenant_id, resource_type, rid):
+    from r6.models import R6Resource, db
+    with app.app_context():
+        row = R6Resource.query.filter_by(
+            tenant_id=tenant_id, resource_type=resource_type, id=rid).one()
+        row.is_deleted = True
+        db.session.commit()
+
+
+def test_the_stored_fallback_skips_a_deleted_observation(
+        app, client, tenant_headers, tenant_id):
+    """MUTATION: drop `is_deleted=False` from _stored_observations -> red."""
+    _stored_obs(app, tenant_id, "live-1", "2823-3", 4.2, "mmol/L")
+    _stored_obs(app, tenant_id, "gone-1", "2823-3", 7.0, "mmol/L")
+    _tombstone(app, tenant_id, "Observation", "gone-1")
+
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json={})
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 1
+    assert summary["critical"] == 0, (
+        "a deleted critical potassium was interpreted back to the patient")
+
+
+def test_the_subject_branch_skips_a_deleted_observation(
+        app, client, tenant_headers, tenant_id):
+    """MUTATION: drop `is_deleted=False` from the ?subject query -> red."""
+    _stored_obs(app, tenant_id, "live-2", "2823-3", 4.2, "mmol/L")
+    _stored_obs(app, tenant_id, "gone-2", "2823-3", 7.0, "mmol/L")
+    _tombstone(app, tenant_id, "Observation", "gone-2")
+
+    r = client.post("/r6/fhir/Observation/$interpret?subject=Patient/p1",
+                    headers=tenant_headers, json={})
+    summary = json.loads(_resp_param(r.get_json(), "summary")["valueString"])
+    assert summary["total"] == 1 and summary["critical"] == 0
+
+
+def test_a_deleted_patient_does_not_set_the_reference_range(
+        app, client, tenant_headers, tenant_id):
+    """Hemoglobin 12.5 g/dL is low for a male and in range when sex is
+    unknown. With the Patient deleted, sex is unknown.
+
+    MUTATION: drop `is_deleted=False` from _patient_for -> flag L -> red."""
+    from r6.models import R6Resource, db
+    with app.app_context():
+        db.session.add(R6Resource(
+            resource_type="Patient",
+            resource_json=json.dumps({"resourceType": "Patient", "id": "p1",
+                                      "gender": "male"}),
+            resource_id="p1", tenant_id=tenant_id))
+        db.session.commit()
+    _tombstone(app, tenant_id, "Patient", "p1")
+    _stored_obs(app, tenant_id, "hgb-1", "718-7", 12.5, "g/dL")
+
+    r = client.post("/r6/fhir/Observation/$interpret",
+                    headers=tenant_headers, json={})
+    entry = _resp_param(r.get_json(), "return")["resource"]["entry"][0]
+    flag = entry["resource"]["interpretation"][0]["coding"][0]["code"]
+    assert flag == "N", "a deleted Patient's sex still chose the range"
