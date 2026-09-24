@@ -150,7 +150,9 @@ def _report(sites, pin, what):
 #: No direct validator call is left in r6/routes.py.
 #: 3 -> 2 (#655): $extract asks decide_grant. Its two refusal sentences stay
 #: byte-identical; the missing-header one is still decided at the site.
-_STEP_UP_CALLSITES = 2
+#: 2 -> 1 (#655): the command centre's _authz_write asks decide_grant and
+#: keeps its JSON refusal, byte-identical, reason included.
+_STEP_UP_CALLSITES = 1
 
 
 def test_direct_step_up_validation_only_decreases():

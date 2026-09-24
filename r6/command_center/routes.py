@@ -44,8 +44,9 @@ from r6.command_center.models import (
     default_conversation_id,
 )
 from r6.command_center.agents import load_agents, load_agent_templates, get_agent
-from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
-                       public_step_up_reason, tenant_from_request)
+from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
+                       decide_grant, has_grant, public_step_up_reason,
+                       tenant_from_request)
 from r6.read_auth import TENANT_SESSION_KEY, authorize_tenant_read
 from r6.stepup import validate_step_up_token
 
@@ -311,6 +312,25 @@ def api_openclaw_sessions():
 # Write APIs — used by Telegram bot + any future channel to persist activity
 # ---------------------------------------------------------------------------
 
+def _padded_token_reason(raw: str) -> str | None:
+    """Today's refusal for a whitespace-padded step-up token, or None.
+
+    The kernel strips the token before validating it (#334), so it calls a
+    whitespace-only token absent and grants a padded valid one. This site
+    never stripped: the validator saw the raw header and refused both. #655
+    moves the site onto the kernel without changing its answers, so the two
+    sentences the validator gave are kept here, exactly: no dot means
+    "Malformed step-up token" (which covers whitespace-only), and a dot
+    means the signature never matches. Dropping this is a behaviour change
+    for its own PR.
+    """
+    if raw == raw.strip():
+        return None
+    if "." not in raw:
+        return public_step_up_reason("Malformed step-up token")
+    return public_step_up_reason("Invalid token signature")
+
+
 def _authz_write(tenant_id: str) -> tuple | None:
     """
     Allow a write to `tenant_id` if either:
@@ -322,18 +342,25 @@ def _authz_write(tenant_id: str) -> tuple | None:
     """
     step_up = request.headers.get("X-Step-Up-Token")
     if step_up:
-        valid, err = validate_step_up_token(step_up, tenant_id)
-        if valid:
-            return None
-        # `public_step_up_reason`, never `err` (#508). One of the eleven
-        # values err can take is 'Token tenant mismatch', which tells a caller
-        # holding a token they should not have that it is VALID and merely
-        # issued elsewhere — the distinction a prober is trying to draw. The
-        # other ten describe the caller's own token and are published
-        # verbatim, per the owner's 2026-08-10 ruling.
-        return jsonify({
-            "error": f"step-up token rejected: {public_step_up_reason(err)}"
-        }), 401
+        # #655: the kernel decides, and keeps the classified reason this
+        # site publishes. decide_grant's reason already went through
+        # public_step_up_reason, so 'Token tenant mismatch' still reaches
+        # the caller as the generic sentence (#508).
+        #
+        # The tenant is the id the caller handed this function (body or
+        # header on create, the task row on update), bound as given and NOT
+        # format-checked — as r6/agent_runs/routes.py:_tenant_authorized
+        # does. A malformed id was never a 400 here; it is a token that
+        # fails, or passes, its tenant binding, and it stays that.
+        reason = _padded_token_reason(step_up)
+        if reason is None:
+            decision = decide_grant(
+                scope=Scope.WRITE,
+                tenant=Tenant(id=tenant_id, source=TenantSource.DEFAULT))
+            if decision.granted:
+                return None
+            reason = decision.reason
+        return jsonify({"error": f"step-up token rejected: {reason}"}), 401
     if session.get(SESSION_KEY) == tenant_id:
         return None
     return jsonify({
