@@ -103,3 +103,45 @@ def test_an_accepted_ingest_is_audited(app, client, sample_bundle, monkeypatch):
     assert _audit_rows(app, tenant) > before, (
         'resources were written to the tenant record with no AuditEvent'
     )
+
+
+# ---------------------------------------------------------------------------
+# The wire contract, byte for byte (#648 PR 2)
+# ---------------------------------------------------------------------------
+
+#: The refusal a client sees, exactly. Owner ruling on #648: the move to the
+#: kernel keeps this body byte-identical for every refusal kind — absent,
+#: under-scoped, garbage and another tenant's token all answer the same
+#: sentence, so the kernel's classified reasons do not reach this route.
+_REFUSAL_BYTES = (
+    b'{"issue":[{"code":"security","diagnostics":"Bundle ingestion requires '
+    b'a tenant-bound write token","severity":"error"}],'
+    b'"resourceType":"OperationOutcome"}\n'
+)
+
+
+def _refusal_tokens(tenant):
+    return {
+        'absent': '',
+        'read-scoped': generate_step_up_token(tenant, scope='read'),
+        'garbage': generate_step_up_token(tenant) + 'x',
+        'other-tenant': generate_step_up_token('some-other-tenant'),
+    }
+
+
+def test_every_refusal_answers_the_same_bytes(client, sample_bundle,
+                                              monkeypatch):
+    """MUTATION: change the sentence at the route -> red; drop the
+    site-specific message so the kernel's reason renders -> red."""
+    monkeypatch.setenv('READ_AUTH_ENABLED', 'true')
+    tenant = 'byte-pinned-tenant'
+    for kind, token in _refusal_tokens(tenant).items():
+        refused = client.post(
+            '/r6/fhir/Bundle/$ingest-context',
+            json=sample_bundle,
+            headers={'X-Tenant-Id': tenant, 'X-Step-Up-Token': token},
+        )
+        assert refused.status_code == 401, kind
+        assert refused.mimetype == 'application/json', kind
+        assert refused.get_data() == _REFUSAL_BYTES, (
+            kind, refused.get_data())
