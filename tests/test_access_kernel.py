@@ -890,7 +890,11 @@ def _holder_of(spans, lineno):
 #: decide_grant (#655) shares has_grant's hazard and its guards. Empty in the
 #: kernel PR; each of the three reason-publishing sites adds itself in the
 #: one-site PR that adopts it.
-_DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset()
+_DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset({
+    # $extract's commit-mode gate. It still answers "Invalid step-up token"
+    # for every rejected token; publishing `.reason` is a later PR.
+    'r6/sdc/routes.py:register_sdc_routes.sdc_extract',
+})
 
 
 def _has_grant_calls(name='has_grant'):

@@ -26,7 +26,8 @@ import logging
 
 from flask import request, jsonify
 
-from r6.access import TenantSource, tenant_from_request, unredacted_response
+from r6.access import (Scope, TenantSource, decide_grant, tenant_from_request,
+                       unredacted_response)
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
@@ -40,8 +41,7 @@ def register_sdc_routes(blueprint, deps):
     """Register SDC routes on `blueprint`.
 
     deps: dict providing helpers from r6/routes.py —
-      'operation_outcome', 'authenticate_tenant_read', 'validate_step_up_token',
-      'validator'.
+      'operation_outcome', 'authenticate_tenant_read', 'validator'.
 
     Note: `operation_outcome` already returns a Flask Response (it calls
     jsonify internally), and `authenticate_tenant_read` returns
@@ -50,7 +50,6 @@ def register_sdc_routes(blueprint, deps):
     """
     operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
-    validate_step_up_token = deps["validate_step_up_token"]
     validator = deps["validator"]
 
     @blueprint.route("/Questionnaire/$populate", methods=["POST"])
@@ -105,7 +104,8 @@ def register_sdc_routes(blueprint, deps):
     @blueprint.route("/QuestionnaireResponse/<qr_id>/$extract",
                      methods=["POST"])
     def sdc_extract(qr_id=None):
-        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+        tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+        tenant_id = tenant.id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -123,15 +123,20 @@ def register_sdc_routes(blueprint, deps):
         # Step-up gate (writes) fires before any resolution/extraction work
         # so a commit-mode caller without a token is rejected up front.
         # dry_run is a read-shaped preview and skips the gate.
+        #
+        # The missing-header test reads the RAW header on purpose. The kernel
+        # strips the token, so it calls a whitespace-only one absent; this
+        # site has always answered that "Invalid step-up token", and only a
+        # missing or empty header gets the sentence naming dryRun=true.
+        # Branching on `.absent` would move the whitespace case across
+        # (tests/test_sdc_extract_step_up_pins.py).
         if not dry_run:
-            step_up = request.headers.get("X-Step-Up-Token")
-            if not step_up:
+            if not request.headers.get("X-Step-Up-Token"):
                 return operation_outcome(
                     "error", "security",
                     "$extract requires X-Step-Up-Token (use dryRun=true to "
                     "preview without committing)"), 401
-            valid, _err = validate_step_up_token(step_up, tenant_id)
-            if not valid:
+            if not decide_grant(scope=Scope.WRITE, tenant=tenant).granted:
                 return operation_outcome(
                     "error", "security", "Invalid step-up token"), 401
 
