@@ -206,11 +206,16 @@ def _approve_context(action):
 
 def _resolve_questionnaire(action, tenant_id):
     """Resolve the action's questionnaire. A stored Questionnaire wins; the
-    canonical intake form is the built-in fallback for 'healthclaw-intake'."""
+    canonical intake form is the built-in fallback for 'healthclaw-intake'.
+
+    Every query in this module reads live rows only (is_deleted=False): a
+    tombstoned Questionnaire, Patient or clinical row must not drive a draft
+    a person is asked to approve — the sdc/routes.py shape, ruling D10."""
     qref = (action.payload.get('questionnaire') or '').strip()
     ident = qref.split('/')[-1].split('|')[0]
     row = R6Resource.query.filter_by(
-        resource_type='Questionnaire', id=ident, tenant_id=tenant_id).first()
+        resource_type='Questionnaire', id=ident, tenant_id=tenant_id,
+        is_deleted=False).first()
     if row is not None:
         return row.to_fhir_json()
     if ident == 'healthclaw-intake' or not ident:
@@ -225,10 +230,12 @@ def _load_patient(tenant_id, subject_ref=None):
         ident = (_referenced_patient_id(subject_ref)
                  or subject_ref.split('/')[-1])
         row = R6Resource.query.filter_by(
-            resource_type='Patient', id=ident, tenant_id=tenant_id).first()
+            resource_type='Patient', id=ident, tenant_id=tenant_id,
+            is_deleted=False).first()
         return row.to_fhir_json() if row else None
     row = R6Resource.query.filter_by(
-        resource_type='Patient', tenant_id=tenant_id).first()
+        resource_type='Patient', tenant_id=tenant_id,
+        is_deleted=False).first()
     return row.to_fhir_json() if row else None
 
 
@@ -255,7 +262,8 @@ def _gather_content(tenant_id, patient, subject_ref=None):
     unanchored = False
     for resource_type, subject_field in _CONTENT_TYPES:
         for row in R6Resource.query.filter_by(
-                resource_type=resource_type, tenant_id=tenant_id).all():
+                resource_type=resource_type, tenant_id=tenant_id,
+                is_deleted=False).all():
             resource = row.to_fhir_json()
             reference = (resource.get(subject_field) or {}).get('reference')
             if _referenced_patient_id(reference) == patient_id:
