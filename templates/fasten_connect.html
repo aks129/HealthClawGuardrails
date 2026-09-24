@@ -356,14 +356,24 @@
   function _showAgentAccess(access) {
     // One-time handoff of the read-scoped connect token. Shown once, never
     // stored client-side beyond this page render, never sent anywhere else.
+    //
+    // It told the tester to paste these into Claude, Perplexity or any MCP
+    // agent. The hosted MCP endpoint refuses every credential but the
+    // operator's (#290), so each hosted assistant it named turned the tester
+    // away with no next step (#600). The card stays — the token is mint-once and would be lost —
+    // but says who will refuse it before showing it.
     var el = document.createElement('div');
     el.className = 'stitch-card';
     el.style.marginTop = '18px';
     el.innerHTML =
       '<h3 style="margin:0 0 10px">Connect your AI assistant</h3>' +
-      '<p style="margin:0 0 10px">Copy these two values into your assistant ' +
-      '(Claude, Perplexity, or any MCP agent) so it can read <strong>your</strong> ' +
-      'records. The token is read-only — it can never change anything — ' +
+      '<p style="margin:0 0 10px"><strong>Before you copy anything:</strong> ' +
+      'assistants you use in a browser or app — Claude.ai, ChatGPT, ' +
+      'Perplexity — cannot connect to HealthClaw during the beta, and will ' +
+      'refuse these values. They work only with a HealthClaw MCP server you ' +
+      'run on your own computer.</p>' +
+      '<p style="margin:0 0 10px">These two values let that assistant read ' +
+      '<strong>your</strong> records. The token is read-only — it can never change anything — ' +
       'and expires in 30 days. Treat it like a password and save it now: ' +
       'it is shown only once.</p>' +
       '<p style="margin:0 0 6px"><strong>Tenant:</strong> <code></code></p>' +
@@ -417,44 +427,54 @@
                 : (data.detail && data.detail.org_connection_id) ? data.detail
                 : data;
 
+    // The embed posts JSON.stringify(event) and names it in `event_type`
+    // (read out of embed.connect.fastenhealth.com's main bundle), so the
+    // `data.type` lookup above never matches a real failure. Failures are
+    // read off a parsed copy; `data` stays as it was for completion.
+    var evt = data;
+    if (typeof evt === 'string') {
+      try { evt = JSON.parse(evt); } catch (e) { evt = {}; }
+    }
+    var evtType = (evt && evt.event_type) || type;
+
     // Fasten Stitch widget completion (standard + TEFCA mode variants)
     if (type === 'widget.complete' || type === 'complete' ||
         type === 'tefca.complete' || type === 'connection.complete' ||
         type === 'authorization.complete' || oid) {
       backdrop.classList.remove('open');
       await _registerConnection(payload);
-    } else if (type === 'widget.config_error') {
-      // The REAL event name. This branch used to test 'widget.error' and
-      // 'error', neither of which Fasten emits — read out of the shipped
-      // bundle (cdn.fastenhealth.com/connect/v4), whose only widget events
-      // are widget.close, widget.complete and widget.config_error. So every
-      // configuration refusal fell through both branches and produced
-      // nothing from us: the patient saw Fasten's own opaque "Oops!
-      // Something went wrong" inside the iframe and this page stayed
-      // silent, still showing the modal (#326).
-      //
-      // fasten_unauthorized_client on "retrieving vault profile" — the
-      // reported failure — arrives here. We cannot say WHY (the entitlement
-      // lives in Fasten's account, not in anything we can read), so this
-      // says what we know and what to do, and never guesses at a cause.
+    } else if (evtType === 'widget.config_error' ||
+               evtType === 'patient.connection_failed') {
+      // widget.config_error is the widget refusing our configuration (#326)
+      // and carries only {api_mode, event_type}. patient.connection_failed
+      // carries the error code and Fasten's request_id in `data` — the id
+      // FAS-864 asked for — beside error_description and our external id.
+      // Only the code and the request id leave this handler, shown or sent,
+      // and only when token-shaped: the payload is not a published contract.
+      // We cannot say WHY it failed (that lives in Fasten's account), so the
+      // message says what we know and what to do, never a guessed cause.
+      // Close the modal: #stitch-status sits under the backdrop, so the id
+      // is unreadable while the widget is still covering the page.
       backdrop.classList.remove('open');
-      var detail = data.message || (data.data && data.data.message) ||
-                   data.error_type || '';
+      var failed = (evt.data && typeof evt.data === 'object') ? evt.data : evt;
+      var token = /^[A-Za-z0-9._:-]{1,128}$/;
+      var code = token.test(failed.error || failed.error_type || '')
+                 ? (failed.error || failed.error_type) : null;
+      var requestId = token.test(failed.request_id || '')
+                      ? failed.request_id : null;
+      var report = {event_type: evtType};
+      if (code) report.error = code;
+      if (requestId) report.request_id = requestId;
 
-      // Send the payload to the server BEFORE showing anything. Until this
-      // existed, the only record of a refusal was the console.log below, so
-      // when Fasten asked for "a request id so we can correlate the error in
-      // our logs" (FAS-864) we had nothing: two testers had hit
-      // fasten_unauthorized_client and all we could offer was a description.
-      //
-      // The whole object goes, untruncated. The console line is sliced to 500
-      // characters and the vendor's correlation id may sit past that.
+      // Record it BEFORE showing anything, so the reference we show exists.
       var reference = null;
       try {
         var diag = await fetch('/r6/fhir/internal/connect-diagnostic', {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({payload: data})
+          credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json',
+                    'X-Tenant-Id': {{ tenant_id | tojson }}},
+          body: JSON.stringify({payload: report})
         });
         if (diag.ok) reference = (await diag.json()).reference;
       } catch (e) {
@@ -462,14 +482,17 @@
         // patient sees. They still get the message below.
       }
 
+      var quote = [];
+      if (requestId) quote.push('request id ' + requestId);
+      if (reference) quote.push('reference ' + reference);
       showStatus(
-        'The records widget refused this configuration' +
-        (detail ? ' (' + detail + ')' : '') +
-        '. Identity verification is unavailable right now — this is a ' +
-        'problem on our side, not with your records. Please tell us you ' +
-        'saw this so we can chase it' +
-        (reference ? ', and quote reference ' + reference : '') +
-        '.', 'error');
+        'Connecting your records did not finish' +
+        (code ? ' (' + code + ')' : '') +
+        '. The problem is in the connection, not with your records. ' +
+        'Please email ' +
+        'support@healthclaw.io' +
+        (quote.length ? ' and quote ' + quote.join(' and ') : '') +
+        ' so we can chase it.', 'error');
     } else if (type === 'widget.close') {
       // Dismissal is not failure and must not be reported as one.
       backdrop.classList.remove('open');

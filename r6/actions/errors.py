@@ -2,7 +2,12 @@
 API responses and tests both reference these constants (never string literals)."""
 
 PROVIDER_NOT_CONFIGURED = 'provider_not_configured'
-CONTACT_NOT_ALLOWLISTED = 'contact_not_allowlisted'
+# A contact allowlist (`contact_not_allowlisted`) was reserved here and never
+# enforced; it is removed rather than left to read as a control (#216,
+# human-gate spec 6.2). It needs a store of contacts the person attested,
+# which does not exist.
+# Per-tenant, per-kind, per-UTC-day cap on calls and texts, checked at
+# confirm before any provider request (#216, human-gate spec 6.1).
 DAILY_CAP_REACHED = 'daily_cap_reached'
 PAYLOAD_INVALID = 'payload_invalid'
 PROVIDER_ERROR = 'provider_error'
@@ -15,7 +20,7 @@ STALE_SOURCE_DATA = 'stale_source_data'
 APPROVED_PAYLOAD_MISMATCH = 'approved_payload_mismatch'
 
 ALL = (
-    PROVIDER_NOT_CONFIGURED, CONTACT_NOT_ALLOWLISTED, DAILY_CAP_REACHED,
+    PROVIDER_NOT_CONFIGURED, DAILY_CAP_REACHED,
     PAYLOAD_INVALID, PROVIDER_ERROR, EXTRACTION_AMBIGUOUS,
     EMERGENCY_INDICATED, STALE_SOURCE_DATA, APPROVED_PAYLOAD_MISMATCH,
 )

@@ -50,6 +50,11 @@ def app():
         # SELECT during the test) blocks its DROP TABLE indefinitely.
         db.session.remove()
         db.drop_all()
+        # Close the pool. Each test builds a new app and engine, and a Flask
+        # app is a reference cycle, so an undisposed engine keeps its pooled
+        # Postgres connections until a full GC — enough of them and the
+        # server refuses new clients (max_connections=100) mid-suite (#232).
+        db.engine.dispose()
 
 
 @pytest.fixture

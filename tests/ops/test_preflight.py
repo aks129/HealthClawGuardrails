@@ -187,17 +187,24 @@ class TestExecutorEnv:
 # ------------------------------------------------------------ database
 
 class TestDatabase:
-    def test_sqlite_outside_production_is_green_with_dialect(
+    def test_outside_production_is_green_with_dialect(
             self, app, monkeypatch):
+        from models import db
         monkeypatch.delenv('FLASK_ENV', raising=False)
         r = checks.check_database()
         _assert_shape(r)
         assert r['name'] == 'database'
         assert r['ok'] is True
         assert r['fatal'] is True
-        assert 'sqlite' in r['detail']
+        # Whatever the suite runs on — sqlite locally, postgresql in CI's
+        # Postgres lane (#232) — the detail names that dialect.
+        assert db.engine.dialect.name in r['detail']
 
     def test_sqlite_in_production_is_red(self, app, monkeypatch):
+        from models import db
+        # The branch under test is "the dialect is sqlite", not the driver the
+        # suite happens to run on; pin it so the Postgres lane covers it too.
+        monkeypatch.setattr(db.engine.dialect, 'name', 'sqlite')
         monkeypatch.setenv('FLASK_ENV', 'production')
         r = checks.check_database()
         assert r['ok'] is False
