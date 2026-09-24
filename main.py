@@ -104,7 +104,10 @@ def seed_demo_tenant(flask_app: Flask, tenant_id: str | None = None) -> int:
         "DEMO_TENANT_ID", "desktop-demo"
     )
     with flask_app.app_context():
-        existing = R6Resource.query.filter_by(tenant_id=selected_tenant).first()
+        # Live rows only, matching seed_demo_data's own per-resource check: a
+        # tenant holding nothing but tombstones is empty, not already seeded.
+        existing = R6Resource.query.filter_by(
+            tenant_id=selected_tenant, is_deleted=False).first()
         if existing is not None:
             logger.info(
                 "Demo tenant '%s' already has data, skipping auto-seed",
