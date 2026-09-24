@@ -38,6 +38,13 @@ def test_no_stale_tool_counts_in_site_copy():
         for claimed in re.findall(r"(\d+) MCP tools", html):
             assert int(claimed) == count, (
                 f"{name} claims '{claimed} MCP tools' but the manifest has {count}")
+    # The plugin manifests describe the same server to Claude Code users; they
+    # said 16 and 14 tools while the manifest had 29.
+    for rel in (".claude-plugin/marketplace.json", ".claude-plugin/plugin.json"):
+        text = (ROOT / rel).read_text()
+        for claimed in re.findall(r"(\d+) MCP tools", text):
+            assert int(claimed) == count, (
+                f"{rel} claims '{claimed} MCP tools' but the manifest has {count}")
 
 
 def test_base_nav_badge_matches_released_version():
@@ -62,6 +69,14 @@ def test_readme_release_badge_matches_version():
     readme = (ROOT / "README.md").read_text()
     assert f"release-v{_version()}-" in readme, (
         "README release badge is stale vs pyproject version")
+
+
+def test_mcp_registry_server_json_version_matches_release():
+    # server.json is what the MCP registry publishes; it sat at 1.8.0 through
+    # two releases because nothing compared it.
+    server = json.loads((ROOT / "server.json").read_text())
+    assert server["version"] == _version(), (
+        f"server.json version {server['version']} != pyproject {_version()}")
 
 
 # --- numbers the site states about itself ----------------------------------
