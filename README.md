@@ -48,8 +48,8 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.10.0, with 1,490+ Python and 170 Node tests across 29 MCP tools.
-**[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and web/Telegram/iMessage.
+**At a glance:** v1.10.0, with 4,000+ Python and 200+ Node tests across 29 MCP tools.
+**[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and chat on the web (and iMessage where it's offered; Telegram is not open in the beta).
 Two rails run end to end — real-world actions behind a provably out-of-band gate, and forms (`$populate` → human review → provenance PDF).
 Standards: FHIR R4 US Core v9 and R6 v6.0.0-ballot3, HL7 SDC forms, NQF 0018.
 Operations: lab interpreter (`$interpret`), care-gaps reminders (`$care-gaps`) with an embedded MCP-App view, and ChatGPT-connector `search`/`fetch`.
