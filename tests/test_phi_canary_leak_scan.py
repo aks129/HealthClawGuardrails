@@ -47,17 +47,14 @@ excused, only on that surface:
 
 ## What it found (2026-09-24)
 
-One leak. `$compiled-truth`, the call behind `fhir_compiled_truth`, returns
-the current resource redacted but builds its evidence timeline from the raw
-Provenance rows. Four fields arrive verbatim: `agent[].who.display`,
-`reason[0].coding[0].display`, and the curatr-correction extension's
-`change_summary` and `patient_intent`. `GET /Provenance/<id>` strips all
-four, which the `fhir_read` row here confirms. The two `display` fields are
-upstream displays, which CLAUDE.md forbids passing through. The two
-curatr-correction strings are written by the curatr flow and shown on the
-compiled-truth MCP App on purpose, so whether they are contract-kept or
-redacted needs a ruling; this file does not decide it. Each is a strict
-xfail row at the end of the file.
+One leak, since fixed. `$compiled-truth`, the call behind
+`fhir_compiled_truth`, built its evidence timeline from the raw Provenance
+rows, so `agent[].who.display`, `reason[0].coding[0].display` and the
+curatr-correction extension's `change_summary` and `patient_intent` arrived
+verbatim while `GET /Provenance/<id>` stripped all four. The timeline now
+reads each row through `apply_redaction`, and its row below gates all four
+like any other read surface. Why the curatr strings are stripped rather than
+kept: tests/test_compiled_truth_timeline_redacted.py.
 
 ## Not covered
 
@@ -660,16 +657,6 @@ POPULATE_KEEPS = frozenset({FAMILY, GIVEN, PHONE, EMAIL, ADDR_LINE,
 INTAKE_STRIPS = frozenset({NARRATIVE, SSN, OBS_NOTE, COND_NOTE, MED_NOTE,
                            ALLERGY_NOTE})
 
-#: NOT a contract: a leak this scan found, pinned by the strict xfail at the
-#: end of the file. `$compiled-truth` builds its timeline from the stored
-#: Provenance rows without redacting them (r6/routes.py `compiled_truth`,
-#: the loop over `prov_rows`), copying `agent[].who.display`,
-#: `reason[0].coding[0].display` and the curatr-correction extension's
-#: `change_summary` / `patient_intent` strings into the response. Excused on
-#: the main row only so the rest of that surface stays gated meanwhile.
-COMPILED_TRUTH_TIMELINE_LEAK = frozenset({PROV_WHO, PROV_REASON_DISPLAY,
-                                          PROV_SUMMARY, PROV_INTENT})
-
 #: `apply_patient_controlled_redaction` keeps the top-level birthDate
 #: verbatim (#617 docstring); nothing else.
 DEIDENTIFIED_KEEPS = frozenset({DOB})
@@ -678,10 +665,8 @@ READ_ROWS = [
     (name, driver, frozenset())
     for name, (kind, driver) in SURFACES.items()
     if kind == READ and name not in ("questionnaire_populate",
-                                     "shl_generate", "fhir_compiled_truth")
+                                     "shl_generate")
 ] + [
-    ("fhir_compiled_truth", _fhir_compiled_truth,
-     COMPILED_TRUTH_TIMELINE_LEAK),
     ("questionnaire_populate", _questionnaire_populate, POPULATE_KEEPS),
     ("shl_generate[deidentified]", _share_bundle("deidentified"),
      DEIDENTIFIED_KEEPS),
@@ -737,26 +722,3 @@ def test_no_canary_leaves_a_read_surface(scan, surface, driver, keeps):
     assert not leaks, (
         f"{surface} returned canary PHI the redaction contract does not "
         f"keep there: {leaks}")
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "LEAK: $compiled-truth (MCP tool fhir_compiled_truth) copies the stored "
-    "Provenance's agent.who.display, reason.coding.display and "
-    "curatr-correction change_summary/patient_intent into its timeline "
-    "verbatim; the timeline is built from raw rows, never apply_redaction. "
-    "GET /Provenance/<id> strips all four. Found by this scan; not fixed "
-    "in this PR."))
-@pytest.mark.parametrize("field, canary", [
-    ("Provenance.agent.who.display", PROV_WHO),
-    ("Provenance.reason.coding.display", PROV_REASON_DISPLAY),
-    ("curatr-correction change_summary", PROV_SUMMARY),
-    ("curatr-correction patient_intent", PROV_INTENT),
-])
-def test_compiled_truth_timeline_carries_no_upstream_free_text(
-        scan, field, canary):
-    """One row per field, so fixing one goes red under strict xfail and
-    forces its canary out of COMPILED_TRUTH_TIMELINE_LEAK, where the main
-    row then gates it. A single row would stay xfailed through a partial
-    fix and the excuse would never shrink."""
-    (_, body), _ = _fhir_compiled_truth(scan)
-    assert canary not in body, f"{field} reached the timeline"
