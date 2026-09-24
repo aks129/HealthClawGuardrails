@@ -45,12 +45,29 @@ excused, only on that surface:
   `deidentified` profile keeps top-level `birthDate` verbatim
   (`apply_patient_controlled_redaction`, #617) and nothing else.
 
+## What it found (2026-09-24)
+
+One leak. `$compiled-truth`, the call behind `fhir_compiled_truth`, returns
+the current resource redacted but builds its evidence timeline from the raw
+Provenance rows. Four fields arrive verbatim: `agent[].who.display`,
+`reason[0].coding[0].display`, and the curatr-correction extension's
+`change_summary` and `patient_intent`. `GET /Provenance/<id>` strips all
+four, which the `fhir_read` row here confirms. The two `display` fields are
+upstream displays, which CLAUDE.md forbids passing through. The two
+curatr-correction strings are written by the curatr flow and shown on the
+compiled-truth MCP App on purpose, so whether they are contract-kept or
+redacted needs a ruling; this file does not decide it. Each is a strict
+xfail row at the end of the file.
+
 ## Not covered
 
 - The TypeScript layer. `search` and `fetch` build titles with
   `summarizeResource`, and several tools add an `_mcp_summary`. Both are
   built from the Flask body scanned here, so they can only repeat what that
   body holds, but no MCP process runs in this file.
+- The four `mcp-apps/*` pages the tools link as `_meta.ui.resourceUri`
+  are HTML shells that render the tenant id and fetch through the
+  endpoints scanned here.
 - `action_status` reads an action row, which exists only after a write-tier
   tool (`action_propose`, `rx_transfer_request`) created it. The rx-transfer
   script is assembled from the patient's medications, so it is a real read
@@ -448,6 +465,7 @@ def _fhir_permission_evaluate(s):
         json={"subject": f"Patient/{PATIENT_ID}", "action": "read",
               "resource": "Observation/canary-obs-chol"}),
         "Permission/$evaluate")
+    assert '"decision"' in body, body[:300]
     return [("Permission/$evaluate", body)]
 
 
@@ -455,21 +473,28 @@ def _fhir_subscription_topics(s):
     # An allowlisted unredacted exit (tests/test_unredacted_exits.py) for
     # server metadata. No canary is seeded into a SubscriptionTopic; this
     # only checks that patient data does not arrive by it.
-    return [("SubscriptionTopic/$list", _ok(s["client"].get(
-        "/r6/fhir/SubscriptionTopic/$list", headers=s["headers"]),
-        "$list"))]
+    body = _ok(s["client"].get("/r6/fhir/SubscriptionTopic/$list",
+                               headers=s["headers"]), "$list")
+    assert '"total"' in body, body[:300]
+    return [("SubscriptionTopic/$list", body)]
 
 
 def _wearables_sync_status(s):
-    return [("wearables/sync-status", _ok(s["client"].get(
-        f"/wearables/sync-status?tenant_id={TENANT}", headers=s["headers"]),
-        "sync-status"))]
+    response = s["client"].get(f"/wearables/sync-status?tenant_id={TENANT}",
+                               headers=s["headers"])
+    body = _ok(response, "sync-status")
+    assert response.get_json()["tenant_id"] == TENANT, body[:300]
+    assert "connections" in response.get_json(), body[:300]
+    return [("wearables/sync-status", body)]
 
 
 def _sources_check(s):
-    body = _ok(s["client"].get(
+    response = s["client"].get(
         f"/command-center/api/sources-summary?tenant={TENANT}",
-        headers=s["headers"]), "sources-summary")
+        headers=s["headers"])
+    body = _ok(response, "sources-summary")
+    # It counts the tenant's rows, so a count of zero is the wrong tenant.
+    assert response.get_json()["total_records"] > 0, body[:300]
     return [("sources-summary", body)]
 
 
@@ -715,14 +740,23 @@ def test_no_canary_leaves_a_read_surface(scan, surface, driver, keeps):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "LEAK: $compiled-truth (MCP tool fhir_compiled_truth) returns the stored "
+    "LEAK: $compiled-truth (MCP tool fhir_compiled_truth) copies the stored "
     "Provenance's agent.who.display, reason.coding.display and "
-    "curatr-correction change_summary/patient_intent verbatim in its "
-    "timeline; the timeline is built from raw rows, never apply_redaction. "
-    "Found by this scan; not fixed in this PR."))
-def test_compiled_truth_timeline_carries_no_upstream_free_text(scan):
-    """When the timeline is redacted this goes green, strict xfail turns
-    that into a failure, and COMPILED_TRUTH_TIMELINE_LEAK above is deleted
-    with it so the main row gates these canaries too."""
+    "curatr-correction change_summary/patient_intent into its timeline "
+    "verbatim; the timeline is built from raw rows, never apply_redaction. "
+    "GET /Provenance/<id> strips all four. Found by this scan; not fixed "
+    "in this PR."))
+@pytest.mark.parametrize("field, canary", [
+    ("Provenance.agent.who.display", PROV_WHO),
+    ("Provenance.reason.coding.display", PROV_REASON_DISPLAY),
+    ("curatr-correction change_summary", PROV_SUMMARY),
+    ("curatr-correction patient_intent", PROV_INTENT),
+])
+def test_compiled_truth_timeline_carries_no_upstream_free_text(
+        scan, field, canary):
+    """One row per field, so fixing one goes red under strict xfail and
+    forces its canary out of COMPILED_TRUTH_TIMELINE_LEAK, where the main
+    row then gates it. A single row would stay xfailed through a partial
+    fix and the excuse would never shrink."""
     (_, body), _ = _fhir_compiled_truth(scan)
-    assert canaries_in(body) & COMPILED_TRUTH_TIMELINE_LEAK == set()
+    assert canary not in body, f"{field} reached the timeline"
