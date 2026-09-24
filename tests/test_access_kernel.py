@@ -894,6 +894,9 @@ _DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset({
     # $extract's commit-mode gate. It still answers "Invalid step-up token"
     # for every rejected token; publishing `.reason` is a later PR.
     'r6/sdc/routes.py:register_sdc_routes.sdc_extract',
+    # #655: session-or-token write gate; answers its own JSON refusal with
+    # the classified reason, byte-identical to before the move.
+    'r6/command_center/routes.py:_authz_write',
 })
 
 
@@ -1804,14 +1807,11 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # and the remaining 20 raw reads in it are pinned by
                      # tests/test_ratchets.py::_RAW_TENANT_READS.
                      'r6/routes.py',
-                     # #508, and NOT a migration slice. This blueprint imports
-                     # `public_step_up_reason` and nothing else: its two
-                     # step-up checks still call the validator directly and
-                     # are still counted by _STEP_UP_CALLSITES. What moved is
-                     # only which sentence a refusal is allowed to say, which
-                     # is a ruling rather than a gate. Migrating these two is
-                     # slice 17, and it stays blocked on their JSON wire
-                     # shape.
+                     # #508 first imported `public_step_up_reason` here, a
+                     # ruling rather than a gate. #655 moves the step-up
+                     # checks one PR each: _authz_write asks decide_grant;
+                     # the dashboard-link mint still calls the validator
+                     # directly and is still counted by _STEP_UP_CALLSITES.
                      'r6/command_center/routes.py',
                      # Council ruling D10, and NOT a migration slice: the
                      # ruling directs $populate to read its tenant through
