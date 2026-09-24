@@ -559,8 +559,8 @@ def has_grant(
     `require_grant(...)` would raise StepUpDenied.
 
     WHY THIS EXISTS. Four step-up call sites were not authorization gates
-    and could not become one (two have since adopted it; the sites named
-    here are as they stood when it was written):
+    and could not become one (all four have since moved to the kernel; the
+    sites named here are as they stood when it was written):
 
       r6/rate_limit.py:161      picks a bucket key, inside a try/except that
                                 must never fail a request (adopted, kernel
@@ -570,14 +570,23 @@ def has_grant(
                                 kernel slice 19)
       r6/agent_runs/routes.py:63  the same shape, returning bool (adopted,
                                 kernel slice 16)
-      r6/sdc/routes.py:104      refuses with a message naming `dryRun=true`,
-                                which the kernel's uniform outcome cannot say
+      r6/sdc/routes.py:104      refuses with a message naming `dryRun=true`
+                                (adopted decide_grant, #655; see below)
 
     Migrating them to require_grant would make a rate limiter fail requests
     and would rewrite three wire contracts. They kept calling
     validate_step_up_token directly instead, which is the tuple this module
     exists to delete. This is the missing half of the kernel, not a relaxation
     of it.
+
+    The $extract reason no longer holds: require_grant takes a
+    ``denied_message`` (#648). The site asks decide_grant, not require_grant,
+    because require_grant audits every refusal it renders and this site
+    writes no row for one today, so the move stays a move. It answers two
+    sentences. A missing or empty header gets the dryRun one, decided at the
+    site on the raw header. Every other refusal gets "Invalid step-up token",
+    a whitespace-only header included, which the kernel strips and calls
+    absent.
 
     Returns the Grant, or None. Not a bool: the Grant carries the tenant it
     was proved for, so a caller scopes its next query to grant.tenant_id

@@ -46,7 +46,7 @@ from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
                        require_grant, tenant_from_request)
-from r6.stepup import validate_step_up_token, generate_step_up_token
+from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
     authorize_tenant_read,
@@ -3708,7 +3708,6 @@ from r6.sdc.routes import register_sdc_routes  # noqa: E402
 register_sdc_routes(r6_blueprint, {
     "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
-    "validate_step_up_token": validate_step_up_token,
     "validator": validator,
 })
 

@@ -148,7 +148,9 @@ def _report(sites, pin, what):
 #: 4 -> 3 (#648 PR 2): $ingest-context through require_grant, behind the same
 #: READ_AUTH_ENABLED flag, keeping its own refusal sentence (denied_message).
 #: No direct validator call is left in r6/routes.py.
-_STEP_UP_CALLSITES = 3
+#: 3 -> 2 (#655): $extract asks decide_grant. Its two refusal sentences stay
+#: byte-identical; the missing-header one is still decided at the site.
+_STEP_UP_CALLSITES = 2
 
 
 def test_direct_step_up_validation_only_decreases():
@@ -437,7 +439,9 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: and the proxy write redaction came back in (#380).
 #: 3761 -> 3750 (#648 PR 2): $ingest-context's hand-rolled gate and its
 #: audit call replaced by one require_grant.
-_GOD_MODULE_LINES = 3750
+#: 3750 -> 3749 (#655): the validator no longer rides into the SDC routes
+#: as a dependency, so neither the entry nor its import is left.
+_GOD_MODULE_LINES = 3749
 
 
 def test_the_god_module_only_shrinks():
