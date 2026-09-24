@@ -72,8 +72,11 @@ headers selected. This page previously claimed otherwise.
 
 - `X-Tenant-Id` header selects a tenant.
 - Non-public tenants need a tenant-bound token in `X-Step-Up-Token`. Writes
-  always require step-up; clinical writes additionally require an explicit
-  human confirmation (HTTP 428 otherwise).
+  always require step-up. Direct clinical FHIR writes also answer HTTP 428
+  until an `X-Human-Confirmed` header is present, but the caller sets that
+  header, so it is not a human gate (known gap,
+  [#214](https://github.com/aks129/HealthClawGuardrails/issues/214)). The
+  human gate is the action rail's out-of-band approval.
 - Bring-your-own FHIR server: `X-FHIR-Server-URL` (+ `X-FHIR-Access-Token`,
   `X-Patient-ID`) and the guardrail stack proxies it per-request
   (SHARP-on-MCP).

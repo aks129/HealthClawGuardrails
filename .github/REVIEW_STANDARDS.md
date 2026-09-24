@@ -17,14 +17,17 @@ review bot reads THIS file, so keep it current.)
 3. **Every FHIR resource access emits an AuditEvent** (reads and writes).
 4. **Writes require step-up auth; clinical writes require human-in-the-loop.**
    New write paths must call `validate_step_up_token` with its default
-   `require_scope='write'`. Two mechanisms exist — flag any confusion between
-   them:
-   - **Action rail:** approval is a *separate endpoint* consuming a single-use
-     step-up credential. Never accept a header as approval here.
-   - **Direct clinical FHIR writes:** currently HTTP 428 without the
-     client-supplied `X-Human-Confirmed` header — spoofable by any agent
-     holding a write token. Known gap (#214). **Reject new write paths that
-     rely on this header**; route them through the action rail instead.
+   `require_scope='write'`. There is **one** human gate:
+   - **The action rail's out-of-band approval is the mechanism.** `commit`
+     only submits the action; a separate approval endpoint consumes a
+     single-use credential bound to that action. This is how calls, texts and
+     forms get a human step. Never accept a header as approval.
+   - **`X-Human-Confirmed` is not a human gate.** Direct clinical FHIR writes
+     answer HTTP 428 until that header is present, but the caller sets it
+     about itself, so any agent holding a write token passes it. It is a
+     known gap tracked in #214, not a control. **Reject new write paths that
+     rely on this header**, and reject any text that describes it as human
+     confirmation. Route new write paths through the action rail.
 5. **`validate_step_up_token` returns `(bool, str)` — always destructure.**
    Coercing the tuple to a boolean is a silent auth bypass.
 6. **Tenant isolation:** every `R6Resource` (and sibling-table) query filters
