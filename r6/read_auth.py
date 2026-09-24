@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from flask import request, session
+from flask import jsonify, request, session
 
 # Env-only predicates live in runtime_config, at the bottom of the import
 # graph. They were here, and r6.oauth reached through r6.routes' re-export of
@@ -93,3 +93,33 @@ def authorize_tenant_read(
     if bearer and _oauth_authorizes(bearer, tenant_id):
         return tenant_id
     return None
+
+
+def authenticate_tenant_read(tenant_id):
+    """Validate read credentials for `tenant_id`.
+
+    Shared by the GET before_request hook and POST read-shaped operations
+    (e.g. Questionnaire/$populate). Returns None when access is allowed,
+    or an (OperationOutcome, status) tuple to abort with.
+
+    Mirrors the gate semantics: public tenants and the disabled flag pass;
+    otherwise a tenant-bound step-up token OR a SMART bearer is required.
+
+    The OperationOutcome is built inline rather than through
+    r6.access.outcome_response: r6.access imports this module, so reaching
+    back would be a cycle.
+    """
+    if authorize_tenant_read(tenant_id) is not None:
+        return None
+    # Do NOT leak whether the tenant exists or why the token failed.
+    return jsonify({
+        'resourceType': 'OperationOutcome',
+        'issue': [
+            {
+                'severity': 'error',
+                'code': 'security',
+                'diagnostics': (f"Read access to tenant '{tenant_id}' "
+                                "requires authentication"),
+            }
+        ]
+    }), 401

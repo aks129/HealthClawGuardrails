@@ -20,6 +20,7 @@ from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
 from r6.smbp.report import build_report, render_html, render_pdf
 from r6.body_guard import json_body_within_depth
+from r6.read_auth import authenticate_tenant_read
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,7 @@ def enroll():
     tenant_id = tenant.id
     # enroll is a WRITE guarded by the tenant header alone (see the matrix
     # row), so this parse is reachable with no credential. No gate to move
-    # above it; the depth bound is the fix (#312). Lazy import to keep the
-    # r6.routes <-> r6.smbp import graph acyclic, as the report handler does.
+    # above it; the depth bound is the fix (#312).
     body, too_deep = json_body_within_depth()
     if too_deep:
         return jsonify(_oo("error", "invalid",
@@ -135,7 +135,6 @@ def report(session_id):
     if tenant is None:
         return jsonify(_oo("error", "security", "X-Tenant-Id required")), 400
     tenant_id = tenant.id
-    from r6.routes import authenticate_tenant_read
     auth_err = authenticate_tenant_read(tenant_id)
     if auth_err is not None:
         return auth_err[0], auth_err[1]
@@ -190,11 +189,8 @@ def _persist_document_reference(tenant_id, session, size):
 
 # --- Reminder scheduler (GET /r6/smbp/reminders/due — #61) ---
 # Registered onto smbp_blueprint here so main.py's app.register_blueprint picks
-# it up automatically. authenticate_tenant_read is imported lazily inside the
-# deps to keep the r6.routes <-> r6.smbp import graph acyclic, matching the
-# pattern the report handler above uses.
+# it up automatically.
 from r6.smbp.scheduler_routes import register_scheduler_routes  # noqa: E402
-from r6.routes import authenticate_tenant_read  # noqa: E402
 
 register_scheduler_routes(smbp_blueprint, {
     "operation_outcome": _oo,

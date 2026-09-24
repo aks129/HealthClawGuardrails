@@ -49,7 +49,7 @@ from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
-    authorize_tenant_read,
+    authenticate_tenant_read,
     read_auth_enabled as _read_auth_enabled,
     read_auth_required as _read_auth_required,
 )
@@ -183,25 +183,6 @@ def enforce_tenant_id():
             'error', 'invalid', 'X-Tenant-Id must match [a-zA-Z0-9_-]{1,64}'), 400
     # The path id, only once the tenant is known to be well-formed (#279).
     return refuse_malformed_resource_id()
-
-
-def authenticate_tenant_read(tenant_id):
-    """Validate read credentials for `tenant_id`.
-
-    Shared by the GET before_request hook and POST read-shaped operations
-    (e.g. Questionnaire/$populate). Returns None when access is allowed,
-    or an (OperationOutcome, status) tuple to abort with.
-
-    Mirrors the gate semantics: public tenants and the disabled flag pass;
-    otherwise a tenant-bound step-up token OR a SMART bearer is required.
-    """
-    if authorize_tenant_read(tenant_id) is not None:
-        return None
-    # Do NOT leak whether the tenant exists or why the token failed.
-    return _operation_outcome(
-        'error', 'security',
-        f"Read access to tenant '{tenant_id}' requires authentication",
-    ), 401
 
 
 @r6_blueprint.before_request

@@ -42,7 +42,7 @@ from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
 from r6.audit import add_audit_event, record_audit_event
 from r6.rate_limit import rate_limit_middleware
-from r6.read_auth import authorize_tenant_read
+from r6.read_auth import authenticate_tenant_read, authorize_tenant_read
 from r6.stepup import generate_step_up_token
 from r6.telegram_push import notify_tenant
 from r6.body_guard import json_body_within_depth
@@ -376,8 +376,7 @@ def propose_action():
     # propose has no step-up gate at all — the tenant header is the whole
     # credential — so this parse is reachable by anyone who can name a
     # tenant. There is no auth gate to move above it; bounding the depth is
-    # the fix (#312). Lazy import, like authenticate_tenant_read below, to
-    # keep the r6.routes <-> r6.actions import graph acyclic.
+    # the fix (#312).
     body, too_deep = json_body_within_depth()
     if too_deep:
         return _error(400, 'request body nesting is too deep')
@@ -915,13 +914,6 @@ def issue_action_approval_token(action_id):
 _LIST_CAP = 50
 
 
-def _read_auth_error(tenant_id):
-    """The one import of the god module's read gate for both action reads;
-    lazy, to keep r6.routes <-> r6.actions acyclic (ratchet: importers)."""
-    from r6.routes import authenticate_tenant_read
-    return authenticate_tenant_read(tenant_id)
-
-
 @actions_blueprint.route('', methods=['GET'])
 def list_pending_actions():
     """The tenant's proposals awaiting a person's answer (#215): the one
@@ -933,7 +925,7 @@ def list_pending_actions():
     if tenant is None:
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
-    auth_err = _read_auth_error(tenant_id)
+    auth_err = authenticate_tenant_read(tenant_id)
     if auth_err is not None:
         return auth_err
     status = request.args.get('status', 'awaiting_confirmation')
@@ -957,7 +949,7 @@ def action_status(action_id):
 
     # Read-auth: for non-public tenants (when the flag is on) require a
     # tenant-bound token/bearer, same posture as FHIR + SMBP reads.
-    auth_err = _read_auth_error(tenant_id)
+    auth_err = authenticate_tenant_read(tenant_id)
     if auth_err is not None:
         return auth_err
 
