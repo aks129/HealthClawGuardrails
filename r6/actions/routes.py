@@ -299,8 +299,11 @@ def propose_rx_transfer():
     name_filter = body.get('medication_names')
 
     from r6.models import R6Resource
+    # Live rows only: a medication the patient deleted must not be drafted
+    # into a call a human is then asked to approve (#805's shape).
     rows = R6Resource.query.filter_by(
-        resource_type='MedicationRequest', tenant_id=tenant_id).all()
+        resource_type='MedicationRequest', tenant_id=tenant_id,
+        is_deleted=False).all()
     meds = [r.to_fhir_json() for r in rows]
     if isinstance(name_filter, list) and name_filter:
         wanted = {n.lower() for n in name_filter if isinstance(n, str)}

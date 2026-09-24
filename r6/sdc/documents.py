@@ -76,11 +76,13 @@ def get_document_pdf_bytes(tenant_id, docref_id):
     """Load the DocumentReference `docref_id` under `tenant_id` and decode
     its embedded PDF bytes back out of content[0].attachment.data.
 
-    Returns None if the DocumentReference doesn't exist for that tenant, or
-    has no embedded attachment data.
+    Returns None if the DocumentReference doesn't exist for that tenant, is
+    soft-deleted, or has no embedded attachment data. A signed link minted
+    before the delete must not keep serving the PDF until it expires.
     """
     row = R6Resource.query.filter_by(resource_type="DocumentReference",
-                                     id=docref_id, tenant_id=tenant_id).first()
+                                     id=docref_id, tenant_id=tenant_id,
+                                     is_deleted=False).first()
     if row is None:
         return None
     resource = row.to_fhir_json()

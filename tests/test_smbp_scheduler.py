@@ -7,7 +7,7 @@ never a phone number).
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from r6.models import R6Resource, db
@@ -163,3 +163,30 @@ def test_reminders_due_read_auth_for_nonpublic_tenant(client, app, monkeypatch):
                       headers={"X-Tenant-Id": "private-smbp"})
     assert resp.status_code == 401
     assert resp.get_json()["issue"][0]["code"] == "security"
+
+
+def test_a_deleted_reading_does_not_make_the_patient_up_to_date(
+        client, app, tenant_id, auth_headers, tenant_headers):
+    """The patient's only live reading is months old, so a reminder is due.
+    A deleted reading from an hour ago must not count as the latest one and
+    silence it.
+
+    MUTATION: drop `is_deleted=False` from reminders_due's query -> red."""
+    ref = "Patient/deleted-recent"
+    _seed(client, app, tenant_id, auth_headers, ref,
+          [(140, 90, "2026-01-01T08:00:00Z")])
+    recent = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    with app.app_context():
+        row = R6Resource(resource_type="Observation",
+                         resource_json=json.dumps(
+                             build_bp_observation(ref, 128, 78, recent)),
+                         tenant_id=tenant_id)
+        row.is_deleted = True
+        db.session.add(row)
+        db.session.commit()
+
+    resp = client.get("/r6/smbp/reminders/due", headers=tenant_headers)
+    assert resp.status_code == 200
+    refs = [item["patient_ref"] for item in resp.get_json()["reminders"]]
+    assert ref in refs, "a deleted reading silenced a due reminder"

@@ -234,7 +234,7 @@ Release notes: [docs/releases/2.0.0.md](releases/2.0.0.md).
 
 | Item | Where it stands on 2026-09-24 |
 |---|---|
-| All ratchets at zero | Six live pins, table below |
+| All ratchets at zero | Six ratchets, four still live pins, table below |
 | Workstream C, contract ingest | Not started: no `to_canonical()` pipeline yet |
 | D4 URL-mode elicitation, which closes #214 | Not built. Direct FHIR writes still gate on `X-Human-Confirmed` |
 | MCP OAuth connector on | Built behind `MCP_OAUTH_ENABLED`, off in production (#568) |
@@ -247,7 +247,7 @@ The live pins, read from `tests/test_ratchets.py`:
 | Post-commit audit call sites | `_POST_COMMIT_AUDIT_CALLSITES` | 88 | 86 | 0 |
 | Raw tenant-header reads | `_RAW_TENANT_READS` | 55 | 24 | 0 |
 | Direct step-up validation | tripwire since #655 (was `_STEP_UP_CALLSITES`) | 20 | 0 | 0 |
-| Soft-delete-blind files | `_FILES_QUERYING_WITHOUT_SOFT_DELETE` | 12 | 8 | 0 |
+| Soft-delete-blind files | tripwire since 2026-09-24 (was `_FILES_QUERYING_WITHOUT_SOFT_DELETE`) | 12 | 0 | 0 |
 | Imports out of `routes.py` | `_ROUTES_IMPORTERS` | 4 | 4 | 1 |
 | `routes.py` lines, a ceiling | `_GOD_MODULE_LINES` | 3,930 | 3,750 | shrinks |
 
