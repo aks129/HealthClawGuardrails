@@ -175,11 +175,12 @@ async def _reply(update: Update, text: str, agent_id: str,
 # MCP HTTP bridge helpers
 # ---------------------------------------------------------------------------
 
-def _rpc(tool: str, **params) -> dict:
+def _rpc(tool: str, *, headers: dict | None = None, **params) -> dict:
     """
     Call an MCP tool via the HTTP bridge (POST /mcp/rpc).
 
-    Uses JSON-RPC 2.0 with method=tools/call.
+    Uses JSON-RPC 2.0 with method=tools/call. `headers` are extra request
+    headers the bridge forwards to Flask (X-Step-Up-Token for a write).
     Returns the result value on success, raises on HTTP error.
     """
     payload = {
@@ -191,7 +192,7 @@ def _rpc(tool: str, **params) -> dict:
             'arguments': {'tenant_id': TENANT_ID, **params},
         },
     }
-    headers = {}
+    headers = dict(headers or {})
     if MCP_AUTH_TOKEN:
         headers['Authorization'] = f'Bearer {MCP_AUTH_TOKEN}'
     resp = requests.post(_RPC_URL, json=payload, headers=headers, timeout=20)
@@ -717,13 +718,39 @@ async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     action_id = result.get('id')
+    # A draft nobody submits never reaches "Waiting for you", which lists
+    # only awaiting_confirmation. There is no model here to call
+    # action_commit, so the bot submits what the person just asked for.
+    # Submitting is not approving: that stays on the review page.
+    try:
+        committed = _rpc(
+            'action_commit',
+            action_id=action_id,
+            headers={'X-Step-Up-Token': _get_step_up_token(),
+                     'X-Tenant-Id': TENANT_ID},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error('curatr_fix commit error: %s', exc)
+        committed = {'error': 'the request could not be sent'}
+    if committed.get('error') or committed.get('status') != 'awaiting_confirmation':
+        await _reply(
+            update,
+            f'Proposed: {description}\n\n'
+            f'Action `{action_id}` was not submitted for your approval '
+            f'({committed.get("error") or committed.get("status")}). '
+            f'Nothing has changed. Run /curatr\\_fix again to retry.',
+            agent_id,
+            parse_mode='Markdown',
+        )
+        return
+
     state['pending_action'] = action_id
     await _reply(
         update,
         f'Proposed: {description}\n\n'
-        f'Action `{action_id}`. Nothing has changed yet. Submit it and '
-        f'approve it on your CareAgents review page; only that approval '
-        f'carries the fix out. /approve explains where.',
+        f'Action `{action_id}`. Nothing has changed yet. Open CareAgents: '
+        f'it is under "Waiting for you" on your agent. Approve or decline '
+        f'it there; only that approval carries the fix out.',
         agent_id,
         parse_mode='Markdown',
     )
@@ -738,9 +765,9 @@ async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _reply(
         update,
         f'{which}Approvals do not happen in this chat: a message here cannot '
-        f'prove you read what will change. Open the request on your '
-        f'CareAgents review page ({DASHBOARD_BASE_URL}) and approve or '
-        f'decline it there.',
+        f'prove you read what will change. Open CareAgents: the request '
+        f'is under "Waiting for you" on your agent. Approve or decline it '
+        f'there.',
         agent_id,
         parse_mode='Markdown',
     )
