@@ -1109,7 +1109,7 @@ class Profile(Enum):
 
     STANDARD = 'standard'                      # r6/redaction.py:22 + add_disclaimer
     PATIENT_CONTROLLED = 'patient-controlled'  # r6/redaction.py:180
-    INTAKE = 'intake'                          # r6/routes.py:3318 _intake_strip
+    INTAKE = 'intake'                          # r6/routes.py _intake_strip
 
 
 _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
@@ -1117,17 +1117,25 @@ _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn',
 
 
 def _intake_profile(resource):
-    """Intake profile: identified for clinic check-in (name/DOB/address/telecom
-    preserved) but SSN-class identifiers and clinician free-text never ship.
+    """Intake profile: identified for clinic check-in, so a Patient's name,
+    birthDate, address and telecom ship verbatim. Everything else goes
+    through apply_redaction (upstream `display`/`CodeableConcept.text` and
+    free text stripped, then relabelled by code from r6/terminology.py), and
+    top-level note, narrative, DiagnosticReport.conclusion and SSN-class
+    identifiers are removed (#282, owner ruling).
 
-    Byte-for-byte the behavior of r6/routes.py:_intake_strip, which slice 14
-    deletes when $share-bundle adopts fhir_response. Until then the two are
-    pinned equal by test_intake_profile_matches_the_shipped_intake_strip, so
-    the copy cannot drift while it waits.
+    The same behavior as r6/routes.py:_intake_strip, which slice 14 deletes
+    when $share-bundle adopts fhir_response. Until then the two are pinned
+    equal by test_intake_profile_matches_the_shipped_intake_strip, so the
+    copy cannot drift while it waits.
     """
-    res = resource
-    res.pop('note', None)
-    res.pop('text', None)
+    res = _redaction_mod.apply_redaction(resource)
+    if resource.get('resourceType') == 'Patient':
+        for key in ('name', 'birthDate', 'address', 'telecom'):
+            if key in resource:
+                res[key] = resource[key]
+    for key in ('note', 'text', 'conclusion'):
+        res.pop(key, None)
     idents = res.get('identifier')
     if isinstance(idents, list):
         kept = [i for i in idents
@@ -1190,6 +1198,7 @@ _UNREDACTED_EXITS: frozenset[str] = frozenset({
     # populated slice by slice; each entry names its reason in the test
     'r6.subscription_topics',   # SubscriptionTopic is server metadata (routes.py:1671)
     'r6.audit_search',          # AuditEventRecord is PHI-free by construction
+    'r6.sdc_populate',          # content redacted before population (#282)
 })
 
 

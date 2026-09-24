@@ -3307,19 +3307,19 @@ def mcp_app_wearables():
 
 # --- $share-bundle Export (SMART Health Link feed) ---
 
-def _intake_strip(res):
-    """Intake profile: identified for clinic check-in (name/DOB/address/telecom
-    preserved) but SSN-class identifiers and clinician free-text never ship."""
-    res.pop('note', None)
-    res.pop('text', None)
+def _intake_strip(original):
+    """Intake: Patient name/birthDate/address/telecom verbatim; all else
+    apply_redaction (strip, then relabel by code); no SSN or free text (#282)."""
+    res = apply_redaction(original)
+    if original.get('resourceType') == 'Patient':
+        res.update({k: original[k] for k in ('name', 'birthDate', 'address', 'telecom') if k in original})
+    for key in ('note', 'text', 'conclusion'):
+        res.pop(key, None)
     _SSN_SYSTEMS = ('http://hl7.org/fhir/sid/us-ssn', 'urn:oid:2.16.840.1.113883.4.1')
-    idents = res.get('identifier')
-    if isinstance(idents, list):
-        kept = [i for i in idents if not (isinstance(i, dict) and i.get('system') in _SSN_SYSTEMS)]
-        if kept:
-            res['identifier'] = kept
-        else:
-            res.pop('identifier', None)
+    if isinstance(res.get('identifier'), list):
+        res['identifier'] = [i for i in res['identifier'] if not (isinstance(i, dict) and i.get('system') in _SSN_SYSTEMS)]
+    if res.get('identifier') == []:
+        res.pop('identifier')
     return res
 
 
@@ -3330,11 +3330,11 @@ def share_bundle():
     generation.
 
     Profiles:
-        intake (default) — identified; name/DOB/address/insurance preserved;
-                           SSN-class identifiers (http://hl7.org/fhir/sid/us-ssn
-                           and urn:oid:2.16.840.1.113883.4.1), narrative text
-                           (text), and free-text notes (note) stripped; meta.tag
-                           stamped intake-identified.
+        intake (default) — identified; Patient name/birthDate/address/telecom
+                           verbatim, everything else apply_redaction (upstream
+                           display/text stripped, relabelled by code); SSN-class
+                           identifiers, text, note and conclusion removed;
+                           meta.tag stamped intake-identified (#282).
         deidentified    — apply_patient_controlled_redaction; strips name/
                           telecom/address/notes, preserves birthDate and clinical
                           codes, injects healthclaw canonical identifier; stamps
@@ -3443,7 +3443,7 @@ def share_bundle():
             )
             resource = apply_patient_controlled_redaction(fhir_json, redact_pid)
         else:
-            # intake profile: strip SSN-class identifiers and free-text, then
+            # intake profile: identity fields kept, the rest redacted, then
             # stamp meta.tag so receivers know this is an identified share.
             resource = _intake_strip(fhir_json)
             meta = resource.setdefault('meta', {})

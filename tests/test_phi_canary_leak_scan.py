@@ -39,9 +39,12 @@ excused, only on that surface:
   `identifier.value` are withheld there, and are scanned.
 - `shl_generate` defaults to the `intake` profile of `$share-bundle`, an
   identified export the patient sends to a clinic
-  (`r6/routes.py::_intake_strip`; `tests/test_share_bundle.py`, which pins
-  that the name survives). It strips only top-level `note`, the narrative
-  and SSN-class identifiers, so those are the canaries scanned there. The
+  (`r6/routes.py::_intake_strip`; `tests/test_share_bundle.py`). It keeps
+  the Patient's `name`, `birthDate`, `address` and `telecom` verbatim and
+  runs everything else through `apply_redaction` (#282, owner ruling), so
+  only those canaries are excused there. Its row asks for every type with a
+  patient reference, not the route's default set, so `conclusion`, the
+  attachments and the Encounter canaries are on the wire to be scanned. The
   `deidentified` profile keeps top-level `birthDate` verbatim
   (`apply_patient_controlled_redaction`, #617) and nothing else.
 
@@ -584,13 +587,25 @@ def _questionnaire_populate(s):
     return [("$populate", body)]
 
 
+#: Every seeded type that references the patient, so the patient filter keeps
+#: it. The route's default set has no DiagnosticReport, DocumentReference or
+#: Encounter; without asking for them, their canaries would never be on the
+#: wire and the row would pass for that reason alone.
+SHARE_TYPES = ["Patient", "Observation", "Condition", "MedicationRequest",
+               "AllergyIntolerance", "DiagnosticReport", "DocumentReference",
+               "Coverage", "Immunization", "Encounter"]
+
+
 def _share_bundle(profile):
     def driver(s):
         body = _ok(s["client"].post(
             "/r6/fhir/$share-bundle", headers=s["headers"],
-            json={"profile": profile, "patient_id": PATIENT_ID}),
+            json={"profile": profile, "patient_id": PATIENT_ID,
+                  "resource_types": SHARE_TYPES}),
             f"$share-bundle {profile}")
-        assert "canary-obs-chol" in body, body[:300]
+        ids = {e["resource"]["id"] for e in json.loads(body)["entry"]}
+        expected = {rid for rtype, rid in RESOURCES if rtype in SHARE_TYPES}
+        assert ids == expected, sorted(expected - ids)
         return [(f"$share-bundle profile={profile}", body)]
     return driver
 
@@ -650,12 +665,15 @@ SURFACES = {
 POPULATE_KEEPS = frozenset({FAMILY, GIVEN, PHONE, EMAIL, ADDR_LINE,
                             ADDR_CITY, ADDR_POSTAL, DOB})
 
-#: What `_intake_strip` removes: top-level `note`, the narrative and
-#: SSN-class identifiers. The intake share is identified by design
-#: (r6/routes.py `share_bundle` docstring; tests/test_share_bundle.py), so
-#: every other canary may arrive, and these must not.
-INTAKE_STRIPS = frozenset({NARRATIVE, SSN, OBS_NOTE, COND_NOTE, MED_NOTE,
-                           ALLERGY_NOTE})
+#: The intake share is identified by design: the Patient's name, birthDate,
+#: address and telecom ship verbatim, and nothing else (#282, owner ruling;
+#: r6/routes.py `_intake_strip`). `name.text` and `address.text` are part of
+#: the HumanName and Address kept whole. Every other canary must be absent:
+#: displays, `CodeableConcept.text`, notes, `conclusion`, the MRN, member
+#: numbers and `Patient.contact`.
+INTAKE_KEEPS = frozenset({FAMILY, GIVEN, NAME_TEXT, DOB, PHONE, EMAIL,
+                          ADDR_LINE, ADDR_CITY, ADDR_DISTRICT, ADDR_POSTAL,
+                          ADDR_TEXT})
 
 #: `apply_patient_controlled_redaction` keeps the top-level birthDate
 #: verbatim (#617 docstring); nothing else.
@@ -670,8 +688,7 @@ READ_ROWS = [
     ("questionnaire_populate", _questionnaire_populate, POPULATE_KEEPS),
     ("shl_generate[deidentified]", _share_bundle("deidentified"),
      DEIDENTIFIED_KEEPS),
-    ("shl_generate[intake]", _share_bundle("intake"),
-     CANARIES - INTAKE_STRIPS),
+    ("shl_generate[intake]", _share_bundle("intake"), INTAKE_KEEPS),
 ]
 
 
