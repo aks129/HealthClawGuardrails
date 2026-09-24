@@ -7,6 +7,10 @@ starts.
 
 ## 0. The premise: 2.0 is a ratchet, not a rewrite
 
+> **Amended 2026-09-24:** 2.0 is now the synthetic-beta release, and the
+> ratchets below carry on as 2.x. §5 has the new definition and today's
+> numbers. This section is kept as written.
+
 The research did not find a wrong architecture. It found a right
 architecture that nothing *enforces*: four jobs (store, PEP, contract
 ingest, thin heads) that all exist and none of which is the only path.
@@ -209,6 +213,49 @@ Why this order and not another:
   not on enthusiasm.
 
 ## 5. Definition of done for 2.0
+
+**Amended 2026-09-24.** The owner ruled that 2.0 is the synthetic-beta
+release, cut from this week's `main`. The refactor ratchets continue as 2.x
+releases. The original definition stays below, marked superseded.
+
+2.0 is done when:
+
+1. The guardrails are on by default: redaction, audit, step-up,
+   action-rail approval and tenant isolation.
+2. Grade A conformance holds (`tests/test_guardrail_conformance.py`).
+3. The docs and the site claim only what is true on `main`.
+4. The deployed stack runs the released commit.
+   `scripts/prod_watch.py` and `scripts/beta_acceptance.py` verify it
+   live, not from fakes.
+
+Release notes: [docs/releases/2.0.0.md](releases/2.0.0.md).
+
+### Moved to 2.x
+
+| Item | Where it stands on 2026-09-24 |
+|---|---|
+| All ratchets at zero | Six live pins, table below |
+| Workstream C, contract ingest | Not started: no `to_canonical()` pipeline yet |
+| D4 URL-mode elicitation, which closes #214 | Not built. Direct FHIR writes still gate on `X-Human-Confirmed` |
+| MCP OAuth connector on | Built behind `MCP_OAUTH_ENABLED`, off in production (#568) |
+| Curatr fix rail on | Built behind `CURATR_FIX_RAIL_ENABLED`, dark (#413) |
+
+The live pins, read from `tests/test_ratchets.py`:
+
+| Ratchet | Pin | 2026-08-06 | 2026-09-24 | Target |
+|---|---|---|---|---|
+| Post-commit audit call sites | `_POST_COMMIT_AUDIT_CALLSITES` | 88 | 86 | 0 |
+| Raw tenant-header reads | `_RAW_TENANT_READS` | 55 | 24 | 0 |
+| Direct step-up validation | `_STEP_UP_CALLSITES` | 20 | 3 | 0 |
+| Soft-delete-blind files | `_FILES_QUERYING_WITHOUT_SOFT_DELETE` | 12 | 8 | 0 |
+| Imports out of `routes.py` | `_ROUTES_IMPORTERS` | 4 | 4 | 1 |
+| `routes.py` lines, a ceiling | `_GOD_MODULE_LINES` | 3,930 | 3,750 | shrinks |
+
+Two of the original eight have no live pin. Step-up sites without a nonce
+wait on A6: `consume_nonce` still defaults to `False`. The "nothing read as
+an answer" count reached 0 in August.
+
+### Superseded 2026-09-24: the original definition
 
 1. All eight ratchets read zero and are tripwires (increments = red CI).
 2. Grade A conformance held on every merge in between (it gates CI

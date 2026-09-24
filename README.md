@@ -12,7 +12,7 @@
 <br/>
 
 <!-- Project -->
-[![Release](https://img.shields.io/badge/release-v1.10.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
+[![Release](https://img.shields.io/badge/release-v2.0.0-f97316?style=flat-square)](https://github.com/aks129/HealthClawGuardrails/releases)
 [![License](https://img.shields.io/badge/license-MIT-2dd4bf?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/aks129/HealthClawGuardrails/ci.yml?branch=main&style=flat-square&label=CI&logo=github)](https://github.com/aks129/HealthClawGuardrails/actions/workflows/ci.yml)
 [![Code size](https://img.shields.io/github/languages/code-size/aks129/HealthClawGuardrails?style=flat-square&color=0ea5e9)](https://github.com/aks129/HealthClawGuardrails)
@@ -48,7 +48,7 @@
 
 **This is a community effort.** It's most useful when implementers, clinicians, and standards folks poke holes in it. Issues, PRs, and "you got the SDC extraction wrong" critiques are all welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
-**At a glance:** v1.10.0, with 4,000+ Python and 200+ Node tests across 29 MCP tools.
+**At a glance:** v2.0.0, with 4,000+ Python and 200+ Node tests across 29 MCP tools.
 **[CareAgents](https://careagents.cloud)** is the hosted consumer app: passkey sign-in, advisors, and chat on the web. iMessage works where it's offered; Telegram is not open in the beta.
 Two rails run end to end — real-world actions behind a provably out-of-band gate, and forms (`$populate` → human review → provenance PDF).
 Standards: FHIR R4 US Core v9 and R6 v6.0.0-ballot3, HL7 SDC forms, NQF 0018.
@@ -90,7 +90,7 @@ Full notes live in **[Releases](https://github.com/aks129/HealthClawGuardrails/r
 
 | Version | Highlights |
 | --- | --- |
-| **v1.10.0** | **Runs in front of a real FHIR server.** The proxy now authenticates to an upstream FHIR server with its own client credential, so an agent never holds one — with a runnable [Aidbox example](examples/aidbox-healthclaw-guardrails/) that stands the guardrails in front of Aidbox and asserts each property rather than narrating it · **access kernel** — `r6.access` becomes the one tenant reader, step-up gate, audit call and FHIR exit, adopted blueprint by blueprint · **security**: a caller-supplied seed bundle takes the ingest gate, not the mint gate (an unauthenticated write path, found and closed) · **MCP**: an expired session returns 404, so a client re-initializes instead of failing · **demo data**: multi-year synthetic blood-pressure history and a server-rendered trend chart, with home and clinic readings modelled distinctly · a [defect catalogue](docs/) wired into the PR gate, and drift guards that replay the published example's own claims against the running app |
+| **v2.0.0** | **The synthetic-beta release** ([notes](docs/releases/2.0.0.md)): guardrails on by default, Grade A held, and the docs claim only what is true on `main`. What is *not* in 2.0 is listed there: the #214 header gate, the MCP OAuth connector (off), the Curatr fix rail (dark), invite-only real records · **action rail**: the approval binds a digest of the payload the person saw, every kind has an approve page, and a decline is recorded as one · **redaction sweep**: identifier values removed, write responses redacted, surviving free text stripped · **Runs in front of a real FHIR server.** The proxy now authenticates to an upstream FHIR server with its own client credential, so an agent never holds one — with a runnable [Aidbox example](examples/aidbox-healthclaw-guardrails/) that stands the guardrails in front of Aidbox and asserts each property rather than narrating it · **access kernel** — `r6.access` becomes the one tenant reader, step-up gate, audit call and FHIR exit, adopted blueprint by blueprint · **security**: a caller-supplied seed bundle takes the ingest gate, not the mint gate (an unauthenticated write path, found and closed) · **MCP**: an expired session returns 404, so a client re-initializes instead of failing · **demo data**: multi-year synthetic blood-pressure history and a server-rendered trend chart, with home and clinic readings modelled distinctly · a [defect catalogue](docs/) wired into the PR gate, and drift guards that replay the published example's own claims against the running app |
 | **v1.9.0** | **[CareAgents](https://careagents.cloud) — the hosted consumer experience**: sign up with a passkey, connect records through a pluggable connector marketplace (Fasten, Apple Health via Open Wearables, sample data), and spin up a guardrailed health agent reachable on web, Telegram, and iMessage · **advisor registry** — specialties ported from SmartHealthConnect (healthy-habits, care-completion, medication-refills, diet-exercise) as prompt-blocks over the guarded tool set, deferred ones honestly labeled · **versioned informed consent** enforced server-side (HTTP 428) before any real-record connection · **forms rail ships end-to-end** — `$populate` → per-item human review (NKA never inferred) → provenance-stamped PDF → signed expiring link · **error fidelity is conformance property seven (Grade A = 7/7)**, hardened across both MCP transports with a Python↔TypeScript drift guard · **MCP Apps** — care-gaps results embed an engine-served UI (`text/html; profile=mcp-app`) whose only fetch target is the guarded operation · security pass: fail-closed prod config, authenticated tenant reads, MCP transport auth, Alembic · SmartHealthConnect archived (skills frozen at v1.2.0; advisors are the live successors) |
 | **v1.8.0** | **Real-actions foundation** — an agent can *propose* a real-world action (call, SMS, form) but `commit` only *submits* it (HTTP 202); execution happens through a separate approval that requires a single-use step-up credential and an expiry-guarded atomic claim, so the agent's own toolchain can never approve its own action (the action rail no longer accepts the spoofable `X-Human-Confirmed` header; direct FHIR writes still do, a known gap tracked in [#214](../../issues/214)) · **`ActionExecutor` plugin registry** — add a real-world capability behind the full guardrail rail in ~50 lines, no core changes ([extend it](ROADMAP.md#extending-the-action-rail)) · mandatory red-flag emergency screen; fail-loud rails (no silent simulation) · **durable execution** — attempt ledger, provider reconciliation, external-tick reaper, append-only action-event log · **reliability floor** — config preflight (`GET /r6/ops/preflight`), Postgres CI lane, MCP fetch timeouts, poller 409-storm detection, source-aware resource identity `(tenant, type, id)`, Fasten hardening + zombie-job reaper · public [ROADMAP](ROADMAP.md) + contributor on-ramp · fixes: upstream FHIR error fidelity, quality measures default to current year |
 | **v1.7.0** | Preventive care-gaps engine (`Patient/$care-gaps`, USPSTF/ACIP/ADA + eCQM crosswalk) · patient connect flow: identity-verified Fasten onboarding mints a webhook-gated, read-scoped 30-day agent token · prescription transfer requests (`rx_transfer_request`, Schedule II refused) — 29 MCP tools · [per-agent quickstarts](docs/quickstarts/) (Claude/Perplexity/ChatGPT/Telegram) · HBO export→FHIR converter + embedded-XML PHI scrubber · hardening: fail-closed webhook verify, scoped tokens, serverless write guard, live-path contract tests · clinical fixes: SNOMED diabetes detection, inclusive panic thresholds, one-sided-range honesty |
@@ -120,6 +120,18 @@ AI Agent ──▶ MCP Server ──▶ Guardrail Proxy ──▶ Any FHIR Serve
                          Step-up auth
                          Human-in-the-loop
 ```
+
+### How it differs from a plain FHIR MCP server
+
+| | Typical FHIR MCP server | HealthClaw |
+| --- | --- | --- |
+| Redaction before the model | Returns the record as the server stores it | Before the agent sees the record: names cut to initials, identifier values removed, addresses stripped, birth dates cut to the year |
+| Audit of every access | Left to the FHIR server behind it | Every read and write records an AuditEvent, with a PHI-free detail |
+| Step-up for writes | The session credential covers writes | Each write needs a tenant-bound HMAC step-up token |
+| Out-of-band approval for calls, texts and forms | Not in scope | The agent only proposes. A person approves on a separate page, bound to the payload they were shown |
+| Tenant isolation | One credential, one view of the server | Every query is scoped to a tenant; cross-tenant access is refused |
+
+Direct clinical FHIR writes are the exception to the approval row: they still gate on a header the caller sets ([#214](../../issues/214)).
 
 ## Prove it: guardrail conformance
 
