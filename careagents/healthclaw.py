@@ -560,6 +560,7 @@ class HealthClawClient:
     # meaningful set rather than every supported type — this is a progress
     # signal for the patient, not an inventory.
     COUNTED_TYPES = ("Condition", "Observation", "MedicationRequest",
+                     "MedicationStatement",  # readable via search_records (#377)
                      "AllergyIntolerance", "Immunization")
 
     # Ingested and stored, deliberately NOT counted (#226, council D2 option
