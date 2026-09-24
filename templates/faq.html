@@ -238,7 +238,7 @@
       <li><strong>OpenClaw</strong> — a Telegram bot. Fixed slash commands (<code>/conditions</code>, <code>/labs</code>, <code>/curatr</code>, <code>/approve</code>). Best if you only want one chat channel with predictable behavior.</li>
       <li><strong>Hermes</strong> (Nous Research) — multi-gateway agent. Telegram + Discord + Slack + WhatsApp + Signal + CLI + HTTP. Self-improving: skills get better as you use them.</li>
       <li><strong>PromptOpinion</strong> — a healthcare AI assembly platform. HealthClaw is published there as a Superpower + Agent; you "Add to Workspace" and chat in the browser.</li>
-      <li><strong>Claude Desktop / Claude Code</strong> — Anthropic's clients connect over native MCP. Use the published <code>.mcp.json</code> config or the hosted Railway URL.</li>
+      <li><strong>Claude Desktop / Claude Code</strong> — Anthropic's clients connect over native MCP to a HealthClaw MCP server you run on your own computer; the published <code>.mcp.json</code> config points at one. Assistants you use in a browser or app — Claude.ai, ChatGPT, Perplexity — cannot connect to HealthClaw during the beta: the hosted MCP endpoint refuses them. The read token from the connect page works with a server you run yourself.</li>
     </ul>
     <p>All four use the same MCP server, the same skills library, and the same guardrails. Pick by where you want to type, not by what you can do.</p>
     <p><strong>One exception right now:</strong> the Telegram surface is not currently served — the bot has been out of service since June — so OpenClaw, and the Telegram channel of Hermes, describe what those components are rather than somewhere you can reach us today.</p>
