@@ -88,6 +88,7 @@ class R6Resource(db.Model):
         'Condition', 'Provenance',
         # Phase 4 — US Core v9 R4 clinical resources
         'AllergyIntolerance', 'Immunization', 'MedicationRequest',
+        'MedicationStatement',  # #377 — stored apart, never merged
         'Medication', 'MedicationDispense',
         'Procedure', 'DiagnosticReport',
         'CarePlan', 'CareTeam', 'Goal',

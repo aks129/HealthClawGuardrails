@@ -5,20 +5,19 @@ Standard redaction profile for PHI protection applied consistently
 on all resource access paths (not just context ingestion).
 
 - Names: Truncate family and given names to first initial only (e.g. "Rivera" → "R.")
-- Identifiers: Remove the value from every entry in a resource's
-  `identifier` array; keep `system` and `type`. Safe Harbor
+- Identifiers: Remove the value from every Identifier under a key in
+  `_IDENTIFIER_KEYS` (`identifier`, `accessionIdentifier`, `requisition`,
+  `valueIdentifier`, ...); keep `system` and `type`. Safe Harbor
   §164.514(b)(2)(i)(G)/(H)/(I)/(J) list SSNs, medical record numbers,
   health plan and account numbers among the identifiers to REMOVE — a
-  last-four suffix is a re-identification vector, not a redaction. This
-  covers those categories WHEN they appear as `identifier` array entries.
-  A category-J account number or a category-I health plan number carried
-  in a different field shape (e.g. `Coverage.subscriberId`, a plain string
-  rather than an `Identifier`) is a distinct field this function does not
-  inspect — see #112. Do not read "Safe Harbor §…(G)/(H)/(I)/(J)" above as
-  a claim that every field shape those categories can appear in is
-  covered; it names which categories this specific array is redacted
-  against, not the codebase's total Safe Harbor posture.
-- Addresses: Remove line/text, keep city/state/country
+  last-four suffix is a re-identification vector, not a redaction.
+  Coverage's plain-string member numbers (`subscriberId`, `dependent`,
+  R4 `class.value`) are removed too (#282). This names the keys the
+  supported types use; an identifier-like value under any other key is
+  not covered, so do not read the Safe Harbor citation as the codebase's
+  total Safe Harbor posture.
+- Addresses: Remove line/text/city/district/postalCode, keep state/country,
+  whether the element is a list or a single Address
 - Telecom: Replace values with [Redacted]
 - Birth dates: Truncate to year only
 - Photos: Remove entirely
@@ -85,9 +84,15 @@ def _redact_fields(resource, narrative=True):
     # Remove identifier values. Until 2026-09 this kept the last four
     # characters, and SECURITY.md said so (docs/2026-08-16-hard-truths.md
     # §4). `system` and `type` stay so a reader can see which kind of
-    # identifier existed without learning it.
-    if 'identifier' in resource:
-        identifiers = resource['identifier']
+    # identifier existed without learning it. FHIR puts the Identifier
+    # datatype under other keys too (_IDENTIFIER_KEYS); those leaked whole
+    # until #282. A plain string under one of them (R4's
+    # Coverage.subscriberId, AuditEvent.agent.altId) is removed outright.
+    for key in _IDENTIFIER_KEYS:
+        identifiers = resource.get(key)
+        if isinstance(identifiers, str):
+            resource.pop(key)
+            continue
         if isinstance(identifiers, dict):
             identifiers = [identifiers]
         if isinstance(identifiers, list):
@@ -95,9 +100,15 @@ def _redact_fields(resource, narrative=True):
                 if isinstance(ident, dict):
                     ident.pop('value', None)
 
-    # Remove full addresses
-    if 'address' in resource and isinstance(resource['address'], list):
-        for addr in resource['address']:
+    # Remove full addresses. Most resources carry a list; Location.address
+    # is a single Address, and leaked whole until #282.
+    addresses = resource.get('address')
+    if isinstance(addresses, dict):
+        addresses = [addresses]
+    if isinstance(addresses, list):
+        for addr in addresses:
+            if not isinstance(addr, dict):
+                continue
             addr.pop('line', None)
             addr.pop('text', None)
             addr.pop('city', None)
@@ -138,9 +149,52 @@ def _redact_fields(resource, narrative=True):
                 ca.pop('city', None)
                 ca.pop('district', None)
                 ca.pop('postalCode', None)
+            # Subscription.contact[] is a ContactPoint itself, not a
+            # Patient.contact entry, so its value sits right here (#282).
+            if isinstance(c.get('value'), str):
+                c['value'] = '[Redacted]'
 
-    # Remove notes/comments
-    for field in ['note', 'comment']:
+    # Coverage.dependent is a plain string; Coverage.class.value is a string
+    # in R4 and an Identifier from R5 on. Both are plan-membership numbers
+    # (Safe Harbor §164.514(b)(2)(i)(I)), and `value`/`dependent` mean other
+    # things elsewhere, so this is scoped by resource type (#282).
+    if resource.get('resourceType') == 'Coverage':
+        if isinstance(resource.get('dependent'), str):
+            resource.pop('dependent')
+        for cls in (resource.get('class') or []):
+            if not isinstance(cls, dict):
+                continue
+            if isinstance(cls.get('value'), str):
+                cls.pop('value')
+            elif isinstance(cls.get('value'), dict):
+                cls['value'].pop('value', None)
+
+    # A stored AuditEvent's agent carries a network address (an IP or host
+    # name, Safe Harbor (O)). `altId` is handled with the identifiers above.
+    if resource.get('resourceType') == 'AuditEvent':
+        for agent in (resource.get('agent') or []):
+            if not isinstance(agent, dict):
+                continue
+            if isinstance(agent.get('network'), dict):
+                agent['network'].pop('address', None)
+            agent.pop('networkString', None)
+            agent.pop('networkUri', None)
+
+    # CarePlan.title is written per patient by whoever made the plan. `title`
+    # elsewhere (Questionnaire, Requirements) is a definition's own label and
+    # stays, so this one is scoped by resource type (#282).
+    if resource.get('resourceType') == 'CarePlan' and \
+            isinstance(resource.get('title'), str):
+        resource.pop('title')
+
+    # Goal.statusReason is free text. On other resources the same key is a
+    # CodeableConcept or a list of them, which must keep its codes (#282).
+    if isinstance(resource.get('statusReason'), str):
+        resource.pop('statusReason')
+
+    # Remove notes/comments. DiagnosticReport.conclusion is the same kind of
+    # clinician free text and leaked on the standard read path until #282.
+    for field in ['note', 'comment', 'conclusion']:
         if field in resource:
             if isinstance(resource[field], list):
                 resource[field] = [{'text': '[Redacted]'}]
@@ -151,10 +205,31 @@ def _redact_fields(resource, narrative=True):
 _FREE_TEXT_KEYS = {
     'display', 'description', 'valueString', 'valueMarkdown', 'valueUrl',
     'valueUri', 'valueCanonical', 'valueBase64Binary',
+    # Free-text strings that survived a sweep of every string/markdown
+    # element of the supported types (#282). Each key is a string wherever
+    # FHIR uses it. authorString is Annotation's author NAME.
+    'patientInstruction', 'onsetString', 'abatementString',
+    'occurrenceString', 'performedString', 'scheduledString',
+    'authorString', 'detailString', 'ageString', 'bornString',
+    'deceasedString',
 }
 _DATE_KEYS = {
     'birthDate', 'deceasedDateTime', 'valueDate', 'valueDateTime',
 }
+# Keys that hold the Identifier datatype in the supported types, whatever the
+# resource. `subscriberId` is Coverage's member id (a string in R4) and
+# `altId` an AuditEvent agent's alternate user id (a string).
+_IDENTIFIER_KEYS = (
+    'identifier', 'accessionIdentifier', 'masterIdentifier',
+    'groupIdentifier', 'requisition', 'preAdmissionIdentifier',
+    'valueIdentifier', 'subscriberId', 'altId',
+)
+# Elements only an Attachment has. `url` and `title` alone are not enough to
+# know one: an Extension has a `url`, a definition has both.
+_ATTACHMENT_ONLY_KEYS = (
+    'contentType', 'size', 'hash', 'creation', 'pages', 'frames',
+    'duration', 'height', 'width',
+)
 
 
 def _redact_recursive(obj):
@@ -169,7 +244,16 @@ def _redact_recursive(obj):
     _redact_fields(obj, narrative=bool(obj.get('resourceType')))
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
-    if ('contentType' in obj and any(k in obj for k in ('data', 'url', 'title'))):
+    # Every Attachment element is optional, so it is known by shape: an
+    # Attachment-only key, or `data` (SampledData also has `data`, with
+    # `dimensions`), or `url` with `title` on a datatype (a Questionnaire is
+    # a resource with both). Until #282 only `contentType` counted, so an
+    # attachment without one kept its body.
+    is_attachment = (
+        any(k in obj for k in _ATTACHMENT_ONLY_KEYS)
+        or ('data' in obj and 'dimensions' not in obj)
+        or ('url' in obj and 'title' in obj and 'resourceType' not in obj))
+    if is_attachment and any(k in obj for k in ('data', 'url', 'title')):
         obj.pop('data', None)
         obj.pop('url', None)
         obj.pop('title', None)

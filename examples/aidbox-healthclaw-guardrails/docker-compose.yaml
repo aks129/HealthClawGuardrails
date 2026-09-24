@@ -19,9 +19,14 @@ services:
   # The system of record. Holds the COMPLETE, fully-identified resource.
   # Nothing below ever modifies it: redaction is a property of the path the
   # agent takes, not an edit to the data.
+  #
+  # Pinned by digest: this is what `healthsamurai/aidboxone:edge` resolved to
+  # on 2026-08-16, the only Aidbox build this walkthrough has been run end to
+  # end against (docs/evidence/2026-08-16-set2-connectors.md §7). `edge` is a
+  # rolling build and has moved since, so the tag no longer names the image
+  # that was verified (#604). Moving this pin means re-running the walkthrough.
   aidbox:
-    image: healthsamurai/aidboxone:edge
-    pull_policy: always
+    image: healthsamurai/aidboxone@sha256:42e4e8e10d9d42b54bf3f4602b3f584e06acc70738cdcf280ce7634bdb5e58b3
     depends_on:
       - postgres
     ports:

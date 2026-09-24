@@ -7,7 +7,8 @@ What deletion means here, stated explicitly because the answer is not
 obvious for a guardrailed system:
 
   * PURGED — every store that can hold PHI or PHI-adjacent detail: clinical
-    resources, context envelopes and their items, proposed actions, agent
+    resources, context envelopes and their items, proposed actions and their
+    lifecycle events and approval records, agent
     conversation/tasks, BP sessions, and the connector rows that could pull
     more data (Fasten, wearables, Telegram binding).
   * RETAINED — AuditEventRecord. The audit trail is the immutable record of
@@ -46,6 +47,25 @@ def purge_tenant(tenant_id):
         deleted["context_items"] = ContextItem.query.filter(
             ContextItem.context_id.in_(envelope_ids)).delete(
                 synchronize_session=False)
+
+    # Same shape for actions (#217): events and confirmations hang off an
+    # action by action_id, not tenant, so collect the ids before the actions
+    # themselves are deleted below.
+    try:
+        from r6.actions.confirmations import ActionConfirmation
+        from r6.actions.events import ActionEvent
+        from r6.actions.models import ProposedAction
+    except ImportError:
+        logger.info("purge: action rail not present in this deployment")
+    else:
+        action_ids = [a.id for a in ProposedAction.query.filter_by(
+            tenant_id=tenant_id).all()]
+        if action_ids:
+            for model, label in ((ActionEvent, "action_events"),
+                                 (ActionConfirmation, "action_confirmations")):
+                deleted[label] = model.query.filter(
+                    model.action_id.in_(action_ids)).delete(
+                        synchronize_session=False)
 
     for model, label in ((R6Resource, "resources"),
                          (ContextEnvelope, "context_envelopes"),

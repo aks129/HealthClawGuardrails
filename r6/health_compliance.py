@@ -30,6 +30,10 @@ MEDICAL_DISCLAIMER = (
 CLINICAL_RESOURCE_TYPES = {
     'Observation', 'Condition', 'MedicationRequest', 'DiagnosticReport',
     'AllergyIntolerance', 'Procedure', 'CarePlan', 'Immunization',
+    # #377: supported for ingest and read. Listed here so a direct write
+    # needs the same human confirmation as the MedicationRequest beside it,
+    # not a step-up token alone.
+    'MedicationStatement',
     # Phase 2 — R6 clinical types
     'NutritionIntake', 'DeviceAlert',
 }
