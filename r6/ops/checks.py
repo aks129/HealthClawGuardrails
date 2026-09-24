@@ -83,6 +83,22 @@ def check_internal_mint_secret():
                             else ' (warning outside production)'), fatal)
 
 
+def check_nonce_store():
+    """Single-use confirm nonces are shared across workers only through
+    Redis (r6/stepup.py). Without REDIS_URL a production process refuses
+    every consuming validation, so the action rail cannot confirm (#212)."""
+    fatal = _is_production()
+    if os.environ.get('REDIS_URL', '').strip():
+        # Presence only, and never the value: the URL can carry a password.
+        return _result('nonce_store', True, 'REDIS_URL set', fatal)
+    return _result(
+        'nonce_store', False,
+        'REDIS_URL is not set — single-use nonces are per-process, so a '
+        'confirm token replays on another worker%s.' % (
+            ' (fatal in production: consuming validations refuse)' if fatal
+            else ' (warning outside production)'), fatal)
+
+
 def check_actions_webhook():
     """Provider callbacks (Bland/Twilio) verify a shared secret riding in a
     URL built from PUBLIC_BASE_URL; unset means callbacks fail closed and
@@ -163,6 +179,7 @@ CHECKS = (
     check_step_up_secret,
     check_fasten_webhook_secret,
     check_internal_mint_secret,
+    check_nonce_store,
     check_actions_webhook,
     check_executor_env,
     check_database,

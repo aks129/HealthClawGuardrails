@@ -829,9 +829,11 @@ class CuratrEngine:
                 field_path=f"{path}.display",
                 severity="suggestion",
                 title="Display name differs from terminology",
+                # The stored display is never quoted back: upstream feeds put
+                # patient names there, and this text reaches the caller (#282).
                 plain_language=(
-                    f"The description says '{display}' but the official "
-                    f"{sys_name} description is '{canonical}'."
+                    "The description on this record differs from the "
+                    f"official {sys_name} description, '{canonical}'."
                 ),
                 impact=(
                     "Different descriptions for the same code can cause "
