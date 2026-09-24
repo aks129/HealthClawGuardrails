@@ -30,11 +30,13 @@ from r6.access import (
     Grant,
     Profile,
     Scope,
+    StepUpDecision,
     StepUpDenied,
     Tenant,
     TenantRejected,
     TenantSource,
     audit,
+    decide_grant,
     fhir_response,
     has_grant,
     install_audit_assertions,
@@ -591,6 +593,99 @@ def test_has_grant_returns_the_same_grant_require_grant_returns(
             scope=scope, tenant=tenant)
 
 
+#: The sentence each _REFUSALS row is told. Pinned directly, not only as
+#: agreement with require_grant: both halves route through _evaluate, so a
+#: generic sentence substituted there would agree with itself. The tenant
+#: mismatch stays generic by design (_WITHHELD_REASONS).
+_REFUSAL_REASONS = {
+    'no token at all': 'Step-up token required',
+    'junk': 'Malformed step-up token',
+    'a token for another tenant': 'Invalid step-up token',
+    'an expired token': 'Step-up token expired',
+    'a read-scoped token asked for write':
+        'Read-scoped token cannot authorize this operation',
+    'a bearer the endpoint did not opt into': 'Step-up token required',
+    'the wrong audience': 'Token audience mismatch',
+    'the wrong operation': 'Token operation mismatch',
+}
+
+
+def test_every_refusal_row_names_its_reason():
+    assert set(_REFUSAL_REASONS) == {row[0] for row in _REFUSALS}
+
+
+@pytest.mark.parametrize('label,marker,kwargs', _REFUSALS,
+                         ids=[row[0] for row in _REFUSALS])
+def test_decide_grant_refuses_wherever_require_grant_refuses_and_says_why(
+        app, tenant_id, label, marker, kwargs):
+    """#655: the reason-carrying, non-raising surface answers exactly what
+    require_grant would raise, and carries the classified reason it would
+    have rendered — never the validator's raw text.
+
+    MUTATION: make decide_grant skip any check require_grant makes -> the
+    row goes red on the decide_grant half while require_grant still refuses.
+    MUTATION: replace the classified reason in _evaluate with the generic
+    sentence -> the classified rows go red on the direct pin.
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    headers = _refusal_headers(marker, tenant_id)
+    with app.test_request_context(headers=headers):
+        decision = decide_grant(scope=Scope.WRITE, tenant=tenant, **kwargs)
+        assert decision.grant is None and decision.granted is False
+        with pytest.raises(StepUpDenied) as raised:
+            require_grant(scope=Scope.WRITE, tenant=tenant, **kwargs)
+        assert decision.reason == str(raised.value)
+        assert decision.reason == _REFUSAL_REASONS[label]
+        # `absent` means no token was READ: none sent, or only a bearer the
+        # endpoint did not opt into — the same two cases that answer 401 via
+        # absent_status in require_grant.
+        assert decision.absent is (label in ('no token at all',
+                                             'a bearer the endpoint did not opt into'))
+
+
+@pytest.mark.parametrize('scope', [Scope.WRITE, Scope.TENANT_BOUND])
+def test_decide_grant_returns_the_grant_require_grant_returns(
+        app, tenant_id, scope):
+    token = generate_step_up_token(tenant_id)
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(token)):
+        decision = decide_grant(scope=scope, tenant=tenant)
+        assert decision.granted is True and decision.reason == ''
+        assert decision.grant == require_grant(scope=scope, tenant=tenant)
+
+
+def test_a_step_up_decision_cannot_be_truth_tested(app, tenant_id):
+    """The tuple trap, closed at the type: `if decision:` is a bypass for a
+    refused decision (an object is truthy), so both a granted and a refused
+    decision raise on the first request rather than answer.
+
+    MUTATION: delete StepUpDecision.__bool__ -> red (the refused decision
+    reads as True).
+    """
+    tenant = Tenant(id=tenant_id, source=TenantSource.HEADER)
+    with app.test_request_context(headers=_headers(None)):
+        refused = decide_grant(scope=Scope.WRITE, tenant=tenant)
+    with app.test_request_context(
+            headers=_headers(generate_step_up_token(tenant_id))):
+        granted = decide_grant(scope=Scope.WRITE, tenant=tenant)
+    for decision in (refused, granted):
+        assert isinstance(decision, StepUpDecision)
+        with pytest.raises(TypeError, match='granted'):
+            bool(decision)
+        with pytest.raises(TypeError):
+            if decision:  # pragma: no cover - the raise is the assertion
+                pass
+        # Nor can it be read as the old (valid, error) tuple.
+        with pytest.raises(TypeError):
+            valid, error = decision
+    assert refused.granted is False and granted.granted is True
+
+
+def test_decide_grant_cannot_be_asked_to_consume_a_nonce():
+    import inspect
+    assert 'consume_nonce' not in inspect.signature(decide_grant).parameters
+
+
 def test_has_grant_reads_the_opted_in_sources_the_same_way(app, tenant_id):
     """also_bearer / also_body_field mean the same thing in both.
 
@@ -792,8 +887,14 @@ def _holder_of(spans, lineno):
     return holding[-1] if holding else '<module>'
 
 
-def _has_grant_calls():
-    """(path:function, is_discarded) for every production call to has_grant."""
+#: decide_grant (#655) shares has_grant's hazard and its guards. Empty in the
+#: kernel PR; each of the three reason-publishing sites adds itself in the
+#: one-site PR that adopts it.
+_DECIDE_GRANT_CALLSITES: frozenset[str] = frozenset()
+
+
+def _has_grant_calls(name='has_grant'):
+    """(path:function, is_discarded) for every production call to `name`."""
     for path in _production_python_files():
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
         spans = _definition_spans(tree)
@@ -803,9 +904,9 @@ def _has_grant_calls():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            name = (getattr(node.func, 'id', None)
-                    or getattr(node.func, 'attr', None))
-            if name == 'has_grant':
+            called = (getattr(node.func, 'id', None)
+                      or getattr(node.func, 'attr', None))
+            if called == name:
                 yield (f'{path.relative_to(REPO_ROOT)}:'
                        f'{_holder_of(spans, node.lineno)}',
                        node.lineno in discarded)
@@ -838,6 +939,123 @@ def test_every_listed_call_site_still_holds_a_call():
         'remove the entry or restore the call: ' + ', '.join(stale))
 
 
+def test_decide_grant_is_adopted_only_where_listed():
+    """MUTATION: call decide_grant from any production module -> red."""
+    sites = sorted(site for site, _ in _has_grant_calls('decide_grant'))
+    unexpected = [s for s in sites if s not in _DECIDE_GRANT_CALLSITES]
+    assert not unexpected, (
+        'decide_grant is a non-raising check with has_grant\'s hazard; each '
+        'call site is listed deliberately in _DECIDE_GRANT_CALLSITES by the '
+        'PR that adopts it. Unlisted: ' + ', '.join(unexpected))
+
+
+def test_every_listed_decide_grant_site_still_holds_a_call():
+    sites = {site for site, _ in _has_grant_calls('decide_grant')}
+    stale = sorted(_DECIDE_GRANT_CALLSITES - sites)
+    assert not stale, (
+        'listed in _DECIDE_GRANT_CALLSITES but holding no call: '
+        + ', '.join(stale))
+
+
+def test_a_decide_grant_call_may_never_have_its_answer_thrown_away():
+    """MUTATION: write a bare `decide_grant(...)` statement anywhere -> red."""
+    thrown_away = [site for site, discarded
+                   in _has_grant_calls('decide_grant') if discarded]
+    assert not thrown_away, (
+        'the decision is the only thing decide_grant does; discarding it is '
+        'a guard that checks nothing: ' + ', '.join(thrown_away))
+
+
+#: What a caller may branch on. `.reason` and `.absent` describe a refusal;
+#: neither says whether there was one.
+_DECISION_VERDICTS = frozenset({'granted', 'grant'})
+
+
+def _decide_grant_misreads(tree):
+    """Line numbers of decide_grant calls whose verdict is never read.
+
+    A call passes in exactly two shapes: `decide_grant(...).granted` (or
+    `.grant`) directly, or `d = decide_grant(...)` with `d.granted` (or
+    `d.grant`) read somewhere in the same function. Anything else — a tuple
+    unpack, a bare return, an argument, a name only ever asked `.reason` or
+    `.absent` — is reported, because each is a way to act on a decision
+    without asking whether it granted.
+    """
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def scope_of(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return node
+        return tree
+
+    misreads = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and (getattr(node.func, 'id', None)
+                     or getattr(node.func, 'attr', None)) == 'decide_grant'):
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Attribute) and parent.attr in _DECISION_VERDICTS:
+            continue
+        if (isinstance(parent, ast.Assign) and len(parent.targets) == 1
+                and isinstance(parent.targets[0], ast.Name)):
+            bound = parent.targets[0].id
+            if any(isinstance(read, ast.Attribute)
+                   and read.attr in _DECISION_VERDICTS
+                   and isinstance(read.value, ast.Name)
+                   and read.value.id == bound
+                   for read in ast.walk(scope_of(node))):
+                continue
+        misreads.append(node.lineno)
+    return misreads
+
+
+def test_every_decide_grant_call_reads_its_verdict():
+    """MUTATION: adopt decide_grant at a site that only reads `.reason` or
+    `.absent` -> red."""
+    misread = []
+    for path in _production_python_files():
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+        misread += [f'{path.relative_to(REPO_ROOT)}:{line}'
+                    for line in _decide_grant_misreads(tree)]
+    assert not misread, (
+        'a decide_grant call must branch on .granted or .grant; these never '
+        'ask whether the decision granted: ' + ', '.join(misread))
+
+
+@pytest.mark.parametrize('source,misread', [
+    ('def h():\n    d = decide_grant(scope=1, tenant=2)\n'
+     '    if not d.granted:\n        return d.reason\n', False),
+    ('def h():\n    if decide_grant(scope=1, tenant=2).granted:\n'
+     '        pass\n', False),
+    ('def h():\n    grant = decide_grant(scope=1, tenant=2).grant\n'
+     '    return grant\n', False),
+    ('def h():\n    d = decide_grant(scope=1, tenant=2)\n'
+     '    if d.reason:\n        return d.reason\n', True),
+    ('def h():\n    d = decide_grant(scope=1, tenant=2)\n'
+     '    if not d.absent:\n        pass\n', True),
+    ('def h():\n    a, b, c = decide_grant(scope=1, tenant=2)\n', True),
+    ('def h():\n    if decide_grant(scope=1, tenant=2):\n        pass\n',
+     True),
+    ('def h():\n    return decide_grant(scope=1, tenant=2)\n', True),
+    # A verdict read in ANOTHER function does not vouch for this one.
+    ('def h():\n    d = decide_grant(scope=1, tenant=2)\n    return d.reason\n'
+     'def g(d):\n    return d.granted\n', True),
+], ids=['bound-and-granted', 'inline-granted', 'inline-grant',
+        'reason-only', 'absent-only', 'tuple-unpack', 'truth-test',
+        'bare-return', 'verdict-read-elsewhere'])
+def test_the_verdict_check_actually_detects_the_shape(source, misread):
+    """The read-check proves itself on synthetic sources first: with
+    _DECIDE_GRANT_CALLSITES empty in the kernel PR, the production scan
+    above has nothing to find yet."""
+    assert bool(_decide_grant_misreads(ast.parse(source))) is misread
+
+
 def test_no_call_site_key_is_ambiguous():
     """Two definitions of one name in one file would share a key.
 
@@ -852,7 +1070,8 @@ def test_no_call_site_key_is_ambiguous():
                    for node in ast.walk(tree)
                    if isinstance(node, ast.Call)
                    and (getattr(node.func, 'id', None)
-                        or getattr(node.func, 'attr', None)) == 'has_grant'}
+                        or getattr(node.func, 'attr', None))
+                   in ('has_grant', 'decide_grant')}
         if not holders:
             continue
         names = [name for _, _, name in spans]
@@ -860,7 +1079,8 @@ def test_no_call_site_key_is_ambiguous():
                            if names.count(name) > 1})
         assert not repeated, (
             f'{path.relative_to(REPO_ROOT)} defines these names more than '
-            'once and a has_grant call sits in one of them, so the key does '
+            'once and a has_grant or decide_grant call sits in one of them, '
+            'so the key does '
             'not say which: ' + ', '.join(repeated))
 
 

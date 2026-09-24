@@ -88,13 +88,15 @@ Flask/DB), report builders, and a `register_*_routes` function wired in
   truthiness-test the tuple.
 - Every FHIR resource access emits an AuditEvent; audit `detail` is PHI-free.
 - Writes require a step-up token; **clinical** writes additionally require a
-  human confirmation, via one of two mechanisms:
-  - **Action rail** (`r6/actions/`): a separate approval endpoint consuming a
-    single-use step-up credential — genuinely out-of-band.
-  - **Direct clinical FHIR writes**: `X-Human-Confirmed: true` (HTTP 428
-    otherwise). The header is client-supplied and therefore spoofable by an
-    agent that already holds a write token — a known gap tracked in #214.
-    Prefer the action rail for anything new.
+  human. The one mechanism that provides that is the **action rail**
+  (`r6/actions/`): `commit` only submits the action, and a separate approval
+  endpoint consumes a single-use credential bound to that action. Calls,
+  texts and forms all go through it.
+- **`X-Human-Confirmed` is not a human gate.** Direct clinical FHIR writes
+  answer HTTP 428 until the header is present, but the caller sets it about
+  itself, so an agent that already holds a write token passes it. It is a
+  known gap tracked in #214. Do not build on it; route anything new through
+  the action rail.
 - Redaction imports: `from r6.redaction import apply_redaction` (Safe Harbor)
   or `apply_patient_controlled_redaction(resource, patient_id)`.
 - The whole set is enforced by the **conformance harness**:

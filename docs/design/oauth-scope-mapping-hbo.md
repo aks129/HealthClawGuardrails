@@ -15,7 +15,9 @@ HealthClaw already speaks the vocabulary — it's currently its *own* OAuth auth
   registration, `.well-known/smart-configuration`, and `validate_bearer_token`.
 - **Tool tiers:** the 26 MCP tools are already typed `read` | `write`
   (`ToolTier` in `tools.ts`); writes additionally require an HMAC step-up token
-  and an explicit human-confirmation header (HTTP 428 otherwise).
+  and, for clinical writes, an `X-Human-Confirmed` header (HTTP 428
+  otherwise). The caller sets that header, so it is not a human gate; it is a
+  known gap (#214). The human gate is the action rail's out-of-band approval.
 - **Guardrails** run regardless of caller: PHI redaction on reads, immutable
   AuditEvent, tenant isolation, medical disclaimers (all provable via
   `GET /r6/fhir/$conformance`).

@@ -175,11 +175,12 @@ async def _reply(update: Update, text: str, agent_id: str,
 # MCP HTTP bridge helpers
 # ---------------------------------------------------------------------------
 
-def _rpc(tool: str, **params) -> dict:
+def _rpc(tool: str, *, headers: dict | None = None, **params) -> dict:
     """
     Call an MCP tool via the HTTP bridge (POST /mcp/rpc).
 
-    Uses JSON-RPC 2.0 with method=tools/call.
+    Uses JSON-RPC 2.0 with method=tools/call. `headers` are extra request
+    headers the bridge forwards to Flask (X-Step-Up-Token for a write).
     Returns the result value on success, raises on HTTP error.
     """
     payload = {
@@ -191,7 +192,7 @@ def _rpc(tool: str, **params) -> dict:
             'arguments': {'tenant_id': TENANT_ID, **params},
         },
     }
-    headers = {}
+    headers = dict(headers or {})
     if MCP_AUTH_TOKEN:
         headers['Authorization'] = f'Bearer {MCP_AUTH_TOKEN}'
     resp = requests.post(_RPC_URL, json=payload, headers=headers, timeout=20)
@@ -289,6 +290,12 @@ def _get_step_up_token() -> str:
     resp.raise_for_status()
     data = resp.json()
     return data.get('token') or data.get('step_up_token', '')
+
+
+def _write_headers() -> dict:
+    """Headers for a write-tier MCP tool call: a fresh step-up token and the
+    tenant it is bound to."""
+    return {'X-Step-Up-Token': _get_step_up_token(), 'X-Tenant-Id': TENANT_ID}
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +706,8 @@ async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     issue = issues[0]
     description = issue.get('title') or issue.get('plain_language') or issue['field_path']
     try:
+        # Both calls are write-tier on the MCP server, which refuses either
+        # without a step-up. A fresh one each, bound to this bot's tenant.
         result = _rpc(
             'curatr_apply_fix',
             resource_type=last.get('resource_type'),
@@ -707,6 +716,7 @@ async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     'new_value': issue['suggested_value']}],
             patient_intent='requested from Telegram /curatr_fix',
             reason=description,
+            headers=_write_headers(),
         )
     except Exception as exc:  # noqa: BLE001
         logger.error('curatr_fix propose error: %s', exc)
@@ -717,13 +727,37 @@ async def _curatr_fix(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     action_id = result.get('id')
+    # A draft nobody submits never reaches "Waiting for you", which lists
+    # only awaiting_confirmation. There is no model here to call
+    # action_commit, so the bot submits what the person just asked for.
+    # Submitting is not approving: that stays on the review page.
+    try:
+        committed = _rpc('action_commit', action_id=action_id,
+                         headers=_write_headers())
+    except Exception as exc:  # noqa: BLE001
+        logger.error('curatr_fix commit error: %s', exc)
+        committed = {'error': 'the request could not be sent'}
+    if committed.get('error') or committed.get('status') != 'awaiting_confirmation':
+        # Plain text, like the propose failure above: an engine error such
+        # as "action_commit failed" breaks Telegram Markdown, and the reply
+        # that says nothing was submitted must not be the one that is lost.
+        await _reply(
+            update,
+            f'Proposed: {description}\n\n'
+            f'Action {action_id} was not submitted for your approval '
+            f'({committed.get("error") or committed.get("status")}). '
+            f'Nothing has changed. Run /curatr_fix again to retry.',
+            agent_id,
+        )
+        return
+
     state['pending_action'] = action_id
     await _reply(
         update,
         f'Proposed: {description}\n\n'
-        f'Action `{action_id}`. Nothing has changed yet. Submit it and '
-        f'approve it on your CareAgents review page; only that approval '
-        f'carries the fix out. /approve explains where.',
+        f'Action `{action_id}`. Nothing has changed yet. Open CareAgents: '
+        f'it is under "Waiting for you" on your agent. Approve or decline '
+        f'it there; only that approval carries the fix out.',
         agent_id,
         parse_mode='Markdown',
     )
@@ -738,9 +772,9 @@ async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _reply(
         update,
         f'{which}Approvals do not happen in this chat: a message here cannot '
-        f'prove you read what will change. Open the request on your '
-        f'CareAgents review page ({DASHBOARD_BASE_URL}) and approve or '
-        f'decline it there.',
+        f'prove you read what will change. Open CareAgents: the request '
+        f'is under "Waiting for you" on your agent. Approve or decline it '
+        f'there.',
         agent_id,
         parse_mode='Markdown',
     )
