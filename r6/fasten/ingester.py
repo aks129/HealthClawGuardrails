@@ -79,8 +79,9 @@ REFUSED_OUTCOMES = frozenset({'invalid_id', 'forbidden'})
 UNNAMED_SKIPPED_TYPE = 'other'
 
 _NAMEABLE_SKIPPED_TYPES = frozenset({
-    # Medication semantics we do not store (#377)
-    'MedicationStatement', 'MedicationAdministration', 'MedicationKnowledge',
+    # Medication semantics we do not store. MedicationStatement left this
+    # list when it became a stored type (#377).
+    'MedicationAdministration', 'MedicationKnowledge',
     # Imaging, documents, raw attachments
     'ImagingStudy', 'ImagingSelection', 'Media', 'Binary', 'Composition',
     'DocumentManifest',
