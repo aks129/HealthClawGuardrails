@@ -1486,7 +1486,7 @@ export class FHIRTools {
             requires_step_up: true,
             requires_human_confirmation: requiresHumanConfirmation,
             message: requiresHumanConfirmation
-              ? `${resourceType} is a clinical resource. Commit requires both X-Step-Up-Token AND X-Human-Confirmed: true headers.`
+              ? `${resourceType} is a clinical resource. Commit requires X-Step-Up-Token, and a human must confirm the write. If commit returns 428, stop and tell the person; never set X-Human-Confirmed yourself.`
               : `Ready to commit. Provide X-Step-Up-Token header to proceed.`,
           }
         : {
