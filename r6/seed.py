@@ -132,22 +132,48 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
         # id failed quietly on every deploy while the six without ids
         # duplicated loudly in the UI and nowhere else.
         rid = resource.get('id')
-        # `is_deleted=False` is load-bearing, not defensive. A soft-deleted
-        # row is a tombstone: if the demo patient has been purged, this must
-        # seed a live one rather than see the tombstone, decide the tenant is
-        # already seeded, and leave the demo empty. That is #422's shape
-        # (soft-deleted rows counted as present) in a second place, and
-        # tests/test_ratchets.py caught it here before it shipped.
+        # The lookup must SEE a tombstone, and must not count it as present.
+        # A soft-deleted row still holds the composite primary key: filtering
+        # it out (`is_deleted=False`, as this did until the revive below) sent
+        # a deleted demo patient to the insert, which collided with the
+        # tombstone, logged a warning and left the demo empty. Counting it as
+        # present is #422's shape (soft-deleted rows taken for data). So: a
+        # live row is skipped, a tombstone is revived, nothing else inserts.
         existing = (R6Resource.query
-                    .filter_by(tenant_id=tenant_id, resource_type=rtype,
-                               id=rid, is_deleted=False)
+                    .filter_by(tenant_id=tenant_id, resource_type=rtype, id=rid)
                     .first()) if rid else None
-        if existing is not None:
+        if existing is not None and not existing.is_deleted:
             # Resolve the placeholder against the patient already on file, or
             # every later resource in this pass points at nothing.
             if rtype == 'Patient':
                 patient_id = str(existing.id)
             skipped += 1
+            continue
+
+        if existing is not None:
+            # Revive through the ingest path's own upsert rather than a
+            # second copy of it: it restores the seed content, lifts the
+            # tombstone and writes the 'update' AuditEvent naming the revive
+            # in this transaction (#558,
+            # tests/test_revive_on_reingest_is_audited.py).
+            from r6.fasten.ingester import _ingest_one
+            try:
+                result, _ = _ingest_one(
+                    json.loads(resource_str), tenant_id, agent_id='seed',
+                    detail='seeded via auto-seed on first boot')
+            except Exception:
+                # The revive and its audit row share the transaction, so
+                # nothing landed; abort loudly as an audit failure does below.
+                db.session.rollback()
+                logger.error("Seed aborted: could not revive %s", rtype)
+                raise
+            if result != 'ok':
+                logger.warning("Seed could not revive %s: %s", rtype, result)
+                continue
+            db.session.commit()
+            if rtype == 'Patient':
+                patient_id = str(existing.id)
+            created += 1
             continue
 
         try:
