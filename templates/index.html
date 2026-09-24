@@ -254,7 +254,7 @@
         <span class="chip">Telegram</span>
       </div>
       <div class="card__title">One bot, fixed commands, zero ambiguity</div>
-      <p class="card__body">The original integration. A Telegram bot with slash commands (<code>/conditions</code>, <code>/labs</code>, <code>/curatr</code>, <code>/approve</code>). Best when you want exactly one chat channel and predictable behaviour.</p>
+      <p class="card__body">The original integration. A Telegram bot with slash commands (<code>/conditions</code>, <code>/labs</code>, <code>/curatr</code>; <code>/approve</code> works in the demo environment only). Best when you want exactly one chat channel and predictable behaviour.</p>
       <ul class="card__list">
         <li><code>docker-compose --profile openclaw up</code></li>
       </ul>
@@ -320,13 +320,13 @@
     <a href="{{ url_for('wiki') }}" class="card">
       <div class="card__kicker"><span class="seq__n">01</span></div>
       <div class="card__title">AI Agent Developer</div>
-      <p class="card__body">Ship HIPAA-safe agents in minutes, not months.</p>
+      <p class="card__body">Put guardrails between your agent and a FHIR server in minutes.</p>
       <ul class="card__list">
         <li>29 MCP tools — drop into Claude Desktop, or any framework via the OpenAI and Gemini adapters</li>
         <li>Fill and extract forms the standard way, with HL7 SDC <code>$populate</code> and <code>$extract</code></li>
         <li>One-line Claude Code install</li>
-        <li>Works with any FHIR server (HAPI, Epic, Medplum, AWS)</li>
-        <li>PHI redaction, audit and step-up auth with zero config</li>
+        <li>Sits in front of Aidbox, HAPI, Medplum, or another FHIR server through the generic connector</li>
+        <li>PHI redaction, audit and step-up auth on by default; you set one secret</li>
       </ul>
       <div class="card__more">Quick start →</div>
     </a>
@@ -338,8 +338,8 @@
       <ul class="card__list">
         <li>Curatr checks records against live medical code databases</li>
         <li>Plain-language explanations of coding errors and their impact</li>
-        <li>You approve every fix, with a full provenance trail</li>
-        <li>Connect 1,000+ EHR systems via Fasten Connect</li>
+        <li>Proposed fixes wait for your approval on the action rail, which is not yet on in production</li>
+        <li>Real records through Fasten Connect, invite-only in the hosted beta</li>
         <li>Wearable data (Garmin, Oura, Polar, Whoop, Fitbit) via Open Wearables</li>
       </ul>
       <div class="card__more">Try Curatr →</div>
@@ -351,8 +351,8 @@
       <p class="card__body">Evaluate the guardrails before an agent goes near patient or member data.</p>
       <ul class="card__list">
         <li>Vendor-neutral proxy that works with your existing FHIR stack</li>
-        <li>Tenant isolation, append-only audit, OAuth 2.1 with PKCE</li>
-        <li>Human-in-the-loop for clinical writes (the HTTP 428 pattern)</li>
+        <li>Tenant isolation, append-only audit, tenant-bound credentials and HMAC step-up tokens</li>
+        <li>Calls, texts and forms run only after a human approves them out of band, on the action rail</li>
         <li>Care-gap evaluation that shows its reasoning and records who approved it</li>
         <li>The gaps are published too: no SOC 2, no BAA, and redaction is not an Expert Determination</li>
       </ul>
@@ -387,10 +387,10 @@
       <p class="card__body">FHIR agent guardrails and EHR integration.</p>
       <ul class="card__list">
         <li><strong>fhir-r6-guardrails</strong> — 29 MCP tools, PHI redaction, step-up auth, audit</li>
-        <li><strong>curatr</strong> — data-quality evaluation and patient-approved fixes</li>
+        <li><strong>curatr</strong> — data-quality evaluation and proposed fixes</li>
         <li><strong>fasten-connect</strong> — EHR and TEFCA ingestion</li>
         <li><strong>phi-redaction</strong> — conservative de-identification preview</li>
-        <li><strong>fhir-upstream-proxy</strong> — HAPI, Epic, Medplum</li>
+        <li><strong>fhir-upstream-proxy</strong> — Aidbox, HAPI, Medplum</li>
         <li><strong>healthex-export</strong> — portable FHIR bundle export</li>
       </ul>
     </div>
@@ -425,7 +425,7 @@
     <div class="section-head rise">
       <span class="eyebrow">Curatr — patient data quality</span>
       <h2 class="section-title">Your health data is full of errors. Now you can fix them.</h2>
-      <p class="section-lede">Curatr evaluates FHIR resources against live public terminology services, explains issues in plain language, and lets you approve fixes with full provenance tracking.</p>
+      <p class="section-lede">Curatr evaluates FHIR resources against live public terminology services, explains issues in plain language, and proposes fixes. Applying one takes your approval on the action rail, which is not yet on in production.</p>
     </div>
 
     <div class="matrix-scroll rise">

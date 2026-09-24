@@ -42,9 +42,13 @@ Breaking one fails CI, but more importantly it breaks the product's core claim.
 - **Every FHIR resource access emits an AuditEvent**, and audit `detail` stays
   **PHI-free**. Never interpolate a caller-supplied value into audit detail.
 - Writes require a step-up token. **Clinical** writes additionally require
-  out-of-band human confirmation via a separate approval endpoint. There is no
-  header that grants this — the old spoofable `X-Human-Confirmed` is gone, and
-  nothing may reintroduce that pattern.
+  out-of-band human confirmation. The mechanism is the action rail's separate
+  approval endpoint, which consumes a single-use credential bound to the
+  action. No header grants this. `X-Human-Confirmed` is gone from the action
+  rail, but direct clinical FHIR writes still accept it (HTTP 428 without
+  it). The caller sets it about itself, so it is a known gap (#214), not a
+  human gate. Do not build new write paths on it, and do not reintroduce the
+  pattern anywhere.
 - No code path may let an agent approve its own action.
 - Redaction goes through `r6.redaction`: `apply_redaction` (Safe Harbor) or
   `apply_patient_controlled_redaction(resource, patient_id)`.

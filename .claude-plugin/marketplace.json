@@ -13,7 +13,7 @@
     {
       "name": "healthclaw-guardrails",
       "source": "./",
-      "description": "FHIR AI agent guardrails with 16 MCP tools including Compiled Truth (current state + evidence timeline) and Wearables (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava via Open Wearables). PHI redaction on every read, step-up auth for writes, immutable audit, tenant isolation, Curatr data quality, Fasten Connect EHR ingestion. FHIR R4 US Core v9 + R6 ballot3.",
+      "description": "FHIR AI agent guardrails with 29 MCP tools including Compiled Truth (current state + evidence timeline) and Wearables (Garmin, Oura, Polar, Suunto, Whoop, Fitbit, Strava via Open Wearables). PHI redaction on every read, step-up auth for writes, immutable audit, tenant isolation, Curatr data quality, Fasten Connect EHR ingestion. FHIR R4 US Core v9 + R6 ballot3.",
       "version": "1.3.0",
       "author": {
         "name": "aks129"

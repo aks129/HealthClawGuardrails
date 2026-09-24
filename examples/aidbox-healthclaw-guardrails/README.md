@@ -305,7 +305,8 @@ guardrails, so it is never told what it is.
   which the caller that sets it can spoof. It is documented as a compensating
   control rather than proof a human acted; the action rail's separate
   approval endpoint is the real mechanism. HealthClaw tracks this as a known
-  gap.
+  gap. An agent that gets a 428 stops and tells the person a human must
+  confirm; it never sets the header itself.
 
 ## Links
 

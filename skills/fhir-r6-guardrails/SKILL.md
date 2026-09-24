@@ -67,7 +67,9 @@ Writes always follow propose-then-commit:
 
 3. **Commit**: Call `fhir.commit_write` with the same resource. Include:
    - `X-Step-Up-Token` header (HMAC-SHA256 signed, 5-minute TTL)
-   - `X-Human-Confirmed: true` header for clinical resources
+   - For clinical resources, a 428 means a human must confirm. Stop and tell
+     the person; never set `X-Human-Confirmed` yourself. Outward actions
+     (calls, texts, forms) go through the action rail's out-of-band approval.
 
 ### Clinical Resource Types (require human-in-the-loop)
 
