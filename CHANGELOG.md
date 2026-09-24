@@ -7,37 +7,113 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
-Work merged since 1.9.0 has not been cut as a release. The themes below are
-what a reader of the code will notice; the full list is the
-[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v1.9.0...main).
+## [2.0.0] — 2026-09-XX — The synthetic-beta release
 
-### Added
+2.0 is the synthetic-beta release. The guardrails are on by default and
+Grade A holds. The docs claim only what is true on `main`. The refactor
+ratchets continue as 2.x; the definition and today's numbers are in
+[the playbook's §5](docs/2026-08-05-healthclaw-2.0-playbook.md#5-definition-of-done-for-20).
+The user-facing summary and what is *not* in 2.0 are in
+[docs/releases/2.0.0.md](docs/releases/2.0.0.md). The full list is the
+[compare view](https://github.com/aks129/HealthClawGuardrails/compare/v1.9.0...main).
+Version 1.10.0 was a release candidate and was never tagged, so its work is
+part of 2.0.0.
+
+### Guardrails
 
 - **An access kernel.** `r6/access.py` is now the one tenant reader, step-up
-  gate, audit call and FHIR exit, and the blueprints adopt it a slice at a
-  time. `require_grant` raises rather than returning a tuple a caller can
-  mis-read; `has_grant` answers the same question where a route needs a
-  predicate rather than a gate. A refusal states its reason.
-- **A connector registry**, so adding an upstream FHIR server is a row rather
-  than a code path, with authenticated proxying to a real server.
-- **Measurement published rather than asserted**: the dashboard shows what the
-  conformance harness does *not* grade, alongside what it does.
-- Clinical reading surfaces: lab trends over time, chart answers in chat,
-  medication names followed through references, opt-in terminology lookup for
-  codes the static table lacks, and three years of synthetic home blood
-  pressure for the demo patients.
+  gate, audit call and FHIR exit. The blueprints adopt it one slice at a time.
+  `require_grant` raises rather than returning a tuple a caller can mis-read.
+  `has_grant` and `decide_grant` answer the same question as a predicate.
+  A refusal states its reason.
+- **Tenant isolation, closed where it leaked.** `/r6/ops/*` authenticates as
+  infrastructure (#304). `/demo/agent-loop` was an anonymous cross-tenant
+  write and is now gated (#210). Wearables sync is scoped to the
+  authenticated tenant (#311). The rate limit is no longer opt-out through a
+  caller-chosen header (#339).
+- **Step-up.** Production refuses a per-process nonce store (#212). A
+  non-ASCII credential is a refusal, not a 500 (#557). A caller-supplied seed
+  bundle takes the ingest gate, not the mint gate (#491).
+- **Audit.** `command_center` and `agent_runs` writes are audited (B1, B2).
+  A timer that moves a run into the human gate is audited (#596). Un-deleting
+  a record on re-ingest leaves a trace (#558). An audit failure no longer
+  discards the caller's work.
+- **Conformance.** The grade had measured resemblance to this codebase, not
+  conformance; it now measures conformance (#525). The dashboard publishes
+  what the harness does *not* grade (#401).
 
-### Changed
+### Action rail
 
-- Tenant ids are validated at sites that previously accepted any string.
-- Agent runs are covered by the audit rule rather than exempt from it.
+- The approval credential binds the action and a digest of the payload the
+  person was shown (#559, #659). A confirmed payload cannot change (#528).
+- Every action kind has an approve page, rendered from the sealed payload
+  (#215). A person who declines is recorded as a decline, not a timeout
+  (#520).
+- The daily call and text cap is enforced (#216).
+- A Curatr data-quality fix can ride the rail, behind
+  `CURATR_FIX_RAIL_ENABLED`. It is dark in 2.0 (#413).
 
-### Fixed
+### Redaction
 
-Most of the merged work is corrections, and the pattern is worth stating: each
-one adds the test that would have caught it, and several add a guard that
-fails when the shape returns. Where a fix could not be verified end to end,
-the gap is filed as an issue rather than described as closed.
+- Identifier values are removed, not truncated to the last four (#112).
+- A create or update response is redacted like a read (#380).
+- A full sweep stripped the free text that survived: single addresses,
+  attachments, `DiagnosticReport.conclusion` and more (#282).
+- Readable labels come from `r6/terminology.py` after redaction, never from
+  the feed's own `display` (#207). SNOMED CT labels cover the codes the
+  product carries (#577).
+
+### Clinical tools
+
+- Appointment brief with a source for each field (#228, #250).
+- Lab trends over time, as an MCP App and as a chart in chat.
+- Care gaps: a screening that cannot be fully checked is no longer reported
+  as due or as clear (#389, #417, #425).
+- SDC forms: `$populate` reads a bounded, redacted `%patient` projection.
+  `$extract` commit mode is an allowlist, and nothing is on it (#572, #679).
+- Prescription transfer: the Schedule II code set is verified against RxNav,
+  and the refusal does not key on the feed's free text (#727).
+- `MedicationStatement` is stored and read instead of skipped (#377).
+- Three years of synthetic home blood pressure for the demo patients.
+
+### MCP and connectors
+
+- The MCP authorization server, consent handoff and rotating refresh tokens
+  are built. They sit behind `MCP_OAUTH_ENABLED`, off in production (#568).
+- A connector registry: adding an upstream FHIR server is a row. The proxy
+  authenticates to that server with its own credential, and a runnable
+  Aidbox example asserts each property.
+- The public demo server is open but pinned to a synthetic tenant.
+- An expired MCP session returns 404, so the client re-initializes.
+- Error paths no longer leak the backend URL or a verbatim body (#192, #153).
+
+### CareAgents
+
+- Durable chat history and durable agent runs in shared workers.
+- Postgres readiness, with CI running every CareAgents test on Postgres.
+- Self-serve account deletion, records first (#554).
+- Direct FHIR bundle upload, and refresh of an existing connection.
+- A beta switch keeps real-record connections invite-only
+  (`CARE_REAL_RECORDS`).
+- An outage reads as an outage, never as "you have no records".
+- A signed-in person can find what is waiting for their answer (#215).
+
+### CI and operations
+
+- The Postgres lane runs the whole suite, not a hand-kept list.
+- `scripts/prod_watch.py` runs on a schedule. It pins the Flask build and
+  flags an MCP server older than `main` (#703, #155).
+- `/health` reports which commit it runs (#703).
+- `scripts/beta_acceptance.py` walks the synthetic-beta journey and says
+  what it could not run (#677).
+- Table-stakes checks and a defect catalogue gate every PR.
+- The VPS deploy path is retired.
+
+### Removed
+
+- `action_policy.yaml`, which nothing read (#95).
+- The unenforced allowlist code for calls and texts (#216).
+- A fabricated import animation and its route (#305).
 
 ### Security
 
