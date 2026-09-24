@@ -6,9 +6,16 @@ for SMART Health Link generation.  It requires:
   - X-Tenant-Id  (enforced by r6_blueprint.before_request)
   - X-Step-Up-Token  (step-up gate inside the route)
 
-Redaction applied: apply_patient_controlled_redaction — strips name/telecom/
-address/notes, preserves DOB and clinical codes, injects healthclaw canonical
-identifier, stamps meta.tag.
+Profiles:
+  - deidentified: apply_patient_controlled_redaction — strips name/telecom/
+    address/notes, preserves DOB and clinical codes, injects healthclaw
+    canonical identifier, stamps meta.tag.
+  - intake (default): identified for a clinician, so Patient.name, birthDate,
+    address and telecom ship verbatim. Everything else goes through
+    apply_redaction — upstream `display`, `CodeableConcept.text` and free text
+    stripped, codes relabelled from r6/terminology.py — and top-level note,
+    narrative, DiagnosticReport.conclusion and SSN-class identifiers are
+    removed (#282, owner ruling).
 """
 
 import json
@@ -160,8 +167,10 @@ def test_share_bundle_intake_profile_keeps_demographics(client, auth_headers, ap
 
     patient = bundle['entry'][0]['resource']
     # Demographics must be preserved
-    assert 'name' in patient
-    assert patient['name'][0]['family'] == 'Vestel'
+    assert patient['name'] == PATIENT_RESOURCE['name']
+    assert patient['birthDate'] == PATIENT_RESOURCE['birthDate']
+    assert patient['address'] == PATIENT_RESOURCE['address']
+    assert patient['telecom'] == PATIENT_RESOURCE['telecom']
     # meta.tag must flag identified share
     tags = patient.get('meta', {}).get('tag', [])
     tagged_systems = {t.get('system') for t in tags}
@@ -275,14 +284,20 @@ def test_share_bundle_invalid_resource_types_not_list(client, auth_headers):
     assert resp.status_code == 400
 
 
-def test_intake_profile_strips_ssn_note_text_keeps_name_and_mrn(client, auth_headers, app):
-    """Intake profile must strip SSN-class identifiers, note, and text but keep
-    name/demographics and non-SSN identifiers (e.g. MRN)."""
+def test_intake_profile_keeps_identity_fields_and_strips_the_rest(client, auth_headers, app):
+    """Intake profile keeps exactly Patient.name, birthDate, address and
+    telecom verbatim. SSN-class identifiers, note and narrative are removed,
+    and every other identifier loses its value like on a standard read — an
+    MRN is not one of the four identity fields the owner ruled in (#282)."""
     patient_with_ssn = {
         'resourceType': 'Patient',
         'id': 'ssn-strip-pt-001',
         'name': [{'family': 'Smith', 'given': ['Alice']}],
         'birthDate': '1990-03-15',
+        'address': [{'line': ['1 Elm St'], 'city': 'Salem',
+                     'postalCode': '01970', 'state': 'MA'}],
+        'telecom': [{'system': 'phone', 'value': '555-010-2000'}],
+        'maritalStatus': {'text': 'Alice Smith, widow of Bob Smith'},
         'identifier': [
             {'system': 'http://example.org/mrn', 'value': 'MRN-12345'},
             {'system': 'http://hl7.org/fhir/sid/us-ssn', 'value': '123-45-6789'},
@@ -316,8 +331,16 @@ def test_intake_profile_strips_ssn_note_text_keeps_name_and_mrn(client, auth_hea
     systems = [i.get('system') for i in identifiers]
     assert 'http://hl7.org/fhir/sid/us-ssn' not in systems
 
-    # Non-SSN (MRN) identifier must be kept
+    # The MRN keeps its system and loses its value, as on a standard read
     assert 'http://example.org/mrn' in systems
+    assert 'MRN-12345' not in resp.get_data(as_text=True)
+
+    # address and telecom are identity fields: verbatim
+    assert patient['address'] == patient_with_ssn['address']
+    assert patient['telecom'] == patient_with_ssn['telecom']
+
+    # Free text outside the identity fields is stripped
+    assert 'widow' not in resp.get_data(as_text=True)
 
     # note and text must be stripped
     assert 'note' not in patient
@@ -351,3 +374,69 @@ def test_coverage_beneficiary_survives_patient_filter(client, auth_headers, app)
 
     ids = [e['resource'].get('id') for e in bundle['entry']]
     assert 'cov-beneficiary-001' in ids
+
+
+def test_intake_profile_relabels_codes_instead_of_shipping_upstream_display(
+        client, auth_headers, app):
+    """An upstream `display` or `CodeableConcept.text` can carry another
+    person's name, so intake strips both and puts back the server's label for
+    the code (r6/terminology.py), the same order apply_redaction uses (#282).
+    The label proves the relabel ran, not only the strip."""
+    condition = {
+        'resourceType': 'Condition',
+        'id': 'intake-relabel-cond',
+        'code': {
+            'coding': [{'system': 'http://snomed.info/sct', 'code': '38341003',
+                        'display': 'BP per Dr. Jane Upstream'}],
+            'text': 'HTN (per Dr. Jane Upstream)',
+        },
+        'subject': {'reference': f'Patient/{PATIENT_ID}',
+                    'display': 'Eugene Vestel'},
+        'recorder': {'reference': 'Practitioner/x',
+                     'display': 'Dr. Jane Upstream'},
+    }
+    _seed_resource(app, 'Patient', PATIENT_RESOURCE)
+    _seed_resource(app, 'Condition', condition)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'patient_id': PATIENT_ID, 'resource_types': ['Condition']},
+    )
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert 'Jane Upstream' not in body
+    # Reference.display on a clinical resource is not Patient.name
+    assert 'Eugene Vestel' not in body
+
+    cond = json.loads(body)['entry'][0]['resource']
+    assert cond['code']['coding'][0]['code'] == '38341003'
+    assert cond['code']['coding'][0]['display'] == 'Hypertensive disorder'
+    assert cond['code']['text'] == 'Hypertensive disorder'
+
+
+def test_intake_profile_drops_diagnostic_report_conclusion(
+        client, auth_headers, app):
+    """The intake docstring says clinician free text never ships;
+    DiagnosticReport.conclusion is that, and it used to ship (#282)."""
+    report = {
+        'resourceType': 'DiagnosticReport',
+        'id': 'intake-dr-001',
+        'status': 'final',
+        'code': {'coding': [{'system': 'http://loinc.org', 'code': '24331-1'}]},
+        'subject': {'reference': f'Patient/{PATIENT_ID}'},
+        'conclusion': 'Discussed with daughter Mary; elevated LDL',
+    }
+    _seed_resource(app, 'DiagnosticReport', report)
+
+    resp = client.post(
+        '/r6/fhir/$share-bundle',
+        headers=auth_headers,
+        json={'patient_id': PATIENT_ID,
+              'resource_types': ['DiagnosticReport']},
+    )
+    assert resp.status_code == 200
+    bundle = json.loads(resp.data)
+    assert [e['resource']['id'] for e in bundle['entry']] == ['intake-dr-001']
+    assert 'conclusion' not in bundle['entry'][0]['resource']
+    assert 'daughter Mary' not in resp.get_data(as_text=True)

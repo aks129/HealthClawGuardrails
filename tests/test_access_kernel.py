@@ -1638,21 +1638,62 @@ def test_a_patient_id_on_another_profile_is_refused(app):
                           profile=Profile.STANDARD, patient_id='hc-123')
 
 
-def test_the_intake_profile_matches_the_shipped_intake_strip(app):
+_INTAKE_CONDITION = {
+    'resourceType': 'Condition',
+    'id': 'c1',
+    'code': {'coding': [{'system': 'http://snomed.info/sct',
+                         'code': '38341003',
+                         'display': 'Rivera, Marisol'}],
+             'text': 'Rivera, Marisol'},
+    'subject': {'reference': 'Patient/p1', 'display': 'Marisol Rivera'},
+}
+
+_INTAKE_REPORT = {
+    'resourceType': 'DiagnosticReport',
+    'id': 'dr1',
+    'status': 'final',
+    'code': {'coding': [{'system': 'http://loinc.org', 'code': '24331-1'}]},
+    'subject': {'reference': 'Patient/p1'},
+    'conclusion': 'Discussed with Marisol Rivera',
+}
+
+
+@pytest.mark.parametrize('resource', [_PATIENT, _INTAKE_CONDITION,
+                                      _INTAKE_REPORT],
+                         ids=['Patient', 'Condition', 'DiagnosticReport'])
+def test_the_intake_profile_matches_the_shipped_intake_strip(app, resource):
     """The kernel carries a copy of r6/routes.py:_intake_strip until slice 14
     deletes the original. Pinned equal so the copy cannot drift while it waits.
 
-    MUTATION: drop the SSN filter from _intake_profile -> red.
+    Updated deliberately for #282 (owner ruling): intake no longer keeps
+    upstream `display`/`CodeableConcept.text`. Both copies now keep a
+    Patient's name, birthDate, address and telecom verbatim and run
+    everything else through apply_redaction, so the pin covers a coded
+    Condition and a DiagnosticReport as well as the Patient: the relabel and
+    the conclusion strip are the parts that changed.
+
+    MUTATION: drop the SSN filter from _intake_profile -> red (Patient).
+    MUTATION: return the resource from _intake_profile unredacted -> red.
     """
     from r6.routes import _intake_strip
-    expected = _intake_strip(json.loads(json.dumps(_PATIENT)))
+    expected = _intake_strip(json.loads(json.dumps(resource)))
     with app.test_request_context():
-        response = fhir_response(json.loads(json.dumps(_PATIENT)),
+        response = fhir_response(json.loads(json.dumps(resource)),
                                  profile=Profile.INTAKE)
     body = json.loads(response.get_data(as_text=True))
     assert body == expected
-    assert [i['system'] for i in body['identifier']] == ['urn:mrn']
     assert 'note' not in body and 'text' not in body
+    assert 'conclusion' not in body
+    assert 'Marisol Rivera' not in json.dumps(
+        {k: v for k, v in body.items() if k != 'name'})
+    if resource is _PATIENT:
+        assert [i['system'] for i in body['identifier']] == ['urn:mrn']
+        assert 'value' not in body['identifier'][0]
+        for key in ('name', 'birthDate', 'telecom'):
+            assert body[key] == _PATIENT[key]
+    if resource is _INTAKE_CONDITION:
+        assert body['code']['coding'][0]['display'] == 'Hypertensive disorder'
+        assert body['code']['text'] == 'Hypertensive disorder'
 
 
 def test_fhir_response_refuses_anything_that_is_not_a_profile(app):
