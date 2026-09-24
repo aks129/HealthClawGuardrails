@@ -14,6 +14,7 @@ from datetime import date
 
 from flask import request, jsonify
 
+from r6.access import TenantSource, tenant_from_request
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
@@ -112,11 +113,7 @@ def subject_resources(resource_type, subject, tenant_id):
 
 
 def register_caregaps_routes(blueprint, deps):
-    operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
-
-    def _tenant():
-        return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _subject_from_request():
         subject = request.args.get("subject")
@@ -131,10 +128,8 @@ def register_caregaps_routes(blueprint, deps):
 
     @blueprint.route("/Patient/$care-gaps", methods=["GET", "POST"])
     def care_gaps():
-        tenant_id = _tenant()
-        if not tenant_id:
-            return jsonify(operation_outcome(
-                "error", "security", "X-Tenant-Id required")), 400
+        # enforce_tenant_id already refused an absent or malformed id.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]

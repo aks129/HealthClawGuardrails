@@ -1841,7 +1841,12 @@ _ADOPTION_ALLOWED = {'main.py', 'r6/smbp/routes.py', 'r6/shc/routes.py',
                      # asks has_grant; its four JSON 401s are unchanged.
                      'r6/agent_runs/routes.py',
                      'r6/read_auth.py',
-                     'r6/rate_limit.py'}
+                     'r6/rate_limit.py',
+                     # _RAW_TENANT_READS 24 -> 14: the four operations
+                     # registered on r6_blueprint read the tenant through the
+                     # kernel, behind enforce_tenant_id, which asks it too.
+                     'r6/brief/routes.py', 'r6/caregaps/routes.py',
+                     'r6/labs/routes.py', 'r6/quality/routes.py'}
 
 
 def test_no_request_handler_has_adopted_the_kernel():
