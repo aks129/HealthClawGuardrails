@@ -184,6 +184,54 @@ def _parse_care_gaps_status(resource: dict | None) -> str:
     return ""
 
 
+def _uncounted_note(new_records: int, new_documents: int | None,
+                    uncounted: int | None) -> str | None:
+    """The one sentence about documents a count leaves out (#226).
+
+    Shared by the refresh poll and the upload card, so the two counters on
+    the same page cannot say different things again. Both pass the same
+    meanings: `new_records` and `new_documents` are what this sync or upload
+    added (None: arrival unknown), `uncounted` is the tenant's document total
+    afterwards (None: the probe failed).
+    """
+    if uncounted is None:
+        return "We could not check whether notes or documents were left out."
+    if new_records > 0 and uncounted > 0:
+        # A standing caveat on a number the patient can act on: what you
+        # can read grew, and this excludes notes.
+        return "Notes and documents are not yet readable here."
+    if new_records == 0 and new_documents:
+        # Documents arrived and nothing readable did. Silence here is
+        # indistinguishable from a sync that did nothing, so say what
+        # happened. The poll gates this on a delta, never on `uncounted > 0`
+        # — that is true from the first tick for every tenant that already
+        # holds notes, and would fire on every no-op refresh.
+        return ("Notes and documents arrived, and they are not readable "
+                "here yet.")
+    return None
+
+
+def _documents_landed(bundle: dict, result: dict, landed: int) -> int:
+    """How many of an upload's ingested entries are uncounted documents.
+
+    The engine reports one `ingested` total, and an `errors[]` row with the
+    `index` of every entry it did not store. Entries without an error row
+    landed; of those, count the types `record_count` leaves out. Only the
+    resourceType string is read — nothing from the record is kept.
+    """
+    refused = {e.get("index") for e in (result.get("errors") or [])
+               if isinstance(e, dict)}
+    n = 0
+    for idx, entry in enumerate(bundle.get("entry") or []):
+        if idx in refused or not isinstance(entry, dict):
+            continue
+        res = entry.get("resource")
+        if (isinstance(res, dict) and res.get("resourceType")
+                in HealthClawClient.UNCOUNTED_TYPES):
+            n += 1
+    return min(n, landed)
+
+
 def create_app(config: Config | None = None,
                client: HealthClawClient | None = None,
                accounts: AccountService | None = None) -> Flask:
@@ -731,15 +779,20 @@ def create_app(config: Config | None = None,
         # both key on `ingested > 0` so an all-failed / all-skipped bundle
         # never fakes sync freshness (crista #227 release condition 4).
         landed = int(result.get("ingested") or 0)
+        # The tenant's document total after this upload, for the same
+        # standing caveat the poll carries. None when it could not be read.
+        uncounted = 0
         if landed > 0:
             try:
                 svc.set_connection_status(conn["tenant_id"], "active")
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
+            uncounted = None
             try:
-                svc.mark_synced(conn_id, hc.record_count(conn["tenant_id"]),
-                                hc.uncounted_record_count(conn["tenant_id"]))
+                readable_total = hc.record_count(conn["tenant_id"])
+                uncounted = hc.uncounted_record_count(conn["tenant_id"])
+                svc.mark_synced(conn_id, readable_total, uncounted)
             except HealthClawError:
                 logger.warning("record_count after upload failed for %s",
                                conn_id)
@@ -749,6 +802,14 @@ def create_app(config: Config | None = None,
         # would give the browser a token to try elsewhere.
         response = {k: v for k, v in result.items() if k != "tenant_id"}
         response["connection_id"] = conn_id
+        # `ingested` counts documents nothing can open, so the card used to
+        # say "17 records added" where a refresh then said 5 (#226). Report
+        # what the patient can reach, and the same sentence the poll uses.
+        documents = _documents_landed(bundle, result, landed)
+        response["records_added"] = landed - documents
+        note = _uncounted_note(landed - documents, documents, uncounted)
+        if note:
+            response["uncounted_note"] = note
         return jsonify(response), 200
 
     @app.post("/api/connections/<conn_id>/disconnect")
@@ -979,25 +1040,10 @@ def create_app(config: Config | None = None,
                     new_documents = (
                         None if uncounted is None or doc_baseline is None
                         else max(0, uncounted - int(doc_baseline)))
-                    if uncounted is None:
-                        out["uncounted_note"] = (
-                            "We could not check whether notes or documents "
-                            "were left out.")
-                    elif new_records > 0 and uncounted > 0:
-                        # A standing caveat on a number the patient can act
-                        # on: what you can read grew, and this excludes notes.
-                        out["uncounted_note"] = (
-                            "Notes and documents are not yet readable here.")
-                    elif new_records == 0 and new_documents:
-                        # The refresh delivered documents and nothing readable.
-                        # Silence here is indistinguishable from a sync that
-                        # did nothing, so say what happened. Gated on the
-                        # delta, never on `uncounted > 0` — the latter is true
-                        # from the first tick for every tenant that already
-                        # holds notes, and would fire on every no-op refresh.
-                        out["uncounted_note"] = (
-                            "Notes and documents arrived, and they are not "
-                            "readable here yet.")
+                    note = _uncounted_note(new_records, new_documents,
+                                           uncounted)
+                    if note:
+                        out["uncounted_note"] = note
             return jsonify(out)
         return jsonify({"status": "pending"})
 
