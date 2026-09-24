@@ -82,10 +82,14 @@ class Row:
 
     `site` names the gate, so the AST pin below can check the rows against
     the source rather than against a number somebody remembered to bump.
+
+    `env` is set (via monkeypatch) for a gate that only exists behind a flag.
+    `denied_message` is the sentence a site passes to require_grant in place
+    of the kernel's reason; None means the kernel's wording.
     """
 
     def __init__(self, id, site, method, path, status, body=None,
-                 headers=None, seed=None):
+                 headers=None, seed=None, env=None, denied_message=None):
         self.id = id
         self.site = site
         self.method = method
@@ -94,6 +98,12 @@ class Row:
         self.body = body
         self.headers = headers or {}
         self.seed = seed
+        self.env = env or {}
+        self.denied_message = denied_message
+
+    def apply_env(self, monkeypatch):
+        for name, value in self.env.items():
+            monkeypatch.setenv(name, value)
 
 
 def _seed_medication_request(client, tenant_id, token):
@@ -157,6 +167,13 @@ ROWS = [
     Row('internal-bind-telegram', 'r6/routes.py:bind_telegram_chat',
         'POST', '/r6/fhir/internal/bind-telegram', 401,
         body={'tenant_id': 'test-tenant', 'chat_id': 4242}),
+    # #648 PR 2. The gate only exists with READ_AUTH_ENABLED on, and the
+    # site keeps its own refusal sentence for every refusal kind.
+    Row('fhir-ingest-context', 'r6/routes.py:ingest_context',
+        'POST', '/r6/fhir/Bundle/$ingest-context', 401,
+        body={'resourceType': 'Bundle', 'type': 'collection', 'entry': []},
+        env={'READ_AUTH_ENABLED': 'true'},
+        denied_message='Bundle ingestion requires a tenant-bound write token'),
 ]
 
 
@@ -172,12 +189,13 @@ def _call(client, row, tenant_id, token):
 
 @pytest.mark.parametrize('row', ROWS, ids=lambda r: r.id)
 def test_a_non_ascii_token_is_refused_exactly_as_ascii_garbage_is(
-        client, tenant_id, step_up_token, row):
+        client, tenant_id, step_up_token, row, monkeypatch):
     """MUTATION: revert the compare in r6/stepup.py -> TypeError, not 401.
 
     Both requests carry a VALID token with one extra character, so the only
     difference between them is whether that character is ASCII.
     """
+    row.apply_env(monkeypatch)
     if row.seed is not None:
         row.seed(client, tenant_id, step_up_token)
 

@@ -145,7 +145,10 @@ def _report(sites, pin, what):
 #: $ingest-context, waiting on #648.
 #: 9 -> 8 (kernel slice 16): agent_runs' session-or-token predicate asks
 #: has_grant; no direct validator call is left in r6/agent_runs/.
-_STEP_UP_CALLSITES = 4
+#: 4 -> 3 (#648 PR 2): $ingest-context through require_grant, behind the same
+#: READ_AUTH_ENABLED flag, keeping its own refusal sentence (denied_message).
+#: No direct validator call is left in r6/routes.py.
+_STEP_UP_CALLSITES = 3
 
 
 def test_direct_step_up_validation_only_decreases():
@@ -211,7 +214,9 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: cost of not shipping an unaudited read.
 #: 89 -> 87: r6/curatr.py apply_fix (#413 P1-A) — the record, the
 #: Provenance and both audit rows now commit in one transaction.
-_POST_COMMIT_AUDIT_CALLSITES = 87
+#: 87 -> 86 (#648 PR 2): $ingest-context's refusal row is the kernel's now,
+#: written by the StepUpDenied renderer, not by the route.
+_POST_COMMIT_AUDIT_CALLSITES = 86
 
 
 def test_post_commit_audit_callsites_only_decrease():
@@ -427,7 +432,9 @@ def test_soft_delete_blind_query_files_only_decrease():
 #: 3870 -> 3761: path ids moved to r6/resource_ids.py (#726) and the search
 #: error-fidelity contract to r6/search_fidelity.py (#730); the _id filter
 #: and the proxy write redaction came back in (#380).
-_GOD_MODULE_LINES = 3761
+#: 3761 -> 3750 (#648 PR 2): $ingest-context's hand-rolled gate and its
+#: audit call replaced by one require_grant.
+_GOD_MODULE_LINES = 3750
 
 
 def test_the_god_module_only_shrinks():

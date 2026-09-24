@@ -76,8 +76,9 @@ def test_the_census_covers_every_require_grant_site():
 @pytest.mark.parametrize('kind', ['absent', 'rejected'])
 @pytest.mark.parametrize('row', ROWS, ids=lambda r: r.id)
 def test_a_rendered_refusal_is_audited_exactly_once(
-        client, tenant_id, step_up_token, row, kind):
+        client, tenant_id, step_up_token, row, kind, monkeypatch):
     """MUTATION: delete `_audit_refusal(exc)` -> 0 rows; call it twice -> 2."""
+    row.apply_env(monkeypatch)
     if row.seed is not None:
         row.seed(client, tenant_id, step_up_token)
     before = {r.id for r in _rows()}
@@ -86,11 +87,17 @@ def test_a_rendered_refusal_is_audited_exactly_once(
     resp = _call(client, row, tenant_id, token)
 
     # Unchanged answer: the status this site answered before, and the exact
-    # kernel wording. A row refused earlier for another reason fails here
-    # rather than passing on some other audit row.
+    # wording — the kernel's, or the site's own sentence where it passes one.
+    # A row refused earlier for another reason fails here rather than passing
+    # on some other audit row.
     assert resp.status_code == row.status, resp.get_data(as_text=True)
-    assert resp.get_json() == (_ABSENT_BODY if kind == 'absent'
-                               else _REJECTED_BODY)
+    if row.denied_message is not None:
+        expected = {'resourceType': 'OperationOutcome', 'issue': [
+            {'severity': 'error', 'code': 'security',
+             'diagnostics': row.denied_message}]}
+    else:
+        expected = _ABSENT_BODY if kind == 'absent' else _REJECTED_BODY
+    assert resp.get_json() == expected
 
     new = _new_rows(before)
     assert len(new) == 1, (
@@ -143,6 +150,46 @@ def test_work_staged_before_the_gate_is_not_committed_by_the_audit(
     assert [r.detail for r in new] == [
         'step-up refused (absent) at stage_then_refuse: '
         'Step-up token required']
+
+
+# ---------------------------------------------------------------------------
+# denied_message: a site's own sentence on the wire, the reason in the row
+# ---------------------------------------------------------------------------
+
+def test_a_denied_message_replaces_the_body_only(app, tenant_id,
+                                                 step_up_token):
+    """A site that passes denied_message shows that sentence for both
+    refusal kinds, at the status its parameters name. The audit row still
+    records the classified reason, so the row says why and the wire does not.
+    Every other site is the census above, which pins the default wording.
+
+    MUTATION: render `exc.reason` unconditionally -> the bodies go red;
+    audit `denied_message` instead of the reason -> the details go red.
+    """
+    @app.route('/kernel/own-sentence', methods=['POST'])
+    def own_sentence():
+        tenant = tenant_from_request(sources=(TenantSource.HEADER,))
+        require_grant(scope=Scope.WRITE, tenant=tenant, rejected_status=403,
+                      denied_message='This site says its own sentence')
+        return 'unreachable', 201
+
+    before = {r.id for r in _rows()}
+    client = app.test_client()
+    absent = client.post('/kernel/own-sentence',
+                         headers={'X-Tenant-Id': tenant_id})
+    rejected = client.post('/kernel/own-sentence',
+                           headers={'X-Tenant-Id': tenant_id,
+                                    'X-Step-Up-Token': step_up_token + 'x'})
+
+    body = {'resourceType': 'OperationOutcome', 'issue': [
+        {'severity': 'error', 'code': 'security',
+         'diagnostics': 'This site says its own sentence'}]}
+    assert (absent.status_code, absent.get_json()) == (401, body)
+    assert (rejected.status_code, rejected.get_json()) == (403, body)
+    assert sorted(r.detail for r in _new_rows(before)) == [
+        'step-up refused (absent) at own_sentence: Step-up token required',
+        'step-up refused (rejected) at own_sentence: Invalid token signature',
+    ]
 
 
 # ---------------------------------------------------------------------------

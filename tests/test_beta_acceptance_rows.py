@@ -165,16 +165,14 @@ def test_smbp_row_is_unavailable_and_says_why(run):
 
 def test_care_gaps_brief_row_reports_the_section_it_is_shown(cfg, svc,
                                                              monkeypatch, run):
-    """Against the real engine the brief's screening review does not run: it
-    resolves no patient (the stopgap in r6/brief/routes.py) and says so. The
-    row records that as UNAVAILABLE — not a pass, and not "nothing due".
-    When the brief learns its subject, this becomes a PASS with sourced
-    items, and this test is the one to update."""
+    """Against the real engine the brief resolves the tenant's one Patient and
+    runs the screening review, so the row passes with the sample patient's
+    due screenings, each naming its source record."""
     chain = Chain(cfg, svc, monkeypatch)
-    assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is False
+    assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is True
     step = _only(run)
-    assert step["status"] == "UNAVAILABLE"
-    assert "did not run" in step["detail"]
+    assert step["status"] == "PASS"
+    assert step["due_items"] == 4
 
 
 def _page_session(page):

@@ -284,10 +284,10 @@ def _register_request_hooks(flask_app: Flask) -> None:
     # HANDLERS ONLY — no before_request hook is added to any blueprint, because
     # r6/sdc/delivery.py runs off r6_blueprint on purpose (the HMAC signature in
     # the URL is the credential, and the route must work with no headers).
-    # Behaviourally inert today: nothing raises StepUpDenied or calls audit()
-    # yet, since the kernel is still adopted by no production module.
-    # install_audit_assertions is registered here (#321), before any audit()
-    # adoption rather than with it — a guard that arrives alongside the
+    # Every require_grant site's refusal is rendered by the StepUpDenied
+    # handler registered here, and that handler writes the refusal's audit
+    # row (#648). install_audit_assertions was registered here (#321) before
+    # any audit() adoption rather than with it — a guard that arrives alongside the
     # migration it guards protected nobody. Testing-mode only: it fails a
     # request that flushed an AuditEvent and returned without resolving the
     # transaction. It does NOT catch a flush that is rolled back behind a 2xx;

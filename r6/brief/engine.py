@@ -313,8 +313,9 @@ def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     # says which rules never decided and why (`unevaluated*`); discarding that
     # would render an empty or partial gap list as a completed review, and
     # "nothing is due" is a clinical claim only ever repeated from a result
-    # that made it (#428). The brief passes patient=None, so this is the
-    # ORDINARY path here, not an edge case (#435).
+    # that made it (#428). It is also how a tenant with no Patient, or more
+    # than one, reaches this section: the route declares the caller reason
+    # and the note says which.
     if consumer.get("unevaluated"):
         return CareGapsSection(
             fields=out, status=CARE_GAPS_UNAVAILABLE,
