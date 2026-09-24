@@ -676,7 +676,9 @@ _UNAUDITED_REFUSALS = {
         'not the kernel; each audits (or not) at the site until it migrates',
     'over the refusal-audit budget':
         'bounded per client; the refusal is still rendered, and the one row '
-        'at the budget says the rest were not stored',
+        'at the budget says the rest were not stored. check_rate_limit '
+        'answers a production Redis outage as "over", so while Redis is '
+        'down no refusal is audited — it cannot tell this module which',
     'audit storage failure':
         'the refusal is still rendered; the failure is logged by type name',
 }
@@ -746,8 +748,11 @@ def _audit_refusal(exc: StepUpDenied) -> None:
         db.session.rollback()
         allowance = _refusal_audit_allowance()
         if allowance is None:
-            logger.warning('step-up refusal not audited: budget exhausted '
-                           'for this client')
+            # check_rate_limit returns the same answer for "over budget"
+            # and, in production, for "Redis unreachable", so the log says
+            # both rather than asserting the one it cannot know.
+            logger.warning('step-up refusal not audited: refusal-audit '
+                           'budget exhausted or limiter store unavailable')
             return
         if allowance == 'budget':
             detail = _BUDGET_DETAIL
