@@ -50,6 +50,12 @@ limit: every other check here is equally satisfied by a months-old build, and
 this one proves WHICH ARTIFACT is deployed. It does not prove the code in that
 artifact works — a broken build carrying the right sha still passes it.
 
+The MCP version checks (#155) are coarser again. Both MCP services deploy by
+hand, and their /health names only the package version, so these compare it
+with services/agent-orchestrator/package.json in the checkout this runs from.
+That catches a release that was never deployed; it cannot see a merge that
+changed the server without bumping the version — a version is not a commit.
+
 The Telegram check (#537) has the same limit one layer down. It reads what an
 unauthenticated visitor reads — the landing page, and the home page only if
 that ever answers without a session — and fails on any live Telegram link or
@@ -116,6 +122,13 @@ BUILD_CHECK = "careagents: running the current build"
 #: (#703 §0): the packet records both; this asserts it only when asked to.
 FLASK_BUILD_CHECK = "healthclaw: running the expected build"
 TELEGRAM_CHECK = "careagents: telegram not advertised as live"
+#: Both MCP services deploy by hand (#155), so nothing moves them when main
+#: does. Their /health names the package version; these compare it with the
+#: one the checkout declares.
+MCP_LOCKED_VERSION_CHECK = "mcp (locked): running the version main declares"
+MCP_DEMO_VERSION_CHECK = "mcp (public demo): running the version main declares"
+MCP_PACKAGE_JSON = (Path(__file__).resolve().parent.parent
+                    / "services" / "agent-orchestrator" / "package.json")
 # Same shape careagents/_build.py enforces on the way out. A "-dirty" marker
 # deliberately fails it: a build stamped from an uncommitted tree has no
 # provenance to assert.
@@ -289,6 +302,62 @@ _WORKER_STATE_MEANING = {
 }
 
 
+def _declared_mcp_version() -> str | None:
+    """The MCP server version this checkout declares, or None if unreadable.
+
+    Read from the checkout rather than passed in, unlike the two build shas:
+    those need git history only the caller has, while this is a file sitting
+    next to the script. The scheduled run checks out main, so there this is
+    the version main declares.
+    """
+    try:
+        pkg = json.loads(MCP_PACKAGE_JSON.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = pkg.get("version") if isinstance(pkg, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        return None
+    return version.strip()
+
+
+def _mcp_version_verdict(r, declared: str | None):
+    """(asserted, ok, detail) for one MCP service's version check.
+
+    Returns the verdict rather than recording it: `_declared_checks` can only
+    read a `check(...)` whose name is a literal or module constant, so each
+    service names its own constant at its own call site.
+
+    Either side unreadable is reported, not asserted — the #272 rule. A server
+    that is down is already an outage on its "alive" line; calling it stale
+    too would send whoever reads the alarm to redeploy something that is not
+    answering.
+    """
+    code = getattr(r, "status_code", None)
+    deployed = None
+    if code == 200:
+        try:
+            deployed = (r.json() or {}).get("version")
+        except (ValueError, AttributeError):
+            deployed = None
+    deployed = str(deployed).strip() if deployed is not None else ""
+    if not deployed:
+        return False, None, (
+            "not asserted — /health "
+            + (f"answered {code if code is not None else r}" if code != 200
+               else "named no version")
+            + ", so no version was read")
+    if declared is None:
+        return False, None, (
+            f"{deployed} deployed; not asserted — could not read the version "
+            "from services/agent-orchestrator/package.json")
+    if deployed == declared:
+        return True, True, deployed
+    return True, False, (
+        f"deployed version {deployed} is not the {declared} this checkout "
+        "declares. The MCP server does not auto-deploy — redeploy per "
+        "RELEASING.md §4.")
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     """Assert something, and record the verdict under `name`.
 
@@ -360,7 +429,7 @@ def post(url: str, timeout: float, **kw):
 
 def _run_checks(timeout: float, expect_sha: list[str],
                 expect_flask_sha: list[str] | None = None) -> bool:
-    """Run every check; return whether the build check found a stale build.
+    """Run every check; return whether a build check found a stale build.
 
     Split out of `run` so the summary and the completeness guard cannot be
     skipped by anything added in here — including an early `return`, which is
@@ -703,9 +772,19 @@ def _run_checks(timeout: float, expect_sha: list[str],
           "maxlength=8 present" if ok_auth else "code input missing or too short")
 
     # --- MCP servers ---------------------------------------------------------
+    # Read once, for both services' version checks below.
+    declared_mcp = _declared_mcp_version()
     r = get(f"{MCP_LOCKED}/health", timeout)
     check("mcp (locked): alive", getattr(r, "status_code", None) == 200,
           str(getattr(r, "status_code", r)))
+    # Same body, no second request. "alive" is satisfied just as well by a
+    # server releases behind main, which is #155: the MCP server deploys by
+    # hand, and nothing said when nobody had.
+    asserted, ok, detail = _mcp_version_verdict(r, declared_mcp)
+    if asserted:
+        stale = not check(MCP_LOCKED_VERSION_CHECK, ok, detail) or stale
+    else:
+        report(MCP_LOCKED_VERSION_CHECK, detail)
 
     # The one non-negotiable on this server: an unauthenticated caller must be
     # REFUSED. 401/403 is the pass. Anything that looks like service — a 200,
@@ -721,6 +800,11 @@ def _run_checks(timeout: float, expect_sha: list[str],
     r = get(f"{MCP_DEMO}/health", timeout)
     check("mcp (public demo): alive", getattr(r, "status_code", None) == 200,
           str(getattr(r, "status_code", r)))
+    asserted, ok, detail = _mcp_version_verdict(r, declared_mcp)
+    if asserted:
+        stale = not check(MCP_DEMO_VERSION_CHECK, ok, detail) or stale
+    else:
+        report(MCP_DEMO_VERSION_CHECK, detail)
 
     # ...but "alive" was all this asserted for a while, and that is the gap a
     # design partner found for us: every quickstart, the Gemini extension, the
@@ -783,7 +867,9 @@ def run(timeout: float, expect_sha: list[str],
                         missing=missing, unreadable=unreadable)
 
     failed = [n for n, ok, _ in results if not ok]
-    hard = [n for n in failed if n not in (BUILD_CHECK, FLASK_BUILD_CHECK)]
+    hard = [n for n in failed if n not in (BUILD_CHECK, FLASK_BUILD_CHECK,
+                                           MCP_LOCKED_VERSION_CHECK,
+                                           MCP_DEMO_VERSION_CHECK)]
     print(file=_human())
     if failed:
         print(f"{R}{len(failed)} check(s) failing:{X} " + ", ".join(failed),

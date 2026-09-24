@@ -46,9 +46,23 @@ class _Resp:
         return self._payload
 
 
+#: The MCP version the checkout declares, read when the fake answers rather
+#: than hardcoded: a literal here would rot on the next version bump and turn
+#: every test in this file into a stale-MCP run.
+_DECLARED = object()
+
+
 def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
               demo_patients=None, landing='<a href="/auth">start</a>',
-              home=None, flask_build="c937c180319c"):
+              home=None, flask_build="c937c180319c", mcp_version=_DECLARED,
+              demo_mcp_version=_DECLARED):
+    def _mcp_health(version):
+        # None means a /health that answers without naming a version.
+        if version is _DECLARED:
+            version = prod_watch._declared_mcp_version()
+        return _Resp(200, {"status": "healthy"} if version is None
+                     else {"status": "healthy", "version": version})
+
     def get(url, timeout, **kw):
         if url.endswith("/r6/fhir/health"):
             return _Resp(200, {"status": "healthy", "build": flask_build})
@@ -79,8 +93,10 @@ def _fake_get(build="4f2a91cbeef1", built_at=1754056800, grade="A",
             return _Resp(302) if home is None else _Resp(200, text=home)
         if url.endswith("/mcp"):
             return _Resp(401)
-        if url.endswith("/health"):
-            return _Resp(200)
+        if url == f"{prod_watch.MCP_LOCKED}/health":
+            return _mcp_health(mcp_version)
+        if url == f"{prod_watch.MCP_DEMO}/health":
+            return _mcp_health(demo_mcp_version)
         return _Resp(200, text=landing)
     return get
 
@@ -1052,3 +1068,113 @@ def test_a_stale_flask_build_is_not_an_outage(monkeypatch):
     assert prod_watch.run(1.0, [TIP], ["0" * 40]) == 2
     monkeypatch.setattr(prod_watch, "get", _fake_get(grade="B"))
     assert prod_watch.run(1.0, [TIP], ["0" * 40]) == 1
+
+
+# --- MCP deploy drift (#155) --------------------------------------------------
+# Both MCP services deploy by hand, so nothing moved them when main did. Their
+# /health has named a version all along; these pin the check that compares it
+# with the version the checkout declares.
+
+_MCP_CHECKS = ("MCP_LOCKED_VERSION_CHECK", "MCP_DEMO_VERSION_CHECK")
+
+
+def test_the_checkout_declares_an_mcp_version():
+    # Every test below leans on this reading; if it silently returned None the
+    # whole section would pass through the not-asserted branch.
+    assert re.fullmatch(r"\d+\.\d+\.\d+.*", prod_watch._declared_mcp_version())
+
+
+def test_mcp_servers_on_the_declared_version_pass():
+    assert prod_watch.run(1.0, [TIP]) == 0
+    declared = prod_watch._declared_mcp_version()
+    for const in _MCP_CHECKS:
+        (_, ok, detail), = _named(getattr(prod_watch, const))
+        assert ok is True and declared in detail
+
+
+@pytest.mark.parametrize("kw, const", [
+    ({"mcp_version": "0.0.1"}, "MCP_LOCKED_VERSION_CHECK"),
+    ({"demo_mcp_version": "0.0.1"}, "MCP_DEMO_VERSION_CHECK"),
+])
+def test_a_stale_mcp_server_exits_2_and_names_the_remedy(monkeypatch, kw, const):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(**kw))
+    assert prod_watch.run(1.0, [TIP]) == 2
+    (_, ok, detail), = _named(getattr(prod_watch, const))
+    assert ok is False
+    assert "0.0.1" in detail and prod_watch._declared_mcp_version() in detail
+    assert "does not auto-deploy" in detail and "RELEASING.md §4" in detail
+    # Only the drifted service is named; the other one is still current.
+    other, = set(_MCP_CHECKS) - {const}
+    assert _named(getattr(prod_watch, other))[0][1] is True
+
+
+def test_a_stale_mcp_server_is_not_an_outage(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(mcp_version="0.0.1",
+                                                     demo_mcp_version="0.0.1"))
+    out = tmp_path / "status.json"
+    code = _payload(["--expect-sha", TIP, "--json-out", str(out)],
+                    monkeypatch, capsys)
+    payload = json.loads(out.read_text())
+    # Exit 2, and hard_ok stays true: a drifted MCP server must not hold the
+    # outage issue open, only the stale-build one.
+    assert code == 2
+    assert payload["hard_ok"] is True and payload["ok"] is False
+    # ...and an outage still outranks it.
+    monkeypatch.setattr(prod_watch, "get", _fake_get(
+        grade="B", mcp_version="0.0.1", demo_mcp_version="0.0.1"))
+    assert prod_watch.run(1.0, [TIP]) == 1
+
+
+def test_an_mcp_health_without_a_version_is_reported_not_asserted(
+        monkeypatch, capsys):
+    monkeypatch.setattr(prod_watch, "get", _fake_get(mcp_version=None))
+    assert prod_watch.run(1.0, [TIP]) == 0
+    assert _named(prod_watch.MCP_LOCKED_VERSION_CHECK) == []
+    assert prod_watch.MCP_LOCKED_VERSION_CHECK in prod_watch.reported
+    assert "not asserted" in capsys.readouterr().out
+    # The demo, which did name one, is still asserted.
+    assert _named(prod_watch.MCP_DEMO_VERSION_CHECK)[0][1] is True
+
+
+def test_an_mcp_server_that_is_down_is_an_outage_not_a_stale_build(
+        monkeypatch):
+    real = _fake_get()
+
+    def get(url, timeout, **kw):
+        if url == f"{prod_watch.MCP_DEMO}/health":
+            return "ConnectionError"
+        return real(url, timeout, **kw)
+    monkeypatch.setattr(prod_watch, "get", get)
+    assert prod_watch.run(1.0, [TIP]) == 1
+    assert _named(prod_watch.MCP_DEMO_VERSION_CHECK) == []
+    assert prod_watch.MCP_DEMO_VERSION_CHECK in prod_watch.reported
+
+
+def test_an_unreadable_package_json_is_reported_not_asserted(monkeypatch,
+                                                             capsys):
+    # Nothing to compare against is not a mismatch: without the declared
+    # version this run has no honest assertion to make about either server.
+    # Both servers name a version, so both reach the package.json branch.
+    monkeypatch.setattr(prod_watch, "get", _fake_get(mcp_version="0.0.1",
+                                                     demo_mcp_version="0.0.1"))
+    monkeypatch.setattr(prod_watch, "_declared_mcp_version", lambda: None)
+    assert prod_watch.run(1.0, [TIP]) == 0
+    for const in _MCP_CHECKS:
+        assert _named(getattr(prod_watch, const)) == []
+        assert getattr(prod_watch, const) in prod_watch.reported
+    out = capsys.readouterr().out
+    assert out.count("could not read the version from services/"
+                     "agent-orchestrator/package.json") == 2
+
+
+def test_the_declared_version_is_read_from_the_checkout(monkeypatch, tmp_path):
+    pkg = tmp_path / "package.json"
+    pkg.write_text(json.dumps({"name": "x", "version": "7.8.9"}))
+    monkeypatch.setattr(prod_watch, "MCP_PACKAGE_JSON", pkg)
+    assert prod_watch._declared_mcp_version() == "7.8.9"
+    for broken in ("{not json", json.dumps({"name": "x"}),
+                   json.dumps({"version": ""}), json.dumps(["1.0.0"])):
+        pkg.write_text(broken)
+        assert prod_watch._declared_mcp_version() is None
+    monkeypatch.setattr(prod_watch, "MCP_PACKAGE_JSON", tmp_path / "absent")
+    assert prod_watch._declared_mcp_version() is None

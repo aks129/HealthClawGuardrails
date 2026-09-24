@@ -81,6 +81,12 @@ def _fake_get(grade="A"):
             return _Resp(200, text='<input maxlength="8">')
         if url.endswith("/mcp"):
             return _Resp(401)
+        if url in (f"{prod_watch.MCP_LOCKED}/health",
+                   f"{prod_watch.MCP_DEMO}/health"):
+            # Healthy means current (#155): both on the version the checkout
+            # declares, read rather than hardcoded so a bump cannot rot it.
+            return _Resp(200, {"status": "healthy",
+                               "version": prod_watch._declared_mcp_version()})
         if url.endswith("/health"):
             return _Resp(200)
         return _Resp(200, text='<a href="/auth">start</a>')
