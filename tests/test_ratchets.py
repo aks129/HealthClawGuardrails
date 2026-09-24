@@ -378,7 +378,9 @@ def test_no_new_package_mutates_without_auditing():
 #: Patient whose sex picks a reference range.
 #: 6 -> 5: r6/smbp/routes.py filters the clinician report's readings, so a
 #: deleted blood pressure is not a row, an average or a flag in it.
-_FILES_QUERYING_WITHOUT_SOFT_DELETE = 5
+#: 5 -> 4: r6/quality/routes.py filters the one loader behind NQF 0018's
+#: $evaluate-measure — Patients, Conditions and Observations alike.
+_FILES_QUERYING_WITHOUT_SOFT_DELETE = 4
 
 #: r6/purge.py hard-deletes a tenant's rows. It must NOT filter is_deleted —
 #: a purge that skipped soft-deleted rows would leave exactly the records the

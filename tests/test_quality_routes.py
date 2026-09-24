@@ -135,3 +135,62 @@ def test_evaluate_post_requires_read_auth_nonpublic(client, app, monkeypatch):
         headers={"X-Tenant-Id": "private-q"},
         json={"resourceType": "Parameters", "parameter": []})
     assert resp.status_code == 401
+
+
+# --- a soft-deleted row does not count toward the measure -------------------
+
+def _tombstone(app, tenant_id, resource_type, rid):
+    with app.app_context():
+        row = R6Resource.query.filter_by(
+            tenant_id=tenant_id, resource_type=resource_type, id=rid).one()
+        row.is_deleted = True
+        db.session.commit()
+
+
+def test_a_deleted_reading_does_not_make_the_patient_controlled(
+        client, app, tenant_id, tenant_headers):
+    """The latest reading decides control. A deleted later reading at goal
+    must not turn an uncontrolled patient into a numerator hit.
+
+    MUTATION: drop `is_deleted=False` from _load -> numerator 1 -> red."""
+    _seed_controlled_patient(app, tenant_id, sys_v=150, dia_v=95,
+                             observed_on="2026-06-01")
+    _store(app, {"resourceType": "Observation", "id": "o-deleted",
+                 "status": "final",
+                 "code": {"coding": [{"system": "http://loinc.org",
+                                      "code": "85354-9"}]},
+                 "subject": {"reference": "Patient/p1"},
+                 "effectiveDateTime": "2026-09-01",
+                 "component": [
+                     {"code": {"coding": [{"system": "http://loinc.org",
+                                           "code": "8480-6"}]},
+                      "valueQuantity": {"value": 124}},
+                     {"code": {"coding": [{"system": "http://loinc.org",
+                                           "code": "8462-4"}]},
+                      "valueQuantity": {"value": 76}}]}, tenant_id)
+    _tombstone(app, tenant_id, "Observation", "o-deleted")
+
+    resp = client.get(
+        "/r6/fhir/Measure/nqf0018-controlling-high-bp/$evaluate-measure"
+        "?subject=Patient/p1&periodStart=2026-01-01&periodEnd=2026-12-31",
+        headers=tenant_headers)
+    assert resp.status_code == 200
+    assert _pop(resp.get_json(), "numerator") == 0
+
+
+def test_a_deleted_patient_is_not_in_the_population(
+        client, app, tenant_id, tenant_headers):
+    """MUTATION: drop `is_deleted=False` from _load -> denominator 2 -> red."""
+    _seed_controlled_patient(app, tenant_id, pid="kept", sys_v=128, dia_v=78)
+    _seed_controlled_patient(app, tenant_id, pid="gone", sys_v=150, dia_v=96)
+    _tombstone(app, tenant_id, "Patient", "gone")
+
+    resp = client.post(
+        "/r6/fhir/Measure/nqf0018-controlling-high-bp/$evaluate-measure",
+        headers=tenant_headers,
+        json={"resourceType": "Parameters", "parameter": [
+            {"name": "periodStart", "valueDate": "2026-01-01"},
+            {"name": "periodEnd", "valueDate": "2026-12-31"}]})
+    rep = resp.get_json()
+    assert _pop(rep, "denominator") == 1
+    assert rep["group"][0]["measureScore"]["value"] == 1.0

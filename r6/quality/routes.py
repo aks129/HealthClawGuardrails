@@ -42,8 +42,11 @@ def register_quality_routes(blueprint, deps):
         return None
 
     def _load(resource_type, tenant_id):
+        # Live rows only: a deleted Patient is not in the population and a
+        # deleted reading cannot decide whether BP is controlled.
         return [r.to_fhir_json() for r in R6Resource.query.filter_by(
-            resource_type=resource_type, tenant_id=tenant_id).all()]
+            resource_type=resource_type, tenant_id=tenant_id,
+            is_deleted=False).all()]
 
     def _for_subject(resources, subject_ref):
         return [r for r in resources
