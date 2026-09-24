@@ -308,6 +308,7 @@ export class FHIRTools {
                 "AllergyIntolerance",
                 "Immunization",
                 "MedicationRequest",
+                "MedicationStatement",
                 "Medication",
                 "MedicationDispense",
                 "Procedure",
@@ -380,6 +381,7 @@ export class FHIRTools {
                 "AllergyIntolerance",
                 "Immunization",
                 "MedicationRequest",
+                "MedicationStatement",
                 "Medication",
                 "MedicationDispense",
                 "Procedure",
@@ -1446,16 +1448,25 @@ export class FHIRTools {
     const resourceType = resource.resourceType as string;
     const validation = await this.validateResource(resource, headers);
 
-    // Check if validation passed
-    const issues = ((validation as Record<string, unknown>).issue as Array<Record<string, unknown>>) || [];
+    // Check if validation passed. A non-ok $validate (the engine answers 422
+    // for an invalid resource) comes back through backendFailureResult, so
+    // its already-sanitised issues sit under `error.issue`, not `issue`.
+    // Anything that is not an OperationOutcome at all is an unanswered
+    // validation, and an unanswered validation is not a pass.
+    const failed = validation.error !== undefined;
+    const outcome = (failed ? validation.error : validation) as Record<string, unknown>;
+    const answered =
+      !!outcome && outcome.resourceType === "OperationOutcome" && Array.isArray(outcome.issue);
+    const issues = answered ? (outcome.issue as Array<Record<string, unknown>>) : [];
     const errors = issues.filter((i) => i.severity === "error" || i.severity === "fatal");
     const warnings = issues.filter((i) => i.severity === "warning");
-    const passed = errors.length === 0;
+    const passed = answered && !failed && errors.length === 0;
 
     // Determine if clinical resource (requires human-in-the-loop)
     const clinicalTypes = new Set([
       "Observation", "Condition", "MedicationRequest", "DiagnosticReport",
       "AllergyIntolerance", "Procedure", "CarePlan", "Immunization",
+      "MedicationStatement",
       "NutritionIntake", "DeviceAlert",
     ]);
     const requiresHumanConfirmation = clinicalTypes.has(resourceType);
@@ -1479,7 +1490,9 @@ export class FHIRTools {
               : `Ready to commit. Provide X-Step-Up-Token header to proceed.`,
           }
         : {
-            message: `Validation failed with ${errors.length} error(s). Fix issues before committing.`,
+            message: answered
+              ? `Validation failed with ${errors.length} error(s). Fix issues before committing.`
+              : "Validation could not be completed. Do not commit until it passes.",
             errors: errors.map((e) => e.diagnostics || e.details),
           },
     };
@@ -1519,6 +1532,9 @@ export class FHIRTools {
       return { error: `Unknown operation: ${operation}` };
     }
 
+    if (!resp.ok) {
+      return backendFailureResult(resp);
+    }
     return (await resp.json()) as Record<string, unknown>;
   }
 
