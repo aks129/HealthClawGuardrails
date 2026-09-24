@@ -372,19 +372,35 @@ def _step_up_token(*, also_bearer: bool, also_body_field: str | None) -> str:
 
 
 @dataclass(frozen=True)
-class _Outcome:
-    """What ONE step-up evaluation decided. Private on purpose.
+class StepUpDecision:
+    """What ONE step-up evaluation decided.
 
-    The public surface is a Grant or a refusal. This type is the shared
-    middle so that `require_grant` and `has_grant` cannot drift into two
-    different answers to the same question — which is the whole reason the
-    kernel exists. It never leaves this module, so there is no two-field
-    result for a caller to mis-destructure.
+    The shared middle of `require_grant`, `has_grant` and `decide_grant`, so
+    the three cannot drift into different answers to the same question —
+    which is the whole reason the kernel exists. It left this module in
+    #655, for the sites that put the classified refusal reason on the wire
+    and could not adopt the kernel while `has_grant` threw that reason
+    away. `reason` is already public-safe (public_step_up_reason), never
+    the validator's raw text.
+
+    It cannot be mistaken for "granted": truth-testing it raises, so the
+    tuple trap this kernel exists to delete cannot come back as an object
+    trap. Read `.granted`, or `.grant`.
     """
 
     grant: Grant | None
     reason: str      # public-safe; '' when granted
     absent: bool     # the request presented no token at all
+
+    @property
+    def granted(self) -> bool:
+        return self.grant is not None
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            'a StepUpDecision is not a boolean: read .granted (or .grant); '
+            'a refused decision is an object too, and `if decision:` would '
+            'wave it through')
 
 
 def _evaluate(
@@ -397,8 +413,8 @@ def _evaluate(
     also_bearer: bool,
     also_body_field: str | None,
     caller: str,
-) -> _Outcome:
-    """The single step-up decision. Both public entry points route here.
+) -> StepUpDecision:
+    """The single step-up decision. Every public entry point routes here.
 
     THE ONE PROPERTY: a Grant is constructed on exactly one line in this
     repository, and only after validate_step_up_token returned True for this
@@ -420,7 +436,7 @@ def _evaluate(
     token = _step_up_token(also_bearer=also_bearer,
                            also_body_field=also_body_field)
     if not token:
-        return _Outcome(grant=None, reason=_DENIED_ABSENT, absent=True)
+        return StepUpDecision(grant=None, reason=_DENIED_ABSENT, absent=True)
 
     # Destructure both halves. A truthiness test on the tuple is a silent
     # auth bypass — this module exists so that idiom has one home.
@@ -433,7 +449,7 @@ def _evaluate(
         require_operation=operation,
     )
     if valid:
-        return _Outcome(
+        return StepUpDecision(
             grant=Grant(
                 tenant_id=tenant.id,
                 scope=scope,
@@ -451,7 +467,8 @@ def _evaluate(
     # a predicate on a hot path (the rate limiter) would otherwise log once per
     # request.
     logger.info('step-up refused for tenant %s: %s', tenant.id, error)
-    return _Outcome(grant=None, reason=public_step_up_reason(error), absent=False)
+    return StepUpDecision(grant=None, reason=public_step_up_reason(error),
+                          absent=False)
 
 
 def require_grant(
@@ -564,6 +581,49 @@ def has_grant(
         consume_nonce=False, also_bearer=also_bearer,
         also_body_field=also_body_field, caller='has_grant',
     ).grant
+
+
+def decide_grant(
+    *,
+    scope: Scope,
+    tenant: Tenant,
+    audience: str | None = None,
+    operation: str | None = None,
+    also_bearer: bool = False,
+    also_body_field: str | None = None,
+) -> StepUpDecision:
+    """Ask whether this request holds a step-up grant, and if not, why.
+
+    THE ONE PROPERTY: identical to has_grant's — `.grant` is the Grant
+    require_grant would return and None in exactly the cases it would raise
+    — with the refusal's classified reason kept instead of discarded.
+
+    WHY THIS EXISTS (#655). Three direct step-up sites publish the refusal
+    reason on the wire, per the 2026-08-10 ruling (#508): the command
+    centre's `_authz_write` and dashboard-link mint answer
+    `{"error": "step-up token rejected: <reason>"}`, and `$extract` answers
+    two distinct OperationOutcomes. has_grant throws the reason away and
+    require_grant renders one uniform outcome, so neither could adopt them
+    without changing three wire contracts inside move PRs. _evaluate already
+    computes the classified sentence; returning it is the missing half of an
+    existing decision, not a relaxation.
+
+    NO ``consume_nonce`` and NO status parameters, for has_grant's reasons:
+    asking is not spending, and this function makes no HTTP decision.
+    Propagates a validator exception, as _evaluate does.
+
+    THE HAZARD is has_grant's: a decision nobody acts on gates nothing. The
+    same two guards hold it — the answer may never be discarded, and every
+    call site is an allowlist entry added by the PR that adopts it — plus
+    two more: `if decision:` raises on the first request, and every call
+    must read `.granted` or `.grant` (tests/test_access_kernel.py), since
+    `.reason` and `.absent` describe a refusal without saying there was one.
+    """
+    return _evaluate(
+        scope=scope, tenant=tenant, audience=audience, operation=operation,
+        consume_nonce=False, also_bearer=also_bearer,
+        also_body_field=also_body_field, caller='decide_grant',
+    )
 
 
 def register_error_handlers(app) -> None:
