@@ -728,3 +728,89 @@ def test_the_content_list_never_holds_the_patient(app, tenant_id, monkeypatch):
         review._draft_qr(action, tenant_id)
         assert seen['subject']['id'] == 'p-581'
         assert all(r['resourceType'] != 'Patient' for r in seen['content'])
+
+
+# ---------------------------------------------------------------------------
+# A soft-deleted row never drives a review draft
+# ---------------------------------------------------------------------------
+
+def _tombstoned(resource, tenant):
+    row = R6(resource, tenant)
+    row.is_deleted = True
+    return row
+
+
+def test_tombstoned_questionnaire_does_not_drive_the_draft(app, tenant_id):
+    """A soft-deleted Questionnaire falls back to the built-in intake form,
+    exactly as if it were absent.
+
+    MUTATION: drop `is_deleted=False` from _resolve_questionnaire -> red."""
+    from r6.actions import review
+    from r6.actions.models import ProposedAction
+    stored = {'resourceType': 'Questionnaire', 'id': 'q-deleted',
+              'status': 'active', 'title': 'Tombstoned questionnaire',
+              'item': []}
+    with app.app_context():
+        db.session.add(_tombstoned(stored, tenant_id))
+        db.session.commit()
+        action = ProposedAction(
+            tenant_id=tenant_id, kind='form-fill',
+            payload={'questionnaire': 'Questionnaire/q-deleted'})
+        resolved = review._resolve_questionnaire(action, tenant_id)
+        assert resolved.get('id') != 'q-deleted'
+        assert resolved.get('title') != 'Tombstoned questionnaire'
+        assert resolved == review.intake_questionnaire()
+
+
+def test_tombstoned_patient_is_not_resolved(app, tenant_id):
+    """A soft-deleted Patient is not the subject of a review draft, whether
+    the action names it or the tenant's first Patient is taken.
+
+    MUTATION: drop `is_deleted=False` from either _load_patient query -> red."""
+    from r6.actions import review
+    live = dict(PATIENT, id='p-live')
+    with app.app_context():
+        db.session.add(_tombstoned(PATIENT, tenant_id))
+        db.session.commit()
+        assert review._load_patient(tenant_id, 'Patient/test-patient-1') is None
+        assert review._load_patient(tenant_id) is None
+
+        db.session.add(R6(live, tenant_id))
+        db.session.commit()
+        picked = review._load_patient(tenant_id)
+        assert picked is not None and picked['id'] == 'p-live'
+
+
+def test_tombstoned_clinical_row_is_not_gathered(app, tenant_id):
+    """A soft-deleted allergy is not handed to the populate engine, so it is
+    never offered for approval on the patient's behalf.
+
+    MUTATION: drop `is_deleted=False` from _gather_content's sweep -> red."""
+    from r6.actions import review
+    with app.app_context():
+        db.session.add(R6(PATIENT, tenant_id))
+        db.session.add(_tombstoned(ALLERGY_A, tenant_id))
+        db.session.add(R6(MED_A, tenant_id))
+        db.session.commit()
+        content = review._gather_content(tenant_id, dict(PATIENT))
+        ids = sorted(r['id'] for r in content.resources)
+        assert ids == ['med-a']
+
+
+def test_get_review_tombstoned_subject_reads_as_unresolved(
+        client, app, tenant_headers, auth_headers):
+    """End to end: an action whose subject was soft-deleted renders as a
+    record we could not read, never with the deleted patient's details."""
+    _seed(app, tenant_headers['X-Tenant-Id'], [MED_A])
+    with app.app_context():
+        db.session.add(_tombstoned(PATIENT, tenant_headers['X-Tenant-Id']))
+        db.session.commit()
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers,
+                                  subject_ref='Patient/test-patient-1')
+
+    resp = _get(client, auth_headers, action_id)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert 'Smith' not in html
+    assert ABSENCE_LINE not in html
+    assert UNREADABLE_LINE in html
