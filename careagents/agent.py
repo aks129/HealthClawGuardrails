@@ -319,7 +319,7 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
 
 
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
-                  args: dict, events: list) -> str:
+                  args: dict, events: list, agent_id: str = "") -> str:
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
@@ -419,7 +419,9 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         action_id = hc.start_form_action(tenant)
         events.append({"type": "card", "kind": "review",
                        "action_id": action_id,
-                       "review_url": f"/review/{action_id}"})
+                       # The review route is per agent; a bare action id
+                       # named no page at all.
+                       "review_url": f"/review/{agent_id}/{action_id}"})
         return json.dumps({
             "action_id": action_id, "status": "awaiting_confirmation",
             "note": ("Proposed. A Review & approve card is now visible to "
@@ -443,7 +445,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
 
 
 def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
-             history: list[dict], user_text: str):
+             history: list[dict], user_text: str, *, agent_id: str = ""):
     """Generator of UI events for one user message. Mutates `history`."""
     _trim_history(history)
     history.append({"role": "user", "content": user_text})
@@ -474,7 +476,8 @@ def run_turn(cfg, hc: HealthClawClient, tenant: str, system: str,
             side_events: list[dict] = []
             try:
                 result = _execute_tool(hc, tenant, call.name,
-                                       call.arguments, side_events)
+                                       call.arguments, side_events,
+                                       agent_id=agent_id)
             except HealthClawError as exc:
                 result = json.dumps({"error": str(exc)})
             history.append({"role": "tool", "tool_call_id": call.id,
@@ -513,7 +516,8 @@ def run_turn_to_message(cfg, hc: HealthClawClient, tenant: str, system: str,
     parts: list[str] = []
     extras: list[str] = []
     base = (origin or "").rstrip("/")
-    for ev in run_turn(cfg, hc, tenant, system, history, user_text):
+    for ev in run_turn(cfg, hc, tenant, system, history, user_text,
+                       agent_id=agent_id):
         kind = ev.get("type")
         if kind == "text" and ev.get("text"):
             parts.append(ev["text"])
