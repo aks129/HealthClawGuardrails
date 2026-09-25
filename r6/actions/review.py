@@ -49,6 +49,7 @@ from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
 from r6.models import R6Resource
+from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
 from r6.access import Scope, require_grant
@@ -264,7 +265,14 @@ def _gather_content(tenant_id, patient, subject_ref=None):
         for row in R6Resource.query.filter_by(
                 resource_type=resource_type, tenant_id=tenant_id,
                 is_deleted=False).all():
-            resource = row.to_fhir_json()
+            # Redacted, then labelled by code, BEFORE population — the same
+            # profile $populate uses (r6/sdc/routes.py:_redacted_for_populate).
+            # This page used to read the stored JSON raw, so a row's name was
+            # whatever the upstream wrote in `code.text` or a `display`, and
+            # a coded row with neither (a SNOMED-only allergy) had no name at
+            # all. Now a name comes only from r6/terminology.py, keyed by
+            # code; the reviewed QR carries it into the PDF.
+            resource = apply_redaction(row.to_fhir_json())
             reference = (resource.get(subject_field) or {}).get('reference')
             if _referenced_patient_id(reference) == patient_id:
                 # Canonicalize a resolved urn onto the relative form so the
@@ -367,8 +375,10 @@ def _view_rows(draft_qr):
     allergies = []
     for row in _section_repeats(draft_qr, 'allergies', 'allergies.item'):
         allergies.append({
+            # Unlabelled after redaction: a code r6/terminology.py does not
+            # know, or no code at all. Say so rather than print a bare noun.
             'allergen': _leaf_value(row, 'allergies.item.allergen')
-            or 'Allergy',
+            or 'Allergy (name not recognised)',
             'reaction': _leaf_value(row, 'allergies.item.reaction'),
         })
     conditions = []

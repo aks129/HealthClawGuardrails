@@ -20,6 +20,15 @@ from models import db
 from r6.actions.confirmations import ActionConfirmation
 from r6.actions.models import ProposedAction
 
+# Each clinical row is coded AND carries upstream free text. The page names a
+# row from r6/terminology.py by code, after redaction; the upstream text is
+# stripped, so it doubles as a leak marker (a real feed puts patient names
+# in `text` and `display`).
+RXNORM = 'http://www.nlm.nih.gov/research/umls/rxnorm'
+SNOMED = 'http://snomed.info/sct'
+PENICILLIN = {'coding': [{'system': SNOMED, 'code': '91936005'}],
+              'text': 'Penicillin'}
+
 PATIENT = {
     'resourceType': 'Patient', 'id': 'test-patient-1',
     'name': [{'family': 'Smith', 'given': ['John']}],
@@ -28,26 +37,31 @@ PATIENT = {
 MED_A = {
     'resourceType': 'MedicationRequest', 'id': 'med-a', 'status': 'active',
     'intent': 'order',
-    'medicationCodeableConcept': {'text': 'Metformin 500 mg tablet'},
+    'medicationCodeableConcept': {
+        'coding': [{'system': RXNORM, 'code': '860975'}],
+        'text': 'Metformin 500 mg tablet'},
     'dosageInstruction': [{'text': 'Take 1 tablet twice daily'}],
     'subject': {'reference': 'Patient/test-patient-1'},
 }
 MED_B = {
     'resourceType': 'MedicationRequest', 'id': 'med-b', 'status': 'active',
     'intent': 'order',
-    'medicationCodeableConcept': {'text': 'Lisinopril 10 mg tablet'},
+    'medicationCodeableConcept': {
+        'coding': [{'system': RXNORM, 'code': '314076'}],
+        'text': 'Lisinopril 10 mg tablet'},
     'dosageInstruction': [{'text': 'Take 1 tablet daily'}],
     'subject': {'reference': 'Patient/test-patient-1'},
 }
 ALLERGY_A = {
     'resourceType': 'AllergyIntolerance', 'id': 'allergy-a',
-    'code': {'text': 'Penicillin'},
+    'code': PENICILLIN,
     'reaction': [{'manifestation': [{'text': 'Hives'}]}],
     'patient': {'reference': 'Patient/test-patient-1'},
 }
 CONDITION_A = {
     'resourceType': 'Condition', 'id': 'cond-a',
-    'code': {'text': 'Type 2 diabetes mellitus'},
+    'code': {'coding': [{'system': SNOMED, 'code': '44054006'}],
+             'text': 'Type 2 diabetes mellitus'},
     'subject': {'reference': 'Patient/test-patient-1'},
 }
 
@@ -61,7 +75,7 @@ FORM_FILL_BODY = {
 # arrives as `urn:uuid:<id>` rather than `Patient/<id>` (#390).
 URN_ALLERGY = {
     'resourceType': 'AllergyIntolerance', 'id': 'allergy-urn',
-    'code': {'text': 'Penicillin'},
+    'code': PENICILLIN,
     'reaction': [{'manifestation': [{'text': 'Hives'}]}],
     'patient': {'reference': 'urn:uuid:test-patient-1'},
 }
@@ -70,7 +84,7 @@ URN_ALLERGY = {
 # reference can no longer be tied to anybody.
 ORPHANED_ALLERGY = {
     'resourceType': 'AllergyIntolerance', 'id': 'allergy-orphan',
-    'code': {'text': 'Penicillin'},
+    'code': PENICILLIN,
     'reaction': [{'manifestation': [{'text': 'Hives'}]}],
     'patient': {'reference': 'urn:uuid:9d2c8f16-not-a-stored-id'},
 }
@@ -134,10 +148,14 @@ def test_get_review_renders_populated_items_nka_not_prechecked(
     resp = _get(client, auth_headers, action_id)
     assert resp.status_code == 200, resp.get_data(as_text=True)
     html = resp.get_data(as_text=True)
-    # Populated clinical content is shown with provenance.
-    assert 'Metformin 500 mg tablet' in html
-    assert 'Lisinopril 10 mg tablet' in html
-    assert 'Penicillin' in html
+    # Populated clinical content is shown with provenance, named by code
+    # from r6/terminology.py — never by the upstream free text.
+    assert 'Metformin 500 mg' in html
+    assert 'Lisinopril 10 mg' in html
+    assert 'Allergy to penicillin' in html
+    for upstream in ('Metformin 500 mg tablet', 'Lisinopril 10 mg tablet',
+                     'Penicillin'):
+        assert upstream not in html, upstream
     assert 'from your records' in html
     # The NKA checkbox exists and is NOT pre-checked.
     assert 'no known allergies' in html.lower()
@@ -206,7 +224,7 @@ def test_get_review_urn_uuid_subject_resolves_the_patient(
     html = resp.get_data(as_text=True)
     # Resolved both ways: the action's urn subject AND the allergy's urn
     # patient reference. The allergy renders, so there is no absence claim.
-    assert 'Penicillin' in html
+    assert 'Allergy to penicillin' in html
     assert 'Smith' in html
     assert ABSENCE_LINE not in html
     assert UNREADABLE_LINE not in html
@@ -814,3 +832,49 @@ def test_get_review_tombstoned_subject_reads_as_unresolved(
     assert 'Smith' not in html
     assert ABSENCE_LINE not in html
     assert UNREADABLE_LINE in html
+
+
+# ---------------------------------------------------------------------------
+# A coded allergy is named from r6/terminology.py, never from upstream text
+# ---------------------------------------------------------------------------
+
+def test_get_review_names_a_snomed_only_allergy_from_the_terminology_table(
+        client, app, tenant_headers, auth_headers):
+    """A SNOMED code with no `text` rendered as a bare "Allergy".
+
+    The upstream `display` carries a marker: the label must come from the
+    table keyed by code, so the marker must not reach the page.
+    MUTATION: drop apply_redaction in _gather_content -> red.
+    """
+    allergy = {
+        'resourceType': 'AllergyIntolerance', 'id': 'allergy-snomed',
+        'code': {'coding': [{'system': SNOMED, 'code': '91936005',
+                             'display': 'LEAKDISPLAYMARKER'}]},
+        'patient': {'reference': 'Patient/test-patient-1'},
+    }
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, allergy])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    html = _get(client, auth_headers, action_id).get_data(as_text=True)
+    assert 'Allergy to penicillin' in html
+    assert 'LEAKDISPLAYMARKER' not in html
+
+
+def test_get_review_says_when_an_allergy_code_is_not_recognised(
+        client, app, tenant_headers, auth_headers):
+    """An unknown code gets an honest fallback, not a bare noun, and never
+    the upstream display."""
+    allergy = {
+        'resourceType': 'AllergyIntolerance', 'id': 'allergy-unknown',
+        'code': {'coding': [{'system': SNOMED, 'code': '999999999',
+                             'display': 'LEAKDISPLAYMARKER'}]},
+        'patient': {'reference': 'Patient/test-patient-1'},
+    }
+    _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, allergy])
+    action_id = _staged_form_fill(client, tenant_headers, auth_headers)
+
+    html = _get(client, auth_headers, action_id).get_data(as_text=True)
+    assert 'Allergy (name not recognised)' in html
+    assert 'LEAKDISPLAYMARKER' not in html
+    # Still a row to act on: an unreadable allergy is never an absence.
+    assert ABSENCE_LINE not in html
