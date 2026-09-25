@@ -32,7 +32,7 @@
     return t;
   }
 
-  function typewrite(node, text) {
+  function typewrite(node, text, done) {
     let i = 0;
     const step = Math.max(1, Math.round(text.length / 120));
     (function tick() {
@@ -40,13 +40,69 @@
       node.textContent = text.slice(0, i);
       scroll();
       if (i < text.length) requestAnimationFrame(tick);
+      else if (done) done();
     })();
+  }
+
+  // Model markdown, minimal subset: **bold**, *italic*, "- " / "* " / "1. "
+  // list lines, line breaks. Built from text nodes and fixed elements only,
+  // so nothing the model writes is ever parsed as HTML.
+  const BOLD_OR_ITALIC = /\*\*([^*\n]+)\*\*|\*(\S[^*\n]*?)\*/g;
+  const LIST_ITEM = /^\s*(?:[-*]|(\d+)\.)\s+(.*)$/;
+
+  function appendInline(parent, line) {
+    let last = 0, m;
+    BOLD_OR_ITALIC.lastIndex = 0;
+    while ((m = BOLD_OR_ITALIC.exec(line))) {
+      if (m.index > last)
+        parent.appendChild(document.createTextNode(line.slice(last, m.index)));
+      parent.appendChild(m[1] !== undefined
+        ? el("strong", null, m[1]) : el("em", null, m[2]));
+      last = BOLD_OR_ITALIC.lastIndex;
+    }
+    if (last < line.length)
+      parent.appendChild(document.createTextNode(line.slice(last)));
+  }
+
+  function renderMarkdown(node, text) {
+    node.textContent = "";
+    const lines = text.split("\n");
+    let list = null;
+    lines.forEach(function (line, i) {
+      const item = LIST_ITEM.exec(line);
+      if (item) {
+        const kind = item[1] ? "ol" : "ul";
+        if (!list || list.tagName.toLowerCase() !== kind) {
+          list = el(kind);
+          node.appendChild(list);
+        }
+        const li = el("li");
+        appendInline(li, item[2]);
+        list.appendChild(li);
+        return;
+      }
+      list = null;
+      appendInline(node, line);
+      const next = lines[i + 1];
+      if (next !== undefined && !LIST_ITEM.test(next))
+        node.appendChild(el("br"));
+    });
+  }
+
+  // What the typewriter shows before the markdown is laid out: the same
+  // text without the emphasis markers, so they never flash on screen.
+  function withoutMarkers(text) {
+    return text.replace(/\*\*([^*\n]+)\*\*/g, "$1")
+      .replace(/\*(\S[^*\n]*?)\*/g, "$1");
   }
 
   function addAgentText(text) {
     const m = el("div", "msg agent");
     log.appendChild(m);
-    typewrite(m, text);
+    typewrite(m, withoutMarkers(text), function () {
+      renderMarkdown(m, text);
+      scroll();
+    });
   }
 
   function addChip(label) {
