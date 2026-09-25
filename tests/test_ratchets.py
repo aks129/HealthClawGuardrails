@@ -243,7 +243,12 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: 65 -> 64: r6/caregaps — $care-gaps answers GET and POST, so the GET
 #: tripwire (GET-only routes) does not scan it; it adds and commits.
 #: 64 -> 63: r6/quality — the measure $evaluate-measure, GET and POST too.
-_POST_COMMIT_AUDIT_CALLSITES = 63
+#: 63 -> 45: r6/actions — proposals, the emergency refusal, the approval-token
+#: mint and the review submit commit with their row. Sites after
+#: transition_action (which commits the move itself) add and commit next,
+#: the idiom confirm already used; making those one transaction needs an
+#: audit hook in r6/actions/state.py. The review page is an undeclared GET.
+_POST_COMMIT_AUDIT_CALLSITES = 45
 
 
 def test_post_commit_audit_callsites_only_decrease():

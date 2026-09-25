@@ -40,7 +40,7 @@ from r6.actions.registry import get_executor
 from r6.actions.rx_transfer import build_transfer_request, medication_names
 from r6.actions.safety import EMERGENCY_MESSAGE, screen_text
 from r6.actions.state import transition_action
-from r6.audit import add_audit_event, record_audit_event
+from r6.audit import add_audit_event
 from r6.rate_limit import rate_limit_middleware
 from r6.read_auth import authenticate_tenant_read, authorize_tenant_read
 from r6.stepup import generate_step_up_token
@@ -93,11 +93,12 @@ def _emergency_refusal_or_none(tenant_id, text):
     hit = screen_text(text)
     if hit is None:
         return None
-    record_audit_event(
+    add_audit_event(
         'create', resource_type='ProposedAction',
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         outcome='failure', detail='emergency_indicated: %s' % hit['matched'],
     )
+    db.session.commit()
     return jsonify({'error_code': errors.EMERGENCY_INDICATED,
                     'error': EMERGENCY_MESSAGE}), 422
 
@@ -184,11 +185,12 @@ def _resolve_from_executing(action, result):
             {'external_ref': result.provider_ref}, synchronize_session=False)
         db.session.commit()
         db.session.refresh(action)
-        record_audit_event(
+        add_audit_event(
             'update', resource_type='ProposedAction', resource_id=action.id,
             agent_id=agent_id, tenant_id=tenant_id,
             detail=json.dumps(action.summary()),
         )
+        db.session.commit()
         notify_tenant(tenant_id, '📤 %s to %s: %s'
                       % (action.kind, label, action.status))
         if action.status != 'executing':
@@ -209,11 +211,12 @@ def _resolve_from_executing(action, result):
         db.session.refresh(action)
         if not resolved:
             return jsonify(action.to_dict()), 200   # webhook won
-        record_audit_event(
+        add_audit_event(
             'update', resource_type='ProposedAction', resource_id=action.id,
             agent_id=agent_id, tenant_id=tenant_id,
             detail=json.dumps(action.summary()),
         )
+        db.session.commit()
         notify_tenant(tenant_id, '✅ %s to %s: completed'
                       % (action.kind, label))
         return jsonify(action.to_dict()), 200
@@ -227,11 +230,12 @@ def _resolve_from_executing(action, result):
         db.session.refresh(action)
         if not resolved:
             return jsonify(action.to_dict()), 200   # webhook won
-        record_audit_event(
+        add_audit_event(
             'update', resource_type='ProposedAction', resource_id=action.id,
             agent_id=agent_id, tenant_id=tenant_id,
             detail=json.dumps(action.summary()),
         )
+        db.session.commit()
         notify_tenant(tenant_id, '⚠️ %s to %s: needs review'
                       % (action.kind, label))
         return jsonify({'id': action.id, 'status': 'needs_review',
@@ -247,11 +251,12 @@ def _resolve_from_executing(action, result):
     db.session.refresh(action)
     if not resolved:
         return jsonify(action.to_dict()), 200       # webhook won
-    record_audit_event(
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=agent_id, tenant_id=tenant_id,
         outcome='failure', detail=result.error,
     )
+    db.session.commit()
     notify_tenant(tenant_id, '⚠️ %s to %s: %s'
                   % (action.kind, label, new_status))
     # Coerce onto the error taxonomy: executors SHOULD return codes from
@@ -347,13 +352,13 @@ def propose_rx_transfer():
     action = ProposedAction(tenant_id=tenant_id, kind='phone-call',
                             payload=result['action_payload'])
     db.session.add(action)
-    db.session.commit()
-
-    record_audit_event(
+    db.session.flush()
+    add_audit_event(
         'create', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         detail=json.dumps(action.summary()),
     )
+    db.session.commit()
 
     return jsonify({
         'action': action.summary(),
@@ -406,13 +411,13 @@ def propose_action():
 
     action = ProposedAction(tenant_id=tenant_id, kind=kind, payload=payload)
     db.session.add(action)
-    db.session.commit()
-
-    record_audit_event(
+    db.session.flush()
+    add_audit_event(
         'create', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         detail=json.dumps(action.summary()),
     )
+    db.session.commit()
     return jsonify(action.to_dict()), 201
 
 
@@ -451,11 +456,12 @@ def commit_action(action_id):
             actor='commit-route', detail='proposal expired')
         db.session.refresh(action)
         if expired:
-            record_audit_event(
+            add_audit_event(
                 'update', resource_type='ProposedAction', resource_id=action_id,
                 agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
                 detail='proposal expired',
             )
+            db.session.commit()
             return _error(410, 'Proposal expired — propose the action again')
         return _error(409, 'Action is %s, not proposed' % action.status)
 
@@ -476,23 +482,25 @@ def commit_action(action_id):
                 actor='commit-route', detail='proposal expired')
             db.session.refresh(action)
             if expired:
-                record_audit_event(
+                add_audit_event(
                     'update', resource_type='ProposedAction',
                     resource_id=action_id,
                     agent_id=request.headers.get('X-Agent-Id'),
                     tenant_id=tenant_id, detail='proposal expired',
                 )
+                db.session.commit()
                 return _error(410, 'Proposal expired — propose the action '
                                    'again')
         if action.status == 'expired':
             return _error(410, 'Proposal expired — propose the action again')
         return _error(409, 'Action is %s, not proposed' % action.status)
 
-    record_audit_event(
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         detail=json.dumps(action.summary()),
     )
+    db.session.commit()
 
     # Telegram push: summary-level ONLY (kind + recipient label)
     label = action.summary().get('to') or 'recipient'
@@ -710,11 +718,12 @@ def confirm_action(action_id):
             detail='approval window lapsed')
         db.session.refresh(action)
         if lapsed:
-            record_audit_event(
+            add_audit_event(
                 'update', resource_type='ProposedAction', resource_id=action_id,
                 agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
                 detail='approval window lapsed',
             )
+            db.session.commit()
             return _error(410, 'Approval window lapsed — propose the action '
                                'again')
         # Lost to a concurrent claim — the claim below settles it.
@@ -739,12 +748,13 @@ def confirm_action(action_id):
                 detail='approval window lapsed')
             db.session.refresh(action)
             if lapsed:
-                record_audit_event(
+                add_audit_event(
                     'update', resource_type='ProposedAction',
                     resource_id=action_id,
                     agent_id=request.headers.get('X-Agent-Id'),
                     tenant_id=tenant_id, detail='approval window lapsed',
                 )
+                db.session.commit()
                 return _error(410, 'Approval window lapsed — propose the '
                                    'action again')
         if action.status == 'expired':
@@ -819,14 +829,13 @@ def confirm_action(action_id):
                        payload_json=action.payload_json)
     db.session.flush()
     consume_confirmation(action_id)
-    db.session.commit()
-
-    record_audit_event(
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         detail='approved via %s; %s; payload_digest=%s' % (
             approved_via, json.dumps(action.summary()), current),
     )
+    db.session.commit()
 
     # (e) A kind with no registered rail fails loud — never a fake success.
     # Every VALID_KINDS entry has a rail today (form-fill's is a Task-3
@@ -841,11 +850,12 @@ def confirm_action(action_id):
             actor='confirm', outcome_summary=summary)
         db.session.refresh(action)
         if failed:
-            record_audit_event(
+            add_audit_event(
                 'update', resource_type='ProposedAction', resource_id=action.id,
                 agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
                 outcome='failure', detail=summary,
             )
+            db.session.commit()
             label = action.summary().get('to') or 'recipient'
             notify_tenant(tenant_id, '⚠️ %s to %s: failed'
                           % (action.kind, label))
@@ -902,11 +912,12 @@ def issue_action_approval_token(action_id):
         # Bound to the action AND the bytes the person is being shown (#659).
         operation=approval_operation(action_id, action.payload_json),
     )
-    record_audit_event(
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id='human-approval', tenant_id=tenant_id,
         detail='action-bound approval credential issued',
     )
+    db.session.commit()
     return jsonify({'token': token, 'tenant_id': tenant_id,
                     'action_id': action_id})
 
@@ -966,11 +977,12 @@ def action_status(action_id):
             actor='status-route', detail='proposal expired')
         db.session.refresh(action)
         if expired:
-            record_audit_event(
+            add_audit_event(
                 'update', resource_type='ProposedAction', resource_id=action_id,
                 agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
                 detail='proposal expired',
             )
+            db.session.commit()
 
     # Only a caller holding a valid tenant-bound step-up token gets the full
     # record (phone number + message body). Everyone else gets the PHI-safe
@@ -1033,12 +1045,13 @@ def action_callback(provider):
     if not updated:
         return jsonify({'ok': True, 'note': 'no state change'}), 200
 
-    record_audit_event(
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         tenant_id=action.tenant_id,
         outcome='success' if new_status == 'completed' else 'failure',
         detail=json.dumps(action.summary()),
     )
+    db.session.commit()
 
     # Telegram push: summary-level ONLY (kind + recipient label + status)
     label = action.summary().get('to') or 'recipient'
