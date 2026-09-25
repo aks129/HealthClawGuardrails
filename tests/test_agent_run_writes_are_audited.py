@@ -124,6 +124,7 @@ def reconcile_headers(monkeypatch):
 
 
 def _events(app, resource_type=None):
+    hidden = app.extensions.get("audit_baseline", set())
     with app.app_context():
         query = AuditEventRecord.query.filter_by(tenant_id=TENANT)
         if resource_type:
@@ -131,14 +132,21 @@ def _events(app, resource_type=None):
         return [
             {"action": event.event_type, "resource_type": event.resource_type,
              "resource_id": event.resource_id, "detail": event.detail}
-            for event in query.all()
+            for event in query.all() if event.id not in hidden
         ]
 
 
-def _clear(app):
+def _baseline(app):
+    """Hide the events the test's setup wrote from later _events() calls.
+
+    audit_events is append-only at the database (migration 0009), so a test
+    scopes its view to what happened after this point instead of deleting.
+    """
     with app.app_context():
-        AuditEventRecord.query.delete()
-        db.session.commit()
+        app.extensions["audit_baseline"] = {
+            row.id for row in AuditEventRecord.query.with_entities(
+                AuditEventRecord.id)
+        }
 
 
 def _message(client, auth_headers, *, text="hello", request_id="request-1"):
@@ -204,7 +212,7 @@ def _register_tool(client, internal_headers, run_id, *, worker="worker-1",
 def test_creating_a_run_is_audited(app, client, auth_headers):
     """MUTATION: delete the audit() in create_run -> red."""
     message = _message(client, auth_headers)
-    _clear(app)
+    _baseline(app)
 
     created = _run(client, auth_headers, message["id"])
     assert created.status_code == 201, created.get_data(as_text=True)
@@ -222,7 +230,7 @@ def test_an_idempotent_run_replay_is_not_audited_twice(app, client,
     MUTATION: move the audit() above create_run's replay return -> red.
     """
     message = _message(client, auth_headers)
-    _clear(app)
+    _baseline(app)
 
     first = _run(client, auth_headers, message["id"])
     replay = _run(client, auth_headers, message["id"])
@@ -237,7 +245,7 @@ def test_cancelling_a_run_is_audited(app, client, auth_headers):
     """MUTATION: delete the audit() in request_cancel -> red."""
     message = _message(client, auth_headers)
     run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
-    _clear(app)
+    _baseline(app)
 
     cancelled = client.post(f"/command-center/api/runs/{run_id}/cancel",
                             headers=auth_headers)
@@ -262,7 +270,7 @@ def test_cancelling_an_already_finished_run_is_not_audited(
         headers=internal_headers,
         json={"worker_id": "worker-1", "status": "failed"},
     ).status_code == 200
-    _clear(app)
+    _baseline(app)
 
     cancelled = client.post(f"/command-center/api/runs/{run_id}/cancel",
                             headers=auth_headers)
@@ -277,7 +285,7 @@ def test_a_worker_transition_is_audited(app, client, auth_headers,
     MUTATION: delete the audit() in transition_owned_run -> red.
     """
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
 
     moved = client.post(
         f"/command-center/api/runs/{run_id}/transition",
@@ -305,7 +313,7 @@ def test_resuming_a_human_waiting_run_is_audited(app, client, auth_headers,
         headers=internal_headers,
         json={"worker_id": "worker-1", "status": "waiting_for_human"},
     ).status_code == 200
-    _clear(app)
+    _baseline(app)
 
     resumed = client.post(f"/command-center/api/runs/{run_id}/resume",
                           headers=internal_headers)
@@ -325,7 +333,7 @@ def test_registering_a_tool_call_is_audited(app, client, auth_headers,
     MUTATION: delete the audit() in register_tool_call -> red.
     """
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
     call_id = _register_tool(client, internal_headers, run_id)
 
     events = _events(app, "AgentToolCall")
@@ -339,7 +347,7 @@ def test_an_idempotent_tool_replay_is_not_audited_twice(
         app, client, auth_headers, internal_headers):
     """MUTATION: move the audit() above register_tool_call's replay return -> red."""
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
     _register_tool(client, internal_headers, run_id)
 
     replay = client.post(
@@ -358,7 +366,7 @@ def test_a_tool_call_outcome_is_audited(app, client, auth_headers,
     """MUTATION: delete the audit() in transition_tool_call -> red."""
     run_id = _claimed_run(client, auth_headers, internal_headers)
     call_id = _register_tool(client, internal_headers, run_id)
-    _clear(app)
+    _baseline(app)
 
     endpoint = (
         f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/transition")
@@ -387,7 +395,7 @@ def test_finalizing_a_run_audits_the_assistant_message_and_the_completion(
     MUTATION: delete either audit() in finalize_run -> red.
     """
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
 
     finalized = client.post(
         f"/command-center/api/runs/{run_id}/finalize",
@@ -417,7 +425,7 @@ def test_a_finalize_replay_is_not_audited_twice(app, client, auth_headers,
     payload = {"worker_id": "worker-1", "checkpoint_id": "round-1",
                "text": "Your appointment brief is ready."}
     endpoint = f"/command-center/api/runs/{run_id}/finalize"
-    _clear(app)
+    _baseline(app)
 
     assert client.post(endpoint, headers=internal_headers,
                        json=payload).status_code == 200
@@ -452,7 +460,7 @@ def test_reconciling_an_ambiguous_side_effect_is_audited(
     assert client.get(f"/command-center/api/runs/{run_id}/events",
                       headers=auth_headers).get_json()[
                           "status"] == "waiting_for_human"
-    _clear(app)
+    _baseline(app)
 
     reconciled = client.post(
         f"/command-center/api/runs/{run_id}/tool-calls/{call_id}/reconcile",
@@ -480,7 +488,7 @@ def test_the_finalize_audit_never_carries_the_assistant_answer(
     MUTATION: put `text` (or any slice of it) into either detail -> red.
     """
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
 
     client.post(
         f"/command-center/api/runs/{run_id}/finalize",
@@ -503,7 +511,7 @@ def test_the_tool_call_audit_never_carries_the_arguments(
     MUTATION: put `arguments` into the register detail -> red.
     """
     run_id = _claimed_run(client, auth_headers, internal_headers)
-    _clear(app)
+    _baseline(app)
     call_id = _register_tool(
         client, internal_headers, run_id,
         arguments={"slot": "s1", "reason": _SECRET_TEXT})
@@ -552,7 +560,7 @@ def test_a_refused_mutation_leaves_no_audit_event(app, client, auth_headers,
     message = _message(client, auth_headers)
     run_id = _claimed_run(client, auth_headers, internal_headers,
                           request_id="request-2")
-    _clear(app)
+    _baseline(app)
 
     unauthenticated = _run(client, {"X-Tenant-Id": TENANT}, message["id"])
     wrong_worker = client.post(
@@ -584,7 +592,7 @@ def test_queue_chatter_is_deliberately_not_audited(app, client, auth_headers,
     """
     message = _message(client, auth_headers)
     run_id = _run(client, auth_headers, message["id"]).get_json()["id"]
-    _clear(app)
+    _baseline(app)
 
     assert client.post("/command-center/api/runs/claim",
                        headers=internal_headers,
@@ -639,7 +647,7 @@ def test_the_deadline_sweep_entering_the_human_gate_is_audited(
         run = db.session.get(AgentRun, run_id)
         run.deadline_at = utcnow() - timedelta(seconds=1)
         db.session.commit()
-    _clear(app)
+    _baseline(app)
 
     # GET #1: the read that terminalizes.
     detail = client.get(f"/command-center/api/runs/{run_id}",
@@ -680,7 +688,7 @@ def test_a_deadline_with_no_running_tool_is_still_not_audited(
         run = db.session.get(AgentRun, run_id)
         run.deadline_at = utcnow() - timedelta(seconds=1)
         db.session.commit()
-    _clear(app)
+    _baseline(app)
     detail = client.get(f"/command-center/api/runs/{run_id}",
                         headers=auth_headers)
     assert detail.status_code == 200
