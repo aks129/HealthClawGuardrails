@@ -193,7 +193,7 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             # can't poison the final commit; prior resources are already
             # durable (each commits with its audit row below).
             db.session.rollback()
-            logger.warning("Seed failed for %s: %s", rtype, e)
+            logger.warning("Seed failed for %s: %s", rtype, type(e).__name__)  # #306
             continue
 
         if rtype == 'Patient':
