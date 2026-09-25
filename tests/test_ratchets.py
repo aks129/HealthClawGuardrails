@@ -226,7 +226,9 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: Provenance and both audit rows now commit in one transaction.
 #: 87 -> 86 (#648 PR 2): $ingest-context's refusal row is the kernel's now,
 #: written by the StepUpDenied renderer, not by the route.
-_POST_COMMIT_AUDIT_CALLSITES = 86
+#: 86 -> 83: r6/sdc — $populate, $extract and the intake PDF write their
+#: row in the caller's transaction. The signed-link download is a GET.
+_POST_COMMIT_AUDIT_CALLSITES = 83
 
 
 def test_post_commit_audit_callsites_only_decrease():
