@@ -9,6 +9,11 @@
 *FHIR standardized how health data is structured. MCP standardized how AI connects to tools.*
 ***Nobody standardized the guardrails in between. This project does.***
 
+<a href="https://healthclaw.io/#demo"><img src=".github/assets/healthclaw-2.0-demo-preview.jpg" alt="HealthClaw 2.0 demo video preview" width="640"></a>
+
+**[▶ Watch the 90-second demo](https://healthclaw.io/#demo)**<br/>
+<sub>All records are synthetic. The chat ran on a third-party model, best of four takes. No clinician has signed off yet. [How it was made](docs/video/2.0-demo/disclosures.md).</sub>
+
 <br/>
 
 <!-- Project -->

@@ -1,0 +1,37 @@
+
+      
+
+Hi — I'm Juniper. I found
+      1 condition,
+      1 medication,
+      
+      and 3 test results & measurements
+      in your records. Want me to walk through what they show?
+
+
+    
+What do my blood test results say?
+Reading your records — redacted view
+Interpreting your labs
+Charting your results over time
+Your results over time
+Hemoglobin A1c · 1 reading · %
+9
+8
+7
+2026-09-25
+2026-09-25
+
+Only one reading on file — not enough to show a trend.
+
+Advisory decision support, not a diagnosis. Reference ranges are adult population defaults and vary by lab, age, sex, and clinical context. The performing lab's own reference range takes precedence.
+
+I have your recent lab results right here. I know looking at medical test numbers can sometimes feel a bit overwhelming, so let's walk through this together.
+
+Your **Hemoglobin A1c** is currently flagged as high, meaning it is above the typical range. Since your records mention Type 2 diabetes and that you are taking Metformin, this result is very important. It is highly worth discussing with your doctor to see how your current care plan is working for you. 
+
+There are also two results we weren't able to evaluate: **Blood pressure** and **Glucose (blood)**. They couldn't be interpreted here due to technical limitations of this check. This is not a statement about your health, so please ask your clinician to read and interpret those directly for you. 
+
+Because we only have this single A1c reading on file, we aren't able to show a trend over time just yet. 
+
+As a next step, would you like me to help you draft some questions about these results to bring to your doctor?
