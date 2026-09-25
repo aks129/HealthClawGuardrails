@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from models import db
 from r6.models import R6Resource
-from r6.audit import AuditWriteError, record_audit_event
+from r6.audit import AuditWriteError, add_audit_event
 from r6.sdc.intake import intake_questionnaire
 
 logger = logging.getLogger(__name__)
@@ -187,11 +187,20 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
             )
             db.session.add(r)
             db.session.flush()
+        except Exception as e:
+            # Already-seeded resources no longer reach this branch, so anything
+            # landing here is unexpected. Roll back the failed insert so it
+            # can't poison the final commit; prior resources are already
+            # durable (each commits with its audit row below).
+            db.session.rollback()
+            logger.warning("Seed failed for %s: %s", rtype, e)
+            continue
 
-            if rtype == 'Patient':
-                patient_id = str(r.id)
+        if rtype == 'Patient':
+            patient_id = str(r.id)
 
-            record_audit_event(
+        try:
+            add_audit_event(
                 event_type='create',
                 resource_type=rtype,
                 resource_id=str(r.id),
@@ -199,21 +208,16 @@ def seed_demo_data(tenant_id: str = 'desktop-demo', resources: list[dict] | None
                 agent_id='seed',
                 detail='seeded via auto-seed on first boot',
             )
-            created += 1
-        except AuditWriteError:
+            db.session.commit()
+        except Exception as exc:
             # NOT a per-resource problem: the guardrail itself is broken, so
             # every subsequent resource would land unaudited too. Propagate
             # instead of logging 7 warnings and answering 201/created-0 (#182).
             db.session.rollback()
             logger.error("Seed aborted: audit trail unavailable for %s", rtype)
-            raise
-        except Exception as e:
-            # Already-seeded resources no longer reach this branch, so anything
-            # landing here is unexpected. Roll back the failed insert so it
-            # can't poison the final commit; prior resources are already
-            # durable (record_audit_event commits).
-            db.session.rollback()
-            logger.warning("Seed failed for %s: %s", rtype, e)
+            raise AuditWriteError(
+                f'audit write failed: {type(exc).__name__}') from exc
+        created += 1
 
     db.session.commit()
     if skipped:

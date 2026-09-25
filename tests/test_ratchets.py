@@ -237,7 +237,8 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: stores the connection and its row together; manual sync audits after
 #: the poller's own commit.
 #: 69 -> 68: r6/shc — the import summary.
-_POST_COMMIT_AUDIT_CALLSITES = 68
+#: 68 -> 67: r6/seed.py — each seeded resource commits with its row.
+_POST_COMMIT_AUDIT_CALLSITES = 67
 
 
 def test_post_commit_audit_callsites_only_decrease():
