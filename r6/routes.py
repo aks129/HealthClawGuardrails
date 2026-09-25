@@ -67,10 +67,8 @@ from r6.fhir_proxy import (
     get_proxy_for_request,
     is_proxy_enabled,
     upstream_status,
-    is_sharp_context_active,
     close_request_proxy,
     sanitize_operation_outcome_resource,
-    SHARP_SERVER_URL_HEADER,
 )
 from r6.curatr import (
     CuratrEngine,
@@ -157,30 +155,15 @@ def enforce_tenant_id():
     # query string or the MCP client's outer session.
     if _is_exempt_discovery_path(request.path):
         return refuse_resource_rule_on_exempt_path()
-    tenant_id = request.headers.get('X-Tenant-Id')
     # SHARP-on-MCP: requests bearing X-FHIR-Server-URL carry their own
-    # FHIR-level identity (SMART access token). Synthesize a stable tenant
-    # from the upstream URL when X-Tenant-Id is omitted so audit + guardrails
-    # still scope correctly per SHARP context.
-    if not tenant_id and is_sharp_context_active():
-        import hashlib
-        sharp_url = (request.headers.get(SHARP_SERVER_URL_HEADER) or '').strip()
-        digest = hashlib.sha256(sharp_url.encode('utf-8')).hexdigest()[:16]
-        tenant_id = f'sharp-{digest}'
-        request.environ['HTTP_X_TENANT_ID'] = tenant_id
-    if not tenant_id:
-        return jsonify({
-            'resourceType': 'OperationOutcome',
-            'issue': [{
-                'severity': 'error',
-                'code': 'security',
-                'diagnostics': 'X-Tenant-Id header is required'
-            }]
-        }), 400
-    # Validate tenant_id format
-    if not _TENANT_ID_PATTERN.fullmatch(tenant_id):
-        return _operation_outcome(
-            'error', 'invalid', 'X-Tenant-Id must match [a-zA-Z0-9_-]{1,64}'), 400
+    # FHIR-level identity (SMART access token), so the kernel synthesizes a
+    # stable tenant from the upstream URL when X-Tenant-Id is omitted. It is
+    # written back for every downstream read. An absent or malformed tenant
+    # raises TenantRejected, rendered app-wide as the same two 400s.
+    tenant = tenant_from_request(
+        sources=(TenantSource.HEADER, TenantSource.SHARP))
+    if tenant.source is TenantSource.SHARP:
+        request.environ['HTTP_X_TENANT_ID'] = tenant.id
     # The path id, only once the tenant is known to be well-formed (#279).
     return refuse_malformed_resource_id()
 
@@ -213,15 +196,12 @@ def authenticate_read():
     if _is_exempt_discovery_path(request.path):
         return None
 
-    tenant_id = request.headers.get('X-Tenant-Id')
-    # SHARP-on-MCP requests carry their own FHIR-level identity (SMART
-    # access token) and a synthesized tenant; the upstream proxy enforces
-    # auth. Don't double-gate them.
-    if not tenant_id and is_sharp_context_active():
-        return None
-    if not tenant_id:
-        # The tenant hook already rejected this; defensive no-op.
-        return None
+    # The tenant hook ran first: it refused an absent or malformed tenant,
+    # and wrote a SHARP request's synthesized one back into the header.
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    except TenantRejected:
+        return None  # defensive no-op
 
     if not _read_auth_required(tenant_id):
         return None
@@ -1931,10 +1911,14 @@ def record_connect_diagnostic():
         # what it rejected reflects the caller's string.
         return jsonify({'error': 'diagnostic payload too large'}), 413
 
+    try:
+        tenant = tenant_from_request(sources=(TenantSource.HEADER,)).id
+    except TenantRejected:
+        tenant = 'unknown'  # a malformed header is not logged verbatim
     if any(key in payload for key in _CONNECT_DIAGNOSTIC_FORBIDDEN):
         logger.warning(
             'connect-diagnostic refused: payload carries record-shaped keys '
-            '(tenant=%s)', request.headers.get('X-Tenant-Id', 'unknown'))
+            '(tenant=%s)', tenant)
         return jsonify({'error': 'diagnostic payload rejected'}), 422
 
     reference = f'ccd_{uuid.uuid4().hex[:12]}'
@@ -1942,7 +1926,7 @@ def record_connect_diagnostic():
     # door, and it needs to be greppable in the same pass as an outage.
     logger.warning(
         'connect-diagnostic %s tenant=%s payload=%s',
-        reference, request.headers.get('X-Tenant-Id', 'unknown'), raw)
+        reference, tenant, raw)
     return jsonify({'reference': reference}), 202
 
 
@@ -3704,7 +3688,6 @@ register_quality_routes(r6_blueprint, {
 from r6.labs.routes import register_labs_routes  # noqa: E402
 
 register_labs_routes(r6_blueprint, {
-    "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
 
@@ -3712,7 +3695,6 @@ register_labs_routes(r6_blueprint, {
 from r6.caregaps.routes import register_caregaps_routes  # noqa: E402
 
 register_caregaps_routes(r6_blueprint, {
-    "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
 
@@ -3720,7 +3702,6 @@ register_caregaps_routes(r6_blueprint, {
 from r6.brief.routes import register_brief_routes  # noqa: E402
 
 register_brief_routes(r6_blueprint, {
-    "operation_outcome": _operation_outcome,
     "authenticate_tenant_read": authenticate_tenant_read,
 })
 

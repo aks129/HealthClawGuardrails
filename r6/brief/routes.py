@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from flask import request, jsonify
 
+from r6.access import TenantSource, tenant_from_request
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
@@ -26,10 +27,6 @@ from r6.brief.engine import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _tenant() -> str | None:
-    return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
 
 def _resources_for(tenant_id: str, resource_type: str) -> list[dict]:
@@ -151,7 +148,6 @@ def _care_gap_result(tenant_id: str) -> dict:
 
 
 def register_brief_routes(blueprint, deps):
-    operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
 
     # NOT "/fhir/AppointmentBrief": the blueprint is already mounted at
@@ -161,9 +157,8 @@ def register_brief_routes(blueprint, deps):
     # never populated for anyone.
     @blueprint.get("/AppointmentBrief")
     def appointment_brief():
-        tenant_id = _tenant()
-        if not tenant_id:
-            return operation_outcome("error", "required", "X-Tenant-Id header missing"), 400
+        # enforce_tenant_id already refused an absent or malformed id.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
 
         auth = authenticate_tenant_read(tenant_id)
         if auth is not None:

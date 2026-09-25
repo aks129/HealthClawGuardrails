@@ -475,7 +475,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3750 -> 3749 (#655): the validator no longer rides into the SDC routes
 #: as a dependency, so neither the entry nor its import is left.
 #: 3749 -> 3730: authenticate_tenant_read moved to r6/read_auth.py.
-_GOD_MODULE_LINES = 3730
+#: 3730 -> 3711: enforce_tenant_id asks the kernel for the tenant, and three
+#: operations stopped taking an OperationOutcome builder they no longer use.
+_GOD_MODULE_LINES = 3711
 
 
 def test_the_god_module_only_shrinks():
@@ -521,10 +523,11 @@ def test_the_god_module_only_shrinks():
 #: the pin. r6/fasten/routes.py and r6/rate_limit.py each hold one, and they
 #: are real instances of the same thing.
 #:
-#: The floor is NOT zero. r6/routes.py:222 is `enforce_tenant_id` itself —
-#: the before_request hook that requires and validates the header for the
-#: whole blueprint. That read is the enforcement point; it is where the
-#: header is supposed to be read.
+#: The floor IS zero. `enforce_tenant_id`, the before_request hook that
+#: requires and validates the header for the whole blueprint, was once
+#: counted as the one read that belongs here. It asks the kernel now
+#: (HEADER, then SHARP), and TenantRejected renders the same two 400s the
+#: hook wrote by hand, so the enforcement point and the reader are one.
 #:
 #: Why this is safe to do in batches, and why the batches are small: every one
 #: of these sits behind `enforce_tenant_id`, the before_request hook that
@@ -557,7 +560,23 @@ def test_the_god_module_only_shrinks():
 #: while the true number stayed flat.
 #: 27 -> 24, 23 Sep: measured 24 on main (kernel slices moved three), so the
 #: pin had three units of slack and its own MUTATION line stayed green.
-_RAW_TENANT_READS = 24
+#: 24 -> 14, 24 Sep: both before_request hooks, the four operations behind
+#: them (brief, care gaps, labs, quality), the command-center tenant
+#: resolver, wearables /sync-status and the connect-diagnostic log line.
+#: tests/test_raw_tenant_reads_pinned.py holds their answers unchanged.
+#: The fourteen left would each answer differently through the kernel, so
+#: each is a behaviour change for its own PR, not a refactor:
+#:   - a looser id pattern: r6/agent_runs/routes.py (`[A-Za-z0-9._:-]{1,128}`)
+#:   - a live .strip() off the hook: r6/fasten/routes.py (x2; it picks the
+#:     enrollment branch), /internal/ingest-bundle,
+#:     r6/smbp/scheduler_routes.py, r6/rate_limit.py (the bucket key)
+#:   - a malformed id that dev-open mode accepts today and the kernel would
+#:     400: /internal/step-up-token, /internal/purge-tenant, /internal/seed,
+#:     /demo/agent-loop, r6/oauth.py auto-approve
+#:   - a malformed or non-string id that reaches a token binding:
+#:     command-center POST /api/conversations and /api/tasks
+#:   - a malformed id echoed into the command-center login form
+_RAW_TENANT_READS = 14
 
 
 def _is_tenant_header_read(node):
