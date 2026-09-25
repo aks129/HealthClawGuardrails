@@ -181,6 +181,65 @@ def test_action_confirmation_payload_digest_migration_is_reversible(tmp_path):
     engine.dispose()
 
 
+def _audit_statements_refused(engine, event_id: str) -> dict[str, bool]:
+    """Try an UPDATE and a DELETE on one audit row; report which failed."""
+    from sqlalchemy.exc import DBAPIError
+
+    refused = {}
+    for verb, sql in (
+        ("UPDATE", "UPDATE audit_events SET agent_id = 'x' WHERE id = :i"),
+        ("DELETE", "DELETE FROM audit_events WHERE id = :i"),
+    ):
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(sql), {"i": event_id})
+                # Roll back an allowed statement, so the row survives for the
+                # next probe and the outcome is the only thing measured.
+                raise _Allowed()
+        except DBAPIError:
+            refused[verb] = True
+        except _Allowed:
+            refused[verb] = False
+    return refused
+
+
+class _Allowed(Exception):
+    pass
+
+
+def _insert_audit_row(engine, event_id: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO audit_events (id, event_type, recorded) "
+                 "VALUES (:i, 'read', CURRENT_TIMESTAMP)"), {"i": event_id})
+
+
+def test_audit_append_only_migration_refuses_changes_and_is_reversible(tmp_path):
+    """0009 installs the triggers on the Alembic path, which is the one every
+    deployed database takes (the test suite's create_all path is pinned in
+    tests/test_audit_rows_immutable.py).
+
+    MUTATION: empty upgrade() in 0009 -> red on the first assertion.
+    """
+    url = f"sqlite:///{tmp_path / 'append-only.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    command.upgrade(config, "head")
+    _insert_audit_row(engine, "evt-1")
+    assert _audit_statements_refused(engine, "evt-1") == {
+        "UPDATE": True, "DELETE": True}
+
+    command.downgrade(config, "0008_confirmation_digest")
+    assert _audit_statements_refused(engine, "evt-1") == {
+        "UPDATE": False, "DELETE": False}
+
+    command.upgrade(config, "head")
+    assert _audit_statements_refused(engine, "evt-1") == {
+        "UPDATE": True, "DELETE": True}
+    engine.dispose()
+
+
 def test_every_revision_id_fits_the_alembic_version_column():
     """alembic_version.version_num is VARCHAR(32). SQLite does not enforce
     the length; Postgres does, and a longer id fails the upgrade with
@@ -232,7 +291,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0008_confirmation_digest"
+    assert revision == "0009_audit_append_only"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -320,6 +379,10 @@ def test_postgres_fresh_install_and_v1_8_upgrade_path():
             col["name"]: getattr(col["type"], "length", None)
             for col in schema.get_columns("fasten_jobs")
         }["task_id"] == 255
+        # 0009's plpgsql trigger, not only the SQLite one, refuses both verbs.
+        _insert_audit_row(engine, "pg-evt-1")
+        assert _audit_statements_refused(engine, "pg-evt-1") == {
+            "UPDATE": True, "DELETE": True}
 
         # Rehearse an existing v1.8 deployment at the compatibility baseline
         # before the former boot-time schema_sync changes. The contract
@@ -400,11 +463,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0008_confirmation_digest"
+    assert revision == "0009_audit_append_only"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0008_confirmation_digest"
+    assert upgrade_database(engine) == "0009_audit_append_only"
 
 
 def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
@@ -440,7 +503,7 @@ def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
 
     revision = upgrade_database(engine)
 
-    assert revision == "0008_confirmation_digest"
+    assert revision == "0009_audit_append_only"
     inspector = inspect(engine)
     assert {
         "action_confirmations", "action_events", "proposed_actions",
@@ -488,7 +551,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0008_confirmation_digest"
+    assert revision == "0009_audit_append_only"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -531,9 +594,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0008_confirmation_digest"
+        assert revision == "0009_audit_append_only"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0008_confirmation_digest"  # idempotent
+        assert upgrade_database(engine) == "0009_audit_append_only"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]

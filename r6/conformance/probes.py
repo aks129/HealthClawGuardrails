@@ -725,22 +725,8 @@ def probe_audit_trail(client, ctx) -> ProbeResult:
     blob = text or json.dumps(body or {})
     readable = isinstance(body, dict) and body.get("resourceType") == "Bundle"
 
-    # Look for a READ specifically. Matching only `Patient/{pid}` in the blob
-    # could not fail: the create above already emits an event whose
-    # `entity.what.reference` is exactly that string, so the check passed with
-    # read auditing deleted entirely. A check that the setup satisfies is not
-    # a check.
-    read_audited = False
-    if isinstance(body, dict):
-        for entry in body.get("entry") or []:
-            res = entry.get("resource") or {}
-            if res.get("resourceType") != "AuditEvent":
-                continue
-            action = res.get("action")
-            refs = json.dumps(res.get("entity") or [])
-            if action == "R" and pid and f"Patient/{pid}" in refs:
-                read_audited = True
-                break
+    read_event = _find_read_event(body, pid) if isinstance(body, dict) else None
+    read_audited = read_event is not None
 
     r.checks += [
         Check("AuditEvent endpoint readable", readable, f"status {st}"),
@@ -751,7 +737,60 @@ def probe_audit_trail(client, ctx) -> ProbeResult:
         Check("no raw SSN in the audit trail", _SSN not in blob,
               on_failure="PHI leaked into audit"),
     ]
+
+    # "Immutable" is the property's name, so attempt the change it rules out:
+    # overwrite and delete the event just found, then read it back. This
+    # measures the API a caller can reach. Bulk and raw-SQL changes inside the
+    # server are refused by database triggers, which an HTTP probe cannot
+    # reach; tests/test_audit_rows_immutable.py pins those.
+    if read_event is None:
+        r.checks.append(Check(
+            "an AuditEvent cannot be changed or deleted", False,
+            on_failure="no AuditEvent to attempt a change on, so immutability "
+                       "was not measured"))
+        return r
+    eid = read_event.get("id")
+    tampered = dict(read_event, outcome={"code": {"code": "8"}})
+    put_status, _, _ = client.request(
+        "PUT", f"/AuditEvent/{eid}", ctx.write_headers(), tampered)
+    del_status, _, _ = client.request(
+        "DELETE", f"/AuditEvent/{eid}", ctx.write_headers())
+    _, after_body, _ = client.request(
+        "GET", "/AuditEvent?_count=100", ctx.read_headers())
+    after = None
+    if isinstance(after_body, dict):
+        for entry in after_body.get("entry") or []:
+            if (entry.get("resource") or {}).get("id") == eid:
+                after = entry["resource"]
+                break
+    r.checks += [
+        Check("an attempt to overwrite an AuditEvent is refused",
+              not 200 <= put_status < 300, f"PUT status {put_status}"),
+        Check("an attempt to delete an AuditEvent is refused",
+              not 200 <= del_status < 300, f"DELETE status {del_status}"),
+        Check("the AuditEvent reads back unchanged", after == read_event,
+              on_failure="the event is missing or differs after the "
+                         "overwrite and delete attempts"),
+    ]
     return r
+
+
+def _find_read_event(bundle: dict, pid) -> Optional[dict]:
+    """The AuditEvent recording a READ of Patient/{pid}, if the bundle has it.
+
+    Look for a READ specifically. Matching only `Patient/{pid}` in the bundle
+    could not fail: the create emits an event whose `entity.what.reference`
+    is exactly that string, so the check passed with read auditing deleted
+    entirely. A check that the setup satisfies is not a check.
+    """
+    for entry in bundle.get("entry") or []:
+        res = entry.get("resource") or {}
+        if res.get("resourceType") != "AuditEvent":
+            continue
+        refs = json.dumps(res.get("entity") or [])
+        if res.get("action") == "R" and pid and f"Patient/{pid}" in refs:
+            return res
+    return None
 
 
 def probe_step_up_enforcement(client, ctx) -> ProbeResult:
