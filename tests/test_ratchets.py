@@ -233,7 +233,10 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: BP trend are undeclared GETs and stay.
 #: 79 -> 71: r6/fasten — the webhook handlers, the ingest worker, the
 #: quality scan and the boot reaper.
-_POST_COMMIT_AUDIT_CALLSITES = 71
+#: 71 -> 69: r6/wearables — the OAuth callback (a declared GET mutator)
+#: stores the connection and its row together; manual sync audits after
+#: the poller's own commit.
+_POST_COMMIT_AUDIT_CALLSITES = 69
 
 
 def test_post_commit_audit_callsites_only_decrease():
