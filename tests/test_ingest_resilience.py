@@ -369,28 +369,27 @@ def test_a_refused_resource_is_counted_and_logged_apart_from_a_skip(
         "the wild, which is why it is the one thing that must not appear")
 
 
+def _shc_summary_detail(job_id):
+    """The committed SHC import-summary row's detail, read back from the
+    store rather than from a patched writer."""
+    from r6.models import AuditEventRecord
+    return AuditEventRecord.query.filter(
+        AuditEventRecord.event_type == "shc_import_complete",
+        AuditEventRecord.detail.like(f"job={job_id} %")).one().detail
+
+
 def test_the_import_summary_reports_refusals(app, tenant_id):
     """A count nobody can see is not a signal. The audit detail carries it,
     PHI-free, so a silent truncation shows up without a log dive."""
     from r6.shc import routes as shc
 
-    seen = {}
+    shc._ingest_bundle(
+        app, [{"resourceType": "Observation", "id": "bad id!"}],
+        tenant_id, "flexpa", "job3")
 
-    def capture(**kw):
-        seen.update(kw)
-
-    import r6.shc.routes as shcmod
-    original = shcmod.record_audit_event
-    shcmod.record_audit_event = capture
-    try:
-        shc._ingest_bundle(
-            app, [{"resourceType": "Observation", "id": "bad id!"}],
-            tenant_id, "flexpa", "job3")
-    finally:
-        shcmod.record_audit_event = original
-
-    assert "refused=1" in seen.get("detail", "")
-    assert "bad id" not in seen.get("detail", "")
+    detail = _shc_summary_detail("job3")
+    assert "refused=1" in detail
+    assert "bad id" not in detail
 
 
 def test_the_fasten_path_refuses_the_same_way_the_shc_path_does(app, caplog):
@@ -596,29 +595,18 @@ def test_the_shc_path_names_skipped_types_the_same_way(app, tenant_id):
     """
     from r6.shc import routes as shc
 
-    seen: dict = {}
-
-    def capture(**kw):
-        seen.update(kw)
-
-    import r6.shc.routes as shcmod
-    original = shcmod.record_audit_event
-    shcmod.record_audit_event = capture
-    try:
-        counts = shc._ingest_bundle(
-            app,
-            [{"resourceType": "Observation", "id": "shc-skipnamed-1",
-              "status": "final", "code": {"coding": [{"code": "x"}]}},
-             {"resourceType": "MedicationAdministration", "id": "shc-ms-1"}],
-            tenant_id, "flexpa", "job377")
-    finally:
-        shcmod.record_audit_event = original
+    counts = shc._ingest_bundle(
+        app,
+        [{"resourceType": "Observation", "id": "shc-skipnamed-1",
+          "status": "final", "code": {"coding": [{"code": "x"}]}},
+         {"resourceType": "MedicationAdministration", "id": "shc-ms-1"}],
+        tenant_id, "flexpa", "job377")
 
     assert counts["ingested"] == 1 and counts["skipped"] == 1
     assert counts["skipped_types"] == {"MedicationAdministration": 1}, (
         "the returned counts are the assertable surface (#293); a per-type "
         "breakdown no test can read is the next version of the same defect")
-    assert "MedicationAdministration:1" in seen.get("detail", "")
+    assert "MedicationAdministration:1" in _shc_summary_detail("job377")
 
 
 def test_ingest_context_tells_its_caller_what_it_dropped(client, tenant_headers):
