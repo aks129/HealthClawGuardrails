@@ -126,7 +126,10 @@
 
           if (res.r.ok) {
             gateMsg.className = 'alert alert-success';
-            gateMsg.textContent = 'Review recorded. ' + (res.b.next_step || '');
+            // The server's next_step already opens with what was recorded
+            // ("Review recorded and approval issued…"), so it is the whole
+            // message. Prefixing it here printed "Review recorded." twice.
+            gateMsg.textContent = res.b.next_step || 'Review recorded.';
             btn.disabled = true;
             return;
           }
