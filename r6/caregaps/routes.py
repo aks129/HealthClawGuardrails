@@ -10,7 +10,7 @@ happened, and names the failure when neither could.
 """
 import json
 import logging
-from datetime import date
+from datetime import datetime, timezone
 
 from flask import request, jsonify
 
@@ -171,7 +171,7 @@ def register_caregaps_routes(blueprint, deps):
         def _for(resource_type):
             return subject_resources(resource_type, subject, tenant_id) if subject else []
 
-        as_of = date.today().isoformat()
+        as_of = datetime.now(timezone.utc).date().isoformat()
         # A subject we could not resolve is not evaluated, full stop (#542).
         # The route used to set `not_evaluated` and then run the rules anyway,
         # against `patient=None`, which produced two false statements about a
