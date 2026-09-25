@@ -56,15 +56,15 @@ which kind it is:
 
 | # | Time (s) | Kind | What it shows | Source |
 |---|---|---|---|---|
-| b1 | 0.0–6.8 | SLIDE | An illustrated health-record card. The values are blurred, and the Name, Medicines and Test results labels light up as the narration names them. | `scripts/cards/b1.html`. Illustration only. The blurred values are the synthetic demo patient's. |
-| b2 | 6.8–16.6 | SLIDE | An AI helper reads the record card. Chips show what it can do, then the tags "Useful" and "Also risky". | `scripts/cards/b2.html` |
-| b3 | 16.6–26.8 | DIAGRAM | AI helper → HealthClaw (the guard) → "Your record". Two walled-off "Someone else's" records show tenant isolation. The three promises appear inside the guard. | `scripts/cards/b3.html`. `poster.jpg` is taken from this beat. |
-| b4 | 26.8–37.2 | CAPTURED | Stored vs returned for synthetic Patient `demo-patient-rivera`. The A1c result (8.1 %) is kept. The name becomes M. E. R. The phone becomes [Redacted]. The address "123 Clinical Ave, Boston, MA, 02101" becomes MA, and the birth date 1985-03-15 becomes 1985. | `scripts/capture/capture_b4_b5.py` read the stored row straight from `r6_resources` in SQLite, then `GET /r6/fhir/Patient/demo-patient-rivera` (200) from the running engine. Output: `evidence/b4_redaction.json`. Seeded with `flask --app main seed-demo --tenant-id desktop-demo` and `seed-demo-history`. |
-| b5 | 37.2–43.9 | CAPTURED | The 3 `audit_events` rows the b4 reads wrote (time, action, resource type, outcome; no detail column). Then the same read with the audit table switched off: HTTP 500, no record returned. | `evidence/b5_audit.json`. The fail-closed case came from a second engine on :5098 run against a *copy* of the DB with `audit_events` renamed (`scripts/capture/b5_noaudit.md`). Its log line was `AuditWriteError: audit write failed`, and the 500 body held no patient data. Also shows `tests/test_audit_failure_posture.py`: 4 passed. |
-| b6 | 43.9–55.6 | RECORDED + CAPTURED | CareAgents "Waiting for you" lists a proposed Intake form (ringed). The review page follows, opened at Current medications: "Still taking" on the medication, the "No known allergies (patient confirmed)" box ticked, then **Approve & generate** (ringed) and "Review recorded". Last comes page 1 of the PDF that was really delivered (action status: completed), with the Allergies line enlarged. | `scripts/capture/record_careagents.mjs b6`. The form was proposed with no model, the way `tests/test_beta_acceptance_rows.py` does it (`HealthClawClient.start_form_action`, via `scripts/capture/propose_form.py`). The PDF came from `/api/form/<id>`'s `delivery_link`, and page 1 was rasterized with `pdftoppm`. |
-| b7 | 55.6–65.8 | CAPTURED, then RECORDED | Live `$conformance`: Grade A, 7/7 properties, plus `test_guardrail_conformance.py` 37 passed and `test_audit_failure_posture.py` 4 passed. Then a CareAgents chat: "What do my blood test results say?" is typed and sent, and a plain-language answer comes back (A1c flagged high; BP and glucose could not be evaluated; ask your clinician). | `evidence/b7_conformance.txt` and `evidence/b7_pytest.txt`, both from the same checkout. The chat is `scripts/capture/record_careagents.mjs b7`, take 3 of 4. The transcript is `evidence/b7_transcript.txt`. |
-| b8 | 65.8–76.3 | SLIDE | Status: made-up records; real records invite-only; no clinician sign-off yet. | `scripts/cards/b8.html` |
-| b9 | 76.3–88.2 | SLIDE | HealthClaw 2.0 · free · anyone can read the code · healthclaw.io, then "The AI helps. You stay in charge." | `scripts/cards/b9.html` |
+| b1 | 0.0–6.8 | SLIDE | An illustrated health-record card. The values are blurred, and the Name, Medicines and Test results labels light up as the narration names them. | b1.html. Illustration only. The blurred values are the synthetic demo patient's. |
+| b2 | 6.8–16.6 | SLIDE | An AI helper reads the record card. Chips show what it can do, then the tags "Useful" and "Also risky". | b2.html |
+| b3 | 16.6–26.8 | DIAGRAM | AI helper → HealthClaw (the guard) → "Your record". Two walled-off "Someone else's" records show tenant isolation. The three promises appear inside the guard. | b3.html. `poster.jpg` is taken from this beat. |
+| b4 | 26.8–37.2 | CAPTURED | Stored vs returned for synthetic Patient `demo-patient-rivera`. The A1c result (8.1 %) is kept. The name becomes M. E. R. The phone becomes [Redacted]. The address "123 Clinical Ave, Boston, MA, 02101" becomes MA, and the birth date 1985-03-15 becomes 1985. | capture_b4_b5.py read the stored row straight from `r6_resources` in SQLite, then `GET /r6/fhir/Patient/demo-patient-rivera` (200) from the running engine. Output: `evidence/b4_redaction.json`. Seeded with `flask --app main seed-demo --tenant-id desktop-demo` and `seed-demo-history`. |
+| b5 | 37.2–43.9 | CAPTURED | The 3 `audit_events` rows the b4 reads wrote (time, action, resource type, outcome; no detail column). Then the same read with the audit table switched off: HTTP 500, no record returned. | `evidence/b5_audit.json`. The fail-closed case came from a second engine on :5098 run against a *copy* of the DB with `audit_events` renamed (b5_noaudit.md). Its log line was `AuditWriteError: audit write failed`, and the 500 body held no patient data. Also shows `tests/test_audit_failure_posture.py`: 4 passed. |
+| b6 | 43.9–55.6 | RECORDED + CAPTURED | CareAgents "Waiting for you" lists a proposed Intake form (ringed). The review page follows, opened at Current medications: "Still taking" on the medication, the "No known allergies (patient confirmed)" box ticked, then **Approve & generate** (ringed) and "Review recorded". Last comes page 1 of the PDF that was really delivered (action status: completed), with the Allergies line enlarged. | record_careagents.mjs b6. The form was proposed with no model, the way `tests/test_beta_acceptance_rows.py` does it (`HealthClawClient.start_form_action`, via propose_form.py). The PDF came from `/api/form/<id>`'s `delivery_link`, and page 1 was rasterized with `pdftoppm`. |
+| b7 | 55.6–65.8 | CAPTURED, then RECORDED | Live `$conformance`: Grade A, 7/7 properties, plus `test_guardrail_conformance.py` 37 passed and `test_audit_failure_posture.py` 4 passed. Then a CareAgents chat: "What do my blood test results say?" is typed and sent, and a plain-language answer comes back (A1c flagged high; BP and glucose could not be evaluated; ask your clinician). | `evidence/b7_conformance.txt` and `evidence/b7_pytest.txt`, both from the same checkout. The chat is record_careagents.mjs b7, take 3 of 4. The transcript is `evidence/b7_transcript.txt`. |
+| b8 | 65.8–76.3 | SLIDE | Status: made-up records; real records invite-only; no clinician sign-off yet. | b8.html |
+| b9 | 76.3–88.2 | SLIDE | HealthClaw 2.0 · free · anyone can read the code · healthclaw.io, then "The AI helps. You stay in charge." | b9.html |
 
 ## Disclosures: read these before publishing
 
@@ -107,18 +107,18 @@ which kind it is:
 
 ## How it was built
 
-- The slides are HTML in `scripts/cards/`: `card.css` restyled onto
+- The slides are HTML in : `card.css` restyled onto
   `static/css/healthclaw.css` tokens, with Archivo and Fragment Mono copied
   from `static/fonts`. They are rendered one frame at a time
-  (`scripts/build/render_slides.mjs` calls `render(t)` and then takes a screenshot),
+  (render_slides.mjs calls `render(t)` and then takes a screenshot),
   so the slow push and the reveals are frame-exact. The b4/b5/b7 values are
   read from the capture JSON at render time.
-- The recordings drive Playwright (`scripts/capture/record_careagents.mjs`) against the
+- The recordings drive Playwright (record_careagents.mjs) against the
   live stack. Viewport 1280×720, deviceScaleFactor 2, slowMo 120.
 - The ffmpeg here has no drawtext or libass, so captions are transparent PNG
-  overlays (`scripts/build/render_captions.mjs`). Each cue is one line, which is under
+  overlays (render_captions.mjs). Each cue is one line, which is under
   the two-line limit.
-- `scripts/build/assemble.py` handles timing (`scripts/build/plan.py`), the zoom and click
+- assemble.py handles timing (plan.py), the zoom and click
   rings on the recordings, 0.35 s crossfades, the VO on an absolute timeline,
   two-pass loudnorm and the x264 `+faststart` encode.
 
