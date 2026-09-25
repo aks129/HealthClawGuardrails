@@ -76,16 +76,18 @@ def _tenant() -> str | None:
     OAuth bearer. An unauthorized claim returns None; callers reject it
     without querying any tenant data.
     """
-    sess_tenant = session.get(SESSION_KEY)
-    candidate = (
-        sess_tenant
-        or request.args.get("tenant")
-        or request.headers.get("X-Tenant-Id")
-        or DEFAULT_TENANT
-    )
+    # A malformed id is None, not a 400: authorize_tenant_read refuses the
+    # same pattern before it consults any credential, so it always was.
+    try:
+        candidate = tenant_from_request(
+            sources=(TenantSource.SESSION, TenantSource.QUERY,
+                     TenantSource.HEADER),
+            default=DEFAULT_TENANT, query_keys=("tenant",)).id
+    except TenantRejected:
+        return None
     return authorize_tenant_read(
         candidate,
-        session_tenant=sess_tenant,
+        session_tenant=session.get(SESSION_KEY),
         always_require=True,
     )
 

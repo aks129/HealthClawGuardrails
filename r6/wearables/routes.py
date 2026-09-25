@@ -231,12 +231,14 @@ def oauth_callback():
 
 @wearables_blueprint.route('/sync-status', methods=['GET'])
 def sync_status():
-    candidate = request.args.get('tenant_id') or request.headers.get(
-        'X-Tenant-Id',
-    )
-    if not candidate:
-        return jsonify({'error': 'tenant_id required'}), 400
-    tenant_id = authorize_tenant_read(candidate)
+    # A malformed id keeps its 401: authorize_tenant_read refused it.
+    try:
+        tenant_id = authorize_tenant_read(tenant_from_request(
+            sources=(TenantSource.QUERY, TenantSource.HEADER)).id)
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.ABSENT:
+            return jsonify({'error': 'tenant_id required'}), 400
+        tenant_id = None
     if tenant_id is None:
         return jsonify({
             'error': 'authentication required for this tenant',
