@@ -11,8 +11,9 @@ import logging
 from flask import request, jsonify
 
 from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.quality.measures import evaluate_nqf0018, evaluate_population
 from r6.quality.report import (
     build_individual_report, build_summary_report, build_measure_resource,
@@ -103,9 +104,10 @@ def register_quality_routes(blueprint, deps):
             detail = (f"nqf0018 summary rate={pop['performance_rate']} "
                       f"n={pop['numerator']}/{pop['denominator']}")
 
-        record_audit_event("read", "Measure", MEASURE_ID,
-                            agent_id=request.headers.get("X-Agent-Id"),
-                            tenant_id=tenant_id, detail=detail)
+        add_audit_event("read", "Measure", MEASURE_ID,
+                        agent_id=request.headers.get("X-Agent-Id"),
+                        tenant_id=tenant_id, detail=detail)
+        db.session.commit()
         return jsonify(report), 200
 
     return evaluate_measure

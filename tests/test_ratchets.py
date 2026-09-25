@@ -242,7 +242,8 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: 66 -> 65: r6/labs — $interpret (a POST) adds its read row and commits.
 #: 65 -> 64: r6/caregaps — $care-gaps answers GET and POST, so the GET
 #: tripwire (GET-only routes) does not scan it; it adds and commits.
-_POST_COMMIT_AUDIT_CALLSITES = 64
+#: 64 -> 63: r6/quality — the measure $evaluate-measure, GET and POST too.
+_POST_COMMIT_AUDIT_CALLSITES = 63
 
 
 def test_post_commit_audit_callsites_only_decrease():
