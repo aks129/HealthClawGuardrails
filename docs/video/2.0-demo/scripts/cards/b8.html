@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><title>b8</title>
+<link rel="stylesheet" href="card.css">
+<style>
+h1 { font-size: 80px; margin-top: 14px; }
+.list { margin-top: 60px; display: flex; flex-direction: column; }
+.it { display: grid; grid-template-columns: 110px 1fr; align-items: center; padding: 30px 0;
+  border-bottom: 1px solid var(--rule); }
+.it:first-child { border-top: 2px solid var(--ink); }
+.ic { width: 70px; height: 70px; border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 30px; border: 2.5px solid var(--warn); color: var(--warn); background: var(--warn-wash); }
+.it .t { font-size: 50px; font-weight: 500; letter-spacing: -0.025em; }
+.it .s { font-family: var(--mono); font-size: 21px; color: var(--ink-faint); margin-top: 8px; }
+</style>
+<div class="stage">
+  <div class="top"><div class="brand">HealthClaw<span>2.0</span></div><div class="kind">slide · 8 / 9</div></div>
+  <div class="eyebrow fx" id="eb">WHERE THINGS STAND TODAY</div>
+  <h1 class="fx" id="h">What you just saw, honestly.</h1>
+  <div class="list">
+    <div class="it fx" id="i1"><div class="ic">1</div><div><div class="t">Made-up records</div><div class="s">every record in this video is synthetic</div></div></div>
+    <div class="it fx" id="i2"><div class="ic">2</div><div><div class="t">Real records: invite-only</div><div class="s">in the CareAgents app, for now</div></div></div>
+    <div class="it fx" id="i3"><div class="ic">3</div><div><div class="t">No clinician sign-off yet</div><div class="s">no doctor has signed off on the medical parts</div></div></div>
+  </div>
+  <div class="foot"><span>Status as of 2026-09-25</span><span>healthclaw.io</span></div>
+</div>
+<script src="anim.js"></script>
+<script>
+window.render = (t) => {
+  push(t, 0.03);
+  fade($('#eb'), t, 0.05); fade($('#h'), t, 0.15, 0.5);
+  fade($('#i1'), t, cue('s1', 0.5), 0.45, 12); fade($('#i2'), t, cue('s2', 3.2), 0.45, 12); fade($('#i3'), t, cue('s3', 6.8), 0.45, 12);
+};
+</script>

@@ -1,0 +1,26 @@
+
+      
+
+Hi — I'm Juniper. I found
+      1 condition,
+      1 medication,
+      
+      and 3 test results & measurements
+      in your records. Want me to walk through what they show?
+
+
+    
+What do my blood test results say?
+Interpreting your labs
+Reading your records — redacted view
+It can sometimes feel a bit overwhelming to look over lab results, but we can go through them together, step by step. 
+
+Your recent blood test shows one key update:
+
+* **Hemoglobin A1c:** This value is flagged as higher than the typical reference range. Since your records show a history of type 2 diabetes and an active prescription for Metformin, this is a very helpful number to keep track of. It is worth discussing this result with your doctor to see what it means for your care.
+
+There were also results for **blood pressure** and **blood glucose** that our system could not interpret. This is simply a technical limitation of our tool and not a statement about your health. Your clinician will be able to review these directly. 
+
+Additionally, your records do not show any listed allergies at this time.
+
+Would you like to see a chart of how your A1c has changed over time to see the trend?

@@ -1,0 +1,55 @@
+/* HealthClaw 2.0 demo — slide system.
+   Restyled from the 2026-08-19 overview's card.css onto healthclaw.io's
+   tokens (static/css/healthclaw.css): warm paper, one ultramarine accent,
+   green/amber only where they MEAN pass/caution, hairline rules, Archivo for
+   type and Fragment Mono for every number and identifier.
+   Every frame carries a kind tag (SLIDE / DIAGRAM / CAPTURED) so nothing here
+   can be mistaken for recorded product UI. 1920x1080; the bottom 170px is
+   left clear for burned-in captions. */
+@font-face { font-family: 'Archivo'; font-weight: 300 800; font-style: normal;
+  src: url(fonts/archivo-latin-1.woff2) format('woff2'); }
+@font-face { font-family: 'Fragment Mono'; font-weight: 400; font-style: normal;
+  src: url(fonts/fragment-mono-latin-1.woff2) format('woff2'); }
+
+:root {
+  --paper: #FAF9F5; --paper-sunk: #F1EFE8; --paper-raise: #FFFFFF;
+  --ink: #14140F; --ink-soft: #55534B; --ink-faint: #76746A;
+  --rule: #DFDCD2; --rule-firm: #14140F;
+  --signal: #1B2FBF; --signal-deep: #131F8A; --signal-wash: #ECEEFA;
+  --pass: #1B6B45; --warn: #7E5000; --fail: #A82318;
+  --pass-wash: #E7F1EB; --warn-wash: #F6EFE1;
+  --sans: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'Fragment Mono', ui-monospace, Menlo, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--paper); }
+body { font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums; }
+
+/* The whole slide lives in .stage so the Ken Burns push scales it as one. */
+.stage { position: absolute; inset: 0; padding: 64px 120px 0; transform-origin: 50% 42%; }
+
+.top { display: flex; justify-content: space-between; align-items: baseline;
+  padding-bottom: 18px; border-bottom: 2px solid var(--rule-firm); }
+.brand { font-size: 30px; font-weight: 600; letter-spacing: -0.03em; }
+.brand span { font-family: var(--mono); font-size: 20px; font-weight: 400;
+  color: var(--ink-faint); letter-spacing: 0; margin-left: 12px; }
+.kind { font-family: var(--mono); font-size: 23px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-faint); }
+.kind b { font-weight: 400; color: var(--signal); }
+
+.eyebrow { font-family: var(--mono); font-size: 22px; letter-spacing: .06em;
+  color: var(--ink-faint); margin-top: 44px; }
+h1 { font-size: 76px; font-weight: 500; letter-spacing: -0.038em; line-height: 1.0;
+  margin-top: 16px; max-width: 24ch; text-wrap: balance; }
+h1 em { font-style: normal; color: var(--signal); }
+.lede { font-size: 30px; line-height: 1.45; color: var(--ink-soft); margin-top: 22px;
+  max-width: 50ch; }
+.mono { font-family: var(--mono); }
+.foot { position: absolute; left: 120px; right: 120px; top: 846px;
+  font-family: var(--mono); font-size: 21px; color: var(--ink-faint);
+  display: flex; justify-content: space-between; gap: 40px; }
+
+/* Reveal helper: render(t) toggles .on; transitions are driven per frame,
+   not by CSS timing, so every frame is deterministic. */
+.fx { opacity: 0; }

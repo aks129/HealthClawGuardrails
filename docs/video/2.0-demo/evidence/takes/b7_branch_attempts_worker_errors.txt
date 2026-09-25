@@ -1,0 +1,4 @@
+ERROR:__main__:CareAgents run a917a12d-71de-49c5-b308-e93e88982d74 failed
+careagents.llm.LLMRateLimited: model call rate limited (HTTP 429)
+ERROR:__main__:CareAgents run c7e1d4cf-2bbe-4cc5-84a1-6272e68a0ad4 failed
+careagents.llm.LLMRateLimited: model call rate limited (HTTP 429)

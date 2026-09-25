@@ -81,6 +81,7 @@
     Building on it? It is MIT-licensed —
     <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">use it, fork it, send a PR</a>.
   </p>
+  <p class="hero__fine"><a href="#demo">Watch the 90-second demo</a></p>
 </section>
 
 <!-- ═══ SPEC STRIP ═══ -->
@@ -180,33 +181,23 @@
 <section class="wrap section" id="videos">
   <div class="section-head rise">
     <span class="eyebrow">See it in action</span>
-    <h2 class="section-title">Watch HealthClaw guard a live agent</h2>
-    <p class="section-lede">A three-minute showcase built for the PromptOpinion Agents Assemble Challenge, plus a five-minute deep dive for engineers who want the architecture story.</p>
+    <h2 class="section-title">Watch HealthClaw 2.0 in ninety seconds</h2>
+    <p class="section-lede">Ninety seconds on what HealthClaw 2.0 promises, and the real output that shows each promise holding.</p>
   </div>
-  <div class="grid grid--2 rise">
-    <div class="figure">
-      <video controls preload="metadata" playsinline>
-        <source src="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}" type="video/mp4">
-        Your browser does not support the video tag.
-        <a href="{{ url_for('static', filename='videos/healthclaw-3min.mp4') }}">Download the MP4</a>.
-      </video>
-      <div class="figure__cap">
-        <div class="card__kicker">Three-minute demo · Devpost submission</div>
-        <div class="card__title">Agents Assemble Challenge showcase</div>
-        <p class="card__body">An AI agent calls HealthClaw FHIR tools; you see PHI redaction, audit emission, and the synthetic-data disclaimer fire in real time.</p>
-      </div>
-    </div>
-    <div class="figure">
-      <video controls preload="metadata" playsinline>
-        <source src="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}" type="video/mp4">
-        Your browser does not support the video tag.
-        <a href="{{ url_for('static', filename='videos/healthclaw-5min.mp4') }}">Download the MP4</a>.
-      </video>
-      <div class="figure__cap">
-        <div class="card__kicker">Five-minute deep dive</div>
-        <div class="card__title">Architecture and SHARP-on-MCP walkthrough</div>
-        <p class="card__body">How HealthClaw forwards SMART-on-FHIR tokens via SHARP headers, applies the guardrail stack, and stays compatible with any EHR, with the code paths called out.</p>
-      </div>
+  <div class="figure rise">
+    <video id="demo" controls preload="none" playsinline
+           poster="{{ url_for('static', filename='videos/healthclaw-2.0-demo-poster.jpg') }}">
+      <source src="{{ url_for('static', filename='videos/healthclaw-2.0-demo.mp4') }}" type="video/mp4">
+      <track kind="captions" srclang="en" label="English" default
+             src="{{ url_for('static', filename='videos/healthclaw-2.0-demo.vtt') }}">
+      Your browser does not support the video tag.
+      <a href="{{ url_for('static', filename='videos/healthclaw-2.0-demo.mp4') }}">Download the MP4</a>.
+    </video>
+    <div class="figure__cap">
+      <div class="card__kicker">HealthClaw 2.0 · 88-second demo</div>
+      <div class="card__title">Three promises, shown on real output</div>
+      <p class="card__body">The AI gets health facts, not contact details. Every read is written to the audit log, and a read fails if the log cannot be written. A form goes out only after a person taps Approve.</p>
+      <p class="card__body">All records are synthetic. The chat ran on a third-party model, best of four takes. No clinician has signed off yet. <a href="https://github.com/aks129/HealthClawGuardrails/blob/main/docs/video/2.0-demo/disclosures.md" target="_blank" rel="noopener">How it was made</a>.</p>
     </div>
   </div>
 </section>

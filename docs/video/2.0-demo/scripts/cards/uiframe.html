@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>uiframe</title>
+<link rel="stylesheet" href="card.css">
+<style>
+/* The paper around a real screen recording: a kind tag above it and a
+   hairline frame. The recording itself is overlaid into the slot by ffmpeg;
+   nothing inside the slot is drawn here. Slot: x=192 y=64 1536x864. */
+.tagrow { position: absolute; left: 192px; right: 192px; top: 20px; white-space: nowrap; display: flex;
+  justify-content: space-between; font-family: var(--mono); font-size: 23px; letter-spacing: .02em; color: var(--ink-faint); }
+.tagrow b { font-weight: 400; color: var(--signal); }
+.slot { position: absolute; left: 188px; top: 60px; width: 1544px; height: 872px; border: 2px solid var(--ink);
+  border-radius: 3px; box-shadow: 12px 12px 0 var(--paper-sunk); background: #fff; }
+</style>
+<div class="tagrow"><span id="l"></span><span id="r"></span></div>
+<div class="slot"></div>
+<script>
+const q = new URLSearchParams(location.search);
+document.getElementById('l').innerHTML = q.get('l');
+document.getElementById('r').innerHTML = q.get('r');
+</script>
