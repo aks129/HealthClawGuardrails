@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import httpx
 
 from models import db
-from r6.audit import add_audit_event, record_audit_event
+from r6.audit import add_audit_event
 from r6.models import R6Resource
 
 logger = logging.getLogger(__name__)
@@ -295,14 +295,13 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
             job.skipped_resources = skipped
             job.failed_resources = failed
             job.completed_at = datetime.now(timezone.utc)
-            db.session.commit()
 
             # WHICH types were dropped, not just how many. A bare count
             # cannot tell an export full of billing rows apart from a feed
             # whose entire medication list is a type we do not keep (#377).
             types_summary = skipped_type_summary(skipped_types)
 
-            record_audit_event(
+            add_audit_event(
                 event_type='fasten_import_complete',
                 agent_id='fasten-connect',
                 tenant_id=tenant_id,
@@ -315,6 +314,7 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
                        if types_summary else '')
                 ),
             )
+            db.session.commit()
             logger.info(
                 'Fasten job %s complete: ingested=%d skipped=%d '
                 'refused=%d failed=%d skipped_types=%s',
@@ -363,14 +363,14 @@ def stream_ingest(app, job_id: int, download_links: list, tenant_id: str) -> Non
             # database clients commonly embed URLs, tokens, or bound FHIR JSON.
             job.failure_reason = type(exc).__name__[:200]
             job.completed_at = datetime.now(timezone.utc)
-            db.session.commit()
-            record_audit_event(
+            add_audit_event(
                 event_type='fasten_import_failed',
                 agent_id='fasten-connect',
                 tenant_id=tenant_id,
                 outcome='failure',
                 detail=f'job={job.task_id}',
             )
+            db.session.commit()
             logger.error('Fasten job %d failed: %s', job_id,
                          type(exc).__name__)
             try:
@@ -505,7 +505,7 @@ def _run_curatr_scan(
             count = len(result.issues)
             if count:
                 issues_found += count
-                record_audit_event(
+                add_audit_event(
                     event_type='curatr_scan',
                     resource_type=resource_type,
                     resource_id=resource_id,
@@ -517,6 +517,7 @@ def _run_curatr_scan(
         except Exception as exc:
             logger.warning('Curatr scan error for resource type %s: %s',
                            resource_type, type(exc).__name__)
+    db.session.commit()
 
     logger.info(
         'Fasten job %s Curatr scan complete: %d issues across %d resources',

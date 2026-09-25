@@ -47,7 +47,7 @@ from models import db
 from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event, record_audit_event
 from r6.models import R6Resource
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
@@ -547,6 +547,8 @@ def review_submit(action_id):
         issue_confirmation(action_id, approved_via='review-page',
                            ttl_minutes=15,
                            payload_json=action.payload_json)
+        _audit_review(action, tenant_id,
+                      'reviewed via review-page; qr=%s' % qr_row.id)
         db.session.commit()
     except PayloadSealed:
         db.session.rollback()
@@ -554,9 +556,7 @@ def review_submit(action_id):
                            'answers were recorded and approved; nothing '
                            'further is needed.')
 
-    return _reviewed(action, tenant_id,
-                     detail='reviewed via review-page; qr=%s' % qr_row.id,
-                     response={'id': action.id, 'status': action.status,
+    return _reviewed(response={'id': action.id, 'status': action.status,
                                'reviewed_qr_id': qr_row.id,
                                'approved_via': 'review-page',
                                'next_step': _FORM_NEXT_STEP})
@@ -583,25 +583,30 @@ def _approve_submit(action, tenant_id):
     try:
         issue_confirmation(action.id, approved_via='review-page',
                            ttl_minutes=15, payload_json=action.payload_json)
+        _audit_review(action, tenant_id,
+                      'approved via review-page; kind=%s' % action.kind)
         db.session.commit()
     except PayloadSealed:
         db.session.rollback()
         return _error(409, _ALREADY_APPROVED)
-    return _reviewed(action, tenant_id,
-                     detail='approved via review-page; kind=%s' % action.kind,
-                     response={'id': action.id, 'status': action.status,
+    return _reviewed(response={'id': action.id, 'status': action.status,
                                'approved_via': 'review-page',
                                'next_step': _APPROVE_NEXT_STEP})
 
 
-def _reviewed(action, tenant_id, detail, response):
-    """The one audit call and answer for a recorded review, either kind."""
-    record_audit_event(
+def _audit_review(action, tenant_id, detail):
+    """The one audit row for a recorded review, either kind. Added before the
+    commit that stores the confirmation, so the consent record and its audit
+    land together or not at all."""
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
         detail=detail,
     )
 
+
+def _reviewed(response):
+    """The answer for a recorded review, either kind."""
     # #645: this response used to assert the executor's OUTCOME — "the
     # form-fill executor currently returns an honest needs_review
     # placeholder" — as if this handler could see it. It can't: this handler

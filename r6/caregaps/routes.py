@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 from flask import request, jsonify
 
 from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
 
@@ -205,11 +206,12 @@ def register_caregaps_routes(blueprint, deps):
         summary["evaluated"] = not_evaluated is None
         consumer = build_consumer_summary(results, not_evaluated=not_evaluated)
 
-        record_audit_event(
+        add_audit_event(
             "read", resource_type="Patient", resource_id=None,
             agent_id=request.headers.get("X-Agent-Id"), tenant_id=tenant_id,
             detail=(f"care-gaps; subject={state} evaluated={summary['total']} "
                     f"due={summary['due']}"))
+        db.session.commit()
 
         return jsonify({
             "resourceType": "Parameters",

@@ -395,10 +395,10 @@ def create_resource(resource_type):
     if proxy:
         result, status_code = proxy.create(resource_type, body)
         if result and status_code in (200, 201):
-            record_audit_event('create', resource_type, result.get('id'),
-                               agent_id=request.headers.get('X-Agent-Id'),
-                               tenant_id=tenant_id,
-                               detail='source=upstream')
+            add_audit_event('create', resource_type, result.get('id'),
+                            agent_id=request.headers.get('X-Agent-Id'),
+                            tenant_id=tenant_id, detail='source=upstream')
+            db.session.commit()
             result = add_disclaimer(apply_redaction(result), resource_type)  # #380
             result['_source'] = 'upstream'
             response = jsonify(result)
@@ -406,11 +406,11 @@ def create_resource(resource_type):
             return response
         # Upstream rejected the create — audit the failure and surface the
         # sanitized OperationOutcome with its real status.
-        record_audit_event('create', resource_type, None,
-                           agent_id=request.headers.get('X-Agent-Id'),
-                           tenant_id=tenant_id,
-                           outcome='failure',
-                           detail=f'create (upstream): rejected HTTP {status_code}')
+        add_audit_event('create', resource_type, None,
+                        agent_id=request.headers.get('X-Agent-Id'),
+                        tenant_id=tenant_id, outcome='failure',
+                        detail=f'create (upstream): rejected HTTP {status_code}')
+        db.session.commit()
         if result:
             return jsonify(result), status_code
         return _operation_outcome('error', 'exception',
@@ -427,16 +427,15 @@ def create_resource(resource_type):
 
     try:
         db.session.add(resource)
+        add_audit_event('create', resource_type, resource.id,
+                        agent_id=request.headers.get('X-Agent-Id'),
+                        tenant_id=tenant_id)
         db.session.commit()
     except Exception as e:
         db.session.rollback()
         logger.error(f'Failed to create {resource_type}: {e}')
         return _operation_outcome('error', 'exception',
                                   'Failed to store resource'), 500
-
-    record_audit_event('create', resource_type, resource.id,
-                       agent_id=request.headers.get('X-Agent-Id'),
-                       tenant_id=tenant_id)
 
     fhir_json = apply_redaction(resource.to_fhir_json())  # #380: like a read
     fhir_json = add_disclaimer(fhir_json, resource_type)
@@ -579,20 +578,20 @@ def update_resource(resource_type, resource_id):
     if proxy:
         result, status_code = proxy.update(resource_type, resource_id, body, if_match)
         if result and status_code in (200, 201):
-            record_audit_event('update', resource_type, resource_id,
-                               agent_id=request.headers.get('X-Agent-Id'),
-                               tenant_id=tenant_id,
-                               detail='source=upstream')
+            add_audit_event('update', resource_type, resource_id,
+                            agent_id=request.headers.get('X-Agent-Id'),
+                            tenant_id=tenant_id, detail='source=upstream')
+            db.session.commit()
             result = add_disclaimer(apply_redaction(result), resource_type)  # #380
             result['_source'] = 'upstream'
             return jsonify(result)
         # Upstream rejected the update — audit the failure and surface the
         # sanitized OperationOutcome with its real status.
-        record_audit_event('update', resource_type, resource_id,
-                           agent_id=request.headers.get('X-Agent-Id'),
-                           tenant_id=tenant_id,
-                           outcome='failure',
-                           detail=f'update (upstream): rejected HTTP {status_code}')
+        add_audit_event('update', resource_type, resource_id,
+                        agent_id=request.headers.get('X-Agent-Id'),
+                        tenant_id=tenant_id, outcome='failure',
+                        detail=f'update (upstream): rejected HTTP {status_code}')
+        db.session.commit()
         if result:
             return jsonify(result), status_code
         return _operation_outcome('error', 'exception',
@@ -622,16 +621,15 @@ def update_resource(resource_type, resource_id):
     resource.update_resource(resource_json)
 
     try:
+        add_audit_event('update', resource_type, resource_id,
+                        agent_id=request.headers.get('X-Agent-Id'),
+                        tenant_id=tenant_id)
         db.session.commit()
     except Exception as e:
         db.session.rollback()
         logger.error(f'Failed to update {resource_type}/{resource_id}: {e}')
         return _operation_outcome('error', 'exception',
                                   'Failed to update resource'), 500
-
-    record_audit_event('update', resource_type, resource_id,
-                       agent_id=request.headers.get('X-Agent-Id'),
-                       tenant_id=tenant_id)
 
     fhir_json = apply_redaction(resource.to_fhir_json())  # #380: like a read
     fhir_json = add_disclaimer(fhir_json, resource_type)
@@ -1026,10 +1024,10 @@ def validate_resource(resource_type):
     result = validator.validate_resource(body, mode=mode, profile=profile)
 
     tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
-    record_audit_event('validate', resource_type, body.get('id'),
-                       agent_id=request.headers.get('X-Agent-Id'),
-                       tenant_id=tenant_id,
-                       detail=f'mode={mode}, valid={result["valid"]}')
+    add_audit_event('validate', resource_type, body.get('id'),
+                    agent_id=request.headers.get('X-Agent-Id'),
+                    tenant_id=tenant_id, detail=f'mode={mode}, valid={result["valid"]}')
+    db.session.commit()
 
     status_code = 200 if result['valid'] else 422
     return jsonify(result['operation_outcome']), status_code
@@ -1079,14 +1077,14 @@ def ingest_context():
         # `safe_skipped_type`. A discard the audit trail cannot name is the
         # #377 silence with a 201 on it.
         types_summary = skipped_type_summary(result['skipped_types'])
-        record_audit_event('create', 'Bundle', None,
-                           agent_id=request.headers.get('X-Agent-Id'),
-                           context_id=result['context_id'],
-                           tenant_id=tenant_id,
-                           detail=(f'ingested {result["resource_count"]} resources'
-                                   + (f'; skipped {result["skipped_count"]}: '
-                                      f'{types_summary}'
-                                      if types_summary else '')))
+        add_audit_event('create', 'Bundle', None,
+                        agent_id=request.headers.get('X-Agent-Id'),
+                        context_id=result['context_id'], tenant_id=tenant_id,
+                        detail=(f'ingested {result["resource_count"]} resources'
+                                + (f'; skipped {result["skipped_count"]}: '
+                                   f'{types_summary}'
+                                   if types_summary else '')))
+        db.session.commit()
         return jsonify(result), 201
     except ValueError as e:
         return _operation_outcome('error', 'invalid', str(e)), 400
@@ -1314,10 +1312,10 @@ def import_stub():
         }
     }
 
-    record_audit_event('create', 'Bundle', None,
-                       agent_id=request.headers.get('X-Agent-Id'),
-                       tenant_id=tenant_id,
-                       detail=f'import-stub from {source_version}, {len(entries)} entries')
+    add_audit_event('create', 'Bundle', None,
+                    agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                    detail=f'import-stub from {source_version}, {len(entries)} entries')
+    db.session.commit()
 
     return jsonify(result), 202
 
@@ -1620,10 +1618,10 @@ def evaluate_permission():
         ]
     }
 
-    record_audit_event('read', 'Permission', None,
-                       agent_id=request.headers.get('X-Agent-Id'),
-                       tenant_id=tenant_id,
-                       detail=f'$evaluate: subject={subject_ref}, action={action}, decision={decision}')
+    add_audit_event('read', 'Permission', None,
+                    agent_id=request.headers.get('X-Agent-Id'), tenant_id=tenant_id,
+                    detail=f'$evaluate: subject={subject_ref}, action={action}, decision={decision}')
+    db.session.commit()
 
     return jsonify(result)
 
@@ -1992,12 +1990,12 @@ def bind_telegram_chat():
         logger.exception('bind-telegram failed: %s', exc)
         return jsonify({'error': 'binding failed'}), 500
 
-    record_audit_event(
+    add_audit_event(
         'create', 'TelegramBinding', row.id,
-        agent_id='openclaw',
-        tenant_id=tenant_id,
+        agent_id='openclaw', tenant_id=tenant_id,
         detail=f'chat_id={chat_id} username={username or ""}',
     )
+    db.session.commit()
 
     return jsonify({
         'binding_id': row.id,
@@ -2365,7 +2363,20 @@ def ingest_bundle():
                            'code': 'unsupported_resource_type',
                            'message': 'Not a supported resource type'})
 
+    # Audit outcome is `partial` whenever the bundle wasn't fully successful —
+    # a skipped entry (unsupported resource type) is a signal too, not just
+    # a hard failure, and lumping it under `success` hides the truth.
+    outcome = 'success' if (failed == 0 and skipped == 0) else 'partial'
     try:
+        add_audit_event(
+            event_type='ingest_bundle',
+            agent_id='direct-upload',
+            tenant_id=tenant_id,
+            outcome=outcome,
+            detail=(f'entries={len(entries_raw)} ingested={ingested} '
+                    f'skipped={skipped} failed={failed} '
+                    f'correlation={correlation_id}'),
+        )
         db.session.commit()
     except Exception as exc:  # noqa: BLE001
         # Same PHI rule as per-entry: never log the exception message or
@@ -2379,20 +2390,6 @@ def ingest_bundle():
                         'correlation_id': correlation_id,
                         'ingested': 0, 'skipped': skipped, 'failed': failed,
                         'errors': errors}), 500
-
-    # Audit outcome is `partial` whenever the bundle wasn't fully successful —
-    # a skipped entry (unsupported resource type) is a signal too, not just
-    # a hard failure, and lumping it under `success` hides the truth.
-    outcome = 'success' if (failed == 0 and skipped == 0) else 'partial'
-    record_audit_event(
-        event_type='ingest_bundle',
-        agent_id='direct-upload',
-        tenant_id=tenant_id,
-        outcome=outcome,
-        detail=(f'entries={len(entries_raw)} ingested={ingested} '
-                f'skipped={skipped} failed={failed} '
-                f'correlation={correlation_id}'),
-    )
 
     return jsonify({
         'tenant_id': tenant_id,
@@ -2495,7 +2492,6 @@ def _demo_loop_upsert(resource, tenant_id):
             tenant_id=tenant_id,
         )
         db.session.add(row)
-    db.session.commit()
     return row
 
 
@@ -2555,9 +2551,9 @@ def demo_agent_loop():
     }
 
     _demo_loop_upsert(patient, tenant_id)
-    record_audit_event('create', 'Patient', patient['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: created patient for guardrail walkthrough')
+    add_audit_event('create', 'Patient', patient['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: created patient for guardrail walkthrough')
 
     # Read back with redaction
     read_resource = R6Resource.query.filter_by(
@@ -2565,9 +2561,9 @@ def demo_agent_loop():
         is_deleted=False, tenant_id=tenant_id
     ).first()
     redacted_patient = apply_redaction(read_resource.to_fhir_json())
-    record_audit_event('read', 'Patient', patient['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: read patient with PHI redaction applied')
+    add_audit_event('read', 'Patient', patient['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: read patient with PHI redaction applied')
 
     steps.append({
         'step': 1,
@@ -2593,9 +2589,9 @@ def demo_agent_loop():
     }
 
     validation_result = validator.validate_resource(med_request)
-    record_audit_event('validate', 'Observation', med_request['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail=f'Agent demo: validated proposed Observation, valid={validation_result["valid"]}')
+    add_audit_event('validate', 'Observation', med_request['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail=f'Agent demo: validated proposed Observation, valid={validation_result["valid"]}')
 
     steps.append({
         'step': 2,
@@ -2619,7 +2615,6 @@ def demo_agent_loop():
     ).all()
     for p in existing_perms:
         p.is_deleted = True
-    db.session.commit()
 
     {
         'subject': 'Agent/demo-agent',
@@ -2633,9 +2628,9 @@ def demo_agent_loop():
     ).all()
 
     deny_reasoning = 'No active Permission resources found for this tenant. Default deny applies.'
-    record_audit_event('read', 'Permission', None,
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: $evaluate — subject=Agent/demo-agent, action=create, decision=deny')
+    add_audit_event('read', 'Permission', None,
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: $evaluate — subject=Agent/demo-agent, action=create, decision=deny')
 
     steps.append({
         'step': 3,
@@ -2676,16 +2671,16 @@ def demo_agent_loop():
     }
 
     _demo_loop_upsert(permission, tenant_id)
-    record_audit_event('create', 'Permission', permission['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: created permit rule for treatment-purpose writes')
+    add_audit_event('create', 'Permission', permission['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: created permit rule for treatment-purpose writes')
 
     # Re-evaluate — now should permit
     permit_reasoning = (f'Matched 1 rule(s): permit (Permission/{permission["id"]}, '
                         f'combining=permit-overrides). Final decision: permit.')
-    record_audit_event('read', 'Permission', None,
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: $evaluate — action=create, decision=permit')
+    add_audit_event('read', 'Permission', None,
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: $evaluate — action=create, decision=permit')
 
     steps.append({
         'step': 4,
@@ -2716,9 +2711,9 @@ def demo_agent_loop():
         'Without it, server returns HTTP 428 Precondition Required. '
         'Agent must surface the proposed write to a human reviewer.'
     )
-    record_audit_event('read', 'Observation', med_request['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: step-up token issued, human confirmation required')
+    add_audit_event('read', 'Observation', med_request['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: step-up token issued, human confirmation required')
 
     steps.append({
         'step': 5,
@@ -2748,9 +2743,10 @@ def demo_agent_loop():
 
     # --- Step 6: Commit write with full audit trail ---
     obs_resource = _demo_loop_upsert(med_request, tenant_id)
-    record_audit_event('create', 'Observation', med_request['id'],
-                       agent_id='demo-agent', tenant_id=tenant_id,
-                       detail='Agent demo: committed Observation after full guardrail sequence')
+    add_audit_event('create', 'Observation', med_request['id'],
+                    agent_id='demo-agent', tenant_id=tenant_id,
+                    detail='Agent demo: committed Observation after full guardrail sequence')
+    db.session.commit()
 
     committed = apply_redaction(obs_resource.to_fhir_json())
     committed = add_disclaimer(committed, 'Observation')
@@ -2826,12 +2822,12 @@ def curatr_evaluate(resource_type, resource_id):
             f'{resource_type}/{resource_id} not found'
         ), 404
 
-    record_audit_event(
+    add_audit_event(
         'read', resource_type, resource_id,
         agent_id=request.headers.get('X-Agent-Id'),
-        tenant_id=tenant_id,
-        detail='curatr-evaluate',
+        tenant_id=tenant_id, detail='curatr-evaluate',
     )
+    db.session.commit()
 
     fhir_json = resource.to_fhir_json()
     result = _curatr_engine.evaluate(fhir_json)
@@ -3435,10 +3431,9 @@ def share_bundle():
         'entry': entries,
     }
 
-    record_audit_event(
+    add_audit_event(
         'read',
-        resource_type='Bundle',
-        resource_id='share-bundle',
+        resource_type='Bundle', resource_id='share-bundle',
         agent_id=request.headers.get('X-Agent-Id'),
         tenant_id=tenant_id,
         detail=(
@@ -3446,6 +3441,7 @@ def share_bundle():
             f'across {len(type_set)} type(s){multi_patient_note}'
         ),
     )
+    db.session.commit()
 
     return Response(
         json.dumps(bundle),

@@ -10,6 +10,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from models import db
+from r6.audit_ddl import install_statements
 
 
 _AUDIT_OUTCOME_DETAIL_TEXT = {
@@ -198,7 +199,8 @@ class AuditEventRecord(db.Model):
     operations, privacy, security, maintenance, and performance.
 
     APPEND-ONLY: AuditEvents are immutable legal records.
-    Updates and deletes are blocked at the model level.
+    Updates and deletes are blocked at the model level and, for bulk and
+    raw-SQL statements the ORM never sees, by database triggers.
     """
     __tablename__ = 'audit_events'
 
@@ -304,6 +306,16 @@ def _prevent_audit_update(mapper, connection, target):
 @db.event.listens_for(AuditEventRecord, 'before_delete')
 def _prevent_audit_delete(mapper, connection, target):
     raise RuntimeError('AuditEvent records are immutable and cannot be deleted')
+
+
+# The listeners above never see a bulk Query.update/delete or raw SQL. The
+# database triggers do: installed here wherever create_all builds the table,
+# and by migration 0009 everywhere else. See r6/audit_ddl.py.
+for _dialect in ('sqlite', 'postgresql'):
+    for _statement in install_statements(_dialect):
+        db.event.listen(
+            AuditEventRecord.__table__, 'after_create',
+            db.DDL(_statement).execute_if(dialect=_dialect))
 
 
 class TelegramBinding(db.Model):
