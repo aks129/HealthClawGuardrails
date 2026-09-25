@@ -39,8 +39,8 @@ and run everything from that copy, never from inside the repo.
 5. Build: `build/plan.py`, then `render_slides.mjs`, `render_frames.mjs` and
    `render_captions.mjs`, then `build/assemble.py`.
 
-The Node scripts load Playwright from the repo's `e2e/` install. Set
-`HC_REPO_ROOT` to your checkout, or run them from its root. The build needs
+The Node scripts load Playwright from the repo's `e2e/` install, so set
+`HC_REPO_ROOT` to your checkout before you run them. The build needs
 `ffmpeg` and `pdftoppm`.
 
 ## What is not here
