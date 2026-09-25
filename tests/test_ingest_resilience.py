@@ -491,7 +491,8 @@ def _run_fasten_ingest(app, task_id, resources, caplog):
 
     A unit test over `_ingest_one` proves an outcome code. It cannot prove
     the import summary carries it, which is the whole defect. Returns
-    (job, summary_audit_detail).
+    (job, summary_audit_detail), the detail read back from the committed
+    AuditEvent row rather than from a patched writer.
     """
     import json as _json
     import logging
@@ -500,36 +501,29 @@ def _run_fasten_ingest(app, task_id, resources, caplog):
     from models import db
     import r6.fasten.ingester as ingester_mod
     from r6.fasten.models import FastenJob
+    from r6.models import AuditEventRecord
 
     lines = [_json.dumps(r) for r in resources]
-    seen: dict = {}
+    with app.app_context():
+        job = FastenJob(task_id=task_id, org_connection_id="c1",
+                        tenant_id="test-tenant", status="pending")
+        db.session.add(job)
+        db.session.commit()
+        job_id = job.id
 
-    def capture(**kw):
-        if kw.get("event_type") == "fasten_import_complete":
-            seen.update(kw)
+        with patch("r6.fasten.ingester.httpx.stream",
+                   return_value=_ndjson_stream(lines)), \
+                caplog.at_level(logging.INFO):
+            ingester_mod.stream_ingest(
+                app, job_id,
+                ["https://download.example.invalid/e.ndjson"],
+                "test-tenant")
 
-    original = ingester_mod.record_audit_event
-    ingester_mod.record_audit_event = capture
-    try:
-        with app.app_context():
-            job = FastenJob(task_id=task_id, org_connection_id="c1",
-                            tenant_id="test-tenant", status="pending")
-            db.session.add(job)
-            db.session.commit()
-            job_id = job.id
-
-            with patch("r6.fasten.ingester.httpx.stream",
-                       return_value=_ndjson_stream(lines)), \
-                    caplog.at_level(logging.INFO):
-                ingester_mod.stream_ingest(
-                    app, job_id,
-                    ["https://download.example.invalid/e.ndjson"],
-                    "test-tenant")
-
-            db.session.expire_all()
-            return db.session.get(FastenJob, job_id), seen.get("detail", "")
-    finally:
-        ingester_mod.record_audit_event = original
+        db.session.expire_all()
+        summary = AuditEventRecord.query.filter(
+            AuditEventRecord.event_type == "fasten_import_complete",
+            AuditEventRecord.detail.like(f"job={task_id} %")).one()
+        return db.session.get(FastenJob, job_id), summary.detail
 
 
 def test_a_skipped_medication_type_is_named_in_the_import_summary(

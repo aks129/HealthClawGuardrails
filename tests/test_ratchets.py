@@ -231,7 +231,9 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: 83 -> 79: r6/smbp — enroll, reading, the report and its PDF. The
 #: report is a GET, but a declared mutator already; reminders-due and the
 #: BP trend are undeclared GETs and stay.
-_POST_COMMIT_AUDIT_CALLSITES = 79
+#: 79 -> 71: r6/fasten — the webhook handlers, the ingest worker, the
+#: quality scan and the boot reaper.
+_POST_COMMIT_AUDIT_CALLSITES = 71
 
 
 def test_post_commit_audit_callsites_only_decrease():
