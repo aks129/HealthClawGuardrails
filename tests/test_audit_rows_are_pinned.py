@@ -170,3 +170,31 @@ def test_a_wearable_connection_is_audited_when_the_callback_lands(client):
         ('create', 'WearableConnection', str(conn.id), 'pin-wear',
          'wearable-oauth', 'success', 'connected oura'),
     ]
+
+
+# --- a read that cannot be audited is not served ----------------------------
+
+def test_a_read_whose_audit_cannot_be_written_is_not_served(
+        client, tenant_headers, monkeypatch):
+    """Fail closed. With the shim, an audit failure raised AuditWriteError;
+    with add_audit_event it raises the store's own error. Either way the
+    interpretation must not reach the caller. Under TESTING the error
+    propagates; in production Flask answers the same failure with a 500.
+
+    MUTATION: wrap the $interpret audit in a try/except that passes -> red.
+    """
+    def boom(*args, **kwargs):
+        raise RuntimeError('simulated audit insert failure')
+    monkeypatch.setattr('r6.audit._new_audit_event', boom)
+
+    obs = {'resourceType': 'Observation', 'status': 'final',
+           'code': {'coding': [{'system': 'http://loinc.org',
+                                'code': '2823-3'}]},
+           'valueQuantity': {'value': 7.0, 'unit': 'mmol/L'}}
+    try:
+        resp = client.post('/r6/fhir/Observation/$interpret',
+                           headers=tenant_headers, json=obs)
+    except RuntimeError:
+        return
+    assert resp.status_code >= 500, (
+        f'$interpret answered {resp.status_code} with no audit row')

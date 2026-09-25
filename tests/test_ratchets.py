@@ -239,7 +239,8 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: 69 -> 68: r6/shc — the import summary.
 #: 68 -> 67: r6/seed.py — each seeded resource commits with its row.
 #: 67 -> 66: r6/ops — the reaper's row, after transition_action's commit.
-_POST_COMMIT_AUDIT_CALLSITES = 66
+#: 66 -> 65: r6/labs — $interpret (a POST) adds its read row and commits.
+_POST_COMMIT_AUDIT_CALLSITES = 65
 
 
 def test_post_commit_audit_callsites_only_decrease():
