@@ -248,7 +248,10 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: transition_action (which commits the move itself) add and commit next,
 #: the idiom confirm already used; making those one transaction needs an
 #: audit hook in r6/actions/state.py. The review page is an undeclared GET.
-_POST_COMMIT_AUDIT_CALLSITES = 45
+#: 45 -> 23: r6/routes.py — every write and every non-GET read. Local create
+#: and update, ingest-bundle and the demo loop now commit the record and its
+#: row in one transaction. What is left are GET-only reads, below.
+_POST_COMMIT_AUDIT_CALLSITES = 23
 
 
 def test_post_commit_audit_callsites_only_decrease():
@@ -499,7 +502,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3749 -> 3730: authenticate_tenant_read moved to r6/read_auth.py.
 #: 3730 -> 3711: enforce_tenant_id asks the kernel for the tenant, and three
 #: operations stopped taking an OperationOutcome builder they no longer use.
-_GOD_MODULE_LINES = 3711
+#: 3711 -> 3707: the shim migration folded three post-commit audit blocks into
+#: the commit they describe and dropped the demo loop's interim commits.
+_GOD_MODULE_LINES = 3707
 
 
 def test_the_god_module_only_shrinks():

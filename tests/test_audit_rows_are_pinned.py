@@ -172,6 +172,37 @@ def test_a_wearable_connection_is_audited_when_the_callback_lands(client):
     ]
 
 
+# --- a write and its audit row land together or not at all ------------------
+
+def test_a_create_whose_audit_cannot_be_written_stores_nothing(
+        client, auth_headers, tenant_id, monkeypatch):
+    """The point of moving the audit into the write's transaction.
+
+    With the shim the resource was committed first and the audit second, so
+    a failed audit answered 500 over a stored, unaudited record. Now the
+    create and its row commit together, and a failed audit stores neither.
+
+    MUTATION: move the create's add_audit_event after its commit -> red.
+    """
+    def boom(*args, **kwargs):
+        raise RuntimeError('simulated audit insert failure')
+    monkeypatch.setattr('r6.audit._new_audit_event', boom)
+
+    from r6.audit import AuditWriteError
+    try:
+        resp = client.post('/r6/fhir/Observation', json={
+            'resourceType': 'Observation', 'id': 'atomic-pin-1',
+            'status': 'final', 'code': {'coding': [{'code': 'x'}]}},
+            headers={**auth_headers, 'X-Human-Confirmed': 'true'})
+        assert resp.status_code == 500
+    except AuditWriteError:
+        pass  # the shim's failure propagates under TESTING; the store decides
+    db.session.rollback()
+    assert R6Resource.query.filter_by(
+        tenant_id=tenant_id, id='atomic-pin-1').first() is None, (
+        'the resource was stored with no audit row behind it')
+
+
 # --- a read that cannot be audited is not served ----------------------------
 
 def test_a_read_whose_audit_cannot_be_written_is_not_served(
