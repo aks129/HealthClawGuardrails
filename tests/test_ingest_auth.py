@@ -12,8 +12,10 @@ The two tests at the bottom count rows before and after rather than
 asserting a row exists, so they cannot pass on audit rows some other test
 left behind.
 
-MUTATION: delete the `record_audit_event` call on the success path in
-`ingest_context` -> the success test fails (executed 2026-09-05). The deny
+MUTATION: delete the `add_audit_event` call on the success path in
+`ingest_context` -> the success test fails (executed 2026-09-05 against
+record_audit_event, and again 2026-09-25 after the move to add_audit_event
+in the caller's transaction). The deny
 path's row is written by the kernel since #648 PR 2, not by the route: drop
 the `require_grant` call -> every refusal test fails; delete
 `_audit_refusal(exc)` in r6/access.py -> the deny tests fail.

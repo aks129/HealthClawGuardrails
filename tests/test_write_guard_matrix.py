@@ -1101,7 +1101,7 @@ def test_a_successful_clinical_write_emits_an_audit_event(client, tenant_id,
                                                           auth_headers):
     """A create is visible in the audit trail read back through the API.
 
-    MUTATION: remove the record_audit_event call from r6.create_resource.
+    MUTATION: remove the add_audit_event call from r6.create_resource.
 
     Read back over HTTP rather than from the ORM, so this survives the plan's
     move of audit into the access kernel.
@@ -1123,7 +1123,7 @@ def test_a_successful_clinical_write_emits_an_audit_event(client, tenant_id,
 def test_smbp_reading_emits_an_audit_event(client, tenant_id, auth_headers):
     """The clinical write on a NON-r6 blueprint is audited too.
 
-    MUTATION: remove the record_audit_event call from r6/smbp/routes.py
+    MUTATION: remove the add_audit_event call from r6/smbp/routes.py
     reading().
 
     Blueprint-local audit calls are the plan's weak point: r6_blueprint has

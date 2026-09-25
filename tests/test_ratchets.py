@@ -250,7 +250,15 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: audit hook in r6/actions/state.py. The review page is an undeclared GET.
 #: 45 -> 23: r6/routes.py — every write and every non-GET read. Local create
 #: and update, ingest-bundle and the demo loop now commit the record and its
-#: row in one transaction. What is left are GET-only reads, below.
+#: row in one transaction.
+#:
+#: ALL 23 LEFT are reads in GET-only handlers that are not declared GET
+#: mutators: 18 in r6/routes.py, plus brief, the signed PDF download,
+#: the review page, reminders-due and the BP trend. Their inline
+#: add-then-commit would put db.session.commit() in a GET, which
+#: test_no_new_get_route_mutates_the_store flags; the shim's commit is
+#: the one it does not see. They wait on a read-audit ruling (slice 12),
+#: not on more migration of this kind.
 _POST_COMMIT_AUDIT_CALLSITES = 23
 
 
