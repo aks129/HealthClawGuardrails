@@ -1101,7 +1101,7 @@ def test_a_successful_clinical_write_emits_an_audit_event(client, tenant_id,
                                                           auth_headers):
     """A create is visible in the audit trail read back through the API.
 
-    MUTATION: remove the record_audit_event call from r6.create_resource.
+    MUTATION: remove the add_audit_event call from r6.create_resource.
 
     Read back over HTTP rather than from the ORM, so this survives the plan's
     move of audit into the access kernel.
@@ -1123,7 +1123,7 @@ def test_a_successful_clinical_write_emits_an_audit_event(client, tenant_id,
 def test_smbp_reading_emits_an_audit_event(client, tenant_id, auth_headers):
     """The clinical write on a NON-r6 blueprint is audited too.
 
-    MUTATION: remove the record_audit_event call from r6/smbp/routes.py
+    MUTATION: remove the add_audit_event call from r6/smbp/routes.py
     reading().
 
     Blueprint-local audit calls are the plan's weak point: r6_blueprint has
@@ -1631,11 +1631,18 @@ def test_the_get_mutation_scanner_actually_detects_writes(app):
     Without this, test_no_new_get_route_mutates_the_store could pass because
     the scanner detects nothing whatsoever — retro defect #1, a monitor that
     counted how many checks ran rather than which.
+
+    A probe proves a depth only if nothing shallower flags it. smbp.report
+    and r6.curatr_evaluate were the depth-1 probes until the audit-shim
+    migration gave both an inline commit (depth 0), after which depth=0
+    left this test green (verified 2026-09-25). curatr_evaluate was listed
+    as depth 2, but it calls persist_curation_state directly, so it was
+    depth 1 even then: no GET route is flagged only at depth 2 today, and
+    the second level of recursion is not proven here.
     """
     flagged = _flagged_get_endpoints(app)
     for endpoint in ("fasten.agent_access",     # inline write, depth 0
-                     "smbp.report",             # same-module helper, depth 1
-                     "r6.curatr_evaluate"):     # cross-module helper, depth 2
+                     "agent_runs.get_agent_worker_health"):  # helper, depth 1
         assert endpoint in flagged, (
             f"the scanner no longer detects the known GET-mutation "
             f"{endpoint}; it cannot be trusted to detect a new one")

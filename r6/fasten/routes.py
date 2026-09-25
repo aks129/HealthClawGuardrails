@@ -22,7 +22,7 @@ from flask import Blueprint, request, jsonify, current_app
 
 from models import db
 from r6.access import TenantRejected, TenantSource, tenant_from_request
-from r6.audit import add_audit_event, record_audit_event
+from r6.audit import add_audit_event
 from r6.fasten.enrollment import (
     clear_enrollment_session,
     enrollment_proof_hash,
@@ -166,15 +166,14 @@ def _handle_export_success(payload: dict) -> None:
     job.status = 'pending'
     job.download_links_json = json.dumps(download_links)
     conn.last_export_at = datetime.now(timezone.utc)
-    db.session.commit()
-
-    record_audit_event(
+    add_audit_event(
         event_type='fasten_import_start',
         agent_id='fasten-connect',
         tenant_id=conn.tenant_id,
         outcome='success',
         detail=f'job={task_id} links={len(download_links)}',
     )
+    db.session.commit()
 
     _launch_ingest(job.id, download_links, conn.tenant_id, task_id)
 
@@ -238,15 +237,15 @@ def _handle_export_failed(payload: dict) -> None:
         job.status = 'failed'
         job.failure_reason = failure_reason
         job.completed_at = datetime.now(timezone.utc)
-        db.session.commit()
 
-    record_audit_event(
+    add_audit_event(
         event_type='fasten_import_failed',
         agent_id='fasten-connect',
         tenant_id=tenant_id,
         outcome='failure',
         detail=f'job={task_id}',
     )
+    db.session.commit()
 
 
 def _handle_revoked(payload: dict) -> None:
@@ -257,13 +256,13 @@ def _handle_revoked(payload: dict) -> None:
     ).first()
     if conn:
         conn.connection_status = 'revoked'
-        db.session.commit()
-        record_audit_event(
+        add_audit_event(
             event_type='fasten_connection_revoked',
             agent_id='fasten-connect',
             tenant_id=conn.tenant_id,
             outcome='success',
         )
+        db.session.commit()
 
 
 def _handle_connection_success(payload: dict) -> None:

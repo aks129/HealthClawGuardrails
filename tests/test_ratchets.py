@@ -226,7 +226,40 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: Provenance and both audit rows now commit in one transaction.
 #: 87 -> 86 (#648 PR 2): $ingest-context's refusal row is the kernel's now,
 #: written by the StepUpDenied renderer, not by the route.
-_POST_COMMIT_AUDIT_CALLSITES = 86
+#: 86 -> 83: r6/sdc — $populate, $extract and the intake PDF write their
+#: row in the caller's transaction. The signed-link download is a GET.
+#: 83 -> 79: r6/smbp — enroll, reading, the report and its PDF. The
+#: report is a GET, but a declared mutator already; reminders-due and the
+#: BP trend are undeclared GETs and stay.
+#: 79 -> 71: r6/fasten — the webhook handlers, the ingest worker, the
+#: quality scan and the boot reaper.
+#: 71 -> 69: r6/wearables — the OAuth callback (a declared GET mutator)
+#: stores the connection and its row together; manual sync audits after
+#: the poller's own commit.
+#: 69 -> 68: r6/shc — the import summary.
+#: 68 -> 67: r6/seed.py — each seeded resource commits with its row.
+#: 67 -> 66: r6/ops — the reaper's row, after transition_action's commit.
+#: 66 -> 65: r6/labs — $interpret (a POST) adds its read row and commits.
+#: 65 -> 64: r6/caregaps — $care-gaps answers GET and POST, so the GET
+#: tripwire (GET-only routes) does not scan it; it adds and commits.
+#: 64 -> 63: r6/quality — the measure $evaluate-measure, GET and POST too.
+#: 63 -> 45: r6/actions — proposals, the emergency refusal, the approval-token
+#: mint and the review submit commit with their row. Sites after
+#: transition_action (which commits the move itself) add and commit next,
+#: the idiom confirm already used; making those one transaction needs an
+#: audit hook in r6/actions/state.py. The review page is an undeclared GET.
+#: 45 -> 23: r6/routes.py — every write and every non-GET read. Local create
+#: and update, ingest-bundle and the demo loop now commit the record and its
+#: row in one transaction.
+#:
+#: ALL 23 LEFT are reads in GET-only handlers that are not declared GET
+#: mutators: 18 in r6/routes.py, plus brief, the signed PDF download,
+#: the review page, reminders-due and the BP trend. Their inline
+#: add-then-commit would put db.session.commit() in a GET, which
+#: test_no_new_get_route_mutates_the_store flags; the shim's commit is
+#: the one it does not see. They wait on a read-audit ruling (slice 12),
+#: not on more migration of this kind.
+_POST_COMMIT_AUDIT_CALLSITES = 23
 
 
 def test_post_commit_audit_callsites_only_decrease():
@@ -477,7 +510,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3749 -> 3730: authenticate_tenant_read moved to r6/read_auth.py.
 #: 3730 -> 3711: enforce_tenant_id asks the kernel for the tenant, and three
 #: operations stopped taking an OperationOutcome builder they no longer use.
-_GOD_MODULE_LINES = 3711
+#: 3711 -> 3707: the shim migration folded three post-commit audit blocks into
+#: the commit they describe and dropped the demo loop's interim commits.
+_GOD_MODULE_LINES = 3707
 
 
 def test_the_god_module_only_shrinks():

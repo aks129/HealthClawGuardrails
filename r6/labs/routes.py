@@ -12,8 +12,9 @@ import logging
 from flask import request, jsonify
 
 from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.labs.interpret import interpret_observation
 from r6.redaction import apply_redaction
 from r6.labs.report import (
@@ -162,11 +163,12 @@ def register_labs_routes(blueprint, deps):
         summary["ignored"] = ignored
         consumer = build_consumer_summary(results)
 
-        record_audit_event(
+        add_audit_event(
             "read", resource_type="Observation", resource_id=None,
             agent_id=request.headers.get("X-Agent-Id"), tenant_id=tenant_id,
             detail=(f"labs $interpret; interpreted={summary['total']} "
                     f"flagged={len(summary['flagged'])} critical={summary['critical']}"))
+        db.session.commit()
 
         return jsonify({
             "resourceType": "Parameters",
