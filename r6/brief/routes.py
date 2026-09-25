@@ -10,7 +10,7 @@ raw FHIR shape.
 
 import json
 import logging
-from datetime import date
+from datetime import datetime, timezone
 
 from flask import request, jsonify
 
@@ -139,7 +139,7 @@ def _care_gap_result(tenant_id: str) -> dict:
             observations=subject_resources("Observation", subject, tenant_id),
             immunizations=subject_resources("Immunization", subject, tenant_id),
             procedures=subject_resources("Procedure", subject, tenant_id),
-            as_of=date.today().isoformat(),
+            as_of=datetime.now(timezone.utc).date().isoformat(),
         )
         consumer = build_consumer_summary(results)
         return {"consumer": consumer}
