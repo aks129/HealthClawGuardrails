@@ -14,7 +14,7 @@ from flask import Blueprint, request, jsonify, Response
 from r6.models import R6Resource, db
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
                        tenant_from_request)
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
@@ -81,10 +81,11 @@ def enroll():
         consent_captured=bool(body.get("consent_captured", False)),
     )
     db.session.add(session)
+    db.session.flush()
+    add_audit_event("create", "SMBPSession", session.id,
+                    agent_id=request.headers.get("X-Agent-Id"),
+                    tenant_id=tenant_id, detail="smbp enroll")
     db.session.commit()
-    record_audit_event("create", "SMBPSession", session.id,
-                       agent_id=request.headers.get("X-Agent-Id"),
-                       tenant_id=tenant_id, detail="smbp enroll")
     return jsonify(session.to_dict()), 201
 
 
@@ -121,11 +122,11 @@ def reading():
     row = R6Resource(resource_type="Observation",
                      resource_json=json.dumps(obs), tenant_id=grant.tenant_id)
     db.session.add(row)
+    add_audit_event("create", "Observation", row.id,
+                    agent_id=request.headers.get("X-Agent-Id"),
+                    tenant_id=grant.tenant_id,
+                    detail="smbp reading band=%s" % triage["band"])
     db.session.commit()
-    record_audit_event("create", "Observation", row.id,
-                       agent_id=request.headers.get("X-Agent-Id"),
-                       tenant_id=grant.tenant_id,
-                       detail="smbp reading band=%s" % triage["band"])
     return jsonify({"observation_id": row.id, "triage": triage}), 201
 
 
@@ -156,10 +157,11 @@ def report(session_id):
     label = session.patient_ref.split("/")[-1]
     rep = build_report(session.patient_ref, label, session.days, observations)
 
-    record_audit_event("read", "SMBPSession", session.id,
-                       agent_id=request.headers.get("X-Agent-Id"),
-                       tenant_id=tenant_id,
-                       detail="smbp report readings=%d" % len(observations))
+    add_audit_event("read", "SMBPSession", session.id,
+                    agent_id=request.headers.get("X-Agent-Id"),
+                    tenant_id=tenant_id,
+                    detail="smbp report readings=%d" % len(observations))
+    db.session.commit()
 
     if request.args.get("format") == "pdf":
         pdf = render_pdf(rep)
@@ -182,9 +184,9 @@ def _persist_document_reference(tenant_id, session, size):
     row = R6Resource(resource_type="DocumentReference",
                      resource_json=json.dumps(doc), tenant_id=tenant_id)
     db.session.add(row)
+    add_audit_event("create", "DocumentReference", row.id,
+                    tenant_id=tenant_id, detail="smbp report pdf")
     db.session.commit()
-    record_audit_event("create", "DocumentReference", row.id,
-                       tenant_id=tenant_id, detail="smbp report pdf")
 
 
 # --- Reminder scheduler (GET /r6/smbp/reminders/due — #61) ---

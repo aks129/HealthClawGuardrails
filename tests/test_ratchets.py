@@ -228,7 +228,10 @@ def test_imports_out_of_the_god_module_only_decrease():
 #: written by the StepUpDenied renderer, not by the route.
 #: 86 -> 83: r6/sdc — $populate, $extract and the intake PDF write their
 #: row in the caller's transaction. The signed-link download is a GET.
-_POST_COMMIT_AUDIT_CALLSITES = 83
+#: 83 -> 79: r6/smbp — enroll, reading, the report and its PDF. The
+#: report is a GET, but a declared mutator already; reminders-due and the
+#: BP trend are undeclared GETs and stay.
+_POST_COMMIT_AUDIT_CALLSITES = 79
 
 
 def test_post_commit_audit_callsites_only_decrease():
