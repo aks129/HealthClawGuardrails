@@ -433,7 +433,7 @@ def create_resource(resource_type):
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        logger.error(f'Failed to create {resource_type}: {e}')
+        logger.error('Failed to create %s: %s', resource_type, type(e).__name__)  # #306
         return _operation_outcome('error', 'exception',
                                   'Failed to store resource'), 500
 
@@ -627,7 +627,7 @@ def update_resource(resource_type, resource_id):
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        logger.error(f'Failed to update {resource_type}/{resource_id}: {e}')
+        logger.error('Failed to update %s/%s: %s', resource_type, resource_id, type(e).__name__)  # #306
         return _operation_outcome('error', 'exception',
                                   'Failed to update resource'), 500
 
@@ -1987,13 +1987,13 @@ def bind_telegram_chat():
     try:
         row = bind_chat(tenant_id=tenant_id, chat_id=chat_id, username=username)
     except Exception as exc:
-        logger.exception('bind-telegram failed: %s', exc)
+        logger.error('bind-telegram failed: %s', type(exc).__name__)  # #306
         return jsonify({'error': 'binding failed'}), 500
 
     add_audit_event(
         'create', 'TelegramBinding', row.id,
         agent_id='openclaw', tenant_id=tenant_id,
-        detail=f'chat_id={chat_id} username={username or ""}',
+        detail='telegram chat bound',  # no chat_id/username: audit detail stays PII-free
     )
     db.session.commit()
 
