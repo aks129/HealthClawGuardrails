@@ -2,8 +2,9 @@
 
 With CARE_REAL_RECORDS open (`on` or `allowlist`), chat turns carry redacted
 but real health data to whichever model provider serves chat. That provider's
-host must be on a vetted list — Anthropic, api.openai.com, or a host the
-operator names in CARE_REAL_RECORDS_MODEL_HOSTS — or the app refuses to boot.
+host must be on a vetted list (Anthropic, OpenAI, Google Gemini and Groq, as
+approved by the owner) or be named in CARE_REAL_RECORDS_MODEL_HOSTS, or the
+app refuses to boot.
 """
 
 import pytest
@@ -12,7 +13,7 @@ from careagents.config import Config, ConfigError
 
 BASE = {"CARE_RP_ID": "localhost", "CARE_ORIGIN": "http://localhost",
         "OPENAI_API_KEY": "sk-test-secret", "HEALTHCLAW_MINT_SECRET": "m"}
-FOREIGN = "https://generativelanguage.googleapis.com/v1beta/openai"
+FOREIGN = "https://llm.example-provider.test/v1beta/openai"
 
 
 def _cfg(**env):
@@ -46,6 +47,15 @@ def test_open_real_records_accept_anthropic(cred):
     assert cfg.provider == "anthropic"
 
 
+@pytest.mark.parametrize("url", [
+    "https://generativelanguage.googleapis.com/v1beta/openai",
+    "https://api.groq.com/openai/v1",
+])
+def test_open_real_records_accept_the_owner_approved_hosts(url):
+    cfg = _cfg(CARE_REAL_RECORDS="on", OPENAI_BASE_URL=url)
+    assert cfg.real_records == "on"
+
+
 def test_anthropic_serving_ignores_an_unused_openai_base():
     # The rule keys on the provider that will serve chat. With an Anthropic
     # credential set, the OpenAI base is never called.
@@ -59,7 +69,7 @@ def test_open_real_records_refuse_a_foreign_host(mode):
     with pytest.raises(ConfigError) as exc:
         _cfg(CARE_REAL_RECORDS=mode, OPENAI_BASE_URL=FOREIGN)
     msg = str(exc.value)
-    assert "generativelanguage.googleapis.com" in msg
+    assert "llm.example-provider.test" in msg
     assert "CARE_REAL_RECORDS_MODEL_HOSTS" in msg
     # Host only: not the URL, never the key.
     assert "/v1beta" not in msg
@@ -80,7 +90,7 @@ def test_anthropic_base_url_redirect_is_refused():
 def test_a_host_named_in_the_env_var_is_accepted():
     cfg = _cfg(CARE_REAL_RECORDS="on", OPENAI_BASE_URL=FOREIGN,
                CARE_REAL_RECORDS_MODEL_HOSTS=(
-                   " other.example.test, Generativelanguage.GoogleAPIs.com ,"))
+                   " other.example.test, Llm.Example-Provider.TEST ,"))
     assert cfg.real_records == "on"
 
 
