@@ -105,7 +105,7 @@ Condition, DocumentReference, MedicationRequest and AllergyIntolerance. It
 proves these points against the running simulator:
 
 - No clinician name from the raw response appears in the output.
-- Every surviving `display` is the server's own label for its code.
+- Every surviving `display` comes from HealthClaw's terminology table, keyed by code.
 - Attachment data and note text are removed.
 - Each read and search writes an audit row.
 - Paging links that are not absolute URLs are dropped, not passed on.
