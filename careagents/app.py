@@ -703,6 +703,11 @@ def create_app(config: Config | None = None,
                             "error": "Your sample records are on their way. "
                                      "Try again in a moment."}), 409
         try:
+            # Look again under the lease: another tap may have finished and
+            # released it between our first look and our claim.
+            existing = svc.active_sample(acct.id)
+            if existing:
+                return jsonify(_sample_answer(acct.id, existing["id"], True))
             return _start_connection(connector_id, acct, body)
         finally:
             svc.release_sample_start(acct.id)
