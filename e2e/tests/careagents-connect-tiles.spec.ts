@@ -274,8 +274,7 @@ test.describe('CareAgents hub — CARE_REAL_RECORDS=allowlist', () => {
       .toHaveAttribute('data-providers', /Apple Health/);
     // The live blurb is back — the beta closure sentence is gone.
     await expect(tile(page, 'fasten').locator('.connector-blurb')).toHaveText(
-      'Log in to your clinic or hospital portal. Verified; we never see ' +
-      'your password.');
+      'Sign in to your patient portal. We never see your password.');
     await expect(page.locator('.marketplace')).not.toContainText(CLOSED_BLURB);
   });
 
