@@ -553,6 +553,48 @@ class AccountService:
                  .order_by(Agent.created_at.asc()).first())
             return _agent_dict(a) if a else None
 
+    def rename_agent(self, account_id: str, agent_id: str, name: str) -> bool:
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            a.name = name[:48]
+            return True
+
+    def move_agent(self, account_id: str, agent_id: str,
+                   connection_id: str) -> None:
+        """Point an agent at another of the account's ACTIVE connections.
+
+        Raises AuthError for a foreign agent, a foreign connection, or one
+        that is not active: the ownership rule create_agent applies, plus
+        the revoked check, since a revoked connection is not a pathway to
+        a tenant (#215).
+        """
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                raise AuthError("That assistant isn't yours.")
+            c = (s.query(Connection)
+                 .filter_by(id=connection_id, account_id=account_id,
+                            status="active").first())
+            if c is None:
+                raise AuthError("Those records aren't available.")
+            a.connection_id = c.id
+
+    def delete_agent(self, account_id: str, agent_id: str) -> bool:
+        """Remove the agent and its surfaces. Its conversation stays in
+        HealthClaw until the connection is deleted (spec section 5)."""
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            s.query(Surface).filter_by(agent_id=agent_id).delete()
+            s.delete(a)
+            return True
+
     def get_agent_context(self, account_id: str, agent_id: str) -> dict | None:
         """Return {agent, tenant, connection} for an agent the account owns.
 

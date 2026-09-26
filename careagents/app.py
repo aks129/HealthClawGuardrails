@@ -1128,6 +1128,40 @@ def create_app(config: Config | None = None,
             return jsonify({"error": str(exc)}), 400
         return jsonify({"id": aid})
 
+    @app.post("/api/agents/<agent_id>/rename")
+    @login_required
+    def rename_agent(agent_id):
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        name = str(body.get("name") or "").strip()[:48]
+        if not name:
+            return jsonify({"error": "Give your assistant a name."}), 400
+        if not svc.rename_agent(acct.id, agent_id, name):
+            return jsonify({"error": "unknown agent"}), 404
+        return jsonify({"id": agent_id, "name": name})
+
+    @app.post("/api/agents/<agent_id>/connection")
+    @login_required
+    def move_agent(agent_id):
+        """Change records. The service does the ownership check, so there
+        is one place to get it right and one place to mutation-test."""
+        acct = current_account()
+        conn_id = str((request.get_json(silent=True) or {})
+                      .get("connection_id") or "")
+        try:
+            svc.move_agent(acct.id, agent_id, conn_id)
+        except AuthError:
+            return jsonify({"error": "unknown agent or connection"}), 404
+        return jsonify({"id": agent_id, "connection_id": conn_id})
+
+    @app.delete("/api/agents/<agent_id>")
+    @login_required
+    def delete_agent(agent_id):
+        acct = current_account()
+        if not svc.delete_agent(acct.id, agent_id):
+            return jsonify({"error": "unknown agent"}), 404
+        return jsonify({"deleted": True, "id": agent_id})
+
     @app.get("/chat")
     @login_required
     def chat():
