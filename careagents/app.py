@@ -1595,6 +1595,42 @@ def create_app(config: Config | None = None,
                                agent_id=agent_id, pending=pending,
                                kind_labels=_KIND_LABELS)
 
+    @app.get("/api/approvals/count")
+    @login_required
+    def approvals_count():
+        """How many requests wait for this person, for the hub's band.
+
+        The same tenants the approvals page reads: each assistant's live
+        connection, counted once. Any tenant that cannot be asked fails the
+        whole count. A partial sum would read as a smaller inbox, and a
+        failure must never render as zero (calm hub spec section 3).
+        """
+        acct = current_account()
+        data = svc.list_home(acct.id)
+        live = {c["id"]: c for c in data["connections"]
+                if c["status"] != "revoked"}
+        tenants: dict[str, str] = {}
+        for a in data["agents"]:
+            conn = live.get(a["connection_id"])
+            if conn and conn["tenant_id"] not in tenants:
+                tenants[conn["tenant_id"]] = a["id"]
+        total, first = 0, None
+        for tenant, agent_id in tenants.items():
+            try:
+                n = len(hc.pending_actions(tenant))
+            except HealthClawError:
+                logger.warning("pending count unavailable for account %s",
+                               acct.id)
+                return jsonify({"error": "unavailable"}), 503
+            total += n
+            if n and first is None:
+                first = agent_id
+        out = {"count": total}
+        if first:
+            out["agent_id"] = first
+            out["href"] = url_for("approvals", agent_id=first)
+        return jsonify(out)
+
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
     def _agent_owns_action(agent_id, action_id):
