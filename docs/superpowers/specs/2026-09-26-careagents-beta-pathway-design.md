@@ -1,6 +1,6 @@
 # CareAgents: a pathway from sample beta to real-life testing
 
-Status: draft for owner review, 2026-09-26.
+Status: approved by the owner, 2026-09-26.
 Depends on: the calm hub (phase 1), approved providers for real records
 (#833), and bring your own key (#834).
 
@@ -27,20 +27,21 @@ guides and the site.
 
 ## 3. Owner gates before stage 1
 
-These are decisions or accounts only the owner holds. Engineering cannot
-close them.
+Decided or done on 2026-09-26:
 
-1. **Legal.** Decide with counsel whether the FTC Health Breach Notification
-   Rule applies (#168). Update the privacy policy and its date (#565). Add
-   short tester terms.
-2. **A vetted model for real records.** Production chat runs on Gemini today.
-   The #833 rule refuses to start with real records on until chat uses
-   Anthropic or OpenAI. Fund one of those keys, or have testers bring their
-   own under #834.
-3. **Hosts.** Point `mcp.healthclaw.io` away from its dangling record (#522).
-   Shut the abandoned VPS copy (#624).
-4. **An incident contact.** Name who is told within an hour if tester records
-   may have been exposed, and who notifies testers.
+1. **Legal.** The owner decided the FTC Health Breach Notification Rule does
+   not currently apply (#168, closed). The privacy policy date (#565) and
+   short tester terms remain to write.
+2. **Approved model providers for real records:** Anthropic, OpenAI, Google
+   Gemini and Groq (#839). Real-record chat should use a paid key, since
+   free API tiers may use prompts to improve the provider's models.
+3. **Hosts.** `mcp.healthclaw.io` now points at the MCP server (#522,
+   closed). The stale CareAgents copy on the old VPS is stopped (#624).
+4. **Incident contact:** contactus@healthclaw.io. It is told within an hour
+   if tester records may have been exposed, and it notifies testers.
+
+Still open for the owner: the privacy policy date and tester terms, and
+whether any secret the old VPS copy held is shared with production (#624).
 
 ## 4. What engineering builds
 
