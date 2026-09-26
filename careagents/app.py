@@ -1650,16 +1650,22 @@ def create_app(config: Config | None = None,
         data = svc.list_home(acct.id)
         live = {c["id"]: c for c in data["connections"]
                 if c["status"] != "revoked"}
-        tenants: dict[str, dict] = {}
+        # Every live connection's tenant, whether or not an assistant reads
+        # it: deleting an assistant leaves its requests waiting (QA on
+        # #843), and counting only assistants' tenants read that as zero.
+        by_conn = {}
         for a in data["agents"]:
-            conn = live.get(a["connection_id"])
-            if conn and conn["tenant_id"] not in tenants:
-                tenants[conn["tenant_id"]] = a
+            by_conn.setdefault(a["connection_id"], a)
+        tenants: dict[str, tuple] = {}
+        for cid, conn in live.items():
+            if conn["tenant_id"] not in tenants:
+                tenants[conn["tenant_id"]] = (by_conn.get(cid), conn)
         # One queue per tenant with something waiting. The approvals page
         # reads one assistant's records, so each queue is its own link: a
-        # single link to the first would hide every other queue.
+        # single link to the first would hide every other queue. A queue
+        # with no assistant has no page to link to; the hub says so.
         total, queues = 0, []
-        for tenant, agent in tenants.items():
+        for tenant, (agent, conn) in tenants.items():
             try:
                 n = len(hc.pending_actions(tenant))
             except HealthClawError:
@@ -1667,15 +1673,20 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
-            if n:
+            if n and agent:
                 queues.append({"agent_id": agent["id"], "name": agent["name"],
                                "count": n,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
+            elif n:
+                queues.append({"name": conn["label"], "count": n,
+                               "needs_assistant": True})
         out = {"count": total}
         if queues:
-            out["agent_id"] = queues[0]["agent_id"]
-            out["href"] = queues[0]["href"]
+            linked = [q for q in queues if q.get("href")]
+            if linked:
+                out["agent_id"] = linked[0]["agent_id"]
+                out["href"] = linked[0]["href"]
             out["queues"] = queues
         return jsonify(out)
 

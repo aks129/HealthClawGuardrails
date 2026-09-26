@@ -52,3 +52,19 @@ def test_a_request_waiting_after_its_assistant_is_deleted_is_not_zero(
     # Either the waiting request is still counted, or the hub is told it
     # could not check. A 200 zero renders "Nothing yet" over a live request.
     assert not (r.status_code == 200 and body.get("count") == 0), body
+
+
+def test_an_orphaned_queue_is_counted_and_says_how_to_reach_it(
+        app, svc, fake, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    agent = c.post("/api/connections/sample").get_json()["agent_id"]
+    assert c.delete(f"/api/agents/{agent}").status_code == 200
+
+    body = c.get("/api/approvals/count").get_json()
+    assert body["count"] >= 1
+    (queue,) = body["queues"]
+    assert queue["needs_assistant"] is True
+    assert queue["count"] == body["count"]
+    # No assistant, so no approvals page to link to.
+    assert "href" not in queue and "href" not in body

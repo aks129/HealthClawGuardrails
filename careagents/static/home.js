@@ -594,7 +594,13 @@
     // with something waiting is its own link. One queue reads as one line.
     const queues = Array.isArray(d.queues) && d.queues.length
       ? d.queues : [{ href: d.href, count: d.count }];
+    // A queue whose assistant was deleted has no page to open yet: say how
+    // to reach it instead of linking nowhere. Names are the person's own
+    // words, so they go in as text, never markup.
+    const orphan = (q) => requests(q.count) + " waiting on " + q.name +
+      ". Start a chat to review them.";
     if (queues.length === 1) {
+      if (!queues[0].href) { line.textContent = orphan(queues[0]); return; }
       const a = document.createElement("a");
       a.href = queues[0].href;
       a.textContent = requests(d.count) + " waiting for your approval";
@@ -606,11 +612,14 @@
     list.className = "waiting-queues";
     queues.forEach((q) => {
       const li = document.createElement("li");
-      const a = document.createElement("a");
-      a.href = q.href;
-      // The assistant's name is the person's own words: text, never markup.
-      a.textContent = q.name + ": " + requests(q.count);
-      li.appendChild(a);
+      if (q.href) {
+        const a = document.createElement("a");
+        a.href = q.href;
+        a.textContent = q.name + ": " + requests(q.count);
+        li.appendChild(a);
+      } else {
+        li.textContent = orphan(q);
+      }
       list.appendChild(li);
     });
     line.after(list);
@@ -619,7 +628,7 @@
     fetch("/api/approvals/count").then(async (r) => {
       const d = await r.json().catch(() => ({}));
       if (!r.ok || typeof d.count !== "number") return showWaiting("fail", d);
-      showWaiting(d.count > 0 && d.href ? "pending" : "none", d);
+      showWaiting(d.count > 0 ? "pending" : "none", d);
     }).catch(() => showWaiting("fail", {}));
   }
 
