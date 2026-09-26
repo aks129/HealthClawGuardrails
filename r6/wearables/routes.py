@@ -23,7 +23,7 @@ from models import db
 from r6 import constant_time
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
                        tenant_from_request)
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.read_auth import authorize_tenant_read
 from r6.wearables.client import WearablesClient
 from r6.wearables.models import SUPPORTED_PROVIDERS, WearableConnection
@@ -194,18 +194,18 @@ def oauth_callback():
         conn.last_sync_status = 'never'
         conn.last_sync_detail = None
     try:
+        db.session.flush()
+        add_audit_event(
+            'create', 'WearableConnection', str(conn.id),
+            agent_id='wearable-oauth',
+            tenant_id=tenant_id,
+            detail=f'connected {provider}',
+        )
         db.session.commit()
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         logger.error('wearable connection commit failed: %s', exc)
         return jsonify({'error': 'commit failed'}), 500
-
-    record_audit_event(
-        'create', 'WearableConnection', str(conn.id),
-        agent_id='wearable-oauth',
-        tenant_id=tenant_id,
-        detail=f'connected {provider}',
-    )
 
     html = (
         '<!doctype html><html><head><meta charset="utf-8">'
@@ -231,12 +231,14 @@ def oauth_callback():
 
 @wearables_blueprint.route('/sync-status', methods=['GET'])
 def sync_status():
-    candidate = request.args.get('tenant_id') or request.headers.get(
-        'X-Tenant-Id',
-    )
-    if not candidate:
-        return jsonify({'error': 'tenant_id required'}), 400
-    tenant_id = authorize_tenant_read(candidate)
+    # A malformed id keeps its 401: authorize_tenant_read refused it.
+    try:
+        tenant_id = authorize_tenant_read(tenant_from_request(
+            sources=(TenantSource.QUERY, TenantSource.HEADER)).id)
+    except TenantRejected as exc:
+        if exc.reason == TenantRejected.ABSENT:
+            return jsonify({'error': 'tenant_id required'}), 400
+        tenant_id = None
     if tenant_id is None:
         return jsonify({
             'error': 'authentication required for this tenant',
@@ -291,7 +293,7 @@ def sync_now():
     # handler must not be able to sweep a tenant the grant did not authorize
     # (spec §3(e)).
     summary = run_once(current_app, tenant_id=grant.tenant_id)
-    record_audit_event(
+    add_audit_event(
         'update', 'WearableConnection', None,
         agent_id=request.headers.get('X-Agent-Id', 'wearable-manual-sync'),
         tenant_id=grant.tenant_id,
@@ -301,4 +303,5 @@ def sync_now():
             f"errors={summary.get('errors')}"
         ),
     )
+    db.session.commit()
     return jsonify(summary)

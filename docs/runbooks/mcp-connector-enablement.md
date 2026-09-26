@@ -133,7 +133,7 @@ returns the MCP audience to the demo tenant. Neither step opens anything.
 
 ## 7. Third-party agent harnesses are clients, not surfaces
 
-Reviewed 13 September 2026: the OpenAI Agents API (public beta, 10 Sep),
+Reviewed 13 September 2026, Muse row updated 26 September: the OpenAI Agents API (public beta, 10 Sep),
 xAI's Grok Bot (early beta, 11 Aug) and Meta's Muse (8 Sep). None needs a
 new server. Each consumes the same Streamable HTTP endpoint with the same
 bearer or OAuth token, and every call still passes redaction, audit,
@@ -146,7 +146,7 @@ class each may see.
 |---|---|---|---|---|
 | OpenAI Agents API | `type: mcp`, HTTP transport, `connection_origin: service` | Inline `transport.authorization` (encrypted, not echoed) or a reusable vault | Developer-defined; the harness sees our "pending approval" and waits | Session state retained by OpenAI; US residency only; **no ZDR**, and a self-hosted sandbox does not change that |
 | Grok Bot | Remote MCP over the public internet only | On a cloud computer that **all of one user's bots share** | Prompt rules plus "Auto Review" | Not stated in the public material |
-| Meta Muse | "Credentials the user provides" for a public API, or its own browser against the consumer app | A Sentinel agent injects the real secret at the network boundary; the agent sees a placeholder | Sentinel approves every connector action; sensitive actions pause for the user | Stated not shared with ads systems; no MCP and no third-party connector program yet |
+| Meta Muse | A custom integration the agent builds itself from an MCP URL, over Streamable HTTP, from Meta's cloud | A daemon outside the agent's runtime; the agent sees a placeholder | Sensitive actions pause for the user; Meta does not review user-built integrations | Stated not shared with ads systems; a reviewed connector directory opened 18 Sep |
 
 The Agents API tool block, for the walkthrough in §4 run from there instead
 of claude.ai:

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 
 # LOINC "Summarization of episode note" — a generic document-summary type
 # code commonly used for rendered clinical/administrative documents (CCD-style
@@ -66,9 +66,9 @@ def persist_intake_document(tenant_id, subject_ref, pdf_bytes, *, title=None,
     row = R6Resource(resource_type="DocumentReference",
                      resource_json=json.dumps(doc), tenant_id=tenant_id)
     db.session.add(row)
+    add_audit_event("create", "DocumentReference", row.id,
+                    tenant_id=tenant_id, detail="intake pdf persisted")
     db.session.commit()
-    record_audit_event("create", "DocumentReference", row.id,
-                       tenant_id=tenant_id, detail="intake pdf persisted")
     return row.to_fhir_json()
 
 

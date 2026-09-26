@@ -17,6 +17,7 @@ import time
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
                         LargeBinary, String, UniqueConstraint, create_engine,
                         inspect, text)
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 
@@ -238,6 +239,31 @@ def _ensure_columns(engine) -> None:
                     "INTEGER"))
 
 
+#: What a peer creating the same table first looks like, by backend. SQLite
+#: and Postgres both say "already exists"; Postgres can instead trip the
+#: unique index on its type catalogue when two CREATE TABLEs overlap.
+_CREATED_BY_A_PEER = ("already exists", "pg_type_typname_nsp_index")
+
+
+def _create_tables(engine) -> None:
+    """create_all(), tolerant of another process creating the same tables.
+
+    create_all() checks for each table and then creates it, so web and worker
+    starting together on a fresh database both see "missing" and the loser
+    dies on "table ca_accounts already exists". That error means the table is
+    there, which is what we wanted. The two processes interleave table by
+    table, so one retry of create_all() collides again (measured: 4 failures
+    in 40 paired starts). Each table is created on its own instead, and a
+    collision on it is skipped. Any other error is raised.
+    """
+    for table in Base.metadata.sorted_tables:
+        try:
+            table.create(engine, checkfirst=True)
+        except (OperationalError, ProgrammingError, IntegrityError) as exc:
+            if not any(m in str(exc.orig).lower() for m in _CREATED_BY_A_PEER):
+                raise
+
+
 def make_engine(url: str):
     is_sqlite = url.startswith("sqlite")
     connect_args = {"check_same_thread": False} if is_sqlite else {}
@@ -264,7 +290,7 @@ def make_engine(url: str):
         pool_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
     engine = create_engine(url, connect_args=connect_args, future=True,
                            **pool_kwargs)
-    Base.metadata.create_all(engine)
+    _create_tables(engine)
     _ensure_columns(engine)
     return engine
 

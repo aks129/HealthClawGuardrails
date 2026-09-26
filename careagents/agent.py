@@ -38,6 +38,11 @@ GENERIC_FAILURE_TEXT = "Something went wrong on our side."
 RATE_LIMITED_TEXT = (
     "I'm getting more requests than I can answer right now. Nothing is wrong "
     "with your records — try asking again in a moment.")
+# Out of credit or quota. Says nothing about providers or billing: that is
+# the operator's problem, and careagents/llm.py logs it for them.
+UNAVAILABLE_TEXT = (
+    "The assistant is unavailable right now. Nothing is wrong with your "
+    "records — please try again later.")
 
 
 def failure_text(exc: Exception) -> str:
@@ -49,6 +54,8 @@ def failure_text(exc: Exception) -> str:
     health records are broken. Everything else stays generic on purpose —
     exception internals are never patient-facing text.
     """
+    if isinstance(exc, llm.LLMOutOfCredit):
+        return UNAVAILABLE_TEXT
     if isinstance(exc, llm.LLMRateLimited):
         return RATE_LIMITED_TEXT
     return GENERIC_FAILURE_TEXT

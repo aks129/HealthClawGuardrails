@@ -9,6 +9,11 @@
 *FHIR standardized how health data is structured. MCP standardized how AI connects to tools.*
 ***Nobody standardized the guardrails in between. This project does.***
 
+<a href="https://healthclaw.io/#demo"><img src=".github/assets/healthclaw-2.0-demo-preview.jpg" alt="HealthClaw 2.0 demo video preview" width="640"></a>
+
+**[▶ Watch the 90-second demo](https://healthclaw.io/#demo)**<br/>
+<sub>All records are synthetic. The chat ran on a third-party model, best of four takes. No clinician has signed off yet. [How it was made](docs/video/2.0-demo/disclosures.md).</sub>
+
 <br/>
 
 <!-- Project -->
@@ -77,7 +82,7 @@ One-command installs:
 skills on [ClawHub](https://clawhub.ai/aks129/skills/fhir-r6-guardrails)
 
 **Non-developer?** Step-by-step guides for Claude (web/desktop/phone), Perplexity,
-ChatGPT, and Telegram — plus a 10-minute demo script — in [docs/quickstarts/](docs/quickstarts/README.md).
+ChatGPT, Grok, Meta Muse and Telegram — plus a 10-minute demo script — in [docs/quickstarts/](docs/quickstarts/README.md).
 
 **Listed in:** [Official MCP Registry](https://registry.modelcontextprotocol.io) (`io.github.aks129/healthclaw-guardrails`) ·
 [Glama](https://glama.ai/mcp/servers/aks129/HealthClawGuardrails) ([hosted connector](https://glama.ai/mcp/connectors/io.github.aks129/healthclaw-guardrails)) ·

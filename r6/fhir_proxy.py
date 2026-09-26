@@ -25,6 +25,7 @@ Medplum mode (MEDPLUM_BASE_URL set, FHIR_UPSTREAM_URL not set):
   an in-process dict cache when Redis is unavailable.
 """
 
+import hashlib
 import ipaddress
 import logging
 import os
@@ -34,6 +35,7 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from r6.upstream_connectors import (
     AUTH_OAUTH2,
+    AUTH_PASSWORD_JSON,
     resolve_upstream_config,
 )
 
@@ -99,39 +101,67 @@ def _get_redis():
         return None
 
 
-def _fetch_medplum_token(client_id: str, client_secret: str,
-                         token_endpoint: str = '') -> str:
-    """
-    Obtain a Medplum access token via OAuth2 client-credentials.
+def _token_cache_key(grant: str, token_endpoint: str, client_id: str) -> str:
+    """Which cache slot a token lives in.
 
-    Checks Redis first (key: medplum:access_token), then in-process cache,
+    The OAuth2 path keeps its historical Redis key, so a running deployment's
+    cached token stays valid across this change. Any other grant gets a key
+    of its own, derived from where the token came from and who asked for it.
+    One shared slot would hand a token minted by one server to another.
+    """
+    if grant == AUTH_OAUTH2:
+        return 'medplum:access_token'
+    digest = hashlib.sha256(
+        f'{token_endpoint}\n{client_id}'.encode()).hexdigest()[:16]
+    return f'upstream:{grant}:access_token:{digest}'
+
+
+def _fetch_medplum_token(client_id: str, client_secret: str,
+                         token_endpoint: str = '',
+                         grant: str = AUTH_OAUTH2) -> str:
+    """
+    Obtain an upstream access token: OAuth2 client-credentials by default,
+    or a JSON username/password body when `grant` is AUTH_PASSWORD_JSON.
+
+    Checks Redis first (key from _token_cache_key), then in-process cache,
     then fetches a fresh token and stores it in both caches.
     """
+    token_endpoint = token_endpoint or medplum_token_endpoint()
+    cache_key = _token_cache_key(grant, token_endpoint, client_id)
+
     # 1. Try Redis
     r = _get_redis()
     if r is not None:
         try:
-            cached = r.get('medplum:access_token')
+            cached = r.get(cache_key)
             if cached:
                 return cached.decode()
         except Exception as exc:
             logger.debug('Redis token-cache read failed (%s)', type(exc).__name__)
 
-    # 2. Try in-process cache
-    if _medplum_cache['token'] and time.time() < _medplum_cache['expires_at']:
+    # 2. Try in-process cache — only a token stored under the same key.
+    if (_medplum_cache['token'] and time.time() < _medplum_cache['expires_at']
+            and _medplum_cache.get('key') == cache_key):
         return _medplum_cache['token']
 
     # 3. Fetch fresh token
-    resp = httpx.post(
-        token_endpoint or medplum_token_endpoint(),
-        data={
-            'grant_type': 'client_credentials',
-            'client_id': client_id,
-            'client_secret': client_secret,
-        },
-        headers={'Content-Type': 'application/x-www-form-urlencoded'},
-        timeout=10,
-    )
+    if grant == AUTH_PASSWORD_JSON:
+        resp = httpx.post(
+            token_endpoint,
+            json={'username': client_id, 'password': client_secret},
+            timeout=10,
+        )
+    else:
+        resp = httpx.post(
+            token_endpoint,
+            data={
+                'grant_type': 'client_credentials',
+                'client_id': client_id,
+                'client_secret': client_secret,
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=10,
+        )
     resp.raise_for_status()
     payload = resp.json()
     token = payload['access_token']
@@ -141,15 +171,16 @@ def _fetch_medplum_token(client_id: str, client_secret: str,
     # 4. Store in Redis
     if r is not None:
         try:
-            r.setex('medplum:access_token', ttl, token)
+            r.setex(cache_key, ttl, token)
         except Exception as exc:
             logger.debug('Redis token-cache write failed (%s)', type(exc).__name__)
 
     # 5. Store in-process fallback
     _medplum_cache['token'] = token
     _medplum_cache['expires_at'] = time.time() + ttl
+    _medplum_cache['key'] = cache_key
 
-    logger.info('Medplum access token refreshed (ttl=%ds)', ttl)
+    logger.info('Upstream access token refreshed (%s, ttl=%ds)', grant, ttl)
     return token
 
 # Timeout for upstream requests (seconds)
@@ -371,6 +402,26 @@ def upstream_unreachable_outcome(exc: Exception) -> tuple[dict, int]:
     }, 502
 
 
+def _absolute_links(links) -> list:
+    """Keep only Bundle.link entries whose url is an absolute http(s) URL.
+
+    FHIR requires absolute paging links. Some servers send `""` or a bare
+    query fragment such as `&_offset=10`; passed through, a client follows
+    that to a URL that does not exist. Dropping it is the honest choice:
+    `total` still shows that more records exist.
+    """
+    if not isinstance(links, list):
+        return []
+    kept = []
+    for link in links:
+        if not isinstance(link, dict) or not isinstance(link.get('url'), str):
+            continue
+        parts = urlsplit(link['url'])
+        if parts.scheme in ('http', 'https') and parts.netloc:
+            kept.append(link)
+    return kept
+
+
 class FHIRUpstreamProxy:
     """
     HTTP client that proxies FHIR requests to an upstream server.
@@ -506,6 +557,7 @@ class FHIRUpstreamProxy:
                 # searchset. Treat anything else as a malformed response.
                 logger.warning(f'Upstream search {resource_type} returned a non-Bundle 200 body')
                 return malformed if malformed is not None else malformed_upstream_response_outcome()
+            data['link'] = _absolute_links(data.get('link'))
             return data, 200
         logger.warning(f'Upstream search {resource_type} returned {resp.status_code}')
         return sanitize_upstream_error(resp, caller_auth=self.caller_auth)
@@ -622,10 +674,16 @@ class OAuth2UpstreamProxy(FHIRUpstreamProxy):
         local_base_url: str = '',
         token_endpoint: str = '',
         kind: str = '',
+        grant: str = AUTH_OAUTH2,
     ):
+        # The Medplum fallback below is right only for the OAuth2 grant. Any
+        # other grant sent there would post its password to the wrong server.
+        if grant != AUTH_OAUTH2 and not token_endpoint:
+            raise ValueError(f'grant {grant!r} needs an explicit token endpoint')
         super().__init__(base_url, local_base_url, kind=kind)
         self._client_id = client_id
         self._client_secret = client_secret
+        self._grant = grant
         # Resolved once, from the server this proxy actually points at — not
         # read from the environment at request time, which would let a proxy
         # built for one server start authenticating against another after an
@@ -652,7 +710,7 @@ class OAuth2UpstreamProxy(FHIRUpstreamProxy):
         request rather than a successful unauthenticated one.
         """
         token = _fetch_medplum_token(self._client_id, self._client_secret,
-                                     self._token_endpoint)
+                                     self._token_endpoint, grant=self._grant)
         request.headers['Authorization'] = f'Bearer {token}'
 
 
@@ -725,8 +783,8 @@ def get_proxy() -> FHIRUpstreamProxy | None:
 
     local_base = os.environ.get('FHIR_LOCAL_BASE_URL', '').strip()
 
-    if config.auth == AUTH_OAUTH2:
-        # Refusing beats proceeding: a client-credentials upstream with no
+    if config.auth in (AUTH_OAUTH2, AUTH_PASSWORD_JSON):
+        # Refusing beats proceeding: a token-based upstream with no
         # credentials can only make anonymous requests, and an anonymous
         # request at a record system is not a degraded mode worth having.
         if not config.client_id or not config.client_secret:
@@ -738,7 +796,7 @@ def get_proxy() -> FHIRUpstreamProxy | None:
         _proxy_instance = OAuth2UpstreamProxy(
             config.base_url, config.client_id, config.client_secret,
             local_base, token_endpoint=config.token_endpoint,
-            kind=config.kind)
+            kind=config.kind, grant=config.auth)
         return _proxy_instance
 
     _proxy_instance = FHIRUpstreamProxy(
@@ -756,6 +814,7 @@ def reset_proxy():
     # Also clear in-process token cache so tests get a clean slate
     _medplum_cache['token'] = None
     _medplum_cache['expires_at'] = 0.0
+    _medplum_cache.pop('key', None)
 
 
 def upstream_intended() -> bool:

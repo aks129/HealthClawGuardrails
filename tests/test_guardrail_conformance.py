@@ -1140,6 +1140,39 @@ def test_step_up_validation_turned_off_no_longer_scores_a(
         "write with a forged step-up token is rejected (401)"]
 
 
+def test_a_deployment_that_lets_an_audit_event_be_deleted_is_not_immutable(
+        client, tenant_id, step_up_token):
+    """"Immutable Audit Trail" used to be a name no check could fail.
+
+    The real app refuses the probe's PUT (403) and DELETE (405) at more than
+    one layer, so removing one guard in-process leaves the probe green — it
+    measures the property, not a particular guard. This proves the probe can
+    go red: a deployment that accepts the DELETE and drops the event.
+    """
+    deleted = set()
+
+    def mutate(method, path, headers, out):
+        if method == "DELETE" and path.startswith("/AuditEvent/"):
+            deleted.add(path.rsplit("/", 1)[1])
+            return 204, None, ""
+        if method == "GET" and path.startswith("/AuditEvent?") and deleted:
+            status, body, text = out
+            body = dict(body, entry=[
+                e for e in body.get("entry") or []
+                if (e.get("resource") or {}).get("id") not in deleted])
+            return status, body, ""
+        return out
+
+    report = run_conformance(
+        _MutatedDeployment(FlaskProbeClient(client), mutate),
+        _ctx(None, tenant_id, step_up_token))
+
+    assert report.grade != "A", "a deletable audit trail still scored A"
+    assert _failed(report, "audit_trail") == [
+        "an attempt to delete an AuditEvent is refused",
+        "the AuditEvent reads back unchanged"]
+
+
 def test_a_deployment_that_refuses_everyone_no_longer_isolates(
         tenant_id, step_up_token):
     """Blanket 404 isolates perfectly and serves nobody."""

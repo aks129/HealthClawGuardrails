@@ -1107,3 +1107,19 @@ def test_every_element_the_handler_dereferences_exists_on_the_page(page):
     assert not missing, (
         "the handler dereferences elements this page does not have: %s"
         % missing)
+
+
+def test_the_success_message_is_the_server_next_step_said_once(page):
+    """The approved message read "Review recorded. Review recorded and
+    approval issued…": the page prefixed a sentence the server's
+    `next_step` already opens with (r6/actions/review.py:_FORM_NEXT_STEP).
+
+    MUTATION: restore the `'Review recorded. ' +` prefix -> red.
+    """
+    from r6.actions.review import _FORM_NEXT_STEP
+    assert _FORM_NEXT_STEP.startswith("Review recorded")
+    printed = _as_printed(_submit_handler(page))
+    ok = printed.index("if (res.r.ok)")
+    branch = printed[ok:printed.index("return;", ok)]
+    assert "gateMsg.textContent = res.b.next_step ||" in branch, branch
+    assert "'Review recorded. ' +" not in branch, branch

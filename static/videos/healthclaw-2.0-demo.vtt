@@ -1,0 +1,97 @@
+WEBVTT
+
+1
+00:00:00.740 --> 00:00:02.580
+Your health record is private.
+
+2
+00:00:02.660 --> 00:00:06.425
+It holds your name, your medicines, and your test results.
+
+3
+00:00:07.285 --> 00:00:10.405
+AI helpers can now read records like this.
+
+4
+00:00:10.485 --> 00:00:13.255
+They can answer your questions, and even act for you.
+
+5
+00:00:13.335 --> 00:00:16.275
+That is useful. It is also risky.
+
+6
+00:00:17.095 --> 00:00:21.355
+HealthClaw is a guard that sits between the AI and your record.
+
+7
+00:00:21.435 --> 00:00:24.275
+It keeps your record apart from everyone else's.
+
+8
+00:00:24.355 --> 00:00:26.450
+And it makes three promises.
+
+9
+00:00:27.270 --> 00:00:31.960
+Promise one. The AI gets your health facts, not your contact details.
+
+10
+00:00:32.040 --> 00:00:33.990
+Your name shrinks to initials.
+
+11
+00:00:34.070 --> 00:00:36.875
+Your phone number and address are taken out.
+
+12
+00:00:37.695 --> 00:00:40.455
+Promise two. Every look is written down.
+
+13
+00:00:40.535 --> 00:00:43.575
+If the note can't be written, the look doesn't happen.
+
+14
+00:00:44.395 --> 00:00:49.605
+Promise three. The AI can't send a form, a call, or a text on its own.
+
+15
+00:00:49.685 --> 00:00:51.345
+It can only suggest one.
+
+16
+00:00:51.425 --> 00:00:54.075
+Nothing is sent until you tap Approve.
+
+17
+00:00:56.085 --> 00:01:00.445
+Automatic tests check these promises every time the code changes.
+
+18
+00:01:00.525 --> 00:01:05.400
+Here, a patient asks about their blood tests, and gets a plain answer.
+
+19
+00:01:06.230 --> 00:01:08.900
+Everything you saw used made-up records.
+
+20
+00:01:08.980 --> 00:01:12.510
+In our app, real records are invite-only for now.
+
+21
+00:01:12.590 --> 00:01:15.900
+And no doctor has signed off on the medical parts yet.
+
+22
+00:01:16.730 --> 00:01:20.660
+HealthClaw 2.0 is free, and anyone can read its code.
+
+23
+00:01:20.740 --> 00:01:22.650
+See how it works at healthclaw.io.
+
+24
+00:01:23.080 --> 00:01:26.375
+The AI helps. You stay in charge.

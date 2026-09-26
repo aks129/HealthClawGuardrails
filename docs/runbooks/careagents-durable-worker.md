@@ -89,6 +89,7 @@ what the site does rather than how fast the queue drains:
 | `CAREAGENTS_CANONICAL_HOST` | unset | The site's only public hostname. A request arriving under any other `Host` is answered 308 to the same path and query there; `/healthz` is exempt |
 | `CARE_REAL_RECORDS` | `off` | Whether an account may **start** a Fasten, wearable or direct-upload connection. One of `off`, `allowlist`, `on` |
 | `CARE_REAL_RECORDS_ALLOWLIST` | empty | The account emails `allowlist` mode admits — comma-separated, case-insensitive |
+| `CARE_REAL_RECORDS_MODEL_HOSTS` | empty | Extra model hosts that may serve chat while `CARE_REAL_RECORDS` is not `off` — comma-separated exact hostnames. Anthropic, OpenAI, Google Gemini (`generativelanguage.googleapis.com`) and Groq (`api.groq.com`) are always allowed; any other `OPENAI_BASE_URL` (or `ANTHROPIC_BASE_URL`) host makes the app refuse to boot until it is named here |
 | `CARE_ANALYTICS` | unset | Count views of the pages anyone can open. One row per UTC day per page, nothing about a visitor. Read it with `flask --app careagents.wsgi page-views` |
 
 What each does when it is **absent** is the part worth reading:
