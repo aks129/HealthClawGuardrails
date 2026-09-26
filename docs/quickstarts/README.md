@@ -35,6 +35,8 @@ reason to copy it from this page would be by mistake. See
 | Claude (claude.ai, desktop, iOS/Android) | [claude.md](claude.md) | Yes — add the connector on the web once, it appears in the mobile app |
 | Perplexity (Pro/Max) | [perplexity.md](perplexity.md) | Connector added in settings; available wherever you use Perplexity |
 | ChatGPT (Plus/Pro, Developer Mode) | [chatgpt.md](chatgpt.md) | Dev-mode connectors work in the ChatGPT apps |
+| Grok and Grok Bot (xAI) | [grok.md](grok.md) | Add it once at grok.com/connectors |
+| Meta Muse | [muse.md](muse.md) | You ask Muse to build the connection |
 | Telegram (OpenClaw bot) | [telegram.md](telegram.md) | Yes — pure chat |
 | Claude Code / any MCP client | [mcp-generic.md](mcp-generic.md) | — |
 
