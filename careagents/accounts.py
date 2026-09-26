@@ -16,7 +16,7 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -36,6 +36,7 @@ MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
 RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts)
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
+SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
 
 
 class AuthError(RuntimeError):
@@ -300,6 +301,40 @@ class AccountService:
             s.flush()
             return c.id
 
+    def active_sample(self, account_id: str) -> dict | None:
+        """The account's oldest active sample, if any. Older accounts can
+        hold several; none is merged or removed (calm hub spec section 5)."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(account_id=account_id, kind="sample",
+                            status="active")
+                 .order_by(Connection.connected_at.asc()).first())
+            return _conn_dict(c) if c else None
+
+    def claim_sample_start(self, account_id: str) -> bool:
+        """Win the right to mint this account's sample tenant.
+
+        A compare-and-set on the account row: one caller sets the lease and
+        every overlapping caller updates zero rows. A lease older than
+        SAMPLE_LEASE_SECONDS counts as abandoned, so a crash mid-seed cannot
+        lock the sample out for good.
+        """
+        t = now()
+        with self.session() as s:
+            won = (s.query(Account)
+                   .filter(Account.id == account_id,
+                           or_(Account.sample_claim_at.is_(None),
+                               Account.sample_claim_at
+                               < t - SAMPLE_LEASE_SECONDS))
+                   .update({"sample_claim_at": t},
+                           synchronize_session=False))
+            return won == 1
+
+    def release_sample_start(self, account_id: str) -> None:
+        with self.session() as s:
+            (s.query(Account).filter(Account.id == account_id)
+             .update({"sample_claim_at": None}, synchronize_session=False))
+
     def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
         """Count one chat turn against today's cap. Returns (allowed, used).
 
@@ -468,6 +503,108 @@ class AccountService:
             s.add(a)
             s.flush()
             return a.id
+
+    def ensure_first_agent(self, account_id: str,
+                           connection_id: str) -> str | None:
+        """The account's first assistant, created once (spec section 5).
+
+        Returns the new agent id, or None when nothing was created. The
+        connection must be the account's and active. `first_agent_at` is a
+        compare-and-set on the account row, so a second callback, or one
+        racing this one, updates zero rows. An account that already has
+        agents is stamped and left alone.
+        """
+        with self.session() as s:
+            conn = (s.query(Connection)
+                    .filter_by(id=connection_id, account_id=account_id,
+                               status="active").first())
+            if conn is None:
+                return None
+            won = (s.query(Account)
+                   .filter(Account.id == account_id,
+                           Account.first_agent_at.is_(None))
+                   .update({"first_agent_at": now()},
+                           synchronize_session=False))
+            if won != 1:
+                return None
+            if s.query(Agent).filter_by(account_id=account_id).first():
+                return None
+            a = Agent(account_id=account_id, connection_id=connection_id,
+                      name="Juniper", persona="calm", advisor=None)
+            s.add(a)
+            s.flush()
+            return a.id
+
+    def activate_connection(self, tenant_id: str) -> list[str]:
+        """Records landed on this tenant: mark it active, and give each
+        owning account its first assistant if it has none. Safe to repeat."""
+        self.set_connection_status(tenant_id, "active")
+        with self.session() as s:
+            owners = [(c.account_id, c.id) for c in
+                      s.query(Connection).filter_by(tenant_id=tenant_id)]
+        made = [self.ensure_first_agent(a, c) for a, c in owners]
+        return [x for x in made if x]
+
+    def agent_for_connection(self, account_id: str,
+                             connection_id: str) -> dict | None:
+        with self.session() as s:
+            a = (s.query(Agent)
+                 .filter_by(account_id=account_id, connection_id=connection_id)
+                 .order_by(Agent.created_at.asc()).first())
+            return _agent_dict(a) if a else None
+
+    def rename_agent(self, account_id: str, agent_id: str, name: str) -> bool:
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            a.name = name[:48]
+            return True
+
+    def move_agent(self, account_id: str, agent_id: str,
+                   connection_id: str) -> None:
+        """Point an agent at another of the account's ACTIVE connections.
+
+        Raises AuthError for a foreign agent, a foreign connection, or one
+        that is not active: the ownership rule create_agent applies, plus
+        the revoked check, since a revoked connection is not a pathway to
+        a tenant (#215).
+        """
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                raise AuthError("That assistant isn't yours.")
+            c = (s.query(Connection)
+                 .filter_by(id=connection_id, account_id=account_id,
+                            status="active").first())
+            if c is None:
+                raise AuthError("Those records aren't available.")
+            a.connection_id = c.id
+
+    def delete_agent(self, account_id: str, agent_id: str) -> bool:
+        """Remove the agent and its surfaces. Its conversation stays in
+        HealthClaw until the connection is deleted (spec section 5)."""
+        with self.session() as s:
+            a = s.query(Agent).filter_by(id=agent_id,
+                                         account_id=account_id).first()
+            if a is None:
+                return False
+            s.query(Surface).filter_by(agent_id=agent_id).delete()
+            s.delete(a)
+            return True
+
+    def switch_prompted_at(self, account_id: str) -> float | None:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            return acct.switch_prompted_at if acct else None
+
+    def stamp_switch_prompt(self, account_id: str) -> None:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            if acct is not None and acct.switch_prompted_at is None:
+                acct.switch_prompted_at = now()
 
     def get_agent_context(self, account_id: str, agent_id: str) -> dict | None:
         """Return {agent, tenant, connection} for an agent the account owns.
