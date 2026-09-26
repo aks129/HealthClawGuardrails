@@ -504,6 +504,55 @@ class AccountService:
             s.flush()
             return a.id
 
+    def ensure_first_agent(self, account_id: str,
+                           connection_id: str) -> str | None:
+        """The account's first assistant, created once (spec section 5).
+
+        Returns the new agent id, or None when nothing was created. The
+        connection must be the account's and active. `first_agent_at` is a
+        compare-and-set on the account row, so a second callback, or one
+        racing this one, updates zero rows. An account that already has
+        agents is stamped and left alone.
+        """
+        with self.session() as s:
+            conn = (s.query(Connection)
+                    .filter_by(id=connection_id, account_id=account_id,
+                               status="active").first())
+            if conn is None:
+                return None
+            won = (s.query(Account)
+                   .filter(Account.id == account_id,
+                           Account.first_agent_at.is_(None))
+                   .update({"first_agent_at": now()},
+                           synchronize_session=False))
+            if won != 1:
+                return None
+            if s.query(Agent).filter_by(account_id=account_id).first():
+                return None
+            a = Agent(account_id=account_id, connection_id=connection_id,
+                      name="Juniper", persona="calm", advisor=None)
+            s.add(a)
+            s.flush()
+            return a.id
+
+    def activate_connection(self, tenant_id: str) -> list[str]:
+        """Records landed on this tenant: mark it active, and give each
+        owning account its first assistant if it has none. Safe to repeat."""
+        self.set_connection_status(tenant_id, "active")
+        with self.session() as s:
+            owners = [(c.account_id, c.id) for c in
+                      s.query(Connection).filter_by(tenant_id=tenant_id)]
+        made = [self.ensure_first_agent(a, c) for a, c in owners]
+        return [x for x in made if x]
+
+    def agent_for_connection(self, account_id: str,
+                             connection_id: str) -> dict | None:
+        with self.session() as s:
+            a = (s.query(Agent)
+                 .filter_by(account_id=account_id, connection_id=connection_id)
+                 .order_by(Agent.created_at.asc()).first())
+            return _agent_dict(a) if a else None
+
     def get_agent_context(self, account_id: str, agent_id: str) -> dict | None:
         """Return {agent, tenant, connection} for an agent the account owns.
 

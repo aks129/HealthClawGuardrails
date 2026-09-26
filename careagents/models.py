@@ -44,6 +44,10 @@ class Account(Base):
     # account's sample tenant is minted and seeded, cleared after. A double
     # tap races on this row, not on the tenant mint. A timestamp, not PHI.
     sample_claim_at = Column(Float, nullable=True)
+    # When this account was given its first assistant (calm hub spec
+    # section 5). A compare-and-set target: it makes a repeated or racing
+    # ingest-complete callback a no-op. A timestamp, not PHI.
+    first_agent_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -232,7 +236,7 @@ def _ensure_columns(engine) -> None:
     tables = insp.get_table_names()
     if "ca_accounts" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_accounts")}
-        for name in ("sample_claim_at",):
+        for name in ("sample_claim_at", "first_agent_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_email_tokens" in tables:

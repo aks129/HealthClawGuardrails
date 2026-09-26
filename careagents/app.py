@@ -629,8 +629,13 @@ def create_app(config: Config | None = None,
             cfg, real_records=cfg.real_records_open_for(acct.email))})
 
     def _sample_answer(account_id, conn_id, existing):
-        """What a sample tap answers. Task 2 adds the chat redirect."""
-        return {"id": conn_id, "status": "active", "existing": existing}
+        """What a sample tap answers: the connection, and the chat to open."""
+        out = {"id": conn_id, "status": "active", "existing": existing}
+        agent = svc.agent_for_connection(account_id, conn_id)
+        if agent:
+            out["agent_id"] = agent["id"]
+            out["redirect"] = url_for("chat", agent=agent["id"])
+        return out
 
     def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
@@ -663,6 +668,14 @@ def create_app(config: Config | None = None,
                                  provider=plan.get("provider"),
                                  consent_version=consent_version)
         if connector_id == "sample":
+            # A count for the record card, and the first assistant. Neither
+            # blocks the connect: an unknown count renders as no count.
+            try:
+                svc.mark_synced(cid, hc.record_count(tenant))
+            except HealthClawError:
+                logger.warning("record count after sample seed failed for %s",
+                               cid)
+            svc.ensure_first_agent(acct.id, cid)
             return jsonify(_sample_answer(acct.id, cid, False))
         out = {"id": cid, "status": plan["status"]}
         if plan.get("connect_url"):
@@ -824,7 +837,7 @@ def create_app(config: Config | None = None,
         uncounted = 0
         if landed > 0:
             try:
-                svc.set_connection_status(conn["tenant_id"], "active")
+                svc.activate_connection(conn["tenant_id"])
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
@@ -1044,7 +1057,7 @@ def create_app(config: Config | None = None,
                            "a problem on our side — we'll keep checking.",
             }), 503
         if landed:
-            svc.set_connection_status(conn_tenant, "active")
+            svc.activate_connection(conn_tenant)
             out = {"status": "active"}
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
