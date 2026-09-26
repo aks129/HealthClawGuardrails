@@ -19,6 +19,7 @@ from r6.upstream_connectors import (
     AUTH_BASIC,
     AUTH_NONE,
     AUTH_OAUTH2,
+    AUTH_PASSWORD_JSON,
     CONNECTORS,
     resolve_upstream_config,
     supported_connectors,
@@ -26,6 +27,7 @@ from r6.upstream_connectors import (
 
 AIDBOX = "https://aidbox.example/fhir"
 MEDPLUM = "https://medplum.example/fhir/R4"
+SYNTHETIC = "http://synthetic-hospital.example:58000/fhir"
 
 
 def _resolve(**env):
@@ -87,6 +89,7 @@ class TestTheRegistryNamesWhatWeAreInFrontOf:
         # recorded — not raising a ratchet to go green.
         ("hapi", AUTH_BASIC),
         ("generic", AUTH_BASIC),
+        ("synthetic_hospital", AUTH_PASSWORD_JSON),
     ])
     def test_each_kind_declares_its_auth_style(self, kind, auth):
         c = _resolve(FHIR_UPSTREAM_KIND=kind, FHIR_UPSTREAM_URL=AIDBOX)
@@ -184,6 +187,13 @@ class TestTheTokenEndpointFollowsTheServer:
                      FHIR_UPSTREAM_CLIENT_ID="i", FHIR_UPSTREAM_CLIENT_SECRET="s")
         assert c.token_endpoint == expected
 
+    def test_synthetic_hospital_token_hangs_off_its_origin(self):
+        c = _resolve(FHIR_UPSTREAM_KIND="synthetic_hospital",
+                     FHIR_UPSTREAM_URL=SYNTHETIC,
+                     FHIR_UPSTREAM_CLIENT_ID="u", FHIR_UPSTREAM_CLIENT_SECRET="p")
+        assert c.token_endpoint == "http://synthetic-hospital.example:58000/auth/token"
+        assert c.basic_auth is None, "a password grant must not also send Basic"
+
     def test_an_explicit_override_wins(self):
         c = _resolve(FHIR_UPSTREAM_KIND="medplum", FHIR_UPSTREAM_URL=MEDPLUM,
                      FHIR_UPSTREAM_TOKEN_URL="https://auth.example/token",
@@ -234,6 +244,26 @@ class TestGetProxyBuildsWhatTheConfigSays:
         from r6.fhir_proxy import get_proxy
         monkeypatch.setenv("FHIR_UPSTREAM_KIND", "medplum")
         monkeypatch.setenv("FHIR_UPSTREAM_URL", MEDPLUM)
+        assert get_proxy() is None
+
+    def test_password_json_upstream_builds_a_token_injecting_proxy(
+            self, monkeypatch):
+        from r6.fhir_proxy import get_proxy
+        monkeypatch.setenv("FHIR_UPSTREAM_KIND", "synthetic_hospital")
+        monkeypatch.setenv("FHIR_UPSTREAM_URL", SYNTHETIC)
+        monkeypatch.setenv("FHIR_UPSTREAM_CLIENT_ID", "u")
+        monkeypatch.setenv("FHIR_UPSTREAM_CLIENT_SECRET", "p")
+        p = get_proxy()
+        assert isinstance(p, OAuth2UpstreamProxy)
+        assert p._grant == AUTH_PASSWORD_JSON
+        assert p._token_endpoint == (
+            "http://synthetic-hospital.example:58000/auth/token")
+
+    def test_password_json_without_credentials_refuses(self, monkeypatch):
+        """MUTATION: drop AUTH_PASSWORD_JSON from the refuse branch -> red."""
+        from r6.fhir_proxy import get_proxy
+        monkeypatch.setenv("FHIR_UPSTREAM_KIND", "synthetic_hospital")
+        monkeypatch.setenv("FHIR_UPSTREAM_URL", SYNTHETIC)
         assert get_proxy() is None
 
     def test_the_old_class_name_still_imports(self):
