@@ -185,7 +185,7 @@ def test_a_read_writes_its_own_audit_event(client, app):
 
 @pytest.mark.parametrize("marker", [v for _, v in _MARKERS])
 def test_the_audit_trail_carries_no_phi(client, app, marker):
-    """The audit trail is shown to patients; it must not become the leak."""
+    """Operators and agents read the audit trail back; it must not become the leak."""
     _seed(app, "audit-phi-probe")
     client.get("/r6/fhir/Patient/audit-phi-probe",
                headers={"X-Tenant-Id": TENANT})
