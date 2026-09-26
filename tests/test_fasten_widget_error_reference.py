@@ -125,10 +125,16 @@ def test_a_failed_connection_shows_the_request_id(client, monkeypatch, tmp_path)
     """The whole point: something the person can paste into an email.
 
     MUTATION: drop the request id from the status message -> red.
+
+    The error code is deliberately NOT shown (changed for #326, which this
+    test previously pinned the other way): `fasten_unauthorized_client` is
+    vendor jargon a patient cannot act on. It still reaches support in the
+    diagnostic record, keyed by the reference shown here — see
+    test_only_the_code_and_request_id_leave_the_event.
     """
     result = _run(client, monkeypatch, tmp_path, _CONNECTION_FAILED)
     assert _REQUEST_ID in result["status"], result["status"]
-    assert _CODE in result["status"], result["status"]
+    assert _CODE not in result["status"], result["status"]
     assert _REFERENCE in result["status"], result["status"]
 
 
