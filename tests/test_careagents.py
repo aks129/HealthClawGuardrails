@@ -3746,7 +3746,8 @@ def test_deleting_the_account_purges_every_tenant_then_removes_the_row(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn_a = c.post("/api/connections/sample").get_json()["id"]
-    conn_b = c.post("/api/connections/sample").get_json()["id"]
+    conn_b = c.post("/api/connections/direct",
+                    json={"consent": True}).get_json()["id"]
     with c.session_transaction() as sess:
         account_id = sess["account_id"]
     with svc.session() as s:

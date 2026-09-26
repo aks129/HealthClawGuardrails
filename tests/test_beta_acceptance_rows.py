@@ -94,6 +94,12 @@ class Chain:
             from r6.actions.rails import register_all
             _clear()
             register_all()
+            # Each world is a fresh engine on the same tenant id, so start it
+            # with a fresh rate-limit budget, as conftest's engine fixture
+            # does. The sample connect now counts records after seeding (six
+            # searches), and the file's worlds together pass 120 a minute.
+            from r6.rate_limit import _rate_limits
+            _rate_limits.clear()
         engine = self.engine_app.test_client()
         self.engine = engine
 
