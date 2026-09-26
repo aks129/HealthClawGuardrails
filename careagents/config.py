@@ -16,7 +16,14 @@ logger = logging.getLogger(__name__)
 
 # Model hosts that may serve chat while real records are open (see
 # CARE_REAL_RECORDS below). Operators extend it by name, never by pattern.
-_VETTED_MODEL_HOSTS = frozenset({"api.anthropic.com", "api.openai.com"})
+# The owner approved these four providers on 2026-09-26: Anthropic, OpenAI,
+# Google Gemini (its OpenAI-compatible endpoint) and Groq.
+_VETTED_MODEL_HOSTS = frozenset({
+    "api.anthropic.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "api.groq.com",
+})
 
 
 class ConfigError(RuntimeError):
@@ -147,8 +154,8 @@ class Config:
         self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5")
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
-        # data to the model host, so that host must be vetted: Anthropic,
-        # api.openai.com, or one the operator names in
+        # data to the model host, so that host must be vetted: one of the
+        # owner-approved hosts in _VETTED_MODEL_HOSTS, or one named in
         # CARE_REAL_RECORDS_MODEL_HOSTS (naming it is the deliberate act).
         # Exact hostname match. The Anthropic SDK honours ANTHROPIC_BASE_URL
         # from the environment, so that is the Anthropic host when set.
