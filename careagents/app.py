@@ -628,11 +628,16 @@ def create_app(config: Config | None = None,
         return jsonify({"connectors": connectors.catalog(
             cfg, real_records=cfg.real_records_open_for(acct.email))})
 
-    @app.post("/api/connections/<connector_id>")
-    @login_required
-    def add_connection(connector_id):
-        acct = current_account()
-        body = request.get_json(silent=True) or {}
+    def _sample_answer(account_id, conn_id, existing):
+        """What a sample tap answers: the connection, and the chat to open."""
+        out = {"id": conn_id, "status": "active", "existing": existing}
+        agent = svc.agent_for_connection(account_id, conn_id)
+        if agent:
+            out["agent_id"] = agent["id"]
+            out["redirect"] = url_for("chat", agent=agent["id"])
+        return out
+
+    def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
         plan = connectors.start(
@@ -662,10 +667,50 @@ def create_app(config: Config | None = None,
                                  status=plan["status"],
                                  provider=plan.get("provider"),
                                  consent_version=consent_version)
+        if connector_id == "sample":
+            # A count for the record card, and the first assistant. Neither
+            # blocks the connect: an unknown count renders as no count.
+            try:
+                svc.mark_synced(cid, hc.record_count(tenant))
+            except HealthClawError:
+                logger.warning("record count after sample seed failed for %s",
+                               cid)
+            svc.ensure_first_agent(acct.id, cid)
+            return jsonify(_sample_answer(acct.id, cid, False))
         out = {"id": cid, "status": plan["status"]}
         if plan.get("connect_url"):
             out["connect_url"] = plan["connect_url"]
         return jsonify(out)
+
+    @app.post("/api/connections/<connector_id>")
+    @login_required
+    def add_connection(connector_id):
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if connector_id != "sample":
+            return _start_connection(connector_id, acct, body)
+        # One sample per account (calm hub spec section 4). A second tap
+        # opens the one that exists; a tap while another is still seeding
+        # mints nothing.
+        existing = svc.active_sample(acct.id)
+        if existing:
+            return jsonify(_sample_answer(acct.id, existing["id"], True))
+        if not svc.claim_sample_start(acct.id):
+            existing = svc.active_sample(acct.id)
+            if existing:
+                return jsonify(_sample_answer(acct.id, existing["id"], True))
+            return jsonify({"status": "connecting",
+                            "error": "Your sample records are on their way. "
+                                     "Try again in a moment."}), 409
+        try:
+            # Look again under the lease: another tap may have finished and
+            # released it between our first look and our claim.
+            existing = svc.active_sample(acct.id)
+            if existing:
+                return jsonify(_sample_answer(acct.id, existing["id"], True))
+            return _start_connection(connector_id, acct, body)
+        finally:
+            svc.release_sample_start(acct.id)
 
     @app.post("/api/connections/<conn_id>/upload")
     @login_required
@@ -797,7 +842,7 @@ def create_app(config: Config | None = None,
         uncounted = 0
         if landed > 0:
             try:
-                svc.set_connection_status(conn["tenant_id"], "active")
+                svc.activate_connection(conn["tenant_id"])
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "could not flip connection %s to active", conn_id)
@@ -1017,7 +1062,7 @@ def create_app(config: Config | None = None,
                            "a problem on our side — we'll keep checking.",
             }), 503
         if landed:
-            svc.set_connection_status(conn_tenant, "active")
+            svc.activate_connection(conn_tenant)
             out = {"status": "active"}
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
@@ -1087,6 +1132,59 @@ def create_app(config: Config | None = None,
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"id": aid})
+
+    @app.post("/api/agents/<agent_id>/rename")
+    @login_required
+    def rename_agent(agent_id):
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        name = str(body.get("name") or "").strip()[:48]
+        if not name:
+            return jsonify({"error": "Give your assistant a name."}), 400
+        if not svc.rename_agent(acct.id, agent_id, name):
+            return jsonify({"error": "unknown agent"}), 404
+        return jsonify({"id": agent_id, "name": name})
+
+    @app.post("/api/agents/<agent_id>/connection")
+    @login_required
+    def move_agent(agent_id):
+        """Change records. The service does the ownership check, so there
+        is one place to get it right and one place to mutation-test."""
+        acct = current_account()
+        conn_id = str((request.get_json(silent=True) or {})
+                      .get("connection_id") or "")
+        try:
+            svc.move_agent(acct.id, agent_id, conn_id)
+        except AuthError:
+            return jsonify({"error": "unknown agent or connection"}), 404
+        return jsonify({"id": agent_id, "connection_id": conn_id})
+
+    @app.delete("/api/agents/<agent_id>")
+    @login_required
+    def delete_agent(agent_id):
+        acct = current_account()
+        if not svc.delete_agent(acct.id, agent_id):
+            return jsonify({"error": "unknown agent"}), 404
+        return jsonify({"deleted": True, "id": agent_id})
+
+    @app.post("/api/hub/switch-prompt")
+    @login_required
+    def answer_switch_prompt():
+        """Either answer ends the question; "switch" also moves the agent,
+        through the same ownership check as Change records."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        answer = body.get("answer")
+        if answer == "switch":
+            try:
+                svc.move_agent(acct.id, str(body.get("agent_id") or ""),
+                               str(body.get("connection_id") or ""))
+            except AuthError:
+                return jsonify({"error": "unknown agent or connection"}), 404
+        elif answer != "later":
+            return jsonify({"error": "answer must be switch or later"}), 400
+        svc.stamp_switch_prompt(acct.id)
+        return jsonify({"answer": answer})
 
     @app.get("/chat")
     @login_required
@@ -1520,6 +1618,42 @@ def create_app(config: Config | None = None,
         return render_template("approvals.html", me=ctx["agent"],
                                agent_id=agent_id, pending=pending,
                                kind_labels=_KIND_LABELS)
+
+    @app.get("/api/approvals/count")
+    @login_required
+    def approvals_count():
+        """How many requests wait for this person, for the hub's band.
+
+        The same tenants the approvals page reads: each assistant's live
+        connection, counted once. Any tenant that cannot be asked fails the
+        whole count. A partial sum would read as a smaller inbox, and a
+        failure must never render as zero (calm hub spec section 3).
+        """
+        acct = current_account()
+        data = svc.list_home(acct.id)
+        live = {c["id"]: c for c in data["connections"]
+                if c["status"] != "revoked"}
+        tenants: dict[str, str] = {}
+        for a in data["agents"]:
+            conn = live.get(a["connection_id"])
+            if conn and conn["tenant_id"] not in tenants:
+                tenants[conn["tenant_id"]] = a["id"]
+        total, first = 0, None
+        for tenant, agent_id in tenants.items():
+            try:
+                n = len(hc.pending_actions(tenant))
+            except HealthClawError:
+                logger.warning("pending count unavailable for account %s",
+                               acct.id)
+                return jsonify({"error": "unavailable"}), 503
+            total += n
+            if n and first is None:
+                first = agent_id
+        out = {"count": total}
+        if first:
+            out["agent_id"] = first
+            out["href"] = url_for("approvals", agent_id=first)
+        return jsonify(out)
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 

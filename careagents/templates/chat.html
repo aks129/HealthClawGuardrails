@@ -67,12 +67,6 @@
       and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong>
       in your records. Want me to walk through what they show?</p>
     </div>
-    <div class="starters" id="starters">
-      <button type="button" class="starter">What do my labs say?</button>
-      <button type="button" class="starter">Any screenings I'm due for?</button>
-      <button type="button" class="starter">What medications am I on?</button>
-      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
-    </div>
     {% else %}
     <div class="msg agent">
       <p>Hi — I'm {{ me.name }}. I can read the health records in this space,
@@ -81,11 +75,15 @@
       of that yourself.</p>
       <p>What would you like to know?</p>
     </div>
+    {% endif %}
+    {% if not past %}
+    {# One block for every first visit. Intake comes first: that path ends
+       in an approval, which is what the product is for (spec section 5). #}
     <div class="starters" id="starters">
+      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
       <button type="button" class="starter">What do my labs say?</button>
       <button type="button" class="starter">Any screenings I'm due for?</button>
       <button type="button" class="starter">What medications am I on?</button>
-      <button type="button" class="starter">Fill out my intake form for a new doctor</button>
     </div>
     {% endif %}
   </div>

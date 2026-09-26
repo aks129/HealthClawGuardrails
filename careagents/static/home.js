@@ -47,6 +47,7 @@
                    res.d.error || "Couldn't connect that source.");
       }
       if (res.d.soon) { tile.querySelector(".connector-tag").textContent = "we'll let you know"; return; }
+      if (res.d.redirect) { location.assign(res.d.redirect); return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
       location.reload();
     });
