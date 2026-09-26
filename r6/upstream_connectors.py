@@ -36,6 +36,9 @@ from urllib.parse import urlsplit, urlunsplit
 AUTH_NONE = "none"
 AUTH_BASIC = "basic"
 AUTH_OAUTH2 = "oauth2_client_credentials"
+#: A username and password POSTed as a JSON body for a bearer token. The
+#: Synthetic Hospital simulator uses it; it refuses a form-encoded body.
+AUTH_PASSWORD_JSON = "password_json"
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,8 @@ class Connector:
     auth: str
     summary: str
     #: True when the server's token endpoint hangs off its origin rather than
-    #: needing to be configured. Only meaningful for AUTH_OAUTH2.
+    #: needing to be configured. Only meaningful for the token-based styles,
+    #: AUTH_OAUTH2 and AUTH_PASSWORD_JSON.
     token_path: str | None = None
 
     def token_endpoint(self, base_url: str, explicit: str = "") -> str:
@@ -104,6 +108,14 @@ CONNECTORS: dict[str, Connector] = {
         auth=AUTH_BASIC,
         summary="HAPI FHIR. Public sandboxes take no credential; add "
                 "FHIR_UPSTREAM_CLIENT_ID/_SECRET for one behind HTTP Basic.",
+    ),
+    "synthetic_hospital": Connector(
+        name="synthetic_hospital",
+        auth=AUTH_PASSWORD_JSON,
+        summary="Synthetic Hospital FHIR R4 simulator (synthetic data only). "
+                "FHIR_UPSTREAM_CLIENT_ID/_SECRET are its username and "
+                "password credential.",
+        token_path="/auth/token",
     ),
     "generic": Connector(
         name="generic",

@@ -109,7 +109,7 @@ SQLite, which is the right fallback — the defect was never where the data went
 it was that the health page said everything was fine.
 
 The pack cites `is_proxy_enabled()` at `r6/routes.py:1980`. It now lives at
-`r6/fhir_proxy.py:775`, split against `upstream_intended()`.
+`r6/fhir_proxy.py:834`, split against `upstream_intended()`.
 
 ## §6 — what the proxy actually sends, per kind
 
