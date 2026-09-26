@@ -63,6 +63,21 @@ def build(home: dict, now: float) -> dict:
     }
 
 
+def menu_items(catalog: list[dict], real_open: bool) -> list[dict]:
+    """The connector rows the Add records menu shows (spec section 4).
+
+    The sample is never a row: it is the closed state's one action and the
+    open state's small link. With real records closed the catalog still
+    returns every other source as coming soon, and the closed state shows
+    none of them, so they are dropped here rather than trusted to the
+    template.
+    """
+    rows = [m for m in catalog if m["id"] != "sample"]
+    if not real_open:
+        rows = [m for m in rows if m["tier"] != "soon"]
+    return rows
+
+
 def switch_prompt(home: dict) -> dict | None:
     """The one "Switch Juniper to your records?" question, when it applies:
     an assistant reads the sample and a real connection is active."""

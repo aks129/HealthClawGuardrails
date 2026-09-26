@@ -29,6 +29,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
+from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
@@ -385,15 +386,18 @@ def create_app(config: Config | None = None,
             return redirect(url_for("consent_authorize", req=pending_req))
         acct = current_account()
         data = svc.list_home(acct.id)
+        real_open = cfg.real_records_open_for(acct.email)
         return render_template(
-            "home.html", me=acct, personas=PERSONAS,
-            connections=data["connections"], agents=data["agents"],
+            "home.html", me=acct,
+            hub=hub_view.build(data, time.time()),
+            switch_prompt=(None if svc.switch_prompted_at(acct.id)
+                           else hub_view.switch_prompt(data)),
             has_grants=bool(svc.list_grants(acct.id)),
+            menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
-            advisors=advisors.catalog(),
-            catalog=connectors.catalog(
-                cfg, real_records=cfg.real_records_open_for(acct.email)))
+            menu=hub_view.menu_items(
+                connectors.catalog(cfg, real_records=real_open), real_open))
 
     @app.get("/settings")
     @login_required
@@ -1643,13 +1647,16 @@ def create_app(config: Config | None = None,
         data = svc.list_home(acct.id)
         live = {c["id"]: c for c in data["connections"]
                 if c["status"] != "revoked"}
-        tenants: dict[str, str] = {}
+        tenants: dict[str, dict] = {}
         for a in data["agents"]:
             conn = live.get(a["connection_id"])
             if conn and conn["tenant_id"] not in tenants:
-                tenants[conn["tenant_id"]] = a["id"]
-        total, first = 0, None
-        for tenant, agent_id in tenants.items():
+                tenants[conn["tenant_id"]] = a
+        # One queue per tenant with something waiting. The approvals page
+        # reads one assistant's records, so each queue is its own link: a
+        # single link to the first would hide every other queue.
+        total, queues = 0, []
+        for tenant, agent in tenants.items():
             try:
                 n = len(hc.pending_actions(tenant))
             except HealthClawError:
@@ -1657,12 +1664,16 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
-            if n and first is None:
-                first = agent_id
+            if n:
+                queues.append({"agent_id": agent["id"], "name": agent["name"],
+                               "count": n,
+                               "href": url_for("approvals",
+                                               agent_id=agent["id"])})
         out = {"count": total}
-        if first:
-            out["agent_id"] = first
-            out["href"] = url_for("approvals", agent_id=first)
+        if queues:
+            out["agent_id"] = queues[0]["agent_id"]
+            out["href"] = queues[0]["href"]
+            out["queues"] = queues
         return jsonify(out)
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------

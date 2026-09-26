@@ -2571,12 +2571,10 @@ def test_fresh_home_gates_agent_modal_and_shows_onboarding(app, svc, monkeypatch
     c = app.test_client()
     _login(c, svc, monkeypatch)
     html = c.get("/home").data.decode()
-    # the modal element is present but carries the `hidden` attribute
-    assert 'id="agent-modal"' in html
-    modal = html.split('id="agent-modal"')[1][:40]
-    assert "hidden" in modal
-    # first-run onboarding: Step 1 points at connections, not the agent
-    assert "Step 1" in html and "connect" in html.lower()
+    # The add-assistant modal is gone (calm hub spec section 5).
+    assert 'id="agent-modal"' not in html
+    # First run, real records open in this fixture: the plain first line.
+    assert "Start with sample records, or find your own." in html
 
 
 def test_wrong_email_code_rejected(app, svc, monkeypatch):
@@ -5883,13 +5881,12 @@ def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
     # Sample records are the beta's whole track; they stay live.
     assert cat["sample"]["tier"] == "live"
     body = c.get("/home").get_data(as_text=True)
+    # Closed state: no tiles for these sources at all (calm hub spec
+    # section 4), one primary action and one line instead.
     for tile in _REAL_RECORD_TILES:
-        start = body.index(f'data-connector="{tile}"')
-        opening = body[body.rindex("<button", 0, start):body.index(">", start)]
-        assert 'data-soon="1"' in opening, tile
-        assert "data-consent" not in opening, tile
-        assert "tier-soon" in opening, tile
-    assert "Not open in this beta" in body
+        assert f'data-connector="{tile}"' not in body, tile
+    assert 'id="explore-sample"' in body
+    assert "Coming for invited testers" in body
 
 
 def test_real_record_connect_posts_are_refused_with_503_when_off(
@@ -6340,8 +6337,8 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     _login(closed, svc, monkeypatch, email="tester@example.org")
     body = closed.get("/home").get_data(as_text=True)
     assert note not in body
-    # The tiles it contradicted are the ones on screen.
-    assert "Not open in this beta" in body
+    # The tiles it contradicted are gone; the closed line says it instead.
+    assert "Coming for invited testers" in body
 
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
                     CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")
