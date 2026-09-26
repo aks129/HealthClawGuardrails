@@ -595,6 +595,17 @@ class AccountService:
             s.delete(a)
             return True
 
+    def switch_prompted_at(self, account_id: str) -> float | None:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            return acct.switch_prompted_at if acct else None
+
+    def stamp_switch_prompt(self, account_id: str) -> None:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            if acct is not None and acct.switch_prompted_at is None:
+                acct.switch_prompted_at = now()
+
     def get_agent_context(self, account_id: str, agent_id: str) -> dict | None:
         """Return {agent, tenant, connection} for an agent the account owns.
 

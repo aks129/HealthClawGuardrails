@@ -48,6 +48,9 @@ class Account(Base):
     # section 5). A compare-and-set target: it makes a repeated or racing
     # ingest-complete callback a no-op. A timestamp, not PHI.
     first_agent_at = Column(Float, nullable=True)
+    # When the person answered "Switch Juniper to your records?" either
+    # way (calm hub spec section 5). A timestamp, not PHI.
+    switch_prompted_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -236,7 +239,8 @@ def _ensure_columns(engine) -> None:
     tables = insp.get_table_names()
     if "ca_accounts" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_accounts")}
-        for name in ("sample_claim_at", "first_agent_at"):
+        for name in ("sample_claim_at", "first_agent_at",
+                     "switch_prompted_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_email_tokens" in tables:

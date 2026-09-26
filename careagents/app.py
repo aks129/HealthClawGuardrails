@@ -1162,6 +1162,25 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown agent"}), 404
         return jsonify({"deleted": True, "id": agent_id})
 
+    @app.post("/api/hub/switch-prompt")
+    @login_required
+    def answer_switch_prompt():
+        """Either answer ends the question; "switch" also moves the agent,
+        through the same ownership check as Change records."""
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        answer = body.get("answer")
+        if answer == "switch":
+            try:
+                svc.move_agent(acct.id, str(body.get("agent_id") or ""),
+                               str(body.get("connection_id") or ""))
+            except AuthError:
+                return jsonify({"error": "unknown agent or connection"}), 404
+        elif answer != "later":
+            return jsonify({"error": "answer must be switch or later"}), 400
+        svc.stamp_switch_prompt(acct.id)
+        return jsonify({"answer": answer})
+
     @app.get("/chat")
     @login_required
     def chat():

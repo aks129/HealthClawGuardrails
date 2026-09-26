@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from careagents import models
 
-NEW_COLUMNS = {"sample_claim_at", "first_agent_at"}
+NEW_COLUMNS = {"sample_claim_at", "first_agent_at", "switch_prompted_at"}
 
 
 @pytest.fixture
