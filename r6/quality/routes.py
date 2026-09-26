@@ -10,8 +10,10 @@ import logging
 
 from flask import request, jsonify
 
+from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.quality.measures import evaluate_nqf0018, evaluate_population
 from r6.quality.report import (
     build_individual_report, build_summary_report, build_measure_resource,
@@ -30,9 +32,6 @@ def _default_measurement_period(today=None):
 def register_quality_routes(blueprint, deps):
     operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
-
-    def _tenant():
-        return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _param(params, name):
         for p in params.get("parameter", []):
@@ -59,10 +58,8 @@ def register_quality_routes(blueprint, deps):
     @blueprint.route(f"/Measure/{MEASURE_ID}/$evaluate-measure",
                      methods=["POST", "GET"])
     def evaluate_measure():
-        tenant_id = _tenant()
-        if not tenant_id:
-            return jsonify(operation_outcome(
-                "error", "security", "X-Tenant-Id required")), 400
+        # enforce_tenant_id already refused an absent or malformed id.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -107,9 +104,10 @@ def register_quality_routes(blueprint, deps):
             detail = (f"nqf0018 summary rate={pop['performance_rate']} "
                       f"n={pop['numerator']}/{pop['denominator']}")
 
-        record_audit_event("read", "Measure", MEASURE_ID,
-                            agent_id=request.headers.get("X-Agent-Id"),
-                            tenant_id=tenant_id, detail=detail)
+        add_audit_event("read", "Measure", MEASURE_ID,
+                        agent_id=request.headers.get("X-Agent-Id"),
+                        tenant_id=tenant_id, detail=detail)
+        db.session.commit()
         return jsonify(report), 200
 
     return evaluate_measure

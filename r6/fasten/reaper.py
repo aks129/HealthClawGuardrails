@@ -24,7 +24,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from models import db
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.fasten.api import trigger_ehi_export
 from r6.fasten.models import FastenJob
 
@@ -86,14 +86,14 @@ def reap_zombie_jobs() -> int:
             job.failure_reason = ('boot reaper: job stranded by a restart; '
                                   're-trigger of EHI export failed')[:256]
             job.completed_at = datetime.now(timezone.utc)
-            db.session.commit()
-            record_audit_event(
+            add_audit_event(
                 event_type='fasten_job_reap_failed',
                 agent_id='fasten-boot-reaper',
                 tenant_id=job.tenant_id,
                 outcome='failure',
                 detail=f'job={job.task_id} stale_status_recovered=zombie',
             )
+            db.session.commit()
             continue
 
         # Fresh export requested. The old signed URLs are expired — clear
@@ -106,8 +106,7 @@ def reap_zombie_jobs() -> int:
         job.skipped_resources = 0
         job.failed_resources = 0
         job.failure_reason = None
-        db.session.commit()
-        record_audit_event(
+        add_audit_event(
             event_type='fasten_job_reaped',
             agent_id='fasten-boot-reaper',
             tenant_id=job.tenant_id,
@@ -115,6 +114,7 @@ def reap_zombie_jobs() -> int:
             detail=f'job={job.task_id} fresh export triggered '
                    f'(new task={result.get("task_id")})',
         )
+        db.session.commit()
         logger.info('Fasten boot reaper: job %s re-triggered (fresh export '
                     'task=%s)', job.task_id, result.get('task_id'))
         reaped += 1

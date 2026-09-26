@@ -406,3 +406,126 @@ def test_consecutive_failures_still_lose_the_lease():
     hc = _FlakyHC(failures=99)
     hb = _beat(hc, times=4)
     assert hb.lost is True, "the lease was never given up"
+
+
+# --- out of credit is not a rate limit ------------------------------------
+#
+# Found filming the demo: an OpenAI key with no credit answers 429
+# `insufficient_quota`, which was classified as a rate limit and reached the
+# patient as "I'm getting more requests than I can answer". Nothing clears
+# it but an operator, so "ask again in a moment" was false.
+
+_QUOTA = {"error": {"message": "You exceeded your current quota, please "
+                               "check your plan and billing details.",
+                    "type": "insufficient_quota", "param": None,
+                    "code": "insufficient_quota"}}
+_RATE = {"error": {"message": "Rate limit reached for requests",
+                   "type": "requests", "code": "rate_limit_exceeded"}}
+
+
+def test_an_openai_quota_429_is_out_of_credit_and_not_retried(
+        monkeypatch, slept, caplog):
+    """MUTATION: drop the _openai_out_of_credit check -> red."""
+    post = _Post(_Resp(429, payload=_QUOTA))
+    with caplog.at_level("ERROR", logger="careagents.llm"):
+        with pytest.raises(llm.LLMOutOfCredit):
+            _complete(monkeypatch, post)
+    assert post.calls == 1
+    assert slept == []
+    # The operator is told, by type/code only.
+    assert "insufficient_quota" in caplog.text
+    assert "exceeded your current quota" not in caplog.text
+
+
+def test_a_402_is_out_of_credit(monkeypatch, slept):
+    post = _Post(_Resp(402, payload={"error": {"type": "billing_error"}}))
+    with pytest.raises(llm.LLMOutOfCredit):
+        _complete(monkeypatch, post)
+    assert post.calls == 1
+
+
+def test_a_plain_429_is_still_a_rate_limit(monkeypatch, slept):
+    post = _Post(_Resp(429, payload=_RATE))
+    with pytest.raises(llm.LLMRateLimited) as info:
+        _complete(monkeypatch, post)
+    assert not isinstance(info.value, llm.LLMOutOfCredit)
+    assert post.calls == llm.MAX_ATTEMPTS
+
+
+def test_a_429_with_an_unreadable_body_is_still_a_rate_limit(monkeypatch,
+                                                             slept):
+    class _Garbage(_Resp):
+        def json(self):
+            raise ValueError("not json")
+    post = _Post(_Garbage(429))
+    with pytest.raises(llm.LLMRateLimited):
+        _complete(monkeypatch, post)
+
+
+def _anthropic_raising(monkeypatch, status, body):
+    class _APIError(Exception):
+        def __init__(self):
+            super().__init__("refused")
+            self.status_code = status
+            self.body = body
+
+    fake = types.ModuleType("anthropic")
+    fake.APIError = _APIError
+
+    class _Client:
+        def __init__(self, **_kw):
+            self.messages = self
+
+        def create(self, **_kw):
+            raise _APIError()
+
+    fake.Anthropic = _Client
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake)
+    cfg = types.SimpleNamespace(
+        provider="anthropic", anthropic_api_key="k", anthropic_model="m",
+        anthropic_oauth_token="")
+    return lambda: llm.complete(cfg, "sys", [{"role": "user", "content": "hi"}],
+                                [])
+
+
+@pytest.mark.parametrize("status,body", [
+    (402, {"type": "error", "error": {"type": "billing_error",
+                                      "message": "billing problem"}}),
+    (400, {"type": "error", "error": {
+        "type": "invalid_request_error",
+        "message": "Your credit balance is too low to access the Anthropic "
+                   "API."}}),
+])
+def test_anthropic_billing_refusals_are_out_of_credit(monkeypatch, status,
+                                                      body):
+    """MUTATION: drop the _anthropic_out_of_credit check -> red."""
+    call = _anthropic_raising(monkeypatch, status, body)
+    with pytest.raises(llm.LLMOutOfCredit):
+        call()
+
+
+def test_an_ordinary_anthropic_400_is_still_a_generic_error(monkeypatch):
+    call = _anthropic_raising(monkeypatch, 400, {"type": "error", "error": {
+        "type": "invalid_request_error", "message": "max_tokens too large"}})
+    with pytest.raises(llm.LLMError) as info:
+        call()
+    assert not isinstance(info.value, (llm.LLMOutOfCredit, llm.LLMRateLimited))
+
+
+def test_out_of_credit_is_an_llm_error_so_existing_handlers_still_catch_it():
+    assert issubclass(llm.LLMOutOfCredit, llm.LLMError)
+
+
+def test_the_patient_is_told_it_is_unavailable_and_nothing_about_billing():
+    """MUTATION: drop the LLMOutOfCredit branch in failure_text -> red."""
+    text = worker._failure_text(llm.LLMOutOfCredit("billing"))
+    assert text == agent.UNAVAILABLE_TEXT
+    assert "more requests" not in text
+    for word in ("quota", "billing", "credit", "openai", "anthropic",
+                 "gemini", "provider", "http"):
+        assert word not in text.lower(), word
+
+
+def test_the_sync_path_says_unavailable_when_out_of_credit(monkeypatch):
+    events = _turn_events(monkeypatch, llm.LLMOutOfCredit("billing"))
+    assert events == [{"type": "error", "text": agent.UNAVAILABLE_TEXT}]

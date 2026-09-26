@@ -10,12 +10,14 @@ happened, and names the failure when neither could.
 """
 import json
 import logging
-from datetime import date
+from datetime import datetime, timezone
 
 from flask import request, jsonify
 
+from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
 
@@ -112,11 +114,7 @@ def subject_resources(resource_type, subject, tenant_id):
 
 
 def register_caregaps_routes(blueprint, deps):
-    operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
-
-    def _tenant():
-        return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _subject_from_request():
         subject = request.args.get("subject")
@@ -131,10 +129,8 @@ def register_caregaps_routes(blueprint, deps):
 
     @blueprint.route("/Patient/$care-gaps", methods=["GET", "POST"])
     def care_gaps():
-        tenant_id = _tenant()
-        if not tenant_id:
-            return jsonify(operation_outcome(
-                "error", "security", "X-Tenant-Id required")), 400
+        # enforce_tenant_id already refused an absent or malformed id.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -176,7 +172,7 @@ def register_caregaps_routes(blueprint, deps):
         def _for(resource_type):
             return subject_resources(resource_type, subject, tenant_id) if subject else []
 
-        as_of = date.today().isoformat()
+        as_of = datetime.now(timezone.utc).date().isoformat()
         # A subject we could not resolve is not evaluated, full stop (#542).
         # The route used to set `not_evaluated` and then run the rules anyway,
         # against `patient=None`, which produced two false statements about a
@@ -210,11 +206,12 @@ def register_caregaps_routes(blueprint, deps):
         summary["evaluated"] = not_evaluated is None
         consumer = build_consumer_summary(results, not_evaluated=not_evaluated)
 
-        record_audit_event(
+        add_audit_event(
             "read", resource_type="Patient", resource_id=None,
             agent_id=request.headers.get("X-Agent-Id"), tenant_id=tenant_id,
             detail=(f"care-gaps; subject={state} evaluated={summary['total']} "
                     f"due={summary['due']}"))
+        db.session.commit()
 
         return jsonify({
             "resourceType": "Parameters",

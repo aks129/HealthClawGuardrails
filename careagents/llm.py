@@ -19,10 +19,13 @@ Tools use a neutral shape: {"name", "description", "parameters": JSONSchema}.
 from __future__ import annotations
 
 import json
+import logging
 import time as _time_mod
 from dataclasses import dataclass, field
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,6 +57,62 @@ class LLMRateLimited(LLMError):
     busy, ask again in a moment" — which is true, actionable, and does not
     invite them to report a defect that does not exist.
     """
+
+
+class LLMOutOfCredit(LLMError):
+    """The provider refused on billing: the key is out of credit or quota.
+
+    Not a rate limit, although OpenAI sends it as a 429. "Ask again in a
+    moment" is false here — nothing clears until an operator tops the account
+    up — so the patient is told the assistant is unavailable, and the
+    operator learns why from the log. Retrying only spends the run's deadline.
+    """
+
+
+def _error_fields(body) -> tuple[str, str, str]:
+    """(type, code, message) from a provider error body, '' when absent.
+
+    OpenAI and Anthropic both nest it under `error`. Only the first two are
+    ever logged; the message is read for classification and nowhere else.
+    """
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return "", "", ""
+    return (str(err.get("type") or ""), str(err.get("code") or ""),
+            str(err.get("message") or ""))
+
+
+def _log_out_of_credit(provider: str, status, err_type: str, code: str) -> None:
+    # For the operator only. Status and the provider's error type/code say
+    # which account to fix; the request itself never enters the log.
+    logger.error("model provider %s refused on billing (HTTP %s, type=%s, "
+                 "code=%s): top up or rotate the key", provider, status,
+                 err_type or "-", code or "-")
+
+
+def _openai_out_of_credit(r) -> bool:
+    """402, or OpenAI's `insufficient_quota` 429 — never a plain 429."""
+    if r.status_code not in (402, 429):
+        return False
+    try:
+        err_type, code, _msg = _error_fields(r.json())
+    except ValueError:
+        err_type = code = ""
+    if r.status_code == 402 or "insufficient_quota" in (err_type, code):
+        _log_out_of_credit("openai-compatible", r.status_code, err_type, code)
+        return True
+    return False
+
+
+def _anthropic_out_of_credit(exc) -> bool:
+    """402 `billing_error`, or the 400 "credit balance is too low"."""
+    status = getattr(exc, "status_code", None)
+    err_type, code, message = _error_fields(getattr(exc, "body", None))
+    if (status == 402 or err_type == "billing_error"
+            or (status == 400 and "credit balance" in message.lower())):
+        _log_out_of_credit("anthropic", status, err_type, code)
+        return True
+    return False
 
 
 # Transient by definition: the same request may succeed unchanged. 400/401/403
@@ -157,6 +216,8 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
         # would multiply the delay while the run holds its lease. What was
         # missing is the CLASSIFICATION — a rate limit reaching here has
         # already been retried and deserves its own honest message.
+        if _anthropic_out_of_credit(exc):
+            raise LLMOutOfCredit("model call refused on billing") from exc
         if getattr(exc, "status_code", None) == 429:
             raise LLMRateLimited("model call rate limited (HTTP 429)") from exc
         raise LLMError(f"model call failed ({type(exc).__name__})") from exc
@@ -242,6 +303,10 @@ def _openai_complete(cfg, system, messages, tools) -> LLMTurn:
 
         if r.status_code == 200:
             break
+        # Before the retry decision: an exhausted quota arrives as a 429,
+        # and backing off from it only burns the run's deadline.
+        if _openai_out_of_credit(r):
+            raise LLMOutOfCredit("model call refused on billing")
         if r.status_code not in RETRYABLE_STATUSES:
             raise LLMError(f"model call failed (HTTP {r.status_code})")
         delay = _retry_delay(attempt, r.headers.get("Retry-After"))

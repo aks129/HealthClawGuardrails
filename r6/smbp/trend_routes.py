@@ -122,8 +122,9 @@ def register_trend_routes(blueprint, deps):
         # audit() flushes without committing, so a read path has to commit
         # its own row — and a GET that commits is what
         # test_no_new_get_route_mutates_the_store exists to stop. Slice 12
-        # migrates read audits wholesale; until then this matches every
-        # other read route in the blueprint.
+        # migrates read audits wholesale; until then this matches the
+        # blueprint's other GET, reminders-due. (The report GET commits in
+        # its own handler: it is a declared GET mutator.)
         record_audit_event(
             "read", "Observation", subject.split("/")[-1],
             agent_id=request.headers.get("X-Agent-Id"),

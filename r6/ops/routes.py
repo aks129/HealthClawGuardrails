@@ -29,7 +29,7 @@ from models import db
 from r6.actions.models import ProposedAction, _utcnow
 from r6.actions.registry import get_executor
 from r6.actions.state import transition_action
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.internal_auth import internal_secret_authorized
 from r6.ops import checks as preflight_checks
 from r6.rate_limit import rate_limit_middleware
@@ -76,12 +76,15 @@ STALE_AFTER = timedelta(minutes=5)
 
 
 def _audit_reaped(action, to_state, detail):
-    record_audit_event(
+    # transition_action has already committed the move; this row commits on
+    # its own, as the confirm route's post-transition audits do.
+    add_audit_event(
         'update', resource_type='ProposedAction', resource_id=action.id,
         agent_id='reaper', tenant_id=action.tenant_id,
         outcome='success' if to_state in ('completed', 'expired')
         else 'failure',
         detail=detail)
+    db.session.commit()
 
 
 def _apply_reconcile(action, result):

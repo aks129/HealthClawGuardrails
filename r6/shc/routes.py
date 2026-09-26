@@ -47,7 +47,7 @@ from markupsafe import escape
 from models import db
 from r6 import constant_time
 from r6.access import TenantRejected, TenantSource, tenant_from_request
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +302,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
                   'refused': refused, 'failed': failed,
                   'skipped_types': dict(skipped_types)}
         types_summary = ingester.skipped_type_summary(skipped_types)
-        record_audit_event(
+        add_audit_event(
             event_type='shc_import_complete',
             agent_id=f'shc-{source}',
             tenant_id=tenant_id,
@@ -314,6 +314,7 @@ def _ingest_bundle(app, entries: list, tenant_id: str, source: str,
                 + (f' skipped_types={types_summary}' if types_summary else '')
             ),
         )
+        db.session.commit()
         logger.info(
             'SHC job %s complete: source=%s ingested=%d skipped=%d '
             'refused=%d failed=%d skipped_types=%s',

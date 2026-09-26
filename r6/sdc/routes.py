@@ -28,8 +28,9 @@ from flask import request, jsonify
 
 from r6.access import (Scope, TenantSource, decide_grant, tenant_from_request,
                        unredacted_response)
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.redaction import apply_redaction
 from r6.sdc.populate import NOT_POPULATED, populate_questionnaire
 from r6.sdc.extract import COMMIT_WITHOUT_CONFIRMATION, extract_resources
@@ -74,11 +75,12 @@ def register_sdc_routes(blueprint, deps):
 
         qr, issues = populate_questionnaire(questionnaire, subject, content)
 
-        record_audit_event("read", "Questionnaire",
-                            questionnaire.get("id"),
-                            agent_id=request.headers.get("X-Agent-Id"),
-                            tenant_id=tenant_id,
-                            detail=f"populate; issues={len(issues)}")
+        add_audit_event("read", "Questionnaire",
+                        questionnaire.get("id"),
+                        agent_id=request.headers.get("X-Agent-Id"),
+                        tenant_id=tenant_id,
+                        detail=f"populate; issues={len(issues)}")
+        db.session.commit()
 
         response_params = {
             "resourceType": "Parameters",
@@ -177,23 +179,24 @@ def register_sdc_routes(blueprint, deps):
                 result = validator.validate_resource(entry["resource"])
                 if not result["valid"]:
                     return jsonify(result["operation_outcome"]), 422
-            try:
-                _commit_bundle(bundle, tenant_id)
-            except Exception as exc:
-                from r6.models import db
-                db.session.rollback()
-                logger.error("SDC extract commit failed: %s",
-                             type(exc).__name__)
-                return operation_outcome(
-                    "error", "exception",
-                    "Failed to commit extracted resources"), 500
-
-        record_audit_event("create" if not dry_run else "read",
+        # The rows and their audit commit together or not at all.
+        try:
+            if not dry_run:
+                _add_bundle(bundle, tenant_id)
+            add_audit_event("create" if not dry_run else "read",
                             "QuestionnaireResponse", qr.get("id"),
                             agent_id=request.headers.get("X-Agent-Id"),
                             tenant_id=tenant_id,
                             detail=f"extract; dryRun={dry_run}; "
                                    f"resources={len(bundle['entry'])}")
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            logger.error("SDC extract commit failed: %s",
+                         type(exc).__name__)
+            return operation_outcome(
+                "error", "exception",
+                "Failed to commit extracted resources"), 500
 
         return jsonify({
             "resourceType": "Parameters",
@@ -346,8 +349,7 @@ def _redacted_for_populate(resources):
     return [apply_redaction(resource) for resource in resources]
 
 
-def _commit_bundle(bundle, tenant_id):
-    from r6.models import db
+def _add_bundle(bundle, tenant_id):
     for entry in bundle["entry"]:
         resource = entry["resource"]
         row = R6Resource(
@@ -356,7 +358,6 @@ def _commit_bundle(bundle, tenant_id):
             tenant_id=tenant_id,
         )
         db.session.add(row)
-    db.session.commit()
 
 
 def _issues_outcome(issues):

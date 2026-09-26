@@ -11,8 +11,10 @@ import logging
 
 from flask import request, jsonify
 
+from r6.access import TenantSource, tenant_from_request
+from models import db
 from r6.models import R6Resource
-from r6.audit import record_audit_event
+from r6.audit import add_audit_event
 from r6.labs.interpret import interpret_observation
 from r6.redaction import apply_redaction
 from r6.labs.report import (
@@ -31,11 +33,7 @@ _DISCLAIMER = ("Advisory decision support, not a diagnosis. Reference ranges are
 
 
 def register_labs_routes(blueprint, deps):
-    operation_outcome = deps["operation_outcome"]
     authenticate_tenant_read = deps["authenticate_tenant_read"]
-
-    def _tenant():
-        return (request.headers.get("X-Tenant-Id") or "").strip() or None
 
     def _stored_observations(tenant_id):
         """The tenant's own live Observations, newest first, capped.
@@ -130,10 +128,8 @@ def register_labs_routes(blueprint, deps):
 
     @blueprint.route("/Observation/$interpret", methods=["POST"])
     def interpret_labs():
-        tenant_id = _tenant()
-        if not tenant_id:
-            return jsonify(operation_outcome(
-                "error", "security", "X-Tenant-Id required")), 400
+        # enforce_tenant_id already refused an absent or malformed id.
+        tenant_id = tenant_from_request(sources=(TenantSource.HEADER,)).id
         auth_err = authenticate_tenant_read(tenant_id)
         if auth_err is not None:
             return auth_err[0], auth_err[1]
@@ -167,11 +163,12 @@ def register_labs_routes(blueprint, deps):
         summary["ignored"] = ignored
         consumer = build_consumer_summary(results)
 
-        record_audit_event(
+        add_audit_event(
             "read", resource_type="Observation", resource_id=None,
             agent_id=request.headers.get("X-Agent-Id"), tenant_id=tenant_id,
             detail=(f"labs $interpret; interpreted={summary['total']} "
                     f"flagged={len(summary['flagged'])} critical={summary['critical']}"))
+        db.session.commit()
 
         return jsonify({
             "resourceType": "Parameters",

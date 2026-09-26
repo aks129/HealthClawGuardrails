@@ -101,6 +101,7 @@ MED_TEXT_MARKER = "PHIMEDTEXTMARKER"
 #: is no .text, so the two need separate markers to tell which arrived.
 MED_DISPLAY_MARKER = "PHIMEDDISPLAYMARKER"
 ALLERGY_TEXT_MARKER = "PHIALLERGYTEXTMARKER"
+ALLERGY_DISPLAY_MARKER = "PHIALLERGYDISPLAYMARKER"
 COMPONENT_DISPLAY_MARKER = "PHICOMPONENTDISPLAYMARKER"
 EFFECTIVE_MARKER = "PHIEFFECTIVEMARKER"
 OBS_NOTE_MARKER = "PHIOBSNOTEMARKER"
@@ -111,7 +112,7 @@ COND_NOTE_MARKER = "PHICONDNOTEMARKER"
 ALL_MARKERS = (
     NAME_MARKER, SUBJECT_LABEL_MARKER, OBS_DISPLAY_MARKER, OBS_TEXT_MARKER,
     MED_TEXT_MARKER, MED_DISPLAY_MARKER, ALLERGY_TEXT_MARKER,
-    COMPONENT_DISPLAY_MARKER,
+    ALLERGY_DISPLAY_MARKER, COMPONENT_DISPLAY_MARKER,
     EFFECTIVE_MARKER, OBS_NOTE_MARKER, COND_TEXT_MARKER, COND_DISPLAY_MARKER,
     COND_NOTE_MARKER,
 )
@@ -171,7 +172,12 @@ def _marked_medication():
 def _marked_allergy():
     return {
         "resourceType": "AllergyIntolerance", "id": "probe-allergy-1",
-        "code": {"text": ALLERGY_TEXT_MARKER},
+        # SNOMED 91936005 is in r6/terminology.py ("Allergy to penicillin"),
+        # so the form names this row from the table, never from either marker.
+        "code": {"coding": [{"system": "http://snomed.info/sct",
+                             "code": "91936005",
+                             "display": ALLERGY_DISPLAY_MARKER}],
+                 "text": ALLERGY_TEXT_MARKER},
         "reaction": [{"manifestation": [{"text": "Hives"}]}],
         "patient": {"reference": PROBE_PATIENT_REF},
     }
@@ -412,18 +418,24 @@ def test_form_fill_pdf_carries_only_the_reviewed_answers_and_the_name(
 
     `NAME_MARKER` (the family name) arrives twice, through the SDC populate
     step — `demographics.family-name` is an item of the intake questionnaire
-    — and through form_fill's structured-name title (#367). Medication and
-    allergy free text is there because a human confirmed each row on the
-    review page. All three are the form's content; `SUBJECT_LABEL_MARKER`
-    (`name.text`) is not, and its absence here is part of the pin.
+    — and through form_fill's structured-name title (#367). It is the form's
+    content; `SUBJECT_LABEL_MARKER` (`name.text`) is not, and its absence
+    here is part of the pin.
+
+    Medication and allergy free text used to be in this set too: the review
+    page read the stored JSON raw, and the reviewed rows carried the upstream
+    `text` into the PDF. The review page now redacts before population, as
+    $populate does, so a row is named from r6/terminology.py by code or not
+    at all. The allergy here is coded, so the form still names it.
 
     Asserting the set EXACTLY is the point: a future change that starts
     rendering some other upstream field (a code `display`, say) fails here
     instead of shipping.
     """
     _, pdf = _download_the_form(client, app, tenant_headers, auth_headers)
-    assert _markers_in(pdf_text(pdf)) == {
-        NAME_MARKER, MED_TEXT_MARKER, ALLERGY_TEXT_MARKER}
+    text = pdf_text(pdf)
+    assert _markers_in(text) == {NAME_MARKER}
+    assert "Allergy to penicillin" in text
 
 
 # ---------------------------------------------------------------------------

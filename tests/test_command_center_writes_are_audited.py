@@ -23,7 +23,6 @@ import re
 
 import pytest
 
-from models import db
 from r6.models import AuditEventRecord
 
 _TENANT = "cc-audit-tenant"
@@ -38,6 +37,8 @@ def step_up(app):
         return generate_step_up_token(_TENANT)
 
 
+# No clearing step: the app fixture builds a fresh schema per test, so the
+# trail starts empty, and audit_events refuses DELETE at the database anyway.
 def _events(app, resource_type=None):
     with app.app_context():
         q = AuditEventRecord.query.filter_by(tenant_id=_TENANT)
@@ -50,17 +51,10 @@ def _events(app, resource_type=None):
         ]
 
 
-def _clear(app):
-    with app.app_context():
-        AuditEventRecord.query.filter_by(tenant_id=_TENANT).delete()
-        db.session.commit()
-
-
 # --- conversations ----------------------------------------------------------
 
 def test_logging_a_conversation_turn_is_audited(app, client, step_up):
     """MUTATION: delete the record_audit_event in api_conversations_create -> red."""
-    _clear(app)
     resp = client.post("/command-center/api/conversations",
                        headers={"X-Step-Up-Token": step_up},
                        json={"tenant_id": _TENANT, "role": "user",
@@ -85,7 +79,6 @@ def test_the_conversation_audit_never_carries_the_message(app, client, step_up):
     the five whole words, and the POST's status was never asserted, so a
     refusal would have satisfied the loop with an empty trail.
     """
-    _clear(app)
     resp = client.post("/command-center/api/conversations",
                        headers={"X-Step-Up-Token": step_up},
                        json={"tenant_id": _TENANT, "role": "user",
@@ -120,7 +113,6 @@ def test_an_idempotent_replay_does_not_audit_a_second_write(app, client, step_up
 
     MUTATION: move record_audit_event above the replay return -> red.
     """
-    _clear(app)
     payload = {"tenant_id": _TENANT, "role": "user", "text": "hello",
                "agent_id": "a1", "request_id": "req-replay-1"}
     first = client.post("/command-center/api/conversations",
@@ -138,7 +130,6 @@ def test_an_idempotent_replay_does_not_audit_a_second_write(app, client, step_up
 
 def test_creating_and_updating_a_task_are_both_audited(app, client, step_up):
     """MUTATION: delete either record_audit_event in the task handlers -> red."""
-    _clear(app)
     created = client.post("/command-center/api/tasks",
                           headers={"X-Step-Up-Token": step_up},
                           json={"tenant_id": _TENANT, "agent_id": "joe",
@@ -163,7 +154,6 @@ def test_the_task_audit_never_carries_the_title(app, client, step_up):
     case, and the same result: green before the additions below, red after.
     This docstring had never been run.
     """
-    _clear(app)
     resp = client.post("/command-center/api/tasks",
                        headers={"X-Step-Up-Token": step_up},
                        json={"tenant_id": _TENANT, "agent_id": "joe",
@@ -189,7 +179,6 @@ def test_a_refused_write_leaves_no_audit_event(app, client):
 
     MUTATION: audit before the _authz_write check -> red.
     """
-    _clear(app)
     resp = client.post("/command-center/api/tasks",
                        json={"tenant_id": _TENANT, "agent_id": "joe",
                              "title": "no credential"})
