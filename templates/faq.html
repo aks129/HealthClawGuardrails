@@ -165,9 +165,9 @@
     <span class="faq-icon"><i class="fas fa-plus"></i></span>
   </div>
   <div class="faq-answer">
-    <p>Yes, at the application layer. SQLAlchemy event listeners fire on <code>before_update</code> and <code>before_delete</code> for <code>AuditEventRecord</code> and raise a <code>RuntimeError</code>, preventing any modification.</p>
-    <p>Every resource access — read, create, update, validate — writes an AuditEvent recording the tenant, agent, resource, and outcome. These cannot be modified through the application.</p>
-    <p><em>Note: a database administrator with direct SQL access could still modify records. For true immutability, store audit events in an append-only ledger or cloud audit service.</em></p>
+    <p>Close to it. The database itself refuses any UPDATE or DELETE on audit rows, on both Postgres and SQLite. Application code cannot change a row, even through raw SQL.</p>
+    <p>Every resource access writes an AuditEvent recording the tenant, agent, resource, and outcome.</p>
+    <p><em>Limits: a database owner can still disable the trigger, and Postgres TRUNCATE bypasses it. For a tamper-evident ledger, also ship audit events to an external append-only store.</em></p>
   </div>
 </div>
 
