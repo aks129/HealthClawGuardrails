@@ -386,10 +386,13 @@ def create_app(config: Config | None = None,
             return redirect(url_for("consent_authorize", req=pending_req))
         acct = current_account()
         data = svc.list_home(acct.id)
+        view = hub_view.build(data, time.time())
         real_open = cfg.real_records_open_for(acct.email)
         return render_template(
             "home.html", me=acct,
-            hub=hub_view.build(data, time.time()),
+            hub=view,
+            banner_records=("your records are connected" if view["has_real"]
+                            else "sample records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
             has_grants=bool(svc.list_grants(acct.id)),
@@ -2008,7 +2011,7 @@ def create_app(config: Config | None = None,
                         "instructions": (
                             f"Text  care {code}  to {cfg.imessage_handle}"
                             if cfg.imessage_handle else
-                            "iMessage isn't configured on this deployment yet.")})
+                            "iMessage isn't available yet.")})
 
     @app.post("/api/surfaces/imessage/bind")
     def imessage_bind():

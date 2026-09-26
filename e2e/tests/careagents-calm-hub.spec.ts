@@ -87,6 +87,11 @@ test.describe('calm hub, real records closed', () => {
     await expect(links.nth(1)).toHaveAttribute('href', '/agents/agent_b/approvals');
   });
 
+  test('the banner names the sample for a new account', async ({ page }) => {
+    await expect(page.locator('.beta-banner'))
+      .toHaveText('Beta: sample records. Things will break, tell us.');
+  });
+
   test('the hub has no horizontal scroll at 375px', async ({ page }) => {
     const wide = await page.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth);

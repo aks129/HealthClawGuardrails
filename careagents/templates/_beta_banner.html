@@ -1,6 +1,7 @@
 {# Beta posture (council ruling 2026-09-02, D3): one line, on the landing
-   page and the hub. Says what the records are and that it will break.
-   Tests pin it under fifteen words — keep it that way. #}
-<p class="beta-banner"><b>Beta:</b> synthetic records only. Things will break —
+   page and the hub. On the hub it names the account's own records (calm
+   hub spec section 7). The landing page has no account. Tests pin it under
+   fifteen words. #}
+<p class="beta-banner"><b>Beta:</b> {{ banner_records | default("synthetic records only") }}. Things will break,
   <a href="https://github.com/aks129/HealthClawGuardrails/issues"
      target="_blank" rel="noopener">tell us</a>.</p>

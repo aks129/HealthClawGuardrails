@@ -722,24 +722,6 @@
     });
   });
 
-  // --- Telegram surface ---
-  const tg = $("tg-surface");
-  if (tg) tg.addEventListener("click", async () => {
-    const firstAgent = document.querySelector(".agent-card");
-    $("surfaces-msg").hidden = true;
-    if (!firstAgent) {
-      return flashSection($("agents"), $("surfaces-msg"),
-        "Create an agent first, then connect Telegram.");
-    }
-    const agentId = new URL(firstAgent.href).searchParams.get("agent");
-    const res = await post("/api/surfaces/telegram", { agent_id: agentId });
-    if (!res.ok) return say(tg, $("surfaces-msg"), res.d.error || "Failed");
-    if (res.d.deep_link) { $("tg-state").textContent = "opening…"; window.open(res.d.deep_link, "_blank", "noopener"); }
-    // Telegram pairs on the bare code, so that is what we show and copy.
-    else showCodeCard(res.d.code, "Send this code to the CareAgents bot with /start:");
-    $("tg-state").textContent = "pending — finish in Telegram";
-  });
-
   // --- iMessage surface (settings page) ---
   // The page names the assistant to bind on the tile itself: settings has
   // no assistant cards to read one from.

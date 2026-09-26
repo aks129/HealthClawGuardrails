@@ -3209,7 +3209,7 @@ def test_refresh_sample_connection_is_honestly_unsupported(app, svc, monkeypatch
     assert r.status_code == 200
     d = r.get_json()
     assert d["unsupported"] is True
-    assert "synthetic" in d["reason"].lower()
+    assert "made up" in d["reason"].lower()
 
 
 def test_refresh_real_connection_returns_reauth_url(app, svc, monkeypatch):
@@ -6003,7 +6003,7 @@ def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
                          re.S).group(1)
     words = re.sub(r"<[^>]+>", "", sentence).split()
     assert len(words) < 15, words
-    assert "Beta" in sentence and "synthetic" in sentence
+    assert "Beta" in sentence and "sample records" in sentence
 
 
 def test_no_canonical_host_means_no_redirect(app):
