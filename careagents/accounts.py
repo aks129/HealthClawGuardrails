@@ -16,7 +16,7 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -36,6 +36,7 @@ MAX_CODE_ATTEMPTS = 5   # burn a login code after this many wrong guesses
 RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts)
                         # while a recent one is still in flight
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
+SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
 
 
 class AuthError(RuntimeError):
@@ -299,6 +300,40 @@ class AccountService:
             s.add(c)
             s.flush()
             return c.id
+
+    def active_sample(self, account_id: str) -> dict | None:
+        """The account's oldest active sample, if any. Older accounts can
+        hold several; none is merged or removed (calm hub spec section 5)."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(account_id=account_id, kind="sample",
+                            status="active")
+                 .order_by(Connection.connected_at.asc()).first())
+            return _conn_dict(c) if c else None
+
+    def claim_sample_start(self, account_id: str) -> bool:
+        """Win the right to mint this account's sample tenant.
+
+        A compare-and-set on the account row: one caller sets the lease and
+        every overlapping caller updates zero rows. A lease older than
+        SAMPLE_LEASE_SECONDS counts as abandoned, so a crash mid-seed cannot
+        lock the sample out for good.
+        """
+        t = now()
+        with self.session() as s:
+            won = (s.query(Account)
+                   .filter(Account.id == account_id,
+                           or_(Account.sample_claim_at.is_(None),
+                               Account.sample_claim_at
+                               < t - SAMPLE_LEASE_SECONDS))
+                   .update({"sample_claim_at": t},
+                           synchronize_session=False))
+            return won == 1
+
+    def release_sample_start(self, account_id: str) -> None:
+        with self.session() as s:
+            (s.query(Account).filter(Account.id == account_id)
+             .update({"sample_claim_at": None}, synchronize_session=False))
 
     def claim_daily_turn(self, account_id: str, cap: int) -> tuple[bool, int]:
         """Count one chat turn against today's cap. Returns (allowed, used).

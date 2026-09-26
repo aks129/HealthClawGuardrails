@@ -40,6 +40,10 @@ class Account(Base):
     email_verified_at = Column(Float, nullable=True)
     created_at = Column(Float, default=now)
     last_login_at = Column(Float, nullable=True)
+    # Sample-connect lease (calm hub spec section 4). Set while this
+    # account's sample tenant is minted and seeded, cleared after. A double
+    # tap races on this row, not on the tenant mint. A timestamp, not PHI.
+    sample_claim_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -194,6 +198,29 @@ class EmailToken(Base):
     attempts = Column(Integer, default=0)
 
 
+#: What a peer adding the same column first looks like: Postgres says the
+#: column "already exists", SQLite says "duplicate column name".
+_ADDED_BY_A_PEER = ("already exists", "duplicate column")
+
+
+def _add_column(engine, table: str, name: str, sql_type: str) -> None:
+    """ADD COLUMN, tolerant of a peer process adding it first.
+
+    Web and worker start together on a deploy (see `_create_tables`), so both
+    can see the column missing and both issue the ALTER. The loser's "already
+    exists" means the column is there, which is what we wanted. Each column
+    gets its own transaction: on Postgres one failed statement aborts the
+    whole transaction it runs in. Any other error is raised.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+    except (OperationalError, ProgrammingError) as exc:
+        if not any(m in str(exc.orig).lower() for m in _ADDED_BY_A_PEER):
+            raise
+
+
 def _ensure_columns(engine) -> None:
     """Idempotently add columns introduced after a table first shipped.
 
@@ -203,6 +230,11 @@ def _ensure_columns(engine) -> None:
     """
     insp = inspect(engine)
     tables = insp.get_table_names()
+    if "ca_accounts" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_accounts")}
+        for name in ("sample_claim_at",):
+            if name not in cols:
+                _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_email_tokens" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
         if "attempts" not in cols:

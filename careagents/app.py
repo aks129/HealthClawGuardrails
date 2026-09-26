@@ -628,11 +628,11 @@ def create_app(config: Config | None = None,
         return jsonify({"connectors": connectors.catalog(
             cfg, real_records=cfg.real_records_open_for(acct.email))})
 
-    @app.post("/api/connections/<connector_id>")
-    @login_required
-    def add_connection(connector_id):
-        acct = current_account()
-        body = request.get_json(silent=True) or {}
+    def _sample_answer(account_id, conn_id, existing):
+        """What a sample tap answers. Task 2 adds the chat redirect."""
+        return {"id": conn_id, "status": "active", "existing": existing}
+
+    def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
         plan = connectors.start(
@@ -662,10 +662,37 @@ def create_app(config: Config | None = None,
                                  status=plan["status"],
                                  provider=plan.get("provider"),
                                  consent_version=consent_version)
+        if connector_id == "sample":
+            return jsonify(_sample_answer(acct.id, cid, False))
         out = {"id": cid, "status": plan["status"]}
         if plan.get("connect_url"):
             out["connect_url"] = plan["connect_url"]
         return jsonify(out)
+
+    @app.post("/api/connections/<connector_id>")
+    @login_required
+    def add_connection(connector_id):
+        acct = current_account()
+        body = request.get_json(silent=True) or {}
+        if connector_id != "sample":
+            return _start_connection(connector_id, acct, body)
+        # One sample per account (calm hub spec section 4). A second tap
+        # opens the one that exists; a tap while another is still seeding
+        # mints nothing.
+        existing = svc.active_sample(acct.id)
+        if existing:
+            return jsonify(_sample_answer(acct.id, existing["id"], True))
+        if not svc.claim_sample_start(acct.id):
+            existing = svc.active_sample(acct.id)
+            if existing:
+                return jsonify(_sample_answer(acct.id, existing["id"], True))
+            return jsonify({"status": "connecting",
+                            "error": "Your sample records are on their way. "
+                                     "Try again in a moment."}), 409
+        try:
+            return _start_connection(connector_id, acct, body)
+        finally:
+            svc.release_sample_start(acct.id)
 
     @app.post("/api/connections/<conn_id>/upload")
     @login_required
