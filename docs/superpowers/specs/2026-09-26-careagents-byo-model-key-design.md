@@ -1,6 +1,7 @@
 # CareAgents: bring your own model key
 
-Status: draft for owner review, 2026-09-26.
+Status: draft for owner review, 2026-09-26. Reviewed by the CTO agent;
+its required changes are applied.
 Scope: spec A of two. Spec B (platform credits) builds on this one.
 
 ## 1. Goal
@@ -18,32 +19,29 @@ nothing usable.
 - Platform credits, checkout and metering. That is spec B.
 - Signing in with a consumer AI subscription. Those plans do not permit it
   for third-party apps. API keys only.
-- Several active keys per account, or per-agent keys. One active key per
-  account covers the need.
-- Choosing among many models in the UI. An optional model name field is
-  enough.
+- Custom or self-hosted endpoints. They carry the whole server-side request
+  forgery surface, so they wait for their own issue and design.
+- More than one key per account, or keys per agent.
 
 ## 3. Today
 
 The model is chosen per deployment. `careagents/config.py` reads
-`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` and `OPENAI_BASE_URL` from the
-environment. `Config.provider` picks Anthropic when its key is set. The
-durable worker passes that one `Config` to `llm.complete` for every account.
+`ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `OPENAI_API_KEY` and
+`OPENAI_BASE_URL` from the environment. The durable worker passes that one
+`Config` to `llm.complete` for every account.
 
 There is no per-account secret storage, and no encryption at rest.
 
 ## 4. Providers at launch
 
-| Provider | Base URL | Real records |
-|---|---|---|
-| `anthropic` | fixed: `https://api.anthropic.com` | allowed |
-| `openai` | fixed: `https://api.openai.com/v1` | allowed |
-| `openai_compatible` | user supplied, https only | sample data only |
+| Provider | Base URL, fixed by us |
+|---|---|
+| `anthropic` | `https://api.anthropic.com` |
+| `openai` | `https://api.openai.com/v1` |
 
-The real-records column applies the rule from #833 per credential. A key on
-a host outside the vetted set still works, but only on sample connections.
-An operator can open a named host with `CARE_REAL_RECORDS_MODEL_HOSTS`, as
-today.
+Both hosts are on the vetted list from #833, so a user's key may serve real
+records wherever the account's real-records setting allows. The user cannot
+change the base URL.
 
 ## 5. Storage
 
@@ -53,19 +51,18 @@ it belongs in CareAgents.
 | Column | Notes |
 |---|---|
 | `id` | `cred_…` |
-| `account_id` | foreign key, indexed |
-| `provider` | one of the three above |
-| `base_url` | only for `openai_compatible` |
+| `account_id` | foreign key, unique: one key per account |
+| `provider` | `anthropic` or `openai` |
 | `model` | optional; provider default when empty |
 | `ciphertext`, `nonce` | the encrypted key |
 | `key_version` | which master key encrypted it |
 | `last4` | the only part ever shown again |
-| `status` | `active`, `invalid` or `revoked` |
-| `created_at`, `validated_at`, `last_used_at` | timestamps |
+| `status` | `active` or `invalid` |
+| `created_at`, `validated_at` | timestamps |
 | `last_error` | a short code such as `rejected` or `out_of_credit` |
 
-At most one `active` row per account, enforced by a partial unique index.
-Replacing a key revokes the old row and deletes its ciphertext.
+Replacing or removing a key deletes the row. The account event log in
+section 10 is the history.
 
 ## 6. Encryption
 
@@ -75,81 +72,87 @@ ciphertext.
 - Algorithm: AES-256-GCM from the `cryptography` package already pinned.
 - Nonce: 96 random bits per encryption.
 - Associated data binds each ciphertext to its row:
-  `careagents:model-key:v1|{account_id}|{credential_id}|{provider}|{base_url}`.
-  A ciphertext copied to another row fails to decrypt.
+  `careagents:model-key:v1|{account_id}|{credential_id}|{provider}`.
+  A ciphertext copied to another row fails to decrypt. Someone who can write
+  the database cannot point a stored key at a different provider.
 - Master keys come from one secret, `CAREAGENTS_KEY_ENCRYPTION_KEYS`, in the
-  form `v2:<base64>,v1:<base64>`. The first encrypts; any listed key decrypts.
-- Rotation: add a new first key, run a re-encrypt script, then drop the old key.
-- If the secret is missing or malformed, the app still boots. Saving a key is
-  refused, and existing keys are unusable, so turns fall back to the operator
-  default. The health check reports the feature as disabled.
+  form `v1:<base64>`. More versions can be listed later; the first encrypts
+  and any listed key decrypts. The re-encrypt script is written at the first
+  real rotation.
+- If the secret is missing or malformed, the app still boots. The "Your AI"
+  panel says the feature is unavailable, and saving is refused.
 
 Moving to a cloud key service later changes only this module's internals.
-The table does not change.
 
 ## 7. Onboarding flow
 
 A "Your AI" panel in account settings.
 
-1. Choose a provider. For `openai_compatible`, enter the base URL.
+1. Choose Anthropic or OpenAI.
 2. Paste the key. Optionally name a model.
-3. Confirm presence. That is a fresh passkey assertion, or a new email code
-   for an account with no passkey. The existing consent flow already has this
-   gate; reuse it.
+3. Confirm presence with a fresh passkey assertion that requires user
+   verification. The challenge has its own session key, is used once, and
+   the verified passkey must belong to the signed-in account. An account
+   without a passkey is asked to add one first.
 4. The server checks the key with one minimal call carrying no health data.
    The call has a short timeout.
 5. On success the key is encrypted and stored. The panel shows the provider,
    model and last four characters.
 
-Removing a key needs no fresh check, since it only reduces access. Replacing
-one repeats steps 1 to 5.
+Removing a key needs no passkey, since it only reduces access. The panel
+reminds the person to also revoke the key at their provider.
 
 ## 8. Using the key
 
-The worker already knows each run's agent, and so its account. Per run it:
+`llm.complete` stops reading model settings from `Config`. It takes a frozen
+`ModelSetting(provider, base_url, api_key, model)` instead. There are two
+ways to build one:
 
-1. loads the account's active credential, if any;
-2. decrypts the key in memory;
-3. builds a per-run model setting from it and calls `llm.complete`;
-4. drops the plaintext when the turn ends.
+- from the account's credential, decrypted per turn; or
+- from the operator's environment, for accounts with no credential row.
 
-With no active credential, the turn uses the operator's default, as today.
-Spec B replaces that default with credits.
+This matters because the Anthropic path prefers the operator's OAuth token
+when one is set. A copied `Config` with only the key swapped would silently
+use the operator's token. The Anthropic client is also built with an explicit
+base URL, so `ANTHROPIC_BASE_URL` in the environment cannot redirect a user's
+key.
 
-The Anthropic client is built with an explicit base URL. Otherwise the SDK
-reads `ANTHROPIC_BASE_URL` from the environment and could send a user's key
-to another host.
+The worker call path uses `ModelSetting`. The unused synchronous path,
+`run_turn` in `careagents/agent.py`, is deleted rather than migrated.
 
-## 9. Failure handling
+The plaintext key lives only in the `ModelSetting` for one turn.
+
+## 9. No silent fallback
+
+If an account has a credential row, its turns run on that key or not at all.
 
 | Event | What happens | What the person sees |
 |---|---|---|
 | Provider rejects the key (401/403) | status becomes `invalid` | "Your AI key was rejected. Update it in Settings." |
+| Key is `invalid`, or decrypt fails, or the master key is missing | turn refused before any call | "Your AI key is unavailable. Check it in Settings." |
 | Provider says out of credit | `last_error` set, key kept | "Your AI provider account is out of credit." |
 | Rate limited | existing retry path | existing rate-limit text |
-| Real-record connection, key off the vetted list | turn refused before any call | "This key can only be used with sample records." |
-| Master key missing | operator default used | nothing new |
 
-The person's message distinguishes their provider from ours. Spec B will
-need that distinction.
+Only an account with no credential row uses the operator default. Falling
+back quietly would send a person's data under terms they did not choose, at
+the operator's cost.
 
 ## 10. Security controls
 
-- **Never returned.** No endpoint, page or export includes the key. Tests
-  assert this for every account API response.
+- **Never returned.** No endpoint, page or export includes the key.
+- **Never in the model's context.** The key never enters the system prompt,
+  messages or tool results. A model cannot leak what it was never given.
+- **Never stored outside its row.** Run events, tool-call records, the
+  transcript store and HealthClaw never receive it.
 - **Never logged.** A logging filter masks key-shaped strings (`sk-…`,
-  `sk-ant-…`) and the key in use for the current turn. Provider exceptions are reduced to status and error code before
-  anything is logged or stored.
-- **Never in run events.** Run events and tool-call records carry no key
-  material. HealthClaw never receives the key.
+  `sk-ant-…`). Provider exceptions are reduced to status and error code
+  before anything is logged or stored.
 - **Fresh presence** to add or replace a key, as in section 7.
-- **Rate limit** on key validation, per account and per IP. It stops the
-  endpoint being used to test stolen keys.
-- **Base URL checks** for `openai_compatible`: https only, and the host
-  must resolve to public addresses. The check runs again at call time,
-  which closes DNS rebinding.
-- **Deletion.** Account deletion deletes credentials. Revocation deletes
-  ciphertext immediately.
+- **Rate limit** on key validation, per account. It stops the endpoint being
+  used to test stolen keys.
+- **Deletion.** Removing a key or deleting the account deletes the row.
+  Database backups keep the ciphertext until they expire. Rotating the master
+  key is what makes those copies unreadable.
 - **Account event log.** Added, replaced, removed, rejected. Each entry has
   a timestamp, provider and last four only.
 
@@ -166,22 +169,27 @@ Behind `CARE_BYO_KEYS`, off by default. Owner steps before turning it on:
 ## 12. Testing
 
 - Crypto: round trip, tampered ciphertext, swapped associated data, wrong
-  master key, rotation across two versions.
+  master key, a second key version.
 - The database holds no plaintext key after save, found by searching the
   raw row.
 - No account API response contains the key.
+- The key never appears in `system`, `messages` or tool results given to
+  `llm.complete`, in run events, or in the transcript store.
 - Logs captured during save, use and failure contain no key.
-- Add and replace fail without fresh presence.
-- The worker calls a fake provider with the user's key, and with the
-  operator key when none is set.
-- A rejected key flips to `invalid` and shows the right message.
-- Real-records rule per credential, including a lookalike host.
-- Base URL checks: http, private IP, loopback, and a host that resolves
-  private at call time.
-- Mutation evidence for the associated-data binding, the fresh-presence
-  gate and the log filter.
+- Adding or replacing fails without a fresh, verified passkey from the same
+  account.
+- The worker calls a fake provider with the user's key. With no credential
+  row it uses the operator setting. With an operator OAuth token set, a
+  user's key still wins.
+- Every row in section 9: each refusal happens before any provider call.
+- Mutation evidence for the associated-data binding, the presence gate, the
+  no-fallback rule and the log filter.
 
-## 13. Open questions for the owner
+## 13. Later, not in this spec
 
-- Should an account with no key and no credits still get the operator
-  default once spec B ships? This spec assumes yes until then.
+- Custom endpoints, with pinned public addresses, port 443, no redirects and
+  sample data only.
+- A sealed-box split, so the web process can encrypt but only the worker can
+  decrypt.
+- Spec B, platform credits, which replaces the operator default for accounts
+  with no key.
