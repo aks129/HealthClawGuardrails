@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urlparse
 
 from careagents import _build
 
 logger = logging.getLogger(__name__)
+
+# Model hosts that may serve chat while real records are open (see
+# CARE_REAL_RECORDS below). Operators extend it by name, never by pattern.
+_VETTED_MODEL_HOSTS = frozenset({"api.anthropic.com", "api.openai.com"})
 
 
 class ConfigError(RuntimeError):
@@ -141,6 +146,28 @@ class Config:
                             or "https://api.openai.com/v1").rstrip("/")
         self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5")
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
+        # With real records open, chat turns carry redacted-but-real health
+        # data to the model host, so that host must be vetted: Anthropic,
+        # api.openai.com, or one the operator names in
+        # CARE_REAL_RECORDS_MODEL_HOSTS (naming it is the deliberate act).
+        # Exact hostname match. The Anthropic SDK honours ANTHROPIC_BASE_URL
+        # from the environment, so that is the Anthropic host when set.
+        if self.real_records != "off":
+            serving_url = (
+                (e.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com")
+                if self.provider == "anthropic" else self.openai_base)
+            model_host = urlparse(serving_url).hostname
+            vetted = _VETTED_MODEL_HOSTS | {
+                x.strip().lower()
+                for x in (e.get("CARE_REAL_RECORDS_MODEL_HOSTS") or "")
+                .split(",") if x.strip()}
+            if model_host not in vetted:
+                # Host only: a base URL can carry credentials.
+                raise ConfigError(
+                    f"CARE_REAL_RECORDS={self.real_records} but chat would "
+                    f"go to {self.provider} at unvetted host {model_host!r}; "
+                    "use a vetted provider or name the host in "
+                    "CARE_REAL_RECORDS_MODEL_HOSTS")
 
         # Chat rate limit: turns per window per session (LLM spend bound on a
         # public, unauthenticated site).
