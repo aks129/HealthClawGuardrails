@@ -932,6 +932,10 @@ sits in the property name printed on every passing scorecard. Either the probe
 or the name should change. Severity: medium — it is a claim in a forwardable
 artifact.
 
+Update: the database now refuses UPDATE and DELETE on audit rows (migration
+0009, tested in `tests/test_database_migrations.py`). No conformance probe
+exercises it yet, so the scorecard claim is still unverified by this suite.
+
 **G-C — this document is a public surface the de-identification language guard
 does not open.** `tests/test_deidentification_language.py` scans a fixed list
 plus `docs/blog/*.md` and `docs/recipes/*.md`. `docs/specs/*.md` is in neither.
