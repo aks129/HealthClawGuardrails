@@ -274,6 +274,13 @@ class AccountService:
             return (s.query(Passkey)
                     .filter_by(account_id=account_id).first() is not None)
 
+    def list_passkeys(self, account_id: str) -> list[dict]:
+        with self.session() as s:
+            rows = (s.query(Passkey).filter_by(account_id=account_id)
+                    .order_by(Passkey.created_at.asc()).all())
+            return [{"id": p.id, "name": p.name, "created_at": p.created_at}
+                    for p in rows]
+
     # --- connections / agents / surfaces (thin CRUD) ------------------------
 
     def list_home(self, account_id: str) -> dict:

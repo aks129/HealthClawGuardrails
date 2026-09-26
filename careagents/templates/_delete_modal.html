@@ -1,0 +1,19 @@
+<!-- Delete confirmation. Same copy and the same typed-DELETE requirement as
+     the prompt() it replaces — the friction is the point, only the container
+     changed. #delete-confirm ships disabled; home.js re-checks on click too. -->
+<div class="modal" id="delete-modal" role="dialog" aria-modal="true"
+     aria-labelledby="delete-title" hidden>
+  <div class="modal-card">
+    <h3 id="delete-title">Delete these records?</h3>
+    <p class="delete-warn">This permanently deletes the records in
+      "<span id="delete-label"></span>".</p>
+    <p class="delete-warn">The PHI-free audit trail (who accessed what) is kept
+      as the record of what happened, and this deletion is added to it.</p>
+    <label class="field-label" for="delete-input">Type DELETE to confirm:</label>
+    <input class="field" id="delete-input" autocomplete="off"
+           autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <button type="button" class="btn-primary btn-block" id="delete-confirm"
+            disabled>Delete these records</button>
+    <button type="button" class="linkish" id="delete-cancel">Cancel</button>
+  </div>
+</div>

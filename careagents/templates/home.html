@@ -8,11 +8,9 @@
   <div class="hub-head">
     <div>
       <h1>Welcome back</h1>
-      <p class="hub-sub">{{ me.email }}
-        {% if not has_passkey %}· <a href="/auth?enroll=1">add a passkey</a>{% endif %}
-      </p>
+      <p class="hub-sub">{{ me.email }}</p>
     </div>
-    <form method="post" action="/logout"><button class="pill">Sign out</button></form>
+    <a class="pill" href="/settings">Settings</a>
   </div>
 
   {% if not connections %}
@@ -76,22 +74,8 @@
       </div>
       {% endfor %}
     </div>
-    {% if grants %}
-    <h3 class="add-heading">Shared with other apps</h3>
-    <div class="card-grid" id="grants">
-      {% for g in grants %}
-      <div class="hub-card grant-card" data-grant="{{ g.id }}">
-        <div class="hub-card-name">{{ g.client_name }}</div>
-        <div class="hub-card-sub">reads {{ g.tenant_label or 'one connection' }} through HealthClaw</div>
-        <span class="status status-{{ g.status }}">{{ g.status }}</span>
-        {% if g.status != 'revoked' %}
-        <button type="button" class="grant-revoke" data-grant="{{ g.id }}"
-                title="Stop this app reading your records">Revoke</button>
-        {% endif %}
-        <span class="grant-msg" role="status" aria-live="polite" hidden></span>
-      </div>
-      {% endfor %}
-    </div>
+    {% if has_grants %}
+    <p class="hub-link"><a href="/settings#grants-section">Apps you've shared records with</a></p>
     {% endif %}
     <h3 class="add-heading">Connect records</h3>
     <div class="marketplace" id="marketplace">
@@ -124,37 +108,6 @@
     {% endif %}
   </section>
 
-  <!-- SURFACES -->
-  <section class="hub-section">
-    <div class="section-head"><h2>Where you can reach your agent</h2></div>
-    <div class="surface-row">
-      <div class="surface on"><b>Web</b><span>always on</span></div>
-      {# Not serviced in the beta (#536, D6): no webhook, no poller. No id, so
-         home.js has nothing to bind — the tile is a label, not a control. #}
-      <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
-      {% if imessage_handle %}
-      <div class="surface" id="im-surface"><b>iMessage</b>
-        <span id="im-state">connect →</span></div>
-      {% else %}
-      <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
-      {% endif %}
-      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
-    </div>
-    {# The refusal for these surfaces, and the words explaining every section
-       flash, arrive here. Same live-region treatment as #connect-msg and
-       .conn-refresh-msg; announce() shows it before writing into it. #}
-    <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
-       hidden></p>
-  </section>
-
-  <section class="leaving">
-    <h2>Leaving</h2>
-    <p>Deleting your account deletes the records behind every connection
-      first, then your email, passkey and consents. The PHI-free audit trail
-      stays as the record of who accessed what.</p>
-    <button class="pill danger" id="account-delete" type="button">Delete my account</button>
-    <p class="inline-msg" id="account-msg" role="status" aria-live="polite" hidden></p>
-  </section>
 </main>
 
 <!-- Consent card: shown before any REAL-record connection starts.
@@ -244,39 +197,7 @@
   </div>
 </div>
 
-<!-- Pairing code card. What is shown in #pair-code is byte-identical to what
-     Copy writes, so the press-and-hold fallback can't copy the wrong string. -->
-<div class="modal" id="code-card" role="dialog" aria-modal="true"
-     aria-labelledby="code-title" hidden>
-  <div class="modal-card">
-    <h3 id="code-title">Your pairing code</h3>
-    <p id="code-instructions"></p>
-    <div id="pair-code"></div>
-    <button type="button" class="btn-secondary btn-block" id="copy-code">
-      <span id="copy-state">Copy</span></button>
-    <button type="button" class="btn-primary btn-block" id="code-done">Done</button>
-  </div>
-</div>
-
-<!-- Delete confirmation. Same copy and the same typed-DELETE requirement as
-     the prompt() it replaces — the friction is the point, only the container
-     changed. #delete-confirm ships disabled; home.js re-checks on click too. -->
-<div class="modal" id="delete-modal" role="dialog" aria-modal="true"
-     aria-labelledby="delete-title" hidden>
-  <div class="modal-card">
-    <h3 id="delete-title">Delete these records?</h3>
-    <p class="delete-warn">This permanently deletes the records in
-      "<span id="delete-label"></span>".</p>
-    <p class="delete-warn">The PHI-free audit trail (who accessed what) is kept
-      as the record of what happened, and this deletion is added to it.</p>
-    <label class="field-label" for="delete-input">Type DELETE to confirm:</label>
-    <input class="field" id="delete-input" autocomplete="off"
-           autocapitalize="characters" autocorrect="off" spellcheck="false">
-    <button type="button" class="btn-primary btn-block" id="delete-confirm"
-            disabled>Delete these records</button>
-    <button type="button" class="linkish" id="delete-cancel">Cancel</button>
-  </div>
-</div>
+{% include "_delete_modal.html" %}
 
 <!-- Hidden file input reused by every "Upload records" button on `direct`
      connections. The button's click handler assigns itself as the

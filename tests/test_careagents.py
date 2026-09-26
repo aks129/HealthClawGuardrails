@@ -2825,7 +2825,7 @@ def test_plain_auth_still_sends_a_signed_in_person_home(app, svc, monkeypatch):
 def test_the_hub_links_to_a_reachable_enrolment_page(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    assert "/auth?enroll=1" in c.get("/home").get_data(as_text=True)
+    assert "/auth?enroll=1" in c.get("/settings").get_data(as_text=True)
 
 
 def test_passkey_registration_and_login_via_faked_verification(app, svc, monkeypatch):
@@ -5232,6 +5232,9 @@ _CA = _pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_CA / "static" / "home.js").read_text()
 _HOME_HTML = (_CA / "templates" / "home.html").read_text()
 _CSS = (_CA / "static" / "careagents.css").read_text()
+_SETTINGS_HTML = (_CA / "templates" / "settings.html").read_text()
+_HUB_PAGES = (_HOME_HTML + _SETTINGS_HTML
+              + (_CA / "templates" / "_delete_modal.html").read_text())
 _AUTH_JS = (_CA / "static" / "auth.js").read_text()
 _AUTH_HTML = (_CA / "templates" / "auth.html").read_text()
 
@@ -5300,7 +5303,7 @@ def test_typed_delete_stays_double_gated():
     """Three layers, all load-bearing. Deleting records is irreversible, and a
     markup tidy-up that drops `disabled` must not silently make it one tap."""
     # (a) the button ships disabled in the static markup
-    confirm = _HOME_HTML.split('id="delete-confirm"')[1][:120]
+    confirm = _HUB_PAGES.split('id="delete-confirm"')[1][:120]
     assert "disabled" in confirm
     # (b) enabled only on an exact, case-sensitive match
     assert 'input.value !== "DELETE"' in _HOME_JS
@@ -5315,8 +5318,8 @@ def test_typed_delete_stays_double_gated():
 def test_delete_confirmation_is_not_a_form_or_native_dialog():
     """A <form> would let Enter submit past the JS check; <dialog>/showModal
     brings a focus trap that breaks VoiceOver on iOS."""
-    assert "<form" not in _HOME_HTML.split('id="delete-modal"')[1].split("</div>\n\n")[0]
-    assert "<dialog" not in _HOME_HTML
+    assert "<form" not in _HUB_PAGES.split('id="delete-modal"')[1].split("</div>\n\n")[0]
+    assert "<dialog" not in _HUB_PAGES
     assert "showModal" not in _HOME_JS
 
 
@@ -5374,7 +5377,7 @@ def test_hub_dialog_selector_contract():
                 'id="im-state"', 'id="delete-modal"',
                 'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
                 'id="delete-cancel"'):
-        assert sel in _HOME_HTML, sel
+        assert sel in _HUB_PAGES, sel
 
 
 def test_a_background_message_does_not_scroll_the_page_under_an_open_modal():
@@ -5395,7 +5398,7 @@ def test_a_background_message_does_not_scroll_the_page_under_an_open_modal():
     assert "scrollIntoView" in body
     assert ".modal:not([hidden])" in body[:body.index("scrollIntoView")]
     # The three facts that selector rests on, pinned where they live.
-    opens = re.findall(r'<div class="modal(?: [\w-]+)*"[^>]*>', _HOME_HTML)
+    opens = re.findall(r'<div class="modal(?: [\w-]+)*"[^>]*>', _HUB_PAGES)
     assert opens
     for tag in opens:
         assert " hidden" in tag, tag
@@ -5980,7 +5983,7 @@ def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,
     # is not a control: no id for home.js to bind, no "connect" affordance.
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    body = c.get("/home").get_data(as_text=True)
+    body = c.get("/settings").get_data(as_text=True)
     assert 'id="tg-surface"' not in body
     assert 'id="tg-state"' not in body
     start = body.index("<b>Telegram</b>")
@@ -6285,7 +6288,7 @@ def test_the_surfaces_message_is_a_live_region_too():
     treatment to one of the page's two message channels and the PR's framing
     implied there was only one (#590).
     """
-    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
+    tag = _SETTINGS_HTML[_SETTINGS_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
     tag = tag[:tag.index(">") + 1]
     assert 'role="status"' in tag, tag
     assert 'aria-live="polite"' in tag, tag

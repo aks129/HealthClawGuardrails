@@ -388,15 +388,25 @@ def create_app(config: Config | None = None,
         return render_template(
             "home.html", me=acct, personas=PERSONAS,
             connections=data["connections"], agents=data["agents"],
-            surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
-            grants=_grants_with_labels(svc.list_grants(acct.id), data["connections"]),
-            telegram_bot=cfg.telegram_bot,
-            imessage_handle=cfg.imessage_handle,
+            has_grants=bool(svc.list_grants(acct.id)),
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             advisors=advisors.catalog(),
             catalog=connectors.catalog(
                 cfg, real_records=cfg.real_records_open_for(acct.email)))
+
+    @app.get("/settings")
+    @login_required
+    def settings():
+        acct = current_account()
+        data = svc.list_home(acct.id)
+        return render_template(
+            "settings.html", me=acct,
+            passkeys=svc.list_passkeys(acct.id),
+            grants=_grants_with_labels(svc.list_grants(acct.id),
+                                       data["connections"]),
+            first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
+            imessage_handle=cfg.imessage_handle)
 
     @app.post("/logout")
     def logout():

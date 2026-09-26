@@ -599,28 +599,30 @@
     modal.hidden = false;
     $("a-name").focus();
   }
-  $("new-agent-btn").addEventListener("click", openAgentModal);
-  const emptyCta = $("empty-new-agent");
-  if (emptyCta) emptyCta.addEventListener("click", openAgentModal);
+  if (modal) {
+    $("new-agent-btn").addEventListener("click", openAgentModal);
+    const emptyCta = $("empty-new-agent");
+    if (emptyCta) emptyCta.addEventListener("click", openAgentModal);
 
-  $("close-modal").addEventListener("click", () => (modal.hidden = true));
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
-  $("create-agent").addEventListener("click", async () => {
-    const conn = $("a-conn").value;
-    if (!conn) { const e = $("modal-err"); e.textContent = "Connect records first."; e.hidden = false; return; }
-    const persona = document.querySelector('input[name="ag-persona"]:checked');
-    const btn = $("create-agent");
-    btn.disabled = true; btn.textContent = "Creating…";
-    const res = await post("/api/agents", {
-      name: $("a-name").value.trim() || "Juniper",
-      persona: persona ? persona.value : "calm",
-      advisor: ($("a-advisor") && $("a-advisor").value) || "general",
-      connection_id: conn,
+    $("close-modal").addEventListener("click", () => (modal.hidden = true));
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+    $("create-agent").addEventListener("click", async () => {
+      const conn = $("a-conn").value;
+      if (!conn) { const e = $("modal-err"); e.textContent = "Connect records first."; e.hidden = false; return; }
+      const persona = document.querySelector('input[name="ag-persona"]:checked');
+      const btn = $("create-agent");
+      btn.disabled = true; btn.textContent = "Creating…";
+      const res = await post("/api/agents", {
+        name: $("a-name").value.trim() || "Juniper",
+        persona: persona ? persona.value : "calm",
+        advisor: ($("a-advisor") && $("a-advisor").value) || "general",
+        connection_id: conn,
+      });
+      if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }
+      btn.disabled = false; btn.textContent = "Create";
+      const e = $("modal-err"); e.textContent = res.d.error || "Failed"; e.hidden = false;
     });
-    if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }
-    btn.disabled = false; btn.textContent = "Create";
-    const e = $("modal-err"); e.textContent = res.d.error || "Failed"; e.hidden = false;
-  });
+  }
 
   // --- Telegram surface ---
   const tg = $("tg-surface");
@@ -640,16 +642,17 @@
     $("tg-state").textContent = "pending — finish in Telegram";
   });
 
-  // --- iMessage surface ---
+  // --- iMessage surface (settings page) ---
+  // The page names the assistant to bind on the tile itself: settings has
+  // no assistant cards to read one from.
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
-    const firstAgent = document.querySelector(".agent-card");
     $("surfaces-msg").hidden = true;
-    if (!firstAgent) {
-      return flashSection($("agents"), $("surfaces-msg"),
-        "Create an agent first, then connect iMessage.");
+    const agentId = im.dataset.agent;
+    if (!agentId) {
+      return say(im, $("surfaces-msg"),
+        "Start a chat with your assistant first, then connect iMessage.");
     }
-    const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
     if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
     $("im-state").textContent = "pending — text to finish";

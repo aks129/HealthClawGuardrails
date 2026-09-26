@@ -625,3 +625,8 @@ textarea:focus-visible {
 .leaving p { color: var(--ink-soft); font-size: 13.5px; max-width: 60ch; }
 .pill.danger { border-style: dashed; color: var(--clay-deep); }
 .pill.danger:hover { border-style: solid; border-color: var(--clay-deep); }
+
+/* --- settings (calm hub, 2026-09-26) ------------------------------------- */
+.settings-list { margin: 0 0 12px; padding-left: 20px; }
+.settings-list li { margin: 4px 0; }
+.hub-link { margin: 12px 0 0; }
