@@ -1,6 +1,7 @@
 # CareAgents: a calm hub and a real connector menu
 
-Status: draft for owner review, 2026-09-26.
+Status: draft for owner review, 2026-09-26. Reviewed by the product agent;
+its required changes are applied.
 Scope: phase 1 of the stable-beta plan. Phase 2 opens real records.
 
 ## 1. Goal
@@ -32,14 +33,18 @@ person approves every outbound form, call or text. The hub should show it.
 
 ## 3. The hub, top to bottom
 
-1. **Waiting for you.** Shown only when something is pending: "2 requests
-   waiting for your approval", linking to the queue. First on the page.
+1. **Waiting for you.** Always shown. With nothing pending it is one line:
+   "Nothing yet. Anything your assistant prepares, like a form or a
+   reminder, waits here for your OK." With requests pending it becomes a
+   band: "2 requests waiting for your approval", linking to the queue. If
+   the count cannot be fetched it says "Couldn't check for requests", never
+   zero.
 2. **Your assistant.** One card per agent. It shows the name, which records
    it reads, and two actions: "Chat" and "Visit brief". A menu holds Rename,
    Change records, and Delete.
 3. **Your records.** One card per active connection. It shows the source, a
-   record count and "Updated 3 days ago". Actions: Refresh or Upload, and
-   Disconnect.
+   record count and "Updated 3 days ago". The sample card carries a
+   "Made-up records" badge.
 4. **Add records.** The connector menu, section 4.
 5. **Past connections.** Revoked connections, collapsed by default, each
    with Delete.
@@ -49,42 +54,53 @@ Grants stay one tap away as a hub link when any exist.
 
 ## 4. The connector menu
 
-Grouped by what a person is trying to do. Each group lists its sources with
-one status chip: **Connected**, **Available** or **Coming soon**.
+The menu has two states, decided per account by the real-records setting.
+
+**Real records closed** (most beta accounts):
+
+- One full-width primary action: "Explore with made-up records".
+- One line underneath: "Coming for invited testers: your doctor's records,
+  Apple Health and wearables, uploading a file from your patient portal."
+- No groups and no coming-soon tiles.
+
+**Real records open:**
 
 | Group | Sources |
 |---|---|
-| Find my records | Fasten: "Find my records at my doctor or hospital" |
-| Bring a file | Upload a FHIR file; SMART Health Link |
-| Devices and apps | Apple Health and wearables |
-| Other record services | HealthEx; Health Bank One |
-| Practice | Sample records |
+| Find my records | Fasten: "Find my records at my doctor or hospital", full width |
+| Bring a file | "Upload a file from your patient portal" |
+| Devices and apps | Apple Health and wearables, when enabled |
 
-Rules:
+Each source shows one status chip: **Connected** or **Available**. Sources
+not yet built (SMART Health Link, HealthEx, Health Bank One, and wearables
+while disabled) share one "Coming later" line under the groups. The sample
+stays available as a small link.
 
-- **Fasten leads.** When real records are open for the account, it is a
-  full-width button above the groups.
-- **Closed is not dead.** When real records are closed for the account, the
-  real-record sources show "Coming soon" with one shared line: "Real
-  records open to invited testers first."
-- **Coming soon collapses.** A group with nothing available shows its chips
-  on one line, not full tiles.
+Rules for both states:
+
 - **No operator words.** "Not configured on this deployment" and "sidecar
-  not wired" become "Coming soon". The reason goes to the server log.
+  not wired" never reach a person. The reason goes to the server log.
 - **The sample is one per account.** Tapping it again opens the existing
   sample. The server returns the existing active sample connection instead
   of minting a new tenant.
 
-## 5. One assistant by default
+## 5. One assistant, straight into chat
 
-- When an account's first connection becomes active, create one agent for
-  it: default name "Juniper", calm voice, no specialty.
-- "Add another assistant" stays, as a small link under the cards.
+- The first time a connection becomes active, create one agent for it:
+  default name "Juniper", calm voice, no specialty. That happens in two
+  places: the sample connect handler, and the ingest-complete path for
+  real records.
+- After the sample connects, go straight to chat. The first starter prompt
+  is "Fill out my intake form for a new doctor". That path ends in an
+  approval, so the first five minutes show what the product is for.
+- When a real connection first becomes active and the agent reads the
+  sample, the hub asks once: "Switch Juniper to your records?"
 - "Change records" moves an agent to another of the account's active
   connections. The server checks ownership, as `create_agent` does today.
 - Delete removes the agent only. Its conversation stays in HealthClaw until
   the connection is deleted, as today.
-- The create form's record picker lists active connections only.
+- The hub has no "add another assistant" control in phase 1. The API keeps
+  supporting more than one.
 
 Nobody's existing agents are merged or deleted. The first-run default only
 applies to accounts with no agents.
@@ -93,10 +109,9 @@ applies to accounts with no agents.
 
 A new `/settings` page:
 
-- Passkeys: list, add, remove (the last one needs another sign-in method).
+- Passkeys: list and add.
 - Where you can reach your assistant: the surfaces now on the hub.
 - Apps you have shared records with: the grants now on the hub.
-- Your AI: a placeholder until the bring-your-own-key spec ships.
 - Sign out, and Delete my account.
 
 ## 7. Copy
@@ -105,6 +120,7 @@ A new `/settings` page:
 |---|---|
 | Banner "synthetic records only" for every account | Matches the account: "Sample records" or "Your records are connected" |
 | "Your provider (verified)" / "My health provider" | "Find my records" and, once connected, the provider's name |
+| "Upload records" (FHIR bundle) | "Upload a file from your patient portal" |
 | "no signup" on the sample tile | "Made-up records to explore safely" |
 | Status words `active`, `pending`, `empty`, `revoked` | "Connected", "Connecting…", "No records yet", in past connections only |
 | Sample card "Disconnect: stop new records arriving" | Sample cards offer Delete only |
@@ -118,6 +134,7 @@ Telegram handler bound to a removed element in `home.js`.
 - Identity-first record discovery. That is phase 2, after the Fasten fix.
 - Search inside the connector menu. There are too few sources to need it.
 - A waitlist for coming-soon sources.
+- A "Your AI" settings section, added when #834 ships.
 - The bring-your-own-key feature (its own spec, #834).
 
 ## 9. Testing
@@ -127,8 +144,11 @@ Telegram handler bound to a removed element in `home.js`.
 - Change records refuses another account's connection.
 - The hub shows no revoked connection outside past connections.
 - Catalog output contains none of the operator phrases in section 4.
-- Pending-approval count matches the approvals endpoint.
+- Pending-approval count matches the approvals endpoint; a failed count
+  never renders as zero.
+- With real records closed, the menu shows no coming-soon tiles.
+- The sample connect lands in chat with the intake-form starter first.
 - Every status word in section 7 renders as its plain-language form.
-- A browser run of the new-account journey, captured before and after, on
-  synthetic records only.
+- A browser run of the new-account journey at phone width, captured before
+  and after, on synthetic records only.
 - Mutation evidence for the sample dedupe and the ownership check.
