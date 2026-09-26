@@ -54,7 +54,7 @@ const REFUSED =
   'Start with the sample records.';
 
 /** connectors.py:94 — the blurb that replaces the live one when closed. */
-const CLOSED_BLURB = 'Not open in this beta — start with the sample records.';
+const CLOSED_BLURB = 'Not open in this beta. Start with the sample records.';
 
 /** _beta_banner.html — eleven words, on the landing page and the hub. */
 const BANNER = 'Beta: synthetic records only. Things will break — tell us.';
@@ -109,11 +109,11 @@ test.describe('CareAgents hub — real records closed (CARE_REAL_RECORDS off)', 
     // The labels stay — a tester should see the source exists and is not yet
     // open, rather than wonder where it went.
     await expect(tile(page, 'fasten').locator('.connector-label'))
-      .toHaveText('Your provider (verified)');
+      .toHaveText('Find my records at my doctor or hospital');
     await expect(tile(page, 'wearable').locator('.connector-label'))
-      .toHaveText('Apple Health & wearables');
+      .toHaveText('Apple Health and wearables');
     await expect(tile(page, 'direct').locator('.connector-label'))
-      .toHaveText('Upload records');
+      .toHaveText('Upload a file from your patient portal');
   });
 
   test('tapping a closed tile shows the refusal under that tile', async ({
@@ -150,7 +150,7 @@ test.describe('CareAgents hub — real records closed (CARE_REAL_RECORDS off)', 
       await expect(t).toBeVisible();
       await expect(t).toHaveClass(/tier-live/);
       await expect(t.locator('.connector-label'))
-        .toHaveText('Try it with sample records');
+        .toHaveText('Explore with made-up records');
       // A live tile carries no tag at all — nothing telling a tester to wait.
       await expect(t.locator('.connector-tag')).toHaveCount(0);
       expect(await t.getAttribute('data-soon')).toBeNull();
@@ -274,8 +274,7 @@ test.describe('CareAgents hub — CARE_REAL_RECORDS=allowlist', () => {
       .toHaveAttribute('data-providers', /Apple Health/);
     // The live blurb is back — the beta closure sentence is gone.
     await expect(tile(page, 'fasten').locator('.connector-blurb')).toHaveText(
-      'Log in to your clinic or hospital portal. Verified; we never see ' +
-      'your password.');
+      'Sign in to your patient portal. We never see your password.');
     await expect(page.locator('.marketplace')).not.toContainText(CLOSED_BLURB);
   });
 

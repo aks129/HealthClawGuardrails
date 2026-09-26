@@ -1,0 +1,28 @@
+# CareAgents calm hub, PR 1: mutation runs
+# Tree: 4ac4f31. PYTHONDONTWRITEBYTECODE=1, __pycache__ purged
+# before each run, replacement count asserted == 1, restored with git checkout --.
+
+== M1: drop the first active_sample early return
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_sample.py::test_a_second_tap_returns_the_existing_sample
+FAILED tests/test_careagents_calm_hub_sample.py::test_an_account_with_old_duplicate_samples_keeps_them_all
+2 failed, 4 passed in 0.81s
+
+== M2: claim_sample_start always wins
+mutated careagents/accounts.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_sample.py::test_a_tap_during_seeding_mints_no_second_tenant
+FAILED tests/test_careagents_calm_hub_sample.py::test_the_sample_lease_is_single_winner_and_expires
+2 failed, 4 passed in 0.71s
+
+== control: unmutated tree
+6 passed in 0.66s
+
+== M3: move_agent ignores the connection's owner (tree 4f99e1b)
+mutated careagents/accounts.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_agent_menu.py::test_change_records_refuses_another_accounts_connection
+FAILED tests/test_careagents_calm_hub_agent_menu.py::test_move_agent_checks_ownership_in_the_service
+2 failed, 5 passed in 0.76s
+
+== control: unmutated tree
+7 passed in 0.72s
+
