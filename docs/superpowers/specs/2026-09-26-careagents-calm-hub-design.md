@@ -65,16 +65,27 @@ The menu has two states, decided per account by the real-records setting.
 
 **Real records open:**
 
-| Group | Sources |
-|---|---|
-| Find my records | Fasten: "Find my records at my doctor or hospital", full width |
-| Bring a file | "Upload a file from your patient portal" |
-| Devices and apps | Apple Health and wearables, when enabled |
+| Group | Source | How it connects today |
+|---|---|---|
+| Find my records | Fasten: "Find my records at my doctor or hospital" (full width) | Fasten Connect, in the app |
+| Find my records | Epic MyChart and other portals, via Health Skillz | Sign in there, download the file, upload it here |
+| Record services | Health Bank One | OAuth flow exists (`/shc/hbo/callback`), run by the bot today |
+| Record services | HealthEx | Arrives through the HealthEx connector in Claude today |
+| Bring a file | "Upload a file from your patient portal" | In the app |
+| Bring a file | SMART Health Link | Sharing works; importing waits on the decoder (#225) |
+| Devices and apps | Apple Health and wearables | In the app, when enabled |
 
-Each source shows one status chip: **Connected** or **Available**. Sources
-not yet built (SMART Health Link, HealthEx, Health Bank One, and wearables
-while disabled) share one "Coming later" line under the groups. The sample
-stays available as a small link.
+Each source shows one status chip: **Connected**, **Available** or **Coming
+soon**. A source is **Available** only when a person can finish it inside
+CareAgents and the import lands in their own tenant. That is proven by a
+test that runs the full import. Until then it shows **Coming soon**.
+
+Phase 1 makes three sources available: Fasten, file upload, and Health
+Skillz as a guided two-step flow through file upload. Health Bank One,
+HealthEx and SMART Health Link import each get their own wiring task, in
+that order. Each flips to Available as its test passes.
+
+The sample stays available as a small link.
 
 Rules for both states:
 
