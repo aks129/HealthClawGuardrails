@@ -674,6 +674,17 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "consent_required",
                                 "consent_version": CONSENT_VERSION}), 428
             consent_version = CONSENT_VERSION
+        if connector_id == "fasten":
+            # A second tap while the first is still connecting reuses it:
+            # two taps made two identical rows, both stuck connecting. Only
+            # a pending row is reused, and only after consent above.
+            waiting = svc.pending_connection(acct.id, "fasten")
+            if waiting:
+                return jsonify({
+                    "id": waiting["id"], "status": "pending",
+                    "existing": True,
+                    "connect_url": hc.fasten_connect_url(
+                        waiting["tenant_id"])})
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:

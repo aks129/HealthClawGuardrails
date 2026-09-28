@@ -318,6 +318,16 @@ class AccountService:
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 
+    def pending_connection(self, account_id: str, kind: str) -> dict | None:
+        """The account's oldest connection of this kind still waiting for
+        records, if any."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(account_id=account_id, kind=kind,
+                            status="pending")
+                 .order_by(Connection.connected_at.asc()).first())
+            return _conn_dict(c) if c else None
+
     def claim_sample_start(self, account_id: str) -> bool:
         """Win the right to mint this account's sample tenant.
 

@@ -38,11 +38,16 @@ def count_line(n: int | None) -> str:
 
 
 def _record(c: dict, now: float) -> dict:
+    # Only a sync, or an active connection, has updated anything. A pending
+    # or empty row has received nothing, so its connect time is not an
+    # update and saying "Updated today" there is untrue.
+    stamp = c.get("last_synced_at")
+    if stamp is None and c.get("status") == "active":
+        stamp = c.get("connected_at")
     return {**c,
             "status_word": status_word(c.get("status")),
             "count_line": count_line(c.get("last_count")),
-            "updated": updated_line(
-                c.get("last_synced_at") or c.get("connected_at"), now),
+            "updated": updated_line(stamp, now),
             "is_sample": c.get("kind") == "sample"}
 
 

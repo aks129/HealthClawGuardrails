@@ -219,3 +219,53 @@ def test_a_crowded_legacy_account_renders_every_row(app, svc, monkeypatch):
         assert f'<div class="hub-card-name">{name}</div>' in body
     for cid in samples + [pending]:
         assert f'data-conn="{cid}" data-kind' in body
+
+
+def test_a_second_tap_on_find_my_records_reuses_the_pending_connection(
+        app, svc, monkeypatch):
+    """Two taps made two identical "Records from your doctor" rows, both
+    stuck connecting (PR #843 QA). The second reuses the first."""
+    c, aid = _signed_in(app, svc, monkeypatch)
+    first = c.post("/api/connections/fasten", json={"consent": True})
+    second = c.post("/api/connections/fasten", json={"consent": True})
+    assert first.status_code == 200 and second.status_code == 200
+    a, b = first.get_json(), second.get_json()
+    assert b["id"] == a["id"] and b["status"] == "pending"
+    assert b["connect_url"] == a["connect_url"]
+    fasten = [x for x in svc.list_home(aid)["connections"]
+              if x["kind"] == "fasten"]
+    assert len(fasten) == 1
+    body = c.get("/home").get_data(as_text=True)
+    assert body.count('<div class="hub-card-name">Records from your doctor'
+                      '</div>') == 1
+    assert "Updated today" not in _card(body, a["id"])
+
+
+def test_the_reused_connection_still_needs_consent(app, svc, monkeypatch):
+    c, _ = _signed_in(app, svc, monkeypatch)
+    c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json={})
+    assert r.status_code == 428
+    assert "connect_url" not in r.get_json()
+
+
+def test_a_connected_provider_does_not_block_another(app, svc, monkeypatch):
+    """Only a pending row is reused: once records arrive, a second doctor
+    is a second connection."""
+    c, aid = _signed_in(app, svc, monkeypatch)
+    first = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    tenant = svc.get_connection(aid, first["id"])["tenant_id"]
+    svc.activate_connection(tenant)
+    second = c.post("/api/connections/fasten",
+                    json={"consent": True}).get_json()
+    assert second["id"] != first["id"]
+
+
+def test_the_status_badge_sits_in_the_flow_of_a_record_card():
+    """At 375px the absolutely placed badge overlapped the card's title
+    (PR #843 QA). On a record card it is laid out above the title."""
+    css = (pathlib.Path(__file__).resolve().parents[1]
+           / "careagents" / "static" / "careagents.css").read_text()
+    rule = re.search(r"\.conn-card \.status \{([^}]*)\}", css)
+    assert rule, "no .conn-card .status rule"
+    assert "position: static" in rule.group(1)
