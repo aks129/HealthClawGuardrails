@@ -149,9 +149,28 @@ def decode_grant(grant):
     return payload if isinstance(payload, dict) else None
 
 
+def _split_unambiguous(uri):
+    """urlsplit(uri), or None when a browser could read its host differently
+    from Python (#846): a backslash (browsers end the authority there,
+    urlsplit does not), userinfo (the host hides after an '@'), a non-ASCII
+    host (a lookalike, or a full stop like U+3002 a browser maps to '.'), or
+    a URI urlsplit cannot parse at all."""
+    if not isinstance(uri, str) or '\\' in uri:
+        return None
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return None
+    if '@' in parts.netloc or not parts.netloc.isascii():
+        return None
+    return parts
+
+
 def _loopback_form(uri):
     """The port-stripped form of a plain-http loopback URI, else None."""
-    parts = urlsplit(uri)
+    parts = _split_unambiguous(uri)
+    if parts is None:
+        return None
     if parts.scheme == 'http' and (parts.hostname or '') in _LOOPBACK_HOSTS:
         return parts._replace(netloc=parts.hostname)
     return None
@@ -160,11 +179,11 @@ def _loopback_form(uri):
 def redirect_uri_allowed(uri):
     """RFC 7591 registration: `https://`, or a plain-http loopback URI.
     Anything else is a redirect we would send a code to over the open
-    network, and the registration is refused rather than stored."""
-    if not isinstance(uri, str):
-        return False
-    parts = urlsplit(uri)
-    if not parts.netloc or parts.fragment:
+    network, and the registration is refused rather than stored. So is one
+    whose host a browser could read differently from us (_split_unambiguous):
+    the consent page names the app by that host."""
+    parts = _split_unambiguous(uri)
+    if parts is None or not parts.netloc or parts.fragment:
         return False
     if parts.scheme == 'https':
         return True
@@ -180,8 +199,25 @@ def redirect_uri_matches(candidate, registered):
 
 
 def redirect_host(uri):
-    """The host a code sent to `uri` lands on, lowercased, no port."""
-    return urlsplit(uri).hostname if isinstance(uri, str) else None
+    """The host a code sent to `uri` lands on, lowercased, no port, as ASCII.
+
+    Read the way a browser reads it: '\\' ends the authority like '/'. A
+    non-ASCII host is shown as its IDNA A-label (stdlib codec, IDNA 2003,
+    which also maps U+3002, U+FF0E and U+FF61 to '.'), never in Unicode:
+    registration refuses such hosts now, but clients stored before that live
+    up to CLIENT_TTL_SECONDS. None when there is no host to show."""
+    if not isinstance(uri, str):
+        return None
+    try:
+        host = urlsplit(uri.replace('\\', '/')).hostname
+    except ValueError:
+        return None
+    if not host or host.isascii():
+        return host or None
+    try:
+        return host.encode('idna').decode('ascii').lower()
+    except UnicodeError:
+        return None
 
 
 def clean_client_name(value):
