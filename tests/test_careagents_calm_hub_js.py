@@ -74,3 +74,17 @@ def test_both_delete_gates_use_the_same_rule():
     assert len(re.findall(r"deleteTyped\(input\.value\)", js)) == 2
     assert 'input.value !== "DELETE"' not in js
     assert 'input.value === "DELETE"' not in js
+
+
+def test_every_way_to_confirm_a_delete_goes_through_the_typed_check():
+    """Enter, the button and any later path close the box as agreed only
+    behind deleteTyped (QA on PR #843 at 766117a): an Enter handler that
+    closed the dialog directly passed every other test."""
+    js = HOME_JS.read_text()
+    ask = js.split("function askToDelete(")[1].split("\n  }")[0]
+    agreed = [ln.strip() for ln in ask.splitlines() if "close(true)" in ln]
+    assert agreed == [
+        "ok.onclick = () => { if (deleteTyped(input.value)) "
+        "dlg.close(true); };"]
+    assert ('input.onkeydown = (e) => { if (e.key === "Enter") '
+            'ok.onclick(); };') in ask

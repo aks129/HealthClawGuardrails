@@ -269,3 +269,19 @@ def test_the_status_badge_sits_in_the_flow_of_a_record_card():
     rule = re.search(r"\.conn-card \.status \{([^}]*)\}", css)
     assert rule, "no .conn-card .status rule"
     assert "position: static" in rule.group(1)
+
+
+def test_a_pending_wearable_is_not_reused_as_a_doctor_connection(
+        app, svc, monkeypatch):
+    """Only a pending doctor (Fasten) row is reused (QA on PR #843 at
+    766117a): a wearable still connecting must not hand its tenant to the
+    doctor flow, or the doctor's records land under the wearable's card."""
+    c, aid = _signed_in(app, svc, monkeypatch)
+    wearable = svc.add_connection(aid, "wearable", "ca-wearable1", "Oura",
+                                  status="pending")
+    r = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    assert r["id"] != wearable
+    assert "ca-wearable1" not in r["connect_url"]
+    fasten = [x for x in svc.list_home(aid)["connections"]
+              if x["kind"] == "fasten"]
+    assert [x["id"] for x in fasten] == [r["id"]]
