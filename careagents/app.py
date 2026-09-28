@@ -567,7 +567,7 @@ def create_app(config: Config | None = None,
         offered, real_open = _offered_connections(acct)
         return render_template(
             "consent.html", state="ask", req=req, me=acct,
-            client_name=parked.get("client_name") or "An agent",
+            **consent.app_identity(parked),
             scopes=[consent.describe_scope(x) for x in parked.get("scopes", [])],
             connections=offered, real_open=real_open,
             has_passkey=svc.has_passkey(acct.id),

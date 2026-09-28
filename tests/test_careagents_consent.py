@@ -182,14 +182,15 @@ def test_a_valid_link_signed_out_goes_to_sign_in_and_resumes_after(
 
 
 def test_the_page_names_the_client_the_permissions_and_the_persons_connections(
-        app, svc, monkeypatch):
+        app, svc, fake, monkeypatch):
     client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
     _connect(svc, acct, "sample", "Sample records")
     _connect(svc, acct, "fasten", "Clinic records", provider="Epic (Fasten)")
+    fake.parked["redirect_host"] = "claude.ai"
     resp = client.get("/authorize", query_string={"req": _handle()})
     page = resp.get_data(as_text=True)
     assert resp.status_code == 200
-    assert "Claude wants to read your records" in page
+    assert "claude.ai wants to read your records" in page
     assert "Read your health records" in page and "summaries" in page
     assert "Sample records" in page and "Clinic records" in page
     assert 'id="approve-btn"' in page and "Don't allow" in page
@@ -412,3 +413,78 @@ def test_a_revoke_that_cannot_be_confirmed_keeps_the_connection_listed(
     assert body["deleted"] is True and body["unlinked"] is False and body["grants_active"] == 1
     assert svc.get_connection(acct.id, conn) is not None, "still listed, so Delete can be retried"
     assert svc.get_grant(acct.id, gid)["status"] == "active"
+
+
+# --- who is asking: the address the code goes to, not the name it chose -----
+#
+# Registration is open (spec §13.1), so anyone can register a client named
+# "Claude" with their own callback and send a person the authorize link. The
+# name is the client's claim; the redirect host is where the code actually
+# goes, and it is the one thing such a client cannot fake.
+
+
+def _ask_page(app, svc, fake, monkeypatch, host, name="Claude"):
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["client_name"] = name
+    if host is None:
+        fake.parked.pop("redirect_host", None)
+    else:
+        fake.parked["redirect_host"] = host
+    resp = client.get("/authorize", query_string={"req": _handle()})
+    assert resp.status_code == 200
+    return resp.get_data(as_text=True)
+
+
+CAUTION = "We don't recognize this app"
+
+
+@pytest.mark.parametrize("host", ["claude.ai", "claude.com"])
+def test_a_recognized_host_heads_the_page_and_reads_as_recognized(
+        app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert f"{host} wants to read your records" in page
+    assert f"""you'll go back to <strong class="consent-host">{host}</strong>""" in page
+    assert "calls itself" in page and "Claude" in page
+    assert CAUTION not in page
+
+
+@pytest.mark.parametrize("host", [
+    "evil.example", "claude.ai.evil.example", "evilclaude.ai", "localhost"])
+def test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself(
+        app, svc, fake, monkeypatch, host):
+    """The attack: a client named "Claude" whose code goes elsewhere.
+    MUTATION: treat every host as recognized -> red; match on suffix -> the
+    lookalike rows go red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host, name="Claude")
+    assert f"{host} wants to read your records" in page
+    assert CAUTION in page
+    assert f"Only allow it if you started this from {host} yourself" in page
+    assert "Claude wants to read" not in page
+
+
+def test_without_a_host_the_page_says_it_cannot_tell_where_the_code_goes(
+        app, svc, fake, monkeypatch):
+    """A HealthClaw that predates redirect_host: caution, never recognition."""
+    page = _ask_page(app, svc, fake, monkeypatch, None)
+    assert "An app wants to read your records" in page
+    assert "We can't tell where this app will send you" in page
+    assert "go back to" not in page
+
+
+def test_the_client_name_and_host_are_escaped_on_the_page(app, svc, fake, monkeypatch):
+    """Jinja autoescape is on for consent.html; this row is the proof.
+    MUTATION: render client_name with |safe -> red."""
+    page = _ask_page(app, svc, fake, monkeypatch, "evil.example",
+                     name='<img src=x onerror="alert(1)">Claude')
+    assert "<img src=x" not in page
+    assert "&lt;img src=x onerror=&#34;alert(1)&#34;&gt;Claude" in page
+
+
+def test_app_identity_matches_hosts_exactly():
+    assert consent.app_identity({"redirect_host": "CLAUDE.AI", "client_name": "C"}) == {
+        "client_name": "C", "redirect_host": "claude.ai", "host_recognized": True}
+    for host in ("claude.ai.evil.example", "evilclaude.ai", "", None, 7):
+        ident = consent.app_identity({"redirect_host": host})
+        assert ident["host_recognized"] is False, host
+    assert consent.app_identity({})["client_name"] == "An agent"

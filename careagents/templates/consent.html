@@ -15,10 +15,29 @@
     Go back to the app that asked and start again.</p>
     <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
   {% else %}
-    <h1>{{ client_name }} wants to read your records</h1>
+    {#- The address the code goes to names the app: anyone can register a
+        client under any name, but not with somebody else's address. -#}
+    {% if redirect_host %}
+    <h1 class="consent-title">{{ redirect_host }} wants to read your records</h1>
+    <p class="consent-origin">After you allow,
+      you'll go back to <strong class="consent-host">{{ redirect_host }}</strong>.</p>
+    {% else %}
+    <h1 class="consent-title">An app wants to read your records</h1>
+    {% endif %}
+    <p class="consent-name">The app calls itself &ldquo;{{ client_name }}&rdquo;.
+    Any app can choose that name, so go by the address.</p>
+    {% if host_recognized %}
+    <p class="form-ok">We recognize this address.</p>
+    {% elif redirect_host %}
+    <p class="form-warn">We don't recognize this app.
+    Only allow it if you started this from {{ redirect_host }} yourself.</p>
+    {% else %}
+    <p class="form-warn">We can't tell where this app will send you. Only
+    allow it if you started this yourself, just now.</p>
+    {% endif %}
     <p class="setup-sub">Through HealthClaw: every read redacted and audited,
-    nothing written. {{ client_name }} can never change your records or act
-    on your behalf; those still need your approval, one action at a time.</p>
+    nothing written. This app can never change your records or act on your
+    behalf; those still need your approval, one action at a time.</p>
 
     <div id="err" class="form-error" hidden></div>
 

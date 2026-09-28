@@ -30,6 +30,24 @@ def describe_scope(scope: str) -> str:
     return SCOPE_WORDS.get(scope, f"Use the permission named {scope!r}.")
 
 
+#: Hosted connectors whose callback host we know, matched exactly. Source:
+#: spec §13.1 (docs/specs/2026-08-16-mcp-authorization.md), Claude's
+#: registered callbacks. Add a host only with a documented callback for it.
+RECOGNIZED_REDIRECT_HOSTS = frozenset({"claude.ai", "claude.com"})
+
+
+def app_identity(parked: dict) -> dict:
+    """How the consent page names the app asking. Registration is open, so
+    `client_name` is only what the app calls itself; the redirect host is
+    where the code goes, and is what the page leads with. No host (a
+    HealthClaw that predates it) is never recognized."""
+    host = parked.get("redirect_host")
+    host = host.strip().lower() if isinstance(host, str) and host.strip() else None
+    return {"client_name": parked.get("client_name") or "An agent",
+            "redirect_host": host,
+            "host_recognized": host in RECOGNIZED_REDIRECT_HOSTS}
+
+
 def handoff_key(mint_secret: str) -> bytes:
     if not mint_secret:
         raise ValueError("HEALTHCLAW_MINT_SECRET is required for the consent handoff")

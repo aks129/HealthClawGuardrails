@@ -21,6 +21,7 @@ import logging
 import os
 import secrets
 import time
+import unicodedata
 import uuid
 from functools import wraps
 from urllib.parse import urlencode, urlsplit
@@ -52,6 +53,9 @@ _TENANT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 #: Loopback hosts whose redirect URIs match on any port (RFC 8252 §7.3).
 #: Native clients such as Claude Code listen on an ephemeral port.
 _LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
+#: A registered `client_name` is the client's own claim, shown on the consent
+#: page; it is kept short and printable, never trusted as an identity.
+CLIENT_NAME_MAX = 80
 
 
 def issuer():
@@ -173,6 +177,24 @@ def redirect_uri_matches(candidate, registered):
         return True
     a, b = _loopback_form(candidate), _loopback_form(registered)
     return a is not None and b is not None and a == b
+
+
+def redirect_host(uri):
+    """The host a code sent to `uri` lands on, lowercased, no port."""
+    return urlsplit(uri).hostname if isinstance(uri, str) else None
+
+
+def clean_client_name(value):
+    """RFC 7591 `client_name`, made safe to show: whitespace runs collapsed,
+    control and format characters (escapes, NULs, bidi overrides) removed,
+    capped at CLIENT_NAME_MAX. Anything else, or nothing left, is
+    'Unknown Client'."""
+    if not isinstance(value, str):
+        return 'Unknown Client'
+    printable = ''.join(ch for ch in ' '.join(value.split())
+                        if unicodedata.category(ch)[0] != 'C')
+    name = ' '.join(printable.split())[:CLIENT_NAME_MAX].rstrip()
+    return name or 'Unknown Client'
 
 
 def _redirect_to_client(redirect_uri, state, **params):
@@ -595,7 +617,7 @@ def register_oauth_routes(blueprint):
 
         client_id = str(uuid.uuid4())
         client_secret = None if auth_method == 'none' else secrets.token_urlsafe(32)
-        client_name = body.get('client_name', 'Unknown Client')
+        client_name = clean_client_name(body.get('client_name'))
         scope = body.get('scope', 'fhir.read context.read')
         issued_at = int(time.time())
 
@@ -607,6 +629,13 @@ def register_oauth_routes(blueprint):
             'token_endpoint_auth_method': auth_method,
             'created_at': issued_at,
         }, ttl=CLIENT_TTL_SECONDS)
+        # Registration is open by design (spec §13.1), so each one is visible:
+        # the id, where its codes go, how it authenticates. PHI-free, and the
+        # chosen name and any secret stay out. %r keeps a crafted host from
+        # writing its own log line.
+        logger.info('OAuth client registered: client_id=%s auth_method=%s '
+                    'redirect_hosts=%r', client_id, auth_method,
+                    sorted({redirect_host(u) or '' for u in redirect_uris}))
 
         response = {
             'client_id': client_id,
@@ -683,7 +712,9 @@ def register_oauth_routes(blueprint):
                                            error_description='consent handoff not configured')
             _oauth_store_set('consent-request', request_id, {
                 'client_id': client_id,
-                'client_name': registered_client.get('client_name', 'Unknown Client'),
+                # Cleaned again: a client stored before names were cleaned
+                # lives up to CLIENT_TTL_SECONDS.
+                'client_name': clean_client_name(registered_client.get('client_name')),
                 'redirect_uri': redirect_uri,
                 'code_challenge': code_challenge,
                 'code_challenge_method': code_challenge_method,
@@ -757,6 +788,9 @@ def register_oauth_routes(blueprint):
             'request_id': request_id,
             'client_id': parked['client_id'],
             'client_name': parked['client_name'],
+            # Where the code goes: what the page names the app by, since a
+            # self-registered client picks its own name but not this.
+            'redirect_host': redirect_host(parked['redirect_uri']),
             'scopes': parked['scopes'],
             'exp': parked['exp'],
         })

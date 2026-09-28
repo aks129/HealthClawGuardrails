@@ -607,6 +607,10 @@ textarea:focus-visible {
 .form-error, .form-ok, .form-warn { font-size: 16px; }
 
 /* --- consent page (a third-party agent asks to read one connection) --- */
+/* The host leads, and a host is one long word: let it wrap at 375px. */
+.consent-title, .consent-host { overflow-wrap: anywhere; }
+.consent-origin { font-size: 18px; margin: 10px 0 6px; }
+.consent-name { color: var(--ink-soft); margin: 0 0 12px; overflow-wrap: anywhere; }
 .consent-h2 { font-size: 15px; letter-spacing: .02em; text-transform: uppercase;
   margin: 26px 0 8px; opacity: .75; }
 .consent-scopes { margin: 0; padding-left: 20px; }
