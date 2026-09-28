@@ -167,3 +167,31 @@ def test_fetch_exception_still_forwards_with_notice(client, monkeypatch):
     assert r.status_code == 200
     assert "could not be retrieved" in calls["post_json"]["text"]
     assert "em_123" in calls["post_json"]["text"]
+
+
+def test_bad_signature_makes_no_resend_call(client, monkeypatch):
+    # The signature gate must run before any call to Resend: an unsigned
+    # request must not trigger a fetch (which carries the API key) or a forward.
+    monkeypatch.setenv("RESEND_INBOUND_WEBHOOK_SECRET", f"whsec_{SECRET_B64}")
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    calls = _stub_resend(monkeypatch)
+
+    body = _event()
+    headers = _sign(body)
+    headers["svix-signature"] = "v1,AAAA"
+    r = client.post("/email/inbound", data=body, headers=headers,
+                    content_type="application/json")
+    assert r.status_code == 403
+    assert calls == {}
+
+
+def test_unconfigured_secret_makes_no_resend_call(client, monkeypatch):
+    monkeypatch.delenv("RESEND_INBOUND_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    calls = _stub_resend(monkeypatch)
+
+    body = _event()
+    r = client.post("/email/inbound", data=body, headers=_sign(body),
+                    content_type="application/json")
+    assert r.status_code == 503
+    assert calls == {}
