@@ -15,9 +15,8 @@
     Go back to the app that asked and start again.</p>
     <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
   {% elif state == "declined" %}
-    <h1>You said no</h1>
-    <p class="setup-sub">You said no. Nothing was shared.
-    You can close this page.</p>
+    <h1>You said no.</h1>
+    <p class="setup-sub">Nothing was shared. You can close this page.</p>
   {% else %}
     {#- The address the code goes to names the app: anyone can register a
         client under any name, but not with somebody else's address. The
