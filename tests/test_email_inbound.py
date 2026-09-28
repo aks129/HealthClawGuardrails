@@ -91,3 +91,79 @@ def test_non_received_events_ignored(client, monkeypatch):
     r = client.post("/email/inbound", data=body, headers=_sign(body),
                     content_type="application/json")
     assert r.status_code == 200
+
+
+def _stub_resend(monkeypatch, get_status=200, get_body=None):
+    """Stub the Resend API: record the fetch URL and the forward payload."""
+    calls = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls["post_json"] = json
+        class R:
+            status_code = 200
+        return R()
+
+    def fake_get(url, headers=None, timeout=None):
+        calls["get_url"] = url
+        class R:
+            status_code = get_status
+            def json(self):
+                return get_body or {}
+        return R()
+
+    import r6.email_inbound as mod
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+    return calls
+
+
+def test_fetches_body_from_receiving_api(client, monkeypatch):
+    # Received mail lives under /emails/receiving/{id}; /emails/{id} is the
+    # *sent*-email endpoint and has no body for an inbound message.
+    monkeypatch.setenv("RESEND_INBOUND_WEBHOOK_SECRET", f"whsec_{SECRET_B64}")
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    calls = _stub_resend(monkeypatch, get_body={
+        "from": "someone@example.com", "subject": "Help please",
+        "text": "Synthetic body line", "html": "<p>Synthetic body line</p>"})
+
+    body = _event()
+    r = client.post("/email/inbound", data=body, headers=_sign(body),
+                    content_type="application/json")
+    assert r.status_code == 200
+    assert calls["get_url"] == "https://api.resend.com/emails/receiving/em_123"
+    assert "Synthetic body line" in calls["post_json"]["text"]
+    assert calls["post_json"]["html"] == "<p>Synthetic body line</p>"
+    assert "could not be retrieved" not in calls["post_json"]["text"]
+
+
+def test_failed_fetch_still_forwards_with_notice(client, monkeypatch):
+    monkeypatch.setenv("RESEND_INBOUND_WEBHOOK_SECRET", f"whsec_{SECRET_B64}")
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    calls = _stub_resend(monkeypatch, get_status=404)
+
+    body = _event()
+    r = client.post("/email/inbound", data=body, headers=_sign(body),
+                    content_type="application/json")
+    assert r.status_code == 200
+    text = calls["post_json"]["text"]
+    assert "could not be retrieved" in text
+    assert "em_123" in text
+    assert "Help please" in calls["post_json"]["subject"]
+
+
+def test_fetch_exception_still_forwards_with_notice(client, monkeypatch):
+    monkeypatch.setenv("RESEND_INBOUND_WEBHOOK_SECRET", f"whsec_{SECRET_B64}")
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    calls = _stub_resend(monkeypatch)
+    import r6.email_inbound as mod
+
+    def boom(url, headers=None, timeout=None):
+        raise mod.requests.ConnectionError("unreachable")
+    monkeypatch.setattr(mod.requests, "get", boom)
+
+    body = _event()
+    r = client.post("/email/inbound", data=body, headers=_sign(body),
+                    content_type="application/json")
+    assert r.status_code == 200
+    assert "could not be retrieved" in calls["post_json"]["text"]
+    assert "em_123" in calls["post_json"]["text"]
