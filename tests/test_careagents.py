@@ -5303,13 +5303,17 @@ def test_typed_delete_stays_double_gated():
     # (a) the button ships disabled in the static markup
     confirm = _HUB_PAGES.split('id="delete-confirm"')[1][:120]
     assert "disabled" in confirm
-    # (b) enabled only on an exact, case-sensitive match
-    assert 'input.value !== "DELETE"' in _HOME_JS
+    # (b) enabled only on a match: the whole word, any case, whitespace
+    # trimmed, because phones capitalise it to "Delete" (PR #843 QA).
+    # tests/test_careagents_calm_hub_js.py runs the rule itself.
+    assert ('const deleteTyped = (v) => v.trim().toUpperCase() === "DELETE";'
+            in _HOME_JS)
+    assert "ok.disabled = !deleteTyped(input.value);" in _HOME_JS
     # (c) the click handler re-checks the value itself
-    assert 'if (input.value === "DELETE")' in _HOME_JS
-    # and the comparison is never loosened, inside the confirmation helper
+    assert "if (deleteTyped(input.value)) dlg.close(true);" in _HOME_JS
+    # and the comparison is never loosened past that, inside the helper
     ask = _HOME_JS.split("function askToDelete(")[1].split("\n  }")[0]
-    for loosener in ("trim()", "toUpperCase()", "toLowerCase()"):
+    for loosener in ("includes(", "startsWith(", "indexOf(", "toLowerCase()"):
         assert loosener not in ask, loosener
 
 

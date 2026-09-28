@@ -509,7 +509,8 @@
   const acctBtn = $("account-delete");
   if (acctBtn) acctBtn.addEventListener("click", async () => {
     const msg = $("account-msg");
-    const agreed = await askToDelete("your account and all its records");
+    // settings.html renders the account wording; there is no label to fill.
+    const agreed = await askToDelete();
     if (!agreed) return;
     acctBtn.disabled = true;
     announce(msg, "Deleting…");
@@ -525,19 +526,24 @@
     location.assign("/?deleted=1");
   });
 
-  // Resolves true only after the patient types DELETE exactly. Two gates on
-  // purpose: the button ships disabled and is only enabled on an exact match,
+  // The word, in any case, with the whitespace trimmed: phones capitalise
+  // the first letter, and "Delete" is plainly the person agreeing.
+  const deleteTyped = (v) => v.trim().toUpperCase() === "DELETE";
+
+  // Resolves true only after the patient types DELETE. Two gates on
+  // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
   function askToDelete(label) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
-    $("delete-label").textContent = label;
+    const named = $("delete-label");
+    if (named) named.textContent = label;
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
-    input.oninput = () => { ok.disabled = input.value !== "DELETE"; };
-    ok.onclick = () => { if (input.value === "DELETE") dlg.close(true); };
+    input.oninput = () => { ok.disabled = !deleteTyped(input.value); };
+    ok.onclick = () => { if (deleteTyped(input.value)) dlg.close(true); };
     // Enter goes through the same check; there is no form here to submit.
     input.onkeydown = (e) => { if (e.key === "Enter") ok.onclick(); };
     $("delete-cancel").onclick = () => dlg.close(false);
@@ -581,6 +587,11 @@
   // so; it is never rendered as zero (#215, #403).
   const waiting = $("waiting");
   const requests = (n) => n + (n === 1 ? " request" : " requests");
+  // A queue whose assistant was deleted has no page to open yet: say how
+  // to reach it instead of linking nowhere. Names are the person's own
+  // words, so they go in as text, never markup.
+  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name +
+    ". Start a chat to review " + (q.count === 1 ? "it" : "them") + ".";
   function showWaiting(state, d) {
     const line = waiting.querySelector(".waiting-line");
     waiting.dataset.state = state;
@@ -594,13 +605,8 @@
     // with something waiting is its own link. One queue reads as one line.
     const queues = Array.isArray(d.queues) && d.queues.length
       ? d.queues : [{ href: d.href, count: d.count }];
-    // A queue whose assistant was deleted has no page to open yet: say how
-    // to reach it instead of linking nowhere. Names are the person's own
-    // words, so they go in as text, never markup.
-    const orphan = (q) => requests(q.count) + " waiting on " + q.name +
-      ". Start a chat to review them.";
     if (queues.length === 1) {
-      if (!queues[0].href) { line.textContent = orphan(queues[0]); return; }
+      if (!queues[0].href) { line.textContent = orphanLine(queues[0]); return; }
       const a = document.createElement("a");
       a.href = queues[0].href;
       a.textContent = requests(d.count) + " waiting for your approval";
@@ -618,7 +624,7 @@
         a.textContent = q.name + ": " + requests(q.count);
         li.appendChild(a);
       } else {
-        li.textContent = orphan(q);
+        li.textContent = orphanLine(q);
       }
       list.appendChild(li);
     });

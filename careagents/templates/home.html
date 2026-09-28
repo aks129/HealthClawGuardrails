@@ -204,9 +204,10 @@
       <li><b>Leaving:</b> you can do it yourself, right here, whenever you
         like. <b>Disconnect</b> stops new records arriving and keeps what's
         already there; <b>Delete</b> permanently removes the records
-        themselves and tells you how many were deleted. The PHI-free audit
-        trail of who accessed what is kept — a deletion shouldn't be able to
-        erase the record of the access that came before it. Stuck? Email
+        themselves and tells you how many were deleted. We keep a log of who
+        looked at your records, with no health details in it — a deletion
+        shouldn't be able to erase the record of the access that came before
+        it. Stuck? Email
         <a href="mailto:support@healthclaw.io">support@healthclaw.io</a>.</li>
     </ul>
     <p class="consent-fine">Full detail:
@@ -270,7 +271,8 @@
      aria-labelledby="agent-delete-title" hidden>
   <div class="modal-card">
     <h3 id="agent-delete-title">Delete <span id="agent-delete-name"></span>?</h3>
-    <p>Your records and your conversation stay. Only the assistant goes.</p>
+    <p>Your records stay. This assistant goes, and you won't be able to open
+      its chat again.</p>
     <button type="button" class="btn-primary btn-block" id="agent-delete-confirm">Delete</button>
     <button type="button" class="linkish" id="agent-delete-cancel">Cancel</button>
   </div>
