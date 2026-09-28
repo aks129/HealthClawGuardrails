@@ -62,6 +62,9 @@ def test_a_backslash_callback_lands_on_the_host_the_page_shows(client):
     ('https://сlaude.ai/api/mcp/auth_callback', 'xn--laude-0ye.ai'),
     # Ideographic full stop: a browser maps it to '.'.
     ('https://claude.ai。evil.example/cb', 'claude.ai.evil.example'),
+    # Percent-escapes in the host: a browser decodes them before resolving.
+    ('https://claude.ai%2eevil.example/cb', 'claude.ai.evil.example'),
+    ('https://%63laude.ai/cb', 'claude.ai'),
 ])
 def test_a_non_ascii_host_is_refused_or_shown_as_the_browser_resolves_it(
         client, uri, browser_host):

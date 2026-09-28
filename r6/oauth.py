@@ -153,15 +153,18 @@ def _split_unambiguous(uri):
     """urlsplit(uri), or None when a browser could read its host differently
     from Python (#846): a backslash (browsers end the authority there,
     urlsplit does not), userinfo (the host hides after an '@'), a non-ASCII
-    host (a lookalike, or a full stop like U+3002 a browser maps to '.'), or
-    a URI urlsplit cannot parse at all."""
+    host (a lookalike, or a full stop like U+3002 a browser maps to '.'), a
+    percent-escape in the host (a browser decodes `%2e` to '.' and `%63` to
+    'c' before resolving, urlsplit does not), or a URI urlsplit cannot parse
+    at all."""
     if not isinstance(uri, str) or '\\' in uri:
         return None
     try:
         parts = urlsplit(uri)
     except ValueError:
         return None
-    if '@' in parts.netloc or not parts.netloc.isascii():
+    if ('@' in parts.netloc or '%' in parts.netloc
+            or not parts.netloc.isascii()):
         return None
     return parts
 
@@ -641,7 +644,9 @@ def register_oauth_routes(blueprint):
             return jsonify({
                 'error': 'invalid_redirect_uri',
                 'error_description': 'redirect_uris must be https URLs or '
-                'plain-http loopback URLs (localhost, 127.0.0.1, [::1])',
+                'plain-http loopback URLs (localhost, 127.0.0.1, [::1]), '
+                'each with a plain ASCII host (no percent-escapes), '
+                'no userinfo, no backslash and no fragment',
             }), 400
         auth_method = body.get('token_endpoint_auth_method') or 'client_secret_post'
         if auth_method not in CLIENT_AUTH_METHODS:
