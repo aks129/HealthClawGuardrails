@@ -148,6 +148,10 @@ class Grant(Base):
     tenant_id = Column(String(64), nullable=False)
     client_id = Column(String(64), nullable=False)
     client_name = Column(String(120), default="An agent")
+    # Where the client's codes go (an A-label host): what the hub names the
+    # app by, since `client_name` is the client's own choice. NULL on grants
+    # from before it was kept.
+    redirect_host = Column(String(255), nullable=True)
     scopes = Column(String(255), default="")
     consent_id = Column(String(64), unique=True, nullable=False)
     granted_at = Column(Float, default=now)
@@ -261,6 +265,10 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_grants" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_grants")}
+        if "redirect_host" not in cols:
+            _add_column(engine, "ca_grants", "redirect_host", "VARCHAR(255)")
     if "ca_email_tokens" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
         if "attempts" not in cols:

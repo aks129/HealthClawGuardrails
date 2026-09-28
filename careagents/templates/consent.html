@@ -14,27 +14,39 @@
     <p class="setup-sub">Requests to share your records last ten minutes.
     Go back to the app that asked and start again.</p>
     <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+  {% elif state == "declined" %}
+    <h1>You said no</h1>
+    <p class="setup-sub">You said no. Nothing was shared.
+    You can close this page.</p>
   {% else %}
     {#- The address the code goes to names the app: anyone can register a
-        client under any name, but not with somebody else's address. -#}
+        client under any name, but not with somebody else's address. The
+        first screen at 375px answers who is asking, where you'll go, whether
+        we recognize it, and what to do if you didn't start this. -#}
     {% if redirect_host %}
-    <h1 class="consent-title">{{ redirect_host }} wants to read your records</h1>
+    <h1 class="consent-title">{{ host_html }} wants to read your records</h1>
+    {% if lookalike_of %}
+    <p class="form-warn consent-lookalike"><strong>This is not {{ lookalike_of }}.</strong>
+    The address only uses the name.</p>
+    {% endif %}
     <p class="consent-origin">After you allow,
-      you'll go back to <strong class="consent-host">{{ redirect_host }}</strong>.</p>
+      you'll go back to <strong class="consent-host">{{ host_html }}</strong>.</p>
     {% else %}
     <h1 class="consent-title">An app wants to read your records</h1>
     {% endif %}
-    <p class="consent-name">The app calls itself &ldquo;{{ client_name }}&rdquo;.
-    Any app can choose that name, so go by the address.</p>
     {% if host_recognized %}
     <p class="form-ok">We recognize this address.</p>
     {% elif redirect_host %}
-    <p class="form-warn">We don't recognize this app.
-    Only allow it if you started this from {{ redirect_host }} yourself.</p>
+    <p class="form-warn">We don't recognize this address.
+    Only allow it if you started this from {{ host_html }} yourself.</p>
     {% else %}
-    <p class="form-warn">We can't tell where this app will send you. Only
+    <p class="form-warn">We can't tell which address you'd go back to. Only
     allow it if you started this yourself, just now.</p>
     {% endif %}
+    <p class="consent-stop">
+      If you didn't just ask {{ host_html or "an app" }} to connect, tap Don't allow.</p>
+    <p class="consent-name">The app calls itself &ldquo;{{ client_name }}&rdquo;.
+    Any app can choose that name, so check the web address above.</p>
     <p class="setup-sub">Through HealthClaw: every read redacted and audited,
     nothing written. This app can never change your records or act on your
     behalf; those still need your approval, one action at a time.</p>
@@ -68,8 +80,15 @@
       that asked.</p>
     {% endif %}
 
+    {#- A recognized address keeps Allow primary. Any other puts Don't allow
+        first and primary: saying no is the safe answer there. -#}
+    {% macro deny_button(cls) %}
+    <button class="{{ cls }} btn-block" id="deny-btn"
+            data-req="{{ req }}">Don't allow</button>
+    {% endmacro %}
+    {% if not host_recognized %}{{ deny_button("btn-primary") }}{% endif %}
     {% if has_passkey and connections %}
-    <button class="btn-primary btn-block" id="approve-btn"
+    <button class="{{ 'btn-primary' if host_recognized else 'btn-secondary' }} btn-block" id="approve-btn"
             data-req="{{ req }}">Allow, with my passkey</button>
     <p class="auth-fine">Your face, fingerprint or PIN confirms it is you,
     now, not a remembered sign-in.</p>
@@ -78,8 +97,7 @@
     remembered sign-in is never enough to share your records.
       <a href="/auth?enroll=1">Add a passkey</a>, then come back.</p>
     {% endif %}
-    <button class="btn-secondary btn-block" id="deny-btn"
-            data-req="{{ req }}">Don't allow</button>
+    {% if host_recognized %}{{ deny_button("btn-secondary") }}{% endif %}
     <p class="auth-fine">You can take this back any time from your hub.
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
       policy</a>.</p>

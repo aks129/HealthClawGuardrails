@@ -18,6 +18,8 @@ import json
 import secrets
 import time
 
+from markupsafe import Markup, escape
+
 #: What each requested scope means to the person, in their words.
 SCOPE_WORDS = {
     "fhir.read": "Read your health records. Every read is redacted and "
@@ -34,6 +36,46 @@ def describe_scope(scope: str) -> str:
 #: spec §13.1 (docs/specs/2026-08-16-mcp-authorization.md), Claude's
 #: registered callbacks. Add a host only with a documented callback for it.
 RECOGNIZED_REDIRECT_HOSTS = frozenset({"claude.ai", "claude.com"})
+#: The name inside the recognized hosts. A host that carries it without being
+#: one of them (claude.ai.secure-login.example, claudeai-help.example) is told
+#: apart in plain words.
+_RECOGNIZED_NAME = "claude"
+
+
+def _ascii_host(host) -> str | None:
+    """The host as a browser resolves it, lowercased: an IDNA A-label for a
+    non-ASCII host (which also maps U+3002, U+FF0E and U+FF61 to '.'), so a
+    lookalike is never shown in Unicode. None when there is none to show."""
+    if not isinstance(host, str) or not host.strip():
+        return None
+    host = host.strip().lower()
+    if host.isascii():
+        return host
+    try:
+        return host.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+
+
+def _lookalike_of(host: str | None) -> str | None:
+    """The recognized host an unrecognized one borrows the name of, if any."""
+    if not host or host in RECOGNIZED_REDIRECT_HOSTS:
+        return None
+    compact = "".join(ch for ch in host if ch.isalnum())
+    if _RECOGNIZED_NAME not in compact:
+        return None
+    for known in sorted(RECOGNIZED_REDIRECT_HOSTS):
+        if known.replace(".", "") in compact:
+            return known
+    return sorted(RECOGNIZED_REDIRECT_HOSTS)[0]
+
+
+def _wrap_at_dots(host: str | None) -> Markup | None:
+    """The host, escaped, with a line-break hint after each dot: at 375px a
+    long host wraps between its labels, never mid-word."""
+    if host is None:
+        return None
+    return Markup(".<wbr>").join(escape(label) for label in host.split("."))
 
 
 def app_identity(parked: dict) -> dict:
@@ -41,11 +83,12 @@ def app_identity(parked: dict) -> dict:
     `client_name` is only what the app calls itself; the redirect host is
     where the code goes, and is what the page leads with. No host (a
     HealthClaw that predates it) is never recognized."""
-    host = parked.get("redirect_host")
-    host = host.strip().lower() if isinstance(host, str) and host.strip() else None
+    host = _ascii_host(parked.get("redirect_host"))
     return {"client_name": parked.get("client_name") or "An agent",
             "redirect_host": host,
-            "host_recognized": host in RECOGNIZED_REDIRECT_HOSTS}
+            "host_html": _wrap_at_dots(host),
+            "host_recognized": host in RECOGNIZED_REDIRECT_HOSTS,
+            "lookalike_of": _lookalike_of(host)}
 
 
 def handoff_key(mint_secret: str) -> bytes:

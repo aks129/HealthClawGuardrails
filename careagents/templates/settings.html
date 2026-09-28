@@ -49,7 +49,10 @@
     <div class="card-grid" id="grants">
       {% for g in grants %}
       <div class="hub-card grant-card" data-grant="{{ g.id }}">
-        <div class="hub-card-name">{{ g.client_name }}</div>
+        {#- Named by where its codes go, as on the consent page: the name is
+            the app's own choice. Labels are escaped; <wbr> after each dot. -#}
+        <div class="hub-card-name grant-host">{% if g.redirect_host %}{% for label in g.redirect_host.split('.') %}{{ label }}{% if not loop.last %}.<wbr>{% endif %}{% endfor %}{% else %}{{ g.client_name }}{% endif %}</div>
+        <div class="hub-card-sub">calls itself &ldquo;{{ g.client_name }}&rdquo;</div>
         <div class="hub-card-sub">reads {{ g.tenant_label or 'one connection' }} through HealthClaw</div>
         <span class="status status-{{ g.status }}">{{ g.status }}</span>
         {% if g.status != 'revoked' %}

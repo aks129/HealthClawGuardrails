@@ -188,7 +188,7 @@ def test_the_page_names_the_client_the_permissions_and_the_persons_connections(
     _connect(svc, acct, "fasten", "Clinic records", provider="Epic (Fasten)")
     fake.parked["redirect_host"] = "claude.ai"
     resp = client.get("/authorize", query_string={"req": _handle()})
-    page = resp.get_data(as_text=True)
+    page = resp.get_data(as_text=True).replace("<wbr>", "")
     assert resp.status_code == 200
     assert "claude.ai wants to read your records" in page
     assert "Read your health records" in page and "summaries" in page
@@ -311,8 +311,11 @@ def test_an_approval_sends_back_a_grant_healthclaw_decodes_and_records_it(
     assert g["connection_id"] == conn
 
 
-def test_a_denial_needs_no_passkey_and_records_nothing(app, svc, monkeypatch):
+def test_a_denial_needs_no_passkey_and_records_nothing(app, svc, fake, monkeypatch):
+    """A recognized host gets the OAuth access_denied back; see the
+    unrecognized-host rows below for the page that stays here."""
     monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", MINT)
+    fake.parked["redirect_host"] = "claude.ai"
     client, acct = _signed_in(app, svc, monkeypatch)
     resp = client.post("/authorize/decide", data=json.dumps({
         "req": _handle(), "decision": "denied"}), content_type="application/json")
@@ -433,10 +436,12 @@ def _ask_page(app, svc, fake, monkeypatch, host, name="Claude"):
         fake.parked["redirect_host"] = host
     resp = client.get("/authorize", query_string={"req": _handle()})
     assert resp.status_code == 200
-    return resp.get_data(as_text=True)
+    # The host carries a line-break hint after each dot; read the words.
+    return resp.get_data(as_text=True).replace("<wbr>", "")
 
 
-CAUTION = "We don't recognize this app"
+CAUTION = "We don't recognize this address"
+STOP_LINE = "If you didn't just ask {} to connect, tap Don't allow."
 
 
 @pytest.mark.parametrize("host", ["claude.ai", "claude.com"])
@@ -446,7 +451,9 @@ def test_a_recognized_host_heads_the_page_and_reads_as_recognized(
     assert f"{host} wants to read your records" in page
     assert f"""you'll go back to <strong class="consent-host">{host}</strong>""" in page
     assert "calls itself" in page and "Claude" in page
-    assert CAUTION not in page
+    assert "check the web address above" in page
+    assert STOP_LINE.format(host) in page
+    assert CAUTION not in page and "This is not" not in page
 
 
 @pytest.mark.parametrize("host", [
@@ -460,7 +467,9 @@ def test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself
     assert f"{host} wants to read your records" in page
     assert CAUTION in page
     assert f"Only allow it if you started this from {host} yourself" in page
+    assert STOP_LINE.format(host) in page
     assert "Claude wants to read" not in page
+    assert "this app" not in page.split("It would be able to")[0].split(CAUTION)[1]
 
 
 def test_without_a_host_the_page_says_it_cannot_tell_where_the_code_goes(
@@ -468,8 +477,58 @@ def test_without_a_host_the_page_says_it_cannot_tell_where_the_code_goes(
     """A HealthClaw that predates redirect_host: caution, never recognition."""
     page = _ask_page(app, svc, fake, monkeypatch, None)
     assert "An app wants to read your records" in page
-    assert "We can't tell where this app will send you" in page
-    assert "go back to" not in page
+    assert "We can't tell which address you'd go back to" in page
+    assert STOP_LINE.format("an app") in page
+    assert "go back to <strong" not in page
+
+
+@pytest.mark.parametrize("host, not_this", [
+    ("claude.ai.secure-login.example", "claude.ai"),
+    ("claudeai-help.example", "claude.ai"),
+    ("evilclaude.ai", "claude.ai"),
+    ("claude.com.evil.example", "claude.com"),
+    ("my-claude-tools.example", "claude.ai"),
+])
+def test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that(
+        app, svc, fake, monkeypatch, host, not_this):
+    """MUTATION: never set lookalike_of -> red; set it for exact hosts too ->
+    the recognized rows above go red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert f"This is not {not_this}." in page
+    # Near the top: straight after the headline, before the scopes.
+    top = page.split("It would be able to")[0]
+    assert top.index("wants to read your records") < top.index(f"This is not {not_this}.")
+
+
+@pytest.mark.parametrize("host", ["evil.example", "localhost", None])
+def test_an_unrecognized_host_makes_dont_allow_the_primary_button(
+        app, svc, fake, monkeypatch, host):
+    """MUTATION: keep Allow primary for every host -> red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert 'class="btn-primary btn-block" id="deny-btn"' in page
+    assert 'class="btn-secondary btn-block" id="approve-btn"' in page
+    assert page.index('id="deny-btn"') < page.index('id="approve-btn"')
+
+
+@pytest.mark.parametrize("host", ["claude.ai", "claude.com"])
+def test_a_recognized_host_keeps_allow_primary(app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert 'class="btn-primary btn-block" id="approve-btn"' in page
+    assert 'class="btn-secondary btn-block" id="deny-btn"' in page
+
+
+def test_the_host_wraps_only_at_its_dots(app, svc, fake, monkeypatch):
+    """A host is one long word: at 375px it wraps after a dot, never mid-label.
+    MUTATION: render the host without <wbr> -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = "claude.ai.secure-login.example"
+    page = client.get("/authorize", query_string={"req": _handle()}).get_data(as_text=True)
+    assert "claude.<wbr>ai.<wbr>secure-login.<wbr>example wants to read" in page
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    consent_css = css.split("--- consent page")[1].split("Leaving (#554)")[0]
+    assert "anywhere" not in consent_css
 
 
 def test_the_client_name_and_host_are_escaped_on_the_page(app, svc, fake, monkeypatch):
@@ -481,10 +540,171 @@ def test_the_client_name_and_host_are_escaped_on_the_page(app, svc, fake, monkey
     assert "&lt;img src=x onerror=&#34;alert(1)&#34;&gt;Claude" in page
 
 
+def test_the_host_is_escaped_between_its_line_breaks(app, svc, fake, monkeypatch):
+    """The <wbr> hints are markup; the labels between them are not.
+    MUTATION: join the raw labels without escape() -> red."""
+    page = _ask_page(app, svc, fake, monkeypatch, 'evil<b>.example"')
+    assert "evil<b>" not in page
+    assert "evil&lt;b&gt;.example&#34; wants to read" in page
+
+
 def test_app_identity_matches_hosts_exactly():
-    assert consent.app_identity({"redirect_host": "CLAUDE.AI", "client_name": "C"}) == {
-        "client_name": "C", "redirect_host": "claude.ai", "host_recognized": True}
+    ident = consent.app_identity({"redirect_host": "CLAUDE.AI", "client_name": "C"})
+    assert ident["client_name"] == "C" and ident["redirect_host"] == "claude.ai"
+    assert ident["host_recognized"] is True and ident["lookalike_of"] is None
+    assert str(ident["host_html"]) == "claude.<wbr>ai"
     for host in ("claude.ai.evil.example", "evilclaude.ai", "", None, 7):
         ident = consent.app_identity({"redirect_host": host})
         assert ident["host_recognized"] is False, host
     assert consent.app_identity({})["client_name"] == "An agent"
+    assert consent.app_identity({})["host_html"] is None
+
+
+@pytest.mark.parametrize("given, shown", [
+    ("clаude.com", "xn--clude-5ve.com"),          # Cyrillic a
+    ("claude.ai。evil.example", "claude.ai.evil.example"),
+    ("claude.ai．evil.example", "claude.ai.evil.example"),
+    ("claude.ai｡evil.example", "claude.ai.evil.example"),
+])
+def test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it(given, shown):
+    """Defence in depth: HealthClaw sends A-labels, but the page never shows
+    a Unicode host whatever it is sent. MUTATION: skip the A-label step -> red."""
+    ident = consent.app_identity({"redirect_host": given})
+    assert ident["redirect_host"] == shown and ident["host_recognized"] is False
+
+
+def test_app_identity_shows_no_host_rather_than_one_it_cannot_encode():
+    ident = consent.app_identity({"redirect_host": "a" * 64 + "é.example"})
+    assert ident["redirect_host"] is None and ident["host_recognized"] is False
+
+
+# --- signing in on the way to a consent request ------------------------------
+
+
+def test_signing_in_by_email_code_resumes_the_consent_request(app, svc, fake, monkeypatch):
+    """Bug A: _login clears the session against fixation, and used to take the
+    parked request with it, so the person landed on the hub instead.
+    MUTATION: clear consent_req along with the rest -> red."""
+    from tests.test_careagents import _login as email_login
+    client = app.test_client()
+    req = _handle()
+    assert client.get("/authorize", query_string={"req": req}).status_code == 302
+    with client.session_transaction() as s:
+        s["wa_consent_challenge"] = "planted-before-sign-in"
+        s["something_else"] = "planted-before-sign-in"
+    email_login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        # Only the parked handle survives the clear.
+        assert s["consent_req"] == req
+        assert "wa_consent_challenge" not in s and "something_else" not in s
+    # "Skip for now" and every other post-sign-in path land on /home.
+    home = client.get("/home")
+    assert home.status_code == 302
+    assert home.headers["Location"].endswith(f"/authorize?req={req}")
+    page = client.get(home.headers["Location"])
+    assert page.status_code == 200 and "wants to read your records" in page.get_data(as_text=True)
+    # Once: the hub is the hub again afterwards.
+    assert client.get("/home").status_code == 200
+
+
+def test_a_forged_consent_handle_is_not_carried_across_sign_in(app, svc, monkeypatch):
+    from tests.test_careagents import _login as email_login
+    client = app.test_client()
+    with client.session_transaction() as s:
+        s["consent_req"] = _handle(secret="guessed")
+    email_login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        assert "consent_req" not in s
+
+
+# --- saying no ------------------------------------------------------------------
+
+
+def test_dont_allow_on_an_unrecognized_host_stays_here_and_sends_nothing(
+        app, svc, fake, monkeypatch):
+    """Bug B: a denial used to send the browser to the client's redirect URI,
+    which for a stranger's client is the stranger's page.
+    MUTATION: send the access_denied grant for every host -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.status_code == 200
+    redirect = resp.get_json()["redirect"]
+    assert redirect == "/authorize/declined"
+    assert "grant=" not in redirect
+    page = client.get(redirect)
+    assert page.status_code == 200
+    text = page.get_data(as_text=True)
+    assert "You said no." in text and "Nothing was shared." in text
+    assert "You can close this page." in text
+    assert svc.list_grants(acct.id) == []
+
+
+def test_dont_allow_without_a_host_also_stays_here(app, svc, fake, monkeypatch):
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked.pop("redirect_host", None)
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+
+
+# --- the hub says where a shared app's codes go ---------------------------------
+
+
+def test_a_grant_records_the_redirect_host_and_the_hub_leads_with_it(
+        app, svc, fake, monkeypatch):
+    """The name is the client's claim; the hub, like the consent page, names
+    the app by its address. MUTATION: drop redirect_host from add_grant -> red."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", MINT)
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = "evil.example"
+    with client.session_transaction() as s:
+        s["wa_consent_challenge"] = "c"
+    monkeypatch.setattr(svc, "finish_authentication",
+                        lambda cred, ch, require_uv=False: acct)
+    assert _approve(client, conn).status_code == 200
+    g = svc.list_grants(acct.id)[0]
+    assert g["redirect_host"] == "evil.example" and g["client_name"] == "Claude"
+    page = client.get("/settings").get_data(as_text=True).replace("<wbr>", "")
+    assert '<div class="hub-card-name grant-host">evil.example</div>' in page
+    assert "calls itself &ldquo;Claude&rdquo;" in page or "calls itself “Claude”" in page
+    assert '<div class="hub-card-name grant-host">Claude</div>' not in page
+
+
+def test_a_grant_from_before_hosts_were_kept_still_shows_its_name(
+        app, svc, monkeypatch):
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude", "fhir.read",
+                  "consent_old")
+    assert svc.list_grants(acct.id)[0]["redirect_host"] is None
+    page = client.get("/settings").get_data(as_text=True)
+    assert "calls itself" in page and "Claude" in page
+
+
+def test_an_existing_grants_table_gains_redirect_host_at_start(tmp_path):
+    """create_all() adds tables, never columns, so a live ca_grants reaches
+    this code without redirect_host. MUTATION: delete the ca_grants block
+    from _ensure_columns -> red."""
+    from sqlalchemy import create_engine, inspect, text
+    from careagents.models import _ensure_columns
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE ca_grants (id VARCHAR(32) PRIMARY KEY, "
+            "account_id VARCHAR(32), connection_id VARCHAR(32), "
+            "tenant_id VARCHAR(64), client_id VARCHAR(64), "
+            "client_name VARCHAR(120), scopes VARCHAR(255), "
+            "consent_id VARCHAR(64), granted_at FLOAT, revoked_at FLOAT)"))
+        conn.execute(text("INSERT INTO ca_grants (id, client_name) "
+                          "VALUES ('g1', 'Claude')"))
+    _ensure_columns(engine)
+    assert "redirect_host" in {c["name"] for c in inspect(engine).get_columns("ca_grants")}
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT redirect_host FROM ca_grants WHERE id='g1'")).scalar() is None
+    _ensure_columns(engine)  # idempotent: boot runs it every time
+    engine.dispose()
