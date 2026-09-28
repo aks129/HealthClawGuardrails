@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Share your records? — CareAgents{% endblock %}
+{% block title %}{% if state == "declined" %}You said no{% else %}Share your records?{% endif %} — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
 {% block content %}
 <main class="setup-wrap">
@@ -21,15 +21,20 @@
     {#- The address the code goes to names the app: anyone can register a
         client under any name, but not with somebody else's address. The
         first screen at 375px answers who is asking, where you'll go, whether
-        we recognize it, and what to do if you didn't start this. -#}
+        we recognize it, and what to do if you didn't start this. The host
+        only ever appears as host_html, which carries its wrap fallback. -#}
     {% if redirect_host %}
     <h1 class="consent-title">{{ host_html }} wants to read your records</h1>
     {% if lookalike_of %}
     <p class="form-warn consent-lookalike"><strong>This is not {{ lookalike_of }}.</strong>
-    The address only uses the name.</p>
+    It just has {{ lookalike_of }} in it.</p>
+    {% endif %}
+    {% if unusual_letters %}
+    <p class="form-warn consent-lookalike">This address uses unusual letters
+    that can imitate another address.</p>
     {% endif %}
     <p class="consent-origin">After you allow,
-      you'll go back to <strong class="consent-host">{{ host_html }}</strong>.</p>
+      you'll go back to <strong>{{ host_html }}</strong>.</p>
     {% else %}
     <h1 class="consent-title">An app wants to read your records</h1>
     {% endif %}

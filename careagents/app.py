@@ -600,7 +600,11 @@ def create_app(config: Config | None = None,
             # sends the browser to the client. Any other stays here: its
             # redirect URI is a stranger's page. HealthClaw's parked request is
             # then never decided and lapses at its ten-minute expiry (#846).
-            parked = hc.consent_request(request_id)
+            # HealthClaw unreachable: nothing was shared, so say no here too.
+            try:
+                parked = hc.consent_request(request_id)
+            except HealthClawError:
+                parked = None
             if not consent.app_identity(parked or {})["host_recognized"]:
                 return jsonify({"redirect": url_for("consent_declined")})
             grant, _ = consent.build_grant(cfg.mint_secret, request_id, "denied")

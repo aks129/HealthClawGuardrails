@@ -188,7 +188,7 @@ def test_the_page_names_the_client_the_permissions_and_the_persons_connections(
     _connect(svc, acct, "fasten", "Clinic records", provider="Epic (Fasten)")
     fake.parked["redirect_host"] = "claude.ai"
     resp = client.get("/authorize", query_string={"req": _handle()})
-    page = resp.get_data(as_text=True).replace("<wbr>", "")
+    page = _words(resp.get_data(as_text=True))
     assert resp.status_code == 200
     assert "claude.ai wants to read your records" in page
     assert "Read your health records" in page and "summaries" in page
@@ -436,8 +436,16 @@ def _ask_page(app, svc, fake, monkeypatch, host, name="Claude"):
         fake.parked["redirect_host"] = host
     resp = client.get("/authorize", query_string={"req": _handle()})
     assert resp.status_code == 200
-    # The host carries a line-break hint after each dot; read the words.
-    return resp.get_data(as_text=True).replace("<wbr>", "")
+    return _words(resp.get_data(as_text=True))
+
+
+HOST_OPEN = '<span class="consent-host">'
+
+
+def _words(page):
+    """The page as read: the host's wrapper and its line-break hints (one
+    after each dot) are markup around the words, not words."""
+    return page.replace("<wbr>", "").replace(HOST_OPEN, "").replace("</span>", "")
 
 
 CAUTION = "We don't recognize this address"
@@ -449,7 +457,7 @@ def test_a_recognized_host_heads_the_page_and_reads_as_recognized(
         app, svc, fake, monkeypatch, host):
     page = _ask_page(app, svc, fake, monkeypatch, host)
     assert f"{host} wants to read your records" in page
-    assert f"""you'll go back to <strong class="consent-host">{host}</strong>""" in page
+    assert f"you'll go back to <strong>{host}</strong>" in page
     assert "calls itself" in page and "Claude" in page
     assert "check the web address above" in page
     assert STOP_LINE.format(host) in page
@@ -524,7 +532,8 @@ def test_the_host_wraps_only_at_its_dots(app, svc, fake, monkeypatch):
     _connect(svc, acct, "sample", "Sample records")
     fake.parked["redirect_host"] = "claude.ai.secure-login.example"
     page = client.get("/authorize", query_string={"req": _handle()}).get_data(as_text=True)
-    assert "claude.<wbr>ai.<wbr>secure-login.<wbr>example wants to read" in page
+    assert (f"{HOST_OPEN}claude.<wbr>ai.<wbr>secure-login.<wbr>example</span> "
+            "wants to read") in page
     import pathlib
     css = pathlib.Path("careagents/static/careagents.css").read_text()
     consent_css = css.split("--- consent page")[1].split("Leaving (#554)")[0]
@@ -552,7 +561,7 @@ def test_app_identity_matches_hosts_exactly():
     ident = consent.app_identity({"redirect_host": "CLAUDE.AI", "client_name": "C"})
     assert ident["client_name"] == "C" and ident["redirect_host"] == "claude.ai"
     assert ident["host_recognized"] is True and ident["lookalike_of"] is None
-    assert str(ident["host_html"]) == "claude.<wbr>ai"
+    assert str(ident["host_html"]) == f"{HOST_OPEN}claude.<wbr>ai</span>"
     for host in ("claude.ai.evil.example", "evilclaude.ai", "", None, 7):
         ident = consent.app_identity({"redirect_host": host})
         assert ident["host_recognized"] is False, host
@@ -682,7 +691,28 @@ def test_a_grant_from_before_hosts_were_kept_still_shows_its_name(
                   "consent_old")
     assert svc.list_grants(acct.id)[0]["redirect_host"] is None
     page = client.get("/settings").get_data(as_text=True)
-    assert "calls itself" in page and "Claude" in page
+    # No host to lead with: the name alone, not "Claude / calls itself Claude".
+    # MUTATION: show the calls-itself line whatever the host -> red.
+    assert '<div class="hub-card-name grant-host">Claude</div>' in page
+    assert "calls itself" not in page
+
+
+def test_a_long_shared_app_host_wraps_at_dots_with_a_fallback(app, svc, monkeypatch):
+    """The settings card names the app by its host, which can be one label
+    wider than a 375px card. MUTATION: drop the <wbr> loop or the
+    .grant-host wrap rule -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-x", "Claude", "fhir.read",
+                  "consent_long", redirect_host=f"a.{LONG_LABEL}")
+    page = client.get("/settings").get_data(as_text=True)
+    assert (f'<div class="hub-card-name grant-host">a.<wbr>{LONG_LABEL.split(".")[0]}'
+            f'.<wbr>example</div>') in page
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    assert ".grant-host { overflow-wrap: break-word; }" in css
+    assert ".grant-card { min-width: 0; }" in css
 
 
 def test_an_existing_grants_table_gains_redirect_host_at_start(tmp_path):
@@ -708,3 +738,79 @@ def test_an_existing_grants_table_gains_redirect_host_at_start(tmp_path):
             "SELECT redirect_host FROM ca_grants WHERE id='g1'")).scalar() is None
     _ensure_columns(engine)  # idempotent: boot runs it every time
     engine.dispose()
+
+
+# --- patient re-walk: wrapping, unusual letters, small copy -------------------
+
+LONG_LABEL = "claudeaiconnectorauthorizationcallbackservicesecureverification.example"
+
+
+def _consent_css_rule(selector):
+    import pathlib
+    import re as _re
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    consent_css = css.split("--- consent page")[1].split("Leaving (#554)")[0]
+    for m in _re.finditer(r"([^{}]+)\{([^}]*)\}", consent_css):
+        if selector in [s.strip() for s in m.group(1).split(",")]:
+            return m.group(2)
+    return ""
+
+
+@pytest.mark.parametrize("host", [LONG_LABEL, "evil.example", "claude.ai"])
+def test_every_occurrence_of_the_host_carries_the_wrap_fallback(
+        app, svc, fake, monkeypatch, host):
+    """A single label wider than 375px overflowed wherever the host was plain
+    text (the caution and the stop line). Every occurrence now sits in the
+    consent-host wrapper, and that wrapper breaks a too-long label.
+    MUTATION: render any occurrence without host_html, or drop break-word
+    from .consent-host -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = host
+    page = client.get("/authorize", query_string={"req": _handle()}).get_data(as_text=True)
+    first_label = host.split(".")[0]
+    starts = [i for i in range(len(page)) if page.startswith(first_label, i)]
+    # Headline, "go back to", the stop line, and the caution when unrecognized.
+    assert len(starts) == (3 if host == "claude.ai" else 4), starts
+    for i in starts:
+        assert page[:i].endswith(HOST_OPEN), page[max(0, i - 80):i + 40]
+    assert "overflow-wrap: break-word" in _consent_css_rule(".consent-host")
+
+
+@pytest.mark.parametrize("host, lookalike", [
+    ("xn--clude-5ve.com", "claude.com"),          # clаude.com, Cyrillic a
+    ("xn--laude-0ye.ai", "claude.ai"),            # сlaude.ai, Cyrillic c
+    ("login.xn--80ak6aa92e.com", None),           # a Cyrillic label, no claude
+])
+def test_a_punycode_host_is_explained_in_plain_words(
+        app, svc, fake, monkeypatch, host, lookalike):
+    """xn--… reads as machine code. MUTATION: never set unusual_letters ->
+    red; skip the decode in the lookalike check -> the claude rows go red."""
+    page = " ".join(_ask_page(app, svc, fake, monkeypatch, host).split())
+    assert "This address uses unusual letters that can imitate another address." in page
+    if lookalike:
+        assert f"This is not {lookalike}.</strong> It just has {lookalike} in it." in page
+    else:
+        assert "This is not" not in page
+
+
+@pytest.mark.parametrize("host", ["evil.example", "claude.ai", "claude.ai.xn--evil.example"])
+def test_unusual_letters_line_only_for_a_label_that_starts_with_xn(
+        app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    has = "unusual letters" in page
+    assert has is any(label.startswith("xn--") for label in host.split("."))
+
+
+def test_the_lookalike_line_names_the_recognized_address_it_borrows(
+        app, svc, fake, monkeypatch):
+    page = _ask_page(app, svc, fake, monkeypatch, "claude.com.evil.example")
+    assert ("This is not claude.com.</strong> It just has claude.com in it."
+            in " ".join(page.split()))
+    assert "only uses the name" not in page
+
+
+def test_the_declined_page_is_titled_you_said_no(app):
+    page = app.test_client().get("/authorize/declined").get_data(as_text=True)
+    assert "<title>You said no — CareAgents</title>" in page
+    assert "Share your records?" not in page

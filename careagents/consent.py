@@ -17,6 +17,7 @@ import hmac
 import json
 import secrets
 import time
+import unicodedata
 
 from markupsafe import Markup, escape
 
@@ -57,11 +58,41 @@ def _ascii_host(host) -> str | None:
         return None
 
 
+#: Letters from other scripts that read as the Latin letters of the
+#: recognized name. Not a full confusables table: enough to name the
+#: lookalike on an A-label host; the unusual-letters line shows regardless.
+_CONFUSABLE = str.maketrans({
+    "а": "a", "α": "a", "с": "c", "ϲ": "c", "ԁ": "d", "е": "e", "ε": "e",
+    "ӏ": "l", "ι": "l", "о": "o", "ο": "o", "р": "p", "ս": "u", "υ": "u",
+    "х": "x", "у": "y",
+})
+
+
+def _unusual_letters(host: str | None) -> bool:
+    """An A-label anywhere in the host: letters outside plain ASCII, which a
+    person sees as machine code (xn--…) and which can imitate another host."""
+    return bool(host) and any(label.startswith("xn--") for label in host.split("."))
+
+
+def _as_read(host: str) -> str:
+    """The host as a person would read it: A-labels decoded, lookalike
+    letters folded to Latin. Only used to spot a borrowed name."""
+    labels = []
+    for label in host.split("."):
+        if label.startswith("xn--"):
+            try:
+                label = label.encode("ascii").decode("idna")
+            except UnicodeError:
+                pass
+        labels.append(unicodedata.normalize("NFKC", label).lower().translate(_CONFUSABLE))
+    return ".".join(labels)
+
+
 def _lookalike_of(host: str | None) -> str | None:
     """The recognized host an unrecognized one borrows the name of, if any."""
     if not host or host in RECOGNIZED_REDIRECT_HOSTS:
         return None
-    compact = "".join(ch for ch in host if ch.isalnum())
+    compact = "".join(ch for ch in _as_read(host) if ch.isascii() and ch.isalnum())
     if _RECOGNIZED_NAME not in compact:
         return None
     for known in sorted(RECOGNIZED_REDIRECT_HOSTS):
@@ -72,10 +103,13 @@ def _lookalike_of(host: str | None) -> str | None:
 
 def _wrap_at_dots(host: str | None) -> Markup | None:
     """The host, escaped, with a line-break hint after each dot: at 375px a
-    long host wraps between its labels, never mid-word."""
+    long host wraps between its labels. It carries its own consent-host
+    wrapper, whose CSS breaks a single label wider than the screen, so no
+    occurrence of the host on the page can go without that fallback."""
     if host is None:
         return None
-    return Markup(".<wbr>").join(escape(label) for label in host.split("."))
+    labels = Markup(".<wbr>").join(escape(label) for label in host.split("."))
+    return Markup('<span class="consent-host">') + labels + Markup("</span>")
 
 
 def app_identity(parked: dict) -> dict:
@@ -88,7 +122,8 @@ def app_identity(parked: dict) -> dict:
             "redirect_host": host,
             "host_html": _wrap_at_dots(host),
             "host_recognized": host in RECOGNIZED_REDIRECT_HOSTS,
-            "lookalike_of": _lookalike_of(host)}
+            "lookalike_of": _lookalike_of(host),
+            "unusual_letters": _unusual_letters(host)}
 
 
 def handoff_key(mint_secret: str) -> bytes:

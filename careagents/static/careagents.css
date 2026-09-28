@@ -608,8 +608,9 @@ textarea:focus-visible {
 
 /* --- consent page (a third-party agent asks to read one connection) --- */
 /* The host leads, and a host is one long word: the page puts a <wbr> after
-   each dot so it wraps between labels. break-word is only the last resort
-   for a single label wider than the screen. */
+   each dot so it wraps between labels. Every occurrence of it sits in
+   .consent-host, whose break-word is the last resort for a single label
+   wider than the screen. */
 .consent-title, .consent-host { overflow-wrap: break-word; }
 .consent-origin { font-size: 18px; margin: 10px 0 6px; }
 .consent-lookalike { margin: 8px 0; }
@@ -626,6 +627,11 @@ textarea:focus-visible {
 .consent-choice input { margin: 0; grid-row: span 2; }
 .consent-choice-name { font-weight: 600; }
 .consent-choice-sub { font-size: 13px; opacity: .7; }
+/* A shared app is named by its host (#846): <wbr> after each dot. A label
+   wider than the card breaks as a last resort; min-width: 0 lets the grid
+   item shrink to the column instead of widening it. */
+.grant-card { min-width: 0; }
+.grant-host { overflow-wrap: break-word; }
 .grant-revoke { margin-top: 8px; }
 .grant-msg { display: block; font-size: 13px; margin-top: 6px; }
 
