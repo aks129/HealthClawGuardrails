@@ -73,18 +73,34 @@ def inbound_email():
     api_key = os.environ.get("RESEND_API_KEY", "")
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    # Pull the full message (webhook payload carries metadata only).
+    # Pull the full message (webhook payload carries metadata only). Received
+    # mail lives under /emails/receiving/{id}; /emails/{id} is the *sent*-mail
+    # endpoint and has no body for an inbound message.
     body_text, body_html = "", None
     sender = data.get("from", "unknown")
     subject = data.get("subject", "(no subject)")
     if email_id:
-        resp = requests.get(f"{RESEND_API}/emails/{email_id}", headers=auth, timeout=15)
-        if resp.status_code == 200:
+        try:
+            resp = requests.get(
+                f"{RESEND_API}/emails/receiving/{email_id}", headers=auth, timeout=15
+            )
+            fetch_status = resp.status_code
+        except requests.RequestException:
+            fetch_status = None
+        if fetch_status == 200:
             msg = resp.json()
             sender = msg.get("from") or sender
             subject = msg.get("subject") or subject
             body_text = msg.get("text") or ""
             body_html = msg.get("html")
+        else:
+            # Still forward, but say so: a silent empty body looks like an
+            # empty message. The id lets the owner find it in Resend.
+            logger.warning("inbound email %s: body fetch failed: %s", email_id, fetch_status)
+            body_text = (
+                "[The message body could not be retrieved from Resend. "
+                f"Resend email id: {email_id}]"
+            )
 
     to_addr = (data.get("to") or ["support@healthclaw.io"])[0]
     fwd = {
