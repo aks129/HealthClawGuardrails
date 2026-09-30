@@ -86,7 +86,7 @@ Each risk names the decision that answers it and the task that pins it.
 | R4 | **What a pause does not stop.** Fasten webhook ingest runs in the engine, and an MCP grant reads through HealthClaw directly. | Pause blocks new real connections, new MCP grants on real connections (`consent_decide` uses the same gate), refresh, upload and every chat turn. It does **not** stop engine-side ingest or an existing MCP grant. For stage 1 the MCP connector is token-locked in production, so no grant exists. For a full stop the operator uses `CARE_REAL_RECORDS=off` plus Disconnect or Delete. The runbook row says so. Before the connector opens: pause must also revoke grants (fast-follow issue). | 5, 8 |
 | R5 | **Consent claimed for terms nobody saw.** A terms change that does not bump the version silently claims earlier consent. | `careagents/tester_terms.py` owns `CONSENT_VERSION`. A test ties it to the terms file: while the file carries the pending marker, the version stays `2026-08-01` and the card shows no terms. Once the marker is removed, the version must change. That holds today and fails the moment someone pastes real terms without bumping. | 3 |
 | R6 | **Invites honoured before the terms exist.** Stage 1's legal gate (spec §3, gate 1) is the tester terms. | Table invites count only when `tester_terms.approved()`. The env allowlist keeps working as it does today for the people already on it. Invites can be added early; the CLI says they are not honoured yet. | 3, 4 |
-| R7 | **A consent bump that only reaches new connections.** Consent is checked at connect (`careagents/app.py:654`) and at refresh, but Fasten refresh answers `requires_consent: False`, so an existing real connection is never asked again. | Any non-sample connection whose `consent_version` differs from the current one gets the terms sentence from the worker instead of an answer, until the person accepts again from the hub (`POST /api/connections/<id>/consent`). The gate is `kind != "sample"`, not a list of kinds, so an older or unknown kind fails closed. **Rollout note:** real connections made before the consent column existed hold `NULL` and will be asked once on deploy. That is correct, and the owner should expect it. | 6 |
+| R7 | **A consent bump that only reaches new connections.** Consent is checked at connect (`careagents/app.py:654`) and at refresh, but Fasten refresh answers `requires_consent: False`, so an existing real connection is never asked again. | Any non-sample connection whose `consent_version` differs from the current one gets the terms sentence from the worker instead of an answer, until the person accepts again from the hub (`POST /api/connections/<id>/consent`). The gate is `kind != "sample"`, not a list of kinds, so an older or unknown kind fails closed. **Rollout note:** real connections made before the consent column existed hold `NULL` and will be asked once on deploy. That is correct, and the owner should expect it. The worker sentence and the hub line are worded to be true before #565 is approved ("please review and accept the current terms"), not "we updated the terms". | 6 |
 | R8 | **Tenancy on the new endpoint.** A re-consent endpoint that takes a connection id is a cross-account write if it is not scoped. | `svc.record_consent(account_id, conn_id, version)` filters by both ids. A foreign id is a 404, the same as every connection route. | 6 |
 | R9 | **Duplicate pending Fasten rows (#847).** Two tabs pass `pending_connection` before either inserts. | Reuse the per-account lease `claim_sample_start` / `release_sample_start` (a compare-and-set on `ca_accounts.sample_claim_at`) around the Fasten reuse-or-insert. No partial unique index: `_create_tables` never adds an index to an existing table, and live duplicate rows would make a `CREATE UNIQUE INDEX` fail at boot. The method keeps its name: renaming it touches evidence files that record past mutation runs. The docstring is updated. | 9 |
 | R10 | **Invite emails outlive the person.** `delete_account` promises every row keyed to the person goes. | `delete_account` also deletes the invite row for the account's email and its `ca_activity_days` rows. The operator can invite again. | 1 |
@@ -628,6 +628,8 @@ To approve: replace the whole of templates/_tester_terms.html with the
 approved text (the marker goes with it), set TERMS_VERSION to the approval
 date, and ship. tests/test_careagents_beta_terms.py fails if only one of the
 two changes is made. Every tester then accepts the new wording once.
+The approved file must keep `<section class="consent-terms"
+id="tester-terms">` as its outer element: the card test looks for that id.
 """
 
 from __future__ import annotations
@@ -656,7 +658,8 @@ def approved() -> bool:
 {# TESTER-TERMS-PENDING-565
    Placeholder. The tester terms wait on owner approval (#565). This file is
    not rendered while careagents/tester_terms.py has TERMS_VERSION = None.
-   Replace the whole file with the approved text, including this comment. #}
+   Replace the whole file with the approved text, including this comment,
+   and keep the outer <section class="consent-terms" id="tester-terms">. #}
 <section class="consent-terms" id="tester-terms">
   <h4>Tester terms</h4>
   <p>The tester terms are not approved yet.</p>
@@ -1096,6 +1099,7 @@ def _real_agent(cfg, svc, monkeypatch, email="gene@example.com"):
     c = app.test_client()
     _login(c, svc, monkeypatch, email=email)
     conn = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    svc.set_connection_status(fake.tenants[-1], "active")
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
         "connection_id": conn["id"]}).get_json()["id"]
@@ -1181,8 +1185,11 @@ In `careagents/beta.py`, add the text and replace `turn_block`'s body:
 ```python
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
-TERMS_TEXT = ("We updated the tester terms. Open your home page and accept "
-              "them, then ask me again.")
+#: True before and after #565 is approved: a connection made before the
+#: consent column existed holds NULL and is asked on the first deploy,
+#: when no terms have changed yet.
+TERMS_TEXT = ("Before we go on, please review and accept the current terms "
+              "on your home page, then ask me again.")
 
 
 def turn_block(connection: dict, paused: bool,
@@ -1255,7 +1262,7 @@ block:
 ```html
   {% for s in stale_consent %}
   <section class="switch-prompt">
-    <p>We updated the tester terms for {{ s.label }}.</p>
+    <p>Please review and accept the current terms for {{ s.label }}.</p>
     <button type="button" class="btn-primary"
             data-reconsent="{{ s.id }}">Review and accept</button>
   </section>
@@ -2017,8 +2024,8 @@ Curl the running server after each change so a stale process cannot pass.
 | Signer | Rows | What they exercise |
 |---|---|---|
 | QA verifier | G1 to G5 | This plan's tasks against the spec table at the top; suite counts; mutation file; the real run. |
-| Security tester | V1, V3, V6 | A second account's connection id on `/api/connections/<id>/consent` and on the Fasten reuse path; a paused account on every surface; `weekly-counts` and `invites list` output carry no health data; no email in the application log (`grep -r "@example" ` the captured log). |
-| Patient tester | V4, G7 | At 375px: the consent card with the terms block, the "updated tester terms" hub line and its accept flow, the paused chat answer, the 409 connect sentence. |
+| Security tester | V1, V2, V3, V6 | V2: no new record read or write path, so report it as not applicable, citing the worker gate that returns before `recent_messages`. A second account's connection id on `/api/connections/<id>/consent` and on the Fasten reuse path; a paused account on every surface; `weekly-counts` and `invites list` output carry no health data; no email in the application log (`grep -r "@example"` over the captured log). |
+| Patient tester | V4, G7 | At 375px: the consent card with the terms block, the "review and accept the current terms" hub line and its accept flow, the paused chat answer, the 409 connect sentence. |
 | CTO | Architecture | This plan (done in the design pass above) and any deviation from it. |
 
 - [ ] **Step 5: Open the PR, do not merge**
