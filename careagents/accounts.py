@@ -274,6 +274,13 @@ class AccountService:
             return (s.query(Passkey)
                     .filter_by(account_id=account_id).first() is not None)
 
+    def list_passkeys(self, account_id: str) -> list[dict]:
+        with self.session() as s:
+            rows = (s.query(Passkey).filter_by(account_id=account_id)
+                    .order_by(Passkey.created_at.asc()).all())
+            return [{"id": p.id, "name": p.name, "created_at": p.created_at}
+                    for p in rows]
+
     # --- connections / agents / surfaces (thin CRUD) ------------------------
 
     def list_home(self, account_id: str) -> dict:
@@ -308,6 +315,16 @@ class AccountService:
             c = (s.query(Connection)
                  .filter_by(account_id=account_id, kind="sample",
                             status="active")
+                 .order_by(Connection.connected_at.asc()).first())
+            return _conn_dict(c) if c else None
+
+    def pending_connection(self, account_id: str, kind: str) -> dict | None:
+        """The account's oldest connection of this kind still waiting for
+        records, if any."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(account_id=account_id, kind=kind,
+                            status="pending")
                  .order_by(Connection.connected_at.asc()).first())
             return _conn_dict(c) if c else None
 

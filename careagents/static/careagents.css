@@ -337,6 +337,9 @@ h1 em { font-style: italic; color: var(--clay); }
 .status { position: absolute; top: 16px; right: 16px; font-size: 11px;
   font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   padding: 4px 9px; border-radius: 999px; }
+/* On a record card the badge sits above the name, in the flow: placed
+   absolutely it ran over a long name at 375px. */
+.conn-card .status { position: static; align-self: flex-start; order: -1; }
 .status-active { background: #EAF1EA; color: var(--sage); }
 .status-revoked { background: #F1ECEC; color: #7A4A4A; }
 .status-pending { background: #FBEFD9; color: #A97516; }
@@ -625,3 +628,47 @@ textarea:focus-visible {
 .leaving p { color: var(--ink-soft); font-size: 13.5px; max-width: 60ch; }
 .pill.danger { border-style: dashed; color: var(--clay-deep); }
 .pill.danger:hover { border-style: solid; border-color: var(--clay-deep); }
+
+/* --- settings (calm hub, 2026-09-26) ------------------------------------- */
+.settings-list { margin: 0 0 12px; padding-left: 20px; }
+.settings-list li { margin: 4px 0; }
+.hub-link { margin: 12px 0 0; }
+
+/* --- calm hub (spec 2026-09-26) ------------------------------------------ */
+.waiting { margin: 0 0 24px; padding: 16px 18px; border-radius: var(--radius);
+  background: var(--paper); border: 1px solid var(--hairline); }
+.waiting h2 { font-size: 16px; margin: 0 0 4px; }
+.waiting-line { margin: 0; color: var(--ink-soft); }
+.waiting[data-state="pending"] { background: #FBEFD9; border-color: #E9CF9E; }
+.waiting[data-state="pending"] a { color: var(--clay-deep); font-weight: 700; }
+.waiting[data-state="fail"] .waiting-line { color: var(--clay-deep); }
+.waiting-queues { margin: 8px 0 0; padding-left: 20px; }
+.waiting-queues li { margin: 4px 0; }
+.switch-prompt { margin: 0 0 24px; padding: 16px 18px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--hairline); }
+.card-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 12px; }
+.card-menu summary { cursor: pointer; min-height: 44px; display: inline-flex;
+  align-items: center; padding: 0 12px; }
+.card-menu button { display: block; width: 100%; min-height: 44px;
+  text-align: left; background: none; border: 0; font: inherit; color: inherit; }
+.badge-sample { display: inline-block; margin-top: 6px; padding: 2px 8px;
+  border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: var(--paper); color: var(--ink-soft); }
+.conn-facts { margin: 6px 0 0; font-size: 14px; color: var(--ink-soft); }
+.menu-group { margin: 0 0 18px; }
+.menu-group h3 { font-size: 15px; margin: 0 0 8px; }
+.connector-row { display: grid; grid-template-columns: 1fr auto;
+  gap: 2px 12px; width: 100%; min-height: 44px; margin-bottom: 8px;
+  padding: 14px 16px; text-align: left; font: inherit; color: inherit;
+  background: var(--card); border: 1px solid var(--hairline); border-radius: 14px; }
+.connector-row .connector-label { grid-column: 1; font-weight: 700; }
+.connector-row .connector-blurb { grid-column: 1; font-size: 14px;
+  color: var(--ink-soft); }
+.connector-row .chip { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.chip { padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  font-weight: 700; background: #E9F0E7; color: var(--sage); }
+.chip-soon { background: var(--paper); color: var(--ink-soft); }
+.menu-closed-line { margin: 12px 0 0; color: var(--ink-soft); }
+.past summary { cursor: pointer; min-height: 44px; display: flex;
+  align-items: center; font-weight: 700; }

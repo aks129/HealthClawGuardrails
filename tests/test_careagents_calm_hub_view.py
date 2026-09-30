@@ -75,3 +75,17 @@ def test_the_switch_prompt_needs_an_agent_on_the_sample_and_a_real_source():
     pending = {"connections": [sample, _conn("f", "fasten", "pending")],
                "agents": [_agent("g", "s")]}
     assert hub.switch_prompt(pending) is None
+
+
+def test_a_connection_that_never_synced_does_not_say_updated():
+    """Nothing arrived, so there is no "Updated today" (PR #843 QA). An
+    active row with no sync stamp still reads from when it connected."""
+    view = hub.build({"connections": [
+        _conn("p", kind="fasten", status="pending"),
+        _conn("e", status="empty"),
+        _conn("a", status="active"),
+        _conn("s", kind="fasten", status="pending", last_synced_at=NOW - DAY),
+    ], "agents": []}, NOW)
+    by_id = {r["id"]: r["updated"] for r in view["records"]}
+    assert by_id == {"p": "", "e": "", "a": "Updated today",
+                     "s": "Updated yesterday"}

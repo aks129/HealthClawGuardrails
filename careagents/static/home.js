@@ -1,5 +1,5 @@
-/* CareAgents hub — add connections (sample/Fasten), create agents, connect
-   Telegram. Small vanilla JS; the server is authoritative. */
+/* CareAgents hub and settings: add records, the assistant's menu, the
+   waiting band. Small vanilla JS; the server is authoritative. */
 (function () {
   const $ = (id) => document.getElementById(id);
   async function post(url, body) {
@@ -14,15 +14,6 @@
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
       const id = tile.dataset.connector;
-      if (tile.dataset.soon) {
-        // Waitlist tiles record intent and answer 200. A real-record tile
-        // closed by CARE_REAL_RECORDS answers 503 — show that, rather than
-        // a "we'll let you know" the server never agreed to.
-        const res = await post("/api/connections/" + id);
-        if (!res.ok) return say(tile, $("connect-msg"), res.d.error || "Not available yet");
-        tile.querySelector(".connector-tag").textContent = "we'll let you know";
-        return;
-      }
       let body = {};
       $("connect-msg").hidden = true;
       if (tile.dataset.providers) {
@@ -46,7 +37,6 @@
         return say(tile, $("connect-msg"),
                    res.d.error || "Couldn't connect that source.");
       }
-      if (res.d.soon) { tile.querySelector(".connector-tag").textContent = "we'll let you know"; return; }
       if (res.d.redirect) { location.assign(res.d.redirect); return; }
       if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
       location.reload();
@@ -519,7 +509,8 @@
   const acctBtn = $("account-delete");
   if (acctBtn) acctBtn.addEventListener("click", async () => {
     const msg = $("account-msg");
-    const agreed = await askToDelete("your account and all its records");
+    // settings.html renders the account wording; there is no label to fill.
+    const agreed = await askToDelete();
     if (!agreed) return;
     acctBtn.disabled = true;
     announce(msg, "Deleting…");
@@ -535,19 +526,24 @@
     location.assign("/?deleted=1");
   });
 
-  // Resolves true only after the patient types DELETE exactly. Two gates on
-  // purpose: the button ships disabled and is only enabled on an exact match,
+  // The word, in any case, with the whitespace trimmed: phones capitalise
+  // the first letter, and "Delete" is plainly the person agreeing.
+  const deleteTyped = (v) => v.trim().toUpperCase() === "DELETE";
+
+  // Resolves true only after the patient types DELETE. Two gates on
+  // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
   function askToDelete(label) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
-    $("delete-label").textContent = label;
+    const named = $("delete-label");
+    if (named) named.textContent = label;
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
-    input.oninput = () => { ok.disabled = input.value !== "DELETE"; };
-    ok.onclick = () => { if (input.value === "DELETE") dlg.close(true); };
+    input.oninput = () => { ok.disabled = !deleteTyped(input.value); };
+    ok.onclick = () => { if (deleteTyped(input.value)) dlg.close(true); };
     // Enter goes through the same check; there is no form here to submit.
     input.onkeydown = (e) => { if (e.key === "Enter") ok.onclick(); };
     $("delete-cancel").onclick = () => dlg.close(false);
@@ -586,70 +582,172 @@
     }, 5000);
   }
 
-  // --- new agent modal ---
-  const modal = $("agent-modal");
-  const hasConn = () => $("a-conn") && $("a-conn").options.length > 0;
-
-  // With no records connected there's nothing to build an agent on — send the
-  // user to the connect step (highlight it) instead of opening a dead modal.
-  function needConnection() { flashSection($("connect-section"), null, ""); }
-  function openAgentModal() {
-    if (!hasConn()) { needConnection(); return; }
-    $("modal-err").hidden = true;
-    modal.hidden = false;
-    $("a-name").focus();
-  }
-  $("new-agent-btn").addEventListener("click", openAgentModal);
-  const emptyCta = $("empty-new-agent");
-  if (emptyCta) emptyCta.addEventListener("click", openAgentModal);
-
-  $("close-modal").addEventListener("click", () => (modal.hidden = true));
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
-  $("create-agent").addEventListener("click", async () => {
-    const conn = $("a-conn").value;
-    if (!conn) { const e = $("modal-err"); e.textContent = "Connect records first."; e.hidden = false; return; }
-    const persona = document.querySelector('input[name="ag-persona"]:checked');
-    const btn = $("create-agent");
-    btn.disabled = true; btn.textContent = "Creating…";
-    const res = await post("/api/agents", {
-      name: $("a-name").value.trim() || "Juniper",
-      persona: persona ? persona.value : "calm",
-      advisor: ($("a-advisor") && $("a-advisor").value) || "general",
-      connection_id: conn,
-    });
-    if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }
-    btn.disabled = false; btn.textContent = "Create";
-    const e = $("modal-err"); e.textContent = res.d.error || "Failed"; e.hidden = false;
-  });
-
-  // --- Telegram surface ---
-  const tg = $("tg-surface");
-  if (tg) tg.addEventListener("click", async () => {
-    const firstAgent = document.querySelector(".agent-card");
-    $("surfaces-msg").hidden = true;
-    if (!firstAgent) {
-      return flashSection($("agents"), $("surfaces-msg"),
-        "Create an agent first, then connect Telegram.");
+  // --- waiting for you (spec section 3) ---
+  // "Checking" until the count answers. A failed or malformed answer says
+  // so; it is never rendered as zero (#215, #403).
+  const waiting = $("waiting");
+  const requests = (n) => n + (n === 1 ? " request" : " requests");
+  // A queue whose assistant was deleted has no page to open yet: say how
+  // to reach it instead of linking nowhere. Names are the person's own
+  // words, so they go in as text, never markup.
+  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name +
+    ". Start a chat to review " + (q.count === 1 ? "it" : "them") + ".";
+  function showWaiting(state, d) {
+    const line = waiting.querySelector(".waiting-line");
+    waiting.dataset.state = state;
+    if (state === "fail") { line.textContent = "Couldn't check for requests."; return; }
+    if (state === "none") {
+      line.textContent = "Nothing yet. Anything your assistant prepares, " +
+        "like a form or a reminder, waits here for your OK.";
+      return;
     }
-    const agentId = new URL(firstAgent.href).searchParams.get("agent");
-    const res = await post("/api/surfaces/telegram", { agent_id: agentId });
-    if (!res.ok) return say(tg, $("surfaces-msg"), res.d.error || "Failed");
-    if (res.d.deep_link) { $("tg-state").textContent = "opening…"; window.open(res.d.deep_link, "_blank", "noopener"); }
-    // Telegram pairs on the bare code, so that is what we show and copy.
-    else showCodeCard(res.d.code, "Send this code to the CareAgents bot with /start:");
-    $("tg-state").textContent = "pending — finish in Telegram";
+    // The approvals page reads one assistant's records, so each assistant
+    // with something waiting is its own link. One queue reads as one line.
+    const queues = Array.isArray(d.queues) && d.queues.length
+      ? d.queues : [{ href: d.href, count: d.count }];
+    if (queues.length === 1) {
+      if (!queues[0].href) { line.textContent = orphanLine(queues[0]); return; }
+      const a = document.createElement("a");
+      a.href = queues[0].href;
+      a.textContent = requests(d.count) + " waiting for your approval";
+      line.replaceChildren(a);
+      return;
+    }
+    line.textContent = requests(d.count) + " waiting for your approval:";
+    const list = document.createElement("ul");
+    list.className = "waiting-queues";
+    queues.forEach((q) => {
+      const li = document.createElement("li");
+      if (q.href) {
+        const a = document.createElement("a");
+        a.href = q.href;
+        a.textContent = q.name + ": " + requests(q.count);
+        li.appendChild(a);
+      } else {
+        li.textContent = orphanLine(q);
+      }
+      list.appendChild(li);
+    });
+    line.after(list);
+  }
+  if (waiting) {
+    fetch("/api/approvals/count").then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || typeof d.count !== "number") return showWaiting("fail", d);
+      showWaiting(d.count > 0 ? "pending" : "none", d);
+    }).catch(() => showWaiting("fail", {}));
+  }
+
+  // --- switch to your records (spec section 5) ---
+  const sw = $("switch-prompt");
+  if (sw) {
+    const answer = async (a) => {
+      const res = await post("/api/hub/switch-prompt", {
+        answer: a, agent_id: sw.dataset.agent, connection_id: sw.dataset.conn });
+      if (!res.ok) return announce($("switch-msg"), "That didn't work. Try again.");
+      location.reload();
+    };
+    $("switch-yes").addEventListener("click", () => answer("switch"));
+    $("switch-later").addEventListener("click", () => answer("later"));
+  }
+
+  // --- your assistant: start, rename, change records, delete ---
+  // Start a chat: an account with records and no assistant (its first one
+  // was deleted) gets one with the first-run defaults. The server checks
+  // the connection is this account's, as for any new assistant.
+  const startChat = $("start-chat");
+  if (startChat) startChat.addEventListener("click", async () => {
+    startChat.disabled = true;
+    const res = await post("/api/agents", {
+      name: "Juniper", persona: "calm", connection_id: startChat.dataset.conn });
+    if (res.ok) { location.href = "/chat?agent=" + res.d.id; return; }
+    startChat.disabled = false;
+    announce($("start-chat-msg"), "Couldn't start a chat. Refresh and try again.");
   });
 
-  // --- iMessage surface ---
+  const agentMsg = (btn) => btn.closest(".agent-card").querySelector(".agent-msg");
+
+  function askForName(current) {
+    const input = $("rename-input");
+    input.value = current || "";
+    const dlg = openDialog($("rename-modal"));
+    $("rename-save").onclick = () => dlg.close(input.value.trim() || null);
+    input.onkeydown = (e) => { if (e.key === "Enter") $("rename-save").onclick(); };
+    $("rename-cancel").onclick = () => dlg.close(null);
+    input.focus();
+    return dlg.result;
+  }
+  document.querySelectorAll(".agent-rename").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = await askForName(btn.dataset.name);
+      if (!name) return;
+      const res = await post(`/api/agents/${btn.dataset.agent}/rename`, { name });
+      if (!res.ok) return announce(agentMsg(btn), res.d.error || "Couldn't rename.");
+      location.reload();
+    });
+  });
+
+  let moveChoices = [];
+  try { moveChoices = JSON.parse(($("agents") && $("agents").dataset.records) || "[]"); }
+  catch (e) { moveChoices = []; }
+  function pickRecords(currentId) {
+    const rows = $("records-rows");
+    rows.textContent = "";
+    const dlg = openDialog($("records-picker"));
+    moveChoices.filter((c) => c.id !== currentId).forEach((c) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "picker-row";
+      row.textContent = c.label;   // server-supplied label: text, never markup
+      row.addEventListener("click", () => dlg.close(c.id));
+      rows.appendChild(row);
+    });
+    $("records-cancel").onclick = () => dlg.close(null);
+    const first = rows.querySelector(".picker-row");
+    if (first) first.focus();
+    return dlg.result;
+  }
+  document.querySelectorAll(".agent-move").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const conn = await pickRecords(btn.dataset.conn);
+      if (!conn) return;
+      const res = await post(`/api/agents/${btn.dataset.agent}/connection`,
+                             { connection_id: conn });
+      if (!res.ok) {
+        return announce(agentMsg(btn), "Those records aren't available. Refresh and try again.");
+      }
+      location.reload();
+    });
+  });
+
+  function askToRemoveAgent(name) {
+    $("agent-delete-name").textContent = name;
+    const dlg = openDialog($("agent-delete-modal"));
+    $("agent-delete-confirm").onclick = () => dlg.close(true);
+    $("agent-delete-cancel").onclick = () => dlg.close(false);
+    $("agent-delete-cancel").focus();
+    return dlg.result;
+  }
+  document.querySelectorAll(".agent-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!(await askToRemoveAgent(btn.dataset.name))) return;
+      const r = await fetch(`/api/agents/${btn.dataset.agent}`, { method: "DELETE" });
+      if (!r.ok) return announce(agentMsg(btn), "Couldn't delete. Try again.");
+      location.reload();
+    });
+  });
+
+  // --- iMessage surface (settings page) ---
+  // The page names the assistant to bind on the tile itself: settings has
+  // no assistant cards to read one from.
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
-    const firstAgent = document.querySelector(".agent-card");
     $("surfaces-msg").hidden = true;
-    if (!firstAgent) {
-      return flashSection($("agents"), $("surfaces-msg"),
-        "Create an agent first, then connect iMessage.");
+    const agentId = im.dataset.agent;
+    if (!agentId) {
+      return say(im, $("surfaces-msg"),
+        "Start a chat with your assistant first, then connect iMessage.");
     }
-    const agentId = new URL(firstAgent.href).searchParams.get("agent");
     const res = await post("/api/surfaces/imessage", { agent_id: agentId });
     if (!res.ok) return say(im, $("surfaces-msg"), res.d.error || "Failed");
     $("im-state").textContent = "pending — text to finish";

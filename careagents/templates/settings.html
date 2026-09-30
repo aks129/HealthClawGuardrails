@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}CareAgents settings{% endblock %}
+{% block bodyclass %}page-home{% endblock %}
+{% block content %}
+<main class="hub">
+  <div class="hub-head">
+    <div>
+      <h1>Settings</h1>
+      <p class="hub-sub">{{ me.email }}</p>
+    </div>
+    <a class="pill" href="/home">Back to your hub</a>
+  </div>
+
+  <section class="hub-section" id="passkeys-section">
+    <div class="section-head"><h2>Passkeys</h2></div>
+    {% if passkeys %}
+    <ul class="settings-list">
+      {% for p in passkeys %}<li>{{ p.name }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No passkey yet. Add one to sign in with your face or
+      fingerprint.</p>
+    {% endif %}
+    <a class="pill" href="/auth?enroll=1">Add a passkey</a>
+  </section>
+
+  <section class="hub-section">
+    <div class="section-head"><h2>Where you can reach your assistant</h2></div>
+    <div class="surface-row">
+      <div class="surface on"><b>Web</b><span>always on</span></div>
+      {# Not serviced in the beta (#536, D6): no webhook, no poller. No id, so
+         home.js has nothing to bind. The tile is a label, not a control. #}
+      <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
+      {% if imessage_handle %}
+      <div class="surface" id="im-surface" data-agent="{{ first_agent }}"><b>iMessage</b>
+        <span id="im-state">connect →</span></div>
+      {% else %}
+      <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
+      {% endif %}
+      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
+    </div>
+    <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
+       hidden></p>
+  </section>
+
+  <section class="hub-section" id="grants-section">
+    <div class="section-head"><h2>Apps you have shared records with</h2></div>
+    {% if grants %}
+    <div class="card-grid" id="grants">
+      {% for g in grants %}
+      <div class="hub-card grant-card" data-grant="{{ g.id }}">
+        <div class="hub-card-name">{{ g.client_name }}</div>
+        <div class="hub-card-sub">reads {{ g.tenant_label or 'one connection' }} through HealthClaw</div>
+        <span class="status status-{{ g.status }}">{{ g.status }}</span>
+        {% if g.status != 'revoked' %}
+        <button type="button" class="grant-revoke" data-grant="{{ g.id }}"
+                title="Stop this app reading your records">Revoke</button>
+        {% endif %}
+        <span class="grant-msg" role="status" aria-live="polite" hidden></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">You haven't shared your records with any app.</p>
+    {% endif %}
+  </section>
+
+  <section class="leaving">
+    <h2>Sign out or leave</h2>
+    <form method="post" action="/logout"><button class="pill">Sign out</button></form>
+    <p>Deleting your account deletes the records behind every connection
+      first, then your email, passkey and consents. We keep a log of who
+      looked at your records, with no health details in it.</p>
+    <button class="pill danger" id="account-delete" type="button">Delete my account</button>
+    <p class="inline-msg" id="account-msg" role="status" aria-live="polite" hidden></p>
+  </section>
+</main>
+
+<!-- Pairing code card. What is shown in #pair-code is byte-identical to what
+     Copy writes, so the press-and-hold fallback can't copy the wrong string. -->
+<div class="modal" id="code-card" role="dialog" aria-modal="true"
+     aria-labelledby="code-title" hidden>
+  <div class="modal-card">
+    <h3 id="code-title">Your pairing code</h3>
+    <p id="code-instructions"></p>
+    <div id="pair-code"></div>
+    <button type="button" class="btn-secondary btn-block" id="copy-code">
+      <span id="copy-state">Copy</span></button>
+    <button type="button" class="btn-primary btn-block" id="code-done">Done</button>
+  </div>
+</div>
+
+{% set delete_for = "account" %}
+{% include "_delete_modal.html" %}
+
+{# The hub's script: its dialog, announce and delete primitives are shared,
+   and every handler is guarded by the element it binds. #}
+<script src="{{ url_for('static', filename='home.js') }}"></script>
+{% endblock %}

@@ -347,8 +347,8 @@ def test_the_hub_lists_grants_and_revokes_at_healthclaw_first(
     tenant = svc.get_connection(acct.id, conn)["tenant_id"]
     gid = svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude",
                         "fhir.read", "consent_abc")
-    page = client.get("/home").get_data(as_text=True)
-    assert "Shared with other apps" in page and "Claude" in page
+    page = client.get("/settings").get_data(as_text=True)
+    assert "Apps you have shared records with" in page and "Claude" in page
     assert f'data-grant="{gid}"' in page
 
     fake.revoke_fails = True

@@ -38,11 +38,16 @@ def count_line(n: int | None) -> str:
 
 
 def _record(c: dict, now: float) -> dict:
+    # Only a sync, or an active connection, has updated anything. A pending
+    # or empty row has received nothing, so its connect time is not an
+    # update and saying "Updated today" there is untrue.
+    stamp = c.get("last_synced_at")
+    if stamp is None and c.get("status") == "active":
+        stamp = c.get("connected_at")
     return {**c,
             "status_word": status_word(c.get("status")),
             "count_line": count_line(c.get("last_count")),
-            "updated": updated_line(
-                c.get("last_synced_at") or c.get("connected_at"), now),
+            "updated": updated_line(stamp, now),
             "is_sample": c.get("kind") == "sample"}
 
 
@@ -61,6 +66,21 @@ def build(home: dict, now: float) -> dict:
         "connected_kinds": sorted({r["kind"] for r in active}),
         "has_real": any(not r["is_sample"] for r in active),
     }
+
+
+def menu_items(catalog: list[dict], real_open: bool) -> list[dict]:
+    """The connector rows the Add records menu shows (spec section 4).
+
+    The sample is never a row: it is the closed state's one action and the
+    open state's small link. With real records closed the catalog still
+    returns every other source as coming soon, and the closed state shows
+    none of them, so they are dropped here rather than trusted to the
+    template.
+    """
+    rows = [m for m in catalog if m["id"] != "sample"]
+    if not real_open:
+        rows = [m for m in rows if m["tier"] != "soon"]
+    return rows
 
 
 def switch_prompt(home: dict) -> dict | None:

@@ -29,6 +29,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
+from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
 from careagents.agent import GENERIC_FAILURE_TEXT
@@ -385,18 +386,34 @@ def create_app(config: Config | None = None,
             return redirect(url_for("consent_authorize", req=pending_req))
         acct = current_account()
         data = svc.list_home(acct.id)
+        view = hub_view.build(data, time.time())
+        real_open = cfg.real_records_open_for(acct.email)
         return render_template(
-            "home.html", me=acct, personas=PERSONAS,
-            connections=data["connections"], agents=data["agents"],
-            surfaces=data["surfaces"], has_passkey=svc.has_passkey(acct.id),
-            grants=_grants_with_labels(svc.list_grants(acct.id), data["connections"]),
-            telegram_bot=cfg.telegram_bot,
-            imessage_handle=cfg.imessage_handle,
+            "home.html", me=acct,
+            hub=view,
+            banner_records=("your records are connected" if view["has_real"]
+                            else "sample records"),
+            switch_prompt=(None if svc.switch_prompted_at(acct.id)
+                           else hub_view.switch_prompt(data)),
+            has_grants=bool(svc.list_grants(acct.id)),
+            menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
-            advisors=advisors.catalog(),
-            catalog=connectors.catalog(
-                cfg, real_records=cfg.real_records_open_for(acct.email)))
+            menu=hub_view.menu_items(
+                connectors.catalog(cfg, real_records=real_open), real_open))
+
+    @app.get("/settings")
+    @login_required
+    def settings():
+        acct = current_account()
+        data = svc.list_home(acct.id)
+        return render_template(
+            "settings.html", me=acct,
+            passkeys=svc.list_passkeys(acct.id),
+            grants=_grants_with_labels(svc.list_grants(acct.id),
+                                       data["connections"]),
+            first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
+            imessage_handle=cfg.imessage_handle)
 
     @app.post("/logout")
     def logout():
@@ -657,6 +674,17 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "consent_required",
                                 "consent_version": CONSENT_VERSION}), 428
             consent_version = CONSENT_VERSION
+        if connector_id == "fasten":
+            # A second tap while the first is still connecting reuses it:
+            # two taps made two identical rows, both stuck connecting. Only
+            # a pending row is reused, and only after consent above.
+            waiting = svc.pending_connection(acct.id, "fasten")
+            if waiting:
+                return jsonify({
+                    "id": waiting["id"], "status": "pending",
+                    "existing": True,
+                    "connect_url": hc.fasten_connect_url(
+                        waiting["tenant_id"])})
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:
@@ -1633,13 +1661,22 @@ def create_app(config: Config | None = None,
         data = svc.list_home(acct.id)
         live = {c["id"]: c for c in data["connections"]
                 if c["status"] != "revoked"}
-        tenants: dict[str, str] = {}
+        # Every live connection's tenant, whether or not an assistant reads
+        # it: deleting an assistant leaves its requests waiting (QA on
+        # #843), and counting only assistants' tenants read that as zero.
+        by_conn = {}
         for a in data["agents"]:
-            conn = live.get(a["connection_id"])
-            if conn and conn["tenant_id"] not in tenants:
-                tenants[conn["tenant_id"]] = a["id"]
-        total, first = 0, None
-        for tenant, agent_id in tenants.items():
+            by_conn.setdefault(a["connection_id"], a)
+        tenants: dict[str, tuple] = {}
+        for cid, conn in live.items():
+            if conn["tenant_id"] not in tenants:
+                tenants[conn["tenant_id"]] = (by_conn.get(cid), conn)
+        # One queue per tenant with something waiting. The approvals page
+        # reads one assistant's records, so each queue is its own link: a
+        # single link to the first would hide every other queue. A queue
+        # with no assistant has no page to link to; the hub says so.
+        total, queues = 0, []
+        for tenant, (agent, conn) in tenants.items():
             try:
                 n = len(hc.pending_actions(tenant))
             except HealthClawError:
@@ -1647,12 +1684,21 @@ def create_app(config: Config | None = None,
                                acct.id)
                 return jsonify({"error": "unavailable"}), 503
             total += n
-            if n and first is None:
-                first = agent_id
+            if n and agent:
+                queues.append({"agent_id": agent["id"], "name": agent["name"],
+                               "count": n,
+                               "href": url_for("approvals",
+                                               agent_id=agent["id"])})
+            elif n:
+                queues.append({"name": conn["label"], "count": n,
+                               "needs_assistant": True})
         out = {"count": total}
-        if first:
-            out["agent_id"] = first
-            out["href"] = url_for("approvals", agent_id=first)
+        if queues:
+            linked = [q for q in queues if q.get("href")]
+            if linked:
+                out["agent_id"] = linked[0]["agent_id"]
+                out["href"] = linked[0]["href"]
+            out["queues"] = queues
         return jsonify(out)
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
@@ -1987,7 +2033,7 @@ def create_app(config: Config | None = None,
                         "instructions": (
                             f"Text  care {code}  to {cfg.imessage_handle}"
                             if cfg.imessage_handle else
-                            "iMessage isn't configured on this deployment yet.")})
+                            "iMessage isn't available yet.")})
 
     @app.post("/api/surfaces/imessage/bind")
     def imessage_bind():

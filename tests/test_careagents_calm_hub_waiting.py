@@ -74,3 +74,48 @@ def test_a_failed_count_is_503_with_no_count(app, svc, fake, monkeypatch):
     r = c.get("/api/approvals/count")
     assert r.status_code == 503
     assert "count" not in r.get_json()
+
+
+def test_every_assistants_queue_is_linked_not_only_the_first(
+        app, svc, monkeypatch):
+    """The approvals page reads one assistant's records. Two assistants on
+    two connections are two queues, and the band links each one; linking
+    only the first would hide the second's requests from the hub."""
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    with c.session_transaction() as s:
+        aid = s["account_id"]
+    first = c.post("/api/connections/sample").get_json()["agent_id"]
+    other = svc.add_connection(aid, "direct", "ca-other", "Upload",
+                               status="active")
+    second = svc.create_agent(aid, "Coach", "calm", other)
+    d = c.get("/api/approvals/count").get_json()
+    assert d["count"] == 2
+    # Row order is the database's; the queues are compared as a set.
+    assert sorted(d["queues"], key=lambda q: q["name"]) == [
+        {"agent_id": second, "name": "Coach", "count": 1,
+         "href": f"/agents/{second}/approvals"},
+        {"agent_id": first, "name": "Juniper", "count": 1,
+         "href": f"/agents/{first}/approvals"},
+    ]
+    for q in d["queues"]:
+        assert c.get(q["href"]).status_code == 200
+
+
+def test_a_queue_with_nothing_waiting_is_not_linked(
+        app, svc, fake, monkeypatch):
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    with c.session_transaction() as s:
+        aid = s["account_id"]
+    c.post("/api/connections/sample")
+    quiet_tenant = "ca-quiet"
+    other = svc.add_connection(aid, "direct", quiet_tenant, "Upload",
+                               status="active")
+    svc.create_agent(aid, "Coach", "calm", other)
+    busy = fake.pending_actions
+    monkeypatch.setattr(fake, "pending_actions", lambda t: (
+        [] if t == quiet_tenant else busy(t)))
+    d = c.get("/api/approvals/count").get_json()
+    assert d["count"] == 1
+    assert [q["name"] for q in d["queues"]] == ["Juniper"]

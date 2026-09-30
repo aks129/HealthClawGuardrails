@@ -171,7 +171,7 @@ def start(connector_id: str, provider: str | None, cfg, client,
                              "now.", "code": 503}
         tenant = client.new_tenant_id()
         return {"tenant": tenant, "status": "pending",
-                "label": "My health provider", "provider": "Connecting…",
+                "label": "Records from your doctor", "provider": "your doctor",
                 "requires_consent": True,
                 "connect_url": client.fasten_connect_url(tenant)}
 
@@ -229,8 +229,9 @@ def refresh(connector_id: str, tenant: str, provider: str | None,
         # Synthetic data is generated, not fetched — re-seeding would only
         # rewrite the same fixture. Say so rather than pretending to sync.
         return {"unsupported": True,
-                "reason": "Sample records are synthetic — there's nothing new "
-                          "to pull. Connect a real source to see updates."}
+                "reason": "Sample records are made up, so there's nothing "
+                          "new to pull. Connect a real source to see "
+                          "updates."}
 
     if connector_id == "fasten":
         if not getattr(cfg, "fasten_public_key", ""):
