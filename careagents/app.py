@@ -30,7 +30,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
-from careagents import beta, tester_terms
+from careagents import beta, operator_cli, tester_terms
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -2505,6 +2505,9 @@ def create_app(config: Config | None = None,
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
+        if not tester_terms.approved():
+            click.echo("note: invites are not honoured until the tester "
+                       "terms are approved (#565)")
 
     @_invites.command("revoke")
     @click.argument("email")
@@ -2530,5 +2533,9 @@ def create_app(config: Config | None = None,
                      if r["revoked_at"] else "live")
             click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
                        f"by {r['invited_by']:<20} {state}")
+
+    # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
+
+    operator_cli.register(app, svc)
 
     return app

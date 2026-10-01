@@ -129,20 +129,50 @@ What each does when it is **absent** is the part worth reading:
   so it is never a way around `off`.
 - **Invites live in the database as well** (`ca_real_record_invites`, beta
   pathway spec section 4.2). In `allowlist` mode an account qualifies when its
-  email is in the variable OR holds a live invite. `off` and `on` ignore the
-  table exactly as they ignore the variable. Manage invites from a shell with
-  the app's environment:
+  email is in the variable OR holds a live invite **and the tester terms are
+  approved** (`careagents/tester_terms.py`, #565). Until then `invites add`
+  works but says the invite is not honoured yet; the environment list keeps
+  working as before. `off` and `on` ignore the table exactly as they ignore
+  the variable. Stage 1 holds at most 25 live invites; the environment list
+  is not counted. Manage invites from a shell with the app's environment:
 
   ```bash
-  flask --app careagents.wsgi invites add tester@example.org --by <your name>
+  flask --app careagents.wsgi invites add tester@example.org --by <operator handle>
   flask --app careagents.wsgi invites list
   flask --app careagents.wsgi invites revoke tester@example.org
   ```
 
-  Revoking refuses NEW real connections from that account. A connection that
-  already exists keeps refreshing and accepting uploads until the person
-  disconnects it; to stop every real connection at once, set
-  `CARE_REAL_RECORDS=off`. Inviting a revoked email again reopens it.
+  `--by` is a short operator handle, not a person's name. Revoking refuses
+  NEW real connections from that account. A connection that already exists
+  keeps refreshing and accepting uploads until the person disconnects it; to
+  stop one account now, pause it (below); to stop every real connection at
+  once, set `CARE_REAL_RECORDS=off`. Inviting a revoked email again reopens
+  it. Deleting an account removes its invite.
+
+### Stage 1 operator commands
+
+Run from a shell with the app's environment, like `invites` above. Output goes
+to your terminal only; nothing here writes an email to the application log.
+
+| Command | What it does |
+| --- | --- |
+| `invites add EMAIL --by HANDLE` | Invite a tester (at most 25 live). Honoured only in `allowlist` mode with approved tester terms |
+| `invites list` / `invites revoke EMAIL` | List invites; revoke one. Revoke stops new connections only |
+| `records pause EMAIL` | Stops every chat turn on every surface (web, iMessage, Telegram), including turns already queued, plus new real connections, new MCP grants on a real connection, refresh and upload. The assistant answers a fixed "your records are paused" sentence and no model is called |
+| `records resume EMAIL` | Undo the pause |
+| `weekly-counts [--weeks N]` | Four integers per ISO week: accounts signed up, accounts that connected real records, accounts that asked a real-record assistant, accounts that approved a real-record action |
+
+- **What pause does not stop:** Fasten webhook ingest in the engine, and an
+  MCP grant that already exists (the connector is token-locked in production
+  during stage 1, so none should). For a full stop, set
+  `CARE_REAL_RECORDS=off` and have the person Disconnect or Delete.
+- **Terms bump:** when `TERMS_VERSION` changes, every real connection whose
+  consent is older answers "please review and accept the current terms" until
+  the person accepts from the hub. Real connections made before consent was
+  recorded (`consent_version` NULL) are asked once on the first deploy of
+  stage 1, before any terms change. Expect it.
+- **`weekly-counts` prints integers only.** Copy the numbers into any report,
+  never per-person data.
 
 ## Railway
 
