@@ -136,7 +136,7 @@ def test_the_hub_lists_stale_connections_only_after_a_bump(
     approve_terms(monkeypatch, "2026-10-01")
     page = c.get("/home").get_data(as_text=True)
     assert f'data-reconsent="{conn_id}"' in page
-    assert "Please review and accept the current terms" in page
+    assert "Please review and accept our current terms" in page
 
 
 def test_a_connection_from_before_consent_was_kept_is_asked_now(
@@ -166,3 +166,75 @@ def _account_id(svc, email="gene@example.com"):  # noqa: F811
     from careagents.models import Account
     with svc.session() as s:
         return s.query(Account).filter_by(email=email).one().id
+
+
+# --- #856 review: one prompt, its own card, first connect kept ---------------
+
+def _add_real(svc, kind, status, version="2026-08-01"):  # noqa: F811
+    return svc.add_connection(_account_id(svc), kind, f"t-{kind}-{status}",
+                              f"My {kind}", status=status,
+                              consent_version=version)
+
+
+def test_one_prompt_and_one_accept_cover_every_settled_connection(
+        cfg, svc, monkeypatch):  # noqa: F811
+    c, fake, agent_id, conn_id = _real_agent(cfg, svc, monkeypatch)
+    other = _add_real(svc, "direct", "empty")
+    waiting = _add_real(svc, "wearable", "pending")
+    gone = _add_real(svc, "direct", "revoked")
+    approve_terms(monkeypatch, "2026-10-01")
+    page = c.get("/home").get_data(as_text=True)
+    assert page.count("data-reconsent=") == 1
+    with svc.session() as s:
+        first = s.get(Connection, conn_id).consented_at
+    assert c.post(f"/api/connections/{conn_id}/consent",
+                  json={"consent": True}).status_code == 200
+    with svc.session() as s:
+        got = {i: s.get(Connection, i) for i in (conn_id, other, waiting, gone)}
+        assert got[conn_id].consent_version == "2026-10-01"
+        assert got[other].consent_version == "2026-10-01"
+        # still connecting: asked once it settles; revoked: never
+        assert got[waiting].consent_version == "2026-08-01"
+        assert got[gone].consent_version == "2026-08-01"
+        # the first connect is kept; the re-accept is stored apart
+        assert got[conn_id].consented_at == first
+        assert got[conn_id].reconsented_at is not None
+    assert 'data-reconsent=' not in c.get("/home").get_data(as_text=True)
+
+
+def test_a_connection_still_connecting_is_not_prompted(
+        cfg, svc, monkeypatch):  # noqa: F811
+    from careagents.app import create_app
+    app = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    app.config["TESTING"] = True
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    c.post("/api/connections/fasten", json={"consent": True})   # pending
+    approve_terms(monkeypatch, "2026-10-01")
+    assert 'data-reconsent=' not in c.get("/home").get_data(as_text=True)
+
+
+def test_the_reconsent_card_has_its_own_wording(cfg, svc, monkeypatch):  # noqa: F811
+    from careagents import tester_terms
+    c, fake, agent_id, conn_id = _real_agent(cfg, svc, monkeypatch)
+    approve_terms(monkeypatch, "2026-10-01")
+    page = c.get("/home").get_data(as_text=True)
+    card = page.split('id="reconsent-modal"', 1)[1].split("</div>\n</div>")[0]
+    assert "Our terms changed" in card
+    assert "Accept the new terms" in card
+    from markupsafe import escape
+    assert str(escape(tester_terms.CHANGE_SUMMARY)) in card
+    assert "connect my records" not in card
+
+
+def test_a_reaccept_does_not_count_as_a_new_connection(
+        cfg, svc, monkeypatch):  # noqa: F811
+    c, fake, agent_id, conn_id = _real_agent(cfg, svc, monkeypatch)
+    before = beta.weekly_counts(svc.session, weeks=1)
+    with svc.session() as s:     # the first connect, moved to an earlier week
+        s.get(Connection, conn_id).consented_at -= 14 * 24 * 3600
+    approve_terms(monkeypatch, "2026-10-01")
+    c.post(f"/api/connections/{conn_id}/consent", json={"consent": True})
+    after = beta.weekly_counts(svc.session, weeks=1)
+    assert before[0]["real_connected"] == 1
+    assert after[0]["real_connected"] == 0

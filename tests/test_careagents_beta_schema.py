@@ -100,3 +100,24 @@ def test_a_connection_reports_its_consent_version(svc, monkeypatch):  # noqa: F8
     cid = svc.add_connection(acct_id, "fasten", "t-1", "My records",
                              status="pending", consent_version="2026-08-01")
     assert svc.get_connection(acct_id, cid)["consent_version"] == "2026-08-01"
+
+
+def test_an_existing_connection_gains_an_empty_reconsent_column(url):
+    legacy = create_engine(url)
+    with legacy.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE ca_connections (id VARCHAR(32) PRIMARY KEY, "
+            "account_id VARCHAR(32), kind VARCHAR(16) NOT NULL, "
+            "tenant_id VARCHAR(64) NOT NULL, label VARCHAR(120), "
+            "status VARCHAR(16), provider VARCHAR(120), connected_at FLOAT)"))
+        conn.execute(text(
+            "INSERT INTO ca_connections (id, kind, tenant_id, status) "
+            "VALUES ('conn_legacy', 'fasten', 't-1', 'active')"))
+    engine = models.make_engine(url)
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT consent_version, reconsented_at FROM ca_connections "
+            "WHERE id = 'conn_legacy'")).one()
+    assert tuple(row) == (None, None)
+    engine.dispose()
+    legacy.dispose()

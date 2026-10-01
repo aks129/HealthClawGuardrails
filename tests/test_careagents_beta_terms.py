@@ -57,3 +57,11 @@ def test_a_new_real_connection_records_the_current_version(
     with svc.session() as s:
         assert s.query(Connection).filter_by(
             kind="fasten").one().consent_version == "2026-10-01"
+
+
+def test_the_change_line_moves_with_the_terms():
+    """The "Our terms changed" card's one line is a placeholder until #565.
+    Approving the terms without replacing it fails here."""
+    if tester_terms.approved():
+        assert tester_terms.CHANGE_SUMMARY != tester_terms.PENDING_CHANGE_SUMMARY
+    assert "—" not in tester_terms.CHANGE_SUMMARY

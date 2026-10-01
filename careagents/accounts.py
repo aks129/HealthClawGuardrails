@@ -608,18 +608,44 @@ class AccountService:
                  .filter_by(id=conn_id, account_id=account_id).first())
             return _conn_dict(c) if c else None
 
+    #: Connections a terms prompt skips: revoked ones are gone, and pending
+    #: ones are still connecting, so they are asked once they settle.
+    RECONSENT_SKIPS = ("revoked", "pending")
+
     def record_consent(self, account_id: str, conn_id: str,
                        version: str) -> bool:
-        """Stamp a fresh consent on one of this account's real connections.
-        Scoped by both ids: another account's connection is never touched."""
+        """Accept the current terms, starting from one of this account's real
+        connections. One accept covers every real connection on the account
+        that is neither revoked nor still connecting (beta spec 4.3). Scoped
+        by the account: another account's connection is never touched.
+
+        Stamps consent_version and reconsented_at. consented_at stays the
+        first connect, so the weekly number does not move.
+        """
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(id=conn_id, account_id=account_id).first())
             if c is None or c.kind == "sample" or c.status == "revoked":
                 return False
-            c.consented_at = now()
-            c.consent_version = version
+            t = now()
+            rows = (s.query(Connection)
+                    .filter(Connection.account_id == account_id,
+                            Connection.kind != "sample",
+                            Connection.status.notin_(self.RECONSENT_SKIPS))
+                    .all())
+            for row in {r.id: r for r in [c, *rows]}.values():
+                if row.consent_version != version:
+                    row.consent_version = version
+                    row.reconsented_at = t
             return True
+
+    def stale_consent(self, connections: list[dict],
+                      version: str) -> list[dict]:
+        """The account's real connections a terms prompt should cover."""
+        return [c for c in connections
+                if c["kind"] != "sample"
+                and c["status"] not in self.RECONSENT_SKIPS
+                and c.get("consent_version") != version]
 
     def mark_synced(self, conn_id: str, count: int,
                     uncounted: int | None = None) -> dict:

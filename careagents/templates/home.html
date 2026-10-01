@@ -27,16 +27,17 @@
   </section>
 
   {# Real connections whose consent predates the current terms (beta spec
-     4.3). The assistant on one answers only "please review and accept"
-     until this is done, on every surface. #}
-  {% for s in stale_consent %}
+     4.3). One prompt for the account; one accept covers every connection
+     that is not revoked or still connecting. Until then the assistant on
+     one answers only "please review and accept". #}
+  {% if stale_consent %}
   <section class="switch-prompt reconsent">
-    <p>Please review and accept the current terms for {{ s.label }}.</p>
+    <p>Please review and accept our current terms to keep using your records.</p>
     <button type="button" class="btn-primary"
-            data-reconsent="{{ s.id }}">Review and accept</button>
+            data-reconsent="{{ stale_consent[0].id }}">Review and accept</button>
     <span class="inline-msg" role="status" aria-live="polite" hidden></span>
   </section>
-  {% endfor %}
+  {% endif %}
 
   {% if switch_prompt %}
   <section class="switch-prompt" id="switch-prompt"
@@ -241,6 +242,25 @@
   </div>
 </div>
 
+
+<!-- Terms card for someone who already connected (beta spec 4.3): its own
+     wording, not the first-connect card. Explicit buttons only, like the
+     consent card. -->
+<div class="modal" id="reconsent-modal" role="dialog" aria-modal="true"
+     aria-labelledby="reconsent-title" hidden>
+  <div class="modal-card consent-card">
+    <h3 id="reconsent-title">Our terms changed</h3>
+    <p class="consent-lead">{{ terms_change }}</p>
+    {% if tester_terms_approved %}{% include "_tester_terms.html" %}{% endif %}
+    <p class="consent-fine">Full detail:
+      <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
+      <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
+        policy</a></p>
+    <button type="button" class="btn-primary btn-block" id="reconsent-agree">
+      Accept the new terms</button>
+    <button type="button" class="linkish" id="reconsent-cancel">Not now</button>
+  </div>
+</div>
 
 <!-- Provider picker: one large tappable row per provider, filled in by
      home.js from the tile's data-providers. No numbers, no keyboard — the

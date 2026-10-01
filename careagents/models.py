@@ -95,6 +95,11 @@ class Connection(Base):
     # change doesn't silently claim consent it never obtained.
     consented_at = Column(Float, nullable=True)
     consent_version = Column(String(16), nullable=True)
+    # When the person last accepted newer terms for this connection (beta
+    # spec 4.3). Kept apart from consented_at, which stays the first
+    # connect, so the weekly number does not count a re-accept as a new
+    # connection.
+    reconsented_at = Column(Float, nullable=True)
     # Refresh state. A refresh re-pulls the same tenant; HealthClaw's ingest
     # upserts on (tenant, resource_type, id), so re-pulling never duplicates.
     # last_count is the record count observed at the end of the last sync, so
@@ -324,6 +329,8 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_connections ADD COLUMN last_uncounted "
                     "INTEGER"))
+        if "reconsented_at" not in cols:
+            _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
 
 
 #: What a peer creating the same table first looks like, by backend. SQLite

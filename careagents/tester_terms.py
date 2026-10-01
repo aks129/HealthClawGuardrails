@@ -29,6 +29,16 @@ TERMS_VERSION: str | None = None
 TEMPLATE = "_tester_terms.html"
 PENDING_MARKER = "TESTER-TERMS-PENDING-565"
 
+#: The one line the "Our terms changed" card says about what changed.
+#: Replace it together with the terms file when #565 is approved; the terms
+#: test fails if the terms are approved and this line is still the pending
+#: one. True in both states: no connection made before consent was recorded
+#: has accepted the current wording.
+PENDING_CHANGE_SUMMARY = ("We now keep a record of which version of our "
+                          "terms you accepted, so we're asking you to accept "
+                          "the current ones.")
+CHANGE_SUMMARY: str = PENDING_CHANGE_SUMMARY
+
 #: What a connection's consent_version must equal to be current. Read as
 #: `tester_terms.CONSENT_VERSION` at call time, never copied at import.
 CONSENT_VERSION: str = TERMS_VERSION or BASE_VERSION

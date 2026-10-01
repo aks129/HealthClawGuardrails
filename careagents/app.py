@@ -410,11 +410,9 @@ def create_app(config: Config | None = None,
         real_open = _real_records_open(acct)
         # Real connections whose consent predates the current terms (beta
         # spec 4.3). The worker refuses their turns until this is answered.
-        stale_consent = [
-            {"id": c["id"], "label": c["label"]}
-            for c in data["connections"]
-            if c["kind"] != "sample" and c["status"] != "revoked"
-            and c.get("consent_version") != tester_terms.CONSENT_VERSION]
+        # One prompt for the account, however many connections it covers.
+        stale_consent = svc.stale_consent(data["connections"],
+                                          tester_terms.CONSENT_VERSION)
         return render_template(
             "home.html", me=acct,
             stale_consent=stale_consent,
@@ -428,6 +426,7 @@ def create_app(config: Config | None = None,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             tester_terms_approved=tester_terms.approved(),
+            terms_change=tester_terms.CHANGE_SUMMARY,
             menu=hub_view.menu_items(
                 connectors.catalog(cfg, real_records=real_open), real_open))
 

@@ -56,12 +56,21 @@
     });
   }
 
-  // Accept the current terms for a real connection made under older ones
-  // (beta spec 4.3). Same card as a new connection; the server refuses
-  // (428) without an explicit `consent: true`.
+  // Accept the current terms for real connections made under older ones
+  // (beta spec 4.3). Its own card, not the first-connect one; the server
+  // refuses (428) without an explicit `consent: true`.
+  function showReconsentCard() {
+    return new Promise((resolve) => {
+      const modal = $("reconsent-modal");
+      const done = (v) => { modal.hidden = true; resolve(v); };
+      $("reconsent-agree").onclick = () => done(true);
+      $("reconsent-cancel").onclick = () => done(false);
+      modal.hidden = false;
+    });
+  }
   document.querySelectorAll("[data-reconsent]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const agreed = await showConsentCard();
+      const agreed = await showReconsentCard();
       if (!agreed) return;
       btn.disabled = true;
       const res = await post(
