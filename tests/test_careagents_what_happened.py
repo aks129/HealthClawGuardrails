@@ -351,6 +351,28 @@ def test_the_hub_asks_before_disconnecting_and_carries_the_result_over():
     assert "carryNotice(" in dele
 
 
+def test_disconnect_names_the_assistant_that_reads_those_records(
+        cfg, svc, monkeypatch):
+    """A revoked connection is not a pathway to its requests (#215), so an
+    assistant reading it can still chat but nothing it prepares can be
+    approved. The dialog says so before the tap, not after."""
+    app = _app(cfg, svc, FakeClient())
+    c, agent, _ = _signed_in(app, svc, monkeypatch)
+    with c.session_transaction() as sess:
+        account_id = sess["account_id"]
+    other = svc.add_connection(account_id, "fasten", "tenant-other", "Clinic")
+    assert c.post(f"/api/agents/{agent}/connection",
+                  json={"connection_id": other}).status_code == 200
+    html = c.get("/home").get_data(as_text=True)
+    btn = html[html.index(f'class="conn-disconnect" data-conn="{other}"'):]
+    btn = btn[:btn.index(">")]
+    assert 'data-readers="Juniper"' in btn
+    js = (ROOT / "careagents" / "static" / "home.js").read_text()
+    ask = js[js.index("function askToDisconnect"):]
+    ask = ask[:ask.index("return dlg.result;")]
+    assert "can't be approved" in ask
+
+
 # --- chat: the review card survives a reload --------------------------------
 
 def test_a_pending_review_is_rendered_on_reload(cfg, svc, monkeypatch):

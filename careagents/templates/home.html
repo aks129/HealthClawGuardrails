@@ -97,7 +97,7 @@
         {% endif %}
         {% if not c.is_sample %}
         <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}"
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
                 title="Stop new records arriving; keep what's already here">Disconnect</button>
         {% endif %}
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
@@ -280,6 +280,7 @@
     <h3 id="disconnect-title">Disconnect <span id="disconnect-name"></span>?</h3>
     <p>No new records will arrive from it. The records already here stay, and
       you can still delete them later.</p>
+    <p id="disconnect-readers" hidden></p>
     <button type="button" class="btn-primary btn-block" id="disconnect-confirm">Disconnect</button>
     <button type="button" class="linkish" id="disconnect-cancel">Cancel</button>
   </div>

@@ -484,8 +484,16 @@
   })();
 
   // --- disconnect: ask first, stop new records, keep what's already here ---
-  function askToDisconnect(label) {
+  function askToDisconnect(label, readers) {
     $("disconnect-name").textContent = label;   // the person's label: text only
+    // A disconnected connection is no longer a way to its requests (#215),
+    // so an assistant reading it keeps its chat but loses its approvals.
+    const who = $("disconnect-readers");
+    who.textContent = readers
+      ? readers + " reads these records. It can still answer questions " +
+        "about them, but anything it prepares can't be approved."
+      : "";
+    who.hidden = !readers;
     const dlg = openDialog($("disconnect-modal"));
     $("disconnect-confirm").onclick = () => dlg.close(true);
     $("disconnect-cancel").onclick = () => dlg.close(false);
@@ -496,7 +504,8 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      if (!(await askToDisconnect(btn.dataset.label || "these records"))) return;
+      if (!(await askToDisconnect(btn.dataset.label || "these records",
+                                  btn.dataset.readers || ""))) return;
       btn.disabled = true;
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {

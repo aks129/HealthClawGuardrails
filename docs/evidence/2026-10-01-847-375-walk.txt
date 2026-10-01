@@ -1,7 +1,7 @@
-#847 walk at 375x812, 2026-10-01T14:30:25.480Z
+#847 walk at 375x812, 2026-10-01T14:43:14.749Z
 Local engine + CareAgents, synthetic account and sample records only.
 01-hub-new-account (new account, heading): scrollWidth=375 clientWidth=375
-proposed intake form 76b8638c-cd16-4346-bd26-c4c6f39821ca
+proposed intake form ed124e99-ae09-431c-b7d2-63e6f1414766
 02-chat-review-card (chat with pending card): scrollWidth=375 clientWidth=375
 chat after reload: Open the review cards = 1
 trust pill box after reload: left=219 right=319 text=guardrails A
@@ -20,6 +20,8 @@ direct upload status 200
 move assistant to direct: 200
 hub band orphan: Waiting for you |  | 1 request waiting on Sample records. To review it, switch your assistant to Sample records: More, then Change records. |  | Recently | Intake form to Intake portal: Done. Open the PDF | Intake form to Intake portal: Didn't finish. To try again, switch your assistant to Sample records: More, then Change records. | Intake form to Intake portal: Done. Open the PDF
 09-hub-orphan-switch-line (orphan queue line): scrollWidth=375 clientWidth=375
+disconnect dialog, assistant reads it: Disconnect Uploaded records? | No new records will arrive from it. The records already here stay, and you can still delete them later. | Juniper reads these records. It can still answer questions about them, but anything it prepares can't be approved. | Disconnect | Cancel
+09b-disconnect-confirm-assistant-reads-it (disconnect dialog with reader): scrollWidth=375 clientWidth=375
 10-disconnect-confirm (disconnect dialog): scrollWidth=375 clientWidth=375
 after disconnect: Disconnected. No new records will arrive. The records already here stay; you'll find them under Past connections.
 11-disconnect-done (after disconnect): scrollWidth=375 clientWidth=375

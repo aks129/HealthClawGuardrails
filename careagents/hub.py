@@ -56,7 +56,13 @@ def _record(c: dict, now: float) -> dict:
 def build(home: dict, now: float) -> dict:
     conns = home["connections"]
     by_id = {c["id"]: c for c in conns}
-    records = [_record(c, now) for c in conns if c["status"] != "revoked"]
+    # Which assistants read each connection, for the disconnect dialog: a
+    # revoked connection takes its assistant's approvals with it (#847).
+    readers: dict = {}
+    for a in home["agents"]:
+        readers.setdefault(a["connection_id"], []).append(a["name"])
+    records = [{**_record(c, now), "readers": ", ".join(readers.get(c["id"], []))}
+               for c in conns if c["status"] != "revoked"]
     active = [r for r in records if r["status"] == "active"]
     return {
         "agents": [{**a, "reads": (by_id.get(a["connection_id"]) or {})

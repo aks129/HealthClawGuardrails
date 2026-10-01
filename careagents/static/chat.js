@@ -141,7 +141,9 @@
     a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
     log.appendChild(c); scroll();
-    watchForm(actionId);
+    // Only the intake form ends in a PDF; polling for one on any other
+    // request would run until the page closed.
+    if (!label) watchForm(actionId);
   }
 
   function addPdfCard(url) {
