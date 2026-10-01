@@ -100,8 +100,8 @@ def catalog(cfg, real_records: bool = False) -> list[dict]:
     """The menu with per-account availability resolved.
 
     `real_records` is whether the viewing account may START a real-record
-    connection (`cfg.real_records_open_for(email)`). The default is closed,
-    so a caller that forgets fails safe. `chip` is the one status word each
+    connection (`cfg.real_records_open_for(email, invited=...)`). The
+    default is closed, so a caller that forgets fails safe. `chip` is the one status word each
     source shows; "Connected" is added by the hub, which knows the account.
     """
     out = []

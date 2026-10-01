@@ -191,6 +191,24 @@ class PageViewDay(Base):
     views = Column(Integer, default=0)
 
 
+class RealRecordInvite(Base):
+    """An invitation to connect real records (beta pathway spec section 4.2).
+
+    Read in `CARE_REAL_RECORDS=allowlist` mode only, alongside the
+    environment allowlist. Account-level data: an email, when, and who
+    invited it. No health information.
+
+    One row per email. Revoking stamps `revoked_at`; inviting again clears it.
+    A revoked invite blocks NEW real connections; existing ones keep working
+    until the person disconnects them or the operator closes real records.
+    """
+    __tablename__ = "ca_real_record_invites"
+    email = Column(String(255), primary_key=True)
+    invited_at = Column(Float, nullable=False, default=now)
+    invited_by = Column(String(255), nullable=False)
+    revoked_at = Column(Float, nullable=True)
+
+
 class EmailToken(Base):
     """One-time email code (sign-up verify / new-device login)."""
     __tablename__ = "ca_email_tokens"

@@ -19,6 +19,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import quote
 
@@ -267,6 +268,13 @@ def create_app(config: Config | None = None,
 
     turns: dict[str, deque] = defaultdict(deque)
 
+    def _real_records_open(acct) -> bool:
+        """May this account START a real-record connection? The environment
+        allowlist and the invite table (beta pathway spec section 4.2), in
+        `allowlist` mode only."""
+        return cfg.real_records_open_for(acct.email,
+                                         invited=svc.real_records_invited)
+
     # --- canonical host (#264, D7) -------------------------------------------
 
     @app.before_request
@@ -387,7 +395,7 @@ def create_app(config: Config | None = None,
         acct = current_account()
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
-        real_open = cfg.real_records_open_for(acct.email)
+        real_open = _real_records_open(acct)
         return render_template(
             "home.html", me=acct,
             hub=view,
@@ -535,7 +543,7 @@ def create_app(config: Config | None = None,
                 f"?grant={grant}")
 
     def _offered_connections(acct):
-        real_open = cfg.real_records_open_for(acct.email)
+        real_open = _real_records_open(acct)
         conns = svc.list_home(acct.id)["connections"]
         return [c for c in conns
                 if c["status"] != "revoked"
@@ -587,7 +595,7 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, str(body.get("connection_id") or ""))
         if conn is None or conn["status"] == "revoked":
             return jsonify({"error": "unknown connection"}), 404
-        if conn["kind"] != "sample" and not cfg.real_records_open_for(acct.email):
+        if conn["kind"] != "sample" and not _real_records_open(acct):
             return jsonify({"error": "Sharing real records is not open for "
                                      "this account yet."}), 403
 
@@ -643,7 +651,7 @@ def create_app(config: Config | None = None,
     def connections_catalog():
         acct = current_account()
         return jsonify({"connectors": connectors.catalog(
-            cfg, real_records=cfg.real_records_open_for(acct.email))})
+            cfg, real_records=_real_records_open(acct))})
 
     def _sample_answer(account_id, conn_id, existing):
         """What a sample tap answers: the connection, and the chat to open."""
@@ -659,7 +667,7 @@ def create_app(config: Config | None = None,
         # existing connection never consult the real-records switch.
         plan = connectors.start(
             connector_id, body.get("provider"), cfg, hc,
-            real_records=cfg.real_records_open_for(acct.email))
+            real_records=_real_records_open(acct))
         if plan.get("error"):
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
         if plan.get("soon"):
@@ -2258,5 +2266,56 @@ def create_app(config: Config | None = None,
             return
         for day, endpoint, views in rows:
             click.echo(f"{day}  {endpoint:<12} {views}")
+
+    # --- real-record invites (beta pathway spec section 4.2) ---------------
+
+    @app.cli.group("invites")
+    def _invites():
+        """Invite, list and revoke real-record testers.
+
+        Invites are read only when CARE_REAL_RECORDS=allowlist, alongside
+        CARE_REAL_RECORDS_ALLOWLIST. A command for the same reason as
+        page-views: no admin page to authorise.
+        """
+
+    @_invites.command("add")
+    @click.argument("email")
+    @click.option("--by", "invited_by", required=True,
+                  help="Who is inviting, for the record.")
+    def _invites_add(email, invited_by):
+        try:
+            created = svc.invite_real_records(email, invited_by)
+        except (AuthError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"invited {email.strip().lower()}" if created
+                   else f"{email.strip().lower()} was already invited")
+        if cfg.real_records != "allowlist":
+            click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
+                       "invites are read only in 'allowlist' mode")
+
+    @_invites.command("revoke")
+    @click.argument("email")
+    def _invites_revoke(email):
+        """Refuse new real connections. Existing ones keep working until the
+        person disconnects them."""
+        try:
+            revoked = svc.revoke_real_records_invite(email)
+        except AuthError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"revoked {email.strip().lower()}" if revoked
+                   else f"no live invite for {email.strip().lower()}")
+
+    @_invites.command("list")
+    def _invites_list():
+        rows = svc.real_record_invites()
+        if not rows:
+            click.echo("no invites")
+        for r in rows:
+            when = datetime.fromtimestamp(r["invited_at"], timezone.utc)
+            state = ("revoked " + datetime.fromtimestamp(
+                r["revoked_at"], timezone.utc).strftime("%Y-%m-%d")
+                     if r["revoked_at"] else "live")
+            click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
+                       f"by {r['invited_by']:<20} {state}")
 
     return app
