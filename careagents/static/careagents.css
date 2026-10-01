@@ -672,3 +672,34 @@ textarea:focus-visible {
 .menu-closed-line { margin: 12px 0 0; color: var(--ink-soft); }
 .past summary { cursor: pointer; min-height: 44px; display: flex;
   align-items: center; font-weight: 700; }
+
+/* --- #847: what happened, and the 375px fixes ----------------------------- */
+/* A long address with nowhere to break held the hub head's text column at
+   its full width, which pushed main.hub past the viewport on /settings and
+   /home (629px for a 375px phone). The column may shrink, and the address
+   breaks where it must. */
+.hub-head > div { min-width: 0; }
+.hub-sub { overflow-wrap: anywhere; }
+/* The surfaces grid kept two columns at 375px; one reads at a phone's width. */
+@media (max-width: 480px) {
+  .surface-row { grid-template-columns: 1fr; }
+}
+/* Chat header at 375px: three pills and the name were 15px wider than the
+   phone, so the page wobbled sideways and the guardrails pill was cut off.
+   The pills wrap under the name instead, and a pill never splits its words. */
+.chat-tools .pill { white-space: nowrap; }
+@media (max-width: 480px) {
+  .chat-head { flex-wrap: wrap; }
+  .chat-tools { flex-wrap: wrap; }
+}
+/* Hub: the sentence a delete or disconnect leaves behind, the brief's
+   explanation, and the band's list of answered requests. */
+.hub-notice { margin: 0 0 18px; padding: 12px 16px; border-radius: 12px;
+  background: #F3F7F3; border: 1px solid #D8E2D8; color: var(--ink); }
+.hub-notice:empty { display: none; }
+.card-note { font-size: 13px; color: var(--ink-soft); margin: 6px 0 0; }
+.recent-head { font-size: 14px; margin: 14px 0 4px; }
+.recent-list { margin: 0; padding-left: 20px; }
+.recent-list li { margin: 4px 0; }
+.recent-list a { color: var(--clay-deep); font-weight: 700; }
+.recent-note { margin: 10px 0 0; color: var(--clay-deep); }

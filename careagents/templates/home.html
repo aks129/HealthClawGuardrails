@@ -7,11 +7,16 @@
 <main class="hub">
   <div class="hub-head">
     <div>
-      <h1>Welcome back</h1>
+      {# Not "Welcome back": a brand-new account lands here too (#847). #}
+      <h1>Your hub</h1>
       <p class="hub-sub">{{ me.email }}</p>
     </div>
     <a class="pill" href="/settings">Settings</a>
   </div>
+
+  {# What the last action did, carried across its reload by home.js:
+     a delete's count, a disconnect's result (#847). #}
+  <p class="hub-notice" id="hub-notice" role="status" aria-live="polite" hidden></p>
 
   {# 1. Waiting for you. Always shown. It starts as "Checking" and home.js
      fills it from /api/approvals/count. A failed count says so and is
@@ -40,6 +45,7 @@
       <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
         <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads }}{% endif %}</div>
+        <p class="card-note">Visit brief: a one-page summary of your records to bring to an appointment.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
           <a class="pill" href="/brief?agent={{ a.id }}">Visit brief</a>
@@ -91,6 +97,7 @@
         {% endif %}
         {% if not c.is_sample %}
         <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
+                data-label="{{ c.label }}"
                 title="Stop new records arriving; keep what's already here">Disconnect</button>
         {% endif %}
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
@@ -264,6 +271,17 @@
     <input class="field" id="rename-input" maxlength="48" autocomplete="off">
     <button type="button" class="btn-primary btn-block" id="rename-save">Save</button>
     <button type="button" class="linkish" id="rename-cancel">Cancel</button>
+  </div>
+</div>
+
+<div class="modal" id="disconnect-modal" role="dialog" aria-modal="true"
+     aria-labelledby="disconnect-title" hidden>
+  <div class="modal-card">
+    <h3 id="disconnect-title">Disconnect <span id="disconnect-name"></span>?</h3>
+    <p>No new records will arrive from it. The records already here stay, and
+      you can still delete them later.</p>
+    <button type="button" class="btn-primary btn-block" id="disconnect-confirm">Disconnect</button>
+    <button type="button" class="linkish" id="disconnect-cancel">Cancel</button>
   </div>
 </div>
 

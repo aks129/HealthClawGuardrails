@@ -111,7 +111,7 @@
           </div>
           {% endfor %}
           {% elif record_readable %}
-          <div class="alert alert-warning mb-3" role="alert">No allergies found in your records — add them or affirmatively confirm none below.
+          <div class="alert alert-warning mb-3" role="alert">No allergies found in your records. If you have none, say so with the box below; it is never assumed for you.
           </div>
           {% endif %}
 
@@ -121,12 +121,12 @@
                  absence the page could not verify (#390). -->
             <input class="form-check-input" type="checkbox" name="nka" id="nka" value="true">
             <label class="form-check-label fw-bold" for="nka">
-              No known allergies (patient confirmed)
+              I have no known allergies
             </label>
             <div class="text-muted small">
-              Only check this if the patient has affirmatively stated they have no known allergies.
+              Only check this if you know you have no allergies.
               {%- if not record_readable %}
-              It is the patient's own statement and confirms nothing about what is on file.
+              It is your own statement and confirms nothing about what is on file.
               {%- endif %}
             </div>
           </div>

@@ -1,0 +1,39 @@
+#847 walk at 375x812, 2026-10-01T14:30:25.480Z
+Local engine + CareAgents, synthetic account and sample records only.
+01-hub-new-account (new account, heading): scrollWidth=375 clientWidth=375
+proposed intake form 76b8638c-cd16-4346-bd26-c4c6f39821ca
+02-chat-review-card (chat with pending card): scrollWidth=375 clientWidth=375
+chat after reload: Open the review cards = 1
+trust pill box after reload: left=219 right=319 text=guardrails A
+03-chat-after-reload (chat after reload): scrollWidth=375 clientWidth=375
+04-review-page (review page, full): scrollWidth=375 clientWidth=375
+after approve: Confirmed. Your approval went through and this request was carried out. It went to Intake portal. Open your form (PDF)
+pdf link host: 127.0.0.1:5163
+05-review-approved-pdf-link (after approve): scrollWidth=375 clientWidth=375
+hub band: Waiting for you |  | Nothing waiting for you now. |  | Recently | Intake form to Intake portal: Done. Open the PDF
+06-hub-recent-done (hub after approve): scrollWidth=375 clientWidth=375
+hub band with failure: Waiting for you |  | Nothing waiting for you now. |  | Recently | Intake form to Intake portal: Didn't finish. Ask Juniper to try again | Intake form to Intake portal: Done. Open the PDF
+07-hub-didnt-finish (hub with failed request): scrollWidth=375 clientWidth=375
+review failed arm (intercepted status): Your approval went through and this request could not be completed. Approving again will not retry it. Ask your assistant to try again. Your hub lists it as not finished.
+08-review-failed-next-step (review failed arm): scrollWidth=375 clientWidth=375
+direct upload status 200
+move assistant to direct: 200
+hub band orphan: Waiting for you |  | 1 request waiting on Sample records. To review it, switch your assistant to Sample records: More, then Change records. |  | Recently | Intake form to Intake portal: Done. Open the PDF | Intake form to Intake portal: Didn't finish. To try again, switch your assistant to Sample records: More, then Change records. | Intake form to Intake portal: Done. Open the PDF
+09-hub-orphan-switch-line (orphan queue line): scrollWidth=375 clientWidth=375
+10-disconnect-confirm (disconnect dialog): scrollWidth=375 clientWidth=375
+after disconnect: Disconnected. No new records will arrive. The records already here stay; you'll find them under Past connections.
+11-disconnect-done (after disconnect): scrollWidth=375 clientWidth=375
+12-delete-confirm (records delete dialog): scrollWidth=375 clientWidth=375
+after delete: Your records were deleted: 11 stored items removed. We keep a log of who looked at your records, with no health details in it, and this deletion is in it.
+13-delete-count (after delete): scrollWidth=375 clientWidth=375
+14-settings (settings, long email): scrollWidth=375 clientWidth=375
+15-settings-account-delete (account delete dialog): scrollWidth=375 clientWidth=375
+
+Before the CSS fix, same branch, same harness:
+  chat: scrollWidth=390 clientWidth=375 (div.chat-tools and #trust-pill right edge at 390)
+  settings, unbroken email averylongsynthetictesteraddressnumber847@examplehealthclawtesting.test: scrollWidth=629 clientWidth=375 (main.hub width 629)
+
+Screens 07 and 08 are staged: 07 sets one engine row to failed in the local
+synthetic SQLite DB; 08 answers the status lookup with "failed" through a
+Playwright route, after a real approval. A real executor failure is not
+reachable from the UI.

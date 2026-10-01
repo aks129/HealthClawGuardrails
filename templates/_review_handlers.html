@@ -131,6 +131,12 @@
             // message. Prefixing it here printed "Review recorded." twice.
             gateMsg.textContent = res.b.next_step || 'Review recorded.';
             btn.disabled = true;
+            // Then on to the result. Printing next_step and stopping left
+            // a person who approved with no way to reach what they approved
+            // (#847): the PDF link, or the plain fact that it was done or
+            // did not finish, comes from the status, as on every other
+            // branch that knows the relay answered.
+            checkStatus();
             return;
           }
 
@@ -336,7 +342,19 @@
               // about how many times it ran. Claim only what was observed.
               gateMsg.textContent =
                 'Confirmed. Your approval went through and this request was ' +
-                'carried out.';
+                'carried out.' + (res.b.to ? ' It went to ' + res.b.to + '.' : '');
+              // The route to the result (#847). Only an http(s) link becomes
+              // an href; anything else is left out rather than shown raw.
+              var link = res.b.delivery_link;
+              if (typeof link === 'string' && /^https?:\/\//.test(link)) {
+                var a = document.createElement('a');
+                a.href = link;
+                a.target = '_blank';
+                a.rel = 'noopener';
+                a.textContent = 'Open your form (PDF)';
+                gateMsg.appendChild(document.createTextNode(' '));
+                gateMsg.appendChild(a);
+              }
               return;
             }
             // executing, failed, needs_review and unknown are reachable only
@@ -365,7 +383,9 @@
               // approval landed, the work after it did not.
               gateMsg.textContent =
                 'Your approval went through and this request could not be ' +
-                'completed. Approving again will not retry it.';
+                'completed. Approving again will not retry it. ' +
+                'Ask your assistant to try again. ' +
+                'Your hub lists it as not finished.';
               return;
             }
             if (status === 'unknown') {

@@ -6,6 +6,8 @@ PHI: labels, statuses, counts and timestamps only (calm hub spec 3 and 7).
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlsplit
+
 #: The one place a stored status becomes a word a person reads. `revoked`
 #: has no word: a revoked connection appears only under Past connections,
 #: whose heading already says what it is.
@@ -81,6 +83,40 @@ def menu_items(catalog: list[dict], real_open: bool) -> list[dict]:
     if not real_open:
         rows = [m for m in rows if m["tier"] != "soon"]
     return rows
+
+
+#: An engine status past the human gate, as the state the hub's line is
+#: chosen by (#847). home.js owns the sentences; this owns the mapping, so
+#: an engine status with no line here is dropped rather than shown raw.
+RECENT_STATES = {"completed": "done", "failed": "failed",
+                 "needs_review": "needs_review", "unknown": "unknown",
+                 "executing": "in_progress"}
+
+
+def recent_state(status: str | None) -> str | None:
+    return RECENT_STATES.get(status or "")
+
+
+def live_link(link, now: float) -> str | None:
+    """The PDF link, if it can still open.
+
+    The engine signs it for a day (`r6/sdc/delivery.py`), so a link past its
+    `exp` is dropped: a dead link reads as a broken product. Only http(s)
+    becomes a link, since the page puts it in an href.
+    """
+    if not isinstance(link, str):
+        return None
+    parts = urlsplit(link)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    exp = parse_qs(parts.query).get("exp", [""])[0]
+    if exp:
+        try:
+            if int(exp) <= now:
+                return None
+        except ValueError:
+            return None
+    return link
 
 
 def switch_prompt(home: dict) -> dict | None:
