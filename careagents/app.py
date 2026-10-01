@@ -976,35 +976,40 @@ def create_app(config: Config | None = None,
                             "that an app you shared them with was cut off. The "
                             "connection stays listed so you can try again."),
             }), 502
+        # Read before the unlink: deleting a connection deletes the
+        # assistants that read it, and the person is told which (#853).
+        gone = [a["name"] for a in svc.list_home(acct.id)["agents"]
+                if a["connection_id"] == conn_id]
         svc.delete_connection(acct.id, conn_id)
-        n = _records_deleted(purged)
+        # The count is the one the card showed. The engine's resource count
+        # includes kinds the card leaves out, so "15 stored items" beside a
+        # card saying 9 records read as a mistake (patient tester, #853).
+        n = conn.get("last_count")
+        n = n if isinstance(n, int) and not isinstance(n, bool) else None
         return jsonify({
             "deleted": True,
             "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
             "records_deleted": n,
+            "assistants_deleted": gone,
             "audit_retained": True,
-            "message": _deleted_sentence(n),
+            "message": _deleted_sentence(n, conn["label"], gone),
         })
 
-    def _records_deleted(purged) -> int | None:
-        """How many health records the purge removed, as the consent box
-        promises (#847). `rows_deleted` sums every table the purge touched,
-        approval events and bindings included, so it is not this number.
-        None when the engine did not say, which is never shown as zero."""
-        detail = purged.get("detail") if isinstance(purged, dict) else None
-        n = detail.get("resources") if isinstance(detail, dict) else None
-        return n if isinstance(n, int) and not isinstance(n, bool) else None
-
-    def _deleted_sentence(n: int | None) -> str:
-        # "items", not "records": the purge counts every stored resource,
-        # and the card's record count leaves some kinds out, so "11
-        # records" beside "5 records" read as a mistake (#847 walk).
-        lead = "Your records were deleted."
-        if n is not None:
-            lead = (f"Your records were deleted: {n} stored "
-                    f"item{'' if n == 1 else 's'} removed.")
+    def _deleted_sentence(n: int | None, label: str,
+                          gone: list[str]) -> str:
+        if n is None:
+            lead = f"Your records in {label} were deleted."
+        elif n == 1:
+            lead = f"The 1 record in {label} was deleted."
+        else:
+            lead = f"All {n} records in {label} were deleted."
+        if gone:
+            lead += (f" {' and '.join(gone)} "
+                     f"{'was' if len(gone) == 1 else 'were'} deleted too, "
+                     f"because {'it' if len(gone) == 1 else 'they'} read "
+                     "these records.")
         return (lead + " We keep a log of who looked at your records, with "
                 "no health details in it, and this deletion is in it.")
 
@@ -1323,17 +1328,23 @@ def create_app(config: Config | None = None,
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.
         # A lookup that fails draws no card, and the "Waiting for you" pill
-        # in the header still leads to the list.
-        try:
-            reviews = [{"id": a["id"],
-                        "label": _KIND_LABELS.get(a.get("kind"), "Request"),
-                        "form": a.get("kind") == "form-fill"}
-                       for a in hc.pending_actions(ctx["tenant"])
-                       if a.get("id")]
-        except HealthClawError:
-            logger.warning("pending reviews unavailable for agent %s",
-                           agent_id)
-            reviews = []
+        # in the header still leads to the list. A disconnected connection
+        # is not a pathway to its requests (#215), so it is not asked at
+        # all: a card there would promise an approval the relay refuses
+        # (security review of #853).
+        reviews = []
+        if conn.get("status") != "revoked":
+            try:
+                reviews = [{"id": a["id"],
+                            "label": _KIND_LABELS.get(a.get("kind"),
+                                                      "Request"),
+                            "form": a.get("kind") == "form-fill"}
+                           for a in hc.pending_actions(ctx["tenant"])
+                           if a.get("id")]
+            except HealthClawError:
+                logger.warning("pending reviews unavailable for agent %s",
+                               agent_id)
+                reviews = []
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
@@ -1795,7 +1806,9 @@ def create_app(config: Config | None = None,
                         "label": _KIND_LABELS.get(a.get("kind"),
                                                   "Request"),
                         "updated_at": a.get("updated_at") or ""}
-                if a.get("to"):
+                # An intake form goes nowhere: only a PDF is made, so naming
+                # a recipient read as though it had been sent (#853).
+                if a.get("to") and a.get("kind") != "form-fill":
                     item["to"] = a["to"]
                 if agent:
                     item["agent_name"] = agent["name"]

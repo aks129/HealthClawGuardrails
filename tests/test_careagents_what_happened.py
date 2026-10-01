@@ -297,33 +297,67 @@ class PurgeClient(FakeClient):
         return {"deleted": True, "rows_deleted": 999, "detail": self._detail}
 
 
-def test_records_delete_says_how_many_records_were_deleted(
+def test_records_delete_uses_the_count_the_card_showed(
         cfg, svc, monkeypatch):
-    fake = PurgeClient({"resources": 42, "action_events": 7})
+    """The patient tester's card said 9 records and the message said 15
+    stored items. The count is the one the card showed, never the engine's
+    count of every resource it removed."""
+    fake = PurgeClient({"resources": 15, "action_events": 7})
     c, _, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    svc.mark_synced(conn, 9)
     body = c.delete(f"/api/connections/{conn}").get_json()
     assert body["deleted"] is True
-    # The records count, not every row of every table the purge touched.
-    assert body["records_deleted"] == 42
-    assert "42 stored items" in body["message"]
+    assert body["records_deleted"] == 9
+    assert body["message"].startswith("All 9 records in Sample records "
+                                      "were deleted.")
+    assert "15" not in body["message"]
     assert "PHI" not in body["message"]
 
 
 def test_records_delete_without_a_count_does_not_invent_one(
         cfg, svc, monkeypatch):
-    fake = PurgeClient({})
+    fake = PurgeClient({"resources": 15})
     c, _, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    with svc.session() as s:
+        from careagents.models import Connection
+        s.query(Connection).filter_by(id=conn).update({"last_count": None})
     body = c.delete(f"/api/connections/{conn}").get_json()
     assert body["deleted"] is True
     assert body["records_deleted"] is None
-    assert body["message"].startswith("Your records were deleted.")
-    assert "0 records" not in body["message"]
+    assert body["message"].startswith("Your records in Sample records were "
+                                      "deleted.")
+    assert "15" not in body["message"]
 
 
 def test_one_record_is_singular(cfg, svc, monkeypatch):
-    fake = PurgeClient({"resources": 1})
-    c, _, conn = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
-    assert "1 stored item " in c.delete(f"/api/connections/{conn}").get_json()["message"]
+    c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
+    svc.mark_synced(conn, 1)
+    msg = c.delete(f"/api/connections/{conn}").get_json()["message"]
+    assert msg.startswith("The 1 record in Sample records was deleted.")
+
+
+def test_records_delete_says_the_assistant_went_with_them(
+        cfg, svc, monkeypatch):
+    """Deleting a connection deletes the assistants that read it. The
+    patient tester found the assistant gone with nothing saying so."""
+    c, _, conn = _signed_in(_app(cfg, svc, PurgeClient({})), svc, monkeypatch)
+    body = c.delete(f"/api/connections/{conn}").get_json()
+    assert body["assistants_deleted"] == ["Juniper"]
+    assert "Juniper was deleted too" in body["message"]
+
+
+def test_the_delete_dialog_names_the_assistant_that_goes_with_it(
+        cfg, svc, monkeypatch):
+    c, _, conn = _signed_in(_app(cfg, svc, FakeClient()), svc, monkeypatch)
+    html = c.get("/home").get_data(as_text=True)
+    btn = html[html.index(f'class="conn-delete" data-conn="{conn}"'):]
+    btn = btn[:btn.index(">")]
+    assert 'data-readers="Juniper"' in btn
+    assert 'id="delete-readers"' in html
+    js = (ROOT / "careagents" / "static" / "home.js").read_text()
+    ask = js[js.index("function askToDelete"):]
+    ask = ask[:ask.index("return dlg.result;")]
+    assert "reads these records and will be deleted too" in ask
 
 
 # --- disconnect: ask first, then say what happened -------------------------
@@ -477,3 +511,104 @@ def test_a_failure_on_records_no_assistant_reads_names_the_switch(
     assert orphan[0]["records"] == "Sample records"
     js = (ROOT / "careagents" / "static" / "home.js").read_text()
     assert "switch your assistant to" in js[js.index("const recentLine"):]
+
+
+# --- #853 review round -------------------------------------------------------
+
+def test_a_form_is_not_said_to_have_gone_anywhere(cfg, svc, monkeypatch):
+    """Only a PDF was made. "Intake form to Intake portal" read as though it
+    had been sent (patient tester on #853)."""
+    fake = OutcomeClient(pending=[], recent=[{
+        "id": "act-done", "kind": "form-fill", "to": "Intake portal",
+        "status": "completed",
+        "_outcome": json.dumps({"delivery_link": _link(20)})}])
+    c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    [item] = c.get("/api/approvals/count").get_json()["recent"]
+    assert "to" not in item
+    js = (ROOT / "careagents" / "static" / "home.js").read_text()
+    line = js[js.index("const recentLine"):js.index("function showRecent")]
+    assert '(r.link ? "ready." : "Done.")' in line
+
+
+@pytest.mark.parametrize("name", ["action_review.html", "action_approve.html"])
+def test_a_ready_form_says_what_to_do_with_it(name):
+    poll = _page(name)
+    poll = poll[poll.index("function checkStatus()"):]
+    done = poll[poll.index("status === 'completed'"):]
+    done = done[:done.index("return;")]
+    assert "Your form is ready." in done
+    assert "to save it, print it or send it to your new doctor." in done
+
+
+@pytest.mark.parametrize("name", ["action_review.html", "action_approve.html"])
+def test_approve_and_decline_go_away_once_approved(name):
+    page = _page(name)
+    ok = page.index("if (res.r.ok)")
+    branch = page[ok:page.index("return;", ok)]
+    assert "btn.hidden = true;" in branch
+    assert "document.getElementById('decline-btn').hidden = true;" in branch
+
+
+def test_the_review_shell_styles_a_disabled_button_and_honours_hidden():
+    shell = (ROOT / "templates" / "review_base.html").read_text()
+    assert ".btn:disabled" in shell
+    assert "[hidden] { display: none !important; }" in shell
+
+
+def test_the_review_page_names_the_box_the_person_sees():
+    page = (ROOT / "templates" / "action_review.html").read_text()
+    assert '"No known allergies"' not in page
+    assert page.count('"I have no known allergies"') >= 2
+
+
+def test_the_shared_link_tile_does_not_promise_what_is_coming_soon():
+    from careagents import connectors
+    shl = connectors._BY_ID["shl"]
+    assert shl["tier"] == "soon"
+    assert "Open it here" not in shl["blurb"]
+    assert "coming soon" in shl["blurb"].lower()
+
+
+def test_the_hub_lists_at_most_five_recent_requests(cfg, svc, monkeypatch):
+    recent = [{"id": f"act-{i}", "kind": "sms", "to": "Dr. Lee",
+               "status": "failed",
+               "updated_at": f"2026-10-01T10:0{i}:00Z"} for i in range(8)]
+    fake = OutcomeClient(pending=[], recent=recent)
+    c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
+    items = c.get("/api/approvals/count").get_json()["recent"]
+    assert [i["id"] for i in items] == [f"act-{i}" for i in (7, 6, 5, 4, 3)]
+
+
+_NOTICE_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const key = src.match(/const NOTICE_KEY = [^;]+;/)[0];
+const block = src.match(
+  /\(function showCarriedNotice\(\) \{[\s\S]*?\n  \}\)\(\);/)[0];
+const store = {};
+const storage = {
+  getItem: (k) => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+  removeItem: (k) => { delete store[k]; },
+};
+const shown = [];
+const el = { scrollIntoView() {} };
+const run = new Function('sessionStorage', '$', 'announce',
+  key + '\nsessionStorage.setItem(NOTICE_KEY, "Disconnected.");\n'
+  + block + '\n' + block);
+run(storage, () => el, (_el, text) => { shown.push(text); });
+process.stdout.write(JSON.stringify({ shown, left: Object.keys(store) }));
+"""
+
+
+def test_a_carried_notice_is_shown_once_and_then_cleared():
+    """A second load must not repeat "Disconnected." forever (QA on #853)."""
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(
+        ["node", "-e", _NOTICE_HARNESS, "--",
+         str(ROOT / "careagents" / "static" / "home.js")],
+        capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == {"shown": ["Disconnected."], "left": []}

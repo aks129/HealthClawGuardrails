@@ -14,6 +14,9 @@
     <h3 id="delete-title">Delete these records?</h3>
     <p class="delete-warn">This permanently deletes the records in
       "<span id="delete-label"></span>".</p>
+    {# Filled by home.js when an assistant reads these records: deleting
+       the connection deletes that assistant too (#853). #}
+    <p class="delete-warn" id="delete-readers" hidden></p>
     {% endif %}
     <p class="delete-warn">We keep a log of who looked at your records, with
       no health details in it.</p>

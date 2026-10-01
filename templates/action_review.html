@@ -9,7 +9,8 @@
         <h2 class="mb-0">Review each item before we generate your form</h2>
         <p class="text-muted mb-0">
           Nothing is submitted until you confirm every medication and allergy
-          below. "No known allergies" is never assumed on your behalf.
+          below. Having no allergies is never assumed for you: you say so
+          yourself with the "I have no known allergies" box.
         </p>
       </div>
     </div>
@@ -162,7 +163,7 @@
 
       <div id="review-gate-msg" class="alert alert-secondary" role="alert">
         Review every medication and allergy, then confirm an allergy or check
-        "No known allergies" to continue.
+        "I have no known allergies" to continue.
       </div>
 
       <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve &amp; generate
@@ -230,7 +231,7 @@
       gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';
       gateMsg.textContent = ok
         ? 'Ready to generate. The server will re-verify every item on submit.'
-        : 'Review every medication and allergy, then confirm an allergy or check "No known allergies" to continue.';
+        : 'Review every medication and allergy, then confirm an allergy or check "I have no known allergies" to continue.';
       return ok;
     }
     form.addEventListener('change', evaluate);

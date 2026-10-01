@@ -70,7 +70,9 @@ def build(home: dict, now: float) -> dict:
         "records": records,
         "active_records": active,
         "move_choices": [{"id": r["id"], "label": r["label"]} for r in active],
-        "past": [_record(c, now) for c in conns if c["status"] == "revoked"],
+        "past": [{**_record(c, now),
+                  "readers": ", ".join(readers.get(c["id"], []))}
+                 for c in conns if c["status"] == "revoked"],
         "connected_kinds": sorted({r["kind"] for r in active}),
         "has_real": any(not r["is_sample"] for r in active),
     }

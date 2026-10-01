@@ -101,7 +101,7 @@
                 title="Stop new records arriving; keep what's already here">Disconnect</button>
         {% endif %}
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}
@@ -176,7 +176,7 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">No new records arrive from this one.</div>
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}

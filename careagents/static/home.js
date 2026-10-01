@@ -524,7 +524,8 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const agreed = await askToDelete(btn.dataset.label || "these records");
+      const agreed = await askToDelete(btn.dataset.label || "these records",
+                                       btn.dataset.readers || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -578,11 +579,20 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label) {
+  function askToDelete(label, readers) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
     if (named) named.textContent = label;
+    // Deleting a connection deletes the assistants that read it. Said
+    // before the tap, by name (#853). Absent on the account page.
+    const who = $("delete-readers");
+    if (who) {
+      who.textContent = readers
+        ? readers + " reads these records and will be deleted too."
+        : "";
+      who.hidden = !readers;
+    }
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
@@ -649,7 +659,9 @@
   const SUPPORT = "Email support@healthclaw.io to check.";
   const recentLine = (r) => {
     const what = r.label + (r.to ? " to " + r.to : "") + ": ";
-    if (r.state === "done") return { text: what + "Done.",
+    // A form with its PDF is "ready": it went nowhere, it waits for the
+    // person to save, print or send it (#853).
+    if (r.state === "done") return { text: what + (r.link ? "ready." : "Done."),
       link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
     if (r.state === "failed") return { text: what + "Didn't finish.",
       link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,

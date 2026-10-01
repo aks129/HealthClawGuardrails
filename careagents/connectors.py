@@ -67,8 +67,8 @@ _CATALOG = [
      # The standard's name is kept for people who were told it, and said
      # in plain words for everyone else (#847).
      "blurb": "Some clinics and apps share records as a link or a QR code, "
-              "called a SMART Health Link. Open it here to add the "
-              "records."},
+              "called a SMART Health Link. Adding records from one is "
+              "coming soon."},
     {"id": "wearable", "tier": "live", "icon": "⌚️", "group": "devices",
      "label": "Apple Health and wearables",
      "blurb": "Oura, Whoop, Garmin, Fitbit, Strava and Apple Health.",
