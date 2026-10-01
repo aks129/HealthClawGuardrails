@@ -36,7 +36,7 @@ PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
 #: consent column existed holds NULL and is asked on the first deploy,
 #: when no terms have changed yet.
 TERMS_TEXT = ("Before we go on, please review and accept the current terms "
-              "on your home page, then ask me again.")
+              "on your hub, then ask me again.")
 
 
 def turn_block(connection: dict, paused: bool,

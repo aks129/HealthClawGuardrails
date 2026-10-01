@@ -65,6 +65,13 @@ def contact_links(text) -> Markup:
         CONTACT_EMAIL,
         f'<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>'))
 
+
+def chat_links(text) -> Markup:
+    """Jinja filter for a replayed assistant bubble: contact_links, and
+    "your hub" links to the hub, the same two links chat.js adds live."""
+    return Markup(str(contact_links(text)).replace(
+        "your hub", '<a href="/home">your hub</a>'))
+
 # The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
 # relay ingress). It gets its own budget rather than sharing the readiness
 # probe's, because the stakes are opposite: `/healthz` must answer inside a
@@ -260,6 +267,7 @@ def create_app(config: Config | None = None,
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
     app.jinja_env.filters["contact_links"] = contact_links
+    app.jinja_env.filters["chat_links"] = chat_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),

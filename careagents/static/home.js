@@ -144,10 +144,28 @@
   // text. Delete arms "Deleting…" and then awaits the request; a failure that
   // lands inside the wait would otherwise be papered over by the stale
   // "Deleting…" arriving on top of "Your records were not deleted."
+  // After a write: make the contact address a mailto link, from nodes.
+  const CONTACT = "contactus@healthclaw.io";
+  function linkContact(el) {
+    const text = el.textContent;
+    if (text.indexOf(CONTACT) < 0) return;
+    el.textContent = "";
+    text.split(CONTACT).forEach((part, i) => {
+      if (i) {
+        const a = document.createElement("a");
+        a.href = "mailto:" + CONTACT;
+        a.textContent = CONTACT;
+        el.appendChild(a);
+      }
+      if (part) el.appendChild(document.createTextNode(part));
+    });
+  }
+
   function announce(el, text, after) {
     const pending = announceTimers.get(el);
     if (pending) clearTimeout(pending);
-    const write = () => { el.textContent = text; if (after) after(); };
+    const write = () => {
+      el.textContent = text; linkContact(el); if (after) after(); };
     if (!el.hidden && !pending) return write();
     el.textContent = "";
     el.hidden = false;
