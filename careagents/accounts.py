@@ -25,8 +25,9 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-from careagents.models import (Account, Agent, Connection, EmailToken, Grant, Passkey,
-                               RealRecordInvite, Surface, UsageDay, make_engine,
+from careagents.models import (Account, ActivityDay, Agent, Connection,
+                               EmailToken, Grant, Passkey, RealRecordInvite,
+                               Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -487,9 +488,12 @@ class AccountService:
             if acct is None:
                 return False
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay):
+                          UsageDay, ActivityDay):
                 s.query(model).filter_by(account_id=account_id).delete()
             s.query(EmailToken).filter_by(email=acct.email).delete()
+            # The invite is keyed by the same address (beta spec 4.2). The
+            # operator can invite again if the person comes back.
+            s.query(RealRecordInvite).filter_by(email=acct.email).delete()
             s.delete(acct)
             return True
 
@@ -777,7 +781,8 @@ def _conn_dict(c: Connection) -> dict:
             "label": c.label, "status": c.status, "provider": c.provider,
             "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count,
-            "last_uncounted": c.last_uncounted}
+            "last_uncounted": c.last_uncounted,
+            "consent_version": c.consent_version}
 
 
 def _grant_dict(g: Grant) -> dict:

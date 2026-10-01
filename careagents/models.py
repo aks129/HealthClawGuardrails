@@ -51,6 +51,10 @@ class Account(Base):
     # When the person answered "Switch Juniper to your records?" either
     # way (calm hub spec section 5). A timestamp, not PHI.
     switch_prompted_at = Column(Float, nullable=True)
+    # When an operator paused this account (beta spec section 4.6). While
+    # set, no chat turn reaches a model and no new real connection starts.
+    # A timestamp, not PHI.
+    real_paused_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -175,6 +179,23 @@ class UsageDay(Base):
     turns = Column(Integer, default=0)
 
 
+class ActivityDay(Base):
+    """Per-account daily counts for the weekly number (beta spec 4.5).
+
+    `asked` counts turns on a real-record assistant, `approved` counts
+    approvals of a real-record action. Integers only: no message, no action
+    kind, nothing about the record.
+    """
+    __tablename__ = "ca_activity_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_activity_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("act"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    asked = Column(Integer, default=0)
+    approved = Column(Integer, default=0)
+
+
 class PageViewDay(Base):
     """Per-page daily view count for the pages anyone can open.
 
@@ -262,7 +283,7 @@ def _ensure_columns(engine) -> None:
     if "ca_accounts" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_accounts")}
         for name in ("sample_claim_at", "first_agent_at",
-                     "switch_prompted_at"):
+                     "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_grants" in tables:
