@@ -715,6 +715,19 @@ def test_a_long_shared_app_host_wraps_at_dots_with_a_fallback(app, svc, monkeypa
     assert ".grant-card { min-width: 0; }" in css
 
 
+def test_the_settings_card_escapes_the_host_between_its_line_breaks(
+        app, svc, monkeypatch):
+    """Only the <wbr> hints are markup. MUTATION: render a label |safe -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-x", "Claude", "fhir.read",
+                  "consent_esc", redirect_host="evil<b>.example")
+    page = client.get("/settings").get_data(as_text=True)
+    assert "evil<b>" not in page
+    assert '<div class="hub-card-name grant-host">evil&lt;b&gt;.<wbr>example</div>' in page
+
+
 def test_an_existing_grants_table_gains_redirect_host_at_start(tmp_path):
     """create_all() adds tables, never columns, so a live ca_grants reaches
     this code without redirect_host. MUTATION: delete the ca_grants block
