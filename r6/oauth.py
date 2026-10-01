@@ -882,8 +882,9 @@ def register_oauth_routes(blueprint):
         parked = _oauth_store_pop('consent-request', request_id)
         if not parked:
             return jsonify({'error': 'not_found'}), 404
-        logger.info('OAuth consent request discarded: client_id=%s',
-                    parked.get('client_id'))
+        # Nothing from the parked record is logged: the OAuth store also holds
+        # client secrets, so a value read from it is treated as sensitive.
+        logger.info('OAuth consent request discarded')
         return '', 204
 
     @blueprint.route('/oauth/consent/return', methods=['GET'])
