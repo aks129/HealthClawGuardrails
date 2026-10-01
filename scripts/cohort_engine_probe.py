@@ -102,8 +102,11 @@ def main(argv=None) -> int:
     headers = {}
     for m in manifest:
         bundle = json.loads((Path(args.cohort) / m["file"]).read_text())
-        tenant = f"probe-{m['patient_id']}"
-        pid = f"sh-{m['patient_id']}"
+        # Both from the bundle's file name (sh-<n>.json), which is also the
+        # Patient id the cohort builder wrote. Tenant ids are printed in
+        # labels, so they are not built from a record field.
+        pid = Path(m["file"]).stem
+        tenant = f"probe-{pid}"
         print(f"== {m['file']} ({m['reason']})")
         r = requests.post(f"{base}/internal/ingest-bundle", json={"bundle": bundle},
                           headers={"X-Tenant-Id": tenant, "X-Internal-Secret": args.internal_secret},
