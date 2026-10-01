@@ -14,6 +14,12 @@
     <p class="setup-sub">Requests to share your records last ten minutes.
     Go back to the app that asked and start again.</p>
     <a class="btn-secondary btn-block" href="/home">Back to your hub</a>
+  {% elif state == "unavailable" %}
+    <h1>We can't check this request right now</h1>
+    <p class="setup-sub">Nothing has been shared. Try again in a minute: reload
+    this page. If it keeps happening, go back to the app that asked and start
+    again.</p>
+    <a class="btn-secondary btn-block" href="">Try again</a>
   {% elif state == "declined" %}
     <h1>You said no.</h1>
     <p class="setup-sub">Nothing was shared. You can close this page.</p>
@@ -26,8 +32,12 @@
     {% if redirect_host %}
     <h1 class="consent-title">{{ host_html }} wants to read your records</h1>
     {% if lookalike_of %}
+    {#- Only say what the person can check on screen: "has X in it" when X
+        is in the address letter for letter. -#}
     <p class="form-warn consent-lookalike"><strong>This is not {{ lookalike_of }}.</strong>
-    It just has {{ lookalike_of }} in it.</p>
+    {% if lookalike_how == "contains" %}It just has {{ lookalike_of }} in it.
+    {%- elif lookalike_how == "letters" %}It uses letters that look like it.
+    {%- else %}It only looks similar.{% endif %}</p>
     {% endif %}
     {% if unusual_letters %}
     <p class="form-warn consent-lookalike">This address uses unusual letters

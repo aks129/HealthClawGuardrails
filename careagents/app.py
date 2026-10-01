@@ -567,7 +567,13 @@ def create_app(config: Config | None = None,
         if current_account() is None:
             session["consent_req"] = req
             return redirect(url_for("auth"))
-        parked = hc.consent_request(request_id)
+        try:
+            parked = hc.consent_request(request_id)
+        except HealthClawError:
+            # HealthClaw unreachable: say so plainly, not a 500. The handle is
+            # still good for ten minutes, so trying again can work.
+            return render_template("consent.html", state="unavailable",
+                                   me=current_account()), 503
         if parked is None:
             return render_template("consent.html", state="expired",
                                    me=current_account()), 410
@@ -598,14 +604,20 @@ def create_app(config: Config | None = None,
         if body.get("decision") != "approved":
             # Only a recognized address gets the OAuth access_denied, which
             # sends the browser to the client. Any other stays here: its
-            # redirect URI is a stranger's page. HealthClaw's parked request is
-            # then never decided and lapses at its ten-minute expiry (#846).
-            # HealthClaw unreachable: nothing was shared, so say no here too.
+            # redirect URI is a stranger's page. The parked request is spent
+            # at HealthClaw with no redirect, so an older tab or another
+            # account cannot approve it afterwards (#846). HealthClaw
+            # unreachable: nothing was shared, so say no here too; the
+            # request then lapses at its ten-minute expiry.
             try:
                 parked = hc.consent_request(request_id)
             except HealthClawError:
                 parked = None
             if not consent.app_identity(parked or {})["host_recognized"]:
+                try:
+                    hc.discard_consent_request(request_id)
+                except HealthClawError:
+                    logger.warning("consent discard failed; request lapses at expiry")
                 return jsonify({"redirect": url_for("consent_declined")})
             grant, _ = consent.build_grant(cfg.mint_secret, request_id, "denied")
             return jsonify({"redirect": _consent_return(grant)})

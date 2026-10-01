@@ -552,9 +552,13 @@ def test_the_client_name_and_host_are_escaped_on_the_page(app, svc, fake, monkey
 def test_the_host_is_escaped_between_its_line_breaks(app, svc, fake, monkeypatch):
     """The <wbr> hints are markup; the labels between them are not.
     MUTATION: join the raw labels without escape() -> red."""
+    # Since round 2 such a host is not showable at all: the page names none.
     page = _ask_page(app, svc, fake, monkeypatch, 'evil<b>.example"')
-    assert "evil<b>" not in page
-    assert "evil&lt;b&gt;.example&#34; wants to read" in page
+    assert "evil<b>" not in page and "evil&lt;b&gt;" not in page
+    assert "An app wants to read your records" in page
+    # The wrapper still escapes on its own, as the second wall.
+    wrapped = str(consent._wrap_at_dots('evil<b>.example"'))
+    assert wrapped == f'{HOST_OPEN}evil&lt;b&gt;.<wbr>example&#34;</span>'
 
 
 def test_app_identity_matches_hosts_exactly():
@@ -805,7 +809,11 @@ def test_a_punycode_host_is_explained_in_plain_words(
     page = " ".join(_ask_page(app, svc, fake, monkeypatch, host).split())
     assert "This address uses unusual letters that can imitate another address." in page
     if lookalike:
-        assert f"This is not {lookalike}.</strong> It just has {lookalike} in it." in page
+        # The screen shows xn--…, so "it just has claude.ai in it" would be
+        # false: say what the person can see.
+        assert (f"This is not {lookalike}.</strong> "
+                "It uses letters that look like it.") in page
+        assert "It just has" not in page
     else:
         assert "This is not" not in page
 
@@ -824,6 +832,105 @@ def test_the_lookalike_line_names_the_recognized_address_it_borrows(
     assert ("This is not claude.com.</strong> It just has claude.com in it."
             in " ".join(page.split()))
     assert "only uses the name" not in page
+
+
+@pytest.mark.parametrize("host, line", [
+    # The recognized address appears letter for letter: say so.
+    ("claude.ai.secure-login.example", "It just has claude.ai in it."),
+    ("evilclaude.ai", "It just has claude.ai in it."),
+    # Not letter for letter on screen: never claim it is "in" the address.
+    ("claudeai-help.example", "It only looks similar."),
+    (LONG_LABEL, "It only looks similar."),
+    ("my-claude-tools.example", "It only looks similar."),
+    ("xn--clude-5ve.ai", "It uses letters that look like it."),
+])
+def test_the_lookalike_line_only_claims_what_is_on_screen(
+        app, svc, fake, monkeypatch, host, line):
+    """Patient re-walk: "It just has claude.ai in it." under xn--clude-5ve.ai
+    is false. MUTATION: say "just has" for every lookalike -> red; or never ->
+    the literal rows go red."""
+    page = " ".join(_ask_page(app, svc, fake, monkeypatch, host).split())
+    assert f"</strong> {line}</p>" in page, page.split("consent-lookalike")[1][:200]
+    if "just has" not in line:
+        assert "It just has" not in page
+
+
+# --- round 2: exact hosts, a "no" that is final, HealthClaw down ---------------
+
+
+@pytest.mark.parametrize("given, shown, recognized", [
+    ("claude.ai.", "claude.ai", True),       # one trailing dot: same name in DNS
+    ("CLAUDE.COM.", "claude.com", True),
+    ("claude.ai\x1f", None, False),          # never stripped
+    (" claude.ai", None, False),
+    ("claude.ai ", None, False),
+    ("claude.ai\t", None, False),
+    ("claude.ai..", "claude.ai.", False),    # only one dot comes off
+    ("::1", "::1", False),
+])
+def test_app_identity_compares_hosts_exactly(given, shown, recognized):
+    """R2-2. MUTATION: strip() the host -> the whitespace rows read as
+    claude.ai; drop the trailing-dot step -> the first rows go red."""
+    ident = consent.app_identity({"redirect_host": given})
+    assert ident["redirect_host"] == shown and ident["host_recognized"] is recognized
+
+
+def test_dont_allow_on_an_unrecognized_host_spends_the_request_at_healthclaw(
+        app, svc, fake, monkeypatch):
+    """D1: the "no" is final at once. MUTATION: skip the discard -> red."""
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+    assert fake.discarded == ["req-1"]
+
+
+def test_dont_allow_on_a_recognized_host_redirects_and_discards_nothing(
+        app, svc, fake, monkeypatch):
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "claude.ai"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert "/r6/fhir/oauth/consent/return?grant=" in resp.get_json()["redirect"]
+    assert fake.discarded == []
+
+
+def test_dont_allow_still_says_no_when_the_discard_fails(app, svc, fake, monkeypatch):
+    """MUTATION: let the discard's HealthClawError escape -> 500."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    fake.discard_fails = True
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.status_code == 200
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+    assert svc.list_grants(acct.id) == []
+
+
+def test_the_consent_page_says_plainly_when_healthclaw_cannot_be_reached(
+        app, svc, fake, monkeypatch):
+    """Item 7: a 500 here also broke the sign-in resume, which lands on this
+    page. MUTATION: let the HealthClawError escape -> 500."""
+    from careagents.healthclaw import HealthClawError
+    client, _ = _signed_in(app, svc, monkeypatch)
+
+    def unreachable(request_id):
+        raise HealthClawError("consent request failed", 0)
+
+    monkeypatch.setattr(fake, "consent_request", unreachable)
+    resp = client.get("/authorize", query_string={"req": _handle()})
+    assert resp.status_code == 503
+    page = resp.get_data(as_text=True)
+    assert "We can't check this request right now" in page
+    assert "Try again" in page and "Nothing has been shared." in page
+
+
+def test_revoke_is_a_real_button_with_a_44px_target():
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    rule = css.split(".grant-revoke {", 1)[1].split("}", 1)[0]
+    assert "min-height: 44px" in rule and "border-radius" in rule
 
 
 def test_the_declined_page_is_titled_you_said_no(app):

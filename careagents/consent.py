@@ -15,6 +15,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import unicodedata
@@ -43,19 +44,29 @@ RECOGNIZED_REDIRECT_HOSTS = frozenset({"claude.ai", "claude.com"})
 _RECOGNIZED_NAME = "claude"
 
 
+#: What a host may be made of once it is ASCII: DNS letters, digits, dots and
+#: hyphens, or an IPv6 literal. Anything else (a space, a control character)
+#: is no host a browser resolves, so the page names none.
+_SHOWABLE_HOST = re.compile(r"[a-z0-9.-]+|[0-9a-f:]+")
+
+
 def _ascii_host(host) -> str | None:
-    """The host as a browser resolves it, lowercased: an IDNA A-label for a
-    non-ASCII host (which also maps U+3002, U+FF0E and U+FF61 to '.'), so a
-    lookalike is never shown in Unicode. None when there is none to show."""
-    if not isinstance(host, str) or not host.strip():
+    """The host as a browser resolves it, lowercased, with one trailing dot
+    removed (claude.ai. is claude.ai in DNS): an IDNA A-label for a non-ASCII
+    host (which also maps U+3002, U+FF0E and U+FF61 to '.'), so a lookalike
+    is never shown in Unicode. Never stripped: 'claude.ai\\x1f' is not
+    claude.ai, and is no host at all. None when there is none to show."""
+    if not isinstance(host, str) or not host:
         return None
-    host = host.strip().lower()
-    if host.isascii():
-        return host
-    try:
-        return host.encode("idna").decode("ascii").lower()
-    except UnicodeError:
-        return None
+    host = host.lower()
+    if host.endswith("."):
+        host = host[:-1]
+    if not host.isascii():
+        try:
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            return None
+    return host if _SHOWABLE_HOST.fullmatch(host) else None
 
 
 #: Letters from other scripts that read as the Latin letters of the
@@ -88,17 +99,30 @@ def _as_read(host: str) -> str:
     return ".".join(labels)
 
 
-def _lookalike_of(host: str | None) -> str | None:
-    """The recognized host an unrecognized one borrows the name of, if any."""
+def _compact(text: str) -> str:
+    return "".join(ch for ch in text if ch.isascii() and ch.isalnum())
+
+
+def _lookalike(host: str | None) -> tuple[str | None, str | None]:
+    """The recognized host an unrecognized one borrows the name of, and how,
+    so the page only says what the person can see for themselves:
+    "contains" when that address appears, letter for letter, in the host on
+    screen; "letters" when it only appears once xn-- labels are decoded and
+    lookalike letters folded; "looks" for the name without its dot
+    (claudeai-help.example, one long label)."""
     if not host or host in RECOGNIZED_REDIRECT_HOSTS:
-        return None
-    compact = "".join(ch for ch in _as_read(host) if ch.isascii() and ch.isalnum())
+        return None, None
+    compact = _compact(_as_read(host))
     if _RECOGNIZED_NAME not in compact:
-        return None
-    for known in sorted(RECOGNIZED_REDIRECT_HOSTS):
-        if known.replace(".", "") in compact:
-            return known
-    return sorted(RECOGNIZED_REDIRECT_HOSTS)[0]
+        return None, None
+    known = next((k for k in sorted(RECOGNIZED_REDIRECT_HOSTS)
+                  if k.replace(".", "") in compact),
+                 sorted(RECOGNIZED_REDIRECT_HOSTS)[0])
+    if known in host:
+        return known, "contains"
+    if _RECOGNIZED_NAME in _compact(host):
+        return known, "looks"
+    return known, "letters"
 
 
 def _wrap_at_dots(host: str | None) -> Markup | None:
@@ -118,11 +142,13 @@ def app_identity(parked: dict) -> dict:
     where the code goes, and is what the page leads with. No host (a
     HealthClaw that predates it) is never recognized."""
     host = _ascii_host(parked.get("redirect_host"))
+    lookalike_of, lookalike_how = _lookalike(host)
     return {"client_name": parked.get("client_name") or "An agent",
             "redirect_host": host,
             "host_html": _wrap_at_dots(host),
             "host_recognized": host in RECOGNIZED_REDIRECT_HOSTS,
-            "lookalike_of": _lookalike_of(host),
+            "lookalike_of": lookalike_of,
+            "lookalike_how": lookalike_how,
             "unusual_letters": _unusual_letters(host)}
 
 
