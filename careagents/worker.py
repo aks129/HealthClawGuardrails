@@ -296,6 +296,20 @@ class RunWorker:
             if not calls:
                 final_checkpoint = payload
 
+        if not checkpoints:
+            # The day's allowance is charged here, where the model is called
+            # and after turn_block passed (#856 sign-off F4): a turn admitted
+            # while refused, then unblocked before it was claimed, is
+            # charged like any other. A recovered run that already has a
+            # checkpoint was charged when it made it.
+            allowed, _used = self.accounts.claim_daily_turn(
+                context["account_id"], self.cfg.chat_turns_per_day)
+            if not allowed:
+                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                                   "checkpoint_id": "daily_limit"},
+                             emitted, heartbeat)
+                return
+
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat)
             return

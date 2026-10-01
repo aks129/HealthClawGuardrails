@@ -4346,7 +4346,13 @@ def test_daily_cap_survives_a_service_restart(tmp_path, monkeypatch):
 
 
 def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
+    from careagents import agent as agent_mod
     from careagents.app import create_app
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "hello", [], []
+    # The worker runs the first turn here: never reach a real provider.
+    monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: _Turn())
     monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
     app = create_app(config=cfg, client=FakeClient(), accounts=svc)
     app.config["TESTING"] = True
@@ -4356,7 +4362,9 @@ def test_chat_refuses_once_the_daily_limit_is_reached(cfg, svc, monkeypatch):
     agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
                                         "connection_id": conn}).get_json()["id"]
 
-    first = c.post("/api/chat", json={"agent_id": agent, "message": "hi"})
+    # The turn is charged where the model is called, in the worker (#856
+    # sign-off F4), so the first turn runs before the second is admitted.
+    first = _turn(c, agent, "hi")
     assert first.status_code == 200
 
     second = c.post("/api/chat", json={"agent_id": agent, "message": "again"})

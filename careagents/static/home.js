@@ -711,7 +711,8 @@
   // approval that finished left the band at "Nothing yet" with no way to the
   // result, and one that failed vanished. Each line says what happened and,
   // where there is one, the next step. Labels and names go in as text.
-  const SUPPORT = "Email support@healthclaw.io to check.";
+  // The one contact address (#856), linked by showRecent.
+  const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
     const what = r.label + (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
@@ -751,6 +752,7 @@
       if (!line) return;
       const li = document.createElement("li");
       li.textContent = line.text;
+      linkContact(li);   // before any link below: it rewrites the text
       if (line.link && /^(https?:\/\/|\/)/.test(line.link.href)) {
         const a = document.createElement("a");
         a.href = line.link.href;

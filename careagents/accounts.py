@@ -467,6 +467,16 @@ class AccountService:
             row.turns = used + 1
             return True, used + 1
 
+    def daily_turns_used(self, account_id: str) -> int:
+        """Today's charged turns, read only. Admission asks this; the worker
+        charges with claim_daily_turn where the model is called."""
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self.session() as s:
+            row = (s.query(UsageDay)
+                   .filter_by(account_id=account_id, day=day).first())
+            return int(row.turns or 0) if row else 0
+
     _ACTIVITY_FIELDS = ("asked", "approved")
 
     def count_activity(self, account_id: str, field: str) -> None:

@@ -11,8 +11,6 @@ from __future__ import annotations
 import threading
 import time
 
-import pytest
-
 
 from careagents.models import Connection, RealRecordInvite
 from tests.careagents_stage1_helpers import approve_terms
@@ -244,9 +242,8 @@ def test_account_wide_accept_never_reaches_another_account_or_revoked(
         assert s.get(Connection, a_gone).consent_version == "2026-08-01"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#856 round 2: a turn admitted while refused is not charged, and is not "
-    "charged at the worker either if the person accepts before it is claimed"))
+# Fixed in the #856 follow-up: the day's turn is charged in the worker,
+# where the model is called, after turn_block passes.
 def test_exploit_cap_skip_then_accept_reaches_model_uncharged(
         cfg, svc, monkeypatch):  # noqa: F811
     from careagents import agent as agent_mod
@@ -276,3 +273,8 @@ def test_exploit_cap_skip_then_accept_reaches_model_uncharged(
         used = sum(int(u.turns or 0) for u in s.query(UsageDay).all())
     assert len(calls) <= used <= 1, (
         f"{len(calls)} model calls against a cap of 1, {used} charged")
+    # The two turns past the cap are answered with the limit sentence.
+    from careagents import beta
+    answers = [row["content"] for rows in fake.logged.values()
+               for row in rows if row["role"] == "assistant"]
+    assert answers.count(beta.DAILY_LIMIT_TEXT) == 2

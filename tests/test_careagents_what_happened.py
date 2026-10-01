@@ -603,6 +603,72 @@ process.stdout.write(JSON.stringify({ shown, left: Object.keys(store) }));
 """
 
 
+_RECENT_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+function cut(re) {
+  const m = src.match(re);
+  if (!m) throw new Error('not found: ' + re);
+  return m[0];
+}
+class Node_ {
+  constructor(tag, text) { this.tag = tag; this.kids = []; this.t = text; }
+  get textContent() {
+    return this.tag === '#text' ? this.t
+      : this.kids.map((k) => k.textContent).join('');
+  }
+  set textContent(v) { this.kids = v ? [new Node_('#text', v)] : []; }
+  appendChild(k) { this.kids.push(k); return k; }
+  append(...ks) {
+    ks.forEach((k) => this.kids.push(
+      typeof k === 'string' ? new Node_('#text', k) : k));
+  }
+  get children() { return this.kids.filter((k) => k.tag !== '#text'); }
+}
+const document = {
+  createElement: (tag) => new Node_(tag),
+  createTextNode: (t) => new Node_('#text', t),
+};
+const waiting = new Node_('div');
+const run = new Function('document', 'waiting',
+  cut(/const CONTACT = [^;]+;/) + '\n'
+  + cut(/function linkContact\(el\) \{[\s\S]*?\n  \}\n/)
+  + cut(/const SUPPORT = [^;]+;/) + '\n'
+  + cut(/const recentLine = [\s\S]*?\n  \};\n/)
+  + cut(/function showRecent\(d\) \{[\s\S]*?\n  \}\n/)
+  + 'return showRecent;')(document, waiting);
+run({ recent: [
+  { label: 'Intake form', state: 'needs_review' },
+  { label: 'Reminder', state: 'unknown' },
+] });
+const list = waiting.kids.find((k) => k.tag === 'ul');
+process.stdout.write(JSON.stringify(list.kids.map((li) => ({
+  text: li.textContent,
+  links: li.kids.filter((k) => k.tag === 'a')
+    .map((a) => ({ href: a.href, text: a.textContent })),
+}))));
+"""
+
+
+def test_the_didnt_finish_lines_link_the_one_contact_address():
+    """#853's band said support@; patient-facing copy has one address,
+    tappable (#856 sign-off F5)."""
+    import shutil
+    import subprocess
+    js = ROOT / "careagents" / "static" / "home.js"
+    assert "support@healthclaw.io" not in js.read_text()
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(["node", "-e", _RECENT_HARNESS, "--", str(js)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    lines = json.loads(out.stdout)
+    assert len(lines) == 2
+    for line in lines:
+        assert "contactus@healthclaw.io" in line["text"]
+        assert line["links"] == [{"href": "mailto:contactus@healthclaw.io",
+                                  "text": "contactus@healthclaw.io"}]
+
+
 def test_a_carried_notice_is_shown_once_and_then_cleared():
     """A second load must not repeat "Disconnected." forever (QA on #853)."""
     import shutil

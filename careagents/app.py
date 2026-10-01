@@ -446,7 +446,11 @@ def create_app(config: Config | None = None,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
             hub=view,
-            banner_records=("your records are connected" if view["has_real"]
+            # "Connected" only once a real connection is active; has_real
+            # also counts one still connecting.
+            banner_records=("your records are connected"
+                            if any(not r["is_sample"]
+                                   for r in view["active_records"])
                             else "sample records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
@@ -1674,22 +1678,22 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "rate_limited"}), 429
         # A turn the worker will refuse (paused, or terms not accepted; beta
         # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
-        # a model, so it does not spend the day's allowance. The worker
-        # still makes the decision; this only skips the count.
+        # a model, so the day's allowance does not stop it here.
         refused = beta.turn_block(ctx["connection"], svc.is_paused(acct.id),
                                   tester_terms.CONSENT_VERSION)
         # Durable daily ceiling — survives restarts and is shared across
         # workers, so it is the real bound on per-account inference spend.
+        # Read only: the worker charges the turn where the model is called
+        # (#856 sign-off F4), so a turn admitted while refused and unblocked
+        # before it is claimed is still charged.
         if not refused:
-            allowed, used = svc.claim_daily_turn(acct.id,
-                                                 cfg.chat_turns_per_day)
-            if not allowed:
+            used = svc.daily_turns_used(acct.id)
+            if used >= cfg.chat_turns_per_day:
                 return jsonify({
                     "error": "daily_limit_reached",
                     "used": used,
                     "limit": cfg.chat_turns_per_day,
-                    "message": ("You've reached today's message limit. It "
-                                "resets at midnight UTC."),
+                    "message": beta.DAILY_LIMIT_TEXT,
                 }), 429
 
         tenant = ctx["tenant"]

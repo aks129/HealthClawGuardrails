@@ -30,6 +30,13 @@ PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
                    "didn't expect this, write to contactus@healthclaw.io.")
 
 
+#: What a turn answers when the day's allowance is spent by the time the
+#: worker charges it (#856 sign-off F4). The same words as the 429 at
+#: admission.
+DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets at "
+                    "midnight UTC.")
+
+
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
 #: True before and after #565 is approved: a connection made before the
