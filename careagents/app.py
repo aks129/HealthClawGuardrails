@@ -30,7 +30,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
-from careagents import tester_terms
+from careagents import beta, tester_terms
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -823,6 +823,9 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_TEXT}), 423
         # Only the `direct` tile ships this flow today. `shl` (SMART Health
         # Link) will land on the same endpoint once the encrypted-manifest
         # decoder is in.
@@ -1117,6 +1120,9 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_TEXT}), 423
 
         body = request.get_json(silent=True) or {}
         plan = connectors.refresh(conn["kind"], conn["tenant_id"],

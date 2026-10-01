@@ -17,7 +17,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import llm
+from careagents import beta, llm, tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS,
                               TOOL_LABELS, TOOLS,
@@ -220,6 +220,14 @@ class RunWorker:
         context = self.accounts.get_worker_agent_context(agent_id)
         if context is None or context["tenant"] != tenant:
             raise ValueError("claimed run does not match a CareAgents tenant")
+        blocked = beta.turn_block(context["connection"], context["paused"],
+                                  tester_terms.CONSENT_VERSION)
+        if blocked:
+            # Before any record read and before any model call (beta spec
+            # 4.3 and 4.6). The run still ends normally, with this sentence.
+            self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
+                         set(), heartbeat)
+            return
         agent = context["agent"]
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"))

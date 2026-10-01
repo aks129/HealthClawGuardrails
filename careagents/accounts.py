@@ -753,8 +753,13 @@ class AccountService:
             conn = s.get(Connection, a.connection_id)
             if not conn:
                 return None
+            # The connection and the pause flag let the worker refuse a turn
+            # before it reads anything (beta spec 4.3 and 4.6).
+            acct = s.get(Account, a.account_id)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
-                    "account_id": a.account_id}
+                    "account_id": a.account_id,
+                    "connection": _conn_dict(conn),
+                    "paused": bool(acct and acct.real_paused_at is not None)}
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
