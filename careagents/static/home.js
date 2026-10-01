@@ -56,6 +56,25 @@
     });
   }
 
+  // Accept the current terms for a real connection made under older ones
+  // (beta spec 4.3). Same card as a new connection; the server refuses
+  // (428) without an explicit `consent: true`.
+  document.querySelectorAll("[data-reconsent]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agreed = await showConsentCard();
+      if (!agreed) return;
+      btn.disabled = true;
+      const res = await post(
+        `/api/connections/${btn.dataset.reconsent}/consent`, { consent: true });
+      if (!res.ok) {
+        btn.disabled = false;
+        return announce(btn.parentElement.querySelector(".inline-msg"),
+                        "That didn't work. Try again.");
+      }
+      location.reload();
+    });
+  });
+
   // One shared primitive for the dialogs below: unhide a static modal, resolve
   // once when it closes. ESC and a backdrop tap both abandon it — every one of
   // these is safe to walk away from. The consent card deliberately does NOT go

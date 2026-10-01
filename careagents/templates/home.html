@@ -26,6 +26,18 @@
     <p class="waiting-line">Checking for requests…</p>
   </section>
 
+  {# Real connections whose consent predates the current terms (beta spec
+     4.3). The assistant on one answers only "please review and accept"
+     until this is done, on every surface. #}
+  {% for s in stale_consent %}
+  <section class="switch-prompt reconsent">
+    <p>Please review and accept the current terms for {{ s.label }}.</p>
+    <button type="button" class="btn-primary"
+            data-reconsent="{{ s.id }}">Review and accept</button>
+    <span class="inline-msg" role="status" aria-live="polite" hidden></span>
+  </section>
+  {% endfor %}
+
   {% if switch_prompt %}
   <section class="switch-prompt" id="switch-prompt"
            data-agent="{{ switch_prompt.agent_id }}"

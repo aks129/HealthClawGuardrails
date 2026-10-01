@@ -18,13 +18,27 @@ PAUSED_TEXT = ("Your records are paused, so I can't answer right now. If "
                "you didn't expect this, write to contactus@healthclaw.io.")
 
 
+#: What a real-record assistant answers while its connection's consent is
+#: older than the current terms (spec section 4.3).
+#: True before and after #565 is approved: a connection made before the
+#: consent column existed holds NULL and is asked on the first deploy,
+#: when no terms have changed yet.
+TERMS_TEXT = ("Before we go on, please review and accept the current terms "
+              "on your home page, then ask me again.")
+
+
 def turn_block(connection: dict, paused: bool,
                consent_version: str) -> str | None:
     """The sentence a turn answers instead of reaching a model, or None.
 
     Checked in the run worker, the only caller of llm.complete, so it holds
     for web, iMessage and Telegram, and for runs queued before the change.
+    Anything that is not the sample needs consent at the current version,
+    so an older or unknown kind fails closed.
     """
     if paused:
         return PAUSED_TEXT
+    if (connection.get("kind") != "sample"
+            and connection.get("consent_version") != consent_version):
+        return TERMS_TEXT
     return None

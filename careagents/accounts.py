@@ -580,6 +580,19 @@ class AccountService:
                  .filter_by(id=conn_id, account_id=account_id).first())
             return _conn_dict(c) if c else None
 
+    def record_consent(self, account_id: str, conn_id: str,
+                       version: str) -> bool:
+        """Stamp a fresh consent on one of this account's real connections.
+        Scoped by both ids: another account's connection is never touched."""
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(id=conn_id, account_id=account_id).first())
+            if c is None or c.kind == "sample":
+                return False
+            c.consented_at = now()
+            c.consent_version = version
+            return True
+
     def mark_synced(self, conn_id: str, count: int,
                     uncounted: int | None = None) -> dict:
         """Record the end of a sync and report what changed since the last one.

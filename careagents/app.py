@@ -408,8 +408,16 @@ def create_app(config: Config | None = None,
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
         real_open = _real_records_open(acct)
+        # Real connections whose consent predates the current terms (beta
+        # spec 4.3). The worker refuses their turns until this is answered.
+        stale_consent = [
+            {"id": c["id"], "label": c["label"]}
+            for c in data["connections"]
+            if c["kind"] != "sample" and c["status"] != "revoked"
+            and c.get("consent_version") != tester_terms.CONSENT_VERSION]
         return render_template(
             "home.html", me=acct,
+            stale_consent=stale_consent,
             hub=view,
             banner_records=("your records are connected" if view["has_real"]
                             else "sample records"),
@@ -1104,6 +1112,23 @@ def create_app(config: Config | None = None,
                     acct.id, purged)
         return jsonify({"deleted": True, "connections_purged": purged,
                         "audit_retained": True})
+
+    @app.post("/api/connections/<conn_id>/consent")
+    @login_required
+    def reconsent_connection(conn_id):
+        """Accept the current terms for an existing real connection (beta
+        spec 4.3). Until this is done, the worker answers that connection's
+        turns with beta.TERMS_TEXT instead of reaching a model."""
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None or conn["kind"] == "sample":
+            return jsonify({"error": "unknown connection"}), 404
+        body = request.get_json(silent=True) or {}
+        if body.get("consent") is not True:
+            return jsonify({"error": "consent_required",
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        svc.record_consent(acct.id, conn_id, tester_terms.CONSENT_VERSION)
+        return jsonify({"consent_version": tester_terms.CONSENT_VERSION})
 
     @app.post("/api/connections/<conn_id>/refresh")
     @login_required
