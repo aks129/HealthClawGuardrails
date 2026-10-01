@@ -1672,17 +1672,25 @@ def create_app(config: Config | None = None,
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             return jsonify({"error": "rate_limited"}), 429
+        # A turn the worker will refuse (paused, or terms not accepted; beta
+        # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
+        # a model, so it does not spend the day's allowance. The worker
+        # still makes the decision; this only skips the count.
+        refused = beta.turn_block(ctx["connection"], svc.is_paused(acct.id),
+                                  tester_terms.CONSENT_VERSION)
         # Durable daily ceiling — survives restarts and is shared across
         # workers, so it is the real bound on per-account inference spend.
-        allowed, used = svc.claim_daily_turn(acct.id, cfg.chat_turns_per_day)
-        if not allowed:
-            return jsonify({
-                "error": "daily_limit_reached",
-                "used": used,
-                "limit": cfg.chat_turns_per_day,
-                "message": ("You've reached today's message limit. It resets "
-                            "at midnight UTC."),
-            }), 429
+        if not refused:
+            allowed, used = svc.claim_daily_turn(acct.id,
+                                                 cfg.chat_turns_per_day)
+            if not allowed:
+                return jsonify({
+                    "error": "daily_limit_reached",
+                    "used": used,
+                    "limit": cfg.chat_turns_per_day,
+                    "message": ("You've reached today's message limit. It "
+                                "resets at midnight UTC."),
+                }), 429
 
         tenant = ctx["tenant"]
         agent = ctx["agent"]
