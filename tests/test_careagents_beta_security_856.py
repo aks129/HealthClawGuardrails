@@ -11,7 +11,6 @@ from __future__ import annotations
 import threading
 import time
 
-import pytest
 
 from careagents.models import Connection, RealRecordInvite
 from tests.careagents_stage1_helpers import approve_terms
@@ -38,9 +37,6 @@ def _real_app(cfg, svc, monkeypatch, email=EMAIL):  # noqa: F811
 
 # --- pause scope -------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#856 security review: pause does not stop an approval from executing "
-    "a real-record action proposed before the pause"))
 def test_exploit_paused_account_still_executes_a_pending_action(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, _ = _real_app(cfg, svc, monkeypatch)
@@ -51,6 +47,14 @@ def test_exploit_paused_account_still_executes_a_pending_action(
     r = c.post(f"/review/{agent_id}/act-1/submit", data={"nka": "on"})
     assert executed == [], (
         f"paused account executed an action: {r.status_code} {executed}")
+    # Fixed after the review: refused with the hub's pause sentence, and the
+    # form itself is not served while paused.
+    from careagents import beta
+    assert r.status_code == 423
+    assert r.get_json()["message"] == beta.PAUSED_HUB_TEXT
+    page = c.get(f"/review/{agent_id}/act-1")
+    assert page.status_code == 423
+    assert "Your records are paused" in page.get_data(as_text=True)
 
 
 def test_paused_account_still_reads_its_own_brief_and_labs(
@@ -68,8 +72,6 @@ def test_paused_account_still_reads_its_own_brief_and_labs(
 
 # --- re-consent --------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#856 security review: a revoked connection can be re-consented by hand"))
 def test_exploit_revoked_connection_is_reconsented(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, conn_id = _real_app(cfg, svc, monkeypatch)
@@ -78,6 +80,11 @@ def test_exploit_revoked_connection_is_reconsented(
         s.get(Connection, conn_id).status = "revoked"
     r = c.post(f"/api/connections/{conn_id}/consent", json={"consent": True})
     assert r.status_code == 404, r.get_json()
+    # Fixed after the review, in the route and in the service.
+    with svc.session() as s:
+        assert s.get(Connection, conn_id).consent_version == "2026-08-01"
+    from tests.test_careagents_beta_reconsent import _account_id
+    assert svc.record_consent(_account_id(svc), conn_id, "2026-10-01") is False
 
 
 def test_reconsent_across_accounts_and_on_sample_is_refused(

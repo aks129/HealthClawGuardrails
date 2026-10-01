@@ -19,6 +19,16 @@ STAGE1_INVITE_CAP = 25
 PAUSED_TEXT = ("Your records are paused, so I can't answer right now. If "
                "you didn't expect this, write to contactus@healthclaw.io.")
 
+#: The same state where no assistant is speaking: a refresh or an upload.
+PAUSED_RECORDS_TEXT = ("Your records are paused, so new records can't be "
+                       "added right now. If you didn't expect this, write to "
+                       "contactus@healthclaw.io.")
+
+#: The hub's line while paused, and the answer to an approval.
+PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
+                   "answer, and nothing new can be added or approved. If you "
+                   "didn't expect this, write to contactus@healthclaw.io.")
+
 
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
@@ -33,8 +43,10 @@ def turn_block(connection: dict, paused: bool,
                consent_version: str) -> str | None:
     """The sentence a turn answers instead of reaching a model, or None.
 
-    Checked in the run worker, the only caller of llm.complete, so it holds
-    for web, iMessage and Telegram, and for runs queued before the change.
+    Checked in the run worker, the only caller of llm.complete here, so it
+    holds for every turn CareAgents runs: web chat and the iMessage relay,
+    including runs queued before the change. Telegram is answered by an
+    external gateway, not by this worker, so it is NOT covered.
     Anything that is not the sample needs consent at the current version,
     so an older or unknown kind fails closed.
     """

@@ -59,7 +59,7 @@ def test_turn_block_asks_for_terms_only_on_a_stale_real_connection():
 
 def test_a_worker_turn_after_the_bump_answers_the_terms_sentence(
         cfg, svc, monkeypatch):  # noqa: F811
-    """The worker path, so iMessage and Telegram get it too."""
+    """The worker path, so the iMessage relay gets it too."""
     from careagents.worker import RunWorker
     c, fake, agent_id, conn_id = _real_agent(cfg, svc, monkeypatch)
     approve_terms(monkeypatch, "2026-10-01")

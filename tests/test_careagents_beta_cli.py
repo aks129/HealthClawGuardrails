@@ -64,6 +64,8 @@ def test_the_pause_help_says_what_it_does_not_stop():
     app, run, svc = _runner()
     out = run.invoke(args=["records", "pause", "--help"]).output
     assert "ingest" in out and "MCP" in out
+    # #856 review F3: the Telegram bot is answered outside CareAgents.
+    assert "Telegram" in out and "approvals" in out
 
 
 def test_weekly_counts_prints_integers_and_no_identity(monkeypatch):

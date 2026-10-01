@@ -66,10 +66,13 @@ def test_refresh_and_upload_refuse_while_paused(cfg, svc, monkeypatch):  # noqa:
     svc.set_paused(EMAIL, True)
     r = c.post(f"/api/connections/{conn_id}/refresh")
     assert r.status_code == 423
-    assert r.get_json()["message"] == beta.PAUSED_TEXT
+    # No assistant speaks here, so not the chat sentence (#856 review).
+    assert r.get_json()["message"] == beta.PAUSED_RECORDS_TEXT
     r = c.post(f"/api/connections/{direct}/upload", data=b"{}",
                content_type="application/fhir+json")
     assert r.status_code == 423
+    assert r.get_json() == {"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}
     assert fake.purged == []
 
 
@@ -84,6 +87,9 @@ def test_a_foreign_connection_is_still_a_404_while_paused(
                   content_type="application/fhir+json").status_code == 404
 
 
-def test_the_paused_sentence_is_plain_and_phi_free():
-    assert "—" not in beta.PAUSED_TEXT
-    assert "contactus@healthclaw.io" in beta.PAUSED_TEXT
+def test_the_paused_sentences_are_plain_and_phi_free():
+    for text in (beta.PAUSED_TEXT, beta.PAUSED_RECORDS_TEXT,
+                 beta.PAUSED_HUB_TEXT):
+        assert "—" not in text
+        assert "contactus@healthclaw.io" in text
+    assert "answer" not in beta.PAUSED_RECORDS_TEXT

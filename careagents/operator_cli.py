@@ -21,9 +21,11 @@ def register(app, svc) -> None:
     @records.command("pause")
     @click.argument("email")
     def records_pause(email):
-        """Stop every chat turn (web, iMessage, Telegram), new real
-        connection, new MCP grant, refresh and upload for the account. Does
-        NOT stop engine-side ingest or an existing MCP grant."""
+        """Stop the account's chat turns that CareAgents runs (web chat and
+        the iMessage relay), new real connections, new MCP grants, refresh,
+        upload, and approvals. Does NOT stop engine-side ingest, an existing
+        MCP grant, or a chat answered by an external gateway such as the
+        Telegram bot."""
         if not svc.set_paused(email, True):
             raise click.ClickException("no account with that email")
         click.echo("paused")

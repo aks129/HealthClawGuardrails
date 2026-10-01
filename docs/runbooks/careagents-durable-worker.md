@@ -158,13 +158,17 @@ to your terminal only; nothing here writes an email to the application log.
 | --- | --- |
 | `invites add EMAIL --by HANDLE` | Invite a tester (at most 25 live). Honoured only in `allowlist` mode with approved tester terms |
 | `invites list` / `invites revoke EMAIL` | List invites; revoke one. Revoke stops new connections only |
-| `records pause EMAIL` | Stops every chat turn on every surface (web, iMessage, Telegram), including turns already queued, plus new real connections, new MCP grants on a real connection, refresh and upload. The assistant answers a fixed "your records are paused" sentence and no model is called |
+| `records pause EMAIL` | Stops the chat turns CareAgents runs (web chat and the iMessage relay), including turns already queued, plus new real connections, new MCP grants on a real connection, refresh, upload and approvals. The assistant answers a fixed "your records are paused" sentence and no model is called. The hub shows a pause line |
 | `records resume EMAIL` | Undo the pause |
 | `weekly-counts [--weeks N]` | Four integers per ISO week: accounts signed up, accounts that connected real records, accounts that asked a real-record assistant, accounts that approved a real-record action |
 
-- **What pause does not stop:** Fasten webhook ingest in the engine, and an
+- **What pause does not stop:** Fasten webhook ingest in the engine, an
   MCP grant that already exists (the connector is token-locked in production
-  during stage 1, so none should). For a full stop, set
+  during stage 1, so none should), and chat answered outside CareAgents: the
+  Telegram bot runs on an external gateway that reads the engine directly,
+  so no CareAgents check sees it. Unbind Telegram for a paused tester.
+  Deterministic reads (the brief, the labs timeline) stay open: no model is
+  called and the engine audits them. For a full stop, set
   `CARE_REAL_RECORDS=off` and have the person Disconnect or Delete.
 - **Terms bump:** when `TERMS_VERSION` changes, every real connection whose
   consent is older answers "please review and accept the current terms" until

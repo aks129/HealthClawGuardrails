@@ -615,7 +615,7 @@ class AccountService:
         with self.session() as s:
             c = (s.query(Connection)
                  .filter_by(id=conn_id, account_id=account_id).first())
-            if c is None or c.kind == "sample":
+            if c is None or c.kind == "sample" or c.status == "revoked":
                 return False
             c.consented_at = now()
             c.consent_version = version

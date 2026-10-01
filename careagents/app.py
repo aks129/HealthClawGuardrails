@@ -854,7 +854,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown connection"}), 404
         if svc.is_paused(acct.id):
             return jsonify({"error": "records_paused",
-                            "message": beta.PAUSED_TEXT}), 423
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
         # Only the `direct` tile ships this flow today. `shl` (SMART Health
         # Link) will land on the same endpoint once the encrypted-manifest
         # decoder is in.
@@ -1142,7 +1142,8 @@ def create_app(config: Config | None = None,
         turns with beta.TERMS_TEXT instead of reaching a model."""
         acct = current_account()
         conn = svc.get_connection(acct.id, conn_id)
-        if conn is None or conn["kind"] == "sample":
+        if (conn is None or conn["kind"] == "sample"
+                or conn["status"] == "revoked"):
             return jsonify({"error": "unknown connection"}), 404
         body = request.get_json(silent=True) or {}
         if body.get("consent") is not True:
@@ -1168,7 +1169,7 @@ def create_app(config: Config | None = None,
             return jsonify({"error": "unknown connection"}), 404
         if svc.is_paused(acct.id):
             return jsonify({"error": "records_paused",
-                            "message": beta.PAUSED_TEXT}), 423
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
 
         body = request.get_json(silent=True) or {}
         plan = connectors.refresh(conn["kind"], conn["tenant_id"],
@@ -1999,6 +2000,10 @@ def create_app(config: Config | None = None,
         if not tenant:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
+        if svc.is_paused(current_account().id):
+            # Pause stops approvals too (beta spec 4.6, #856 review F1).
+            return render_template("chat_error.html",
+                                   message=beta.PAUSED_HUB_TEXT), 423
         try:
             status, html = hc.fetch_review_page(tenant, action_id)
         except HealthClawError:
@@ -2047,6 +2052,11 @@ def create_app(config: Config | None = None,
                             "message": _REVIEW_UNCHECKABLE}), 503
         if not tenant:
             return jsonify({"error": "not yours"}), 404
+        if svc.is_paused(current_account().id):
+            # Before the review is submitted, so nothing is confirmed or
+            # executed for a paused account (beta spec 4.6, #856 review F1).
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_HUB_TEXT}), 423
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
