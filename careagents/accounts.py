@@ -293,19 +293,31 @@ class AccountService:
 
     def invite_real_records(self, email: str, invited_by: str) -> bool:
         """Invite an email to connect real records. Inviting a revoked email
-        again reopens it. Returns False when it was already invited."""
+        again reopens it. Returns False when it was already invited.
+
+        Stage 1 holds at most STAGE1_INVITE_CAP active invites; a new or
+        reopened one past that raises ValueError. Two operators racing on
+        the last place can both get in: a hand-run command, not worth a lock.
+        """
+        from careagents.beta import STAGE1_INVITE_CAP
         email = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
         with self.session() as s:
             row = s.get(RealRecordInvite, email)
+            if row is not None and row.revoked_at is None:
+                return False
+            active = (s.query(RealRecordInvite)
+                      .filter(RealRecordInvite.revoked_at.is_(None)).count())
+            if active >= STAGE1_INVITE_CAP:
+                raise ValueError(
+                    f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
+                    "Revoke one first.")
             if row is None:
                 s.add(RealRecordInvite(email=email, invited_at=now(),
                                        invited_by=invited_by))
                 return True
-            if row.revoked_at is None:
-                return False
             row.revoked_at = None
             row.invited_at = now()
             row.invited_by = invited_by
