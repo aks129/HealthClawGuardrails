@@ -732,10 +732,23 @@ def create_app(config: Config | None = None,
                 return jsonify({"error": "consent_required",
                                 "consent_version": tester_terms.CONSENT_VERSION}), 428
             consent_version = tester_terms.CONSENT_VERSION
-        if connector_id == "fasten":
+        if connector_id != "fasten":
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        # Two tabs or devices connecting at once (#847): both passed the
+        # pending check before either inserted. The account's connect lease
+        # (the same one the sample tap uses) makes the check and the insert
+        # one step. A pending row keeps the consent_version it was made
+        # with; a stale one is asked again by the worker (beta spec 4.3).
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Your records are already on their "
+                                     "way. Try again in a moment."}), 409
+        try:
             # A second tap while the first is still connecting reuses it:
             # two taps made two identical rows, both stuck connecting. Only
-            # a pending row is reused, and only after consent above.
+            # a pending row is reused, and only after the gate and consent
+            # above.
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({
@@ -743,6 +756,14 @@ def create_app(config: Config | None = None,
                     "existing": True,
                     "connect_url": hc.fasten_connect_url(
                         waiting["tenant_id"])})
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        finally:
+            svc.release_sample_start(acct.id)
+
+    def _persist_connection(connector_id, acct, plan, consent_version):
+        """What _start_connection does once the gate and consent passed:
+        seed, record the connection, answer."""
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:

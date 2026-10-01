@@ -421,7 +421,8 @@ class AccountService:
             return _conn_dict(c) if c else None
 
     def claim_sample_start(self, account_id: str) -> bool:
-        """Win the right to mint this account's sample tenant.
+        """Win the right to mint a tenant for this account: the sample tap
+        and the Fasten connect share this lease (#847).
 
         A compare-and-set on the account row: one caller sets the lease and
         every overlapping caller updates zero rows. A lease older than
