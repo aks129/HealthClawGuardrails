@@ -88,7 +88,7 @@ what the site does rather than how fast the queue drains:
 | --- | ---: | --- |
 | `CAREAGENTS_CANONICAL_HOST` | unset | The site's only public hostname. A request arriving under any other `Host` is answered 308 to the same path and query there; `/healthz` is exempt |
 | `CARE_REAL_RECORDS` | `off` | Whether an account may **start** a Fasten, wearable or direct-upload connection. One of `off`, `allowlist`, `on` |
-| `CARE_REAL_RECORDS_ALLOWLIST` | empty | The account emails `allowlist` mode admits — comma-separated, case-insensitive |
+| `CARE_REAL_RECORDS_ALLOWLIST` | empty | The account emails `allowlist` mode admits — comma-separated, case-insensitive. Live invites in the database are admitted too; see below |
 | `CARE_REAL_RECORDS_MODEL_HOSTS` | empty | Extra model hosts that may serve chat while `CARE_REAL_RECORDS` is not `off` — comma-separated exact hostnames. Anthropic, OpenAI, Google Gemini (`generativelanguage.googleapis.com`) and Groq (`api.groq.com`) are always allowed; any other `OPENAI_BASE_URL` (or `ANTHROPIC_BASE_URL`) host makes the app refuse to boot until it is named here |
 | `CARE_ANALYTICS` | unset | Count views of the pages anyone can open. One row per UTC day per page, nothing about a visitor. Read it with `flask --app careagents.wsgi page-views` |
 
@@ -127,6 +127,22 @@ What each does when it is **absent** is the part worth reading:
   than opens. Entries are account emails, comma-separated; surrounding
   whitespace and case are ignored. `off` and `on` ignore the variable outright,
   so it is never a way around `off`.
+- **Invites live in the database as well** (`ca_real_record_invites`, beta
+  pathway spec section 4.2). In `allowlist` mode an account qualifies when its
+  email is in the variable OR holds a live invite. `off` and `on` ignore the
+  table exactly as they ignore the variable. Manage invites from a shell with
+  the app's environment:
+
+  ```bash
+  flask --app careagents.wsgi invites add tester@example.org --by <your name>
+  flask --app careagents.wsgi invites list
+  flask --app careagents.wsgi invites revoke tester@example.org
+  ```
+
+  Revoking refuses NEW real connections from that account. A connection that
+  already exists keeps refreshing and accepting uploads until the person
+  disconnects it; to stop every real connection at once, set
+  `CARE_REAL_RECORDS=off`. Inviting a revoked email again reopens it.
 
 ## Railway
 

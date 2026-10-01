@@ -26,7 +26,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 
 from careagents import mail
 from careagents.models import (Account, Agent, Connection, EmailToken, Grant, Passkey,
-                               Surface, UsageDay, make_engine,
+                               RealRecordInvite, Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -280,6 +280,64 @@ class AccountService:
                     .order_by(Passkey.created_at.asc()).all())
             return [{"id": p.id, "name": p.name, "created_at": p.created_at}
                     for p in rows]
+
+    # --- real-record invites (beta pathway spec section 4.2) ---------------
+
+    @staticmethod
+    def _invite_email(email: str) -> str:
+        email = (email or "").strip().lower()
+        if "@" not in email or len(email) > 255:
+            raise AuthError("Enter a valid email address.")
+        return email
+
+    def invite_real_records(self, email: str, invited_by: str) -> bool:
+        """Invite an email to connect real records. Inviting a revoked email
+        again reopens it. Returns False when it was already invited."""
+        email = self._invite_email(email)
+        invited_by = (invited_by or "").strip()[:255]
+        if not invited_by:
+            raise ValueError("invited_by is required")
+        with self.session() as s:
+            row = s.get(RealRecordInvite, email)
+            if row is None:
+                s.add(RealRecordInvite(email=email, invited_at=now(),
+                                       invited_by=invited_by))
+                return True
+            if row.revoked_at is None:
+                return False
+            row.revoked_at = None
+            row.invited_at = now()
+            row.invited_by = invited_by
+            return True
+
+    def revoke_real_records_invite(self, email: str) -> bool:
+        """Revoke an invite. New real connections are refused from now on;
+        existing ones are left alone. Returns False when there was no live
+        invite to revoke."""
+        email = self._invite_email(email)
+        with self.session() as s:
+            row = s.get(RealRecordInvite, email)
+            if row is None or row.revoked_at is not None:
+                return False
+            row.revoked_at = now()
+            return True
+
+    def real_records_invited(self, email) -> bool:
+        """Does this email hold a live (not revoked) invite?"""
+        email = (email or "").strip().lower()
+        if not email:
+            return False
+        with self.session() as s:
+            row = s.get(RealRecordInvite, email)
+            return row is not None and row.revoked_at is None
+
+    def real_record_invites(self) -> list[dict]:
+        with self.session() as s:
+            rows = s.query(RealRecordInvite).order_by(
+                RealRecordInvite.invited_at).all()
+            return [{"email": r.email, "invited_at": r.invited_at,
+                     "invited_by": r.invited_by, "revoked_at": r.revoked_at}
+                    for r in rows]
 
     # --- connections / agents / surfaces (thin CRUD) ------------------------
 

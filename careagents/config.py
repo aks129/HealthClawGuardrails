@@ -97,7 +97,8 @@ class Config:
         # existing connection keeps refreshing, polling and deleting whatever
         # this says. `off` renders those tiles "coming soon" and refuses the
         # connect POST; `allowlist` opens them to the account emails in
-        # CARE_REAL_RECORDS_ALLOWLIST (comma-separated, case-insensitive);
+        # CARE_REAL_RECORDS_ALLOWLIST (comma-separated, case-insensitive)
+        # and to live invites in ca_real_record_invites;
         # `on` opens them to everyone. Unset is `off`: a deployment that
         # forgets the variable must not open real records to strangers.
         self.real_records = (
@@ -275,12 +276,20 @@ class Config:
             return "anthropic"
         return "openai"
 
-    def real_records_open_for(self, email) -> bool:
+    def real_records_open_for(self, email, invited=None) -> bool:
         """May this account START a real-record connection? See
         CARE_REAL_RECORDS above. The allowlist is consulted only in
-        `allowlist` mode — never as a back door around `off`."""
+        `allowlist` mode — never as a back door around `off`.
+
+        `invited`, when given, is a callable(email) -> bool for the invite
+        table (beta pathway spec section 4.2). Like the environment list, it
+        is asked only in `allowlist` mode, and only when the environment list
+        did not already admit the email."""
         if self.real_records == "on":
             return True
         if self.real_records == "allowlist":
-            return (email or "").strip().lower() in self.real_records_allowlist
+            email = (email or "").strip().lower()
+            if email in self.real_records_allowlist:
+                return True
+            return bool(email and invited is not None and invited(email))
         return False
