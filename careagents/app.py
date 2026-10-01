@@ -262,11 +262,22 @@ def create_app(config: Config | None = None,
     turns: dict[str, deque] = defaultdict(deque)
 
     def _real_records_open(acct) -> bool:
-        """May this account START a real-record connection? The environment
-        allowlist and the invite table (beta pathway spec section 4.2), in
-        `allowlist` mode only."""
-        return cfg.real_records_open_for(acct.email,
-                                         invited=svc.real_records_invited)
+        """May this account START a real-record connection? The one gate.
+
+        Order matters. `off` closes everything, before the table is read
+        (never a back door around `off`). A paused account is closed in
+        every mode (beta spec 4.6). Then the config rule: `on` is open,
+        `allowlist` is the environment list or an active invite, and the
+        invite table is asked only once the tester terms are approved (#565).
+        """
+        if cfg.real_records == "off":
+            return False
+        if svc.is_paused(acct.id):
+            return False
+        return cfg.real_records_open_for(
+            acct.email,
+            invited=svc.real_records_invited if tester_terms.approved()
+            else None)
 
     # --- canonical host (#264, D7) -------------------------------------------
 

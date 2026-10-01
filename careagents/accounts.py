@@ -344,6 +344,26 @@ class AccountService:
             row = s.get(RealRecordInvite, email)
             return row is not None and row.revoked_at is None
 
+    # --- pause (beta spec section 4.6) --------------------------------------
+
+    def set_paused(self, email: str, paused: bool) -> bool:
+        """Pause or resume one account by its email. False when no account
+        has that email. Logged by account id, never by email."""
+        email = (email or "").strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is None:
+                return False
+            acct.real_paused_at = now() if paused else None
+            logger.info("account %s %s by operator", acct.id,
+                        "paused" if paused else "resumed")
+            return True
+
+    def is_paused(self, account_id: str) -> bool:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            return bool(acct and acct.real_paused_at is not None)
+
     def real_record_invites(self) -> list[dict]:
         with self.session() as s:
             rows = s.query(RealRecordInvite).order_by(
