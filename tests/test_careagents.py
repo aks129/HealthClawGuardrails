@@ -2255,6 +2255,10 @@ class FakeClient:
         return [{"id": "act-1", "kind": "form-fill", "to": None,
                  "status": "awaiting_confirmation"}]
 
+    def recent_actions(self, tenant):
+        # Nothing answered yet; tests that need outcomes override this.
+        return []
+
     def action_status(self, tenant, action_id):
         if action_id != "act-1":
             raise HealthClawError("not found", 404)

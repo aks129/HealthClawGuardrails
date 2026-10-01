@@ -458,11 +458,54 @@
     });
   }
 
-  // --- disconnect: stop new records, keep what's already here ---
+  // --- what the last action did, across its reload (#847) ---
+  // Delete and disconnect reload the hub so every card is redrawn from the
+  // server, and the reload threw away the one sentence saying what happened.
+  // The sentence rides through sessionStorage, which only this tab reads;
+  // it holds a count and a sentence, never a record. Storage that is
+  // blocked (private mode, some in-app browsers) costs only the sentence.
+  const NOTICE_KEY = "careagents.hubNotice";
+  function carryNotice(text) {
+    try { if (text) sessionStorage.setItem(NOTICE_KEY, text); } catch (e) { /* reload anyway */ }
+    // The reload would otherwise restore the scroll position of the card
+    // that was tapped, far below the notice (seen in the 375px walk).
+    try { history.scrollRestoration = "manual"; } catch (e) { /* older browsers */ }
+    location.reload();
+  }
+  (function showCarriedNotice() {
+    const el = $("hub-notice");
+    if (!el) return;
+    let text = null;
+    try {
+      text = sessionStorage.getItem(NOTICE_KEY);
+      sessionStorage.removeItem(NOTICE_KEY);
+    } catch (e) { text = null; }
+    if (text) announce(el, text, () => el.scrollIntoView({ block: "center" }));
+  })();
+
+  // --- disconnect: ask first, stop new records, keep what's already here ---
+  function askToDisconnect(label, readers) {
+    $("disconnect-name").textContent = label;   // the person's label: text only
+    // A disconnected connection is no longer a way to its requests (#215),
+    // so an assistant reading it keeps its chat but loses its approvals.
+    const who = $("disconnect-readers");
+    who.textContent = readers
+      ? readers + " reads these records. It can still answer questions " +
+        "about them, but anything it prepares can't be approved."
+      : "";
+    who.hidden = !readers;
+    const dlg = openDialog($("disconnect-modal"));
+    $("disconnect-confirm").onclick = () => dlg.close(true);
+    $("disconnect-cancel").onclick = () => dlg.close(false);
+    $("disconnect-cancel").focus();
+    return dlg.result;
+  }
   document.querySelectorAll(".conn-disconnect").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
+      if (!(await askToDisconnect(btn.dataset.label || "these records",
+                                  btn.dataset.readers || ""))) return;
       btn.disabled = true;
       const res = await post(`/api/connections/${btn.dataset.conn}/disconnect`);
       if (!res.ok) {
@@ -470,7 +513,7 @@
         announce(msg, res.d.error || "Couldn't disconnect.");
         return;
       }
-      location.reload();
+      carryNotice(res.d.message || "Disconnected.");
     });
   });
 
@@ -481,7 +524,8 @@
     btn.addEventListener("click", async () => {
       const card = btn.closest(".conn-card");
       const msg = card.querySelector(".conn-refresh-msg");
-      const agreed = await askToDelete(btn.dataset.label || "these records");
+      const agreed = await askToDelete(btn.dataset.label || "these records",
+                                       btn.dataset.readers || "");
       if (!agreed) return;
 
       btn.disabled = true;
@@ -500,7 +544,8 @@
           "We couldn't confirm your records were deleted.");
         return;
       }
-      location.reload();
+      // The count the consent box promises, shown after the reload (#847).
+      carryNotice(d.message || "Your records were deleted.");
     });
   });
 
@@ -534,11 +579,20 @@
   // purpose: the button ships disabled and is only enabled on a match,
   // and the click handler checks the value again — so a future markup change
   // that drops `disabled` still can't turn this into a one-tap delete.
-  function askToDelete(label) {
+  function askToDelete(label, readers) {
     const input = $("delete-input");
     const ok = $("delete-confirm");
     const named = $("delete-label");
     if (named) named.textContent = label;
+    // Deleting a connection deletes the assistants that read it. Said
+    // before the tap, by name (#853). Absent on the account page.
+    const who = $("delete-readers");
+    if (who) {
+      who.textContent = readers
+        ? readers + " reads these records and will be deleted too."
+        : "";
+      who.hidden = !readers;
+    }
     input.value = "";
     ok.disabled = true;
     const dlg = openDialog($("delete-modal"));
@@ -590,15 +644,83 @@
   // A queue whose assistant was deleted has no page to open yet: say how
   // to reach it instead of linking nowhere. Names are the person's own
   // words, so they go in as text, never markup.
-  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name +
-    ". Start a chat to review " + (q.count === 1 ? "it" : "them") + ".";
+  // With an assistant on other records, the one Chat button opens a chat
+  // that cannot see these requests: the step is to switch it (#847).
+  const orphanLine = (q) => requests(q.count) + " waiting on " + q.name + ". " +
+    (q.has_assistant
+      ? "To review " + (q.count === 1 ? "it" : "them") + ", switch your " +
+        "assistant to " + q.name + ": More, then Change records."
+      : "Start a chat to review " + (q.count === 1 ? "it" : "them") + ".");
+
+  // What became of requests already answered (#847). Before this, an
+  // approval that finished left the band at "Nothing yet" with no way to the
+  // result, and one that failed vanished. Each line says what happened and,
+  // where there is one, the next step. Labels and names go in as text.
+  const SUPPORT = "Email support@healthclaw.io to check.";
+  const recentLine = (r) => {
+    const what = r.label + (r.to ? " to " + r.to : "") + ": ";
+    // A form with its PDF is "ready": it went nowhere, it waits for the
+    // person to save, print or send it (#853).
+    if (r.state === "done") return { text: what + (r.link ? "ready." : "Done."),
+      link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
+    if (r.state === "failed") return { text: what + "Didn't finish.",
+      link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,
+      after: r.chat ? ""
+        : r.has_assistant
+          ? " To try again, switch your assistant to " + r.records +
+            ": More, then Change records."
+          : " Start a chat to try again." };
+    if (r.state === "in_progress") return { text: what + "In progress." };
+    if (r.state === "needs_review") return { text: what +
+      "Didn't finish. We couldn't confirm it went through. " + SUPPORT };
+    if (r.state === "unknown") return { text: what +
+      "Didn't finish. It may have gone out, so it won't be sent again. " + SUPPORT };
+    return null;
+  };
+  function showRecent(d) {
+    if (d.recent_unavailable) {
+      const p = document.createElement("p");
+      p.className = "recent-note";
+      p.textContent = "Couldn't check what happened to earlier requests.";
+      waiting.appendChild(p);
+      return;
+    }
+    if (!Array.isArray(d.recent) || !d.recent.length) return;
+    const head = document.createElement("h3");
+    head.className = "recent-head";
+    head.textContent = "Recently";
+    const list = document.createElement("ul");
+    list.className = "recent-list";
+    d.recent.forEach((r) => {
+      const line = recentLine(r);
+      if (!line) return;
+      const li = document.createElement("li");
+      li.textContent = line.text;
+      if (line.link && /^(https?:\/\/|\/)/.test(line.link.href)) {
+        const a = document.createElement("a");
+        a.href = line.link.href;
+        a.textContent = line.link.text;
+        if (line.link.away) { a.target = "_blank"; a.rel = "noopener"; }
+        li.append(" ", a);
+      }
+      if (line.after) li.append(line.after);
+      list.appendChild(li);
+    });
+    if (list.children.length) waiting.append(head, list);
+  }
+
   function showWaiting(state, d) {
     const line = waiting.querySelector(".waiting-line");
     waiting.dataset.state = state;
     if (state === "fail") { line.textContent = "Couldn't check for requests."; return; }
+    showRecent(d);
     if (state === "none") {
-      line.textContent = "Nothing yet. Anything your assistant prepares, " +
-        "like a form or a reminder, waits here for your OK.";
+      // "Nothing yet" above a list of finished requests reads as though
+      // they never happened.
+      line.textContent = Array.isArray(d.recent) && d.recent.length
+        ? "Nothing waiting for you now."
+        : "Nothing yet. Anything your assistant prepares, " +
+          "like a form or a reminder, waits here for your OK.";
       return;
     }
     // The approvals page reads one assistant's records, so each assistant

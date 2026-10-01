@@ -950,7 +950,13 @@ def create_app(config: Config | None = None,
         acct = current_account()
         if not svc.revoke_connection(acct.id, conn_id):
             return jsonify({"error": "unknown connection"}), 404
-        return jsonify({"status": "revoked", "connection_id": conn_id})
+        # The hub shows this after its reload, so the person is told what
+        # changed, and that what they had stays (#847).
+        return jsonify({"status": "revoked", "connection_id": conn_id,
+                        "message": ("Disconnected. No new records will "
+                                    "arrive. The records already here stay; "
+                                    "you'll find them under Past "
+                                    "connections.")})
 
     @app.delete("/api/connections/<conn_id>")
     @login_required
@@ -1007,17 +1013,42 @@ def create_app(config: Config | None = None,
                             "that an app you shared them with was cut off. The "
                             "connection stays listed so you can try again."),
             }), 502
+        # Read before the unlink: deleting a connection deletes the
+        # assistants that read it, and the person is told which (#853).
+        gone = [a["name"] for a in svc.list_home(acct.id)["agents"]
+                if a["connection_id"] == conn_id]
         svc.delete_connection(acct.id, conn_id)
+        # The count is the one the card showed. The engine's resource count
+        # includes kinds the card leaves out, so "15 stored items" beside a
+        # card saying 9 records read as a mistake (patient tester, #853).
+        n = conn.get("last_count")
+        n = n if isinstance(n, int) and not isinstance(n, bool) else None
         return jsonify({
             "deleted": True,
             "unlinked": True,
             "connection_id": conn_id,
             "rows_deleted": purged.get("rows_deleted", 0),
+            "records_deleted": n,
+            "assistants_deleted": gone,
             "audit_retained": True,
-            "message": ("Your records were deleted. The PHI-free audit trail "
-                        "is kept as the record of who accessed what, and this "
-                        "deletion was added to it."),
+            "message": _deleted_sentence(n, conn["label"], gone),
         })
+
+    def _deleted_sentence(n: int | None, label: str,
+                          gone: list[str]) -> str:
+        if n is None:
+            lead = f"Your records in {label} were deleted."
+        elif n == 1:
+            lead = f"The 1 record in {label} was deleted."
+        else:
+            lead = f"All {n} records in {label} were deleted."
+        if gone:
+            lead += (f" {' and '.join(gone)} "
+                     f"{'was' if len(gone) == 1 else 'were'} deleted too, "
+                     f"because {'it' if len(gone) == 1 else 'they'} read "
+                     "these records.")
+        return (lead + " We keep a log of who looked at your records, with "
+                "no health details in it, and this deletion is in it.")
 
     @app.post("/api/account/delete")
     @login_required
@@ -1330,13 +1361,35 @@ def create_app(config: Config | None = None,
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")
+        # The "Open the review" card is a turn event, and history keeps only
+        # text, so a reload lost it while the reply above still promised it
+        # (#847). Ask the engine what is waiting instead; nothing is stored.
+        # A lookup that fails draws no card, and the "Waiting for you" pill
+        # in the header still leads to the list. A disconnected connection
+        # is not a pathway to its requests (#215), so it is not asked at
+        # all: a card there would promise an approval the relay refuses
+        # (security review of #853).
+        reviews = []
+        if conn.get("status") != "revoked":
+            try:
+                reviews = [{"id": a["id"],
+                            "label": _KIND_LABELS.get(a.get("kind"),
+                                                      "Request"),
+                            "form": a.get("kind") == "form-fill"}
+                           for a in hc.pending_actions(ctx["tenant"])
+                           if a.get("id")]
+            except HealthClawError:
+                logger.warning("pending reviews unavailable for agent %s",
+                               agent_id)
+                reviews = []
         return render_template("chat.html", me=ctx["agent"], persona=p,
                                agent_id=agent_id,
                                conversation_id=conversation_id,
                                past=past,
                                history_lost=history_lost,
                                intake=intake,
-                               summary_counts=intake.counts)
+                               summary_counts=intake.counts,
+                               pending_reviews=reviews)
 
     @app.get("/brief")
     @login_required
@@ -1630,8 +1683,13 @@ def create_app(config: Config | None = None,
             outcome = json.loads(status.get("outcome_summary") or "{}")
         except ValueError:
             pass
+        if not isinstance(outcome, dict):
+            outcome = {}
+        # `to` is the recipient label the pending list already shows; the
+        # review page names it when a request is done (#847).
         return jsonify({"status": status.get("status"),
-                        "delivery_link": outcome.get("delivery_link")})
+                        "delivery_link": outcome.get("delivery_link"),
+                        "to": status.get("to")})
 
     @app.get("/api/labs/timeline")
     @login_required
@@ -1735,8 +1793,12 @@ def create_app(config: Config | None = None,
                                "href": url_for("approvals",
                                                agent_id=agent["id"])})
             elif n:
+                # Whether any assistant exists decides the next step: with
+                # one, it is switched to these records ("Change records");
+                # with none, the hub's Start a chat is the way in (#847).
                 queues.append({"name": conn["label"], "count": n,
-                               "needs_assistant": True})
+                               "needs_assistant": True,
+                               "has_assistant": bool(data["agents"])})
         out = {"count": total}
         if queues:
             linked = [q for q in queues if q.get("href")]
@@ -1744,7 +1806,73 @@ def create_app(config: Config | None = None,
                 out["agent_id"] = linked[0]["agent_id"]
                 out["href"] = linked[0]["href"]
             out["queues"] = queues
+        # What became of requests already answered. A recent list that
+        # cannot be read is said, and never fails the count above: the
+        # pending number is the one a person acts on.
+        try:
+            recent = _recent_outcomes(tenants, bool(data["agents"]))
+        except HealthClawError:
+            logger.warning("recent outcomes unavailable for account %s",
+                           acct.id)
+            out["recent_unavailable"] = True
+        else:
+            if recent:
+                out["recent"] = recent
         return jsonify(out)
+
+    #: How many answered requests the hub lists. A week of them is the
+    #: engine's window; the hub shows the newest few.
+    _RECENT_SHOWN = 5
+
+    def _recent_outcomes(tenants, has_assistant):
+        """The hub's "done" and "didn't finish" lines (#847), newest first.
+
+        Read from the engine on every visit and stored nowhere. A completed
+        intake form is looked up once more for its PDF link; a lookup that
+        fails leaves the line saying done, without a link. Records no
+        assistant reads carry the same hint as their pending queue: with an
+        assistant elsewhere, the step is to switch it, not to start a chat."""
+        now = time.time()
+        items = []
+        for tenant, (agent, conn) in tenants.items():
+            for a in hc.recent_actions(tenant):
+                state = hub_view.recent_state(a.get("status"))
+                if not state:
+                    continue
+                item = {"id": a.get("id"), "state": state,
+                        "label": _KIND_LABELS.get(a.get("kind"),
+                                                  "Request"),
+                        "updated_at": a.get("updated_at") or ""}
+                # An intake form goes nowhere: only a PDF is made, so naming
+                # a recipient read as though it had been sent (#853).
+                if a.get("to") and a.get("kind") != "form-fill":
+                    item["to"] = a["to"]
+                if agent:
+                    item["agent_name"] = agent["name"]
+                    item["chat"] = url_for("chat", agent=agent["id"])
+                else:
+                    item["records"] = conn["label"]
+                    item["has_assistant"] = has_assistant
+                items.append((item, tenant, a.get("kind")))
+        items.sort(key=lambda t: t[0]["updated_at"], reverse=True)
+        out = []
+        for item, tenant, kind in items[:_RECENT_SHOWN]:
+            if item["state"] == "done" and kind == "form-fill":
+                link = _pdf_link(tenant, item["id"], now)
+                if link:
+                    item["link"] = link
+            out.append(item)
+        return out
+
+    def _pdf_link(tenant, action_id, now):
+        try:
+            status = hc.action_status(tenant, action_id)
+            outcome = json.loads(status.get("outcome_summary") or "{}")
+        except (HealthClawError, ValueError, TypeError):
+            return None
+        if not isinstance(outcome, dict):
+            return None
+        return hub_view.live_link(outcome.get("delivery_link"), now)
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 

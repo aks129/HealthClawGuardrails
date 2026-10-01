@@ -394,6 +394,19 @@ class HealthClawClient:
         items = body.get("actions")
         return [a for a in items if isinstance(a, dict)] if isinstance(items, list) else []
 
+    def recent_actions(self, tenant: str) -> list[dict]:
+        """Requests that moved past approval this week (#847): done, failed,
+        or still running. Same summaries as `pending_actions`, and the same
+        rule: raises on any non-200, never an empty list for an outage."""
+        r = self._send("GET", self.actions, headers=self._headers(tenant),
+                       params={"status": "recent"}, what="recent actions")
+        if r.status_code != 200:
+            raise HealthClawError(f"recent actions failed ({r.status_code})",
+                                  r.status_code)
+        body = self._json_object(r, "recent actions")
+        items = body.get("actions")
+        return [a for a in items if isinstance(a, dict)] if isinstance(items, list) else []
+
     def action_status(self, tenant: str, action_id: str) -> dict:
         r = self._send("GET", f"{self.actions}/{action_id}",
                        headers=self._headers(tenant), what="action status")

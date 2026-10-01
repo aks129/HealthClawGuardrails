@@ -1,0 +1,46 @@
+#847 walk at 375x812, 2026-10-01T15:17:57.154Z
+Local engine + CareAgents, synthetic account and sample records only.
+01-hub-new-account (new account, heading): scrollWidth=375 clientWidth=375
+proposed intake form 70c913dd-d1b2-4f38-9c92-a06c1cafa28d
+02-chat-review-card (chat with pending card): scrollWidth=375 clientWidth=375
+chat after reload: Open the review cards = 1
+trust pill box after reload: left=219 right=319 text=guardrails A
+03-chat-after-reload (chat after reload): scrollWidth=375 clientWidth=375
+review intro: Nothing is submitted until you confirm every medication and allergy below. Having no allergies is never assumed for you: you say so yourself with the "I have no known allergies" box.
+review hint before ticking: Review every medication and allergy, then confirm an allergy or check "I have no known allergies" to continue.
+Approve disabled before ticking: true, opacity=0.45
+04-review-page (review page, full): scrollWidth=375 clientWidth=375
+after approve: Confirmed. Your form is ready. Open your form (PDF) to save it, print it or send it to your new doctor.
+pdf link host: 127.0.0.1:5163
+after approve, Approve visible=false Decline visible=false
+05-review-approved-pdf-link (after approve): scrollWidth=375 clientWidth=375
+hub band: Waiting for you |  | Nothing waiting for you now. |  | Recently | Intake form: ready. Open the PDF
+06-hub-recent-done (hub after approve): scrollWidth=375 clientWidth=375
+hub band with failure: Waiting for you |  | Nothing waiting for you now. |  | Recently | Intake form: Didn't finish. Ask Juniper to try again | Intake form: ready. Open the PDF
+07-hub-didnt-finish (hub with failed request): scrollWidth=375 clientWidth=375
+review failed arm (intercepted status): Your approval went through and this request could not be completed. Approving again will not retry it. Ask your assistant to try again. Your hub lists it as not finished.
+08-review-failed-next-step (review failed arm): scrollWidth=375 clientWidth=375
+direct upload status 200
+move assistant to direct: 200
+hub band orphan: Waiting for you |  | 1 request waiting on Sample records. To review it, switch your assistant to Sample records: More, then Change records. |  | Recently | Intake form: ready. Open the PDF | Intake form: Didn't finish. To try again, switch your assistant to Sample records: More, then Change records. | Intake form: ready. Open the PDF
+09-hub-orphan-switch-line (orphan queue line): scrollWidth=375 clientWidth=375
+disconnect dialog, assistant reads it: Disconnect Uploaded records? | No new records will arrive from it. The records already here stay, and you can still delete them later. | Juniper reads these records. It can still answer questions about them, but anything it prepares can't be approved. | Disconnect | Cancel
+09b-disconnect-confirm-assistant-reads-it (disconnect dialog with reader): scrollWidth=375 clientWidth=375
+10-disconnect-confirm (disconnect dialog): scrollWidth=375 clientWidth=375
+after disconnect: Disconnected. No new records will arrive. The records already here stay; you'll find them under Past connections.
+11-disconnect-done (after disconnect): scrollWidth=375 clientWidth=375
+delete dialog: Delete these records? | This permanently deletes the records in "Sample records". | Juniper reads these records and will be deleted too. | We keep a log of who looked at your records, with no health details in it. | TYPE DELETE TO CONFIRM: |  Delete these records | Cancel
+12-delete-confirm (records delete dialog): scrollWidth=375 clientWidth=375
+after delete: All 5 records in Sample records were deleted. Juniper was deleted too, because it read these records. We keep a log of who looked at your records, with no health details in it, and this deletion is in it.
+13-delete-count (after delete): scrollWidth=375 clientWidth=375
+14-settings (settings, long email): scrollWidth=375 clientWidth=375
+15-settings-account-delete (account delete dialog): scrollWidth=375 clientWidth=375
+
+Before the CSS fix, same branch, same harness:
+  chat: scrollWidth=390 clientWidth=375 (div.chat-tools and #trust-pill right edge at 390)
+  settings, unbroken email averylongsynthetictesteraddressnumber847@examplehealthclawtesting.test: scrollWidth=629 clientWidth=375 (main.hub width 629)
+
+Screens 07 and 08 are staged: 07 sets one engine row to failed in the local
+synthetic SQLite DB; 08 answers the status lookup with "failed" through a
+Playwright route, after a real approval. A real executor failure is not
+reachable from the UI.

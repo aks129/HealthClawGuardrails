@@ -9,7 +9,8 @@
         <h2 class="mb-0">Review each item before we generate your form</h2>
         <p class="text-muted mb-0">
           Nothing is submitted until you confirm every medication and allergy
-          below. "No known allergies" is never assumed on your behalf.
+          below. Having no allergies is never assumed for you: you say so
+          yourself with the "I have no known allergies" box.
         </p>
       </div>
     </div>
@@ -111,7 +112,7 @@
           </div>
           {% endfor %}
           {% elif record_readable %}
-          <div class="alert alert-warning mb-3" role="alert">No allergies found in your records — add them or affirmatively confirm none below.
+          <div class="alert alert-warning mb-3" role="alert">No allergies found in your records. If you have none, say so with the box below; it is never assumed for you.
           </div>
           {% endif %}
 
@@ -121,12 +122,12 @@
                  absence the page could not verify (#390). -->
             <input class="form-check-input" type="checkbox" name="nka" id="nka" value="true">
             <label class="form-check-label fw-bold" for="nka">
-              No known allergies (patient confirmed)
+              I have no known allergies
             </label>
             <div class="text-muted small">
-              Only check this if the patient has affirmatively stated they have no known allergies.
+              Only check this if you know you have no allergies.
               {%- if not record_readable %}
-              It is the patient's own statement and confirms nothing about what is on file.
+              It is your own statement and confirms nothing about what is on file.
               {%- endif %}
             </div>
           </div>
@@ -162,7 +163,7 @@
 
       <div id="review-gate-msg" class="alert alert-secondary" role="alert">
         Review every medication and allergy, then confirm an allergy or check
-        "No known allergies" to continue.
+        "I have no known allergies" to continue.
       </div>
 
       <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve &amp; generate
@@ -230,7 +231,7 @@
       gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';
       gateMsg.textContent = ok
         ? 'Ready to generate. The server will re-verify every item on submit.'
-        : 'Review every medication and allergy, then confirm an allergy or check "No known allergies" to continue.';
+        : 'Review every medication and allergy, then confirm an allergy or check "I have no known allergies" to continue.';
       return ok;
     }
     form.addEventListener('change', evaluate);
