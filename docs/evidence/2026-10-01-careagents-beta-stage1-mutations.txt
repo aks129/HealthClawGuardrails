@@ -1,0 +1,74 @@
+# CareAgents beta stage 1: mutation runs
+# Tree: c760cbf. PYTHONDONTWRITEBYTECODE=1, __pycache__ purged
+# before each run, replacement count asserted, restored with
+# git checkout --, then an unmutated control run.
+
+== T1: delete_account keeps the invite row
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_schema.py::test_deleting_an_account_removes_its_invite_and_activity
+1 failed, 4 passed in 1.14s
+
+== T2: the 25 cap is never checked
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_invites.py::test_the_cohort_stops_at_the_cap_counting_active_invites_only
+FAILED tests/test_careagents_beta_invites.py::test_reopening_a_revoked_invite_counts_against_the_cap
+FAILED tests/test_careagents_beta_cli.py::test_a_full_cohort_is_an_error_exit
+3 failed, 8 passed in 1.23s
+
+== T3: TERMS_VERSION set without replacing the placeholder
+mutated careagents/tester_terms.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_terms.py::test_the_terms_file_and_the_consent_version_agree
+FAILED tests/test_careagents_beta_terms.py::test_the_card_hides_pending_terms_and_shows_approved_ones
+2 failed, 1 passed in 1.33s
+
+== T4 M1: delete the `off` line in _real_records_open
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_off_answers_before_any_account_state_is_read
+1 failed, 11 passed in 1.33s
+
+== T4 M2: delete the pause check in _real_records_open
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_a_paused_account_is_closed_even_when_on[allowlist]
+FAILED tests/test_careagents_beta_gate.py::test_a_paused_account_is_closed_even_when_on[on]
+2 failed, 10 passed in 1.27s
+
+== T4 M3: invites honoured before the terms are approved
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_an_invite_opens_allowlist_mode_only_once_terms_are_approved
+1 failed, 11 passed in 1.26s
+
+== T5: turn_block moved below recent_messages
+mutated careagents/worker.py: 2 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause.py::test_a_run_queued_before_the_pause_answers_paused_without_a_model
+FAILED tests/test_careagents_beta_reconsent.py::test_a_worker_turn_after_the_bump_answers_the_terms_sentence
+2 failed, 12 passed in 1.42s
+
+== T6 M1: only fasten needs current consent (unknown kinds pass)
+mutated careagents/beta.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_turn_block_asks_for_terms_only_on_a_stale_real_connection
+1 failed, 8 passed in 1.26s
+
+== T6 M2a: record_consent ignores the account
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_another_accounts_connection_is_a_404
+1 failed, 8 passed in 1.30s
+
+== T6 M2b: the consent route lets an unknown connection through
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_another_accounts_connection_is_a_404
+1 failed, 8 passed in 1.31s
+
+== T7: sample turns counted as asked
+mutated careagents/worker.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_weekly.py::test_a_sample_turn_does_not_count
+1 failed, 6 passed in 1.18s
+
+== T9: Fasten reuse-or-insert without the lease
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_fasten_race.py::test_a_connect_that_arrives_mid_insert_does_not_add_a_row
+1 failed, 4 passed in 1.17s
+
+== control: unmutated tree
+57 passed in 2.22s
+
+survivors: none
