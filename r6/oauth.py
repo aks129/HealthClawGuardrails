@@ -149,22 +149,37 @@ def decode_grant(grant):
     return payload if isinstance(payload, dict) else None
 
 
+#: The one shape of authority a redirect URI may have (#846): a host made of
+#: ASCII letters, digits, dots and hyphens, or the bracketed IPv6 loopback,
+#: then optionally ':' and a port. An allowlist, so userinfo ('@'),
+#: percent-escapes, non-ASCII lookalikes, full stops like U+3002, spaces and
+#: a second ':' are all outside it without being named.
+_AUTHORITY = re.compile(r'(?P<host>[A-Za-z0-9.-]+|\[::1\])(?::(?P<port>[0-9]{1,5}))?')
+#: Whitespace and control characters, anywhere in the URI. urlsplit drops a
+#: tab or newline silently and Werkzeug refuses a CR/LF in a Location header.
+_UNSAFE_CHARS = re.compile(r'[\x00-\x20\x7f\s]')
+
+
 def _split_unambiguous(uri):
-    """urlsplit(uri), or None when a browser could read its host differently
-    from Python (#846): a backslash (browsers end the authority there,
-    urlsplit does not), userinfo (the host hides after an '@'), a non-ASCII
-    host (a lookalike, or a full stop like U+3002 a browser maps to '.'), a
-    percent-escape in the host (a browser decodes `%2e` to '.' and `%63` to
-    'c' before resolving, urlsplit does not), or a URI urlsplit cannot parse
-    at all."""
-    if not isinstance(uri, str) or '\\' in uri:
+    """urlsplit(uri), or None unless the URI is one we can both read the way
+    a browser does and actually put in a Location header (#846). This is the
+    one definition of an acceptable redirect URI: registration, loopback
+    matching at authorize and the redirect itself all go through it.
+
+    Refused: a backslash (browsers end the authority there, urlsplit does
+    not), whitespace or a control character anywhere, an authority outside
+    _AUTHORITY, a port outside 1-65535, or a URI urlsplit cannot parse."""
+    if not isinstance(uri, str) or '\\' in uri or _UNSAFE_CHARS.search(uri):
         return None
     try:
         parts = urlsplit(uri)
     except ValueError:
         return None
-    if ('@' in parts.netloc or '%' in parts.netloc
-            or not parts.netloc.isascii()):
+    authority = _AUTHORITY.fullmatch(parts.netloc)
+    if authority is None:
+        return None
+    port = authority.group('port')
+    if port is not None and not 1 <= int(port) <= 65535:
         return None
     return parts
 
@@ -236,10 +251,21 @@ def clean_client_name(value):
     return name or 'Unknown Client'
 
 
+def _unredirectable():
+    return jsonify({'error': 'invalid_request',
+                    'error_description': 'the registered redirect_uri cannot '
+                    'be redirected to; register the client again'}), 400
+
+
 def _redirect_to_client(redirect_uri, state, **params):
     """302 to the client's registered redirect URI (OAuth 2.1 §4.1.2), with
     each parameter URL-encoded and RFC 9207 `iss` appended so the client can
-    tell which issuer answered. `state` is echoed only when it was sent."""
+    tell which issuer answered. `state` is echoed only when it was sent.
+
+    Fails closed: a URI outside redirect_uri_allowed (a client stored before
+    the rule tightened) gets a plain 400, never a Werkzeug 500 at send time."""
+    if not redirect_uri_allowed(redirect_uri):
+        return _unredirectable()
     if state:
         params['state'] = state
     params['iss'] = issuer()
@@ -644,9 +670,11 @@ def register_oauth_routes(blueprint):
             return jsonify({
                 'error': 'invalid_redirect_uri',
                 'error_description': 'redirect_uris must be https URLs or '
-                'plain-http loopback URLs (localhost, 127.0.0.1, [::1]), '
-                'each with a plain ASCII host (no percent-escapes), '
-                'no userinfo, no backslash and no fragment',
+                'plain-http loopback URLs (localhost, 127.0.0.1, [::1]): '
+                'a host of only ASCII letters, digits, dots and hyphens, '
+                'an optional port from 1 to 65535, and no userinfo, '
+                'percent-escapes, backslash, whitespace, control characters '
+                'or fragment',
             }), 400
         auth_method = body.get('token_endpoint_auth_method') or 'client_secret_post'
         if auth_method not in CLIENT_AUTH_METHODS:
@@ -716,6 +744,11 @@ def register_oauth_routes(blueprint):
                    for registered in registered_client.get('redirect_uris', [])):
             return jsonify({'error': 'invalid_request',
                           'error_description': 'redirect_uri not registered for this client'}), 400
+        # A client stored before the redirect rule tightened can hold a URI
+        # no Location header carries. Refuse here, before anything is parked
+        # or consented to, rather than after (#846).
+        if not redirect_uri_allowed(redirect_uri):
+            return _unredirectable()
 
         if not code_challenge:
             return jsonify({'error': 'invalid_request',
@@ -836,6 +869,23 @@ def register_oauth_routes(blueprint):
             'exp': parked['exp'],
         })
 
+    @blueprint.route('/oauth/consent/<request_id>/discard', methods=['POST'])
+    def consent_discard(request_id):
+        """A "no" that goes nowhere (#846). CareAgents calls this when the
+        person declines a client whose address it does not recognize: the
+        parked request is spent at once, so an older tab or another account
+        cannot approve it later, and no redirect goes to the stranger's
+        address. Service credential only. 204 when spent here, 404 when it
+        was already gone; either way it can no longer be approved."""
+        if not internal_secret_authorized():
+            return jsonify({'error': 'forbidden'}), 403
+        parked = _oauth_store_pop('consent-request', request_id)
+        if not parked:
+            return jsonify({'error': 'not_found'}), 404
+        logger.info('OAuth consent request discarded: client_id=%s',
+                    parked.get('client_id'))
+        return '', 204
+
     @blueprint.route('/oauth/consent/return', methods=['GET'])
     def consent_return():
         """§13.3 inbound: the signed decision comes back through the browser.
@@ -861,6 +911,10 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_request'}), 400
 
         redirect_uri, state = parked['redirect_uri'], parked['state']
+        # Checked before the consent is stored or audited: a yes that cannot
+        # reach the client must not leave a consent behind (#846).
+        if not redirect_uri_allowed(redirect_uri):
+            return _unredirectable()
         if payload.get('decision') != 'approved':
             return _redirect_to_client(redirect_uri, state, error='access_denied')
 

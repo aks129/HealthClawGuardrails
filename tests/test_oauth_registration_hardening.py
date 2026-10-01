@@ -61,11 +61,13 @@ def test_each_registration_is_logged_without_the_name_or_secret(client, caplog):
 
 
 def test_logged_hosts_cannot_forge_a_log_line(client, caplog):
+    """A control character in the host used to register and was logged with
+    %r. Since #846 the registration is refused, so no line is written at all;
+    %r stays as the second wall."""
     with caplog.at_level(logging.INFO, logger='r6.oauth'):
-        _register(client, redirect_uris=['https://evil.example\x1b2K/cb'])
-    line = next(r.getMessage() for r in caplog.records
-                if 'client registered' in r.getMessage())
-    assert '\x1b' not in line
+        resp = _register(client, redirect_uris=['https://evil.example\x1b2K/cb'])
+    assert resp.status_code == 400
+    assert not any('\x1b' in r.getMessage() for r in caplog.records)
 
 
 def test_registration_sits_under_the_per_client_rate_limit(client):
