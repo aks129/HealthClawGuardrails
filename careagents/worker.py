@@ -228,6 +228,14 @@ class RunWorker:
             self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
                          set(), heartbeat)
             return
+        if context["connection"].get("kind") != "sample":
+            # The weekly number (beta spec 4.5): integers only. A retried run
+            # can count twice; the weekly figure counts accounts, so that
+            # does not move it.
+            try:
+                self.accounts.count_activity(context["account_id"], "asked")
+            except Exception:  # noqa: BLE001 - a count never fails a turn
+                logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"))

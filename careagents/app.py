@@ -2005,6 +2005,17 @@ def create_app(config: Config | None = None,
                             f"/review/{agent_id}/{action_id}/submit")
         return html
 
+    def _count_approval(agent_id):
+        """One approval on a real-record assistant, for the weekly number
+        (beta spec 4.5). The sample is not counted. Never fails a review."""
+        acct = current_account()
+        try:
+            ctx = svc.get_agent_context(acct.id, agent_id)
+            if ctx and ctx["connection"]["kind"] != "sample":
+                svc.count_activity(acct.id, "approved")
+        except Exception:  # noqa: BLE001 - a count never fails a review
+            logger.warning("could not count an approval")
+
     @app.post("/review/<agent_id>/<action_id>/submit")
     @login_required
     def review_submit(agent_id, action_id):
@@ -2143,6 +2154,7 @@ def create_app(config: Config | None = None,
                 return jsonify(body), 502
             body = dict(body) if isinstance(body, dict) else {}
             body["confirmed"] = True
+            _count_approval(agent_id)
         return jsonify(body), status
 
     @app.post("/review/<agent_id>/<action_id>/decline")

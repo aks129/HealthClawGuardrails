@@ -16,7 +16,8 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import or_, text
+from sqlalchemy import or_, text, update
+from sqlalchemy.exc import IntegrityError
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -464,6 +465,32 @@ class AccountService:
                 return False, used
             row.turns = used + 1
             return True, used + 1
+
+    _ACTIVITY_FIELDS = ("asked", "approved")
+
+    def count_activity(self, account_id: str, field: str) -> None:
+        """Add one to today's `asked` or `approved` for this account (beta
+        spec 4.5). Increment first, insert if there was no row, and on a
+        racing insert increment the row the other writer made."""
+        if field not in self._ACTIVITY_FIELDS:
+            raise ValueError(f"unknown activity field {field!r}")
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        col = getattr(ActivityDay, field)
+        stmt = (update(ActivityDay)
+                .where(ActivityDay.account_id == account_id,
+                       ActivityDay.day == day)
+                .values({field: col + 1}))
+        with self.session() as s:
+            if s.execute(stmt).rowcount:
+                return
+        try:
+            with self.session() as s:
+                s.add(ActivityDay(account_id=account_id, day=day,
+                                  **{field: 1}))
+        except IntegrityError:
+            with self.session() as s:
+                s.execute(stmt)
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
         with self.session() as s:

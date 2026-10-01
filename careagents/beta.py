@@ -7,6 +7,8 @@ the weekly counts.
 
 from __future__ import annotations
 
+import datetime as _dt
+
 #: Stage 1 is "up to 25" invited testers (spec section 2). Counted over
 #: active invites. The environment allowlist is not counted: it is the
 #: operator's own short list and predates the table.
@@ -42,3 +44,55 @@ def turn_block(connection: dict, paused: bool,
             and connection.get("consent_version") != consent_version):
         return TERMS_TEXT
     return None
+
+
+def _iso_week(moment: _dt.datetime) -> str:
+    year, week, _ = moment.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def weekly_counts(session_scope, weeks: int = 4,
+                  now: _dt.datetime | None = None) -> list[dict]:
+    """The spec's weekly number (section 4.5), newest week first.
+
+    Integers only, one row per ISO week (UTC), nothing about any person.
+    Reads whole small tables: stage 1 is at most 25 testers.
+
+    - signed_up: accounts created that week.
+    - real_connected: distinct accounts with a non-sample connection
+      consented that week.
+    - asked: distinct accounts with a real-record turn that week.
+    - approved: distinct accounts with a real-record approval that week.
+      An approval that ends unconfirmed is not counted (an undercount).
+    """
+    from careagents.models import Account, ActivityDay, Connection
+    moment = now or _dt.datetime.now(_dt.timezone.utc)
+    labels = [_iso_week(moment - _dt.timedelta(weeks=i))
+              for i in range(weeks)]
+    rows = {w: {"week": w, "signed_up": set(), "real_connected": set(),
+                "asked": set(), "approved": set()} for w in labels}
+
+    def week_of_ts(ts):
+        return _iso_week(_dt.datetime.fromtimestamp(ts, _dt.timezone.utc))
+
+    with session_scope() as s:
+        for a in s.query(Account.id, Account.created_at):
+            if a.created_at and week_of_ts(a.created_at) in rows:
+                rows[week_of_ts(a.created_at)]["signed_up"].add(a.id)
+        for c in s.query(Connection.account_id, Connection.kind,
+                         Connection.consented_at):
+            if (c.kind != "sample" and c.consented_at
+                    and week_of_ts(c.consented_at) in rows):
+                rows[week_of_ts(c.consented_at)]["real_connected"].add(
+                    c.account_id)
+        for d in s.query(ActivityDay.account_id, ActivityDay.day,
+                         ActivityDay.asked, ActivityDay.approved):
+            w = _iso_week(_dt.datetime.strptime(d.day, "%Y-%m-%d"))
+            if w not in rows:
+                continue
+            if d.asked:
+                rows[w]["asked"].add(d.account_id)
+            if d.approved:
+                rows[w]["approved"].add(d.account_id)
+    return [{k: (v if k == "week" else len(v)) for k, v in rows[w].items()}
+            for w in labels]
