@@ -361,9 +361,17 @@ def create_app(config: Config | None = None,
         return wrapper
 
     def _login(account):
+        # Cleared against session fixation. The one value carried across is
+        # a consent handle parked by /authorize before sign-in, and only if it
+        # still verifies: it is signed by HealthClaw and names no account,
+        # and without it the person lands on the hub, not the request (#846).
+        consent_req = session.get("consent_req")
         session.clear()
         session.permanent = True
         session["account_id"] = account.id
+        if (isinstance(consent_req, str)
+                and consent.parse_handle(consent_req, cfg.mint_secret)):
+            session["consent_req"] = consent_req
 
     # --- pages ---------------------------------------------------------------
 
@@ -559,7 +567,13 @@ def create_app(config: Config | None = None,
         if current_account() is None:
             session["consent_req"] = req
             return redirect(url_for("auth"))
-        parked = hc.consent_request(request_id)
+        try:
+            parked = hc.consent_request(request_id)
+        except HealthClawError:
+            # HealthClaw unreachable: say so plainly, not a 500. The handle is
+            # still good for ten minutes, so trying again can work.
+            return render_template("consent.html", state="unavailable",
+                                   me=current_account()), 503
         if parked is None:
             return render_template("consent.html", state="expired",
                                    me=current_account()), 410
@@ -567,7 +581,7 @@ def create_app(config: Config | None = None,
         offered, real_open = _offered_connections(acct)
         return render_template(
             "consent.html", state="ask", req=req, me=acct,
-            client_name=parked.get("client_name") or "An agent",
+            **consent.app_identity(parked),
             scopes=[consent.describe_scope(x) for x in parked.get("scopes", [])],
             connections=offered, real_open=real_open,
             has_passkey=svc.has_passkey(acct.id),
@@ -588,6 +602,23 @@ def create_app(config: Config | None = None,
         if request_id is None:
             return jsonify({"error": "This request is not valid any more."}), 400
         if body.get("decision") != "approved":
+            # Only a recognized address gets the OAuth access_denied, which
+            # sends the browser to the client. Any other stays here: its
+            # redirect URI is a stranger's page. The parked request is spent
+            # at HealthClaw with no redirect, so an older tab or another
+            # account cannot approve it afterwards (#846). HealthClaw
+            # unreachable: nothing was shared, so say no here too; the
+            # request then lapses at its ten-minute expiry.
+            try:
+                parked = hc.consent_request(request_id)
+            except HealthClawError:
+                parked = None
+            if not consent.app_identity(parked or {})["host_recognized"]:
+                try:
+                    hc.discard_consent_request(request_id)
+                except HealthClawError:
+                    logger.warning("consent discard failed; request lapses at expiry")
+                return jsonify({"redirect": url_for("consent_declined")})
             grant, _ = consent.build_grant(cfg.mint_secret, request_id, "denied")
             return jsonify({"redirect": _consent_return(grant)})
 
@@ -622,8 +653,14 @@ def create_app(config: Config | None = None,
             cfg.mint_secret, request_id, "approved", tenant_id=conn["tenant_id"])
         svc.add_grant(acct.id, conn["id"], conn["tenant_id"],
                       parked.get("client_id", ""), parked.get("client_name", ""),
-                      " ".join(parked.get("scopes", [])), consent_id)
+                      " ".join(parked.get("scopes", [])), consent_id,
+                      redirect_host=consent.app_identity(parked)["redirect_host"])
         return jsonify({"redirect": _consent_return(grant)})
+
+    @app.get("/authorize/declined")
+    def consent_declined():
+        return render_template("consent.html", state="declined",
+                               me=current_account())
 
     @app.post("/api/grants/<grant_id>/revoke")
     @login_required

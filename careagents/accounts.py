@@ -497,11 +497,13 @@ class AccountService:
 
     def add_grant(self, account_id: str, connection_id: str | None,
                   tenant_id: str, client_id: str, client_name: str,
-                  scopes: str, consent_id: str) -> str:
+                  scopes: str, consent_id: str,
+                  redirect_host: str | None = None) -> str:
         with self.session() as s:
             g = Grant(account_id=account_id, connection_id=connection_id,
                       tenant_id=tenant_id, client_id=client_id[:64],
                       client_name=(client_name or "An agent")[:120],
+                      redirect_host=redirect_host[:255] if redirect_host else None,
                       scopes=scopes[:255], consent_id=consent_id)
             s.add(g)
             s.flush()
@@ -781,7 +783,8 @@ def _conn_dict(c: Connection) -> dict:
 def _grant_dict(g: Grant) -> dict:
     return {"id": g.id, "connection_id": g.connection_id,
             "tenant_id": g.tenant_id, "client_id": g.client_id,
-            "client_name": g.client_name, "scopes": g.scopes,
+            "client_name": g.client_name, "redirect_host": g.redirect_host,
+            "scopes": g.scopes,
             "consent_id": g.consent_id, "granted_at": g.granted_at,
             "revoked_at": g.revoked_at,
             "status": "revoked" if g.revoked_at else "active"}

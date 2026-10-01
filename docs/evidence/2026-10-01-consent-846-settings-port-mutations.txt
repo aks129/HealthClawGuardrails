@@ -1,0 +1,59 @@
+# #846 rebased onto main after #843: the host-first shared-app card, ported
+# from home.html to settings.html. 8 mutations against
+# tests/test_careagents_consent.py and tests/test_careagents.py.
+# Tree: cf7b2de, committed before the run. PYTHONDONTWRITEBYTECODE=1,
+# __pycache__ purged before each run, replacement count asserted == 1,
+# restored with git checkout -- and the restore asserted byte-identical.
+# Every mutant was caught. P6-P8 pin CSS text; the rendering was checked in
+# headless Chromium at 375px (2026-10-01-consent-846-375-settings-shared-apps.png).
+#
+# Measured, not fixed here: /settings is wider than a 375px viewport on
+# origin/main itself (8bc73c7, scrollWidth 399, main.hub at 394px) and on this
+# branch (390-398 depending on the synthetic email). The widest element is
+# main.hub; nothing in the shared-app cards is wider than it. That comes from
+# the settings layout #843 shipped, not from this card.
+
+== P1 host without <wbr>
+mutated careagents/templates/settings.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_long_shared_app_host_wraps_at_dots_with_a_fallback
+FAILED tests/test_careagents_consent.py::test_the_settings_card_escapes_the_host_between_its_line_breaks
+2 failed, 333 passed in 9.58s
+
+== P2 card named by client_name
+mutated careagents/templates/settings.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_grant_records_the_redirect_host_and_the_hub_leads_with_it
+FAILED tests/test_careagents_consent.py::test_a_grant_from_before_hosts_were_kept_still_shows_its_name
+FAILED tests/test_careagents_consent.py::test_a_long_shared_app_host_wraps_at_dots_with_a_fallback
+FAILED tests/test_careagents_consent.py::test_the_settings_card_escapes_the_host_between_its_line_breaks
+4 failed, 331 passed in 8.76s
+
+== P3 calls-itself line with no host
+mutated careagents/templates/settings.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_grant_from_before_hosts_were_kept_still_shows_its_name
+1 failed, 334 passed in 9.18s
+
+== P4 no calls-itself line at all
+mutated careagents/templates/settings.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_grant_records_the_redirect_host_and_the_hub_leads_with_it
+1 failed, 334 passed in 8.78s
+
+== P5 labels rendered |safe
+mutated careagents/templates/settings.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_settings_card_escapes_the_host_between_its_line_breaks
+1 failed, 334 passed in 8.90s
+
+== P6 .grant-host wrap rule dropped
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_long_shared_app_host_wraps_at_dots_with_a_fallback
+1 failed, 334 passed in 8.53s
+
+== P7 .grant-card min-width dropped
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_long_shared_app_host_wraps_at_dots_with_a_fallback
+1 failed, 334 passed in 8.59s
+
+== P8 badge back over the host
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_long_shared_app_host_wraps_at_dots_with_a_fallback
+1 failed, 334 passed in 8.69s
+

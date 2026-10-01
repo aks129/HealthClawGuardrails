@@ -273,6 +273,17 @@ class HealthClawClient:
                 f"consent request failed ({r.status_code})", r.status_code)
         return self._json_object(r, "consent request")
 
+    def discard_consent_request(self, request_id: str) -> bool:
+        """Spend a parked request with no redirect (#846): the person said no
+        to an address we do not recognize. 404 is already-gone, which is the
+        state we wanted. Anything else raises."""
+        r = self._send("POST", f"{self.fhir}/oauth/consent/{request_id}/discard",
+                       headers=self._internal_headers(), what="consent discard")
+        if r.status_code in (204, 404):
+            return True
+        raise HealthClawError(
+            f"consent discard failed ({r.status_code})", r.status_code)
+
     def revoke_consent(self, consent_id: str) -> bool:
         """Take a consent back at HealthClaw: every token under it dies.
         404 is already-gone, which is the state we wanted. Anything else

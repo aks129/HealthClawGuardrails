@@ -1,0 +1,100 @@
+# #846 patient re-walk and QA pass: mutation runs
+# 11 mutations across r6/oauth.py, careagents/{consent,app}.py, consent.html,
+# home.html and careagents.css, against seven test files (the six in
+# 2026-09-28-consent-846-fixes-mutations.txt plus test_consent_decline_offline).
+# Tree: 1c19165, committed before the run. PYTHONDONTWRITEBYTECODE=1,
+# __pycache__ purged before each run, replacement count asserted == 1,
+# restored with git checkout -- and the restore asserted byte-identical.
+# Every mutant was caught.
+#
+# Overflow check: the long single-label host
+# claudeaiconnectorauthorizationcallbackservicesecureverification.example
+# measured scrollWidth=375 clientWidth=375 in headless Chromium at 375px
+# (the re-walk measured 548 at 6e279d7). The value is printed on
+# 2026-09-28-consent-846-375-long-label-host.png by a harness-only overlay.
+
+== N1 registration keeps a percent-escaped host
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai%2eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://%63laude.ai/cb]
+FAILED tests/test_consent_redirect_host_parity.py::test_a_non_ascii_host_is_refused_or_shown_as_the_browser_resolves_it[https://claude.ai%2eevil.example/cb-claude.ai.evil.example]
+FAILED tests/test_consent_redirect_host_parity.py::test_a_non_ascii_host_is_refused_or_shown_as_the_browser_resolves_it[https://%63laude.ai/cb-claude.ai]
+4 failed, 118 passed in 5.15s
+
+== N2 the 400 does not say why
+mutated r6/oauth.py: 1 replacement
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example\\@claude.ai/api/mcp/auth_callback]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example\\\\@claude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\\.evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai@evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example;@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://evil.example\t@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://user:pass@claude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://xn--clude-5ve.com.cl\u0430ude.com/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\u3002evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff0eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai\uff61evil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://claude.ai%2eevil.example/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[https://%63laude.ai/cb]
+FAILED tests/test_oauth_redirect_host_exploit.py::test_registration_refuses_a_uri_browsers_and_python_read_differently[http://%6cocalhost:9/cb]
+15 failed, 107 passed in 4.68s
+
+== N3 host_html without its consent-host wrapper
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_host_wraps_only_at_its_dots
+FAILED tests/test_careagents_consent.py::test_app_identity_matches_hosts_exactly
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[claudeaiconnectorauthorizationcallbackservicesecureverification.example]
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[evil.example]
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[claude.ai]
+5 failed, 117 passed in 4.56s
+
+== N4 break-word dropped from .consent-host
+mutated careagents/static/careagents.css: 1 replacement
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[claudeaiconnectorauthorizationcallbackservicesecureverification.example]
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[evil.example]
+FAILED tests/test_careagents_consent.py::test_every_occurrence_of_the_host_carries_the_wrap_fallback[claude.ai]
+3 failed, 119 passed in 4.56s
+
+== N5 unusual-letters line never shown
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--clude-5ve.com-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--laude-0ye.ai-claude.ai]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[login.xn--80ak6aa92e.com-None]
+FAILED tests/test_careagents_consent.py::test_unusual_letters_line_only_for_a_label_that_starts_with_xn[claude.ai.xn--evil.example]
+4 failed, 118 passed in 5.27s
+
+== N6 A-labels not decoded for the lookalike check
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--clude-5ve.com-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--laude-0ye.ai-claude.ai]
+2 failed, 120 passed in 5.29s
+
+== N7 lookalike letters not folded
+mutated careagents/consent.py: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--clude-5ve.com-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--laude-0ye.ai-claude.ai]
+2 failed, 120 passed in 4.55s
+
+== N8 old lookalike copy
+mutated careagents/templates/consent.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--clude-5ve.com-claude.com]
+FAILED tests/test_careagents_consent.py::test_a_punycode_host_is_explained_in_plain_words[xn--laude-0ye.ai-claude.ai]
+FAILED tests/test_careagents_consent.py::test_the_lookalike_line_names_the_recognized_address_it_borrows
+3 failed, 119 passed in 4.74s
+
+== N9 declined page keeps the ask title
+mutated careagents/templates/consent.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_the_declined_page_is_titled_you_said_no
+1 failed, 121 passed in 4.46s
+
+== N10 calls-itself line with no host
+mutated careagents/templates/home.html: 1 replacement
+FAILED tests/test_careagents_consent.py::test_a_grant_from_before_hosts_were_kept_still_shows_its_name
+1 failed, 121 passed in 4.83s
+
+== N11 denial does not catch HealthClawError
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_consent_decline_offline.py::test_dont_allow_still_says_no_when_healthclaw_is_unreachable
+1 failed, 121 passed in 4.49s
+

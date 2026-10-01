@@ -1981,10 +1981,18 @@ class FakeClient:
         self.consent_requests: list[str] = []
         self.revoked: list[str] = []
         self.revoke_fails = False
+        self.discarded: list[str] = []
+        self.discard_fails = False
 
     def consent_request(self, request_id):
         self.consent_requests.append(request_id)
         return dict(self.parked) if self.parked else None
+
+    def discard_consent_request(self, request_id):
+        if self.discard_fails:
+            raise HealthClawError("consent discard failed (0)", 0)
+        self.discarded.append(request_id)
+        return True
 
     def revoke_consent(self, consent_id):
         if self.revoke_fails:

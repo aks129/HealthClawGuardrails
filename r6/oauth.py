@@ -21,6 +21,7 @@ import logging
 import os
 import secrets
 import time
+import unicodedata
 import uuid
 from functools import wraps
 from urllib.parse import urlencode, urlsplit
@@ -52,6 +53,9 @@ _TENANT_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 #: Loopback hosts whose redirect URIs match on any port (RFC 8252 §7.3).
 #: Native clients such as Claude Code listen on an ephemeral port.
 _LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
+#: A registered `client_name` is the client's own claim, shown on the consent
+#: page; it is kept short and printable, never trusted as an identity.
+CLIENT_NAME_MAX = 80
 
 
 def issuer():
@@ -145,9 +149,46 @@ def decode_grant(grant):
     return payload if isinstance(payload, dict) else None
 
 
+#: The one shape of authority a redirect URI may have (#846): a host made of
+#: ASCII letters, digits, dots and hyphens, or the bracketed IPv6 loopback,
+#: then optionally ':' and a port. An allowlist, so userinfo ('@'),
+#: percent-escapes, non-ASCII lookalikes, full stops like U+3002, spaces and
+#: a second ':' are all outside it without being named.
+_AUTHORITY = re.compile(r'(?P<host>[A-Za-z0-9.-]+|\[::1\])(?::(?P<port>[0-9]{1,5}))?')
+#: Whitespace and control characters, anywhere in the URI. urlsplit drops a
+#: tab or newline silently and Werkzeug refuses a CR/LF in a Location header.
+_UNSAFE_CHARS = re.compile(r'[\x00-\x20\x7f\s]')
+
+
+def _split_unambiguous(uri):
+    """urlsplit(uri), or None unless the URI is one we can both read the way
+    a browser does and actually put in a Location header (#846). This is the
+    one definition of an acceptable redirect URI: registration, loopback
+    matching at authorize and the redirect itself all go through it.
+
+    Refused: a backslash (browsers end the authority there, urlsplit does
+    not), whitespace or a control character anywhere, an authority outside
+    _AUTHORITY, a port outside 1-65535, or a URI urlsplit cannot parse."""
+    if not isinstance(uri, str) or '\\' in uri or _UNSAFE_CHARS.search(uri):
+        return None
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return None
+    authority = _AUTHORITY.fullmatch(parts.netloc)
+    if authority is None:
+        return None
+    port = authority.group('port')
+    if port is not None and not 1 <= int(port) <= 65535:
+        return None
+    return parts
+
+
 def _loopback_form(uri):
     """The port-stripped form of a plain-http loopback URI, else None."""
-    parts = urlsplit(uri)
+    parts = _split_unambiguous(uri)
+    if parts is None:
+        return None
     if parts.scheme == 'http' and (parts.hostname or '') in _LOOPBACK_HOSTS:
         return parts._replace(netloc=parts.hostname)
     return None
@@ -156,11 +197,11 @@ def _loopback_form(uri):
 def redirect_uri_allowed(uri):
     """RFC 7591 registration: `https://`, or a plain-http loopback URI.
     Anything else is a redirect we would send a code to over the open
-    network, and the registration is refused rather than stored."""
-    if not isinstance(uri, str):
-        return False
-    parts = urlsplit(uri)
-    if not parts.netloc or parts.fragment:
+    network, and the registration is refused rather than stored. So is one
+    whose host a browser could read differently from us (_split_unambiguous):
+    the consent page names the app by that host."""
+    parts = _split_unambiguous(uri)
+    if parts is None or not parts.netloc or parts.fragment:
         return False
     if parts.scheme == 'https':
         return True
@@ -175,10 +216,56 @@ def redirect_uri_matches(candidate, registered):
     return a is not None and b is not None and a == b
 
 
+def redirect_host(uri):
+    """The host a code sent to `uri` lands on, lowercased, no port, as ASCII.
+
+    Read the way a browser reads it: '\\' ends the authority like '/'. A
+    non-ASCII host is shown as its IDNA A-label (stdlib codec, IDNA 2003,
+    which also maps U+3002, U+FF0E and U+FF61 to '.'), never in Unicode:
+    registration refuses such hosts now, but clients stored before that live
+    up to CLIENT_TTL_SECONDS. None when there is no host to show."""
+    if not isinstance(uri, str):
+        return None
+    try:
+        host = urlsplit(uri.replace('\\', '/')).hostname
+    except ValueError:
+        return None
+    if not host or host.isascii():
+        return host or None
+    try:
+        return host.encode('idna').decode('ascii').lower()
+    except UnicodeError:
+        return None
+
+
+def clean_client_name(value):
+    """RFC 7591 `client_name`, made safe to show: whitespace runs collapsed,
+    control and format characters (escapes, NULs, bidi overrides) removed,
+    capped at CLIENT_NAME_MAX. Anything else, or nothing left, is
+    'Unknown Client'."""
+    if not isinstance(value, str):
+        return 'Unknown Client'
+    printable = ''.join(ch for ch in ' '.join(value.split())
+                        if unicodedata.category(ch)[0] != 'C')
+    name = ' '.join(printable.split())[:CLIENT_NAME_MAX].rstrip()
+    return name or 'Unknown Client'
+
+
+def _unredirectable():
+    return jsonify({'error': 'invalid_request',
+                    'error_description': 'the registered redirect_uri cannot '
+                    'be redirected to; register the client again'}), 400
+
+
 def _redirect_to_client(redirect_uri, state, **params):
     """302 to the client's registered redirect URI (OAuth 2.1 §4.1.2), with
     each parameter URL-encoded and RFC 9207 `iss` appended so the client can
-    tell which issuer answered. `state` is echoed only when it was sent."""
+    tell which issuer answered. `state` is echoed only when it was sent.
+
+    Fails closed: a URI outside redirect_uri_allowed (a client stored before
+    the rule tightened) gets a plain 400, never a Werkzeug 500 at send time."""
+    if not redirect_uri_allowed(redirect_uri):
+        return _unredirectable()
     if state:
         params['state'] = state
     params['iss'] = issuer()
@@ -583,7 +670,11 @@ def register_oauth_routes(blueprint):
             return jsonify({
                 'error': 'invalid_redirect_uri',
                 'error_description': 'redirect_uris must be https URLs or '
-                'plain-http loopback URLs (localhost, 127.0.0.1, [::1])',
+                'plain-http loopback URLs (localhost, 127.0.0.1, [::1]): '
+                'a host of only ASCII letters, digits, dots and hyphens, '
+                'an optional port from 1 to 65535, and no userinfo, '
+                'percent-escapes, backslash, whitespace, control characters '
+                'or fragment',
             }), 400
         auth_method = body.get('token_endpoint_auth_method') or 'client_secret_post'
         if auth_method not in CLIENT_AUTH_METHODS:
@@ -595,7 +686,7 @@ def register_oauth_routes(blueprint):
 
         client_id = str(uuid.uuid4())
         client_secret = None if auth_method == 'none' else secrets.token_urlsafe(32)
-        client_name = body.get('client_name', 'Unknown Client')
+        client_name = clean_client_name(body.get('client_name'))
         scope = body.get('scope', 'fhir.read context.read')
         issued_at = int(time.time())
 
@@ -607,6 +698,13 @@ def register_oauth_routes(blueprint):
             'token_endpoint_auth_method': auth_method,
             'created_at': issued_at,
         }, ttl=CLIENT_TTL_SECONDS)
+        # Registration is open by design (spec §13.1), so each one is visible:
+        # the id, where its codes go, how it authenticates. PHI-free, and the
+        # chosen name and any secret stay out. %r keeps a crafted host from
+        # writing its own log line.
+        logger.info('OAuth client registered: client_id=%s auth_method=%s '
+                    'redirect_hosts=%r', client_id, auth_method,
+                    sorted({redirect_host(u) or '' for u in redirect_uris}))
 
         response = {
             'client_id': client_id,
@@ -646,6 +744,11 @@ def register_oauth_routes(blueprint):
                    for registered in registered_client.get('redirect_uris', [])):
             return jsonify({'error': 'invalid_request',
                           'error_description': 'redirect_uri not registered for this client'}), 400
+        # A client stored before the redirect rule tightened can hold a URI
+        # no Location header carries. Refuse here, before anything is parked
+        # or consented to, rather than after (#846).
+        if not redirect_uri_allowed(redirect_uri):
+            return _unredirectable()
 
         if not code_challenge:
             return jsonify({'error': 'invalid_request',
@@ -683,7 +786,9 @@ def register_oauth_routes(blueprint):
                                            error_description='consent handoff not configured')
             _oauth_store_set('consent-request', request_id, {
                 'client_id': client_id,
-                'client_name': registered_client.get('client_name', 'Unknown Client'),
+                # Cleaned again: a client stored before names were cleaned
+                # lives up to CLIENT_TTL_SECONDS.
+                'client_name': clean_client_name(registered_client.get('client_name')),
                 'redirect_uri': redirect_uri,
                 'code_challenge': code_challenge,
                 'code_challenge_method': code_challenge_method,
@@ -757,9 +862,30 @@ def register_oauth_routes(blueprint):
             'request_id': request_id,
             'client_id': parked['client_id'],
             'client_name': parked['client_name'],
+            # Where the code goes: what the page names the app by, since a
+            # self-registered client picks its own name but not this.
+            'redirect_host': redirect_host(parked['redirect_uri']),
             'scopes': parked['scopes'],
             'exp': parked['exp'],
         })
+
+    @blueprint.route('/oauth/consent/<request_id>/discard', methods=['POST'])
+    def consent_discard(request_id):
+        """A "no" that goes nowhere (#846). CareAgents calls this when the
+        person declines a client whose address it does not recognize: the
+        parked request is spent at once, so an older tab or another account
+        cannot approve it later, and no redirect goes to the stranger's
+        address. Service credential only. 204 when spent here, 404 when it
+        was already gone; either way it can no longer be approved."""
+        if not internal_secret_authorized():
+            return jsonify({'error': 'forbidden'}), 403
+        parked = _oauth_store_pop('consent-request', request_id)
+        if not parked:
+            return jsonify({'error': 'not_found'}), 404
+        # Nothing from the parked record is logged: the OAuth store also holds
+        # client secrets, so a value read from it is treated as sensitive.
+        logger.info('OAuth consent request discarded')
+        return '', 204
 
     @blueprint.route('/oauth/consent/return', methods=['GET'])
     def consent_return():
@@ -786,6 +912,10 @@ def register_oauth_routes(blueprint):
             return jsonify({'error': 'invalid_request'}), 400
 
         redirect_uri, state = parked['redirect_uri'], parked['state']
+        # Checked before the consent is stored or audited: a yes that cannot
+        # reach the client must not leave a consent behind (#846).
+        if not redirect_uri_allowed(redirect_uri):
+            return _unredirectable()
         if payload.get('decision') != 'approved':
             return _redirect_to_client(redirect_uri, state, error='access_denied')
 
