@@ -26,3 +26,34 @@ FAILED tests/test_careagents_calm_hub_agent_menu.py::test_move_agent_checks_owne
 == control: unmutated tree
 7 passed in 0.72s
 
+
+# CareAgents calm hub, PR 2: mutation runs
+# Tree: a0ef714. PYTHONDONTWRITEBYTECODE=1, __pycache__ purged
+# before each run, replacement count asserted == 1, file restored
+# byte for byte, then an unmutated control run.
+
+== M4: create_agent ignores the connection's owner (Start a chat)
+mutated careagents/accounts.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_page.py::test_start_a_chat_cannot_use_another_accounts_records
+1 failed, 12 passed in 1.06s
+
+== control: unmutated tree
+13 passed in 0.90s
+
+== M5: menu_items keeps coming-soon sources with real records closed
+mutated careagents/hub.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_page.py::test_the_closed_menu_is_one_action_and_one_line
+FAILED tests/test_careagents_calm_hub_page.py::test_the_closed_state_filters_every_coming_soon_source
+2 failed, 11 passed in 0.95s
+
+== control: unmutated tree
+13 passed in 0.90s
+
+== M6: the hub always renders the open menu
+mutated careagents/app.py: 1 replacement
+FAILED tests/test_careagents_calm_hub_page.py::test_the_closed_menu_is_one_action_and_one_line
+FAILED tests/test_careagents.py::test_real_record_tiles_are_coming_soon_when_the_switch_is_off
+2 failed, 12 passed in 1.04s
+
+== control: unmutated tree
+14 passed in 0.91s

@@ -1,0 +1,75 @@
+# CareAgents calm hub PR #843: mutation runs for the patient-tester fixes
+# Tree: 7299cd8 (committed first). PYTHONDONTWRITEBYTECODE=1, __pycache__
+# purged before each run, replacement count asserted == 1, restored with
+# git checkout -- <path>. Suite per run: test_careagents_calm_hub_{copy,js,
+# view,page}.py and test_careagents.py. Numbers are the QA finding numbers.
+# Result: 14 of 14 caught.
+#
+# Live check, 375px, port 5147, allowlisted synthetic account
+# qa843@example.test, HEALTHCLAW_BASE a dead port: three taps on "Find my
+# records at my doctor or hospital" left one ca_connections row (fasten,
+# pending); the card's facts line was empty; the badge and the title did
+# not overlap (bounding boxes); "Delete" typed in the account box enabled
+# "Delete my account". Screenshots: 2026-09-28-calm-hub-375-two-connect-
+# taps.png, 2026-09-28-account-delete-375.png.
+
+CAUGHT  1 account heading back to records
+    1 failed, 311 passed in 7.00s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_the_account_delete_box_talks_about_the_account
+
+CAUGHT  1 settings drops the account variant
+    1 failed, 311 passed in 6.71s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_the_account_delete_box_talks_about_the_account
+
+CAUGHT  1 account button text
+    1 failed, 311 passed in 6.64s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_the_account_delete_box_talks_about_the_account
+
+CAUGHT  2 agent delete promises the chat stays
+    1 failed, 311 passed in 6.73s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_deleting_an_assistant_does_not_promise_its_chat_stays
+
+CAUGHT  3 PHI back in the settings line
+    1 failed, 311 passed in 6.65s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_no_patient_facing_copy_says_phi
+
+CAUGHT  3 PHI back in the consent card
+    1 failed, 311 passed in 6.72s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_no_patient_facing_copy_says_phi
+
+CAUGHT  3 PHI in a JS string
+    1 failed, 311 passed in 6.57s
+    FAILED tests/test_careagents_calm_hub_copy.py::test_no_patient_facing_copy_says_phi
+
+CAUGHT  4 no pending reuse
+    1 failed, 311 passed in 6.67s
+    FAILED tests/test_careagents_calm_hub_page.py::test_a_second_tap_on_find_my_records_reuses_the_pending_connection
+
+CAUGHT  4 updated line from connect time again
+    2 failed, 310 passed in 6.64s
+    FAILED tests/test_careagents_calm_hub_view.py::test_a_connection_that_never_synced_does_not_say_updated
+    FAILED tests/test_careagents_calm_hub_page.py::test_a_second_tap_on_find_my_records_reuses_the_pending_connection
+
+CAUGHT  4 badge absolute again
+    1 failed, 311 passed in 6.69s
+    FAILED tests/test_careagents_calm_hub_page.py::test_the_status_badge_sits_in_the_flow_of_a_record_card
+
+CAUGHT  5 case-sensitive again
+    2 failed, 310 passed in 6.73s
+    FAILED tests/test_careagents_calm_hub_js.py::test_delete_is_accepted_in_any_case_with_the_whitespace_trimmed
+    FAILED tests/test_careagents.py::test_typed_delete_stays_double_gated - asser...
+
+CAUGHT  5 no trim
+    2 failed, 310 passed in 6.74s
+    FAILED tests/test_careagents_calm_hub_js.py::test_delete_is_accepted_in_any_case_with_the_whitespace_trimmed
+    FAILED tests/test_careagents.py::test_typed_delete_stays_double_gated - asser...
+
+CAUGHT  5 click gate dropped
+    2 failed, 310 passed in 6.79s
+    FAILED tests/test_careagents_calm_hub_js.py::test_both_delete_gates_use_the_same_rule
+    FAILED tests/test_careagents.py::test_typed_delete_stays_double_gated - asser...
+
+CAUGHT  6 plural for one
+    1 failed, 311 passed in 6.74s
+    FAILED tests/test_careagents_calm_hub_js.py::test_the_orphan_line_is_singular_for_one_request
+

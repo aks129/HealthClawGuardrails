@@ -1981,10 +1981,18 @@ class FakeClient:
         self.consent_requests: list[str] = []
         self.revoked: list[str] = []
         self.revoke_fails = False
+        self.discarded: list[str] = []
+        self.discard_fails = False
 
     def consent_request(self, request_id):
         self.consent_requests.append(request_id)
         return dict(self.parked) if self.parked else None
+
+    def discard_consent_request(self, request_id):
+        if self.discard_fails:
+            raise HealthClawError("consent discard failed (0)", 0)
+        self.discarded.append(request_id)
+        return True
 
     def revoke_consent(self, consent_id):
         if self.revoke_fails:
@@ -2246,6 +2254,10 @@ class FakeClient:
     def pending_actions(self, tenant):
         return [{"id": "act-1", "kind": "form-fill", "to": None,
                  "status": "awaiting_confirmation"}]
+
+    def recent_actions(self, tenant):
+        # Nothing answered yet; tests that need outcomes override this.
+        return []
 
     def action_status(self, tenant, action_id):
         if action_id != "act-1":
@@ -2571,12 +2583,10 @@ def test_fresh_home_gates_agent_modal_and_shows_onboarding(app, svc, monkeypatch
     c = app.test_client()
     _login(c, svc, monkeypatch)
     html = c.get("/home").data.decode()
-    # the modal element is present but carries the `hidden` attribute
-    assert 'id="agent-modal"' in html
-    modal = html.split('id="agent-modal"')[1][:40]
-    assert "hidden" in modal
-    # first-run onboarding: Step 1 points at connections, not the agent
-    assert "Step 1" in html and "connect" in html.lower()
+    # The add-assistant modal is gone (calm hub spec section 5).
+    assert 'id="agent-modal"' not in html
+    # First run, real records open in this fixture: the plain first line.
+    assert "Start with sample records, or find your own." in html
 
 
 def test_wrong_email_code_rejected(app, svc, monkeypatch):
@@ -2825,7 +2835,7 @@ def test_plain_auth_still_sends_a_signed_in_person_home(app, svc, monkeypatch):
 def test_the_hub_links_to_a_reachable_enrolment_page(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    assert "/auth?enroll=1" in c.get("/home").get_data(as_text=True)
+    assert "/auth?enroll=1" in c.get("/settings").get_data(as_text=True)
 
 
 def test_passkey_registration_and_login_via_faked_verification(app, svc, monkeypatch):
@@ -3211,7 +3221,7 @@ def test_refresh_sample_connection_is_honestly_unsupported(app, svc, monkeypatch
     assert r.status_code == 200
     d = r.get_json()
     assert d["unsupported"] is True
-    assert "synthetic" in d["reason"].lower()
+    assert "made up" in d["reason"].lower()
 
 
 def test_refresh_real_connection_returns_reauth_url(app, svc, monkeypatch):
@@ -5232,6 +5242,9 @@ _CA = _pathlib.Path(__file__).resolve().parents[1] / "careagents"
 _HOME_JS = (_CA / "static" / "home.js").read_text()
 _HOME_HTML = (_CA / "templates" / "home.html").read_text()
 _CSS = (_CA / "static" / "careagents.css").read_text()
+_SETTINGS_HTML = (_CA / "templates" / "settings.html").read_text()
+_HUB_PAGES = (_HOME_HTML + _SETTINGS_HTML
+              + (_CA / "templates" / "_delete_modal.html").read_text())
 _AUTH_JS = (_CA / "static" / "auth.js").read_text()
 _AUTH_HTML = (_CA / "templates" / "auth.html").read_text()
 
@@ -5300,23 +5313,27 @@ def test_typed_delete_stays_double_gated():
     """Three layers, all load-bearing. Deleting records is irreversible, and a
     markup tidy-up that drops `disabled` must not silently make it one tap."""
     # (a) the button ships disabled in the static markup
-    confirm = _HOME_HTML.split('id="delete-confirm"')[1][:120]
+    confirm = _HUB_PAGES.split('id="delete-confirm"')[1][:120]
     assert "disabled" in confirm
-    # (b) enabled only on an exact, case-sensitive match
-    assert 'input.value !== "DELETE"' in _HOME_JS
+    # (b) enabled only on a match: the whole word, any case, whitespace
+    # trimmed, because phones capitalise it to "Delete" (PR #843 QA).
+    # tests/test_careagents_calm_hub_js.py runs the rule itself.
+    assert ('const deleteTyped = (v) => v.trim().toUpperCase() === "DELETE";'
+            in _HOME_JS)
+    assert "ok.disabled = !deleteTyped(input.value);" in _HOME_JS
     # (c) the click handler re-checks the value itself
-    assert 'if (input.value === "DELETE")' in _HOME_JS
-    # and the comparison is never loosened, inside the confirmation helper
+    assert "if (deleteTyped(input.value)) dlg.close(true);" in _HOME_JS
+    # and the comparison is never loosened past that, inside the helper
     ask = _HOME_JS.split("function askToDelete(")[1].split("\n  }")[0]
-    for loosener in ("trim()", "toUpperCase()", "toLowerCase()"):
+    for loosener in ("includes(", "startsWith(", "indexOf(", "toLowerCase()"):
         assert loosener not in ask, loosener
 
 
 def test_delete_confirmation_is_not_a_form_or_native_dialog():
     """A <form> would let Enter submit past the JS check; <dialog>/showModal
     brings a focus trap that breaks VoiceOver on iOS."""
-    assert "<form" not in _HOME_HTML.split('id="delete-modal"')[1].split("</div>\n\n")[0]
-    assert "<dialog" not in _HOME_HTML
+    assert "<form" not in _HUB_PAGES.split('id="delete-modal"')[1].split("</div>\n\n")[0]
+    assert "<dialog" not in _HUB_PAGES
     assert "showModal" not in _HOME_JS
 
 
@@ -5374,7 +5391,7 @@ def test_hub_dialog_selector_contract():
                 'id="im-state"', 'id="delete-modal"',
                 'id="delete-label"', 'id="delete-input"', 'id="delete-confirm"',
                 'id="delete-cancel"'):
-        assert sel in _HOME_HTML, sel
+        assert sel in _HUB_PAGES, sel
 
 
 def test_a_background_message_does_not_scroll_the_page_under_an_open_modal():
@@ -5395,7 +5412,7 @@ def test_a_background_message_does_not_scroll_the_page_under_an_open_modal():
     assert "scrollIntoView" in body
     assert ".modal:not([hidden])" in body[:body.index("scrollIntoView")]
     # The three facts that selector rests on, pinned where they live.
-    opens = re.findall(r'<div class="modal(?: [\w-]+)*"[^>]*>', _HOME_HTML)
+    opens = re.findall(r'<div class="modal(?: [\w-]+)*"[^>]*>', _HUB_PAGES)
     assert opens
     for tag in opens:
         assert " hidden" in tag, tag
@@ -5880,13 +5897,12 @@ def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
     # Sample records are the beta's whole track; they stay live.
     assert cat["sample"]["tier"] == "live"
     body = c.get("/home").get_data(as_text=True)
+    # Closed state: no tiles for these sources at all (calm hub spec
+    # section 4), one primary action and one line instead.
     for tile in _REAL_RECORD_TILES:
-        start = body.index(f'data-connector="{tile}"')
-        opening = body[body.rindex("<button", 0, start):body.index(">", start)]
-        assert 'data-soon="1"' in opening, tile
-        assert "data-consent" not in opening, tile
-        assert "tier-soon" in opening, tile
-    assert "Not open in this beta" in body
+        assert f'data-connector="{tile}"' not in body, tile
+    assert 'id="explore-sample"' in body
+    assert "Coming for invited testers" in body
 
 
 def test_real_record_connect_posts_are_refused_with_503_when_off(
@@ -5980,7 +5996,7 @@ def test_the_telegram_surface_is_coming_soon_for_the_beta(app, svc,
     # is not a control: no id for home.js to bind, no "connect" affordance.
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    body = c.get("/home").get_data(as_text=True)
+    body = c.get("/settings").get_data(as_text=True)
     assert 'id="tg-surface"' not in body
     assert 'id="tg-state"' not in body
     start = body.index("<b>Telegram</b>")
@@ -6003,7 +6019,7 @@ def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
                          re.S).group(1)
     words = re.sub(r"<[^>]+>", "", sentence).split()
     assert len(words) < 15, words
-    assert "Beta" in sentence and "synthetic" in sentence
+    assert "Beta" in sentence and "sample records" in sentence
 
 
 def test_no_canonical_host_means_no_redirect(app):
@@ -6285,7 +6301,7 @@ def test_the_surfaces_message_is_a_live_region_too():
     treatment to one of the page's two message channels and the PR's framing
     implied there was only one (#590).
     """
-    tag = _HOME_HTML[_HOME_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
+    tag = _SETTINGS_HTML[_SETTINGS_HTML.index('<p class="inline-msg" id="surfaces-msg"'):]
     tag = tag[:tag.index(">") + 1]
     assert 'role="status"' in tag, tag
     assert 'aria-live="polite"' in tag, tag
@@ -6337,8 +6353,8 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     _login(closed, svc, monkeypatch, email="tester@example.org")
     body = closed.get("/home").get_data(as_text=True)
     assert note not in body
-    # The tiles it contradicted are the ones on screen.
-    assert "Not open in this beta" in body
+    # The tiles it contradicted are gone; the closed line says it instead.
+    assert "Coming for invited testers" in body
 
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
                     CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")

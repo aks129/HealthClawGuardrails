@@ -7,154 +7,182 @@
 <main class="hub">
   <div class="hub-head">
     <div>
-      <h1>Welcome back</h1>
-      <p class="hub-sub">{{ me.email }}
-        {% if not has_passkey %}· <a href="/auth?enroll=1">add a passkey</a>{% endif %}
-      </p>
+      {# Not "Welcome back": a brand-new account lands here too (#847). #}
+      <h1>Your hub</h1>
+      <p class="hub-sub">{{ me.email }}</p>
     </div>
-    <form method="post" action="/logout"><button class="pill">Sign out</button></form>
+    <a class="pill" href="/settings">Settings</a>
   </div>
 
-  {% if not connections %}
-  <!-- FIRST RUN: guide to connect records before anything else -->
-  <p class="onboard-lead">Two quick steps: connect your health records, then
-    spin up an agent that can read them.</p>
+  {# What the last action did, carried across its reload by home.js:
+     a delete's count, a disconnect's result (#847). #}
+  <p class="hub-notice" id="hub-notice" role="status" aria-live="polite" hidden></p>
+
+  {# 1. Waiting for you. Always shown. It starts as "Checking" and home.js
+     fills it from /api/approvals/count. A failed count says so and is
+     never rendered as zero (calm hub spec section 3). #}
+  <section class="waiting" id="waiting" data-state="checking" aria-live="polite">
+    <h2>Waiting for you</h2>
+    <p class="waiting-line">Checking for requests…</p>
+  </section>
+
+  {% if switch_prompt %}
+  <section class="switch-prompt" id="switch-prompt"
+           data-agent="{{ switch_prompt.agent_id }}"
+           data-conn="{{ switch_prompt.connection_id }}">
+    <p>Switch {{ switch_prompt.agent_name }} to your records?</p>
+    <button type="button" class="btn-primary" id="switch-yes">Switch</button>
+    <button type="button" class="linkish" id="switch-later">Not now</button>
+    <span class="inline-msg" id="switch-msg" role="status" aria-live="polite" hidden></span>
+  </section>
   {% endif %}
 
-  <!-- AGENTS -->
+  <!-- 2. YOUR ASSISTANT -->
   <section class="hub-section">
-    <div class="section-head"><h2>Your agents</h2>
-      <button type="button" class="pill pill-cta" id="new-agent-btn">+ New agent</button></div>
-    <div class="card-grid" id="agents">
-      {% for a in agents %}
-      <a class="hub-card agent-card" href="/chat?agent={{ a.id }}">
-        <span class="hub-emoji">{{ personas[a.persona].emoji if a.persona in personas else '🌿' }}</span>
+    <div class="section-head"><h2>Your assistant</h2></div>
+    <div class="card-grid" id="agents" data-records='{{ hub.move_choices | tojson }}'>
+      {% for a in hub.agents %}
+      <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
-        <div class="hub-card-sub">{{ personas[a.persona].name if a.persona in personas else 'Care agent' }}</div>
-        <span class="open-hint">Open chat →</span>
-      </a>
+        <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads }}{% endif %}</div>
+        <p class="card-note">Visit brief: a one-page summary of your records to bring to an appointment.</p>
+        <div class="card-actions">
+          <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
+          <a class="pill" href="/brief?agent={{ a.id }}">Visit brief</a>
+          <details class="card-menu">
+            <summary>More</summary>
+            <button type="button" class="agent-rename" data-agent="{{ a.id }}"
+                    data-name="{{ a.name }}">Rename</button>
+            {% if hub.active_records | length > 1 %}
+            <button type="button" class="agent-move" data-agent="{{ a.id }}"
+                    data-conn="{{ a.connection_id }}">Change records</button>
+            {% endif %}
+            <button type="button" class="agent-delete" data-agent="{{ a.id }}"
+                    data-name="{{ a.name }}">Delete</button>
+          </details>
+        </div>
+        <span class="agent-msg inline-msg" role="status" aria-live="polite" hidden></span>
+      </div>
       {% endfor %}
-      {% if not agents %}
-        {% if connections %}
-        <div class="empty">Records connected. <button type="button" class="linkish" id="empty-new-agent">Create your first agent →</button></div>
+      {% if not hub.agents %}
+        {# An account whose first assistant was deleted is never stamped
+           again, so this is its one way back into a chat. #}
+        {% if hub.active_records %}
+        <div class="empty">Your records are ready.
+          <button type="button" class="linkish" id="start-chat" data-conn="{{ hub.active_records[0].id }}">Start a chat</button>
+          <span class="inline-msg" id="start-chat-msg" role="status" aria-live="polite" hidden></span></div>
         {% else %}
-        <div class="empty"><b>Step 2.</b> Once your records are connected below,
-          create your first agent here.</div>
+        <div class="empty">Your assistant appears here once records are connected.</div>
         {% endif %}
       {% endif %}
     </div>
   </section>
 
-  <!-- CONNECTIONS -->
-  <section class="hub-section" id="connect-section">
-    <div class="section-head"><h2>Your connections</h2>
-      {% if not connections %}<span class="step-tag">Step 1</span>{% endif %}</div>
+  <!-- 3. YOUR RECORDS -->
+  <section class="hub-section" id="records-section">
+    <div class="section-head"><h2>Your records</h2></div>
     <div class="card-grid" id="connections">
-      {% for c in connections %}
+      {% for c in hub.records %}
       <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
-           data-conn="{{ c.id }}" data-kind="{{ c.kind }}">
+           data-conn="{{ c.id }}" data-kind="{{ c.kind }}" data-status="{{ c.status }}">
         <div class="hub-card-name">{{ c.label }}</div>
-        <div class="hub-card-sub">{{ c.provider or c.kind }}</div>
-        <span class="status status-{{ c.status }}">{{ c.status }}</span>
-        {% if c.kind == 'direct' and c.status != 'revoked' %}
-        <button type="button" class="conn-upload" data-conn="{{ c.id }}"
-                title="Upload a FHIR bundle from another app or portal"
-                >Upload records</button>
-        {% elif c.kind != 'sample' %}
-        <button type="button" class="conn-refresh" data-conn="{{ c.id }}"
-                title="Check your provider for new records">Refresh</button>
+        <div class="hub-card-sub">{{ c.provider or '' }}</div>
+        {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
+        <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
+        <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
+        {% if c.kind == 'direct' %}
+        <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
+        {% elif not c.is_sample %}
+        <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
         {% endif %}
-        {% if c.status != 'revoked' %}
+        {% if not c.is_sample %}
         <button type="button" class="conn-disconnect" data-conn="{{ c.id }}"
-                title="Stop new records arriving; keep what's already here"
-                >Disconnect</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}"
+                title="Stop new records arriving; keep what's already here">Disconnect</button>
         {% endif %}
         <button type="button" class="conn-delete" data-conn="{{ c.id }}"
-                data-label="{{ c.label }}"
-                title="Delete these records permanently">Delete</button>
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
+        <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
+      </div>
+      {% endfor %}
+      {% if not hub.records %}
+      <div class="empty">No records yet. Add some below.</div>
+      {% endif %}
+    </div>
+    {% if has_grants %}
+    <p class="hub-link"><a href="/settings#grants-section">Apps you've shared records with</a></p>
+    {% endif %}
+  </section>
+
+  <!-- 4. ADD RECORDS -->
+  {# `menu` is hub.menu_items: with real records closed it holds no
+     coming-soon source, so the groups below render nothing in that state. #}
+  <section class="hub-section" id="connect-section">
+    <div class="section-head"><h2>Add records</h2></div>
+    {% if not menu_open %}
+    <button type="button" class="btn-primary btn-block connector-tile"
+            id="explore-sample" data-connector="sample">Explore with made-up records</button>
+    <p class="menu-closed-line">Coming for invited testers: your doctor's records, Apple Health and wearables, uploading a file from your patient portal.</p>
+    {% elif not hub.records %}
+    <p class="onboard-lead">Start with sample records, or find your own.</p>
+    {% endif %}
+    {% for gid, gname in groups %}
+    {% set items = menu | selectattr('group', 'equalto', gid) | list %}
+    {% if items %}
+    <div class="menu-group" data-group="{{ gid }}">
+      <h3>{{ gname }}</h3>
+      {% for m in items %}
+      {% set chip = 'Connected' if m.id in hub.connected_kinds else m.chip %}
+      {% if m.tier == 'soon' %}
+      <div class="connector-row tier-soon" data-connector="{{ m.id }}">
+        <span class="connector-label">{{ m.label }}</span>
+        <span class="connector-blurb">{{ m.blurb }}</span>
+        <span class="chip chip-soon">{{ chip }}</span>
+      </div>
+      {% else %}
+      <button type="button" class="connector-row connector-tile tier-{{ m.tier }}"
+              data-connector="{{ m.id }}"
+              {% if m.get('providers') %}data-providers='{{ m.providers|tojson }}'{% endif %}
+              {% if m.get('requires_consent') %}data-consent="1"{% endif %}>
+        <span class="connector-label">{{ m.label }}</span>
+        <span class="connector-blurb">{{ m.blurb }}</span>
+        <span class="chip">{{ chip }}</span>
+      </button>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% if menu_open %}
+    <button type="button" class="linkish sample-link connector-tile"
+            data-connector="sample">Explore with made-up records</button>
+    {% if menu | selectattr('id', 'in', ['fasten', 'wearable'])
+               | rejectattr('tier', 'equalto', 'soon') | list %}
+    <p class="add-note">Logins to your doctor or your devices happen on their
+      own site. We never see your password.</p>
+    {% endif %}
+    {% endif %}
+    <p class="inline-msg" id="connect-msg" role="status" aria-live="polite" hidden></p>
+  </section>
+
+  <!-- 5. PAST CONNECTIONS -->
+  {% if hub.past %}
+  <details class="hub-section past" id="past-connections">
+    <summary>Past connections ({{ hub.past | length }})</summary>
+    <div class="card-grid">
+      {% for c in hub.past %}
+      <div class="hub-card conn-card" data-tenant="{{ c.tenant_id }}"
+           data-conn="{{ c.id }}" data-kind="{{ c.kind }}" data-status="{{ c.status }}">
+        <div class="hub-card-name">{{ c.label }}</div>
+        <div class="hub-card-sub">No new records arrive from this one.</div>
+        <button type="button" class="conn-delete" data-conn="{{ c.id }}"
+                data-label="{{ c.label }}" data-readers="{{ c.readers }}">Delete</button>
         <span class="conn-refresh-msg" role="status" aria-live="polite" hidden></span>
       </div>
       {% endfor %}
     </div>
-    {% if grants %}
-    <h3 class="add-heading">Shared with other apps</h3>
-    <div class="card-grid" id="grants">
-      {% for g in grants %}
-      <div class="hub-card grant-card" data-grant="{{ g.id }}">
-        <div class="hub-card-name">{{ g.client_name }}</div>
-        <div class="hub-card-sub">reads {{ g.tenant_label or 'one connection' }} through HealthClaw</div>
-        <span class="status status-{{ g.status }}">{{ g.status }}</span>
-        {% if g.status != 'revoked' %}
-        <button type="button" class="grant-revoke" data-grant="{{ g.id }}"
-                title="Stop this app reading your records">Revoke</button>
-        {% endif %}
-        <span class="grant-msg" role="status" aria-live="polite" hidden></span>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-    <h3 class="add-heading">Connect records</h3>
-    <div class="marketplace" id="marketplace">
-      {% for m in catalog %}
-      <button type="button" class="connector-tile tier-{{ m.tier }}"
-              data-connector="{{ m.id }}"
-              {% if m.get('providers') %}data-providers='{{ m.providers|tojson }}'{% endif %}
-              {% if m.get('requires_consent') and m.tier != 'soon' %}data-consent="1"{% endif %}
-              {% if m.tier == 'soon' %}data-soon="1"{% endif %}>
-        <span class="connector-emoji">{{ m.icon }}</span>
-        <span class="connector-label">{{ m.label }}</span>
-        <span class="connector-blurb">{{ m.blurb }}</span>
-        {% if m.tier == 'soon' %}<span class="connector-tag">{{ m.note or 'coming soon' }}</span>
-        {% elif m.tier == 'import' %}<span class="connector-tag">import</span>{% endif %}
-      </button>
-      {% endfor %}
-    </div>
-    {# The only channel for a refusal: tap a closed tile and this paragraph is
-       the whole of what the deployment says back. Same live-region treatment
-       as .conn-refresh-msg above; say() shows it before writing into it. #}
-    <p class="inline-msg" id="connect-msg" role="status" aria-live="polite"
-       hidden></p>
-    {# True, and worth keeping — but only where the logins it describes are
-       open. Under three "not open in this beta" tiles it contradicted the
-       screen it sat on. #}
-    {% if catalog | selectattr('id', 'in', ['fasten', 'wearable'])
-                  | rejectattr('tier', 'equalto', 'soon') | list %}
-    <p class="add-note">Verified provider &amp; wearable logins happen on the
-      provider’s own site — we never see your password.</p>
-    {% endif %}
-  </section>
-
-  <!-- SURFACES -->
-  <section class="hub-section">
-    <div class="section-head"><h2>Where you can reach your agent</h2></div>
-    <div class="surface-row">
-      <div class="surface on"><b>Web</b><span>always on</span></div>
-      {# Not serviced in the beta (#536, D6): no webhook, no poller. No id, so
-         home.js has nothing to bind — the tile is a label, not a control. #}
-      <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
-      {% if imessage_handle %}
-      <div class="surface" id="im-surface"><b>iMessage</b>
-        <span id="im-state">connect →</span></div>
-      {% else %}
-      <div class="surface soon"><b>iMessage</b><span>coming soon</span></div>
-      {% endif %}
-      <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
-    </div>
-    {# The refusal for these surfaces, and the words explaining every section
-       flash, arrive here. Same live-region treatment as #connect-msg and
-       .conn-refresh-msg; announce() shows it before writing into it. #}
-    <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
-       hidden></p>
-  </section>
-
-  <section class="leaving">
-    <h2>Leaving</h2>
-    <p>Deleting your account deletes the records behind every connection
-      first, then your email, passkey and consents. The PHI-free audit trail
-      stays as the record of who accessed what.</p>
-    <button class="pill danger" id="account-delete" type="button">Delete my account</button>
-    <p class="inline-msg" id="account-msg" role="status" aria-live="polite" hidden></p>
-  </section>
+  </details>
+  {% endif %}
 </main>
 
 <!-- Consent card: shown before any REAL-record connection starts.
@@ -183,9 +211,10 @@
       <li><b>Leaving:</b> you can do it yourself, right here, whenever you
         like. <b>Disconnect</b> stops new records arriving and keeps what's
         already there; <b>Delete</b> permanently removes the records
-        themselves and tells you how many were deleted. The PHI-free audit
-        trail of who accessed what is kept — a deletion shouldn't be able to
-        erase the record of the access that came before it. Stuck? Email
+        themselves and tells you how many were deleted. We keep a log of who
+        looked at your records, with no health details in it — a deletion
+        shouldn't be able to erase the record of the access that came before
+        it. Stuck? Email
         <a href="mailto:support@healthclaw.io">support@healthclaw.io</a>.</li>
     </ul>
     <p class="consent-fine">Full detail:
@@ -198,39 +227,6 @@
   </div>
 </div>
 
-<!-- New-agent modal -->
-<div class="modal" id="agent-modal" hidden>
-  <div class="modal-card">
-    <h3>New agent</h3>
-    <label class="field-label" for="a-name">Name</label>
-    <input class="field" id="a-name" maxlength="48" placeholder="Juniper, Ada, Coach…">
-    <span class="field-label">Voice</span>
-    <div class="persona-grid">
-      {% for key, p in personas.items() %}
-      <label class="persona-card"><input type="radio" name="ag-persona" value="{{ key }}" {% if loop.first %}checked{% endif %}>
-        <span class="persona-emoji">{{ p.emoji }}</span>
-        <span class="persona-name">{{ p.name }}</span></label>
-      {% endfor %}
-    </div>
-    <span class="field-label">Specialty</span>
-    <select class="field" id="a-advisor">
-      {% for adv in advisors %}
-      {% if adv.available %}
-      <option value="{{ adv.id }}">{{ adv.emoji }} {{ adv.name }} — {{ adv.blurb }}</option>
-      {% else %}
-      <option value="" disabled>{{ adv.emoji }} {{ adv.name }} — {{ adv.note }}</option>
-      {% endif %}
-      {% endfor %}
-    </select>
-    <span class="field-label">Records</span>
-    <select class="field" id="a-conn">
-      {% for c in connections %}<option value="{{ c.id }}">{{ c.label }} ({{ c.status }})</option>{% endfor %}
-    </select>
-    <div id="modal-err" class="form-error" hidden></div>
-    <button type="button" class="btn-primary btn-block" id="create-agent">Create</button>
-    <button type="button" class="linkish" id="close-modal">Cancel</button>
-  </div>
-</div>
 
 <!-- Provider picker: one large tappable row per provider, filled in by
      home.js from the tile's data-providers. No numbers, no keyboard — the
@@ -244,41 +240,9 @@
   </div>
 </div>
 
-<!-- Pairing code card. What is shown in #pair-code is byte-identical to what
-     Copy writes, so the press-and-hold fallback can't copy the wrong string. -->
-<div class="modal" id="code-card" role="dialog" aria-modal="true"
-     aria-labelledby="code-title" hidden>
-  <div class="modal-card">
-    <h3 id="code-title">Your pairing code</h3>
-    <p id="code-instructions"></p>
-    <div id="pair-code"></div>
-    <button type="button" class="btn-secondary btn-block" id="copy-code">
-      <span id="copy-state">Copy</span></button>
-    <button type="button" class="btn-primary btn-block" id="code-done">Done</button>
-  </div>
-</div>
+{% include "_delete_modal.html" %}
 
-<!-- Delete confirmation. Same copy and the same typed-DELETE requirement as
-     the prompt() it replaces — the friction is the point, only the container
-     changed. #delete-confirm ships disabled; home.js re-checks on click too. -->
-<div class="modal" id="delete-modal" role="dialog" aria-modal="true"
-     aria-labelledby="delete-title" hidden>
-  <div class="modal-card">
-    <h3 id="delete-title">Delete these records?</h3>
-    <p class="delete-warn">This permanently deletes the records in
-      "<span id="delete-label"></span>".</p>
-    <p class="delete-warn">The PHI-free audit trail (who accessed what) is kept
-      as the record of what happened, and this deletion is added to it.</p>
-    <label class="field-label" for="delete-input">Type DELETE to confirm:</label>
-    <input class="field" id="delete-input" autocomplete="off"
-           autocapitalize="characters" autocorrect="off" spellcheck="false">
-    <button type="button" class="btn-primary btn-block" id="delete-confirm"
-            disabled>Delete these records</button>
-    <button type="button" class="linkish" id="delete-cancel">Cancel</button>
-  </div>
-</div>
-
-<!-- Hidden file input reused by every "Upload records" button on `direct`
+<!-- Hidden file input reused by every "Upload a file" button on `direct`
      connections. The button's click handler assigns itself as the
      current owner before triggering the picker. -->
 <input type="file" id="upload-file" accept=".json,application/json,application/fhir+json" hidden>
@@ -287,5 +251,51 @@
    it (home.js builds the deep link from the server response), and with the
    Telegram tile out of service for the beta (#536, D6) it only put the bot
    handle in the page source. #}
+
+<!-- Change records: one row per other active connection, from #agents'
+     data-records. Same sheet pattern as the provider picker. -->
+<div class="modal sheet" id="records-picker" role="dialog" aria-modal="true"
+     aria-labelledby="records-title" hidden>
+  <div class="modal-card">
+    <h3 id="records-title">Which records should it read?</h3>
+    <div id="records-rows"></div>
+    <button type="button" class="linkish" id="records-cancel">Not now</button>
+  </div>
+</div>
+
+<div class="modal" id="rename-modal" role="dialog" aria-modal="true"
+     aria-labelledby="rename-title" hidden>
+  <div class="modal-card">
+    <h3 id="rename-title">Rename your assistant</h3>
+    <label class="field-label" for="rename-input">Name</label>
+    <input class="field" id="rename-input" maxlength="48" autocomplete="off">
+    <button type="button" class="btn-primary btn-block" id="rename-save">Save</button>
+    <button type="button" class="linkish" id="rename-cancel">Cancel</button>
+  </div>
+</div>
+
+<div class="modal" id="disconnect-modal" role="dialog" aria-modal="true"
+     aria-labelledby="disconnect-title" hidden>
+  <div class="modal-card">
+    <h3 id="disconnect-title">Disconnect <span id="disconnect-name"></span>?</h3>
+    <p>No new records will arrive from it. The records already here stay, and
+      you can still delete them later.</p>
+    <p id="disconnect-readers" hidden></p>
+    <button type="button" class="btn-primary btn-block" id="disconnect-confirm">Disconnect</button>
+    <button type="button" class="linkish" id="disconnect-cancel">Cancel</button>
+  </div>
+</div>
+
+<div class="modal" id="agent-delete-modal" role="dialog" aria-modal="true"
+     aria-labelledby="agent-delete-title" hidden>
+  <div class="modal-card">
+    <h3 id="agent-delete-title">Delete <span id="agent-delete-name"></span>?</h3>
+    <p>Your records stay. This assistant goes, and you won't be able to open
+      its chat again.</p>
+    <button type="button" class="btn-primary btn-block" id="agent-delete-confirm">Delete</button>
+    <button type="button" class="linkish" id="agent-delete-cancel">Cancel</button>
+  </div>
+</div>
+
 <script src="{{ url_for('static', filename='home.js') }}"></script>
 {% endblock %}

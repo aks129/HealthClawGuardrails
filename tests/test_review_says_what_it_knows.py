@@ -604,7 +604,11 @@ def test_check_status_is_only_called_where_the_relay_answered(page):
     # answer about this action — ownership was verified before the submit, so
     # the action exists and is this tenant's — which is exactly the property
     # the list encodes. The two branches deliberately outside it still are.
-    anchors = ("res.r.status === 409",
+    # The success branch joined it with #847: a 2xx is the relay's own
+    # answer that the review was saved and confirmed, the strongest of all
+    # these, and the lookup is what takes the person on to the result.
+    anchors = ("if (res.r.ok)",
+               "res.r.status === 409",
                "res.b.confirmed === null",
                "res.r.status === 502 &&",
                "res.r.status === 404 &&")

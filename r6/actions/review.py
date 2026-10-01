@@ -509,8 +509,8 @@ def review_submit(action_id):
     confirmed_allergy = any(d == 'confirm' for d in allergy_decisions)
     if not (nka_affirmed or confirmed_allergy):
         return _error(422, 'You must confirm at least one allergy OR check '
-                           '"No known allergies (patient confirmed)". No '
-                           'known allergies is never assumed.')
+                           '"I have no known allergies". No known allergies '
+                           'is never assumed.')
 
     # (3a) The two answers cannot both be true. "No known allergies" beside a
     # confirmed allergy row is not a stricter reading of the same fact, it is
@@ -520,10 +520,10 @@ def review_submit(action_id):
     # attests there are none. The message names both halves and neither the
     # substance nor the reaction: the person is looking at the row.
     if nka_affirmed and confirmed_allergy:
-        return _error(422, 'You confirmed an allergy and also checked "No '
-                           'known allergies (patient confirmed)". Both cannot '
-                           'be true: uncheck the box, or remove the allergy '
-                           'rows you confirmed.')
+        return _error(422, 'You confirmed an allergy and also checked "I '
+                           'have no known allergies". Both cannot be true: '
+                           'uncheck the box, or remove the allergy rows you '
+                           'confirmed.')
 
     # (4) Conditions are confirmable but not gating.
     condition_decisions = [
@@ -572,14 +572,12 @@ def review_submit(action_id):
                                'next_step': _FORM_NEXT_STEP})
 
 
-_FORM_NEXT_STEP = ('Review recorded and approval issued. The form is '
-                   'generated once the confirmation above is claimed and '
-                   'executed — check the action\'s own status for the '
-                   'outcome.')
-_APPROVE_NEXT_STEP = ('Approval recorded over exactly what the page showed. '
-                      'The request is carried out once that approval is '
-                      'claimed and executed — check the action\'s own status '
-                      'for the outcome.')
+# Read by the person who just tapped Approve, so in their words (#847). The
+# page then looks up the outcome and replaces this with what happened.
+_FORM_NEXT_STEP = ('Review recorded and approved. We are making your form '
+                   'now; the link to it appears here when it is ready.')
+_APPROVE_NEXT_STEP = ('Approved, exactly as shown. We are carrying out this '
+                      'request now; what happened appears here in a moment.')
 _ALREADY_APPROVED = ('This request has already been approved from this page; '
                      'nothing further is needed.')
 

@@ -115,18 +115,35 @@
     scroll();
   }
 
-  function addReviewCard(actionId, url) {
+  // One card per request: the page draws the ones still waiting on load,
+  // and a turn may announce the same request again.
+  const reviewCards = new Set();
+
+  // `label` is set only for a request that is not the intake form, which
+  // is the one a chat turn proposes; requests from elsewhere are named by
+  // their kind.
+  function addReviewCard(actionId, url, label) {
+    if (reviewCards.has(actionId)) return;
+    reviewCards.add(actionId);
     const c = el("div", "card");
-    c.appendChild(el("h4", null, "Review & approve your intake form"));
-    c.appendChild(el("p", null,
-      "Your agent filled it from the records — now every medication and " +
-      "allergy waits for your say-so. Nothing is generated until you approve."));
+    if (label) {
+      c.appendChild(el("h4", null, "Review & approve: " + label));
+      c.appendChild(el("p", null,
+        "This waits for your answer. Nothing happens until you approve it."));
+    } else {
+      c.appendChild(el("h4", null, "Review & approve your intake form"));
+      c.appendChild(el("p", null,
+        "Your agent filled it from the records — now every medication and " +
+        "allergy waits for your say-so. Nothing is generated until you approve."));
+    }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
     a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
     log.appendChild(c); scroll();
-    watchForm(actionId);
+    // Only the intake form ends in a PDF; polling for one on any other
+    // request would run until the page closed.
+    if (!label) watchForm(actionId);
   }
 
   function addPdfCard(url) {
@@ -394,6 +411,14 @@
       busy = false; sendBtn.disabled = false; box.focus();
     }
   }
+
+  // Requests still waiting when the page loaded, read from the engine by
+  // the server: history keeps only text, so without this a reload lost the
+  // card the reply above promised (#847).
+  let pendingReviews = [];
+  try { pendingReviews = JSON.parse(log.dataset.pendingReviews || "[]"); }
+  catch (e) { pendingReviews = []; }
+  pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
 
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>

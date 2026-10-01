@@ -182,14 +182,15 @@ def test_a_valid_link_signed_out_goes_to_sign_in_and_resumes_after(
 
 
 def test_the_page_names_the_client_the_permissions_and_the_persons_connections(
-        app, svc, monkeypatch):
+        app, svc, fake, monkeypatch):
     client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
     _connect(svc, acct, "sample", "Sample records")
     _connect(svc, acct, "fasten", "Clinic records", provider="Epic (Fasten)")
+    fake.parked["redirect_host"] = "claude.ai"
     resp = client.get("/authorize", query_string={"req": _handle()})
-    page = resp.get_data(as_text=True)
+    page = _words(resp.get_data(as_text=True))
     assert resp.status_code == 200
-    assert "Claude wants to read your records" in page
+    assert "claude.ai wants to read your records" in page
     assert "Read your health records" in page and "summaries" in page
     assert "Sample records" in page and "Clinic records" in page
     assert 'id="approve-btn"' in page and "Don't allow" in page
@@ -310,8 +311,11 @@ def test_an_approval_sends_back_a_grant_healthclaw_decodes_and_records_it(
     assert g["connection_id"] == conn
 
 
-def test_a_denial_needs_no_passkey_and_records_nothing(app, svc, monkeypatch):
+def test_a_denial_needs_no_passkey_and_records_nothing(app, svc, fake, monkeypatch):
+    """A recognized host gets the OAuth access_denied back; see the
+    unrecognized-host rows below for the page that stays here."""
     monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", MINT)
+    fake.parked["redirect_host"] = "claude.ai"
     client, acct = _signed_in(app, svc, monkeypatch)
     resp = client.post("/authorize/decide", data=json.dumps({
         "req": _handle(), "decision": "denied"}), content_type="application/json")
@@ -347,8 +351,8 @@ def test_the_hub_lists_grants_and_revokes_at_healthclaw_first(
     tenant = svc.get_connection(acct.id, conn)["tenant_id"]
     gid = svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude",
                         "fhir.read", "consent_abc")
-    page = client.get("/home").get_data(as_text=True)
-    assert "Shared with other apps" in page and "Claude" in page
+    page = client.get("/settings").get_data(as_text=True)
+    assert "Apps you have shared records with" in page and "Claude" in page
     assert f'data-grant="{gid}"' in page
 
     fake.revoke_fails = True
@@ -412,3 +416,524 @@ def test_a_revoke_that_cannot_be_confirmed_keeps_the_connection_listed(
     assert body["deleted"] is True and body["unlinked"] is False and body["grants_active"] == 1
     assert svc.get_connection(acct.id, conn) is not None, "still listed, so Delete can be retried"
     assert svc.get_grant(acct.id, gid)["status"] == "active"
+
+
+# --- who is asking: the address the code goes to, not the name it chose -----
+#
+# Registration is open (spec §13.1), so anyone can register a client named
+# "Claude" with their own callback and send a person the authorize link. The
+# name is the client's claim; the redirect host is where the code actually
+# goes, and it is the one thing such a client cannot fake.
+
+
+def _ask_page(app, svc, fake, monkeypatch, host, name="Claude"):
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["client_name"] = name
+    if host is None:
+        fake.parked.pop("redirect_host", None)
+    else:
+        fake.parked["redirect_host"] = host
+    resp = client.get("/authorize", query_string={"req": _handle()})
+    assert resp.status_code == 200
+    return _words(resp.get_data(as_text=True))
+
+
+HOST_OPEN = '<span class="consent-host">'
+
+
+def _words(page):
+    """The page as read: the host's wrapper and its line-break hints (one
+    after each dot) are markup around the words, not words."""
+    return page.replace("<wbr>", "").replace(HOST_OPEN, "").replace("</span>", "")
+
+
+CAUTION = "We don't recognize this address"
+STOP_LINE = "If you didn't just ask {} to connect, tap Don't allow."
+
+
+@pytest.mark.parametrize("host", ["claude.ai", "claude.com"])
+def test_a_recognized_host_heads_the_page_and_reads_as_recognized(
+        app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert f"{host} wants to read your records" in page
+    assert f"you'll go back to <strong>{host}</strong>" in page
+    assert "calls itself" in page and "Claude" in page
+    assert "check the web address above" in page
+    assert STOP_LINE.format(host) in page
+    assert CAUTION not in page and "This is not" not in page
+
+
+@pytest.mark.parametrize("host", [
+    "evil.example", "claude.ai.evil.example", "evilclaude.ai", "localhost"])
+def test_any_other_host_is_named_with_a_caution_whatever_the_client_calls_itself(
+        app, svc, fake, monkeypatch, host):
+    """The attack: a client named "Claude" whose code goes elsewhere.
+    MUTATION: treat every host as recognized -> red; match on suffix -> the
+    lookalike rows go red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host, name="Claude")
+    assert f"{host} wants to read your records" in page
+    assert CAUTION in page
+    assert f"Only allow it if you started this from {host} yourself" in page
+    assert STOP_LINE.format(host) in page
+    assert "Claude wants to read" not in page
+    assert "this app" not in page.split("It would be able to")[0].split(CAUTION)[1]
+
+
+def test_without_a_host_the_page_says_it_cannot_tell_where_the_code_goes(
+        app, svc, fake, monkeypatch):
+    """A HealthClaw that predates redirect_host: caution, never recognition."""
+    page = _ask_page(app, svc, fake, monkeypatch, None)
+    assert "An app wants to read your records" in page
+    assert "We can't tell which address you'd go back to" in page
+    assert STOP_LINE.format("an app") in page
+    assert "go back to <strong" not in page
+
+
+@pytest.mark.parametrize("host, not_this", [
+    ("claude.ai.secure-login.example", "claude.ai"),
+    ("claudeai-help.example", "claude.ai"),
+    ("evilclaude.ai", "claude.ai"),
+    ("claude.com.evil.example", "claude.com"),
+    ("my-claude-tools.example", "claude.ai"),
+])
+def test_a_host_that_borrows_a_recognized_name_says_plainly_it_is_not_that(
+        app, svc, fake, monkeypatch, host, not_this):
+    """MUTATION: never set lookalike_of -> red; set it for exact hosts too ->
+    the recognized rows above go red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert f"This is not {not_this}." in page
+    # Near the top: straight after the headline, before the scopes.
+    top = page.split("It would be able to")[0]
+    assert top.index("wants to read your records") < top.index(f"This is not {not_this}.")
+
+
+@pytest.mark.parametrize("host", ["evil.example", "localhost", None])
+def test_an_unrecognized_host_makes_dont_allow_the_primary_button(
+        app, svc, fake, monkeypatch, host):
+    """MUTATION: keep Allow primary for every host -> red."""
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert 'class="btn-primary btn-block" id="deny-btn"' in page
+    assert 'class="btn-secondary btn-block" id="approve-btn"' in page
+    assert page.index('id="deny-btn"') < page.index('id="approve-btn"')
+
+
+@pytest.mark.parametrize("host", ["claude.ai", "claude.com"])
+def test_a_recognized_host_keeps_allow_primary(app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    assert 'class="btn-primary btn-block" id="approve-btn"' in page
+    assert 'class="btn-secondary btn-block" id="deny-btn"' in page
+
+
+def test_the_host_wraps_only_at_its_dots(app, svc, fake, monkeypatch):
+    """A host is one long word: at 375px it wraps after a dot, never mid-label.
+    MUTATION: render the host without <wbr> -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = "claude.ai.secure-login.example"
+    page = client.get("/authorize", query_string={"req": _handle()}).get_data(as_text=True)
+    assert (f"{HOST_OPEN}claude.<wbr>ai.<wbr>secure-login.<wbr>example</span> "
+            "wants to read") in page
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    consent_css = css.split("--- consent page")[1].split("Leaving (#554)")[0]
+    assert "anywhere" not in consent_css
+
+
+def test_the_client_name_and_host_are_escaped_on_the_page(app, svc, fake, monkeypatch):
+    """Jinja autoescape is on for consent.html; this row is the proof.
+    MUTATION: render client_name with |safe -> red."""
+    page = _ask_page(app, svc, fake, monkeypatch, "evil.example",
+                     name='<img src=x onerror="alert(1)">Claude')
+    assert "<img src=x" not in page
+    assert "&lt;img src=x onerror=&#34;alert(1)&#34;&gt;Claude" in page
+
+
+def test_the_host_is_escaped_between_its_line_breaks(app, svc, fake, monkeypatch):
+    """The <wbr> hints are markup; the labels between them are not.
+    MUTATION: join the raw labels without escape() -> red."""
+    # Since round 2 such a host is not showable at all: the page names none.
+    page = _ask_page(app, svc, fake, monkeypatch, 'evil<b>.example"')
+    assert "evil<b>" not in page and "evil&lt;b&gt;" not in page
+    assert "An app wants to read your records" in page
+    # The wrapper still escapes on its own, as the second wall.
+    wrapped = str(consent._wrap_at_dots('evil<b>.example"'))
+    assert wrapped == f'{HOST_OPEN}evil&lt;b&gt;.<wbr>example&#34;</span>'
+
+
+def test_app_identity_matches_hosts_exactly():
+    ident = consent.app_identity({"redirect_host": "CLAUDE.AI", "client_name": "C"})
+    assert ident["client_name"] == "C" and ident["redirect_host"] == "claude.ai"
+    assert ident["host_recognized"] is True and ident["lookalike_of"] is None
+    assert str(ident["host_html"]) == f"{HOST_OPEN}claude.<wbr>ai</span>"
+    for host in ("claude.ai.evil.example", "evilclaude.ai", "", None, 7):
+        ident = consent.app_identity({"redirect_host": host})
+        assert ident["host_recognized"] is False, host
+    assert consent.app_identity({})["client_name"] == "An agent"
+    assert consent.app_identity({})["host_html"] is None
+
+
+@pytest.mark.parametrize("given, shown", [
+    ("clаude.com", "xn--clude-5ve.com"),          # Cyrillic a
+    ("claude.ai。evil.example", "claude.ai.evil.example"),
+    ("claude.ai．evil.example", "claude.ai.evil.example"),
+    ("claude.ai｡evil.example", "claude.ai.evil.example"),
+])
+def test_app_identity_shows_a_non_ascii_host_as_the_browser_resolves_it(given, shown):
+    """Defence in depth: HealthClaw sends A-labels, but the page never shows
+    a Unicode host whatever it is sent. MUTATION: skip the A-label step -> red."""
+    ident = consent.app_identity({"redirect_host": given})
+    assert ident["redirect_host"] == shown and ident["host_recognized"] is False
+
+
+def test_app_identity_shows_no_host_rather_than_one_it_cannot_encode():
+    ident = consent.app_identity({"redirect_host": "a" * 64 + "é.example"})
+    assert ident["redirect_host"] is None and ident["host_recognized"] is False
+
+
+# --- signing in on the way to a consent request ------------------------------
+
+
+def test_signing_in_by_email_code_resumes_the_consent_request(app, svc, fake, monkeypatch):
+    """Bug A: _login clears the session against fixation, and used to take the
+    parked request with it, so the person landed on the hub instead.
+    MUTATION: clear consent_req along with the rest -> red."""
+    from tests.test_careagents import _login as email_login
+    client = app.test_client()
+    req = _handle()
+    assert client.get("/authorize", query_string={"req": req}).status_code == 302
+    with client.session_transaction() as s:
+        s["wa_consent_challenge"] = "planted-before-sign-in"
+        s["something_else"] = "planted-before-sign-in"
+    email_login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        # Only the parked handle survives the clear.
+        assert s["consent_req"] == req
+        assert "wa_consent_challenge" not in s and "something_else" not in s
+    # "Skip for now" and every other post-sign-in path land on /home.
+    home = client.get("/home")
+    assert home.status_code == 302
+    assert home.headers["Location"].endswith(f"/authorize?req={req}")
+    page = client.get(home.headers["Location"])
+    assert page.status_code == 200 and "wants to read your records" in page.get_data(as_text=True)
+    # Once: the hub is the hub again afterwards.
+    assert client.get("/home").status_code == 200
+
+
+def test_a_forged_consent_handle_is_not_carried_across_sign_in(app, svc, monkeypatch):
+    from tests.test_careagents import _login as email_login
+    client = app.test_client()
+    with client.session_transaction() as s:
+        s["consent_req"] = _handle(secret="guessed")
+    email_login(client, svc, monkeypatch, "pat@example.com")
+    with client.session_transaction() as s:
+        assert "consent_req" not in s
+
+
+# --- saying no ------------------------------------------------------------------
+
+
+def test_dont_allow_on_an_unrecognized_host_stays_here_and_sends_nothing(
+        app, svc, fake, monkeypatch):
+    """Bug B: a denial used to send the browser to the client's redirect URI,
+    which for a stranger's client is the stranger's page.
+    MUTATION: send the access_denied grant for every host -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.status_code == 200
+    redirect = resp.get_json()["redirect"]
+    assert redirect == "/authorize/declined"
+    assert "grant=" not in redirect
+    page = client.get(redirect)
+    assert page.status_code == 200
+    text = page.get_data(as_text=True)
+    assert "You said no." in text and "Nothing was shared." in text
+    assert "You can close this page." in text
+    assert svc.list_grants(acct.id) == []
+
+
+def test_dont_allow_without_a_host_also_stays_here(app, svc, fake, monkeypatch):
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked.pop("redirect_host", None)
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+
+
+# --- the hub says where a shared app's codes go ---------------------------------
+
+
+def test_a_grant_records_the_redirect_host_and_the_hub_leads_with_it(
+        app, svc, fake, monkeypatch):
+    """The name is the client's claim; the hub, like the consent page, names
+    the app by its address. MUTATION: drop redirect_host from add_grant -> red."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", MINT)
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = "evil.example"
+    with client.session_transaction() as s:
+        s["wa_consent_challenge"] = "c"
+    monkeypatch.setattr(svc, "finish_authentication",
+                        lambda cred, ch, require_uv=False: acct)
+    assert _approve(client, conn).status_code == 200
+    g = svc.list_grants(acct.id)[0]
+    assert g["redirect_host"] == "evil.example" and g["client_name"] == "Claude"
+    page = client.get("/settings").get_data(as_text=True).replace("<wbr>", "")
+    assert '<div class="hub-card-name grant-host">evil.example</div>' in page
+    assert "calls itself &ldquo;Claude&rdquo;" in page or "calls itself “Claude”" in page
+    assert '<div class="hub-card-name grant-host">Claude</div>' not in page
+
+
+def test_a_grant_from_before_hosts_were_kept_still_shows_its_name(
+        app, svc, monkeypatch):
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-claude", "Claude", "fhir.read",
+                  "consent_old")
+    assert svc.list_grants(acct.id)[0]["redirect_host"] is None
+    page = client.get("/settings").get_data(as_text=True)
+    # No host to lead with: the name alone, not "Claude / calls itself Claude".
+    # MUTATION: show the calls-itself line whatever the host -> red.
+    assert '<div class="hub-card-name grant-host">Claude</div>' in page
+    assert "calls itself" not in page
+
+
+def test_a_long_shared_app_host_wraps_at_dots_with_a_fallback(app, svc, monkeypatch):
+    """The settings card names the app by its host, which can be one label
+    wider than a 375px card. MUTATION: drop the <wbr> loop or the
+    .grant-host wrap rule -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-x", "Claude", "fhir.read",
+                  "consent_long", redirect_host=f"a.{LONG_LABEL}")
+    page = client.get("/settings").get_data(as_text=True)
+    assert (f'<div class="hub-card-name grant-host">a.<wbr>{LONG_LABEL.split(".")[0]}'
+            f'.<wbr>example</div>') in page
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    assert ".grant-host { overflow-wrap: break-word; }" in css
+    assert ".grant-card { min-width: 0; }" in css
+    # The badge sits above the host, in the flow, as on a record card: a long
+    # host ran underneath the absolutely placed ACTIVE badge.
+    assert ".grant-card .status { position: static; align-self: flex-start; order: -1; }" in css
+
+
+def test_the_settings_card_escapes_the_host_between_its_line_breaks(
+        app, svc, monkeypatch):
+    """Only the <wbr> hints are markup. MUTATION: render a label |safe -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    conn = _connect(svc, acct, "sample", "Sample records")
+    tenant = svc.get_connection(acct.id, conn)["tenant_id"]
+    svc.add_grant(acct.id, conn, tenant, "cid-x", "Claude", "fhir.read",
+                  "consent_esc", redirect_host="evil<b>.example")
+    page = client.get("/settings").get_data(as_text=True)
+    assert "evil<b>" not in page
+    assert '<div class="hub-card-name grant-host">evil&lt;b&gt;.<wbr>example</div>' in page
+
+
+def test_an_existing_grants_table_gains_redirect_host_at_start(tmp_path):
+    """create_all() adds tables, never columns, so a live ca_grants reaches
+    this code without redirect_host. MUTATION: delete the ca_grants block
+    from _ensure_columns -> red."""
+    from sqlalchemy import create_engine, inspect, text
+    from careagents.models import _ensure_columns
+    engine = create_engine(f"sqlite:///{tmp_path}/legacy.db")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE ca_grants (id VARCHAR(32) PRIMARY KEY, "
+            "account_id VARCHAR(32), connection_id VARCHAR(32), "
+            "tenant_id VARCHAR(64), client_id VARCHAR(64), "
+            "client_name VARCHAR(120), scopes VARCHAR(255), "
+            "consent_id VARCHAR(64), granted_at FLOAT, revoked_at FLOAT)"))
+        conn.execute(text("INSERT INTO ca_grants (id, client_name) "
+                          "VALUES ('g1', 'Claude')"))
+    _ensure_columns(engine)
+    assert "redirect_host" in {c["name"] for c in inspect(engine).get_columns("ca_grants")}
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT redirect_host FROM ca_grants WHERE id='g1'")).scalar() is None
+    _ensure_columns(engine)  # idempotent: boot runs it every time
+    engine.dispose()
+
+
+# --- patient re-walk: wrapping, unusual letters, small copy -------------------
+
+LONG_LABEL = "claudeaiconnectorauthorizationcallbackservicesecureverification.example"
+
+
+def _consent_css_rule(selector):
+    import pathlib
+    import re as _re
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    consent_css = css.split("--- consent page")[1].split("Leaving (#554)")[0]
+    for m in _re.finditer(r"([^{}]+)\{([^}]*)\}", consent_css):
+        if selector in [s.strip() for s in m.group(1).split(",")]:
+            return m.group(2)
+    return ""
+
+
+@pytest.mark.parametrize("host", [LONG_LABEL, "evil.example", "claude.ai"])
+def test_every_occurrence_of_the_host_carries_the_wrap_fallback(
+        app, svc, fake, monkeypatch, host):
+    """A single label wider than 375px overflowed wherever the host was plain
+    text (the caution and the stop line). Every occurrence now sits in the
+    consent-host wrapper, and that wrapper breaks a too-long label.
+    MUTATION: render any occurrence without host_html, or drop break-word
+    from .consent-host -> red."""
+    client, acct = _signed_in(app, svc, monkeypatch, passkey=True)
+    _connect(svc, acct, "sample", "Sample records")
+    fake.parked["redirect_host"] = host
+    page = client.get("/authorize", query_string={"req": _handle()}).get_data(as_text=True)
+    first_label = host.split(".")[0]
+    starts = [i for i in range(len(page)) if page.startswith(first_label, i)]
+    # Headline, "go back to", the stop line, and the caution when unrecognized.
+    assert len(starts) == (3 if host == "claude.ai" else 4), starts
+    for i in starts:
+        assert page[:i].endswith(HOST_OPEN), page[max(0, i - 80):i + 40]
+    assert "overflow-wrap: break-word" in _consent_css_rule(".consent-host")
+
+
+@pytest.mark.parametrize("host, lookalike", [
+    ("xn--clude-5ve.com", "claude.com"),          # clаude.com, Cyrillic a
+    ("xn--laude-0ye.ai", "claude.ai"),            # сlaude.ai, Cyrillic c
+    ("login.xn--80ak6aa92e.com", None),           # a Cyrillic label, no claude
+])
+def test_a_punycode_host_is_explained_in_plain_words(
+        app, svc, fake, monkeypatch, host, lookalike):
+    """xn--… reads as machine code. MUTATION: never set unusual_letters ->
+    red; skip the decode in the lookalike check -> the claude rows go red."""
+    page = " ".join(_ask_page(app, svc, fake, monkeypatch, host).split())
+    assert "This address uses unusual letters that can imitate another address." in page
+    if lookalike:
+        # The screen shows xn--…, so "it just has claude.ai in it" would be
+        # false: say what the person can see.
+        assert (f"This is not {lookalike}.</strong> "
+                "It uses letters that look like it.") in page
+        assert "It just has" not in page
+    else:
+        assert "This is not" not in page
+
+
+@pytest.mark.parametrize("host", ["evil.example", "claude.ai", "claude.ai.xn--evil.example"])
+def test_unusual_letters_line_only_for_a_label_that_starts_with_xn(
+        app, svc, fake, monkeypatch, host):
+    page = _ask_page(app, svc, fake, monkeypatch, host)
+    has = "unusual letters" in page
+    assert has is any(label.startswith("xn--") for label in host.split("."))
+
+
+def test_the_lookalike_line_names_the_recognized_address_it_borrows(
+        app, svc, fake, monkeypatch):
+    page = _ask_page(app, svc, fake, monkeypatch, "claude.com.evil.example")
+    assert ("This is not claude.com.</strong> It just has claude.com in it."
+            in " ".join(page.split()))
+    assert "only uses the name" not in page
+
+
+@pytest.mark.parametrize("host, line", [
+    # The recognized address appears letter for letter: say so.
+    ("claude.ai.secure-login.example", "It just has claude.ai in it."),
+    ("evilclaude.ai", "It just has claude.ai in it."),
+    # Not letter for letter on screen: never claim it is "in" the address.
+    ("claudeai-help.example", "It only looks similar."),
+    (LONG_LABEL, "It only looks similar."),
+    ("my-claude-tools.example", "It only looks similar."),
+    ("xn--clude-5ve.ai", "It uses letters that look like it."),
+])
+def test_the_lookalike_line_only_claims_what_is_on_screen(
+        app, svc, fake, monkeypatch, host, line):
+    """Patient re-walk: "It just has claude.ai in it." under xn--clude-5ve.ai
+    is false. MUTATION: say "just has" for every lookalike -> red; or never ->
+    the literal rows go red."""
+    page = " ".join(_ask_page(app, svc, fake, monkeypatch, host).split())
+    assert f"</strong> {line}</p>" in page, page.split("consent-lookalike")[1][:200]
+    if "just has" not in line:
+        assert "It just has" not in page
+
+
+# --- round 2: exact hosts, a "no" that is final, HealthClaw down ---------------
+
+
+@pytest.mark.parametrize("given, shown, recognized", [
+    ("claude.ai.", "claude.ai", True),       # one trailing dot: same name in DNS
+    ("CLAUDE.COM.", "claude.com", True),
+    ("claude.ai\x1f", None, False),          # never stripped
+    (" claude.ai", None, False),
+    ("claude.ai ", None, False),
+    ("claude.ai\t", None, False),
+    ("claude.ai..", "claude.ai.", False),    # only one dot comes off
+    ("::1", "::1", False),
+])
+def test_app_identity_compares_hosts_exactly(given, shown, recognized):
+    """R2-2. MUTATION: strip() the host -> the whitespace rows read as
+    claude.ai; drop the trailing-dot step -> the first rows go red."""
+    ident = consent.app_identity({"redirect_host": given})
+    assert ident["redirect_host"] == shown and ident["host_recognized"] is recognized
+
+
+def test_dont_allow_on_an_unrecognized_host_spends_the_request_at_healthclaw(
+        app, svc, fake, monkeypatch):
+    """D1: the "no" is final at once. MUTATION: skip the discard -> red."""
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+    assert fake.discarded == ["req-1"]
+
+
+def test_dont_allow_on_a_recognized_host_redirects_and_discards_nothing(
+        app, svc, fake, monkeypatch):
+    client, _ = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "claude.ai"
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert "/r6/fhir/oauth/consent/return?grant=" in resp.get_json()["redirect"]
+    assert fake.discarded == []
+
+
+def test_dont_allow_still_says_no_when_the_discard_fails(app, svc, fake, monkeypatch):
+    """MUTATION: let the discard's HealthClawError escape -> 500."""
+    client, acct = _signed_in(app, svc, monkeypatch)
+    fake.parked["redirect_host"] = "evil.example"
+    fake.discard_fails = True
+    resp = client.post("/authorize/decide", data=json.dumps({
+        "req": _handle(), "decision": "denied"}), content_type="application/json")
+    assert resp.status_code == 200
+    assert resp.get_json()["redirect"] == "/authorize/declined"
+    assert svc.list_grants(acct.id) == []
+
+
+def test_the_consent_page_says_plainly_when_healthclaw_cannot_be_reached(
+        app, svc, fake, monkeypatch):
+    """Item 7: a 500 here also broke the sign-in resume, which lands on this
+    page. MUTATION: let the HealthClawError escape -> 500."""
+    from careagents.healthclaw import HealthClawError
+    client, _ = _signed_in(app, svc, monkeypatch)
+
+    def unreachable(request_id):
+        raise HealthClawError("consent request failed", 0)
+
+    monkeypatch.setattr(fake, "consent_request", unreachable)
+    resp = client.get("/authorize", query_string={"req": _handle()})
+    assert resp.status_code == 503
+    page = resp.get_data(as_text=True)
+    assert "We can't check this request right now" in page
+    assert "Try again" in page and "Nothing has been shared." in page
+
+
+def test_revoke_is_a_real_button_with_a_44px_target():
+    import pathlib
+    css = pathlib.Path("careagents/static/careagents.css").read_text()
+    rule = css.split(".grant-revoke {", 1)[1].split("}", 1)[0]
+    assert "min-height: 44px" in rule and "border-radius" in rule
+
+
+def test_the_declined_page_is_titled_you_said_no(app):
+    page = app.test_client().get("/authorize/declined").get_data(as_text=True)
+    assert "<title>You said no — CareAgents</title>" in page
+    assert "Share your records?" not in page

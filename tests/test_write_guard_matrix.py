@@ -633,6 +633,7 @@ NON_CLINICAL_MUTATORS = {
     "r6.token": "OAuth token grant (token store)",
     "r6.introspect": "OAuth introspection (RFC 7662): reads the token store, writes nothing; service-client credential",
     "r6.consent_revoke": "OAuth consent revocation (spec §13.4): flips a consent record in the token store; service credential",
+    "r6.consent_discard": "OAuth consent-request discard (spec §13.3, #846): pops a parked request from the token store so a 'no' is final; grants nothing; service credential",
     "r6.revoke": "OAuth revocation (token store)",
     # POSTs that persist nothing in this system.
     "r6.validate_resource": "$validate persists nothing; audits 'validate'",

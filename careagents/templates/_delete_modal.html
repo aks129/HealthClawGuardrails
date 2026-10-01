@@ -1,0 +1,30 @@
+<!-- Delete confirmation. Same copy and the same typed-DELETE requirement as
+     the prompt() it replaces — the friction is the point, only the container
+     changed. #delete-confirm ships disabled; home.js re-checks on click too.
+     A page that sets `delete_for = "account"` before including this gets the
+     account wording; every other page is deleting one connection's records. -->
+<div class="modal" id="delete-modal" role="dialog" aria-modal="true"
+     aria-labelledby="delete-title" hidden>
+  <div class="modal-card">
+    {% if delete_for == "account" %}
+    <h3 id="delete-title">Delete your account?</h3>
+    <p class="delete-warn">This deletes your sign-in, your assistants and your
+      connections, with the records behind them. It can't be undone.</p>
+    {% else %}
+    <h3 id="delete-title">Delete these records?</h3>
+    <p class="delete-warn">This permanently deletes the records in
+      "<span id="delete-label"></span>".</p>
+    {# Filled by home.js when an assistant reads these records: deleting
+       the connection deletes that assistant too (#853). #}
+    <p class="delete-warn" id="delete-readers" hidden></p>
+    {% endif %}
+    <p class="delete-warn">We keep a log of who looked at your records, with
+      no health details in it.</p>
+    <label class="field-label" for="delete-input">Type DELETE to confirm:</label>
+    <input class="field" id="delete-input" autocomplete="off"
+           autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <button type="button" class="btn-primary btn-block" id="delete-confirm"
+            disabled>{% if delete_for == "account" %}Delete my account{% else %}Delete these records{% endif %}</button>
+    <button type="button" class="linkish" id="delete-cancel">Cancel</button>
+  </div>
+</div>

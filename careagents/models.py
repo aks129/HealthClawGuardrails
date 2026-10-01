@@ -148,6 +148,10 @@ class Grant(Base):
     tenant_id = Column(String(64), nullable=False)
     client_id = Column(String(64), nullable=False)
     client_name = Column(String(120), default="An agent")
+    # Where the client's codes go (an A-label host): what the hub names the
+    # app by, since `client_name` is the client's own choice. NULL on grants
+    # from before it was kept.
+    redirect_host = Column(String(255), nullable=True)
     scopes = Column(String(255), default="")
     consent_id = Column(String(64), unique=True, nullable=False)
     granted_at = Column(Float, default=now)
@@ -189,6 +193,24 @@ class PageViewDay(Base):
     day = Column(String(10), nullable=False, index=True)    # UTC "YYYY-MM-DD"
     endpoint = Column(String(64), nullable=False, index=True)
     views = Column(Integer, default=0)
+
+
+class RealRecordInvite(Base):
+    """An invitation to connect real records (beta pathway spec section 4.2).
+
+    Read in `CARE_REAL_RECORDS=allowlist` mode only, alongside the
+    environment allowlist. Account-level data: an email, when, and who
+    invited it. No health information.
+
+    One row per email. Revoking stamps `revoked_at`; inviting again clears it.
+    A revoked invite blocks NEW real connections; existing ones keep working
+    until the person disconnects them or the operator closes real records.
+    """
+    __tablename__ = "ca_real_record_invites"
+    email = Column(String(255), primary_key=True)
+    invited_at = Column(Float, nullable=False, default=now)
+    invited_by = Column(String(255), nullable=False)
+    revoked_at = Column(Float, nullable=True)
 
 
 class EmailToken(Base):
@@ -243,6 +265,10 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_grants" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_grants")}
+        if "redirect_host" not in cols:
+            _add_column(engine, "ca_grants", "redirect_host", "VARCHAR(255)")
     if "ca_email_tokens" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_email_tokens")}
         if "attempts" not in cols:

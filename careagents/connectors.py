@@ -63,8 +63,12 @@ _CATALOG = [
      "blurb": "A health record file you downloaded from your portal "
               "or another app."},
     {"id": "shl", "tier": "soon", "icon": "🔗", "group": "file",
-     "label": "SMART Health Link",
-     "blurb": "Import a record someone shared with you as a link."},
+     "label": "A shared health link",
+     # The standard's name is kept for people who were told it, and said
+     # in plain words for everyone else (#847).
+     "blurb": "Some clinics and apps share records as a link or a QR code, "
+              "called a SMART Health Link. Adding records from one is "
+              "coming soon."},
     {"id": "wearable", "tier": "live", "icon": "⌚️", "group": "devices",
      "label": "Apple Health and wearables",
      "blurb": "Oura, Whoop, Garmin, Fitbit, Strava and Apple Health.",
@@ -100,8 +104,8 @@ def catalog(cfg, real_records: bool = False) -> list[dict]:
     """The menu with per-account availability resolved.
 
     `real_records` is whether the viewing account may START a real-record
-    connection (`cfg.real_records_open_for(email)`). The default is closed,
-    so a caller that forgets fails safe. `chip` is the one status word each
+    connection (`cfg.real_records_open_for(email, invited=...)`). The
+    default is closed, so a caller that forgets fails safe. `chip` is the one status word each
     source shows; "Connected" is added by the hub, which knows the account.
     """
     out = []
@@ -171,7 +175,7 @@ def start(connector_id: str, provider: str | None, cfg, client,
                              "now.", "code": 503}
         tenant = client.new_tenant_id()
         return {"tenant": tenant, "status": "pending",
-                "label": "My health provider", "provider": "Connecting…",
+                "label": "Records from your doctor", "provider": "your doctor",
                 "requires_consent": True,
                 "connect_url": client.fasten_connect_url(tenant)}
 
@@ -229,8 +233,9 @@ def refresh(connector_id: str, tenant: str, provider: str | None,
         # Synthetic data is generated, not fetched — re-seeding would only
         # rewrite the same fixture. Say so rather than pretending to sync.
         return {"unsupported": True,
-                "reason": "Sample records are synthetic — there's nothing new "
-                          "to pull. Connect a real source to see updates."}
+                "reason": "Sample records are made up, so there's nothing "
+                          "new to pull. Connect a real source to see "
+                          "updates."}
 
     if connector_id == "fasten":
         if not getattr(cfg, "fasten_public_key", ""):

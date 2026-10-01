@@ -92,7 +92,9 @@ def test_the_gate_refuses_the_attestation_beside_a_confirmed_allergy(
     # The refusal has to say which two things collide and what to do about
     # them; "invalid submission" sends the person back to guess.
     assert 'confirmed an allergy' in message, message
-    assert 'No known allergies' in message, message
+    # The box's label as the page shows it (#847 moved it to the person's
+    # own words, "I have no known allergies").
+    assert 'I have no known allergies' in message, message
     assert 'uncheck the box' in message, message
 
 

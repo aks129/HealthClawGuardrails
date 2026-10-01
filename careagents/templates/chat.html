@@ -18,7 +18,7 @@
     </div>
   </div>
 
-  <div class="chat-log" id="log">
+  <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'>
     {# An outstanding import is news on every visit, not only the first. The
        greeting is where a patient looks for "did my records land?", and it
        used to be computed only for a first visit — so the one person actually
