@@ -96,7 +96,10 @@ def main(argv=None) -> int:
         r.raise_for_status()
         return r.json()["token"]
 
+    # Tenant ids and their credentials are kept apart, so nothing that
+    # carries a token ever reaches a printed label.
     tenants = []
+    headers = {}
     for m in manifest:
         bundle = json.loads((Path(args.cohort) / m["file"]).read_text())
         tenant = f"probe-{m['patient_id']}"
@@ -166,12 +169,14 @@ def main(argv=None) -> int:
         after = audit_rows(tenant)
         check(after - before >= reads, f"{m['file']} {reads} reads wrote audit rows",
               f"before {before} after {after}")
-        tenants.append((tenant, pid, hdr))
+        tenants.append((tenant, pid))
+        headers[tenant] = hdr
 
     print("== cross-tenant")
-    for (ta, pa, _), (tb, _, hb) in zip(tenants, tenants[1:] + tenants[:1]):
+    for (ta, pa), (tb, _) in zip(tenants, tenants[1:] + tenants[:1]):
         if ta == tb:
             break
+        hb = headers[tb]
         r = requests.get(f"{base}/Patient/{pa}", headers=hb, timeout=10)
         check(r.status_code in (403, 404), f"{tb} cannot read {ta}'s Patient", str(r.status_code))
         r = requests.get(f"{base}/Condition", params={"patient": f"Patient/{pa}"}, headers=hb, timeout=10)
