@@ -10,7 +10,8 @@ approved text (the marker goes with it), set TERMS_VERSION to the approval
 date, and ship. tests/test_careagents_beta_terms.py fails if only one of the
 two changes is made. Every tester then accepts the new wording once.
 The approved file must keep `<section class="consent-terms"
-id="tester-terms">` as its outer element: the card test looks for that id.
+id="{{ terms_id }}">` as its outer element: both consent cards include it,
+each with its own id, and the card tests look for those ids.
 """
 
 from __future__ import annotations

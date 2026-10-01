@@ -25,7 +25,7 @@ def test_the_terms_file_and_the_consent_version_agree():
         assert tester_terms.CONSENT_VERSION == tester_terms.TERMS_VERSION
         assert tester_terms.CONSENT_VERSION != tester_terms.BASE_VERSION
     assert len(tester_terms.CONSENT_VERSION) <= 16  # ca_connections column
-    assert 'id="tester-terms"' in TERMS.read_text()
+    assert 'id="{{ terms_id }}"' in TERMS.read_text()
 
 
 def test_the_card_hides_pending_terms_and_shows_approved_ones(
@@ -37,7 +37,10 @@ def test_the_card_hides_pending_terms_and_shows_approved_ones(
     _login(c, svc, monkeypatch)
     assert 'id="tester-terms"' not in c.get("/home").get_data(as_text=True)
     approve_terms(monkeypatch)
-    assert 'id="tester-terms"' in c.get("/home").get_data(as_text=True)
+    page = c.get("/home").get_data(as_text=True)
+    # Once per card, never the same id twice on one page.
+    assert page.count('id="tester-terms"') == 1
+    assert page.count('id="reconsent-tester-terms"') == 1
 
 
 def test_a_new_real_connection_records_the_current_version(

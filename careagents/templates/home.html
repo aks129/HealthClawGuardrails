@@ -253,7 +253,7 @@
         it. Stuck? Email
         <a href="mailto:contactus@healthclaw.io">contactus@healthclaw.io</a>.</li>
     </ul>
-    {% if tester_terms_approved %}{% include "_tester_terms.html" %}{% endif %}
+    {% if tester_terms_approved %}{% with terms_id = "tester-terms" %}{% include "_tester_terms.html" %}{% endwith %}{% endif %}
     <p class="consent-fine">Full detail:
       <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
@@ -273,7 +273,7 @@
   <div class="modal-card consent-card">
     <h3 id="reconsent-title">Our terms changed</h3>
     <p class="consent-lead">{{ terms_change }}</p>
-    {% if tester_terms_approved %}{% include "_tester_terms.html" %}{% endif %}
+    {% if tester_terms_approved %}{% with terms_id = "reconsent-tester-terms" %}{% include "_tester_terms.html" %}{% endwith %}{% endif %}
     <p class="consent-fine">Full detail:
       <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
