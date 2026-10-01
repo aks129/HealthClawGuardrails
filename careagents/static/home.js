@@ -336,7 +336,10 @@
                          { consent: true });
       }
       btn.disabled = false;
-      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      // `message` first: a coded refusal (records_paused) carries its
+      // sentence there, and the code itself is never shown (#856 review).
+      if (!res.ok) return report(res.d.message || res.d.error ||
+                                 "Couldn't refresh right now.");
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
@@ -378,17 +381,24 @@
     legacy_body_selector:
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
-      "Something went wrong saving the records. Quote the code below to " +
-      "support if you need to reach us.",
+      "Something went wrong saving the records. Try again in a moment.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
-      "moment or contact support with the code below.",
+      "moment.",
+    records_paused:
+      "Your records are paused, so new records can't be added right now. " +
+      "If you didn't expect this, write to contactus@healthclaw.io.",
   };
-  function messageForError(code) {
-    return UPLOAD_MSG[code] || (
-      "The upload didn't go through. If this keeps happening, quote the " +
-      "code below to support.");
-  }
+  // Failures that may repeat get a way to reach us, and a support code only
+  // when the server sent one: a sentence never promises a code it lacks.
+  const UPLOAD_SUPPORT = { commit_failed: 1, ingest_failed: 1 };
+  const uploadErrorLine = (code, supportCode) =>
+    (UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.")
+    + ((UPLOAD_SUPPORT[code] || !UPLOAD_MSG[code])
+      ? (" If it keeps happening, write to contactus@healthclaw.io" +
+         (supportCode ? " and quote this code: " + supportCode + "." : "."))
+      : "");
+  function messageForError(code) { return uploadErrorLine(code, ""); }
 
   // Reused file input — the current owner card is tracked here.
   const fileInput = $("upload-file");
@@ -447,9 +457,8 @@
       }
       btn.disabled = false;
       if (!r.ok) {
-        let line = messageForError(d.error);
-        if (d.correlation_id) line += " Support code: " + d.correlation_id + ".";
-        return sayUpload(msg, line, "form-error");
+        return sayUpload(msg, uploadErrorLine(d.error, d.correlation_id),
+                         "form-error");
       }
       // Success or partial success — show a plain-language summary of
       // what actually landed. When entries failed, surface the unique

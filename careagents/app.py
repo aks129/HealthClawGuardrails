@@ -26,6 +26,7 @@ from urllib.parse import quote
 import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
+from markupsafe import Markup, escape
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
@@ -51,6 +52,18 @@ logger = logging.getLogger(__name__)
 # chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
 # PR #573).
 _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
+#: The one address patient-facing copy sends people to.
+CONTACT_EMAIL = "contactus@healthclaw.io"
+
+
+def contact_links(text) -> Markup:
+    """Jinja filter: escape `text`, then make the contact address a mailto
+    link. Only that fixed address is linked, so nothing in `text` becomes
+    markup."""
+    return Markup(str(escape(text)).replace(
+        CONTACT_EMAIL,
+        f'<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>'))
 
 # The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
 # relay ingress). It gets its own budget rather than sharing the readiness
@@ -246,6 +259,7 @@ def create_app(config: Config | None = None,
     cfg = config or Config()
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
+    app.jinja_env.filters["contact_links"] = contact_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
@@ -413,9 +427,16 @@ def create_app(config: Config | None = None,
         # One prompt for the account, however many connections it covers.
         stale_consent = svc.stale_consent(data["connections"],
                                           tester_terms.CONSENT_VERSION)
+        paused = svc.is_paused(acct.id)
+        # Invited, but the invite waits on the tester terms (#565): say so
+        # rather than "coming for invited testers" to someone who is one.
+        invited = (cfg.real_records == "allowlist"
+                   and svc.real_records_invited(acct.email))
         return render_template(
             "home.html", me=acct,
             stale_consent=stale_consent,
+            paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
+            invited=invited,
             hub=view,
             banner_records=("your records are connected" if view["has_real"]
                             else "sample records"),

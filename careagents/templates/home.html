@@ -26,11 +26,19 @@
     <p class="waiting-line">Checking for requests…</p>
   </section>
 
+  {# An operator paused this account (beta spec 4.6). One calm line; the
+     record cards below say Paused and offer no Refresh or Upload. #}
+  {% if paused %}
+  <section class="switch-prompt hub-paused" id="hub-paused">
+    <p>{{ paused_line | contact_links }}</p>
+  </section>
+  {% endif %}
+
   {# Real connections whose consent predates the current terms (beta spec
      4.3). One prompt for the account; one accept covers every connection
      that is not revoked or still connecting. Until then the assistant on
      one answers only "please review and accept". #}
-  {% if stale_consent %}
+  {% if stale_consent and not paused %}
   <section class="switch-prompt reconsent">
     <p>Please review and accept our current terms to keep using your records.</p>
     <button type="button" class="btn-primary"
@@ -101,9 +109,15 @@
         <div class="hub-card-name">{{ c.label }}</div>
         <div class="hub-card-sub">{{ c.provider or '' }}</div>
         {% if c.is_sample %}<span class="badge-sample">Made-up records</span>{% endif %}
+        {% if paused %}
+        <span class="status status-paused">Paused</span>
+        {% else %}
         <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
+        {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
-        {% if c.kind == 'direct' %}
+        {% if paused %}
+        {# Paused: nothing new can be added, so no button that would fail. #}
+        {% elif c.kind == 'direct' %}
         <button type="button" class="conn-upload" data-conn="{{ c.id }}">Upload a file</button>
         {% elif not c.is_sample %}
         <button type="button" class="conn-refresh" data-conn="{{ c.id }}">Refresh</button>
@@ -135,7 +149,15 @@
     {% if not menu_open %}
     <button type="button" class="btn-primary btn-block connector-tile"
             id="explore-sample" data-connector="sample">Explore with made-up records</button>
+    {% if paused %}
+    {# The pause line at the top already says why. #}
+    {% elif invited %}
+    <p class="menu-closed-line">You're invited. This opens soon.</p>
+    {% elif hub.has_real %}
+    <p class="menu-closed-line">Adding more records isn't open right now.</p>
+    {% else %}
     <p class="menu-closed-line">Coming for invited testers: your doctor's records, Apple Health and wearables, uploading a file from your patient portal.</p>
+    {% endif %}
     {% elif not hub.records %}
     <p class="onboard-lead">Start with sample records, or find your own.</p>
     {% endif %}
