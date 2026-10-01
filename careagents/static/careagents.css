@@ -607,6 +607,15 @@ textarea:focus-visible {
 .form-error, .form-ok, .form-warn { font-size: 16px; }
 
 /* --- consent page (a third-party agent asks to read one connection) --- */
+/* The host leads, and a host is one long word: the page puts a <wbr> after
+   each dot so it wraps between labels. Every occurrence of it sits in
+   .consent-host, whose break-word is the last resort for a single label
+   wider than the screen. */
+.consent-title, .consent-host { overflow-wrap: break-word; }
+.consent-origin { font-size: 18px; margin: 10px 0 6px; }
+.consent-lookalike { margin: 8px 0; }
+.consent-stop { font-weight: 600; margin: 10px 0; }
+.consent-name { color: var(--ink-soft); margin: 0 0 12px; overflow-wrap: break-word; }
 .consent-h2 { font-size: 15px; letter-spacing: .02em; text-transform: uppercase;
   margin: 26px 0 8px; opacity: .75; }
 .consent-scopes { margin: 0; padding-left: 20px; }
@@ -618,7 +627,19 @@ textarea:focus-visible {
 .consent-choice input { margin: 0; grid-row: span 2; }
 .consent-choice-name { font-weight: 600; }
 .consent-choice-sub { font-size: 13px; opacity: .7; }
-.grant-revoke { margin-top: 8px; }
+/* A shared app is named by its host (#846): <wbr> after each dot. A label
+   wider than the card breaks as a last resort; min-width: 0 lets the grid
+   item shrink to the column instead of widening it. */
+.grant-card { min-width: 0; }
+.grant-host { overflow-wrap: break-word; }
+/* The badge goes above the host, in the flow, as on a record card, so a long
+   host never runs under it. */
+.grant-card .status { position: static; align-self: flex-start; order: -1; }
+/* Revoke is a real button with a 44px tap target, not a browser default. */
+.grant-revoke { margin-top: 8px; min-height: 44px; padding: 10px 18px;
+  border: 1px solid var(--hairline); border-radius: 999px; background: var(--card);
+  color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.grant-revoke:hover { border-color: var(--clay); }
 .grant-msg { display: block; font-size: 13px; margin-top: 6px; }
 
 /* Leaving (#554): the account delete sits last, plainly, and looks like the
