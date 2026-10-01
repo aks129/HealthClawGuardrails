@@ -402,6 +402,15 @@ def test_chat_js_draws_the_cards_it_was_given_on_load():
     assert "addReviewCard(" in js[js.index("pendingReviews"):]
 
 
+def test_only_the_intake_form_card_waits_for_a_pdf():
+    """A card for any other request has no PDF coming; polling for one ran
+    every four seconds until the page closed."""
+    js = (ROOT / "careagents" / "static" / "chat.js").read_text()
+    card = js[js.index("function addReviewCard"):]
+    card = card[:card.index("\n  }\n")]
+    assert "if (!label) watchForm(actionId);" in card
+
+
 # --- copy -------------------------------------------------------------------
 
 def test_a_new_account_is_not_welcomed_back(cfg, svc, monkeypatch):
