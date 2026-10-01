@@ -713,6 +713,9 @@ def test_a_long_shared_app_host_wraps_at_dots_with_a_fallback(app, svc, monkeypa
     css = pathlib.Path("careagents/static/careagents.css").read_text()
     assert ".grant-host { overflow-wrap: break-word; }" in css
     assert ".grant-card { min-width: 0; }" in css
+    # The badge sits above the host, in the flow, as on a record card: a long
+    # host ran underneath the absolutely placed ACTIVE badge.
+    assert ".grant-card .status { position: static; align-self: flex-start; order: -1; }" in css
 
 
 def test_the_settings_card_escapes_the_host_between_its_line_breaks(

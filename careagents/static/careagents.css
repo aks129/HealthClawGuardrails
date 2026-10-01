@@ -632,6 +632,9 @@ textarea:focus-visible {
    item shrink to the column instead of widening it. */
 .grant-card { min-width: 0; }
 .grant-host { overflow-wrap: break-word; }
+/* The badge goes above the host, in the flow, as on a record card, so a long
+   host never runs under it. */
+.grant-card .status { position: static; align-self: flex-start; order: -1; }
 .grant-revoke { margin-top: 8px; }
 .grant-msg { display: block; font-size: 13px; margin-top: 6px; }
 
