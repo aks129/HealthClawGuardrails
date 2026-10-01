@@ -1,0 +1,102 @@
+# CareAgents beta stage 1: local real run (G4)
+# Tree c760cbf. Engine on 127.0.0.1:5187, CareAgents web on :8687, one run
+# worker, SQLite for both. FLASK_SKIP_DOTENV=1, RESEND_API_KEY empty (the
+# sign-in code is logged, never mailed), OPENAI_API_KEY a fake key, so any
+# model call fails with a 401 and shows in the worker log.
+# CARE_REAL_RECORDS=allowlist. Synthetic @example.com accounts only.
+# After each restart, the served behaviour was checked with curl first, so
+# no step below was read off a stale process.
+
+== 1. Invite while the terms are pending
+$ flask invites add tester@example.com --by ops-1
+invited tester@example.com
+note: invites are not honoured until the tester terms are approved (#565)
+catalog as tester@example.com: fasten "soon", direct "soon", sample "live"
+POST /api/connections/fasten {"consent": true} -> 503
+
+== 3. Pause, then a chat turn (sample assistant)
+$ flask records pause tester@example.com
+paused
+POST /api/chat -> text: "Your records are paused, so I can't answer right
+  now. If you didn't expect this, write to contactus@healthclaw.io."
+  status completed. Worker log: no model call (no 401), no error.
+POST /api/connections/<sample>/refresh -> 423 records_paused
+A second turn from the browser at 375px answered the same sentence
+  (2026-10-01-beta-stage1-375-paused-chat.png).
+
+== 2. Terms bump, set locally and NOT committed (TERMS_VERSION="2026-10-01")
+Before the bump, early@example.com (on CARE_REAL_RECORDS_ALLOWLIST) connected
+"direct" with consent at 2026-08-01 and made an assistant. Hub: no
+data-reconsent line.
+Restarted web and worker with the bump:
+$ flask records resume tester@example.com
+resumed
+catalog as tester@example.com: fasten "live", direct "import" (the invite
+  is honoured now)
+consent card as tester@example.com shows the #tester-terms block
+  (2026-10-01-beta-stage1-375-consent-card-terms.png)
+early@example.com hub: data-reconsent="<its direct connection>"
+  (2026-10-01-beta-stage1-375-hub-reconsent.png)
+early@example.com chat: "Before we go on, please review and accept the
+  current terms on your home page, then ask me again." No model call.
+  (2026-10-01-beta-stage1-375-terms-chat.png)
+Tapped "Review and accept" -> consent card with the terms block -> "I
+  understand" -> page reloads with no reconsent line
+  (2026-10-01-beta-stage1-375-hub-after-accept.png)
+Next chat turn reached the provider: worker log "model call failed
+  (HTTP 401)" on the fake key, so the gate opened.
+TERMS_VERSION reverted with git checkout --; the diff is empty.
+
+== 4. Weekly counts
+$ flask weekly-counts --weeks 2
+week      signed_up  real_connected  asked  approved
+2026-W40          2               1      1         0
+2026-W39          0               0      0         0
+
+== Logs
+The only email address in any of the three logs is the dev-mode sign-in
+code line ("DEV email — Verify your email for <address>"), which predates
+this change and appears because RESEND_API_KEY is empty. Pause, resume,
+invites and weekly-counts wrote no address to the log.
+
+== Not exercised in the browser
+The 409 "Your records are already on their way. Try again in a moment."
+needs two connects inside one request's lifetime. It is pinned by
+tests/test_careagents_beta_fasten_race.py, not by a screenshot.
+
+
+# ---- Round 2, after the #856 review. Tree f50aa5d. Fresh databases. ----
+early@example.com (on CARE_REAL_RECORDS_ALLOWLIST) connected "direct",
+uploaded a two-entry synthetic bundle (200, 2 records), made an assistant.
+tester@example.com invited with `invites add` (terms pending).
+
+$ flask records pause early@example.com
+hub (curl, then browser): id="hub-paused" present, with "Your records are
+  paused for now. ..." and a mailto link; the record card says PAUSED with
+  Disconnect and Delete, and no Refresh or Upload
+  (2026-10-01-beta-stage1-375-hub-paused.png, ...-hub-paused-records.png)
+chat: the paused sentence, with contactus@healthclaw.io as a mailto link
+  (2026-10-01-beta-stage1-375-paused-chat.png)
+tester@example.com hub, terms pending: "You're invited. This opens soon."
+  under Add records, and no "Coming for invited testers"
+  (2026-10-01-beta-stage1-375-hub-invited-pending.png)
+
+Local-only bump (TERMS_VERSION="2026-10-01", reverted with an edit; the
+committed file reads None), records resume early@example.com, web and worker
+restarted, curl showed data-reconsent served before any browser step:
+chat: "...accept the current terms on your hub, then ask me again." with
+  "your hub" linked to /home; the replayed bubble above keeps its mailto
+  (2026-10-01-beta-stage1-375-terms-chat.png)
+hub: one prompt, "Please review and accept our current terms to keep using
+  your records." (2026-10-01-beta-stage1-375-hub-reconsent.png)
+card: "Our terms changed", the placeholder change line, the terms block,
+  "Accept the new terms" (2026-10-01-beta-stage1-375-reconsent-card.png)
+accept: page reloads with no prompt
+  (2026-10-01-beta-stage1-375-hub-after-accept.png)
+tester@example.com first-connect card: the terms block, and "Stuck? Email
+  contactus@healthclaw.io" as a mailto link
+  (2026-10-01-beta-stage1-375-consent-card-terms.png)
+
+Found in this run and fixed in f50aa5d: with the terms approved, both
+consent cards included the terms block with the same id, so the page held
+two id="tester-terms" elements. Now one id per card.
