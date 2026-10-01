@@ -116,9 +116,9 @@ def main(argv=None) -> int:
         for e in bundle["entry"]:
             rt = e["resource"]["resourceType"]
             expected[rt] = expected.get(rt, 0) + 1
-        phone = next((t["value"] for e in bundle["entry"] if e["resource"]["resourceType"] == "Patient"
-                      for t in e["resource"].get("telecom", [])), None)
-        canaries = [m["canary_family"], phone, *m["clinicians"]]
+        canaries = [m["canary_family"], *m["clinicians"]] + [
+            t["value"] for e in bundle["entry"] if e["resource"]["resourceType"] == "Patient"
+            for t in e["resource"].get("telecom", [])]
         free_text = source_free_text(bundle)
         # Labels the server may attach: terminology lookups of every code present.
         allowed = set()
@@ -148,15 +148,17 @@ def main(argv=None) -> int:
                 continue
             out = r.text
             low = out.lower()
-            leaked = [c for c in canaries if c and c.lower() in low]
-            check(not leaked, f"{m['file']} {rt} carries no canary", f"{len(leaked)} canary values leaked")
+            # Counted with a constant, so no canary value can reach the output.
+            n_leaked = sum(1 for c in canaries if c and c.lower() in low)
+            check(n_leaked == 0, f"{m['file']} {rt} carries no canary",
+                  f"{n_leaked} canary values leaked")
             doc = r.json()
             # Field by field, not substring: a server label for one code may
             # contain a shorter phrase the source wrote as text elsewhere.
-            survived = sorted({v for k, v in walk(doc) if k in ("text", "display", "data")
-                               and v in free_text and v not in allowed})
-            check(not survived, f"{m['file']} {rt} carries no source free text",
-                  f"{len(survived)} source strings survived")
+            n_survived = sum(1 for k, v in walk(doc) if k in ("text", "display", "data")
+                             and v in free_text and v not in allowed)
+            check(n_survived == 0, f"{m['file']} {rt} carries no source free text",
+                  f"{n_survived} source strings survived")
             if rt != "Patient":
                 n = doc.get("total", len(doc.get("entry", [])))
                 check(n == expected.get(rt, 0), f"{m['file']} {rt} count {n} == ingested {expected.get(rt, 0)}",
