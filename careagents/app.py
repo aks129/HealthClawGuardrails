@@ -30,6 +30,7 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
+from careagents import tester_terms
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -40,14 +41,6 @@ from careagents.healthclaw import (HealthClawClient, HealthClawError,
 from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
-
-# Bump when the consent-card copy or the terms/privacy content it points at
-# changes materially. Stored per connection so we always know which version a
-# person agreed to — a later change never silently claims earlier consent.
-# 2026-08-01: the "leaving" clause said to email support, while self-serve
-# Disconnect and Delete sat on the same page (#203). Understating our own
-# strongest privacy control in the one place people read carefully.
-CONSENT_VERSION = "2026-08-01"
 
 # `/healthz` asks HealthClaw whether a run worker is present. That call gets
 # its own budget rather than the client's 25s chat timeout: as a
@@ -415,6 +408,7 @@ def create_app(config: Config | None = None,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
+            tester_terms_approved=tester_terms.approved(),
             menu=hub_view.menu_items(
                 connectors.catalog(cfg, real_records=real_open), real_open))
 
@@ -717,8 +711,8 @@ def create_app(config: Config | None = None,
         if plan.get("requires_consent"):
             if body.get("consent") is not True:
                 return jsonify({"error": "consent_required",
-                                "consent_version": CONSENT_VERSION}), 428
-            consent_version = CONSENT_VERSION
+                                "consent_version": tester_terms.CONSENT_VERSION}), 428
+            consent_version = tester_terms.CONSENT_VERSION
         if connector_id == "fasten":
             # A second tap while the first is still connecting reuses it:
             # two taps made two identical rows, both stuck connecting. Only
@@ -1125,7 +1119,7 @@ def create_app(config: Config | None = None,
         # skips the card is refused here, on every surface.
         if plan.get("requires_consent") and body.get("consent") is not True:
             return jsonify({"error": "consent_required",
-                            "consent_version": CONSENT_VERSION}), 428
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same

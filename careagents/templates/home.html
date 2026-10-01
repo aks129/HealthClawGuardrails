@@ -187,7 +187,8 @@
 
 <!-- Consent card: shown before any REAL-record connection starts.
      Sample records skip this on purpose — synthetic data, zero risk.
-     Copy is versioned server-side (CONSENT_VERSION); keep them in step. -->
+     Copy is versioned server-side (tester_terms.CONSENT_VERSION); keep them
+     in step. -->
 <div class="modal" id="consent-modal" hidden>
   <div class="modal-card consent-card">
     <h3>Before you connect your real records</h3>
@@ -217,6 +218,7 @@
         it. Stuck? Email
         <a href="mailto:support@healthclaw.io">support@healthclaw.io</a>.</li>
     </ul>
+    {% if tester_terms_approved %}{% include "_tester_terms.html" %}{% endif %}
     <p class="consent-fine">Full detail:
       <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> ·
       <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
