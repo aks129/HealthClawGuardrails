@@ -407,7 +407,7 @@ def main(argv=None) -> int:
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False),
                                              encoding="utf-8")
     for m in manifest:
-        print(f"{m['file']:<14} {m['reason']:<22} age {m['age']:>3} {m['sex']} "
+        print(f"{m['file']:<14} {m['reason']:<22} "
               f"visits {m['encounters']:>2} entries {sum(m['counts'].values()):>4} "
               f"labs {m['lab_coded']}/{m['lab_lines']} coded, "
               f"conditions {m['conditions_coded']}/{m['conditions']} coded")

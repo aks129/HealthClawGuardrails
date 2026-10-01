@@ -107,7 +107,7 @@ def main(argv=None) -> int:
                           timeout=120)
         body = r.json()
         check(r.ok and body.get("ingested") == len(bundle["entry"]) and not body.get("failed"),
-              f"{m['file']} ingest", json.dumps(body)[:200])
+              f"{m['file']} ingest", f"{r.status_code} ingested={body.get('ingested')} failed={body.get('failed')}")
 
         expected = {}
         for e in bundle["entry"]:
@@ -141,19 +141,19 @@ def main(argv=None) -> int:
             params = {} if rt == "Patient" else {"patient": f"Patient/{pid}", "_count": "200"}
             r = requests.get(url, params=params, headers=hdr, timeout=30)
             reads += 1
-            if not check(r.status_code == 200, f"{m['file']} {rt} read", f"{r.status_code} {r.text[:150]}"):
+            if not check(r.status_code == 200, f"{m['file']} {rt} read", str(r.status_code)):
                 continue
             out = r.text
             low = out.lower()
             leaked = [c for c in canaries if c and c.lower() in low]
-            check(not leaked, f"{m['file']} {rt} carries no canary", f"leaked {leaked}")
+            check(not leaked, f"{m['file']} {rt} carries no canary", f"{len(leaked)} canary values leaked")
             doc = r.json()
             # Field by field, not substring: a server label for one code may
             # contain a shorter phrase the source wrote as text elsewhere.
             survived = sorted({v for k, v in walk(doc) if k in ("text", "display", "data")
                                and v in free_text and v not in allowed})
             check(not survived, f"{m['file']} {rt} carries no source free text",
-                  f"{len(survived)} e.g. {survived[:2]}")
+                  f"{len(survived)} source strings survived")
             if rt != "Patient":
                 n = doc.get("total", len(doc.get("entry", [])))
                 check(n == expected.get(rt, 0), f"{m['file']} {rt} count {n} == ingested {expected.get(rt, 0)}",
@@ -162,7 +162,7 @@ def main(argv=None) -> int:
                    and v not in allowed and v.strip()]
             # displays on Reference/meta/disclaimer fields are server-authored; report them for review
             if bad:
-                print(f"  note {m['file']} {rt} displays not from the terminology table: {sorted(set(bad))[:4]}")
+                print(f"  note {m['file']} {rt}: {len(set(bad))} displays not from the terminology table")
         after = audit_rows(tenant)
         check(after - before >= reads, f"{m['file']} {reads} reads wrote audit rows",
               f"before {before} after {after}")

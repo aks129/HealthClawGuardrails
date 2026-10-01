@@ -57,6 +57,33 @@ def check(ok: bool, label: str, evidence: str = "") -> bool:
     return ok
 
 
+def why(r) -> str:
+    """A refusal or failure, stated without the response body: the status and
+    the JSON `error` code when there is one. Bodies can carry record content,
+    so they are never printed."""
+    code = ""
+    try:
+        body = r.json()
+        if isinstance(body, dict):
+            code = str(body.get("error") or "")[:60]
+    except ValueError:
+        pass
+    return f"{r.status_code} {code}".strip()
+
+
+def kinds(leaked: list[str], m: dict) -> str:
+    """Which KIND of canary leaked, never the value."""
+    out = []
+    for c in leaked:
+        if c == m["canary_family"]:
+            out.append("patient name")
+        elif c in m["clinicians"]:
+            out.append("clinician name")
+        else:
+            out.append("patient phone")
+    return f"{len(leaked)} leaked: " + ", ".join(sorted(set(out)))
+
+
 def code_from_log(log: Path, email: str, timeout: float = 15) -> str:
     rx = re.compile(r"for " + re.escape(email) + r": (\d{6,8})")
     end = time.time() + timeout
@@ -75,7 +102,7 @@ def sign_in(base: str, log: Path, email: str) -> requests.Session:
     code = code_from_log(log, email)
     r = s.post(f"{base}/api/auth/verify", json={"email": email, "code": code}, timeout=10)
     if r.status_code != 200:
-        raise RuntimeError(f"verify failed {r.status_code} {r.text[:200]}")
+        raise RuntimeError(f"verify failed {why(r)}")
     return s
 
 
@@ -84,7 +111,7 @@ def chat(s: requests.Session, base: str, agent_id: str, text: str, timeout: floa
     r = s.post(f"{base}/api/chat", json={"agent_id": agent_id, "message": text},
                stream=True, timeout=timeout)
     if r.status_code != 200:
-        return None, f"http {r.status_code}: {r.text[:200]}", []
+        return None, f"http {why(r)}", []
     events, answer, status = [], [], None
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -124,8 +151,7 @@ def run(args) -> int:
         canaries = [m["canary_family"], phone] + m["clinicians"]
         all_canaries += canaries
         email = f"sh-{m['patient_id']}@example.test"
-        print(f"\n== {m['file']} ({m['reason']}, age {m['age']} {m['sex']}, "
-              f"{sum(m['counts'].values())} entries)")
+        print(f"\n== {m['file']} ({m['reason']}, {sum(m['counts'].values())} entries)")
         try:
             s = sign_in(base, log, email)
         except Exception as exc:  # noqa: BLE001 - report and move on
@@ -134,10 +160,10 @@ def run(args) -> int:
 
         r = s.post(f"{base}/api/connections/direct", json={}, timeout=10)
         check(r.status_code == 428, f"{m['file']} file connection refused without consent",
-              f"{r.status_code} {r.text[:120]}")
+              why(r))
         r = s.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
         if not check(r.status_code == 200 and r.json().get("id"),
-                     f"{m['file']} file connection opens with consent", f"{r.status_code} {r.text[:200]}"):
+                     f"{m['file']} file connection opens with consent", why(r)):
             continue
         conn_id = r.json()["id"]
 
@@ -151,14 +177,14 @@ def run(args) -> int:
         landed = body.get("ingested", 0) if isinstance(body, dict) else 0
         check(r.status_code == 200 and landed == total and not body.get("failed"),
               f"{m['file']} upload lands every entry ({total}) in {up_secs:.1f}s",
-              f"{r.status_code} {json.dumps(body)[:300]}")
+              f"{why(r)} ingested={landed} failed={body.get('failed')}")
         check("tenant_id" not in json.dumps(body), f"{m['file']} upload answer hides tenant id")
-        if canaries_in(json.dumps(body), canaries):
-            check(False, f"{m['file']} upload answer has no canary", json.dumps(body)[:200])
+        leaked = canaries_in(json.dumps(body), canaries)
+        check(not leaked, f"{m['file']} upload answer has no canary", kinds(leaked, m))
 
         r = s.post(f"{base}/api/agents", json={"name": f"Shake {i}", "connection_id": conn_id},
                    timeout=10)
-        if not check(r.status_code == 200, f"{m['file']} assistant created", r.text[:200]):
+        if not check(r.status_code == 200, f"{m['file']} assistant created", why(r)):
             continue
         agent_id = r.json()["id"]
 
@@ -170,17 +196,17 @@ def run(args) -> int:
                          f"status={status} events={json.dumps(events)[:300]}"):
                 continue
             leaked = canaries_in(answer, canaries)
-            check(not leaked, label + " answer has no canary", f"leaked {leaked}")
+            check(not leaked, label + " answer has no canary", kinds(leaked, m))
             if "lab" in q.lower() and m["lab_lines"]:
                 check("no lab" not in answer.lower() and "don't see" not in answer.lower(),
-                      label + " finds the stored labs", answer[:200])
+                      label + " finds the stored labs", "answer says no labs")
 
         r = s.get(f"{base}/api/labs/timeline", params={"agent": agent_id, "topic": "hemoglobin"},
                   timeout=20)
-        check(r.status_code == 200, f"{m['file']} labs timeline answers", f"{r.status_code} {r.text[:200]}")
+        check(r.status_code == 200, f"{m['file']} labs timeline answers", why(r))
         if r.status_code == 200:
             leaked = canaries_in(r.text, canaries)
-            check(not leaked, f"{m['file']} labs timeline has no canary", f"leaked {leaked}")
+            check(not leaked, f"{m['file']} labs timeline has no canary", kinds(leaked, m))
 
         accounts.append({"m": m, "s": s, "email": email, "conn": conn_id, "agent": agent_id,
                          "canaries": canaries})
@@ -191,7 +217,7 @@ def run(args) -> int:
         s = sign_in(base, log, f"stranger-{stamp}@example.test")
         r = s.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
         check(r.status_code != 200 or r.json().get("soon"), "an uninvited account cannot open a file "
-              "connection", f"{r.status_code} {r.text[:200]}")
+              "connection", why(r))
     except Exception as exc:  # noqa: BLE001
         check(False, "uninvited sign-in", str(exc))
 
@@ -204,22 +230,22 @@ def run(args) -> int:
         page = a["s"].get(f"{base}/agents/{a['agent']}/approvals", timeout=10)
         check(page.status_code == 200, "approvals page renders", str(page.status_code))
         ids = sorted(set(re.findall(r"/review/" + re.escape(a["agent"]) + r"/([A-Za-z0-9_-]+)", page.text)))
-        if check(bool(ids), "a prepared form waits on the approvals page", page.text[:200]):
+        if check(bool(ids), "a prepared form waits on the approvals page", "no review link"):
             review = a["s"].get(f"{base}/review/{a['agent']}/{ids[0]}", timeout=10)
             check(review.status_code == 200, "review page renders", str(review.status_code))
             # The person's own name and phone are on their own form by design
             # (r6/actions/review.py: demographics read-only). Upstream labels,
             # such as clinician names, are not.
             leaked = canaries_in(review.text, a["m"]["clinicians"])
-            check(not leaked, "review page has no clinician name", f"leaked {leaked}")
+            check(not leaked, "review page has no clinician name", kinds(leaked, a["m"]))
             st = a["s"].get(f"{base}/api/form/{ids[0]}", params={"agent": a["agent"]}, timeout=10)
             check(st.ok and st.json().get("status") not in ("completed", "executed", "sent"),
-                  "nothing is sent before Approve", st.text[:200])
+                  "nothing is sent before Approve", why(st))
             bare = a["s"].post(f"{base}/review/{a['agent']}/{ids[0]}/submit", data={}, timeout=10)
             st2 = a["s"].get(f"{base}/api/form/{ids[0]}", params={"agent": a["agent"]}, timeout=10)
             check(st2.json().get("status") not in ("completed", "executed", "sent"),
                   "a bare submit without the allergy attestation does not send",
-                  f"submit {bare.status_code}; status {st2.text[:200]}")
+                  f"submit {bare.status_code}; status {st2.json().get('status')}")
 
     # V6: account B is refused account A's things.
     print("\n== cross-account isolation")
@@ -244,7 +270,7 @@ def run(args) -> int:
         for name, r in probes.items():
             leaked = canaries_in(r.text, a["canaries"])
             check(r.status_code in (302, 303, 400, 403, 404) and not leaked,
-                  f"{tag} {name} refused", f"{r.status_code} leaked={leaked} {r.text[:120]}")
+                  f"{tag} {name} refused", f"{why(r)}; {kinds(leaked, a['m'])}")
 
     # V1: what the model was sent.
     if args.prompt_log and Path(args.prompt_log).exists():
@@ -252,7 +278,8 @@ def run(args) -> int:
         text = Path(args.prompt_log).read_text(errors="replace")
         n = text.count("\n")
         leaked = sorted(set(canaries_in(text, all_canaries)))
-        check(n > 0 and not leaked, f"{n} model requests carry no canary", f"leaked {leaked}")
+        check(n > 0 and not leaked, f"{n} model requests carry no canary",
+              f"{len(leaked)} distinct canary values leaked")
 
     # V2: audit rows per tenant.
     if args.healthclaw_db:
@@ -274,14 +301,14 @@ def run(args) -> int:
         r = a["s"].post(f"{base}/api/account/delete", json={}, timeout=10)
         check(r.status_code == 400, "delete without confirm is refused", str(r.status_code))
         r = a["s"].post(f"{base}/api/account/delete", json={"confirm": "DELETE"}, timeout=60)
-        check(r.ok and r.json().get("deleted") is True, "delete my account", r.text[:300])
+        check(r.ok and r.json().get("deleted") is True, "delete my account", why(r))
         r = a["s"].post(f"{base}/api/chat", json={"agent_id": a["agent"], "message": "hi"}, timeout=10)
         check(r.status_code in (302, 401, 403, 404), "old session cannot chat after delete",
               str(r.status_code))
         try:
             s2 = sign_in(base, log, a["email"])
             r = s2.post(f"{base}/api/connections/direct", json={"consent": True}, timeout=10)
-            check(r.ok, "the same email signs up again and connects", r.text[:200])
+            check(r.ok, "the same email signs up again and connects", why(r))
         except Exception as exc:  # noqa: BLE001
             check(False, "the same email signs up again", str(exc))
 
