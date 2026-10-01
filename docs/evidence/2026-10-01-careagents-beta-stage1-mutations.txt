@@ -72,3 +72,167 @@ FAILED tests/test_careagents_beta_fasten_race.py::test_a_connect_that_arrives_mi
 57 passed in 2.22s
 
 survivors: none
+
+
+# ---- Round 2, after the #856 review (QA, security, patient tester) ----
+# All round 1 mutations re-run against the new tree, plus one per new guard.
+# CareAgents beta stage 1: mutation runs
+# Tree: f50aa5d. PYTHONDONTWRITEBYTECODE=1, __pycache__ purged
+# before each run, replacement count asserted, restored with
+# git checkout --, then an unmutated control run.
+
+== T1: delete_account keeps the invite row
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_schema.py::test_deleting_an_account_removes_its_invite_and_activity
+1 failed, 5 passed in 1.53s
+
+== T2: the 25 cap is never checked
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_invites.py::test_the_cohort_stops_at_the_cap_counting_active_invites_only
+FAILED tests/test_careagents_beta_invites.py::test_reopening_a_revoked_invite_counts_against_the_cap
+FAILED tests/test_careagents_beta_cli.py::test_a_full_cohort_is_an_error_exit
+3 failed, 8 passed in 1.55s
+
+== T3: TERMS_VERSION set without replacing the placeholder
+mutated careagents/tester_terms.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_terms.py::test_the_terms_file_and_the_consent_version_agree
+FAILED tests/test_careagents_beta_terms.py::test_the_card_hides_pending_terms_and_shows_approved_ones
+FAILED tests/test_careagents_beta_terms.py::test_the_change_line_moves_with_the_terms
+3 failed, 1 passed in 1.44s
+
+== T4 M1: delete the `off` line in _real_records_open
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_off_answers_before_any_account_state_is_read
+1 failed, 11 passed in 1.57s
+
+== T4 M2: delete the pause check in _real_records_open
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_a_paused_account_is_closed_even_when_on[allowlist]
+FAILED tests/test_careagents_beta_gate.py::test_a_paused_account_is_closed_even_when_on[on]
+2 failed, 10 passed in 1.51s
+
+== T4 M3: invites honoured before the terms are approved
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_gate.py::test_an_invite_opens_allowlist_mode_only_once_terms_are_approved
+1 failed, 11 passed in 1.49s
+
+== T5: turn_block moved below recent_messages
+mutated careagents/worker.py: 2 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause.py::test_a_run_queued_before_the_pause_answers_paused_without_a_model
+FAILED tests/test_careagents_beta_reconsent.py::test_a_worker_turn_after_the_bump_answers_the_terms_sentence
+2 failed, 16 passed in 1.85s
+
+== T6 M1: only fasten needs current consent (unknown kinds pass)
+mutated careagents/beta.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_turn_block_asks_for_terms_only_on_a_stale_real_connection
+1 failed, 12 passed in 1.69s
+
+== T6 M2a: record_consent ignores the account
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_another_accounts_connection_is_a_404
+1 failed, 12 passed in 1.71s
+
+== T6 M2b: the consent route lets an unknown connection through
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_another_accounts_connection_is_a_404
+1 failed, 12 passed in 1.79s
+
+== F1a: a paused account's review submit goes through
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_security_856.py::test_exploit_paused_account_still_executes_a_pending_action
+1 failed, 6 passed in 2.12s
+
+== F1b: a paused account is served the review form
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_security_856.py::test_exploit_paused_account_still_executes_a_pending_action
+1 failed, 6 passed in 2.16s
+
+== F2a: the consent route accepts a revoked connection
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_security_856.py::test_exploit_revoked_connection_is_reconsented
+1 failed, 6 passed in 2.15s
+
+== F2b: record_consent stamps a revoked connection
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_security_856.py::test_exploit_revoked_connection_is_reconsented
+1 failed, 6 passed in 2.09s
+
+== R6: one accept also stamps a connection still connecting
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_one_prompt_and_one_accept_cover_every_settled_connection
+1 failed, 12 passed in 1.70s
+
+== R6b: the hub prompts for a connection still connecting
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_one_prompt_and_one_accept_cover_every_settled_connection
+FAILED tests/test_careagents_beta_reconsent.py::test_a_connection_still_connecting_is_not_prompted
+2 failed, 11 passed in 1.70s
+
+== Q13: a re-accept restamps the first connect
+mutated careagents/accounts.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_reconsent.py::test_one_prompt_and_one_accept_cover_every_settled_connection
+FAILED tests/test_careagents_beta_reconsent.py::test_a_reaccept_does_not_count_as_a_new_connection
+2 failed, 11 passed in 1.70s
+
+== P4a: no pause line on the hub
+mutated careagents/templates/home.html: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_says_so_and_offers_no_refresh_or_upload
+1 failed, 8 passed in 1.55s
+
+== P4b: paused cards keep Refresh and Upload
+mutated careagents/templates/home.html: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_says_so_and_offers_no_refresh_or_upload
+1 failed, 8 passed in 1.52s
+
+== P9: an invited person is told it is coming for invited testers
+mutated careagents/templates/home.html: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_an_invited_person_waiting_on_the_terms_is_told_so
+1 failed, 8 passed in 1.53s
+
+== P1: refresh shows the error code
+mutated careagents/static/home.js: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_refresh_shows_the_sentence_not_the_code
+1 failed, 8 passed in 1.61s
+
+== P2a: upload has no paused sentence
+mutated careagents/static/home.js: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_an_upload_while_paused_says_paused
+1 failed, 8 passed in 1.59s
+
+== P2b: an upload line promises a code it lacks
+mutated careagents/static/home.js: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_no_upload_line_promises_a_code_it_does_not_show
+1 failed, 8 passed in 1.55s
+
+== P8: the chat does not link the hub
+mutated careagents/static/chat.js: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_copy.py::test_a_live_bubble_links_the_hub_and_the_address
+1 failed, 7 passed in 1.42s
+
+== P5: contact_links links nothing
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_pause_hub.py::test_contact_links_escapes_everything_but_the_address
+FAILED tests/test_careagents_beta_copy.py::test_a_replayed_bubble_carries_both_links_and_nothing_else
+FAILED tests/test_careagents_beta_copy.py::test_the_replayed_chat_links_agent_bubbles_only
+3 failed, 14 passed in 1.72s
+
+== Q14: a refused turn still uses up the cap
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_daily_cap.py::test_paused_turns_do_not_use_up_the_daily_cap
+FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_waiting_on_the_terms_does_not_use_the_cap
+2 failed in 1.31s
+
+== T7: sample turns counted as asked
+mutated careagents/worker.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_weekly.py::test_a_sample_turn_does_not_count
+1 failed, 6 passed in 1.42s
+
+== T9: Fasten reuse-or-insert without the lease
+mutated careagents/app.py: 1 replacement(s), each matched once
+FAILED tests/test_careagents_beta_fasten_race.py::test_a_connect_that_arrives_mid_insert_does_not_add_a_row
+1 failed, 4 passed in 1.46s
+
+== control: unmutated tree
+89 passed in 4.45s
+
+survivors: none

@@ -63,3 +63,40 @@ invites and weekly-counts wrote no address to the log.
 The 409 "Your records are already on their way. Try again in a moment."
 needs two connects inside one request's lifetime. It is pinned by
 tests/test_careagents_beta_fasten_race.py, not by a screenshot.
+
+
+# ---- Round 2, after the #856 review. Tree f50aa5d. Fresh databases. ----
+early@example.com (on CARE_REAL_RECORDS_ALLOWLIST) connected "direct",
+uploaded a two-entry synthetic bundle (200, 2 records), made an assistant.
+tester@example.com invited with `invites add` (terms pending).
+
+$ flask records pause early@example.com
+hub (curl, then browser): id="hub-paused" present, with "Your records are
+  paused for now. ..." and a mailto link; the record card says PAUSED with
+  Disconnect and Delete, and no Refresh or Upload
+  (2026-10-01-beta-stage1-375-hub-paused.png, ...-hub-paused-records.png)
+chat: the paused sentence, with contactus@healthclaw.io as a mailto link
+  (2026-10-01-beta-stage1-375-paused-chat.png)
+tester@example.com hub, terms pending: "You're invited. This opens soon."
+  under Add records, and no "Coming for invited testers"
+  (2026-10-01-beta-stage1-375-hub-invited-pending.png)
+
+Local-only bump (TERMS_VERSION="2026-10-01", reverted with an edit; the
+committed file reads None), records resume early@example.com, web and worker
+restarted, curl showed data-reconsent served before any browser step:
+chat: "...accept the current terms on your hub, then ask me again." with
+  "your hub" linked to /home; the replayed bubble above keeps its mailto
+  (2026-10-01-beta-stage1-375-terms-chat.png)
+hub: one prompt, "Please review and accept our current terms to keep using
+  your records." (2026-10-01-beta-stage1-375-hub-reconsent.png)
+card: "Our terms changed", the placeholder change line, the terms block,
+  "Accept the new terms" (2026-10-01-beta-stage1-375-reconsent-card.png)
+accept: page reloads with no prompt
+  (2026-10-01-beta-stage1-375-hub-after-accept.png)
+tester@example.com first-connect card: the terms block, and "Stuck? Email
+  contactus@healthclaw.io" as a mailto link
+  (2026-10-01-beta-stage1-375-consent-card-terms.png)
+
+Found in this run and fixed in f50aa5d: with the terms approved, both
+consent cards included the terms block with the same id, so the page held
+two id="tester-terms" elements. Now one id per card.
