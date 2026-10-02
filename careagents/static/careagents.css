@@ -427,16 +427,16 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .auth-fine a, .consent-fine a { color: var(--clay-deep); }
 
 /* --- connection actions --------------------------------------------------- */
-.conn-refresh, .conn-disconnect, .conn-delete {
+.conn-upload, .conn-refresh, .conn-disconnect, .conn-delete {
   align-self: flex-start; margin-top: 8px; min-height: 44px;
   font: inherit; font-size: 13.5px; cursor: pointer;
   border-radius: 999px; padding: 10px 18px;
 }
-.conn-refresh, .conn-disconnect {
+.conn-upload, .conn-refresh, .conn-disconnect {
   font-weight: 600; color: var(--ink-soft);
   background: var(--card); border: 1px solid var(--hairline);
 }
-.conn-refresh:hover, .conn-disconnect:hover {
+.conn-upload:hover, .conn-refresh:hover, .conn-disconnect:hover {
   border-color: var(--clay); color: var(--clay-deep);
 }
 /* Delete is irreversible, so it reads as danger — but with no fill and a
