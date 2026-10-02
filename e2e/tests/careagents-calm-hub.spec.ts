@@ -117,3 +117,58 @@ test.describe('calm hub, real records open (allowlisted)', () => {
     await expect(page.locator('.sample-link')).toBeVisible();
   });
 });
+
+test.describe('upload a file, real records open (allowlisted)', () => {
+  test.use({ baseURL: CARE_ALLOW_BASE_URL, ...PHONE });
+
+  // Shakeout finding 5: the tile made an empty card above the fold and never
+  // opened the picker, so a second tap made a second card. The records
+  // service is a dead port here, so the upload itself fails; what this
+  // proves is the picker opening from the tap, and one card, ever.
+  const BUNDLE = {
+    name: 'records.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(
+      { resourceType: 'Bundle', type: 'collection', entry: [] })),
+  };
+  const tile = '.connector-row[data-connector="direct"]';
+  const cards = '.conn-card[data-kind="direct"]';
+
+  test('one tap and "I agree" open the file picker, and no tap adds a card',
+    async ({ page }) => {
+      await blockThirdParty(page);
+      await signIn(page, CARE_ALLOW_EMAIL, CARE_ALLOW_LOG);
+      const before = await page.locator(cards).count();
+
+      // Cancelling the consent card makes nothing.
+      await page.locator(tile).click();
+      await page.locator('#consent-cancel').click();
+      await expect(page.locator('#consent-modal')).toBeHidden();
+      expect(await page.locator(cards).count()).toBe(before);
+
+      // Agreeing opens the picker inside that tap, before anything is made.
+      await page.locator(tile).click();
+      let chooser = page.waitForEvent('filechooser');
+      await page.locator('#consent-agree').click();
+      await (await chooser).setFiles(BUNDLE);
+      const msg = page.locator(`${tile} + #connect-msg`);
+      await expect(msg).toHaveText(/records service couldn't accept/);
+
+      // A second try on the same page goes straight to the picker.
+      chooser = page.waitForEvent('filechooser');
+      await page.locator(tile).click();
+      await chooser;
+      await expect(page.locator('#consent-modal')).toBeHidden();
+
+      // After a reload there is exactly one card waiting for its file, and
+      // the tile goes to it rather than making another.
+      await page.reload();
+      await expect(page.locator(`${cards}[data-status="empty"]`)).toHaveCount(1);
+      expect(await page.locator(cards).count()).toBe(before + 1);
+      chooser = page.waitForEvent('filechooser');
+      await page.locator(tile).click();
+      await chooser;
+      await expect(page.locator('#consent-modal')).toBeHidden();
+      await expect(page.locator(`${cards}[data-status="empty"]`)).toBeInViewport();
+      expect(await page.locator(cards).count()).toBe(before + 1);
+    });
+});
