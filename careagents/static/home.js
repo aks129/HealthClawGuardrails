@@ -357,6 +357,8 @@
       "You've been signed out. Reload this page and sign in again.",
     offline:
       "The upload couldn't start. Check your connection and try again.",
+    start_failed:
+      "The upload couldn't start on our side. Try again in a moment.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
       "moment.",
@@ -496,9 +498,10 @@
         }
         if (!res || !res.ok || !res.d.id) {
           btn.disabled = false;
-          return show(messageForError(
-            res && res.d.error === "sign in" ? "sign in" : "offline"),
-            "form-error");
+          // No answer at all is the signal; an answer is our side failing.
+          const code = !res ? "offline"
+            : res.d.error === "sign in" ? "sign in" : "start_failed";
+          return show(messageForError(code), "form-error");
         }
         conn = tile.dataset.conn = res.d.id;
       }
