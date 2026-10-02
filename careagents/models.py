@@ -51,6 +51,11 @@ class Account(Base):
     # When the person answered "Switch Juniper to your records?" either
     # way (calm hub spec section 5). A timestamp, not PHI.
     switch_prompted_at = Column(Float, nullable=True)
+    # When an operator paused this account's real records (beta pathway
+    # spec section 4.6). While set, nothing reads or sends its real records:
+    # chat answers that the records are paused and calls no model. Sample
+    # records are not affected. A timestamp, not PHI.
+    real_records_paused_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -262,7 +267,7 @@ def _ensure_columns(engine) -> None:
     if "ca_accounts" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_accounts")}
         for name in ("sample_claim_at", "first_agent_at",
-                     "switch_prompted_at"):
+                     "switch_prompted_at", "real_records_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_grants" in tables:

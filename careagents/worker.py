@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from careagents import llm
-from careagents.accounts import AccountService
+from careagents.accounts import RECORDS_PAUSED_TEXT, AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS,
                               TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
@@ -220,6 +220,14 @@ class RunWorker:
         context = self.accounts.get_worker_agent_context(agent_id)
         if context is None or context["tenant"] != tenant:
             raise ValueError("claimed run does not match a CareAgents tenant")
+        if context.get("paused"):
+            # Beta pathway spec section 4.6: answer before reading anything
+            # and without calling a model. Checked here, not in the web
+            # route, so every surface and every already-queued run obeys it.
+            self._finish(run, {"text": RECORDS_PAUSED_TEXT,
+                               "checkpoint_id": "records-paused"},
+                         set(), heartbeat)
+            return
         agent = context["agent"]
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"))

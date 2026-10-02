@@ -143,6 +143,24 @@ What each does when it is **absent** is the part worth reading:
   already exists keeps refreshing and accepting uploads until the person
   disconnects it; to stop every real connection at once, set
   `CARE_REAL_RECORDS=off`. Inviting a revoked email again reopens it.
+- **Pausing one account's real records** (beta pathway spec section 4.6) is
+  the per-person kill switch:
+
+  ```bash
+  flask --app careagents.wsgi records pause tester@example.org
+  flask --app careagents.wsgi records paused
+  flask --app careagents.wsgi records resume tester@example.org
+  ```
+
+  While paused, every chat turn on a real-record assistant answers "Your
+  records are paused" and calls no model. That covers web, iMessage and turns
+  already queued, because the worker checks it. The labs timeline, brief,
+  approvals list, review page and its submit, refresh and upload answer 423,
+  and the account cannot start a new real connection. Sample records stay
+  available, and nothing is deleted. A pause does **not** stop access already
+  granted to another app through HealthClaw; revoke those grants from the
+  account's settings, or close real records for everyone with
+  `CARE_REAL_RECORDS=off`.
 
 ## Railway
 

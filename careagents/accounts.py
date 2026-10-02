@@ -38,6 +38,13 @@ RESEND_COOLDOWN = 30    # seconds — don't mint a fresh code (or reset attempts
 CODE_MAX = 100_000_000  # 8-digit codes (~26.6 bits)
 SAMPLE_LEASE_SECONDS = 60  # a sample seed that has not finished by then died
 
+#: What the assistant says while an operator has paused an account's real
+#: records (beta pathway spec section 4.6). No model is called to say it.
+RECORDS_PAUSED_TEXT = (
+    "Your records are paused, so I can't read them right now. Nothing is "
+    "read or sent while they are paused. Write to contactus@healthclaw.io "
+    "if you have a question.")
+
 
 class AuthError(RuntimeError):
     pass
@@ -337,6 +344,41 @@ class AccountService:
                 RealRecordInvite.invited_at).all()
             return [{"email": r.email, "invited_at": r.invited_at,
                      "invited_by": r.invited_by, "revoked_at": r.revoked_at}
+                    for r in rows]
+
+    # --- pausing real records (beta pathway spec section 4.6) --------------
+
+    def _set_paused(self, email: str, paused: bool) -> bool:
+        email = (email or "").strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is None:
+                raise AuthError(f"No account for {email}.")
+            if bool(acct.real_records_paused_at) == paused:
+                return False
+            acct.real_records_paused_at = now() if paused else None
+            return True
+
+    def pause_real_records(self, email: str) -> bool:
+        """Pause an account's real records. Returns False when already
+        paused. Sample records are not affected."""
+        return self._set_paused(email, True)
+
+    def resume_real_records(self, email: str) -> bool:
+        """Resume them. Returns False when they were not paused."""
+        return self._set_paused(email, False)
+
+    def real_records_paused(self, account_id: str) -> bool:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            return bool(acct and acct.real_records_paused_at)
+
+    def paused_accounts(self) -> list[dict]:
+        with self.session() as s:
+            rows = s.query(Account).filter(
+                Account.real_records_paused_at.isnot(None)).order_by(
+                Account.real_records_paused_at).all()
+            return [{"email": r.email, "paused_at": r.real_records_paused_at}
                     for r in rows]
 
     # --- connections / agents / surfaces (thin CRUD) ------------------------
@@ -700,7 +742,8 @@ class AccountService:
             if not conn:
                 return None
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
-                    "connection": _conn_dict(conn)}
+                    "connection": _conn_dict(conn),
+                    "paused": _paused(s, account_id, conn)}
 
     def get_worker_agent_context(self, agent_id: str) -> dict | None:
         """Resolve an agent for the trusted run worker.
@@ -718,7 +761,8 @@ class AccountService:
             if not conn:
                 return None
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
-                    "account_id": a.account_id}
+                    "account_id": a.account_id,
+                    "paused": _paused(s, a.account_id, conn)}
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
@@ -770,6 +814,15 @@ class _Row:
 def _detach(acct: Account) -> _Row:
     return _Row(id=acct.id, email=acct.email,
                 email_verified_at=acct.email_verified_at)
+
+
+def _paused(s, account_id: str, conn) -> bool:
+    """Is this connection's data paused? Only real records pause; the
+    sample is synthetic and stays available."""
+    if conn.kind == "sample":
+        return False
+    acct = s.get(Account, account_id)
+    return bool(acct and acct.real_records_paused_at)
 
 
 def _conn_dict(c: Connection) -> dict:

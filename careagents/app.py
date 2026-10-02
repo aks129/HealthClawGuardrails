@@ -27,8 +27,9 @@ import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
-from careagents.accounts import (AccountService, AuthError, MailError,
-                                 MailUnconfirmed, new_binding_code)
+from careagents.accounts import (RECORDS_PAUSED_TEXT, AccountService,
+                                 AuthError, MailError, MailUnconfirmed,
+                                 new_binding_code)
 from careagents import advisors, analytics, connectors, consent
 from careagents import hub as hub_view
 from careagents import intake_state
@@ -271,9 +272,30 @@ def create_app(config: Config | None = None,
     def _real_records_open(acct) -> bool:
         """May this account START a real-record connection? The environment
         allowlist and the invite table (beta pathway spec section 4.2), in
-        `allowlist` mode only."""
+        `allowlist` mode only. Never while its records are paused (4.6)."""
+        if svc.real_records_paused(acct.id):
+            return False
         return cfg.real_records_open_for(acct.email,
                                          invited=svc.real_records_invited)
+
+    # Beta pathway spec section 4.6: while an operator has paused an
+    # account's real records, nothing on this side reads or sends them.
+    # Chat is enforced in the worker, where every surface meets; these
+    # answer the routes that read records outside a chat turn.
+    def _paused_json():
+        return jsonify({"error": "records_paused",
+                        "message": RECORDS_PAUSED_TEXT}), 423
+
+    def _paused_page():
+        return render_template("chat_error.html",
+                               message=RECORDS_PAUSED_TEXT), 423
+
+    def _agent_paused(agent_id) -> bool:
+        ctx = svc.get_agent_context(current_account().id, agent_id)
+        return bool(ctx and ctx.get("paused"))
+
+    def _conn_paused(acct, conn) -> bool:
+        return conn["kind"] != "sample" and svc.real_records_paused(acct.id)
 
     # --- canonical host (#264, D7) -------------------------------------------
 
@@ -835,6 +857,8 @@ def create_app(config: Config | None = None,
         # file yet) -> "active" (after the first successful upload), so the
         # check must exclude "revoked" specifically rather than require
         # "active" — requiring "active" would refuse every first upload.
+        if _conn_paused(acct, conn):
+            return _paused_json()
         if conn["status"] == "revoked":
             return jsonify({"error": "connection_not_active",
                             "status": conn["status"],
@@ -1112,6 +1136,8 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if _conn_paused(acct, conn):
+            return _paused_json()
 
         body = request.get_json(silent=True) or {}
         plan = connectors.refresh(conn["kind"], conn["tenant_id"],
@@ -1399,6 +1425,8 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return redirect(url_for("home"))
+        if ctx.get("paused"):
+            return _paused_page()
         try:
             raw = hc.fetch_appointment_brief(ctx["tenant"])
             unavailable = False
@@ -1708,6 +1736,8 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if ctx.get("paused"):
+            return _paused_json()
         try:
             labs = hc.interpret_labs(ctx["tenant"])
         except HealthClawError:
@@ -1739,6 +1769,8 @@ def create_app(config: Config | None = None,
         if not ctx:
             return render_template("chat_error.html",
                                    message="That agent isn't yours."), 404
+        if ctx.get("paused"):
+            return _paused_page()
         try:
             pending = hc.pending_actions(ctx["tenant"])
         except HealthClawError:
@@ -1942,6 +1974,8 @@ def create_app(config: Config | None = None,
         if not tenant:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
+        if _agent_paused(agent_id):
+            return _paused_page()
         try:
             status, html = hc.fetch_review_page(tenant, action_id)
         except HealthClawError:
@@ -1979,6 +2013,8 @@ def create_app(config: Config | None = None,
                             "message": _REVIEW_UNCHECKABLE}), 503
         if not tenant:
             return jsonify({"error": "not yours"}), 404
+        if _agent_paused(agent_id):
+            return _paused_json()
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
@@ -2469,6 +2505,47 @@ def create_app(config: Config | None = None,
             raise click.ClickException(str(exc)) from exc
         click.echo(f"revoked {email.strip().lower()}" if revoked
                    else f"no live invite for {email.strip().lower()}")
+
+    # --- pausing real records (beta pathway spec section 4.6) --------------
+
+    @app.cli.group("records")
+    def _records():
+        """Pause or resume one account's real records.
+
+        While paused, chat answers that the records are paused and calls no
+        model, and the hub reads and sends nothing from them. Sample records
+        are not affected. Access already granted to another app is not
+        stopped by this; revoke those grants separately.
+        """
+
+    @_records.command("pause")
+    @click.argument("email")
+    def _records_pause(email):
+        try:
+            changed = svc.pause_real_records(email)
+        except AuthError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"paused {email.strip().lower()}" if changed
+                   else f"{email.strip().lower()} was already paused")
+
+    @_records.command("resume")
+    @click.argument("email")
+    def _records_resume(email):
+        try:
+            changed = svc.resume_real_records(email)
+        except AuthError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"resumed {email.strip().lower()}" if changed
+                   else f"{email.strip().lower()} was not paused")
+
+    @_records.command("paused")
+    def _records_paused():
+        rows = svc.paused_accounts()
+        if not rows:
+            click.echo("no paused accounts")
+        for r in rows:
+            when = datetime.fromtimestamp(r["paused_at"], timezone.utc)
+            click.echo(f"{r['email']:<40} paused {when:%Y-%m-%d %H:%M} UTC")
 
     @_invites.command("list")
     def _invites_list():

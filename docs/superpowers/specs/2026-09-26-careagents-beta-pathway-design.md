@@ -92,6 +92,9 @@ tracking is added behind sign-in.
 
 ### 4.6 Kill switches
 
+Per-account pause built 2026-10-02: `flask --app careagents.wsgi records
+pause|resume|paused`. See `docs/runbooks/careagents-durable-worker.md`.
+
 - `CARE_REAL_RECORDS=off` already closes new real connections.
 - New: an operator script pauses one account's real connections. The
   assistant then answers "Your records are paused" until resumed.
