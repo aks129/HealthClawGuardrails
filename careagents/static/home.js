@@ -332,7 +332,8 @@
       "Please upload a FHIR JSON file — check that the filename ends " +
       "in .json.",
     invalid_json:
-      "That file isn't valid JSON. Try re-exporting from your provider.",
+      "That file can't be read here. Choose the records file your portal " +
+      "or app exported; its name ends in .json, not .pdf.",
     invalid_body:
       "We couldn't read the file. Try re-exporting from your provider.",
     not_a_bundle:
@@ -351,16 +352,13 @@
     legacy_body_selector:
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
-      "Something went wrong saving the records. Quote the code below to " +
-      "support if you need to reach us.",
+      "Something went wrong saving the records. Try again in a moment.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
-      "moment or contact support with the code below.",
+      "moment.",
   };
   function messageForError(code) {
-    return UPLOAD_MSG[code] || (
-      "The upload didn't go through. If this keeps happening, quote the " +
-      "code below to support.");
+    return UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.";
   }
 
   // Reused file input — the current owner card is tracked here.
@@ -413,7 +411,7 @@
   async function sendFile(connId, file) {
     const fail = (code, cid) => {
       let line = messageForError(code);
-      if (cid) line += " Support code: " + cid + ".";
+      if (cid) line += " If it keeps happening, tell us this code: " + cid + ".";
       return { ok: false, line, cls: "form-error" };
     };
     let text;
@@ -486,10 +484,18 @@
       if (!conn) {
         // Consent was given on the card that opened this picker. The server
         // hands back a connection still waiting for a file, if there is one.
-        const res = await post("/api/connections/direct", { consent: true });
-        if (!res.ok || !res.d.id) {
+        let res;
+        try {
+          res = await post("/api/connections/direct", { consent: true });
+        } catch (e) {
+          res = null;   // no signal: say so, and leave the tile tappable
+        }
+        if (!res || !res.ok || !res.d.id) {
           btn.disabled = false;
-          return show(res.d.error || "Couldn't connect that source.", "form-error");
+          return show(res && res.d.error === "sign in"
+            ? "You've been signed out. Reload this page and sign in again."
+            : "The upload couldn't start. Check your connection and try again.",
+            "form-error");
         }
         conn = tile.dataset.conn = res.d.id;
       }

@@ -146,11 +146,21 @@ test.describe('upload a file, real records open (allowlisted)', () => {
       expect(await page.locator(cards).count()).toBe(before);
 
       // Agreeing opens the picker inside that tap, before anything is made.
+      // With no signal the tile says so and stays tappable.
+      const msg = page.locator(`${tile} + #connect-msg`);
+      await page.route('**/api/connections/direct', (r) => r.abort());
       await page.locator(tile).click();
       let chooser = page.waitForEvent('filechooser');
       await page.locator('#consent-agree').click();
       await (await chooser).setFiles(BUNDLE);
-      const msg = page.locator(`${tile} + #connect-msg`);
+      await expect(msg).toHaveText(/couldn't start\. Check your connection/);
+      await expect(page.locator(tile)).toBeEnabled();
+      await page.unroute('**/api/connections/direct');
+
+      await page.locator(tile).click();
+      chooser = page.waitForEvent('filechooser');
+      await page.locator('#consent-agree').click();
+      await (await chooser).setFiles(BUNDLE);
       await expect(msg).toHaveText(/records service couldn't accept/);
 
       // A second try on the same page goes straight to the picker.
