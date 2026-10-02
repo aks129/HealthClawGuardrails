@@ -353,6 +353,10 @@
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
       "Something went wrong saving the records. Try again in a moment.",
+    "sign in":
+      "You've been signed out. Reload this page and sign in again.",
+    offline:
+      "The upload couldn't start. Check your connection and try again.",
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
       "moment.",
@@ -429,9 +433,9 @@
       });
       d = await r.json().catch(() => ({}));
     } catch (e) {
-      return fail("ingest_failed");
+      return fail("offline");   // the person's signal, not our service
     }
-    if (!r.ok) return fail(d.error, d.correlation_id);
+    if (!r.ok) return fail(r.status === 401 ? "sign in" : d.error, d.correlation_id);
     // Success or partial success — show a plain-language summary of
     // what actually landed. When entries failed, surface the unique
     // opaque correlation ids from `errors[]` (never the raw messages
@@ -492,9 +496,8 @@
         }
         if (!res || !res.ok || !res.d.id) {
           btn.disabled = false;
-          return show(res && res.d.error === "sign in"
-            ? "You've been signed out. Reload this page and sign in again."
-            : "The upload couldn't start. Check your connection and try again.",
+          return show(messageForError(
+            res && res.d.error === "sign in" ? "sign in" : "offline"),
             "form-error");
         }
         conn = tile.dataset.conn = res.d.id;
