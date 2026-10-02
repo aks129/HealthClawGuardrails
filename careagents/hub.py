@@ -53,8 +53,26 @@ def _record(c: dict, now: float) -> dict:
             "is_sample": c.get("kind") == "sample"}
 
 
+def _numbered(conns: list[dict]) -> list[dict]:
+    """Live connections that share a label get a number, oldest first.
+
+    Two uploads both read "Uploaded records", and before a file lands they
+    have no count or date either, so the card's title is the only place to
+    tell them apart. Past connections keep their label.
+    """
+    live = [c for c in conns if c["status"] != "revoked"]
+    seen: dict = {}
+    for c in sorted(live, key=lambda c: c.get("connected_at") or 0):
+        seen.setdefault(c["label"], []).append(c["id"])
+    names = {cid: f"{label} {i}"
+             for label, ids in seen.items() if len(ids) > 1
+             for i, cid in enumerate(ids, 1)}
+    return [{**c, "label": names[c["id"]]} if c["id"] in names else c
+            for c in conns]
+
+
 def build(home: dict, now: float) -> dict:
-    conns = home["connections"]
+    conns = _numbered(home["connections"])
     by_id = {c["id"]: c for c in conns}
     # Which assistants read each connection, for the disconnect dialog: a
     # revoked connection takes its assistant's approvals with it (#847).
