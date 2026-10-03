@@ -249,6 +249,41 @@ def test_the_reused_connection_still_needs_consent(app, svc, monkeypatch):
     assert "connect_url" not in r.get_json()
 
 
+def test_a_second_file_try_reuses_the_empty_upload_connection(
+        app, svc, monkeypatch):
+    """A tap on "Upload a file" that never reached a file left an empty
+    card, and the next tap added a second one (shakeout finding 5)."""
+    c, aid = _signed_in(app, svc, monkeypatch)
+    first = c.post("/api/connections/direct", json={"consent": True})
+    second = c.post("/api/connections/direct", json={"consent": True})
+    assert first.status_code == 200 and second.status_code == 200
+    a, b = first.get_json(), second.get_json()
+    assert b["id"] == a["id"] and b["status"] == "empty" and b["existing"]
+    direct = [x for x in svc.list_home(aid)["connections"]
+              if x["kind"] == "direct"]
+    assert len(direct) == 1
+
+
+def test_the_reused_upload_connection_still_needs_consent(
+        app, svc, monkeypatch):
+    c, _ = _signed_in(app, svc, monkeypatch)
+    c.post("/api/connections/direct", json={"consent": True})
+    r = c.post("/api/connections/direct", json={})
+    assert r.status_code == 428
+    assert "id" not in r.get_json()
+
+
+def test_an_upload_connection_with_records_is_not_reused(
+        app, svc, monkeypatch):
+    c, aid = _signed_in(app, svc, monkeypatch)
+    first = c.post("/api/connections/direct", json={"consent": True}).get_json()
+    tenant = svc.get_connection(aid, first["id"])["tenant_id"]
+    svc.activate_connection(tenant)
+    second = c.post("/api/connections/direct",
+                    json={"consent": True}).get_json()
+    assert second["id"] != first["id"] and "existing" not in second
+
+
 def test_a_connected_provider_does_not_block_another(app, svc, monkeypatch):
     """Only a pending row is reused: once records arrive, a second doctor
     is a second connection."""

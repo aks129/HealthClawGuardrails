@@ -730,6 +730,13 @@ def create_app(config: Config | None = None,
                     "existing": True,
                     "connect_url": hc.fasten_connect_url(
                         waiting["tenant_id"])})
+        if connector_id == "direct":
+            # Same for a file: a connection still waiting for its first file
+            # takes the next one, so a second try never adds a second card.
+            waiting = svc.pending_connection(acct.id, "direct", status="empty")
+            if waiting:
+                return jsonify({"id": waiting["id"], "status": "empty",
+                                "existing": True})
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:
