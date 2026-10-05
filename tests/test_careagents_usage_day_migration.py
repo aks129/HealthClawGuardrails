@@ -71,6 +71,39 @@ def test_boot_collapses_duplicates_and_adds_the_unique_index(kind, tmp_path):
     again.dispose()
 
 
+@pytest.mark.skipif(not PG.startswith("postgres"),
+                    reason="concurrent DDL needs a database with peers")
+def test_processes_booting_together_on_duplicates_all_come_up(tmp_path):
+    """Production boots three processes at once (#862 QA). On Postgres,
+    peers collapsing the same duplicates deadlocked and 1 to 3 of 4 boots
+    died. Under one advisory lock, every boot comes up and the rows end
+    collapsed once: the sums are not added twice."""
+    import threading
+    for trial in range(5):
+        url = _old_database("postgres", tmp_path)
+        n = 4
+        barrier = threading.Barrier(n)
+        errors = []
+
+        def boot():
+            barrier.wait()
+            try:
+                make_engine(url).dispose()
+            except Exception as exc:  # noqa: BLE001 - collected, asserted below
+                errors.append(f"{type(exc).__name__}: {exc}"[:200])
+        threads = [threading.Thread(target=boot) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == [], f"trial {trial}: {errors}"
+        engine = create_engine(url, future=True)
+        assert _rows(engine) == [("acct_a", "2026-10-01", 5),
+                                 ("acct_a", "2026-10-02", 1),
+                                 ("acct_b", "2026-10-01", 5)]
+        engine.dispose()
+
+
 @pytest.mark.parametrize("kind", URLS)
 def test_a_new_database_has_the_constraint_from_the_model(kind, tmp_path):
     url = PG if kind == "postgres" else f"sqlite:///{tmp_path}/new.db"

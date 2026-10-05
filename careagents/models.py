@@ -355,6 +355,16 @@ def _usage_day_is_unique(engine) -> bool:
                    for i in insp.get_indexes("ca_usage_days")))
 
 
+#: Postgres advisory-lock key that serialises the ca_usage_days migration
+#: across processes booting together. Any fixed 64-bit number works, as long
+#: as nothing else in this database takes the same one.
+_USAGE_DAY_LOCK_KEY = 8_620_005
+
+#: Postgres SQLSTATE for a detected deadlock: the transaction was rolled
+#: back and is safe to run again.
+_DEADLOCK = "40P01"
+
+
 def _ensure_usage_day_unique(engine) -> None:
     """Give a ca_usage_days made before the constraint one row per account
     and day (#862 review F5), idempotently, on SQLite and Postgres.
@@ -363,17 +373,29 @@ def _ensure_usage_day_unique(engine) -> None:
     each duplicate group is first collapsed into its oldest-id row with the
     group's summed turns: a turn charged is never forgotten. Collapse and
     index run in one transaction. A turn charged by an old process between
-    the two can add a duplicate back and fail the index; that is retried. A
-    peer process doing the same at the same boot is harmless: its sums are of
-    the same rows, and IF NOT EXISTS covers the index.
+    the two can add a duplicate back and fail the index; that is retried.
+
+    Peers are NOT harmless on Postgres (#862 QA): processes booting together
+    on duplicates each took row locks to collapse and then the index's table
+    lock, and deadlocked; 1 to 3 of 4 boots died. So on Postgres the whole
+    transaction first takes one advisory lock, and checks again under it: a
+    peer that finished first leaves nothing to do. A deadlock is still
+    retried, in case some other writer is involved. SQLite serialises
+    writers itself and needs no lock.
     """
     if "ca_usage_days" not in inspect(engine).get_table_names():
         return
     if _usage_day_is_unique(engine):
         return
+    postgres = engine.dialect.name == "postgresql"
     for attempt in range(3):
         try:
             with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _USAGE_DAY_LOCK_KEY})
+                    if _usage_day_is_unique(conn):
+                        return              # a peer finished while we waited
                 groups = conn.execute(text(
                     "SELECT account_id, day, MIN(id), SUM(COALESCE(turns, 0)) "
                     "FROM ca_usage_days GROUP BY account_id, day "
@@ -394,7 +416,9 @@ def _ensure_usage_day_unique(engine) -> None:
             msg = str(exc.orig).lower()
             if any(m in msg for m in _CREATED_BY_A_PEER):
                 return                      # a peer made the index first
-            if attempt == 2 or not isinstance(exc, IntegrityError):
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
                 raise
 
 
