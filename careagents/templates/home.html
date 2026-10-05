@@ -133,7 +133,8 @@
       </div>
       {% endfor %}
       {% if not hub.records %}
-      <div class="empty">No records yet. Add some below.</div>
+      {# Paused: "Add records" is left out below, so point at nothing. #}
+      <div class="empty">No records yet.{% if not paused %} Add some below.{% endif %}</div>
       {% endif %}
     </div>
     {% if has_grants %}

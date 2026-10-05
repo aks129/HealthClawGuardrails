@@ -132,6 +132,9 @@ def test_a_paused_hub_offers_no_made_up_records(monkeypatch):
     assert 'id="connect-section"' in before and "Add records" in before
     assert 'id="connect-section"' not in page
     assert "Add records" not in page
+    # And no line pointing at the section that is not there.
+    assert "Add some below" in before
+    assert "Add some below" not in page and "No records yet." in page
 
 
 def test_contact_links_escapes_everything_but_the_address():
