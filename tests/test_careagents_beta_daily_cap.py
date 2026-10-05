@@ -89,6 +89,46 @@ def test_a_turn_over_the_cap_is_answered_without_the_model(
     assert _turn(c, agent_id, "q-3") == 429     # and admission says so
 
 
+def test_a_worker_killed_in_its_first_model_call_is_charged_once(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """QA on #862: kill -9 during the first model call, before any
+    checkpoint, and the recovered run was charged again (0 -> 2). The
+    charge leaves a marker on the run; recovery sees it and skips."""
+    from careagents import agent as agent_mod
+    from careagents.worker import RunWorker
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
+                                  "request_id": "kill-1"}, buffered=False)
+    r.close()
+
+    class _Killed(BaseException):
+        """Not an Exception: nothing in the worker catches it, as with
+        kill -9."""
+
+    def die(*a, **k):
+        raise _Killed()
+    monkeypatch.setattr(agent_mod.llm, "complete", die)
+
+    class _Lease:
+        def check(self):
+            pass
+    run = fake.claim_agent_run("doomed-worker")
+    try:
+        RunWorker(cfg, fake, svc, "doomed-worker")._execute(run, _Lease())
+    except _Killed:
+        pass
+    assert _used(svc) == 1
+    # The lease runs out; the run goes back on the queue.
+    fake.runs[run["id"]].update(status="queued", worker_id=None)
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "answer after recovery", [], []
+    monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: _Turn())
+    RunWorker(cfg, fake, svc, "recovery-worker").run_once()
+    assert fake.runs[run["id"]]["status"] == "completed"
+    assert _used(svc) == 1
+
+
 def test_a_recovered_run_is_not_charged_twice(cfg, svc, monkeypatch):  # noqa: F811
     """A run that made a checkpoint before its worker died was charged then.
     Its recovery finishes the answer it has, uncharged, even at the cap."""

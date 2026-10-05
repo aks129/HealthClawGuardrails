@@ -1049,8 +1049,10 @@ def test_late_provider_result_is_not_checkpointed_after_lease_loss(
         RunWorker(cfg, fake, svc, "late-worker")._execute(
             run, _RevokedLease())
 
+    # The day's charge (and its marker) precede the model call; nothing
+    # the late provider returned is persisted.
     assert [event["type"] for event in fake.events[run["id"]]] == [
-        "run.queued", "run.started"]
+        "run.queued", "run.started", "agent.charged"]
     assert [message["role"] for message in fake.logged[
         (tenant, fake.conversation_id(agent_id))]] == ["user"]
 
@@ -4986,6 +4988,47 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
     assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
                       json={"handle": "+1000", "text": "hi"}
                       ).status_code == 404
+
+
+def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
+    """The cap is charged in the worker, so it holds for the relay too
+    (#862): a turn past it answers the limit sentence without a model."""
+    from careagents import beta
+    from careagents.models import UsageDay
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    conn = c.post("/api/connections/sample").get_json()["id"]
+    agent = c.post("/api/agents", json={"name": "Iris", "persona": "calm",
+                                        "connection_id": conn}).get_json()["id"]
+    code = c.post("/api/surfaces/imessage",
+                  json={"agent_id": agent}).get_json()["code"]
+    relay = app.test_client()
+    hdrs = {"X-Internal-Secret": cfg.mint_secret}
+    assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
+                      json={"code": code, "handle": "+15550001111"}
+                      ).status_code == 200
+    calls = []
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "model answer", [], []
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: calls.append(1) or _Turn())
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+
+    def used():
+        with svc.session() as s:
+            return sum(int(u.turns or 0) for u in s.query(UsageDay).all())
+
+    first = _enqueue_and_run_imessage(
+        app, relay, headers=hdrs,
+        json={"handle": "+15550001111", "text": "hi", "request_id": "im-1"})
+    assert first.get_json()["reply"] == "model answer"
+    assert used() == 1
+    second = _enqueue_and_run_imessage(
+        app, relay, headers=hdrs,
+        json={"handle": "+15550001111", "text": "again", "request_id": "im-2"})
+    assert second.get_json()["reply"] == beta.DAILY_LIMIT_TEXT
+    assert calls == [1] and used() == 1
 
 
 def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):
