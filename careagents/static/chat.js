@@ -112,6 +112,14 @@
       .replace(/\*(\S[^*\n]*?)\*/g, "$1");
   }
 
+  // A 429 is two different limits (#862). The burst limiter sends only an
+  // error code, and the pace sentence is true for it. The daily limit sends
+  // its own sentence, and "a few minutes" would be false there.
+  const PACE_TEXT = "You’ve hit the pace limit for now — give it a few minutes.";
+  function limitText(d) {
+    return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
+  }
+
   function addAgentText(text) {
     const m = el("div", "msg agent");
     log.appendChild(m);
@@ -401,7 +409,7 @@
           initial = false;
           if (resp.status === 429) {
             typing.remove();
-            addAgentText("You’ve hit the pace limit for now — give it a few minutes.");
+            addAgentText(limitText(await resp.json().catch(() => ({}))));
             return;
           }
           if (!resp.ok || !resp.body) throw new Error("event stream unavailable");

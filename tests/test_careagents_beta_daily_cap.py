@@ -7,6 +7,10 @@ F4), so `_turn` runs the worker as a deployed turn would.
 
 from __future__ import annotations
 
+import pathlib
+
+import pytest
+
 from careagents.models import UsageDay
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
@@ -127,6 +131,66 @@ def test_a_worker_killed_in_its_first_model_call_is_charged_once(
     RunWorker(cfg, fake, svc, "recovery-worker").run_once()
     assert fake.runs[run["id"]]["status"] == "completed"
     assert _used(svc) == 1
+
+
+CHAT_JS = (pathlib.Path(__file__).resolve().parents[1]
+           / "careagents" / "static" / "chat.js")
+
+_LIMIT_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+function cut(re) {
+  const m = src.match(re);
+  if (!m) throw new Error('not found: ' + re);
+  return m[0];
+}
+const limitText = new Function(
+  cut(/const PACE_TEXT = [^;]+;/) + '\n'
+  + cut(/function limitText\(d\) \{[\s\S]*?\n  \}\n/)
+  + 'return limitText;')();
+const daily = JSON.parse(process.argv[2]);
+process.stdout.write(JSON.stringify({
+  daily: limitText(daily),
+  pace: limitText({ error: 'rate_limited' }),
+  empty: limitText({}),
+  blankMessage: limitText({ error: 'x', message: '' }),
+}));
+"""
+
+
+def test_the_chat_says_the_servers_sentence_at_the_daily_limit(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """Patient tester on #862: every 429 said "give it a few minutes", which
+    is false at the daily limit. The page shows the server's sentence; the
+    burst limiter's 429, which sends none, keeps the pace sentence."""
+    import json
+    import shutil
+    import subprocess
+    app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+    assert _turn(c, agent_id, "lim-1") == 200
+    r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
+                                  "request_id": "lim-2"})
+    assert r.status_code == 429
+    body = r.get_json()
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(["node", "-e", _LIMIT_HARNESS, "--", str(CHAT_JS),
+                          json.dumps(body)],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    from careagents import beta
+    assert got["daily"] == beta.DAILY_LIMIT_TEXT
+    assert "few minutes" in got["pace"]
+    assert got["empty"] == got["pace"] == got["blankMessage"]
+
+
+def test_the_daily_limit_sentence_is_plain():
+    from careagents import beta
+    assert "UTC" not in beta.DAILY_LIMIT_TEXT
+    assert "midnight" not in beta.DAILY_LIMIT_TEXT
+    assert beta.DAILY_LIMIT_TEXT == ("You've reached today's message limit. "
+                                     "It resets overnight.")
 
 
 def test_a_recovered_run_is_not_charged_twice(cfg, svc, monkeypatch):  # noqa: F811
