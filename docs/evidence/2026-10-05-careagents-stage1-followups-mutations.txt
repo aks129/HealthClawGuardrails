@@ -125,3 +125,46 @@ CAUGHT model constraint and boot index both removed
           FAILED tests/test_careagents_cap_race_862.py::test_concurrent_first_charges_of_the_day_are_all_let_through
           FAILED tests/test_careagents_cap_race_862.py::test_exploit_concurrent_charges_exceed_the_cap
           2 failed, 1 passed in 1.53s
+
+
+== Part 3 (#862 QA boot deadlock, security G1), tree ab6ed84, postgres:16
+Before the lock: the concurrent-boot test (4 boots, 5 trials) failed in
+trial 0 on each of 3 runs with DeadlockDetected. QA's own repro
+(qa856_pgboot.py, pointed at this database) after the lock:
+  dups: 0/10 trials had a failed boot
+  nodups: 0/10 trials had a failed boot
+Mutations, each run three times so a racy catch is not read as a survivor:
+CAUGHT   no advisory lock (3/3 runs red)
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.19s
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.06s
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.07s
+SURVIVED no re-check under the lock (0/3 runs red)
+          5 passed in 1.93s
+          5 passed in 1.96s
+          5 passed in 1.91s
+SURVIVED deadlock not retried (0/3 runs red)
+          5 passed in 1.98s
+          5 passed in 1.92s
+          5 passed in 2.08s
+CAUGHT   G1: refuse when the row appeared under the cap (3/3 runs red)
+
+Survivors, both backstops the lock makes unreachable:
+- "no re-check under the lock": a boot that waited finds no duplicates
+  left and the index already there, so collapsing nothing and CREATE ...
+  IF NOT EXISTS do the same as returning early.
+- "deadlock not retried": with the lock, no boot deadlocks, so the retry
+  never runs; the test asserts that no retry was logged.
+The first lock mutation survived until the retry was made visible: the
+deadlock retry absorbed every deadlock and the boots came up, only
+slower. A retry is now logged, and the test asserts there were none.
+
+Flake check: tests/test_careagents_cap_race_862.py,
+test_careagents_cap_race_862_round2.py,
+test_careagents_usage_day_migration.py and test_careagents_beta_daily_cap.py
+together, 50 runs on postgres:16: 0 failing runs of 50, 17 passed each.
+
+Full suites at ab6ed84: SQLite 4967 passed, 60 skipped, 1 xfailed;
+Postgres (as the CI lane) 4985 passed, 44 skipped, 1 xfailed.
