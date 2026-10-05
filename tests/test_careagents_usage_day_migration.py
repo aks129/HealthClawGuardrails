@@ -73,12 +73,17 @@ def test_boot_collapses_duplicates_and_adds_the_unique_index(kind, tmp_path):
 
 @pytest.mark.skipif(not PG.startswith("postgres"),
                     reason="concurrent DDL needs a database with peers")
-def test_processes_booting_together_on_duplicates_all_come_up(tmp_path):
+def test_processes_booting_together_on_duplicates_all_come_up(
+        tmp_path, caplog):
     """Production boots three processes at once (#862 QA). On Postgres,
     peers collapsing the same duplicates deadlocked and 1 to 3 of 4 boots
     died. Under one advisory lock, every boot comes up and the rows end
-    collapsed once: the sums are not added twice."""
+    collapsed once: the sums are not added twice. No boot needed the
+    deadlock retry either: that retry is a backstop, and without the lock
+    it would hide the deadlocks this test is here to catch."""
+    import logging
     import threading
+    caplog.set_level(logging.WARNING, logger="careagents.models")
     for trial in range(5):
         url = _old_database("postgres", tmp_path)
         n = 4
@@ -97,6 +102,9 @@ def test_processes_booting_together_on_duplicates_all_come_up(tmp_path):
         for t in threads:
             t.join()
         assert errors == [], f"trial {trial}: {errors}"
+        retried = [r.getMessage() for r in caplog.records
+                   if "migration retried" in r.getMessage()]
+        assert retried == [], f"trial {trial}: {retried}"
         engine = create_engine(url, future=True)
         assert _rows(engine) == [("acct_a", "2026-10-01", 5),
                                  ("acct_a", "2026-10-02", 1),

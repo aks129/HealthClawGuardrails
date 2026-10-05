@@ -11,6 +11,7 @@ SQLite on the VPS, file-locked 0600.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
@@ -19,6 +20,8 @@ from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
                         inspect, text)
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 def _uid(prefix: str) -> str:
@@ -420,6 +423,11 @@ def _ensure_usage_day_unique(engine) -> None:
                          or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
             if attempt == 2 or not retryable:
                 raise
+            # Said, not swallowed: under the advisory lock this should not
+            # happen, and a test asserts it does not.
+            logger.warning("ca_usage_days migration retried: %s",
+                           "deadlock" if not isinstance(exc, IntegrityError)
+                           else "duplicate added during collapse")
 
 
 #: What a peer creating the same table first looks like, by backend. SQLite
