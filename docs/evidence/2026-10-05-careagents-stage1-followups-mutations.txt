@@ -1,0 +1,49 @@
+# CareAgents stage 1 follow-ups (#856 sign-off F2, F3, F4, F5): mutations
+# Tree 13c8fe8 on origin/main 99ec079. Each mutation applied exactly once
+# (count asserted), __pycache__ purged, PYTHONDONTWRITEBYTECODE=1, file
+# restored from memory, not git. 10 mutations, 10 caught. Unmutated: full
+# suite 4962 passed, 52 skipped, 1 xfailed.
+# 375px screens (same directory, 2026-10-05-stage1-followups-375-*): local
+# engine :5291 and web :8691, FLASK_SKIP_DOTENV=1, RESEND_API_KEY empty,
+# CARE_REAL_RECORDS=allowlist, synthetic @example.com accounts.
+
+CAUGHT   worker: never charge
+          FAILED tests/test_careagents_beta_daily_cap.py::test_paused_turns_do_not_use_up_the_daily_cap
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_security_856.py::test_exploit_cap_skip_then_accept_reaches_model_uncharged
+          FAILED tests/test_careagents.py::test_chat_refuses_once_the_daily_limit_is_reached
+          4 failed, 10 passed in 1.93s
+CAUGHT   worker: charge recovered runs again
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_recovered_run_is_not_charged_twice
+          1 failed, 13 passed in 1.72s
+CAUGHT   worker: ignore a refused claim
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_security_856.py::test_exploit_cap_skip_then_accept_reaches_model_uncharged
+          2 failed, 12 passed in 1.70s
+CAUGHT   admission: no 429 at the limit
+          FAILED tests/test_careagents_beta_daily_cap.py::test_paused_turns_do_not_use_up_the_daily_cap
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents.py::test_chat_refuses_once_the_daily_limit_is_reached
+          3 failed, 11 passed in 1.81s
+CAUGHT   admission: charge again (old behaviour)
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_recovered_run_is_not_charged_twice
+          2 failed, 12 passed in 1.72s
+CAUGHT   hub: has_real counts active only
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[pending]
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[empty]
+          FAILED tests/test_careagents_calm_hub_view.py::test_has_real_counts_any_real_connection_not_yet_revoked
+          3 failed, 16 passed in 1.03s
+CAUGHT   banner: connected for any real row
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[pending]
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[empty]
+          2 failed, 17 passed in 0.98s
+CAUGHT   template: sample button while paused
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_offers_no_made_up_records
+          1 failed, 18 passed in 0.98s
+CAUGHT   home.js: no mailto in the band
+          FAILED tests/test_careagents_what_happened.py::test_the_didnt_finish_lines_link_the_one_contact_address
+          1 failed, 45 passed in 1.95s
+CAUGHT   home.js: support@ address back
+          FAILED tests/test_careagents_what_happened.py::test_the_didnt_finish_lines_link_the_one_contact_address
+          1 failed, 45 passed in 1.91s
