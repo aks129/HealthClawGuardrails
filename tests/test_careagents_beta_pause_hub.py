@@ -128,6 +128,10 @@ def test_a_paused_hub_offers_no_made_up_records(monkeypatch):
     assert 'id="hub-paused"' in page
     assert "Explore with made-up records" not in page
     assert 'data-connector="sample"' not in page
+    # Nothing is listed under "Add records", so no heading over nothing.
+    assert 'id="connect-section"' in before and "Add records" in before
+    assert 'id="connect-section"' not in page
+    assert "Add records" not in page
 
 
 def test_contact_links_escapes_everything_but_the_address():

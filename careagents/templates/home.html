@@ -143,19 +143,16 @@
 
   <!-- 4. ADD RECORDS -->
   {# `menu` is hub.menu_items: with real records closed it holds no
-     coming-soon source, so the groups below render nothing in that state. #}
+     coming-soon source, so the groups below render nothing in that state.
+     Paused: nothing can be added, the sample included, and the pause line at
+     the top says why, so the section is left out (#856 sign-off F2). #}
+  {% if not paused %}
   <section class="hub-section" id="connect-section">
     <div class="section-head"><h2>Add records</h2></div>
     {% if not menu_open %}
-    {# Paused: the pause line says nothing new can be added, the sample
-       included (#856 sign-off F2). #}
-    {% if not paused %}
     <button type="button" class="btn-primary btn-block connector-tile"
             id="explore-sample" data-connector="sample">Explore with made-up records</button>
-    {% endif %}
-    {% if paused %}
-    {# The pause line at the top already says why. #}
-    {% elif invited %}
+    {% if invited %}
     <p class="menu-closed-line">You're invited. This opens soon.</p>
     {% elif hub.has_real %}
     <p class="menu-closed-line">Adding more records isn't open right now.</p>
@@ -203,6 +200,7 @@
     {% endif %}
     <p class="inline-msg" id="connect-msg" role="status" aria-live="polite" hidden></p>
   </section>
+  {% endif %}
 
   <!-- 5. PAST CONNECTIONS -->
   {% if hub.past %}

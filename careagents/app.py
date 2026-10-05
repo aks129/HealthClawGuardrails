@@ -828,6 +828,11 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True) or {}
         if connector_id != "sample":
             return _start_connection(connector_id, acct, body)
+        if svc.is_paused(acct.id):
+            # Nothing new is added while paused, the sample included; the
+            # same answer as refresh and upload (#856 sign-off F2).
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
         # One sample per account (calm hub spec section 4). A second tap
         # opens the one that exists; a tap while another is still seeding
         # mints nothing.
