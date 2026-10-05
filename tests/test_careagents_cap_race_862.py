@@ -73,6 +73,19 @@ def test_exploit_concurrent_charges_let_more_turns_through_than_counted():
         f"{passed} turns allowed to the model, {charged} charged")
 
 
+def test_concurrent_first_charges_of_the_day_are_all_let_through():
+    """Eight slots charging an account's first turns of the day race the
+    insert of its row. The losers charge the winner's row; none of them
+    is refused while the day is far under the cap."""
+    svc = _svc()
+    for _ in range(10):
+        with svc.session() as s:
+            s.query(UsageDay).delete()
+        p, c, rows = _hammer(svc, 8, cap=10_000)
+        assert (p, c, rows) == (8, 8, 1), (
+            f"{p} let through, {c} charged, {rows} rows")
+
+
 def test_exploit_concurrent_charges_exceed_the_cap():
     svc = _svc()
     worst = 0
