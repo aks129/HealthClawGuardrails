@@ -51,6 +51,10 @@ class Account(Base):
     # When the person answered "Switch Juniper to your records?" either
     # way (calm hub spec section 5). A timestamp, not PHI.
     switch_prompted_at = Column(Float, nullable=True)
+    # When an operator paused this account (beta spec section 4.6). While
+    # set, no chat turn reaches a model and no new real connection starts.
+    # A timestamp, not PHI.
+    real_paused_at = Column(Float, nullable=True)
 
     passkeys = relationship("Passkey", back_populates="account",
                             cascade="all, delete-orphan")
@@ -91,6 +95,11 @@ class Connection(Base):
     # change doesn't silently claim consent it never obtained.
     consented_at = Column(Float, nullable=True)
     consent_version = Column(String(16), nullable=True)
+    # When the person last accepted newer terms for this connection (beta
+    # spec 4.3). Kept apart from consented_at, which stays the first
+    # connect, so the weekly number does not count a re-accept as a new
+    # connection.
+    reconsented_at = Column(Float, nullable=True)
     # Refresh state. A refresh re-pulls the same tenant; HealthClaw's ingest
     # upserts on (tenant, resource_type, id), so re-pulling never duplicates.
     # last_count is the record count observed at the end of the last sync, so
@@ -173,6 +182,23 @@ class UsageDay(Base):
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
     turns = Column(Integer, default=0)
+
+
+class ActivityDay(Base):
+    """Per-account daily counts for the weekly number (beta spec 4.5).
+
+    `asked` counts turns on a real-record assistant, `approved` counts
+    approvals of a real-record action. Integers only: no message, no action
+    kind, nothing about the record.
+    """
+    __tablename__ = "ca_activity_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name="uq_ca_activity_days_acct_day"),)
+    id = Column(String(32), primary_key=True, default=lambda: _uid("act"))
+    account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
+    day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
+    asked = Column(Integer, default=0)
+    approved = Column(Integer, default=0)
 
 
 class PageViewDay(Base):
@@ -262,7 +288,7 @@ def _ensure_columns(engine) -> None:
     if "ca_accounts" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_accounts")}
         for name in ("sample_claim_at", "first_agent_at",
-                     "switch_prompted_at"):
+                     "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
     if "ca_grants" in tables:
@@ -303,6 +329,8 @@ def _ensure_columns(engine) -> None:
                 conn.execute(text(
                     "ALTER TABLE ca_connections ADD COLUMN last_uncounted "
                     "INTEGER"))
+        if "reconsented_at" not in cols:
+            _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
 
 
 #: What a peer creating the same table first looks like, by backend. SQLite

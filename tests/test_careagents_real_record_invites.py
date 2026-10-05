@@ -6,6 +6,10 @@ The spec's tests, section 6:
   - A revoked invite blocks new connections and keeps existing ones.
 Plus the rule the environment list already follows: invites are read in
 `allowlist` mode only, so the table is never a way around `off`.
+
+Stage 1 (beta spec 4.3) honours table invites only once the tester terms
+are approved (#565), so the tests that expect an invite to open records
+approve them first. The gate's own tests are test_careagents_beta_gate.py.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import json
 
 from careagents.config import Config
+from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _beta_app, _login, cfg, svc)
 
@@ -26,6 +31,7 @@ def _tiers(client):
 
 
 def test_an_invited_email_can_start_a_real_connection(svc, monkeypatch):  # noqa: F811
+    approve_terms(monkeypatch)
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist")
     assert svc.invite_real_records("Tester@Example.org", "owner") is True
     c = app.test_client()
@@ -49,6 +55,7 @@ def test_the_environment_allowlist_still_works_alongside_the_table(
         svc, monkeypatch):  # noqa: F811
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
                     CARE_REAL_RECORDS_ALLOWLIST="env@example.org")
+    approve_terms(monkeypatch)
     svc.invite_real_records("table@example.org", "owner")
     for email in ("env@example.org", "table@example.org"):
         c = app.test_client()
@@ -59,6 +66,7 @@ def test_the_environment_allowlist_still_works_alongside_the_table(
 
 def test_a_revoked_invite_blocks_new_connections_and_keeps_existing_ones(
         svc, monkeypatch):  # noqa: F811
+    approve_terms(monkeypatch)
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist")
     svc.invite_real_records("tester@example.org", "owner")
     c = app.test_client()

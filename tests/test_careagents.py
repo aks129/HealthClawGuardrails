@@ -4399,7 +4399,7 @@ def test_sample_connect_needs_no_consent(app, svc, monkeypatch):
 
 def test_consent_is_recorded_with_version(app, svc, monkeypatch):
     """An agreed consent persists timestamp + the version agreed to."""
-    from careagents.app import CONSENT_VERSION
+    from careagents.tester_terms import CONSENT_VERSION
     c = app.test_client()
     _login(c, svc, monkeypatch)
     r = c.post("/api/connections/fasten", json={"consent": True})

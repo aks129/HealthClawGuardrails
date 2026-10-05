@@ -149,17 +149,20 @@ def _link(hours_left: float) -> str:
 
 def test_a_finished_form_is_reported_done_with_its_pdf_link(
         cfg, svc, monkeypatch):
+    # Built once: two _link(20) calls straddling a second boundary differ
+    # in `exp` by one, which failed CI on Postgres (#856).
+    link = _link(20)
     fake = OutcomeClient(pending=[], recent=[{
         "id": "act-done", "kind": "form-fill", "to": None,
         "status": "completed",
-        "_outcome": json.dumps({"delivery_link": _link(20)})}])
+        "_outcome": json.dumps({"delivery_link": link})}])
     c, agent, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     body = c.get("/api/approvals/count").get_json()
     assert body["count"] == 0
     [item] = body["recent"]
     assert item["label"] == "Intake form"
     assert item["state"] == "done"
-    assert item["link"] == _link(20)
+    assert item["link"] == link
     assert item["agent_name"] and item["chat"] == f"/chat?agent={agent}"
 
 
