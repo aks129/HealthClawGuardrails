@@ -167,6 +167,11 @@ class Grant(Base):
     revoked_at = Column(Float, nullable=True)
 
 
+#: The name of the one-row-per-account-and-day rule on `ca_usage_days`: a
+#: constraint on a new table, a unique index on one made before it.
+USAGE_DAY_UNIQUE = "uq_ca_usage_days_acct_day"
+
+
 class UsageDay(Base):
     """Per-account daily LLM turn count — a durable spend ceiling.
 
@@ -176,8 +181,14 @@ class UsageDay(Base):
     and durable: one row per account per UTC day.
 
     Counts only — no message content, nothing PHI-adjacent.
+
+    One row per account and day, enforced (#862 review F5): two racing
+    first-of-day inserts made two rows, and a read saw only one. A table
+    made before the constraint gets it from `_ensure_usage_day_unique`.
     """
     __tablename__ = "ca_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name=USAGE_DAY_UNIQUE),)
     id = Column(String(32), primary_key=True, default=lambda: _uid("use"))
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
@@ -333,6 +344,60 @@ def _ensure_columns(engine) -> None:
             _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
 
 
+def _usage_day_is_unique(engine) -> bool:
+    """Is (account_id, day) on ca_usage_days already unique, by constraint
+    (a table created from the model) or by index (one migrated here)?"""
+    insp = inspect(engine)
+    pair = ["account_id", "day"]
+    return (any(c["column_names"] == pair
+                for c in insp.get_unique_constraints("ca_usage_days"))
+            or any(i["unique"] and i["column_names"] == pair
+                   for i in insp.get_indexes("ca_usage_days")))
+
+
+def _ensure_usage_day_unique(engine) -> None:
+    """Give a ca_usage_days made before the constraint one row per account
+    and day (#862 review F5), idempotently, on SQLite and Postgres.
+
+    Such a table may already hold duplicates, which would fail the index, so
+    each duplicate group is first collapsed into its oldest-id row with the
+    group's summed turns: a turn charged is never forgotten. Collapse and
+    index run in one transaction. A turn charged by an old process between
+    the two can add a duplicate back and fail the index; that is retried. A
+    peer process doing the same at the same boot is harmless: its sums are of
+    the same rows, and IF NOT EXISTS covers the index.
+    """
+    if "ca_usage_days" not in inspect(engine).get_table_names():
+        return
+    if _usage_day_is_unique(engine):
+        return
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                groups = conn.execute(text(
+                    "SELECT account_id, day, MIN(id), SUM(COALESCE(turns, 0)) "
+                    "FROM ca_usage_days GROUP BY account_id, day "
+                    "HAVING COUNT(*) > 1")).all()
+                for account_id, day, keep, total in groups:
+                    conn.execute(text(
+                        "UPDATE ca_usage_days SET turns = :t WHERE id = :k"),
+                        {"t": int(total), "k": keep})
+                    conn.execute(text(
+                        "DELETE FROM ca_usage_days WHERE account_id = :a "
+                        "AND day = :d AND id <> :k"),
+                        {"a": account_id, "d": day, "k": keep})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {USAGE_DAY_UNIQUE} "
+                    "ON ca_usage_days (account_id, day)"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return                      # a peer made the index first
+            if attempt == 2 or not isinstance(exc, IntegrityError):
+                raise
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -386,6 +451,7 @@ def make_engine(url: str):
                            **pool_kwargs)
     _create_tables(engine)
     _ensure_columns(engine)
+    _ensure_usage_day_unique(engine)
     return engine
 
 

@@ -60,27 +60,26 @@ def _hammer(svc, n, cap):
     return allowed.count(True), charged, len(rows)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#862 review: claim_daily_turn is a read-then-write; concurrent worker "
-    "slots each pass and the count rises by fewer than the turns let through"))
+# Fixed in #862: one conditional UPDATE charges, and a unique constraint on
+# (account_id, day) makes the first-of-day insert one row.
 def test_exploit_concurrent_charges_let_more_turns_through_than_counted():
     svc = _svc()
     passed, charged = 0, 0
     for _ in range(10):                        # ten bursts of eight
-        p, c, _rows = _hammer(svc, 8, cap=10_000)
+        p, c, rows = _hammer(svc, 8, cap=10_000)
         passed, charged = passed + p, c
+        assert rows == 1, f"{rows} rows for one account and day"
     assert charged == passed, (
         f"{passed} turns allowed to the model, {charged} charged")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#862 review: concurrent charges at the cap let more than the cap through"))
 def test_exploit_concurrent_charges_exceed_the_cap():
     svc = _svc()
     worst = 0
     for _ in range(10):
         with svc.session() as s:
             s.query(UsageDay).delete()
-        p, _c, _rows = _hammer(svc, 8, cap=1)
+        p, c, rows = _hammer(svc, 8, cap=1)
         worst = max(worst, p)
+        assert (c, rows) == (1, 1), f"{c} charged over {rows} rows"
     assert worst <= 1, f"{worst} turns let through against a cap of 1"

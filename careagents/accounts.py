@@ -16,7 +16,7 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import or_, text, update
+from sqlalchemy import func, or_, text, update
 from sqlalchemy.exc import IntegrityError
 
 import webauthn
@@ -451,31 +451,54 @@ class AccountService:
         Durable and shared, unlike the in-process burst limiter — a restart or
         a second gunicorn worker must not hand the account a fresh allowance,
         because every turn costs the operator real money.
+
+        Atomic (#862 review F5): the worker charges from several slots at
+        once, and a read-then-write let two of them pass on one count. One
+        conditional UPDATE both checks and charges, so it either adds one
+        under the cap or changes nothing. With no row yet, insert one; the
+        unique (account_id, day) turns a racing insert into a retry of the
+        UPDATE, the same shape as count_activity.
         """
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with self.session() as s:
-            row = (s.query(UsageDay)
-                   .filter_by(account_id=account_id, day=day).first())
-            if row is None:
-                row = UsageDay(account_id=account_id, day=day, turns=0)
-                s.add(row)
-                s.flush()
-            used = int(row.turns or 0)
-            if used >= cap:
-                return False, used
-            row.turns = used + 1
-            return True, used + 1
+        turns = func.coalesce(UsageDay.turns, 0)
+        charge = (update(UsageDay)
+                  .where(UsageDay.account_id == account_id,
+                         UsageDay.day == day, turns < cap)
+                  .values(turns=turns + 1)
+                  .execution_options(synchronize_session=False))
+        for _ in range(2):
+            with self.session() as s:
+                if s.execute(charge).rowcount:
+                    # Our row lock holds until commit: this reads our charge.
+                    return True, self._turns_today(s, account_id, day)
+                if s.query(UsageDay.id).filter_by(
+                        account_id=account_id, day=day).first():
+                    return False, self._turns_today(s, account_id, day)
+            if cap <= 0:
+                return False, 0
+            try:
+                with self.session() as s:
+                    s.add(UsageDay(account_id=account_id, day=day, turns=1))
+                return True, 1
+            except IntegrityError:
+                continue        # a peer made today's row: charge it instead
+        raise RuntimeError("could not charge today's turn")
+
+    @staticmethod
+    def _turns_today(s, account_id: str, day: str) -> int:
+        return int(s.query(func.coalesce(func.sum(UsageDay.turns), 0))
+                   .filter(UsageDay.account_id == account_id,
+                           UsageDay.day == day).scalar())
 
     def daily_turns_used(self, account_id: str) -> int:
         """Today's charged turns, read only. Admission asks this; the worker
-        charges with claim_daily_turn where the model is called."""
+        charges with claim_daily_turn where the model is called. A sum, so
+        it reads every row even on a table not yet given the constraint."""
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with self.session() as s:
-            row = (s.query(UsageDay)
-                   .filter_by(account_id=account_id, day=day).first())
-            return int(row.turns or 0) if row else 0
+            return self._turns_today(s, account_id, day)
 
     _ACTIVITY_FIELDS = ("asked", "approved")
 
