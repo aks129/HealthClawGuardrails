@@ -57,6 +57,34 @@
     });
   }
 
+  // Accept the current terms for real connections made under older ones
+  // (beta spec 4.3). Its own card, not the first-connect one; the server
+  // refuses (428) without an explicit `consent: true`.
+  function showReconsentCard() {
+    return new Promise((resolve) => {
+      const modal = $("reconsent-modal");
+      const done = (v) => { modal.hidden = true; resolve(v); };
+      $("reconsent-agree").onclick = () => done(true);
+      $("reconsent-cancel").onclick = () => done(false);
+      modal.hidden = false;
+    });
+  }
+  document.querySelectorAll("[data-reconsent]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agreed = await showReconsentCard();
+      if (!agreed) return;
+      btn.disabled = true;
+      const res = await post(
+        `/api/connections/${btn.dataset.reconsent}/consent`, { consent: true });
+      if (!res.ok) {
+        btn.disabled = false;
+        return announce(btn.parentElement.querySelector(".inline-msg"),
+                        "That didn't work. Try again.");
+      }
+      location.reload();
+    });
+  });
+
   // One shared primitive for the dialogs below: unhide a static modal, resolve
   // once when it closes. ESC and a backdrop tap both abandon it — every one of
   // these is safe to walk away from. The consent card deliberately does NOT go
@@ -117,10 +145,28 @@
   // text. Delete arms "Deleting…" and then awaits the request; a failure that
   // lands inside the wait would otherwise be papered over by the stale
   // "Deleting…" arriving on top of "Your records were not deleted."
+  // After a write: make the contact address a mailto link, from nodes.
+  const CONTACT = "contactus@healthclaw.io";
+  function linkContact(el) {
+    const text = el.textContent;
+    if (text.indexOf(CONTACT) < 0) return;
+    el.textContent = "";
+    text.split(CONTACT).forEach((part, i) => {
+      if (i) {
+        const a = document.createElement("a");
+        a.href = "mailto:" + CONTACT;
+        a.textContent = CONTACT;
+        el.appendChild(a);
+      }
+      if (part) el.appendChild(document.createTextNode(part));
+    });
+  }
+
   function announce(el, text, after) {
     const pending = announceTimers.get(el);
     if (pending) clearTimeout(pending);
-    const write = () => { el.textContent = text; if (after) after(); };
+    const write = () => {
+      el.textContent = text; linkContact(el); if (after) after(); };
     if (!el.hidden && !pending) return write();
     el.textContent = "";
     el.hidden = false;
@@ -309,7 +355,10 @@
                          { consent: true });
       }
       btn.disabled = false;
-      if (!res.ok) return report(res.d.error || "Couldn't refresh right now.");
+      // `message` first: a coded refusal (records_paused) carries its
+      // sentence there, and the code itself is never shown (#856 review).
+      if (!res.ok) return report(res.d.message || res.d.error ||
+                                 "Couldn't refresh right now.");
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
         window.open(res.d.reauth_url, "_blank", "noopener");
@@ -353,19 +402,29 @@
       "Upload was rejected. Please retry — if it repeats, refresh this page.",
     commit_failed:
       "Something went wrong saving the records. Try again in a moment.",
+    ingest_failed:
+      "The records service couldn't accept this upload. Try again in a " +
+      "moment.",
     "sign in":
       "You've been signed out. Reload this page and sign in again.",
     offline:
       "The upload couldn't start. Check your connection and try again.",
     start_failed:
       "The upload couldn't start on our side. Try again in a moment.",
-    ingest_failed:
-      "The records service couldn't accept this upload. Try again in a " +
-      "moment.",
+    records_paused:
+      "Your records are paused, so new records can't be added right now. " +
+      "If you didn't expect this, write to contactus@healthclaw.io.",
   };
-  function messageForError(code) {
-    return UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.";
-  }
+  // Failures that may repeat get a way to reach us, and a support code only
+  // when the server sent one: a sentence never promises a code it lacks.
+  const UPLOAD_SUPPORT = { commit_failed: 1, ingest_failed: 1 };
+  const uploadErrorLine = (code, supportCode) =>
+    (UPLOAD_MSG[code] || "The upload didn't go through. Try again in a moment.")
+    + ((UPLOAD_SUPPORT[code] || !UPLOAD_MSG[code])
+      ? (" If it keeps happening, write to contactus@healthclaw.io" +
+         (supportCode ? " and quote this code: " + supportCode + "." : "."))
+      : "");
+  function messageForError(code) { return uploadErrorLine(code, ""); }
 
   // Reused file input — the current owner card is tracked here.
   const fileInput = $("upload-file");
@@ -415,11 +474,8 @@
   // Send one file to a `direct` connection and say what happened, in one
   // sentence and a style. Never throws.
   async function sendFile(connId, file) {
-    const fail = (code, cid) => {
-      let line = messageForError(code);
-      if (cid) line += " If it keeps happening, tell us this code: " + cid + ".";
-      return { ok: false, line, cls: "form-error" };
-    };
+    const fail = (code, cid) =>
+      ({ ok: false, line: uploadErrorLine(code, cid), cls: "form-error" });
     let text;
     try {
       text = await file.text();
@@ -501,7 +557,8 @@
           // No answer at all is the signal; an answer is our side failing.
           const code = !res ? "offline"
             : res.d.error === "sign in" ? "sign in" : "start_failed";
-          return show(messageForError(code), "form-error");
+          return show((res && res.d.message) || messageForError(code),
+                      "form-error");
         }
         conn = tile.dataset.conn = res.d.id;
       }

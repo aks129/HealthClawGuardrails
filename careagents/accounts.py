@@ -16,7 +16,8 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import or_, text
+from sqlalchemy import or_, text, update
+from sqlalchemy.exc import IntegrityError
 
 import webauthn
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -25,8 +26,9 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-from careagents.models import (Account, Agent, Connection, EmailToken, Grant, Passkey,
-                               RealRecordInvite, Surface, UsageDay, make_engine,
+from careagents.models import (Account, ActivityDay, Agent, Connection,
+                               EmailToken, Grant, Passkey, RealRecordInvite,
+                               Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -292,19 +294,31 @@ class AccountService:
 
     def invite_real_records(self, email: str, invited_by: str) -> bool:
         """Invite an email to connect real records. Inviting a revoked email
-        again reopens it. Returns False when it was already invited."""
+        again reopens it. Returns False when it was already invited.
+
+        Stage 1 holds at most STAGE1_INVITE_CAP active invites; a new or
+        reopened one past that raises ValueError. Two operators racing on
+        the last place can both get in: a hand-run command, not worth a lock.
+        """
+        from careagents.beta import STAGE1_INVITE_CAP
         email = self._invite_email(email)
         invited_by = (invited_by or "").strip()[:255]
         if not invited_by:
             raise ValueError("invited_by is required")
         with self.session() as s:
             row = s.get(RealRecordInvite, email)
+            if row is not None and row.revoked_at is None:
+                return False
+            active = (s.query(RealRecordInvite)
+                      .filter(RealRecordInvite.revoked_at.is_(None)).count())
+            if active >= STAGE1_INVITE_CAP:
+                raise ValueError(
+                    f"Stage 1 is full: {STAGE1_INVITE_CAP} active invites. "
+                    "Revoke one first.")
             if row is None:
                 s.add(RealRecordInvite(email=email, invited_at=now(),
                                        invited_by=invited_by))
                 return True
-            if row.revoked_at is None:
-                return False
             row.revoked_at = None
             row.invited_at = now()
             row.invited_by = invited_by
@@ -330,6 +344,26 @@ class AccountService:
         with self.session() as s:
             row = s.get(RealRecordInvite, email)
             return row is not None and row.revoked_at is None
+
+    # --- pause (beta spec section 4.6) --------------------------------------
+
+    def set_paused(self, email: str, paused: bool) -> bool:
+        """Pause or resume one account by its email. False when no account
+        has that email. Logged by account id, never by email."""
+        email = (email or "").strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is None:
+                return False
+            acct.real_paused_at = now() if paused else None
+            logger.info("account %s %s by operator", acct.id,
+                        "paused" if paused else "resumed")
+            return True
+
+    def is_paused(self, account_id: str) -> bool:
+        with self.session() as s:
+            acct = s.get(Account, account_id)
+            return bool(acct and acct.real_paused_at is not None)
 
     def real_record_invites(self) -> list[dict]:
         with self.session() as s:
@@ -388,7 +422,8 @@ class AccountService:
             return _conn_dict(c) if c else None
 
     def claim_sample_start(self, account_id: str) -> bool:
-        """Win the right to mint this account's sample tenant.
+        """Win the right to mint a tenant for this account: the sample tap
+        and the Fasten connect share this lease (#847).
 
         A compare-and-set on the account row: one caller sets the lease and
         every overlapping caller updates zero rows. A lease older than
@@ -432,6 +467,32 @@ class AccountService:
                 return False, used
             row.turns = used + 1
             return True, used + 1
+
+    _ACTIVITY_FIELDS = ("asked", "approved")
+
+    def count_activity(self, account_id: str, field: str) -> None:
+        """Add one to today's `asked` or `approved` for this account (beta
+        spec 4.5). Increment first, insert if there was no row, and on a
+        racing insert increment the row the other writer made."""
+        if field not in self._ACTIVITY_FIELDS:
+            raise ValueError(f"unknown activity field {field!r}")
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        col = getattr(ActivityDay, field)
+        stmt = (update(ActivityDay)
+                .where(ActivityDay.account_id == account_id,
+                       ActivityDay.day == day)
+                .values({field: col + 1}))
+        with self.session() as s:
+            if s.execute(stmt).rowcount:
+                return
+        try:
+            with self.session() as s:
+                s.add(ActivityDay(account_id=account_id, day=day,
+                                  **{field: 1}))
+        except IntegrityError:
+            with self.session() as s:
+                s.execute(stmt)
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
         with self.session() as s:
@@ -488,9 +549,12 @@ class AccountService:
             if acct is None:
                 return False
             for model in (Surface, Agent, Grant, Connection, Passkey,
-                          UsageDay):
+                          UsageDay, ActivityDay):
                 s.query(model).filter_by(account_id=account_id).delete()
             s.query(EmailToken).filter_by(email=acct.email).delete()
+            # The invite is keyed by the same address (beta spec 4.2). The
+            # operator can invite again if the person comes back.
+            s.query(RealRecordInvite).filter_by(email=acct.email).delete()
             s.delete(acct)
             return True
 
@@ -544,6 +608,45 @@ class AccountService:
             c = (s.query(Connection)
                  .filter_by(id=conn_id, account_id=account_id).first())
             return _conn_dict(c) if c else None
+
+    #: Connections a terms prompt skips: revoked ones are gone, and pending
+    #: ones are still connecting, so they are asked once they settle.
+    RECONSENT_SKIPS = ("revoked", "pending")
+
+    def record_consent(self, account_id: str, conn_id: str,
+                       version: str) -> bool:
+        """Accept the current terms, starting from one of this account's real
+        connections. One accept covers every real connection on the account
+        that is neither revoked nor still connecting (beta spec 4.3). Scoped
+        by the account: another account's connection is never touched.
+
+        Stamps consent_version and reconsented_at. consented_at stays the
+        first connect, so the weekly number does not move.
+        """
+        with self.session() as s:
+            c = (s.query(Connection)
+                 .filter_by(id=conn_id, account_id=account_id).first())
+            if c is None or c.kind == "sample" or c.status == "revoked":
+                return False
+            t = now()
+            rows = (s.query(Connection)
+                    .filter(Connection.account_id == account_id,
+                            Connection.kind != "sample",
+                            Connection.status.notin_(self.RECONSENT_SKIPS))
+                    .all())
+            for row in {r.id: r for r in [c, *rows]}.values():
+                if row.consent_version != version:
+                    row.consent_version = version
+                    row.reconsented_at = t
+            return True
+
+    def stale_consent(self, connections: list[dict],
+                      version: str) -> list[dict]:
+        """The account's real connections a terms prompt should cover."""
+        return [c for c in connections
+                if c["kind"] != "sample"
+                and c["status"] not in self.RECONSENT_SKIPS
+                and c.get("consent_version") != version]
 
     def mark_synced(self, conn_id: str, count: int,
                     uncounted: int | None = None) -> dict:
@@ -718,8 +821,13 @@ class AccountService:
             conn = s.get(Connection, a.connection_id)
             if not conn:
                 return None
+            # The connection and the pause flag let the worker refuse a turn
+            # before it reads anything (beta spec 4.3 and 4.6).
+            acct = s.get(Account, a.account_id)
             return {"agent": _agent_dict(a), "tenant": conn.tenant_id,
-                    "account_id": a.account_id}
+                    "account_id": a.account_id,
+                    "connection": _conn_dict(conn),
+                    "paused": bool(acct and acct.real_paused_at is not None)}
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
@@ -778,7 +886,8 @@ def _conn_dict(c: Connection) -> dict:
             "label": c.label, "status": c.status, "provider": c.provider,
             "connected_at": c.connected_at,
             "last_synced_at": c.last_synced_at, "last_count": c.last_count,
-            "last_uncounted": c.last_uncounted}
+            "last_uncounted": c.last_uncounted,
+            "consent_version": c.consent_version}
 
 
 def _grant_dict(g: Grant) -> dict:

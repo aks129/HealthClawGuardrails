@@ -26,10 +26,12 @@ from urllib.parse import quote
 import click
 from flask import (Flask, Response, jsonify, redirect, render_template,
                    request, session, url_for)
+from markupsafe import Markup, escape
 
 from careagents.accounts import (AccountService, AuthError, MailError,
                                  MailUnconfirmed, new_binding_code)
 from careagents import advisors, analytics, connectors, consent
+from careagents import beta, operator_cli, tester_terms
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -41,14 +43,6 @@ from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
 
-# Bump when the consent-card copy or the terms/privacy content it points at
-# changes materially. Stored per connection so we always know which version a
-# person agreed to — a later change never silently claims earlier consent.
-# 2026-08-01: the "leaving" clause said to email support, while self-serve
-# Disconnect and Delete sat on the same page (#203). Understating our own
-# strongest privacy control in the one place people read carefully.
-CONSENT_VERSION = "2026-08-01"
-
 # `/healthz` asks HealthClaw whether a run worker is present. That call gets
 # its own budget rather than the client's 25s chat timeout: as a
 # `(connect, read)` pair the worst case is 2.0s of network wait, which fits
@@ -58,6 +52,25 @@ CONSENT_VERSION = "2026-08-01"
 # chat timeout (docs/evidence/2026-09-03-probe-219-thread-saturation.md §8,
 # PR #573).
 _HEALTHZ_WORKER_TIMEOUT = (1.0, 1.0)
+
+#: The one address patient-facing copy sends people to.
+CONTACT_EMAIL = "contactus@healthclaw.io"
+
+
+def contact_links(text) -> Markup:
+    """Jinja filter: escape `text`, then make the contact address a mailto
+    link. Only that fixed address is linked, so nothing in `text` becomes
+    markup."""
+    return Markup(str(escape(text)).replace(
+        CONTACT_EMAIL,
+        f'<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>'))
+
+
+def chat_links(text) -> Markup:
+    """Jinja filter for a replayed assistant bubble: contact_links, and
+    "your hub" links to the hub, the same two links chat.js adds live."""
+    return Markup(str(contact_links(text)).replace(
+        "your hub", '<a href="/home">your hub</a>'))
 
 # The same call on the ADMISSION path (`POST /api/chat`, and the iMessage
 # relay ingress). It gets its own budget rather than sharing the readiness
@@ -253,6 +266,8 @@ def create_app(config: Config | None = None,
     cfg = config or Config()
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
+    app.jinja_env.filters["contact_links"] = contact_links
+    app.jinja_env.filters["chat_links"] = chat_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=(cfg.app_env == "production"),
@@ -269,11 +284,22 @@ def create_app(config: Config | None = None,
     turns: dict[str, deque] = defaultdict(deque)
 
     def _real_records_open(acct) -> bool:
-        """May this account START a real-record connection? The environment
-        allowlist and the invite table (beta pathway spec section 4.2), in
-        `allowlist` mode only."""
-        return cfg.real_records_open_for(acct.email,
-                                         invited=svc.real_records_invited)
+        """May this account START a real-record connection? The one gate.
+
+        Order matters. `off` closes everything, before the table is read
+        (never a back door around `off`). A paused account is closed in
+        every mode (beta spec 4.6). Then the config rule: `on` is open,
+        `allowlist` is the environment list or an active invite, and the
+        invite table is asked only once the tester terms are approved (#565).
+        """
+        if cfg.real_records == "off":
+            return False
+        if svc.is_paused(acct.id):
+            return False
+        return cfg.real_records_open_for(
+            acct.email,
+            invited=svc.real_records_invited if tester_terms.approved()
+            else None)
 
     # --- canonical host (#264, D7) -------------------------------------------
 
@@ -404,8 +430,21 @@ def create_app(config: Config | None = None,
         data = svc.list_home(acct.id)
         view = hub_view.build(data, time.time())
         real_open = _real_records_open(acct)
+        # Real connections whose consent predates the current terms (beta
+        # spec 4.3). The worker refuses their turns until this is answered.
+        # One prompt for the account, however many connections it covers.
+        stale_consent = svc.stale_consent(data["connections"],
+                                          tester_terms.CONSENT_VERSION)
+        paused = svc.is_paused(acct.id)
+        # Invited, but the invite waits on the tester terms (#565): say so
+        # rather than "coming for invited testers" to someone who is one.
+        invited = (cfg.real_records == "allowlist"
+                   and svc.real_records_invited(acct.email))
         return render_template(
             "home.html", me=acct,
+            stale_consent=stale_consent,
+            paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
+            invited=invited,
             hub=view,
             banner_records=("your records are connected" if view["has_real"]
                             else "sample records"),
@@ -415,6 +454,8 @@ def create_app(config: Config | None = None,
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
+            tester_terms_approved=tester_terms.approved(),
+            terms_change=tester_terms.CHANGE_SUMMARY,
             menu=hub_view.menu_items(
                 connectors.catalog(cfg, real_records=real_open), real_open))
 
@@ -717,12 +758,36 @@ def create_app(config: Config | None = None,
         if plan.get("requires_consent"):
             if body.get("consent") is not True:
                 return jsonify({"error": "consent_required",
-                                "consent_version": CONSENT_VERSION}), 428
-            consent_version = CONSENT_VERSION
-        if connector_id == "fasten":
+                                "consent_version": tester_terms.CONSENT_VERSION}), 428
+            consent_version = tester_terms.CONSENT_VERSION
+        if connector_id not in ("fasten", "direct"):
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        # Two tabs or devices connecting at once (#847): both passed the
+        # pending check before either inserted. The account's connect lease
+        # (the same one the sample tap uses) makes the check and the insert
+        # one step. A pending row keeps the consent_version it was made
+        # with; a stale one is asked again by the worker (beta spec 4.3).
+        if not svc.claim_sample_start(acct.id):
+            return jsonify({"status": "connecting",
+                            "error": "Your records are already on their "
+                                     "way. Try again in a moment."}), 409
+        try:
             # A second tap while the first is still connecting reuses it:
             # two taps made two identical rows, both stuck connecting. Only
-            # a pending row is reused, and only after consent above.
+            # a pending row is reused, and only after the gate and consent
+            # above.
+            if connector_id == "direct":
+                # Same for a file: a connection still waiting for its first
+                # file takes the next one, so a second try never adds a
+                # second card.
+                waiting = svc.pending_connection(acct.id, "direct",
+                                                 status="empty")
+                if waiting:
+                    return jsonify({"id": waiting["id"], "status": "empty",
+                                    "existing": True})
+                return _persist_connection(connector_id, acct, plan,
+                                           consent_version)
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({
@@ -730,13 +795,14 @@ def create_app(config: Config | None = None,
                     "existing": True,
                     "connect_url": hc.fasten_connect_url(
                         waiting["tenant_id"])})
-        if connector_id == "direct":
-            # Same for a file: a connection still waiting for its first file
-            # takes the next one, so a second try never adds a second card.
-            waiting = svc.pending_connection(acct.id, "direct", status="empty")
-            if waiting:
-                return jsonify({"id": waiting["id"], "status": "empty",
-                                "existing": True})
+            return _persist_connection(connector_id, acct, plan,
+                                       consent_version)
+        finally:
+            svc.release_sample_start(acct.id)
+
+    def _persist_connection(connector_id, acct, plan, consent_version):
+        """What _start_connection does once the gate and consent passed:
+        seed, record the connection, answer."""
         tenant = plan["tenant"]
         if plan.get("seed"):
             try:
@@ -825,6 +891,9 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
         # Only the `direct` tile ships this flow today. `shl` (SMART Health
         # Link) will land on the same endpoint once the encrypted-manifest
         # decoder is in.
@@ -1104,6 +1173,24 @@ def create_app(config: Config | None = None,
         return jsonify({"deleted": True, "connections_purged": purged,
                         "audit_retained": True})
 
+    @app.post("/api/connections/<conn_id>/consent")
+    @login_required
+    def reconsent_connection(conn_id):
+        """Accept the current terms for an existing real connection (beta
+        spec 4.3). Until this is done, the worker answers that connection's
+        turns with beta.TERMS_TEXT instead of reaching a model."""
+        acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if (conn is None or conn["kind"] == "sample"
+                or conn["status"] == "revoked"):
+            return jsonify({"error": "unknown connection"}), 404
+        body = request.get_json(silent=True) or {}
+        if body.get("consent") is not True:
+            return jsonify({"error": "consent_required",
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        svc.record_consent(acct.id, conn_id, tester_terms.CONSENT_VERSION)
+        return jsonify({"consent_version": tester_terms.CONSENT_VERSION})
+
     @app.post("/api/connections/<conn_id>/refresh")
     @login_required
     def refresh_connection(conn_id):
@@ -1119,6 +1206,9 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        if svc.is_paused(acct.id):
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_RECORDS_TEXT}), 423
 
         body = request.get_json(silent=True) or {}
         plan = connectors.refresh(conn["kind"], conn["tenant_id"],
@@ -1132,7 +1222,7 @@ def create_app(config: Config | None = None,
         # skips the card is refused here, on every surface.
         if plan.get("requires_consent") and body.get("consent") is not True:
             return jsonify({"error": "consent_required",
-                            "consent_version": CONSENT_VERSION}), 428
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same
@@ -1593,17 +1683,25 @@ def create_app(config: Config | None = None,
             return _refuse_turn_without_workers(workers)
         if not _allow_turn(acct.id):
             return jsonify({"error": "rate_limited"}), 429
+        # A turn the worker will refuse (paused, or terms not accepted; beta
+        # spec 4.3, 4.6) is answered with a fixed sentence and never reaches
+        # a model, so it does not spend the day's allowance. The worker
+        # still makes the decision; this only skips the count.
+        refused = beta.turn_block(ctx["connection"], svc.is_paused(acct.id),
+                                  tester_terms.CONSENT_VERSION)
         # Durable daily ceiling — survives restarts and is shared across
         # workers, so it is the real bound on per-account inference spend.
-        allowed, used = svc.claim_daily_turn(acct.id, cfg.chat_turns_per_day)
-        if not allowed:
-            return jsonify({
-                "error": "daily_limit_reached",
-                "used": used,
-                "limit": cfg.chat_turns_per_day,
-                "message": ("You've reached today's message limit. It resets "
-                            "at midnight UTC."),
-            }), 429
+        if not refused:
+            allowed, used = svc.claim_daily_turn(acct.id,
+                                                 cfg.chat_turns_per_day)
+            if not allowed:
+                return jsonify({
+                    "error": "daily_limit_reached",
+                    "used": used,
+                    "limit": cfg.chat_turns_per_day,
+                    "message": ("You've reached today's message limit. It "
+                                "resets at midnight UTC."),
+                }), 429
 
         tenant = ctx["tenant"]
         agent = ctx["agent"]
@@ -1949,6 +2047,10 @@ def create_app(config: Config | None = None,
         if not tenant:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
+        if svc.is_paused(current_account().id):
+            # Pause stops approvals too (beta spec 4.6, #856 review F1).
+            return render_template("chat_error.html",
+                                   message=beta.PAUSED_HUB_TEXT), 423
         try:
             status, html = hc.fetch_review_page(tenant, action_id)
         except HealthClawError:
@@ -1976,6 +2078,17 @@ def create_app(config: Config | None = None,
                             f"/review/{agent_id}/{action_id}/submit")
         return html
 
+    def _count_approval(agent_id):
+        """One approval on a real-record assistant, for the weekly number
+        (beta spec 4.5). The sample is not counted. Never fails a review."""
+        acct = current_account()
+        try:
+            ctx = svc.get_agent_context(acct.id, agent_id)
+            if ctx and ctx["connection"]["kind"] != "sample":
+                svc.count_activity(acct.id, "approved")
+        except Exception:  # noqa: BLE001 - a count never fails a review
+            logger.warning("could not count an approval")
+
     @app.post("/review/<agent_id>/<action_id>/submit")
     @login_required
     def review_submit(agent_id, action_id):
@@ -1986,6 +2099,11 @@ def create_app(config: Config | None = None,
                             "message": _REVIEW_UNCHECKABLE}), 503
         if not tenant:
             return jsonify({"error": "not yours"}), 404
+        if svc.is_paused(current_account().id):
+            # Before the review is submitted, so nothing is confirmed or
+            # executed for a paused account (beta spec 4.6, #856 review F1).
+            return jsonify({"error": "records_paused",
+                            "message": beta.PAUSED_HUB_TEXT}), 423
         decisions = request.get_json(silent=True) or dict(request.form)
         try:
             status, body = hc.submit_review(tenant, action_id, decisions)
@@ -2114,6 +2232,7 @@ def create_app(config: Config | None = None,
                 return jsonify(body), 502
             body = dict(body) if isinstance(body, dict) else {}
             body["confirmed"] = True
+            _count_approval(agent_id)
         return jsonify(body), status
 
     @app.post("/review/<agent_id>/<action_id>/decline")
@@ -2464,6 +2583,9 @@ def create_app(config: Config | None = None,
         if cfg.real_records != "allowlist":
             click.echo(f"note: CARE_REAL_RECORDS is {cfg.real_records!r}; "
                        "invites are read only in 'allowlist' mode")
+        if not tester_terms.approved():
+            click.echo("note: invites are not honoured until the tester "
+                       "terms are approved (#565)")
 
     @_invites.command("revoke")
     @click.argument("email")
@@ -2489,5 +2611,9 @@ def create_app(config: Config | None = None,
                      if r["revoked_at"] else "live")
             click.echo(f"{r['email']:<40} {when:%Y-%m-%d} "
                        f"by {r['invited_by']:<20} {state}")
+
+    # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
+
+    operator_cli.register(app, svc)
 
     return app

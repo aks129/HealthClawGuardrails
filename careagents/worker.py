@@ -17,7 +17,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-from careagents import llm
+from careagents import beta, llm, tester_terms
 from careagents.accounts import AccountService
 from careagents.agent import (MAX_TOOL_ROUNDS,
                               TOOL_LABELS, TOOLS,
@@ -220,6 +220,22 @@ class RunWorker:
         context = self.accounts.get_worker_agent_context(agent_id)
         if context is None or context["tenant"] != tenant:
             raise ValueError("claimed run does not match a CareAgents tenant")
+        blocked = beta.turn_block(context["connection"], context["paused"],
+                                  tester_terms.CONSENT_VERSION)
+        if blocked:
+            # Before any record read and before any model call (beta spec
+            # 4.3 and 4.6). The run still ends normally, with this sentence.
+            self._finish(run, {"text": blocked, "checkpoint_id": "blocked"},
+                         set(), heartbeat)
+            return
+        if context["connection"].get("kind") != "sample":
+            # The weekly number (beta spec 4.5): integers only. A retried run
+            # can count twice; the weekly figure counts accounts, so that
+            # does not move it.
+            try:
+                self.accounts.count_activity(context["account_id"], "asked")
+            except Exception:  # noqa: BLE001 - a count never fails a turn
+                logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"))

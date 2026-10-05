@@ -50,18 +50,34 @@
   const BOLD_OR_ITALIC = /\*\*([^*\n]+)\*\*|\*(\S[^*\n]*?)\*/g;
   const LIST_ITEM = /^\s*(?:[-*]|(\d+)\.)\s+(.*)$/;
 
+  // Two fixed links, never anything the model chooses: the contact address
+  // and "your hub". The href is ours; the text node is the matched words.
+  const LINKS = /contactus@healthclaw\.io|your hub/g;
+  function appendLinked(parent, text) {
+    let last = 0, m;
+    LINKS.lastIndex = 0;
+    while ((m = LINKS.exec(text))) {
+      if (m.index > last)
+        parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = el("a", null, m[0]);
+      a.href = m[0] === "your hub" ? "/home" : "mailto:" + m[0];
+      parent.appendChild(a);
+      last = LINKS.lastIndex;
+    }
+    if (last < text.length)
+      parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
   function appendInline(parent, line) {
     let last = 0, m;
     BOLD_OR_ITALIC.lastIndex = 0;
     while ((m = BOLD_OR_ITALIC.exec(line))) {
-      if (m.index > last)
-        parent.appendChild(document.createTextNode(line.slice(last, m.index)));
+      if (m.index > last) appendLinked(parent, line.slice(last, m.index));
       parent.appendChild(m[1] !== undefined
         ? el("strong", null, m[1]) : el("em", null, m[2]));
       last = BOLD_OR_ITALIC.lastIndex;
     }
-    if (last < line.length)
-      parent.appendChild(document.createTextNode(line.slice(last)));
+    if (last < line.length) appendLinked(parent, line.slice(last));
   }
 
   function renderMarkdown(node, text) {

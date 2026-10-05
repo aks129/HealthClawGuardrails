@@ -51,7 +51,7 @@
     <div class="chat-resumed">Picking up where you left off</div>
     {% for m in past %}
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
-      <p>{{ m.content }}</p>
+      <p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
     </div>
     {% endfor %}
     {% elif summary_counts %}
