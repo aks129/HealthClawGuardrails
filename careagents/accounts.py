@@ -467,14 +467,20 @@ class AccountService:
                          UsageDay.day == day, turns < cap)
                   .values(turns=turns + 1)
                   .execution_options(synchronize_session=False))
-        for _ in range(2):
+        for _ in range(4):
             with self.session() as s:
                 if s.execute(charge).rowcount:
                     # Our row lock holds until commit: this reads our charge.
                     return True, self._turns_today(s, account_id, day)
                 if s.query(UsageDay.id).filter_by(
                         account_id=account_id, day=day).first():
-                    return False, self._turns_today(s, account_id, day)
+                    used = self._turns_today(s, account_id, day)
+                    if used >= cap:
+                        return False, used
+                    # Under the cap: a peer inserted today's row after our
+                    # UPDATE looked and found none (#862 security G1).
+                    # Charge it, rather than refuse a turn the cap allows.
+                    continue
             if cap <= 0:
                 return False, 0
             try:

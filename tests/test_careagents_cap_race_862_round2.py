@@ -66,9 +66,7 @@ def test_first_charge_of_the_day_at_cap_one_lets_exactly_one_through():
         assert (allowed, charged, rows) == (1, 1, 1)
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "#862 round 2: a first-of-day charge that loses the insert race reads the "
-    "peer's row as 'at the cap' and refuses a turn under the cap"))
+# Fixed in #862: a charge that loses the insert race retries the UPDATE.
 def test_first_charge_burst_counts_every_turn_let_through():
     svc = _svc()
     for _ in range(25):
@@ -124,9 +122,7 @@ def _boot(url, q):
         q.put(repr(exc)[:300])
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "#862 round 2: concurrent boots collapsing duplicates deadlock; one boot "
-    "raises OperationalError and the process exits (turns are kept)"))
+# Fixed in #862: the migration runs under one Postgres advisory lock.
 def test_four_processes_booting_at_once_collapse_once_and_keep_every_turn():
     for _ in range(5):
         _old_schema_with_duplicates()
