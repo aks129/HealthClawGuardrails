@@ -105,7 +105,9 @@ test.describe('CareAgents auth', () => {
 
     await expect(page).toHaveURL(/\/home$/);
     await expect(page).toHaveTitle(/Your hub — CareAgents/);
-    await expect(page.locator('main.hub h1')).toHaveText('Welcome back');
+    // "Your hub", not "Welcome back": a brand-new account lands here too
+    // (#847, shipped in #853).
+    await expect(page.locator('main.hub h1')).toHaveText('Your hub');
     await expect(page.locator('.hub-sub')).toContainText(email);
     // NOT asserted: connection/agent/surface dialogs (#224 rebuild).
   });
