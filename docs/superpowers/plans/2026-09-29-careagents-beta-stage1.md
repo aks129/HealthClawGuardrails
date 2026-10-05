@@ -103,7 +103,7 @@ Nothing is built on `X-Human-Confirmed`.
 
 1. **An invited email in a different case or with spaces** (`" Tester@Example.COM "`): the invite must match the account, and a second `invites add` must not make a second row. Pinned in Task 2.
 2. **A pause that lands while a run is already queued**: the run must answer the paused sentence and never call the provider. Pinned in Task 5 (the run is enqueued before the pause).
-3. **A revoked invite and an existing pending Fasten row**: revocation must stop the reuse path from handing out a connect URL, not only the insert path. Pinned in Task 9.
+3. **A revoked invite and an existing pending Fasten row**: revocation must stop the reuse path from handing out a connect URL. Stopping the insert path alone is not enough. Pinned in Task 9.
 4. **A tester chatting through iMessage after the terms bump**: the terms sentence must reach them there too, not only on the web. Pinned in Task 6 (worker-level test).
 5. **`CARE_REAL_RECORDS=on` with a paused account**: `on` must not reopen a paused account. Pinned in Task 4.
 
@@ -1802,7 +1802,7 @@ In `docs/runbooks/careagents-durable-worker.md`, add a section
 "Stage 1 operator commands" with one row per command, and these facts:
 - invites are read only when `CARE_REAL_RECORDS=allowlist` **and** the tester terms are approved; the env allowlist keeps working and is not counted in the 25;
 - revoke stops new connections only;
-- pause stops chat turns (all surfaces), new real connections, new MCP grants, refresh and upload; it does not stop Fasten webhook ingest in the engine or an existing MCP grant; the full stop is `CARE_REAL_RECORDS=off` plus Disconnect or Delete;
+- pause stops chat turns (all surfaces), new real connections, new MCP grants, refresh and upload. It does not stop Fasten webhook ingest in the engine or an existing MCP grant. The full stop is `CARE_REAL_RECORDS=off` plus Disconnect or Delete;
 - `weekly-counts` prints integers only; copy the numbers, never per-person data, into any report.
 
 - [ ] **Step 4: Run to see them pass**
