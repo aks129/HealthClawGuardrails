@@ -168,3 +168,29 @@ together, 50 runs on postgres:16: 0 failing runs of 50, 17 passed each.
 
 Full suites at ab6ed84: SQLite 4967 passed, 60 skipped, 1 xfailed;
 Postgres (as the CI lane) 4985 passed, 44 skipped, 1 xfailed.
+
+
+== Part 4 (patient tester: the sentence at the daily limit), SQLite
+Mutations against tests/test_careagents_beta_daily_cap.py:
+CAUGHT   chat.js: every 429 says the pace sentence (the old code)
+          FAILED tests/test_careagents_beta_daily_cap.py::test_the_chat_says_the_servers_sentence_at_the_daily_limit
+          1 failed, 6 passed in 0.80s
+CAUGHT   chat.js: limitText ignores the server's message
+          FAILED tests/test_careagents_beta_daily_cap.py::test_the_chat_says_the_servers_sentence_at_the_daily_limit
+          1 failed, 6 passed in 0.81s
+CAUGHT   chat.js: a blank message is shown as blank
+          FAILED tests/test_careagents_beta_daily_cap.py::test_the_chat_says_the_servers_sentence_at_the_daily_limit
+          1 failed, 6 passed in 0.79s
+CAUGHT   beta.py: midnight UTC back
+          FAILED tests/test_careagents_beta_daily_cap.py::test_the_daily_limit_sentence_is_plain
+          1 failed, 6 passed in 0.80s
+
+The first mutant (the old fixed sentence in the 429 branch) survived the
+node harness alone, which tests limitText but not its caller; the 429
+branch's source is now pinned, and it is caught.
+Full suite on SQLite: 4969 passed, 60 skipped, 1 xfailed.
+Live at 375px (2026-10-05-stage1-followups-375-chat-daily-limit.png): local
+stack with CARE_CHAT_TURNS_PER_DAY=1, served chat.js checked for limitText
+first. Turn 1 was charged and reached the model (a 401 on the fake key, the
+"Something went wrong" bubble); turn 2 got POST /api/chat 429, and the
+chat showed "You've reached today's message limit. It resets overnight."

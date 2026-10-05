@@ -33,8 +33,8 @@ PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
 #: What a turn answers when the day's allowance is spent by the time the
 #: worker charges it (#856 sign-off F4). The same words as the 429 at
 #: admission.
-DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets at "
-                    "midnight UTC.")
+DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets "
+                    "overnight.")
 
 
 #: What a real-record assistant answers while its connection's consent is
