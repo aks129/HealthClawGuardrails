@@ -11,6 +11,7 @@ SQLite on the VPS, file-locked 0600.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
@@ -19,6 +20,8 @@ from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
                         inspect, text)
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 def _uid(prefix: str) -> str:
@@ -167,6 +170,11 @@ class Grant(Base):
     revoked_at = Column(Float, nullable=True)
 
 
+#: The name of the one-row-per-account-and-day rule on `ca_usage_days`: a
+#: constraint on a new table, a unique index on one made before it.
+USAGE_DAY_UNIQUE = "uq_ca_usage_days_acct_day"
+
+
 class UsageDay(Base):
     """Per-account daily LLM turn count — a durable spend ceiling.
 
@@ -176,8 +184,14 @@ class UsageDay(Base):
     and durable: one row per account per UTC day.
 
     Counts only — no message content, nothing PHI-adjacent.
+
+    One row per account and day, enforced (#862 review F5): two racing
+    first-of-day inserts made two rows, and a read saw only one. A table
+    made before the constraint gets it from `_ensure_usage_day_unique`.
     """
     __tablename__ = "ca_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name=USAGE_DAY_UNIQUE),)
     id = Column(String(32), primary_key=True, default=lambda: _uid("use"))
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
@@ -333,6 +347,89 @@ def _ensure_columns(engine) -> None:
             _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
 
 
+def _usage_day_is_unique(engine) -> bool:
+    """Is (account_id, day) on ca_usage_days already unique, by constraint
+    (a table created from the model) or by index (one migrated here)?"""
+    insp = inspect(engine)
+    pair = ["account_id", "day"]
+    return (any(c["column_names"] == pair
+                for c in insp.get_unique_constraints("ca_usage_days"))
+            or any(i["unique"] and i["column_names"] == pair
+                   for i in insp.get_indexes("ca_usage_days")))
+
+
+#: Postgres advisory-lock key that serialises the ca_usage_days migration
+#: across processes booting together. Any fixed 64-bit number works, as long
+#: as nothing else in this database takes the same one.
+_USAGE_DAY_LOCK_KEY = 8_620_005
+
+#: Postgres SQLSTATE for a detected deadlock: the transaction was rolled
+#: back and is safe to run again.
+_DEADLOCK = "40P01"
+
+
+def _ensure_usage_day_unique(engine) -> None:
+    """Give a ca_usage_days made before the constraint one row per account
+    and day (#862 review F5), idempotently, on SQLite and Postgres.
+
+    Such a table may already hold duplicates, which would fail the index, so
+    each duplicate group is first collapsed into its oldest-id row with the
+    group's summed turns: a turn charged is never forgotten. Collapse and
+    index run in one transaction. A turn charged by an old process between
+    the two can add a duplicate back and fail the index; that is retried.
+
+    Peers are NOT harmless on Postgres (#862 QA): processes booting together
+    on duplicates each took row locks to collapse and then the index's table
+    lock, and deadlocked; 1 to 3 of 4 boots died. So on Postgres the whole
+    transaction first takes one advisory lock, and checks again under it: a
+    peer that finished first leaves nothing to do. A deadlock is still
+    retried, in case some other writer is involved. SQLite serialises
+    writers itself and needs no lock.
+    """
+    if "ca_usage_days" not in inspect(engine).get_table_names():
+        return
+    if _usage_day_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _USAGE_DAY_LOCK_KEY})
+                    if _usage_day_is_unique(conn):
+                        return              # a peer finished while we waited
+                groups = conn.execute(text(
+                    "SELECT account_id, day, MIN(id), SUM(COALESCE(turns, 0)) "
+                    "FROM ca_usage_days GROUP BY account_id, day "
+                    "HAVING COUNT(*) > 1")).all()
+                for account_id, day, keep, total in groups:
+                    conn.execute(text(
+                        "UPDATE ca_usage_days SET turns = :t WHERE id = :k"),
+                        {"t": int(total), "k": keep})
+                    conn.execute(text(
+                        "DELETE FROM ca_usage_days WHERE account_id = :a "
+                        "AND day = :d AND id <> :k"),
+                        {"a": account_id, "d": day, "k": keep})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {USAGE_DAY_UNIQUE} "
+                    "ON ca_usage_days (account_id, day)"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return                      # a peer made the index first
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            # Said, not swallowed: under the advisory lock this should not
+            # happen, and a test asserts it does not.
+            logger.warning("ca_usage_days migration retried: %s",
+                           "deadlock" if not isinstance(exc, IntegrityError)
+                           else "duplicate added during collapse")
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -386,6 +483,7 @@ def make_engine(url: str):
                            **pool_kwargs)
     _create_tables(engine)
     _ensure_columns(engine)
+    _ensure_usage_day_unique(engine)
     return engine
 
 

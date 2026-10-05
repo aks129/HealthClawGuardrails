@@ -197,3 +197,84 @@ def test_account_delete_removes_mixed_case_invite(cfg, svc, monkeypatch):  # noq
     _login(c2, svc, monkeypatch, email=EMAIL)
     with svc.session() as s:
         assert s.query(Account).filter_by(email=EMAIL).one().real_paused_at is None
+
+
+# --- round 2 (head 4b0decf): account-wide accept and the cap skip ------------
+
+def test_account_wide_accept_never_reaches_another_account_or_revoked(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """One accept covers the account's own live real connections only:
+    not another account's, not a revoked one, not a still-connecting one."""
+    app, a, fake, _agent, a_fasten = _real_app(cfg, svc, monkeypatch)
+    a_direct = a.post("/api/connections/direct",
+                      json={"consent": True}).get_json()["id"]
+    a_gone = a.post("/api/connections/direct",
+                    json={"consent": True}).get_json()["id"]
+    b = app.test_client()
+    _login(b, svc, monkeypatch, email="other@example.com")
+    b_direct = b.post("/api/connections/direct",
+                      json={"consent": True}).get_json()["id"]
+    b_pending = b.post("/api/connections/fasten",
+                       json={"consent": True}).get_json()["id"]
+    with svc.session() as s:
+        s.get(Connection, a_gone).status = "revoked"
+    approve_terms(monkeypatch, "2026-10-01")
+    # B anchors on A's connection: refused, nothing on either account moves.
+    assert b.post(f"/api/connections/{a_fasten}/consent",
+                  json={"consent": True}).status_code == 404
+    with svc.session() as s:
+        assert {s.get(Connection, i).consent_version
+                for i in (a_fasten, a_direct, b_direct)} == {"2026-08-01"}
+    # A accepts from its Fasten connection.
+    assert a.post(f"/api/connections/{a_fasten}/consent",
+                  json={"consent": True}).status_code == 200
+    with svc.session() as s:
+        v = {i: (s.get(Connection, i).consent_version,
+                 s.get(Connection, i).reconsented_at)
+             for i in (a_fasten, a_direct, a_gone, b_direct, b_pending)}
+    assert v[a_fasten][0] == v[a_direct][0] == "2026-10-01"
+    assert v[a_gone] == ("2026-08-01", None)          # revoked: untouched
+    assert v[b_direct] == ("2026-08-01", None)        # other account
+    assert v[b_pending] == ("2026-08-01", None)
+    # B anchoring on its own pending row reaches only B's rows.
+    b.post(f"/api/connections/{b_pending}/consent", json={"consent": True})
+    with svc.session() as s:
+        assert s.get(Connection, a_gone).consent_version == "2026-08-01"
+
+
+# Fixed in the #856 follow-up: the day's turn is charged in the worker,
+# where the model is called, after turn_block passes.
+def test_exploit_cap_skip_then_accept_reaches_model_uncharged(
+        cfg, svc, monkeypatch):  # noqa: F811
+    from careagents import agent as agent_mod
+    from careagents.models import UsageDay
+    from careagents.worker import RunWorker
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "model answer", [], []
+    calls = []
+    monkeypatch.setattr(agent_mod.llm, "complete",
+                        lambda *a, **k: calls.append(1) or _Turn())
+    app, c, fake, agent_id, conn_id = _real_app(cfg, svc, monkeypatch)
+    monkeypatch.setattr(cfg, "chat_turns_per_day", 1)
+    approve_terms(monkeypatch, "2026-10-01")       # connection now stale
+    for i in range(3):                              # admitted, never charged
+        r = c.post("/api/chat", json={"agent_id": agent_id, "message": "hi",
+                                      "request_id": f"race-{i}"},
+                   buffered=False)
+        assert r.status_code == 200
+        r.close()
+    assert c.post(f"/api/connections/{conn_id}/consent",
+                  json={"consent": True}).status_code == 200
+    w = RunWorker(cfg, fake, svc, "race-worker")
+    while w.run_once():
+        pass
+    with svc.session() as s:
+        used = sum(int(u.turns or 0) for u in s.query(UsageDay).all())
+    assert len(calls) <= used <= 1, (
+        f"{len(calls)} model calls against a cap of 1, {used} charged")
+    # The two turns past the cap are answered with the limit sentence.
+    from careagents import beta
+    answers = [row["content"] for rows in fake.logged.values()
+               for row in rows if row["role"] == "assistant"]
+    assert answers.count(beta.DAILY_LIMIT_TEXT) == 2

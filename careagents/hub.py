@@ -74,7 +74,9 @@ def build(home: dict, now: float) -> dict:
                   "readers": ", ".join(readers.get(c["id"], []))}
                  for c in conns if c["status"] == "revoked"],
         "connected_kinds": sorted({r["kind"] for r in active}),
-        "has_real": any(not r["is_sample"] for r in active),
+        # Any real connection not revoked: one still connecting, or with no
+        # records yet, is real all the same (#856 sign-off F3).
+        "has_real": any(not r["is_sample"] for r in records),
     }
 
 

@@ -1,0 +1,170 @@
+# CareAgents stage 1 follow-ups (#862): mutations
+# Tree 5bad170 on origin/main 99ec079. Each mutation applied exactly once
+# (count asserted), __pycache__ purged, PYTHONDONTWRITEBYTECODE=1, file
+# restored from memory, not git.
+# Unmutated: full suite on SQLite 4967 passed, 55 skipped, 1 xfailed; full
+# suite against postgres:16 (SQLALCHEMY_DATABASE_URI,
+# MIGRATION_TEST_DATABASE_URL and CARE_TEST_DATABASE_URL, as the CI lane):
+# 4980 passed, 44 skipped, 1 xfailed.
+# 375px screens (same directory, 2026-10-05-stage1-followups-375-*), taken
+# on 8d3fa21 (templates unchanged since): local engine :5291 and web :8691,
+# FLASK_SKIP_DOTENV=1, RESEND_API_KEY empty, CARE_REAL_RECORDS=allowlist,
+# synthetic @example.com accounts.
+# Live, on 5bad170: one sample chat turn against the real engine stored
+# run.queued, run.started, agent.charged {}, then the model call (401 on a
+# fake key); ca_usage_days.turns = 1.
+
+== Part 1: hub, copy, worker charge and its marker (SQLite): 16 of 16
+
+CAUGHT   worker: never charge (iMessage test alone)
+          FAILED tests/test_careagents.py::test_imessage_turns_spend_the_daily_cap - as...
+          1 failed in 1.12s
+CAUGHT   worker: ignore the charged marker
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_worker_killed_in_its_first_model_call_is_charged_once
+          1 failed, 14 passed in 1.84s
+CAUGHT   worker: no charged marker appended
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_worker_killed_in_its_first_model_call_is_charged_once
+          1 failed, 14 passed in 1.84s
+CAUGHT   worker: never charge
+          FAILED tests/test_careagents_beta_daily_cap.py::test_paused_turns_do_not_use_up_the_daily_cap
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_worker_killed_in_its_first_model_call_is_charged_once
+          FAILED tests/test_careagents_beta_security_856.py::test_exploit_cap_skip_then_accept_reaches_model_uncharged
+          FAILED tests/test_careagents.py::test_chat_refuses_once_the_daily_limit_is_reached
+          5 failed, 10 passed in 1.94s
+CAUGHT   worker: charge recovered runs again
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_recovered_run_is_not_charged_twice
+          1 failed, 14 passed in 1.89s
+CAUGHT   worker: ignore a refused claim
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_security_856.py::test_exploit_cap_skip_then_accept_reaches_model_uncharged
+          2 failed, 13 passed in 1.81s
+CAUGHT   admission: no 429 at the limit
+          FAILED tests/test_careagents_beta_daily_cap.py::test_paused_turns_do_not_use_up_the_daily_cap
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents.py::test_chat_refuses_once_the_daily_limit_is_reached
+          3 failed, 12 passed in 1.61s
+CAUGHT   admission: charge again (old behaviour)
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_worker_killed_in_its_first_model_call_is_charged_once
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_recovered_run_is_not_charged_twice
+          3 failed, 12 passed in 1.82s
+CAUGHT   hub: has_real counts active only
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[pending]
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[empty]
+          FAILED tests/test_careagents_calm_hub_view.py::test_has_real_counts_any_real_connection_not_yet_revoked
+          3 failed, 16 passed in 1.12s
+CAUGHT   banner: connected for any real row
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[pending]
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_real_connection_with_no_records_yet_is_not_promised_again[empty]
+          2 failed, 17 passed in 1.24s
+CAUGHT   template: Add records section (and sample button) while paused
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_shows_no_terms_prompt_and_no_invite_line
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_offers_no_made_up_records
+          2 failed, 17 passed in 1.04s
+CAUGHT   template: 'Add some below' while paused
+          FAILED tests/test_careagents_beta_pause_hub.py::test_a_paused_hub_offers_no_made_up_records
+          1 failed, 18 passed in 1.04s
+CAUGHT   sample endpoint: no pause refusal
+          FAILED tests/test_careagents_beta_pause.py::test_a_sample_is_refused_while_paused
+          1 failed, 5 passed in 0.82s
+CAUGHT   sample endpoint: chat sentence instead of the records one
+          FAILED tests/test_careagents_beta_pause.py::test_a_sample_is_refused_while_paused
+          1 failed, 5 passed in 0.87s
+CAUGHT   home.js: no mailto in the band
+          FAILED tests/test_careagents_what_happened.py::test_the_didnt_finish_lines_link_the_one_contact_address
+          1 failed, 45 passed in 1.97s
+CAUGHT   home.js: support@ address back
+          FAILED tests/test_careagents_what_happened.py::test_the_didnt_finish_lines_link_the_one_contact_address
+          1 failed, 45 passed in 1.90s
+
+== Part 2: atomic charge and one row per day (#862 review F5), against
+== postgres:16-alpine so the race probes run: 5 of 7 caught, 2 equivalent
+
+CAUGHT   charge: no cap in the UPDATE
+          FAILED tests/test_careagents_cap_race_862.py::test_exploit_concurrent_charges_exceed_the_cap
+          FAILED tests/test_careagents_beta_daily_cap.py::test_a_turn_over_the_cap_is_answered_without_the_model
+          FAILED tests/test_careagents.py::test_daily_turn_cap_counts_and_then_refuses
+          FAILED tests/test_careagents.py::test_daily_cap_is_per_account - assert True ...
+          FAILED tests/test_careagents.py::test_daily_cap_survives_a_service_restart - ...
+          5 failed, 9 passed in 6.12s
+SURVIVED model: no unique (account_id, day)
+          14 passed in 4.97s
+CAUGHT   boot: migration not called
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[sqlite]
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[postgres]
+          2 failed, 12 passed in 4.74s
+CAUGHT   boot: duplicates not collapsed
+          E       sqlite3.IntegrityError: UNIQUE constraint failed: ca_usage_days.account_id, ca_usage_days.day
+          E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: ca_usage_days.account_id, ca_usage_days.day
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[sqlite]
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[postgres]
+          2 failed, 12 passed in 5.02s
+CAUGHT   boot: collapse keeps the largest, not the sum
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[sqlite]
+          FAILED tests/test_careagents_usage_day_migration.py::test_boot_collapses_duplicates_and_adds_the_unique_index[postgres]
+          2 failed, 12 passed in 4.74s
+CAUGHT   charge: a racing insert is refused, not retried
+          FAILED tests/test_careagents_cap_race_862.py::test_concurrent_first_charges_of_the_day_are_all_let_through
+          1 failed, 13 passed in 4.54s
+SURVIVED used: first row, not the sum
+          14 passed in 4.89s
+
+Survivors, both equivalent:
+- "model: no unique (account_id, day)": the boot step
+  _ensure_usage_day_unique creates the same unique index on any table
+  without one, new or old, so dropping the model's constraint changes
+  nothing that runs. With both removed, two race probes fail on Postgres
+  (combined run below).
+- "used: first row, not the sum": with the unique index there is one row
+  per account and day, so max and sum agree; the sum is for a table read
+  before boot has migrated it, which does not happen in a running app.
+
+Combined (postgres:16):
+CAUGHT model constraint and boot index both removed
+          FAILED tests/test_careagents_cap_race_862.py::test_concurrent_first_charges_of_the_day_are_all_let_through
+          FAILED tests/test_careagents_cap_race_862.py::test_exploit_concurrent_charges_exceed_the_cap
+          2 failed, 1 passed in 1.53s
+
+
+== Part 3 (#862 QA boot deadlock, security G1), tree ab6ed84, postgres:16
+Before the lock: the concurrent-boot test (4 boots, 5 trials) failed in
+trial 0 on each of 3 runs with DeadlockDetected. QA's own repro
+(qa856_pgboot.py, pointed at this database) after the lock:
+  dups: 0/10 trials had a failed boot
+  nodups: 0/10 trials had a failed boot
+Mutations, each run three times so a racy catch is not read as a survivor:
+CAUGHT   no advisory lock (3/3 runs red)
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.19s
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.06s
+          FAILED tests/test_careagents_usage_day_migration.py::test_processes_booting_together_on_duplicates_all_come_up
+          1 failed, 4 passed in 3.07s
+SURVIVED no re-check under the lock (0/3 runs red)
+          5 passed in 1.93s
+          5 passed in 1.96s
+          5 passed in 1.91s
+SURVIVED deadlock not retried (0/3 runs red)
+          5 passed in 1.98s
+          5 passed in 1.92s
+          5 passed in 2.08s
+CAUGHT   G1: refuse when the row appeared under the cap (3/3 runs red)
+
+Survivors, both backstops the lock makes unreachable:
+- "no re-check under the lock": a boot that waited finds no duplicates
+  left and the index already there, so collapsing nothing and CREATE ...
+  IF NOT EXISTS do the same as returning early.
+- "deadlock not retried": with the lock, no boot deadlocks, so the retry
+  never runs; the test asserts that no retry was logged.
+The first lock mutation survived until the retry was made visible: the
+deadlock retry absorbed every deadlock and the boots came up, only
+slower. A retry is now logged, and the test asserts there were none.
+
+Flake check: tests/test_careagents_cap_race_862.py,
+test_careagents_cap_race_862_round2.py,
+test_careagents_usage_day_migration.py and test_careagents_beta_daily_cap.py
+together, 50 runs on postgres:16: 0 failing runs of 50, 17 passed each.
+
+Full suites at ab6ed84: SQLite 4967 passed, 60 skipped, 1 xfailed;
+Postgres (as the CI lane) 4985 passed, 44 skipped, 1 xfailed.

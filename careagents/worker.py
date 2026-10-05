@@ -66,6 +66,10 @@ def _error_class(exc: Exception) -> str:
 _failure_text = agent_failure_text
 
 
+#: The run event that says this run's daily turn is already charged. Empty
+#: payload; the browser projection drops event types it does not know.
+CHARGED_EVENT = "agent.charged"
+
 #: Consecutive heartbeat failures before the lease is given up. The interval
 #: is a third of the lease, so two misses still leave a third of it to
 #: recover in; one miss ending the run was the whole of the defect.
@@ -295,6 +299,27 @@ class RunWorker:
                                 "content": result.get("content") or "{}"})
             if not calls:
                 final_checkpoint = payload
+
+        charged = any(event.get("type") == CHARGED_EVENT for event in events)
+        if not checkpoints and not charged:
+            # The day's allowance is charged here, where the model is called
+            # and after turn_block passed (#856 sign-off F4): a turn admitted
+            # while refused, then unblocked before it was claimed, is
+            # charged like any other. The charge leaves a marker on the run,
+            # so a run recovered after its worker died in the model call is
+            # not charged again (#862 QA). A run with a checkpoint and no
+            # marker was charged before markers existed. A worker that dies
+            # between the charge and the marker still charges twice: the
+            # error is toward the cap, never past it.
+            allowed, _used = self.accounts.claim_daily_turn(
+                context["account_id"], self.cfg.chat_turns_per_day)
+            if not allowed:
+                self._finish(run, {"text": beta.DAILY_LIMIT_TEXT,
+                                   "checkpoint_id": "daily_limit"},
+                             emitted, heartbeat)
+                return
+            self.hc.append_agent_run_event(
+                run_id, self.worker_id, CHARGED_EVENT, {})
 
         if final_checkpoint is not None:
             self._finish(run, final_checkpoint, emitted, heartbeat)
