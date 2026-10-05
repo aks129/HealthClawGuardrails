@@ -183,6 +183,13 @@ def test_the_chat_says_the_servers_sentence_at_the_daily_limit(
     assert got["daily"] == beta.DAILY_LIMIT_TEXT
     assert "few minutes" in got["pace"]
     assert got["empty"] == got["pace"] == got["blankMessage"]
+    # And the 429 branch hands the server's body to it, rather than a fixed
+    # sentence: the branch sits inside the streaming loop, past the reach of
+    # a harness, so its source is pinned.
+    src = CHAT_JS.read_text(encoding="utf-8")
+    branch = src.split("if (resp.status === 429) {", 1)[1].split("}", 1)[0]
+    assert "addAgentText(limitText(await resp.json()" in branch
+    assert "PACE_TEXT" not in branch and "pace limit" not in branch
 
 
 def test_the_daily_limit_sentence_is_plain():
