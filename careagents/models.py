@@ -143,7 +143,44 @@ class Surface(Base):
     handle = Column(String(120), nullable=True)         # chat id / code
     status = Column(String(16), default="pending")      # active|pending
     bound_at = Column(Float, nullable=True)
+    # When a pending pairing code stops working. NULL on a pending row made
+    # before this column existed reads as expired (fail closed).
+    code_exp = Column(Float, nullable=True)
+    # 1 when the next reply on this surface should open with the welcome:
+    # set by a bind that had no message to answer (the sign-in link).
+    welcome_due = Column(Integer, default=0)
     account = relationship("Account", back_populates="surfaces")
+
+
+class ImessageLink(Base):
+    """A one-time sign-in link texted to an unbound iMessage handle.
+
+    Only the token's SHA-256 is stored. Used once, then stamped; expires
+    after 30 minutes. The handle is the sender's address (a phone number or
+    an Apple ID email), the same pointer a bound Surface keeps. No PHI.
+    """
+    __tablename__ = "ca_imessage_links"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("iml"))
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    handle = Column(String(120), nullable=False)
+    created_at = Column(Float, default=now)
+    exp = Column(Float, nullable=False)
+    used_at = Column(Float, nullable=True)
+
+
+class ImessageHandleState(Base):
+    """Per-sender counters and the STOP flag, keyed by a SHA-256 of the
+    normalized handle so the sender's address itself is not kept here.
+
+    Counts only: failed pairing codes and links issued, each in a window.
+    """
+    __tablename__ = "ca_imessage_handles"
+    handle_key = Column(String(64), primary_key=True)
+    opted_out_at = Column(Float, nullable=True)
+    fail_count = Column(Integer, default=0)
+    fail_window_start = Column(Float, nullable=True)
+    link_count = Column(Integer, default=0)
+    link_window_start = Column(Float, nullable=True)
 
 
 class Grant(Base):
@@ -305,6 +342,13 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_surfaces" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
+        if "code_exp" not in cols:
+            _add_column(engine, "ca_surfaces", "code_exp", "FLOAT")
+        if "welcome_due" not in cols:
+            _add_column(engine, "ca_surfaces", "welcome_due",
+                        "INTEGER DEFAULT 0")
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:
@@ -430,6 +474,83 @@ def _ensure_usage_day_unique(engine) -> None:
                            else "duplicate added during collapse")
 
 
+#: One active iMessage binding per handle (#866 security F2): a partial
+#: unique index, so pending rows (which carry a pairing code in `handle`)
+#: and other surface kinds are untouched.
+IMESSAGE_HANDLE_UNIQUE = "uq_ca_surfaces_imessage_active_handle"
+
+#: Advisory-lock key for that migration; distinct from the usage-day one.
+_IMESSAGE_HANDLE_LOCK_KEY = 8_660_002
+
+
+def _imessage_handle_is_unique(conn_or_engine) -> bool:
+    return any(i["name"] == IMESSAGE_HANDLE_UNIQUE
+               for i in inspect(conn_or_engine).get_indexes("ca_surfaces"))
+
+
+def _ensure_imessage_handle_unique(engine) -> None:
+    """Create the partial unique index on active iMessage handles,
+    idempotently, on SQLite and Postgres.
+
+    A table from before it may hold one handle active on two rows (the race
+    the index closes). Each such group keeps its newest binding (latest
+    `bound_at`, then highest id) and the rest are deleted, in the same
+    transaction as the index. On Postgres an advisory lock serialises peers
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    from careagents.imessage import normalize_handle
+    if "ca_surfaces" not in inspect(engine).get_table_names():
+        return
+    if _imessage_handle_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _IMESSAGE_HANDLE_LOCK_KEY})
+                    if _imessage_handle_is_unique(conn):
+                        return
+                # Rows bound before handles were normalized are rewritten to
+                # the normalized form first, so two spellings of one sender
+                # meet in the dedupe below. One that will not normalize keeps
+                # its spelling (still found by the raw-handle fallback).
+                rows = conn.execute(text(
+                    "SELECT id, handle, bound_at FROM ca_surfaces "
+                    "WHERE kind = 'imessage' AND status = 'active'")).all()
+                groups: dict = {}
+                for row_id, handle, bound_at in rows:
+                    norm = normalize_handle(handle) or handle
+                    groups.setdefault(norm, []).append(
+                        (bound_at or 0.0, row_id, handle))
+                for norm, members in groups.items():
+                    members.sort()
+                    keep_bound, keep_id, keep_handle = members[-1]
+                    for _, row_id, _h in members[:-1]:
+                        conn.execute(text(
+                            "DELETE FROM ca_surfaces WHERE id = :i"),
+                            {"i": row_id})
+                    if keep_handle != norm:
+                        conn.execute(text(
+                            "UPDATE ca_surfaces SET handle = :h "
+                            "WHERE id = :i"), {"h": norm, "i": keep_id})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                    f"{IMESSAGE_HANDLE_UNIQUE} ON ca_surfaces (handle) "
+                    "WHERE kind = 'imessage' AND status = 'active'"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            logger.warning("ca_surfaces handle index migration retried")
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -484,6 +605,7 @@ def make_engine(url: str):
     _create_tables(engine)
     _ensure_columns(engine)
     _ensure_usage_day_unique(engine)
+    _ensure_imessage_handle_unique(engine)
     return engine
 
 

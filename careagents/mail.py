@@ -69,3 +69,31 @@ def send_code(cfg, email: str, code: str, purpose: str) -> str:
         logger.error("resend send http %s", r.status_code)
         return NOT_SENT
     return SENT
+
+
+def send_notice(cfg, email: str, subject: str, line: str) -> str:
+    """Send a one-line account notice (no PHI). Returns SENT, NOT_SENT or
+    UNCONFIRMED, as send_code does. With no provider key nothing is sent
+    and nothing is logged: a notice is not needed to sign in."""
+    if not cfg.resend_api_key:
+        return NOT_SENT
+    html = (f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
+            f"<h2 style='color:#22190E'>CareAgents</h2><p>{line}</p></div>")
+    try:
+        r = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {cfg.resend_api_key}"},
+            json={"from": cfg.resend_from, "to": [email],
+                  "subject": f"{subject} — CareAgents", "html": html,
+                  "text": line},
+            timeout=15)
+    except requests.ConnectionError as exc:
+        logger.error("resend notice failed: %s", type(exc).__name__)
+        return NOT_SENT
+    except requests.RequestException as exc:
+        logger.error("resend notice unconfirmed: %s", type(exc).__name__)
+        return UNCONFIRMED
+    if r.status_code not in (200, 201):
+        logger.error("resend notice http %s", r.status_code)
+        return NOT_SENT
+    return SENT

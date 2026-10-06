@@ -472,6 +472,12 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
 .inline-msg:empty, .conn-refresh-msg:empty {
   margin: 0; padding: 0; background: none;
 }
+/* A message that reports success, not a problem: ink on a quiet green,
+   not the error clay. Its own :empty rule, since this one outranks the one
+   above. */
+.inline-msg.is-ok { color: var(--ink); }
+.surface-row > .inline-msg.is-ok { background: #EAF0E8; }
+.surface-row > .inline-msg.is-ok:empty { background: none; }
 
 /* --- picker / code / delete dialogs --------------------------------------- */
 .modal.sheet { align-items: flex-end; }

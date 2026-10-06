@@ -27,7 +27,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
 
 from careagents import mail
 from careagents.models import (Account, ActivityDay, Agent, Connection,
-                               EmailToken, Grant, Passkey, RealRecordInvite,
+                               EmailToken, Grant, ImessageHandleState,
+                               ImessageLink, Passkey, RealRecordInvite,
                                Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
@@ -869,13 +870,16 @@ class AccountService:
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
+        from careagents.imessage import CODE_TTL_SECONDS
         with self.session() as s:
             if not s.query(Agent).filter_by(
                     id=agent_id, account_id=account_id).first():
                 raise AuthError("That agent isn't yours.")
             x = Surface(account_id=account_id, agent_id=agent_id, kind=kind,
                         handle=handle, status=status,
-                        bound_at=now() if status == "active" else None)
+                        bound_at=now() if status == "active" else None,
+                        code_exp=(now() + CODE_TTL_SECONDS
+                                  if status == "pending" else None))
             s.add(x)
             s.flush()
             return x.id
@@ -883,18 +887,28 @@ class AccountService:
     def find_surface_by_code(self, code: str,
                              kind: str = "telegram") -> dict | None:
         with self.session() as s:
-            x = (s.query(Surface)
-                 .filter_by(handle=code, kind=kind, status="pending")
-                 .first())
+            q = s.query(Surface).filter_by(handle=code, kind=kind,
+                                           status="pending")
+            if kind == "imessage":
+                # Codes expire; a row from before the column reads as expired.
+                q = q.filter(Surface.code_exp.isnot(None),
+                             Surface.code_exp > now())
+            x = q.first()
             return _surf_dict(x) | {"account_id": x.account_id} if x else None
 
-    def find_surface_by_handle(self, handle: str,
-                               kind: str = "imessage") -> dict | None:
+    def find_surface_by_handle(self, handle: str, kind: str = "imessage",
+                               also: str | None = None) -> dict | None:
         """Resolve an active surface by the bound external handle — used to
-        route an inbound message to the right agent."""
+        route an inbound message to the right agent. `also` is the handle as
+        it arrived, for a row bound before handles were normalized."""
+        names = {h for h in (handle, also) if h}
+        if not names:
+            return None
         with self.session() as s:
             x = (s.query(Surface)
-                 .filter_by(handle=handle, kind=kind, status="active")
+                 .filter(Surface.handle.in_(names), Surface.kind == kind,
+                         Surface.status == "active")
+                 .order_by(Surface.bound_at.desc())
                  .first())
             return _surf_dict(x) | {"account_id": x.account_id} if x else None
 
@@ -905,6 +919,228 @@ class AccountService:
                 x.handle = handle
                 x.status = "active"
                 x.bound_at = now()
+
+    # --- iMessage: one handle, one account ----------------------------------
+    # Handles arrive normalized (careagents.imessage.normalize_handle).
+
+    def bind_imessage_handle(self, account_id: str, handle: str,
+                             pending_surface_id: str | None = None,
+                             welcome: bool = False,
+                             also: str | None = None) -> str:
+        """Bind a handle to an account: "connected" or "taken".
+
+        A handle is bound to at most one account. Bound elsewhere, nothing
+        changes until that binding is undone (STOP, or disconnect on the
+        web). Bound here already, the older binding is replaced, so a new
+        pairing code moves the handle to that code's assistant. `also` is
+        the handle as it arrived, for a row bound before normalization.
+
+        The check below is a read; the partial unique index on active
+        iMessage handles (models._ensure_imessage_handle_unique) is what
+        holds when two binds race, and its refusal reads as "taken".
+        """
+        try:
+            return self._bind_imessage_handle(
+                account_id, handle, pending_surface_id, welcome, also)
+        except IntegrityError:
+            return "taken"
+
+    def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
+                              welcome, also) -> str:
+        names = {h for h in (handle, also) if h}
+        with self.session() as s:
+            bound = (s.query(Surface)
+                     .filter(Surface.kind == "imessage",
+                             Surface.handle.in_(names),
+                             Surface.status == "active").all())
+            if any(x.account_id != account_id for x in bound):
+                return "taken"
+            if pending_surface_id:
+                x = s.get(Surface, pending_surface_id)
+                if x is None or x.account_id != account_id:
+                    return "taken"
+            else:
+                first = (s.query(Agent).filter_by(account_id=account_id)
+                         .order_by(Agent.id).first())
+                x = Surface(account_id=account_id, kind="imessage",
+                            agent_id=first.id if first else None)
+                s.add(x)
+            for old in bound:
+                s.delete(old)
+            # Deleted before the new row takes the handle, or the unique
+            # index sees both at once.
+            s.flush()
+            x.handle = handle
+            x.status = "active"
+            x.bound_at = now()
+            x.code_exp = None
+            x.welcome_due = 1 if welcome else 0
+            st = self._handle_state(s, handle)
+            st.opted_out_at = None
+            return "connected"
+
+    def imessage_agent_context(self, surface: dict) -> dict | None:
+        """The agent a bound handle talks to. A handle bound by the sign-in
+        link before the account had an assistant gets the account's first
+        one, once it exists."""
+        agent_id = surface.get("agent_id")
+        if not agent_id:
+            with self.session() as s:
+                first = (s.query(Agent)
+                         .filter_by(account_id=surface["account_id"])
+                         .order_by(Agent.id).first())
+                if first is None:
+                    return None
+                agent_id = first.id
+                x = s.get(Surface, surface["id"])
+                if x is not None:
+                    x.agent_id = agent_id
+            surface["agent_id"] = agent_id
+        return self.get_agent_context(surface["account_id"], agent_id)
+
+    def take_imessage_welcome(self, surface_id: str) -> bool:
+        """True once, if this surface's next reply should open with the
+        welcome. A conditional update, so two racing turns welcome once."""
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id,
+                                   Surface.welcome_due == 1)
+                            .values(welcome_due=0))
+            return res.rowcount == 1
+
+    def disconnect_imessage(self, account_id: str,
+                            surface_id: str | None = None) -> int:
+        """Remove one iMessage binding on the account (`surface_id`), or
+        every binding and pending code. Each freed handle gets its link
+        allowance back, so its next text is answered with a fresh link
+        rather than silence."""
+        with self.session() as s:
+            q = s.query(Surface).filter_by(account_id=account_id,
+                                           kind="imessage")
+            if surface_id is not None:
+                q = q.filter_by(id=surface_id, status="active")
+            rows = q.all()
+            for x in rows:
+                if x.status == "active" and x.handle:
+                    st = s.get(ImessageHandleState, _handle_key(x.handle))
+                    if st is not None:
+                        st.link_count, st.link_window_start = 0, None
+                s.delete(x)
+            return len(rows)
+
+    def _handle_state(self, s, handle: str) -> ImessageHandleState:
+        key = _handle_key(handle)
+        st = s.get(ImessageHandleState, key)
+        if st is None:
+            st = ImessageHandleState(handle_key=key, fail_count=0,
+                                     link_count=0)
+            s.add(st)
+        return st
+
+    def imessage_stop(self, handle: str, also: str | None = None) -> bool:
+        """Unbind the handle (and the raw spelling `also`, for a row bound
+        before normalization), void its unused sign-in links, and remember
+        the STOP. True if this is news: not already opted out."""
+        names = list({h for h in (handle, also) if h})
+        with self.session() as s:
+            s.query(Surface).filter(
+                Surface.kind == "imessage", Surface.handle.in_(names),
+                Surface.status == "active").delete(synchronize_session=False)
+            s.query(ImessageLink).filter(
+                ImessageLink.handle.in_(names),
+                ImessageLink.used_at.is_(None)).update(
+                    {"used_at": now()}, synchronize_session=False)
+            st = self._handle_state(s, handle)
+            first = st.opted_out_at is None
+            st.opted_out_at = st.opted_out_at or now()
+            return first
+
+    def imessage_opted_out(self, handle: str) -> bool:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.opted_out_at)
+
+    def imessage_opt_in(self, handle: str) -> None:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            if st is not None:
+                st.opted_out_at = None
+
+    def imessage_bind_locked(self, handle: str) -> bool:
+        from careagents.imessage import BIND_ATTEMPTS, WINDOW_SECONDS
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.fail_window_start
+                        and now() - st.fail_window_start < WINDOW_SECONDS
+                        and (st.fail_count or 0) >= BIND_ATTEMPTS)
+
+    def imessage_note_bind_failure(self, handle: str) -> None:
+        from careagents.imessage import WINDOW_SECONDS
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.fail_window_start
+                    or now() - st.fail_window_start >= WINDOW_SECONDS):
+                st.fail_window_start, st.fail_count = now(), 0
+            st.fail_count = (st.fail_count or 0) + 1
+
+    def issue_imessage_link(self, handle: str) -> str | None:
+        """Mint a one-time sign-in link for `handle`; the token is returned
+        once and only its hash is kept. None past the window's allowance."""
+        from careagents.imessage import (LINK_TTL_SECONDS, LINKS_PER_WINDOW,
+                                         WINDOW_SECONDS, hash_token,
+                                         new_link_token)
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.link_window_start
+                    or now() - st.link_window_start >= WINDOW_SECONDS):
+                st.link_window_start, st.link_count = now(), 0
+            if (st.link_count or 0) >= LINKS_PER_WINDOW:
+                return None
+            st.link_count = (st.link_count or 0) + 1
+            token = new_link_token()
+            s.add(ImessageLink(token_hash=hash_token(token), handle=handle,
+                               exp=now() + LINK_TTL_SECONDS))
+            return token
+
+    def peek_imessage_link(self, token: str) -> str | None:
+        """The id of a live (unused, unexpired) link, without spending it."""
+        from careagents.imessage import hash_token
+        with self.session() as s:
+            link = (s.query(ImessageLink)
+                    .filter_by(token_hash=hash_token(token))
+                    .filter(ImessageLink.used_at.is_(None),
+                            ImessageLink.exp > now()).first())
+            return link.id if link else None
+
+    def void_imessage_link(self, link_id: str) -> None:
+        """Spend a link without binding anything ("No, this isn't mine")."""
+        with self.session() as s:
+            s.execute(update(ImessageLink)
+                      .where(ImessageLink.id == link_id,
+                             ImessageLink.used_at.is_(None))
+                      .values(used_at=now()))
+
+    def imessage_link_handle(self, link_id: str) -> str | None:
+        """The handle a live link would bind, for the confirm page."""
+        with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None or link.used_at is not None or link.exp <= now():
+                return None
+            return link.handle
+
+    def claim_imessage_link(self, link_id: str, account_id: str) -> str:
+        """Spend a link for a signed-in account and bind its handle:
+        "connected", "taken" or "expired". Spent exactly once."""
+        with self.session() as s:
+            res = s.execute(update(ImessageLink)
+                            .where(ImessageLink.id == link_id,
+                                   ImessageLink.used_at.is_(None),
+                                   ImessageLink.exp > now())
+                            .values(used_at=now()))
+            if res.rowcount != 1:
+                return "expired"
+            handle = s.get(ImessageLink, link_id).handle
+        return self.bind_imessage_handle(account_id, handle, welcome=True)
 
 
 # --- detach helpers: return plain dict-ish objects usable after the session --
@@ -951,6 +1187,27 @@ def _surf_dict(x: Surface) -> dict:
 def _opts_to_dict(options_json: str) -> dict:
     import json
     return json.loads(options_json)
+
+
+def secret_matches(provided: str, expected: str) -> bool:
+    """A shared secret from a request header, compared in constant time.
+
+    Both sides are hashed here first, so `compare_digest` only ever meets
+    two hexdigests this process computed: no caller spelling (non-ASCII, a
+    lone surrogate) can raise inside it (#557). An empty expected secret
+    matches nothing.
+    """
+    if not expected:
+        return False
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(
+            str(value).encode("utf-8", "surrogatepass")).hexdigest()
+    return hmac.compare_digest(digest(provided), digest(expected))
+
+
+def _handle_key(handle: str) -> str:
+    return hashlib.sha256(handle.encode()).hexdigest()
 
 
 def new_binding_code() -> str:

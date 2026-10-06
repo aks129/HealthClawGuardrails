@@ -4902,12 +4902,12 @@ def test_the_imessage_relay_is_told_to_retry_not_that_the_run_vanished(
                   json={"agent_id": agent_id}).get_json()["code"]
     headers = {"X-Internal-Secret": cfg.mint_secret}
     assert c.post("/api/surfaces/imessage/bind", headers=headers,
-                  json={"code": code, "handle": "im-test-handle"}
+                  json={"code": code, "handle": "+15550100999"}
                   ).status_code == 200
 
     fake.get_agent_run = _unreachable
     r = c.get("/api/surfaces/imessage/runs/run-1", headers=headers,
-              query_string={"handle": "im-test-handle"})
+              query_string={"handle": "+15550100999"})
     assert r.status_code == 503
     assert r.get_json()["error"] == "run service unavailable"
 
@@ -4965,7 +4965,7 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
                       json={"code": code, "handle": "+15559998888"}
                       ).status_code == 200
     assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
-                      json={"code": "bogus", "handle": "+1"}
+                      json={"code": "bogus", "handle": "+15550100998"}
                       ).status_code == 404
 
     # inbound: fake the worker's model turn, assert the reply is relayed back
@@ -4984,9 +4984,16 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
         json={"handle": "+15559998888", "text": "how's my a1c?"})
     assert ok.status_code == 200
     assert "6.1%" in ok.get_json()["reply"]
-    # an unbound handle is not routed (don't answer strangers)
+    # an unbound handle is not routed to anyone's agent: it gets a sign-in
+    # link and no run (text-first onboarding)
+    stranger = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                          json={"handle": "+15550100777", "text": "hi"})
+    assert stranger.status_code == 200
+    assert "/link?t=" in stranger.get_json()["reply"]
+    assert "run_id" not in stranger.get_json()
+    # one we cannot text back (a short code) gets nothing at all
     assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
-                      json={"handle": "+1000", "text": "hi"}
+                      json={"handle": "12345", "text": "hi"}
                       ).status_code == 404
 
 
@@ -5019,16 +5026,27 @@ def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
         with svc.session() as s:
             return sum(int(u.turns or 0) for u in s.query(UsageDay).all())
 
-    first = _enqueue_and_run_imessage(
-        app, relay, headers=hdrs,
-        json={"handle": "+15550001111", "text": "hi", "request_id": "im-1"})
-    assert first.get_json()["reply"] == "model answer"
-    assert used() == 1
-    second = _enqueue_and_run_imessage(
-        app, relay, headers=hdrs,
-        json={"handle": "+15550001111", "text": "again", "request_id": "im-2"})
-    assert second.get_json()["reply"] == beta.DAILY_LIMIT_TEXT
+    from careagents.worker import RunWorker
+    runtime = app.extensions["careagents_runtime"]
+    # Both admitted before either runs, so the second meets the cap in the
+    # worker, and the texter reads it through the runs endpoint.
+    runs = [relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": t,
+                             "request_id": f"im-{i}"}).get_json()["run_id"]
+            for i, t in enumerate(("hi", "again"))]
+    for _ in runs:
+        RunWorker(runtime["config"], runtime["client"], runtime["accounts"],
+                  "cap-worker").run_once()
+    replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
+                         query_string={"handle": "+15550001111"}
+                         ).get_json()["reply"] for r in runs]
+    assert replies == ["model answer", beta.DAILY_LIMIT_TEXT]
     assert calls == [1] and used() == 1
+    # Once spent, admission answers it too, without queueing a run.
+    third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": "more"})
+    assert third.status_code == 200
+    assert third.get_json() == {"reply": beta.DAILY_LIMIT_TEXT}
 
 
 def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):

@@ -14,7 +14,7 @@ EnvironmentFile=/etc/careagents/careagents.env
 ExecStart=/opt/careagents/venv/bin/gunicorn careagents.wsgi:app \
   --bind 127.0.0.1:8600 --workers 2 --threads 4 --timeout 180 \
   --access-logfile - --error-logfile - \
-  --access-logformat '%%(h)s "%%(r)s" %%(s)s %%(M)sms'
+  --access-logformat '%%(h)s "%%(m)s %%(U)s" %%(s)s %%(M)sms'
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

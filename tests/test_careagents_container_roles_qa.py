@@ -48,7 +48,7 @@ WEB_ARGV = [
     "--timeout", "180",
     "--access-logfile", "-",
     "--error-logfile", "-",
-    "--access-logformat", '%(h)s "%(r)s" %(s)s %(M)sms',
+    "--access-logformat", '%(h)s "%(m)s %(U)s" %(s)s %(M)sms',
 ]
 WORKER_ARGV = ["python", "-m", "careagents.worker"]
 
@@ -227,7 +227,11 @@ def test_the_web_command_changed_only_where_a_measurement_changed_it():
     # loosened away: #219 measured the thread pool starving `/healthz` and
     # raised it 4 -> 8. Anything else still fails, including a second edit to
     # the same flag — this comparison would then be against 8, not against 4.
-    RETUNES = [("--threads 4", "--threads 8", "#219, measured")]
+    # #866 security F1: the access log dropped the query string (a texted
+    # sign-in link carries its token there), path only.
+    RETUNES = [("--threads 4", "--threads 8", "#219, measured"),
+               ('%(h)s "%(r)s"', '%(h)s "%(m)s %(U)s"',
+                "#866 F1, no query string in the access log")]
 
     previous = subprocess.run(
         ["git", "-C", str(REPO), "show",
