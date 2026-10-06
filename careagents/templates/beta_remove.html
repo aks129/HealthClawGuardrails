@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Remove my request — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# The link from a beta email. Opening it only asks: mail scanners open
+   links, and a GET that deleted would be spent before the person saw it. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card beta-page">
+    {% if outcome == "ask" %}
+    <h1>Remove my request</h1>
+    <p>This deletes your beta request: your name, email and phone number.
+      It does not delete a CareAgents account. You can do that in Settings.</p>
+    <form method="post" action="/beta/remove">
+      <input type="hidden" name="t" value="{{ token }}">
+      <button class="btn-primary btn-block" type="submit">Remove my request</button>
+    </form>
+    {% elif outcome == "removed" %}
+    <h1>Done</h1>
+    <p>Your beta request is removed.</p>
+    {% else %}
+    <h1>This link no longer works</h1>
+    <p>It was used already, or a newer email replaced it. Use the link in our
+      latest email, or <a href="{{ feedback }}">write to us</a>.</p>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}
