@@ -178,6 +178,25 @@ def mailbox(email: str) -> str:
     return f"{local}@{domain}"
 
 
+def account_key(email: str) -> str:
+    """One form for an account's email and a request's: accounts keep the
+    domain as typed, requests keep it in ASCII (`ascii_email`). Both reduce
+    to the same mailbox, so deleting an account, the purge's account check
+    and the hub tile find the request either way."""
+    typed = (email or "").strip().lower()
+    return mailbox(ascii_email(typed) or typed)
+
+
+def delete_for_account(s, email: str) -> None:
+    """Delete the beta requests an account's email reaches, and give any
+    freed spot to the queue (`delete_account`)."""
+    key = account_key(email)
+    for row in s.query(BetaRequest).all():
+        if account_key(row.email) == key:
+            s.delete(row)
+    promote(s)
+
+
 def clean_mobile(value: str) -> str | None:
     """A typed number as E.164, the way iMessage handles are read (ten
     digits are +1). An email-shaped handle is not a mobile."""
@@ -525,13 +544,13 @@ def purge(session_scope, at: float | None = None) -> tuple[int, int]:
     moment = at if at is not None else time.time()
     with session_scope() as s:
         _expire_lapsed(s, moment)
-        accounts = {e for (e,) in s.query(Account.email)}
+        accounts = {account_key(e) for (e,) in s.query(Account.email)}
         gone = 0
         for row in s.query(BetaRequest).all():
             stale_pending = (row.status == "pending" and row.updated_at
                              < moment - PENDING_DAYS * _DAY)
             stale = (row.created_at < moment - REQUEST_DAYS * _DAY
-                     and row.email not in accounts)
+                     and account_key(row.email) not in accounts)
             if stale_pending or stale:
                 s.delete(row)
                 gone += 1
@@ -916,10 +935,10 @@ def text_tile(cfg, hub: dict, session_scope, email: str) -> dict | None:
     number = text_number(cfg)
     if not number or not hub["records"] or hub["has_real"]:
         return None
-    box = mailbox(email or "")
+    box = account_key(email)
     with session_scope() as s:
         added = (s.query(BetaRequest.email)
                  .filter(BetaRequest.status.in_(_CAN_TEXT)).all())
-    if not any(mailbox(e) == box for (e,) in added):
+    if not any(account_key(e) == box for (e,) in added):
         return None
     return {"number": show_number(number), "sms": f"sms:{number}"}

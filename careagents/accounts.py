@@ -26,8 +26,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+# Also puts the beta tables in Base.metadata before any engine is built.
 from careagents import beta_signup
-from careagents.beta_signup import BetaRequest
 from careagents.models import (Account, ActivityDay, Agent, Connection,
                                EmailToken, Grant, ImessageHandleState,
                                ImessageLink, Passkey, RealRecordInvite,
@@ -596,10 +596,10 @@ class AccountService:
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.
             s.query(RealRecordInvite).filter_by(email=acct.email).delete()
-            # So is a beta request (beta onboarding brief section 5); its
-            # iMessage spot goes to the oldest waitlisted request.
-            s.query(BetaRequest).filter_by(email=acct.email).delete()
-            beta_signup.promote(s)
+            # So is a beta request (beta onboarding brief section 5),
+            # matched by mailbox since a request keeps its domain in ASCII;
+            # its iMessage spot goes to the oldest waitlisted request.
+            beta_signup.delete_for_account(s, acct.email)
             s.delete(acct)
             return True
 

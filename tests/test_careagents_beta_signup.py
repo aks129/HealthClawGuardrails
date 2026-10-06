@@ -1253,3 +1253,43 @@ def test_a_twin_on_the_waitlist_is_not_told_the_line_is_full(made, sent):
     assert ("Your request is on the waitlist for iMessage. The web app "
             "works today.") in welcome
     assert "iMessage is full" not in welcome
+
+
+# --- round 5: accounts keep the typed domain, requests the ASCII one ---------
+
+_IDN_EMAILS = ["ida@bücher.example", "ida@ｂｕｃｈｅｒ.example"]
+
+
+@pytest.mark.parametrize("email", _IDN_EMAILS)
+def test_deleting_an_idn_account_deletes_its_request(made, monkeypatch,
+                                                     email):
+    app, svc = made()
+    c = app.test_client()
+    assert _post(c, email=email).status_code == 200
+    _post(c, ip="198.51.100.9", email="other@example.com")
+    assert len(_rows(svc)) == 2
+    _login(c, svc, monkeypatch, email=email)
+    r = c.post("/api/account/delete", json={"confirm": "DELETE"})
+    assert r.status_code == 200
+    assert [row["email"] for row in _rows(svc)] == ["other@example.com"]
+
+
+@pytest.mark.parametrize("email", _IDN_EMAILS)
+def test_purge_exempts_an_idn_account_holder(made, monkeypatch, email):
+    app, svc = made()
+    c = app.test_client()
+    _post(c, email=email)
+    stored = _rows(svc)[0]["email"]
+    beta_signup.mark(svc.session, stored, "new")
+    _login(c, svc, monkeypatch, email=email)
+    with svc.session() as s:
+        s.get(beta_signup.BetaRequest, stored).created_at = 1.0
+    beta_signup.purge(svc.session)
+    assert [row["email"] for row in _rows(svc)] == [stored]
+
+
+def test_account_key_matches_typed_and_stored_forms():
+    for typed in _IDN_EMAILS:
+        stored = beta_signup.ascii_email(typed.lower())
+        assert beta_signup.account_key(typed) == \
+            beta_signup.account_key(stored)
