@@ -444,6 +444,12 @@
   catch (e) { pendingReviews = []; }
   pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
 
+  // A texted answer cannot carry a chart, so it links here with ?chart=
+  // (careagents/imessage.py run_reply). The topic only narrows the series;
+  // the readings still come from /api/labs/timeline under this session.
+  const chartTopic = new URLSearchParams(window.location.search).get("chart");
+  if (chartTopic !== null) addLabTimelineCard(chartTopic.slice(0, 64));
+
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>
     b.addEventListener("click", () => send(b.textContent)));

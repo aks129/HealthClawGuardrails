@@ -241,8 +241,11 @@ class RunWorker:
             except Exception:  # noqa: BLE001 - a count never fails a turn
                 logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
+        # The engine tags each run with the surface its message arrived on;
+        # a text thread gets the texting style (careagents/personas.py).
         prompt = system_prompt(
-            agent["name"], agent["persona"], agent.get("advisor"))
+            agent["name"], agent["persona"], agent.get("advisor"),
+            surface=str(run.get("surface") or ""))
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -422,7 +425,8 @@ class RunWorker:
             try:
                 content = _execute_tool(
                     self.hc, tenant, tool_name, arguments, side_events,
-                    agent_id=str(run.get("agent_id") or ""))
+                    agent_id=str(run.get("agent_id") or ""),
+                    surface=str(run.get("surface") or ""))
             except HealthClawError as exc:
                 content = json.dumps({"error": str(exc)})
             envelope = {"content": content, "ui_events": side_events}

@@ -234,8 +234,8 @@ def test_a_media_only_message_is_told_text_only(sb_cfg, sb_svc, monkeypatch):
     app, c, fake, *_ = _app(sb_cfg, sb_svc, monkeypatch)
     r = _hook(c, "", media_url="https://example.com/x.jpg")
     assert r.status_code == 200
-    assert fake.sent == [(PHONE, sendblue_surface.MEDIA_ONLY_TEXT)]
-    assert sendblue_surface.MEDIA_ONLY_TEXT == "I can only read text for now."
+    assert fake.sent == [(PHONE, sendblue_surface.PHOTO_TEXT)]
+    assert sendblue_surface.PHOTO_TEXT.startswith("I can only read text for now")
 
 
 def test_a_failure_inside_the_core_lets_sendblue_retry(

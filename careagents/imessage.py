@@ -21,6 +21,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import quote
 
 from careagents.agent import GENERIC_FAILURE_TEXT
 
@@ -39,11 +40,22 @@ CONTACT = "contactus@healthclaw.io"
 # --- what the texter reads ------------------------------------------------
 # Plain and short: the reader is on a phone and may never have seen the app.
 
+#: Things to ask, for HELP and the welcome. Each one reaches a feature: the
+#: health summary, labs, care gaps, the lab trend, the visit brief and the
+#: intake form.
+MENU_TEXT = ("1. What medications am I on?\n"
+             "2. What do my labs say?\n"
+             "3. Any screenings due?\n"
+             "4. Has my cholesterol changed?\n"
+             "5. Get me ready for my visit\n"
+             "6. Fill out my intake form")
+
 WELCOME_TEXT = (
     "You're connected to CareAgents. Text me questions about your health "
-    "records. I can explain lab results and help you write questions for "
-    "your next visit. If something needs your OK, I'll send a link so you "
-    "can approve it. Text STOP any time to stop.")
+    "records, for example:\n" + MENU_TEXT + "\n"
+    "I can explain lab results and help with your next visit. If something "
+    "needs your OK, I'll send a link so you can approve it. Text APPROVALS "
+    "to see what's waiting, or STOP any time to stop.")
 
 # A text that names the help address names both brands, so the address
 # does not read as a stranger's.
@@ -53,8 +65,9 @@ WELCOME_TEXT = (
 # used CareAgents, connected or stopped.
 HELP_TEXT = (
     "CareAgents (by HealthClaw) answers questions about your health "
-    "records. Text START for a sign-in link, or STOP to stop. Need a "
-    f"person? Write to {CONTACT}.")
+    "records. Try:\n" + MENU_TEXT + "\n"
+    "Text START for a sign-in link, APPROVALS for requests waiting on you, "
+    f"or STOP to stop. Need a person? Write to {CONTACT}.")
 
 STOP_TEXT = ("Done. CareAgents won't text you anymore. Text START if you "
              "want to come back.")
@@ -84,6 +97,32 @@ START_CAPPED_TEXT = ("I've sent several links in the last half hour. "
                      "Please wait 30 minutes, then text START again.")
 
 TOO_LONG_TEXT = "That message is too long. Please send a shorter one."
+
+# The approvals page's own sentence (app.py, #215): a count we could not
+# get is never said as zero.
+APPROVALS_UNCHECKABLE_TEXT = (
+    "I couldn't check for requests right now. Nothing has been approved or "
+    "declined. Please try again in a moment.")
+
+
+def _host(origin: str) -> str:
+    return origin.split("://", 1)[-1].rstrip("/") or origin
+
+
+def approvals_text(count: int, origin: str, agent_id: str) -> str:
+    link = f"{origin}/agents/{agent_id}/approvals"
+    if count == 0:
+        return f"Nothing is waiting for your OK. Your requests: {link}"
+    noun = "request" if count == 1 else "requests"
+    return f"You have {count} {noun} waiting for your OK: {link}"
+
+
+def connect_text(origin: str) -> str:
+    """CONNECT points to the web: records are connected there, after the
+    consent card, never by text."""
+    return ("To connect your records, open "
+            f"{_host(origin)}/home#connect-section on your phone and look "
+            "under Add records. Texts stay on sample records for now.")
 
 
 def link_text(url: str) -> str:
@@ -193,12 +232,13 @@ STOP_WORDS = frozenset({"stop", "stopall", "unsubscribe", "cancel", "end",
 
 
 def keyword(text: str) -> str | None:
-    """"stop", "help" or "start" when the whole message is that word (or a
-    STOP synonym), else None. Case-insensitive; trailing . or ! ignored."""
+    """"stop", "help", "start", "approvals" or "connect" when the whole
+    message is that word (or a STOP synonym), else None. Case-insensitive;
+    trailing . or ! ignored."""
     word = text.strip().rstrip(".!").strip().lower()
     if word in STOP_WORDS:
         return "stop"
-    return word if word in ("help", "start") else None
+    return word if word in ("help", "start", "approvals", "connect") else None
 
 
 def pairing_code(text: str) -> str | None:
@@ -221,28 +261,97 @@ FINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "waiting_for_human"})
 
 def timeout_text(origin: str) -> str:
-    host = origin.split("://", 1)[-1].rstrip("/") or origin
-    return f"That took too long. Please try again or open {host}."
+    return f"That took too long. Please try again or open {_host(origin)}."
+
+
+# Markdown the model may still write on a text surface. Only at a line's
+# start for headings and bullets, and only paired single asterisks around
+# words: a URL's `#fragment`, an id's `_` and `2*3` must survive.
+_MD_HEADING = re.compile(r"(?m)^[ \t]*#{1,6}[ \t]+")
+_MD_BULLET = re.compile(r"(?m)^([ \t]*)\*[ \t]+")
+_MD_EMPHASIS = re.compile(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])")
+
+
+def plain_text(text: str) -> str:
+    """Markdown stripped, as a backstop to the texting style prompt."""
+    text = text.replace("**", "")
+    text = _MD_HEADING.sub("", text)
+    text = _MD_BULLET.sub(r"\1- ", text)
+    return _MD_EMPHASIS.sub(r"\1", text)
+
+
+#: One text's length, and how many one answer may take. Past that, the
+#: rest is on the web.
+TEXT_PART_LIMIT = 1000
+MAX_TEXT_PARTS = 4
+
+
+def _break_long(paragraph: str, limit: int) -> list[str]:
+    """A paragraph longer than `limit`, cut between words (or hard, for a
+    run with no spaces)."""
+    pieces = []
+    while len(paragraph) > limit:
+        cut = paragraph.rfind(" ", 0, limit + 1)
+        if cut <= 0:
+            cut = limit
+        pieces.append(paragraph[:cut].rstrip())
+        paragraph = paragraph[cut:].lstrip()
+    if paragraph:
+        pieces.append(paragraph)
+    return pieces
+
+
+def split_reply(text: str, origin: str) -> list[str]:
+    """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
+    paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
+    longer answer ends by pointing to the web."""
+    chunks: list[str] = []
+    for paragraph in (p.strip() for p in text.split("\n\n")):
+        if not paragraph:
+            continue
+        for piece in _break_long(paragraph, TEXT_PART_LIMIT):
+            if chunks and len(chunks[-1]) + 2 + len(piece) <= TEXT_PART_LIMIT:
+                chunks[-1] += "\n\n" + piece
+            else:
+                chunks.append(piece)
+    if len(chunks) <= MAX_TEXT_PARTS:
+        return chunks or [text]
+    tail = f"Open {_host(origin)} for the rest."
+    last = _break_long(chunks[MAX_TEXT_PARTS - 1],
+                       TEXT_PART_LIMIT - len(tail) - 2)[0]
+    return [*chunks[:MAX_TEXT_PARTS - 1], f"{last}\n\n{tail}"]
 
 
 def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
     """A finished run's events as the text sent back: the agent's words,
-    then a review link for a form and the URL of a signed document. Both
-    the relay's runs endpoint and the Sendblue deliverer send this."""
+    then a link for each card a phone cannot show (a form to review, a
+    signed document, the lab chart, the visit brief). Both the relay's runs
+    endpoint and the Sendblue deliverer send this."""
     parts: list[str] = []
     extras: list[str] = []
     for event in events or []:
         kind = event.get("type")
         payload = event.get("payload") or {}
         if kind == "agent.text" and payload.get("text"):
-            parts.append(payload["text"])
+            parts.append(plain_text(payload["text"]))
         elif kind == "agent.card" and payload.get("type") == "card":
-            if payload.get("kind") == "review":
+            card = payload.get("kind")
+            if card == "lab-timeline":
+                topic = str(payload.get("topic") or "")[:64]
+                link = (f"See the chart: {origin}/chat?agent={agent_id}"
+                        f"&chart={quote(topic, safe='')}")
+                if link not in extras:
+                    extras.append(link)
+            elif card == "brief":
+                link = f"Your full visit brief: {origin}/brief?agent={agent_id}"
+                if link not in extras:
+                    extras.append(link)
+            elif card == "review":
                 extras.append(
                     "I've prepared a form for your review — approve each "
                     f"item here: {origin}/review/{agent_id}/"
                     f"{payload.get('action_id', '')}")
-            elif payload.get("kind") == "pdf" and payload.get("url"):
+            elif card == "pdf" and payload.get("url"):
                 extras.append(
                     f"Your signed document is ready: {payload['url']}")
         elif kind == "agent.error":
@@ -270,6 +379,9 @@ class Deps:
     burst_window_seconds: float = 600
     #: (account_id, handle) after a handle is newly bound. Tells the owner.
     on_connected: Callable[[str, str], None] | None = None
+    #: ctx -> how many requests wait for this person's OK. Raises
+    #: `queue_error` when that could not be found out; never 0 for it.
+    pending_count: Callable[[dict], int] | None = None
 
 
 def link_url(origin: str, token: str) -> str:
@@ -358,9 +470,22 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     if word == "start":
         return {"reply": START_BOUND_TEXT}, 200
 
+    if word == "connect":
+        return {"reply": connect_text(deps.origin)}, 200
+
     ctx = svc.imessage_agent_context(surface)
     if not ctx:
         return {"reply": no_agent_text(deps.origin)}, 200
+    if word == "approvals" and deps.pending_count is not None:
+        # A count and a link, no record content, so it comes before the
+        # transport's own refusal: the approvals page is where a person on
+        # real records has to go anyway.
+        try:
+            count = deps.pending_count(ctx)
+        except deps.queue_error:
+            return {"reply": APPROVALS_UNCHECKABLE_TEXT}, 200
+        return {"reply": approvals_text(count, deps.origin,
+                                        ctx["agent"]["id"])}, 200
     refused = transport_block(ctx) if transport_block else None
     if refused:
         return {"reply": refused}, 200

@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import json
 
+from careagents import brief as brief_mod
 from careagents import labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 
 MAX_TOOL_ROUNDS = 6
+
+#: Surfaces that are a phone's text thread: no cards, no charts, no
+#: markdown. A card there becomes a link back to the web app.
+TEXT_SURFACES = frozenset({"imessage", "sms"})
 
 # Keep a conversation from growing without limit. Nothing trimmed these before,
 # so a heavy user's cost per turn climbed forever and eventually the request
@@ -118,6 +123,12 @@ TOOLS = [
              "MedicationStatement",
              "AllergyIntolerance", "Immunization", "Procedure"]},
      }, "required": ["resource_type"]}},
+    {"name": "appointment_brief",
+     "description": ("A short pre-visit brief from the person's records: "
+                     "problems, medications, recent labs, screenings due and "
+                     "recent visits. Use for 'get me ready for my visit' or "
+                     "'what should I bring up with my doctor'."),
+     "parameters": {"type": "object", "properties": {}, "required": []}},
     {"name": "start_intake_form",
      "description": ("Start filling the new-patient intake form from the "
                      "person's records. This only PROPOSES the form — a "
@@ -139,6 +150,7 @@ TOOL_LABELS = {
     "show_lab_timeline": "Charting your results over time",
     "get_care_gaps": "Checking preventive care gaps",
     "search_records": "Searching your records",
+    "appointment_brief": "Preparing your visit brief",
     "start_intake_form": "Preparing your intake form",
     "check_form_status": "Checking your form",
 }
@@ -325,8 +337,34 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     return out
 
 
+#: Fields per brief section handed to the model; the page has the rest.
+MAX_BRIEF_FIELDS = 6
+
+
+def _timeline_in_words(series: dict) -> dict:
+    """What a text needs instead of a chart: the first and latest reading
+    and the direction, worked out here so the model never computes one.
+    A single reading has no direction, so it gets neither."""
+    out = {"name": series["name"], "readings": len(series["readings"]),
+           "trend_plottable": series["trend_plottable"]}
+    if not series["trend_plottable"]:
+        return out
+    dated = [r for r in series["readings"] if r["date"]]
+    first, latest = dated[0], dated[-1]
+    out["first"] = {"date": first["date"], "value": first["value"],
+                    "unit": first["unit"] or series["unit"]}
+    out["latest"] = {"date": latest["date"], "value": latest["value"],
+                     "unit": latest["unit"] or series["unit"]}
+    out["direction"] = ("higher" if latest["value"] > first["value"]
+                        else "lower" if latest["value"] < first["value"]
+                        else "unchanged")
+    return out
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
-                  args: dict, events: list, agent_id: str = "") -> str:
+                  args: dict, events: list, agent_id: str = "",
+                  surface: str = "") -> str:
+    on_text = surface in TEXT_SURFACES
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
@@ -369,6 +407,26 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         if series:
             events.append({"type": "card", "kind": "lab-timeline",
                            "topic": topic})
+        if on_text:
+            # A text thread cannot show the chart, so the words have to
+            # carry it: first, latest and direction per plottable series.
+            # The card still goes out; run_reply turns it into a link.
+            return json.dumps({
+                "chart_shown": False,
+                "series": [_timeline_in_words(s) for s in series],
+                "note": ("The chart cannot be shown in a text message. "
+                         "Describe the trend in words in one or two "
+                         "sentences, using first, latest and direction; a "
+                         "link to the chart is sent with your answer. A "
+                         "series with trend_plottable false has a single "
+                         "reading — say so, and never describe it as rising "
+                         "or falling."
+                         if series else
+                         "No lab series matched in the CONNECTED records. "
+                         "That is not the same as the person never having "
+                         "had this test — say so, and do not report it as "
+                         "absent."),
+            })
         # The model gets SHAPE, not the readings: how many series, how many
         # points, whether a trend is even plottable. The chart carries the
         # numbers. Handing them over too would invite the model to restate
@@ -431,9 +489,45 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                        "review_url": f"/review/{agent_id}/{action_id}"})
         return json.dumps({
             "action_id": action_id, "status": "awaiting_confirmation",
-            "note": ("Proposed. A Review & approve card is now visible to "
+            "note": ("Proposed. The person gets a link to review and "
+                     "approve each item; nothing is generated until they "
+                     "do. Say you'll send a link."
+                     if on_text else
+                     "Proposed. A Review & approve card is now visible to "
                      "the person; nothing is generated until they approve "
                      "each item themselves.")})
+    if name == "appointment_brief":
+        raw = hc.fetch_appointment_brief(tenant)
+        if raw is None:
+            # The engine answered and has no brief. That says nothing about
+            # whether the person has a visit, or any history.
+            return json.dumps({
+                "brief": None,
+                "note": ("No visit brief could be built from the connected "
+                         "records. That does not mean the person has no "
+                         "visit or no history — say the brief is not "
+                         "available here and do not report anything as "
+                         "absent.")})
+        sections = {}
+        notes = []
+        for section, fields in brief_mod.parse_sections(raw).items():
+            sections[section] = [
+                {"label": f.get("label"), "value": f.get("value")}
+                for f in fields[:MAX_BRIEF_FIELDS] if isinstance(f, dict)]
+            if len(fields) > MAX_BRIEF_FIELDS:
+                notes.append(f"Only {MAX_BRIEF_FIELDS} of {len(fields)} "
+                             f"{section} items are shown; do not describe "
+                             "that list as complete.")
+        if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
+            notes.append("The screening review did not complete. Do not say "
+                         "no screenings are due.")
+        events.append({"type": "card", "kind": "brief"})
+        notes.append("Summarize in a few short lines; a link to the full "
+                     "brief is sent with your answer."
+                     if on_text else
+                     "Summarize briefly; the full brief is on the person's "
+                     "Visit brief page.")
+        return json.dumps({"sections": sections, "note": " ".join(notes)})
     if name == "check_form_status":
         action_id = str(args.get("action_id") or "")
         status = hc.action_status(tenant, action_id)

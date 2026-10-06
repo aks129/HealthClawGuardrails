@@ -34,6 +34,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
 from careagents import sendblue_surface
+from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -108,7 +109,12 @@ _UPLOAD_MIME_TYPES = frozenset({
     "application/json+fhir",
 })
 
-_BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+# The brief is read in careagents/brief.py, shared with the agent's
+# appointment_brief tool; these names are kept for this module's callers.
+_BRIEF_SECTION_PREFIX = brief_mod.SECTION_PREFIX
+_parse_brief_sections = brief_mod.parse_sections
+_care_gaps_marker = brief_mod.care_gaps_marker
+_CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
 
 #: What a pending request is called on the approvals page, by engine kind.
@@ -145,56 +151,6 @@ class OwnershipUnknown(Exception):
     testing the `validate_step_up_token` tuple, which is a standing
     non-negotiable in this repo. An exception cannot be mis-read that way.
     """
-
-
-def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
-    """Deserialize a FHIR Basic AppointmentBrief into section→field lists.
-
-    Each section is a list of dicts with keys: label, value, sourceType, sourceId.
-    Returns {} on any parse error so the template always gets a plain dict —
-    empty sections render as 'not available from connected records'.
-    """
-    out: dict[str, list[dict]] = {}
-    try:
-        for ext in resource.get("extension", []):
-            url = ext.get("url", "")
-            if not url.startswith(_BRIEF_SECTION_PREFIX):
-                continue
-            name = url[len(_BRIEF_SECTION_PREFIX):]
-            fields = []
-            for fe in ext.get("extension", []):
-                raw = fe.get("valueString")
-                if raw:
-                    try:
-                        fields.append(json.loads(raw))
-                    except (ValueError, TypeError):
-                        pass
-            out[name] = fields
-    except (AttributeError, TypeError):
-        pass
-    return out
-
-
-# Mirrors r6.brief.engine.CARE_GAPS_OK. CareAgents talks to HealthClaw over
-# HTTP and imports nothing from it, so the string is repeated rather than
-# shared.
-_CARE_GAPS_OK = "ok"
-
-
-def _care_gaps_marker(resource: dict | None, key: str) -> str:
-    """One `status`/`reason` sub-extension of the brief's care-gaps section,
-    or "" when the brief, the section or the marker is missing or unreadable."""
-    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
-    try:
-        for ext in (resource or {}).get("extension", []):
-            if ext.get("url") != care_gaps_url:
-                continue
-            for sub in ext.get("extension", []):
-                if sub.get("url") == key:
-                    return sub.get("valueString") or ""
-    except (AttributeError, TypeError):
-        pass
-    return ""
 
 
 def _parse_care_gaps_status(resource: dict | None) -> str:
@@ -2402,7 +2358,10 @@ def create_app(config: Config | None = None,
         queue_turn=_imessage_queue_turn,
         queue_error=HealthClawError,
         burst_window_seconds=cfg.chat_window_seconds,
-        on_connected=_imessage_connected)
+        on_connected=_imessage_connected,
+        # APPROVALS by text: the approvals page's own source and its rule —
+        # an engine that cannot answer raises, never reads as zero (#215).
+        pending_count=lambda ctx: len(hc.pending_actions(ctx["tenant"])))
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
     sendblue_surface.register(app, cfg, svc, imessage_deps)

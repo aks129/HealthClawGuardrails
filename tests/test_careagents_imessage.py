@@ -290,13 +290,14 @@ def test_stop_inside_a_sentence_is_just_a_message(cfg, svc, monkeypatch):  # noq
     assert svc.find_surface_by_handle(PHONE)
 
 
-def test_help_is_one_line_with_the_contact_address(cfg, svc, monkeypatch):  # noqa: F811
+def test_help_is_one_text_with_the_contact_address(cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
     r = _inbound(c, PHONE, "HELP")
     assert r.get_json() == {"reply": imessage.HELP_TEXT}
     assert "contactus@healthclaw.io" in imessage.HELP_TEXT
-    assert "\n" not in imessage.HELP_TEXT
+    # One text, not a thread: a menu, but inside one message.
+    assert len(imessage.HELP_TEXT) <= imessage.TEXT_PART_LIMIT
 
 
 def test_start_while_connected_just_says_so(cfg, svc, monkeypatch):  # noqa: F811
@@ -620,8 +621,16 @@ def test_help_says_how_to_start_and_names_both_brands(
     reply = _inbound(c, PHONE, "help").get_json()["reply"]
     assert reply == imessage.HELP_TEXT == (
         "CareAgents (by HealthClaw) answers questions about your health "
-        "records. Text START for a sign-in link, or STOP to stop. Need a "
-        "person? Write to contactus@healthclaw.io.")
+        "records. Try:\n"
+        "1. What medications am I on?\n"
+        "2. What do my labs say?\n"
+        "3. Any screenings due?\n"
+        "4. Has my cholesterol changed?\n"
+        "5. Get me ready for my visit\n"
+        "6. Fill out my intake form\n"
+        "Text START for a sign-in link, APPROVALS for requests waiting on "
+        "you, or STOP to stop. Need a person? Write to "
+        "contactus@healthclaw.io.")
 
 
 def test_the_older_bind_route_refuses_an_untextable_handle(
