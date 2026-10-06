@@ -51,8 +51,8 @@ WELCOME_TEXT = (
 # used CareAgents, connected or stopped.
 HELP_TEXT = (
     "CareAgents (by HealthClaw) answers questions about your health "
-    "records. Text START or any message for a sign-in link, or STOP to "
-    f"stop. Need a person? Write to {CONTACT}.")
+    "records. Text START for a sign-in link, or STOP to stop. Need a "
+    f"person? Write to {CONTACT}.")
 
 STOP_TEXT = ("Done. CareAgents won't text you anymore. Text START if you "
              "want to come back.")

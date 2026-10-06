@@ -435,7 +435,7 @@ def test_settings_disconnects_imessage(cfg, svc, monkeypatch):  # noqa: F811
     _pair(c, agent_id)
     page = c.get("/settings").get_data(as_text=True)
     assert 'class="pill im-disconnect"' in page and "connected" in page
-    r = c.post("/api/surfaces/imessage/disconnect")
+    r = c.post("/api/surfaces/imessage/disconnect", json={"all": True})
     assert r.status_code == 200 and r.get_json()["removed"] == 1
     assert svc.find_surface_by_handle(PHONE) is None
     # Not opted out: texting again offers a fresh link.
@@ -620,8 +620,8 @@ def test_help_says_how_to_start_and_names_both_brands(
     reply = _inbound(c, PHONE, "help").get_json()["reply"]
     assert reply == imessage.HELP_TEXT == (
         "CareAgents (by HealthClaw) answers questions about your health "
-        "records. Text START or any message for a sign-in link, or STOP to "
-        "stop. Need a person? Write to contactus@healthclaw.io.")
+        "records. Text START for a sign-in link, or STOP to stop. Need a "
+        "person? Write to contactus@healthclaw.io.")
 
 
 def test_the_older_bind_route_refuses_an_untextable_handle(
@@ -774,7 +774,8 @@ def test_web_disconnect_gives_the_phone_a_fresh_link(cfg, svc, monkeypatch):  # 
         _inbound(c, PHONE, "hi")
     assert _inbound(c, PHONE, "hi").get_json() == {}       # capped
     _pair(c, agent_id)
-    assert c.post("/api/surfaces/imessage/disconnect").status_code == 200
+    assert c.post("/api/surfaces/imessage/disconnect",
+                  json={"all": True}).status_code == 200
     assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
 
 
@@ -828,12 +829,41 @@ def test_no_column_remembers_that_a_number_was_ever_connected():
                                    "/api/surfaces/imessage/disconnect",
                                    "/api/surfaces/imessage/bind",
                                    "/api/surfaces/imessage/inbound"])
-@pytest.mark.parametrize("body", [["x"], "text", 7, None])
-def test_imessage_routes_refuse_a_non_object_body(
-        cfg, svc, monkeypatch, route, body):  # noqa: F811
-    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
-    r = c.post(route, headers=HDRS, json=body)
-    assert r.status_code == 400 if body is not None else r.status_code < 500
+@pytest.mark.parametrize("raw", [
+    b"null", b"[]", b"0", b"false", b'""', b'["x"]', b'"text"', b"7",
+    b"{not json", b"{", b"\xff\xfe"])
+def test_imessage_routes_refuse_a_falsy_or_malformed_body(
+        cfg, svc, monkeypatch, route, raw):  # noqa: F811
+    """`get_json(silent=True) or {}` read every one of these as {}; on
+    Disconnect, {} meant every phone. Each is a 400 now, and nothing
+    is unbound."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    r = c.post(route, headers={**HDRS, "Content-Type": "application/json"},
+               data=raw)
+    assert r.status_code == 400, (raw, r.status_code)
+    assert svc.find_surface_by_handle(PHONE)
+
+
+def test_disconnect_needs_a_phone_or_an_explicit_all(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    for kwargs in ({}, {"json": {}}, {"json": {"all": False}},
+                   {"json": {"all": "true"}}, {"json": {"all": 1}}):
+        r = c.post("/api/surfaces/imessage/disconnect", **kwargs)
+        assert r.status_code == 400, kwargs
+        assert svc.find_surface_by_handle(PHONE), kwargs
+    r = c.post("/api/surfaces/imessage/disconnect", json={"all": True})
+    assert r.status_code == 200 and r.get_json()["removed"] == 1
+    assert svc.find_surface_by_handle(PHONE) is None
+
+
+def test_settings_disconnect_always_names_its_phone():
+    js = (Path(__file__).resolve().parents[1] / "careagents" / "static"
+          / "home.js").read_text()
+    calls = re.findall(r'post\("/api/surfaces/imessage/disconnect",\s*([^)]*)\)',
+                       js)
+    assert calls and all("surface_id" in c for c in calls), calls
 
 
 def test_each_disconnect_button_names_its_phone(cfg, svc, monkeypatch):  # noqa: F811

@@ -2405,12 +2405,22 @@ def create_app(config: Config | None = None,
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
 
+    def _imessage_json_object() -> dict | None:
+        """The request's JSON object, {} when there is no body at all, or
+        None for anything else. `get_json(silent=True) or {}` read null,
+        [], 0, false, "" and malformed JSON as {}, and on Disconnect {}
+        meant every phone."""
+        body = request.get_json(silent=True)
+        if body is None:
+            return None if request.get_data(cache=True) else {}
+        return body if isinstance(body, dict) else None
+
     @app.post("/api/surfaces/imessage")
     @login_required
     def connect_imessage():
         acct = current_account()
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
+        body = _imessage_json_object()
+        if body is None:
             return jsonify({"error": "body must be a JSON object"}), 400
         agent_id = body.get("agent_id", "")
         if not svc.get_agent_context(acct.id, agent_id):
@@ -2429,15 +2439,18 @@ def create_app(config: Config | None = None,
     @login_required
     def disconnect_imessage():
         """Settings' Disconnect: unbind one phone ({surface_id}), or every
-        iMessage handle on the account when none is named. A freed phone may
-        text again later and get a fresh sign-in link."""
+        iMessage handle on the account only when asked in so many words
+        ({"all": true}). Anything else is a 400, never "all". A freed phone
+        may text again later and get a fresh sign-in link."""
         acct = current_account()
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
+        body = _imessage_json_object()
+        if body is None:
             return jsonify({"error": "body must be a JSON object"}), 400
         surface_id = body.get("surface_id")
         if surface_id is not None and not isinstance(surface_id, str):
             return jsonify({"error": "invalid surface_id"}), 400
+        if surface_id is None and body.get("all") is not True:
+            return jsonify({"error": "name a surface_id, or all: true"}), 400
         removed = svc.disconnect_imessage(acct.id, surface_id)
         if surface_id is not None and not removed:
             return jsonify({"error": "unknown phone"}), 404
@@ -2449,8 +2462,8 @@ def create_app(config: Config | None = None,
         same line now; kept so a relay not yet updated keeps pairing."""
         if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
+        body = _imessage_json_object()
+        if body is None:
             return jsonify({"error": "body must be a JSON object"}), 400
         code = str(body.get("code") or "").replace("care_", "").replace(
             "care ", "").strip().lower()
@@ -2472,8 +2485,8 @@ def create_app(config: Config | None = None,
         for the agent's answer."""
         if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
+        body = _imessage_json_object()
+        if body is None:
             return jsonify({"error": "body must be a JSON object"}), 400
         request_id = body.get("request_id")
         conversation_id = body.get("conversation_id")
