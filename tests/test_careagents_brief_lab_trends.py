@@ -41,7 +41,7 @@ def _page(app, svc, monkeypatch, brief):  # noqa: F811
     return resp.get_data(as_text=True)
 
 
-HEADING = "Something to raise with your clinician"
+HEADING = "Something to raise with your doctor"
 
 
 def _alert(body):
@@ -58,7 +58,7 @@ def test_the_page_leads_with_the_trend(app, svc, monkeypatch):  # noqa: F811
     assert HEADING in alert
     assert RISE in alert and PROMPTLY in alert
     intro = body.index("A snapshot of your records")
-    assert intro < body.index(HEADING) < body.index("Active problems")
+    assert intro < body.index(HEADING) < body.index("Current conditions")
 
 
 def test_the_trend_names_no_resource_type_or_id(app, svc, monkeypatch):  # noqa: F811

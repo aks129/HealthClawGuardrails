@@ -332,8 +332,30 @@ def _leaf_value(repeat_item, leaf_link_id):
     return None
 
 
+_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def _shown(value):
+    """How one answer reads on the page, never what is stored (#884 G7): a
+    date as "Mar 15, 1985" and a lowercase code such as "female" with a
+    capital. The QuestionnaireResponse keeps the value as it was."""
+    if not isinstance(value, str):
+        return value
+    parts = value.split('-')
+    if len(parts) == 3 and all(p.isdigit() for p in parts) and len(parts[0]) == 4:
+        try:
+            return f'{_MONTHS[int(parts[1]) - 1]} {int(parts[2])}, {parts[0]}'
+        except IndexError:
+            return value
+    if value.isalpha() and value.islower():
+        return value.capitalize()
+    return value
+
+
 def _demographics(draft_qr):
-    """Ordered (label, value) pairs from the populated demographics group."""
+    """Ordered (label, value) pairs from the populated demographics group,
+    as the page shows them."""
     labels = {
         'demographics.given-name': 'First name',
         'demographics.family-name': 'Last name',
@@ -360,7 +382,7 @@ def _demographics(draft_qr):
                         or ans['valueCoding'].get('code')
             if value is not None:
                 out.append((labels.get(child.get('linkId'),
-                                       child.get('linkId')), value))
+                                       child.get('linkId')), _shown(value)))
     return out
 
 

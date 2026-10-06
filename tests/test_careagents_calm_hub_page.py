@@ -103,7 +103,7 @@ def test_the_assistant_card_has_chat_brief_and_a_menu(app, svc, monkeypatch):
     body = c.get("/home").get_data(as_text=True)
     assert f'href="/chat?agent={agent}">Chat</a>' in body
     assert f'href="/brief?agent={agent}">Visit brief</a>' in body
-    assert "Reads Sample records" in body
+    assert "Reads sample records" in body
     assert 'class="agent-rename"' in body and 'class="agent-delete"' in body
     # One active connection: nothing to change records to.
     assert 'class="agent-move"' not in body

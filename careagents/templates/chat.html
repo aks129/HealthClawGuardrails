@@ -14,7 +14,11 @@
     <div class="chat-tools">
       <a class="pill" href="/home">← hub</a>
       <a class="pill" href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
-      <span class="pill pill-quiet" id="trust-pill" title="Today's safety grade">…</span>
+      {# A link to what the grade means, the same page the landing links
+         (#884 G7). Off-site, so a new tab: the chat stays where it was. #}
+      <a class="pill pill-quiet" id="trust-pill" title="See how the safety grade is worked out"
+         href="https://app.healthclaw.io/r6/fhir/$conformance?format=text"
+         target="_blank" rel="noopener">Safety grade: …</a>
     </div>
   </div>
 
@@ -53,32 +57,29 @@
     {# Returning: replay what was actually said rather than greeting them as a
        stranger. The starters are for someone who hasn't asked anything yet. #}
     <div class="chat-resumed">Picking up where you left off</div>
+    {# .msg is white-space: pre-wrap (it keeps a reply's line breaks), so
+       every space between these tags would be drawn. Each bubble is written
+       with no text outside its <p> (#884 G7). #}
     {% for m in past %}
     <div class="msg {{ 'user' if m.role == 'user' else 'agent' }}">
-      <p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
-    </div>
+      {#- -#}<p>{% if m.role == 'user' %}{{ m.content }}{% else %}{{ m.content | chat_links }}{% endif %}</p>
+      {#- -#}</div>
     {% endfor %}
     {% elif summary_counts %}
     {# First visit with connected records: show real counts so the user sees
        immediate value rather than a generic capabilities list. #}
+    {# "test results & measurements", not "lab results": this counts every
+       Observation — vitals and wearable readings included — and the number
+       is now a true total, so the label has to be true too. One line per
+       paragraph: .msg draws every newline and indent (pre-wrap). #}
     <div class="msg agent">
-      <p>Hi — I'm {{ me.name }}. I found
-      <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>,
-      <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>,
-      {# "test results & measurements", not "lab results": this counts every
-         Observation — vitals and wearable readings included — and the number
-         is now a true total, so the label has to be true too. #}
-      and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong>
-      in your records. Want me to walk through what they show?</p>
-    </div>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in your records. Want me to walk through what they show?</p>
+      {#- -#}</div>
     {% else %}
     <div class="msg agent">
-      <p>Hi — I'm {{ me.name }}. I can read the health records in this space,
-      explain labs in plain language, check what preventive care is due, and
-      fill out your new-patient intake form — though you'll approve every line
-      of that yourself.</p>
-      <p>What would you like to know?</p>
-    </div>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I can read the health records in this space, explain labs in plain language, check what preventive care is due, and fill out your new-patient intake form — though you'll approve every line of that yourself.</p>
+      {#- -#}<p>What would you like to know?</p>
+      {#- -#}</div>
     {% endif %}
     {% if not past %}
     {# One block for every first visit. Intake comes first: that path ends
@@ -101,6 +102,7 @@
 <script>
 window.CARE_AGENT = {{ agent_id|tojson }};
 window.CARE_CONVERSATION = {{ conversation_id|tojson }};
+window.CARE_AGENT_NAME = {{ me.name|tojson }};
 </script>
 <script src="{{ url_for('static', filename='chat.js') }}"></script>
 {% endblock %}

@@ -384,12 +384,12 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
             results.append({**base, "applicable": True, "status": "indeterminate",
                             "indeterminate_reason": "evidence-not-read",
                             "unread_evidence": rule["unread_evidence"],
-                            "note": (f"we do not yet read {rule['unread_evidence']}, "
-                                     "so we cannot tell whether this is up to "
-                                     "date — worth raising with your clinician")})
+                            "note": (f"We don't read {rule['unread_evidence']} "
+                                     "yet, so we can't tell whether this is up "
+                                     "to date. Ask your doctor about it.")})
         else:
             results.append({**base, "applicable": True, "status": "due",
-                            "note": ("no record found in your connected data — "
-                                     "you may already be up to date elsewhere; "
-                                     "confirm with your clinician")})
+                            "note": ("We didn't find one in your records. You "
+                                     "may already have had it elsewhere, so "
+                                     "check with your doctor.")})
     return results

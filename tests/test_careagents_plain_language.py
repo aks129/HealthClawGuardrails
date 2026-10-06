@@ -83,7 +83,9 @@ def test_the_brief_shows_no_record_type_or_id(app, svc, monkeypatch):  # noqa: F
                  "demo-med-lis", "demo-obs-a1c", "crc-screening",
                  "demo-enc-1", "read-only"):
         assert word not in page, word
-    assert page.count("From your records") == 5
+    assert page.count("From your records") == 4
+    # Preventive care is due because nothing was found: no record behind it.
+    assert page.count("Based on your age and sex") == 1
     # The items themselves still show.
     assert "Hypertension" in page and "Hemoglobin A1c" in page
 
@@ -320,6 +322,103 @@ def test_the_local_stack_names_public_base_url():
     doc = (ROOT / "docs" / "development.md").read_text()
     block = doc[doc.index("## A local CareAgents stack"):]
     assert "PUBLIC_BASE_URL=" in block
+
+
+# --- #884 patient tester, G7 ------------------------------------------------
+
+def test_the_safety_pill_is_a_link_to_the_grade(cfg, svc, monkeypatch):  # noqa: F811
+    _app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    pill = re.search(r'<a [^>]*id="trust-pill"[^>]*>', page)
+    assert pill, "the pill is not a link"
+    assert "$conformance" in pill.group(0)
+    js = (ROOT / "careagents" / "static" / "chat.js").read_text()
+    assert 'pill.textContent = "Safety grade: " + grade;' in js
+
+
+def test_the_review_card_names_the_assistant(cfg, svc, monkeypatch):  # noqa: F811
+    _app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert 'window.CARE_AGENT_NAME = "Juniper";' in page
+    js = (ROOT / "careagents" / "static" / "chat.js").read_text()
+    assert ('AGENT_NAME + " filled it in from your records. Check each " +\n'
+            '        "medication and allergy. Nothing is made until you '
+            'approve."') in js
+
+
+def test_chat_bubbles_carry_no_stray_whitespace(cfg, svc, monkeypatch):  # noqa: F811
+    """.msg is white-space: pre-wrap, so template indentation was drawn."""
+    _app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
+    first = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    for bubble in re.findall(r'<div class="msg agent">.*?</div>', first, re.S):
+        inner = bubble[len('<div class="msg agent">'):-len("</div>")]
+        assert inner.startswith("<p>") and inner.endswith("</p>"), bubble
+        assert "\n" not in inner, bubble
+    fake.logged[(tenant, fake.conversation_id(agent_id))] = [
+        {"id": "m1", "role": "user", "content": "how are my labs?"},
+        {"role": "assistant", "content": "They look steady."}]
+    again = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
+    assert '<div class="msg user"><p>how are my labs?</p></div>' in again
+    assert '<div class="msg agent"><p>They look steady.</p></div>' in again
+
+
+def test_the_brief_is_the_visit_brief_with_one_disclaimer(app, svc, monkeypatch):  # noqa: F811
+    page = _brief_page(app, svc, monkeypatch)
+    assert "<title>Visit brief — CareAgents</title>" in page
+    assert "<h1>Visit brief</h1>" in page
+    assert "Current conditions" in page and "Active problems" not in page
+    assert "clinician" not in _visible(page)
+    assert _visible(page).count("Not medical advice") == 1
+    assert "decision support" not in _visible(page)
+
+
+def test_the_screening_line_reads_as_sentences():
+    from r6.caregaps.evaluate import evaluate_care_gaps
+    from r6.caregaps.report import build_consumer_summary
+    patient = {"resourceType": "Patient", "gender": "female",
+               "birthDate": "1990-01-01"}
+    lines = build_consumer_summary(evaluate_care_gaps(
+        patient, as_of="2026-10-06"))["lines"]
+    cervical = next(line for line in lines
+                    if line["rule_id"] == "cervical-screening")
+    assert cervical["message"] == (
+        "You may be due for a cervical cancer screening (Pap test, every 3 "
+        "years). We didn't find one in your records. You may already have "
+        "had it elsewhere, so check with your doctor.")
+    for line in lines:
+        assert "clinician" not in line["message"]
+        assert " — " not in line["message"]
+
+
+def test_the_hub_and_sign_in_read_plainly(app, svc, monkeypatch):  # noqa: F811
+    c = app.test_client()
+    _login(c, svc, monkeypatch)
+    c.post("/api/connections/sample")
+    hub = _visible(c.get("/home").get_data(as_text=True))
+    assert "Reads Sample records" not in hub
+    assert "CareAgents keeps only your account, not your health records." \
+        in " ".join(hub.split())
+    assert ("We keep a list of when your records were looked at, with no "
+            "health details. Deleting your records doesn't delete that "
+            "list.") in " ".join(hub.split())
+    auth = (ROOT / "careagents" / "templates" / "auth.html").read_text()
+    assert "can't be phished" not in auth
+    assert "can't be stolen by a fake site" in auth
+    js = (ROOT / "careagents" / "static" / "home.js").read_text()
+    assert '"ready."' not in js
+
+
+def test_a_failed_turn_says_so_without_an_emoji():
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    assert GENERIC_FAILURE_TEXT == (
+        "Something went wrong on our side. Try asking again.")
+    js = (ROOT / "careagents" / "static" / "chat.js").read_text()
+    assert "⚠️" not in js
+
+
+def test_the_delete_confirmation_is_spaced():
+    css = (ROOT / "careagents" / "static" / "careagents.css").read_text()
+    assert ".modal-card .delete-warn + .field-label { margin-top: 20px; }" in css
 
 
 def test_no_tester_screen_uses_the_jargon(app, svc, monkeypatch):  # noqa: F811

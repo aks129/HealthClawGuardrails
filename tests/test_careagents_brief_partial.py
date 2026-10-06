@@ -25,7 +25,7 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
 
 _CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
                       "brief-section-care-gaps")
-_UNAVAILABLE_COPY = "Screening review unavailable"
+_UNAVAILABLE_COPY = "We couldn't check your screenings just now."
 _NO_GAPS_COPY = "no preventive care items"
 
 # 56, female, nothing on file: colorectal is eligible and undecided (stool

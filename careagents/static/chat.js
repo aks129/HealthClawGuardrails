@@ -3,6 +3,7 @@
 (function () {
   const AGENT = window.CARE_AGENT || "";
   const CONVERSATION = window.CARE_CONVERSATION || "";
+  const AGENT_NAME = window.CARE_AGENT_NAME || "Your assistant";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -160,8 +161,8 @@
     } else {
       c.appendChild(el("h4", null, "Review & approve your intake form"));
       c.appendChild(el("p", null,
-        "Your agent filled it from the records — now every medication and " +
-        "allergy waits for your say-so. Nothing is generated until you approve."));
+        AGENT_NAME + " filled it in from your records. Check each " +
+        "medication and allergy. Nothing is made until you approve."));
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
@@ -483,7 +484,7 @@
   fetch("/api/trust").then((r) => r.json()).then((d) => {
     const pill = document.getElementById("trust-pill");
     const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "Safety " + grade;
+    pill.textContent = "Safety grade: " + grade;
   }).catch(() => {});
 
   box.focus();

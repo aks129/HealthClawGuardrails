@@ -11,6 +11,22 @@
       return status >= 400 && status < 500 && status !== 408 && status !== 429;
     }
 
+    // Back to chat (#884 G7). On a phone the review opens in the chat's own
+    // tab, so once it is answered the way back is a link. Only through the
+    // CareAgents relay, whose rewritten form action names the assistant:
+    // /review/<agent>/<action>/submit. The engine's own page has no chat.
+    function showBackToChat() {
+      var parts = form.getAttribute('action').split('/');
+      if (parts[1] !== 'review' || !parts[2] ||
+          document.getElementById('back-to-chat')) { return; }
+      var a = document.createElement('a');
+      a.id = 'back-to-chat';
+      a.className = 'btn btn-outline-secondary btn-lg';
+      a.href = '/chat?agent=' + encodeURIComponent(parts[2]);
+      a.textContent = 'Back to chat';
+      gateMsg.parentNode.insertBefore(a, gateMsg.nextSibling);
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       if (!evaluate()) { return; }
@@ -298,6 +314,15 @@
           // claims nothing about what was or was not sent.
           gateMsg.textContent = res.b.message || res.b.error ||
             'We could not record your review. Please try again.';
+        })
+        .then(function () {
+          // Approve locked means this approval may have gone through, so a
+          // Decline beside it would be a second, contrary answer (#884 G7).
+          // Not a catch: a throw in the renderer still reaches nothing.
+          if (btn.disabled || btn.hidden) {
+            document.getElementById('decline-btn').disabled = true;
+            showBackToChat();
+          }
         });
     });
 
@@ -492,12 +517,14 @@
             gateMsg.textContent =
               'This request was declined and will not be carried out. ' +
               'If you change your mind, ask for it to be proposed again.';
+            showBackToChat();
             return;
           }
           if (res.b && res.b.declined === false) {
             // The engine answered: already approved, lapsed, or moved on.
             // The status says which.
             checkStatus();
+            showBackToChat();
             return;
           }
           gateMsg.className = 'alert alert-warning';

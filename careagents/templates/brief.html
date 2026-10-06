@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Appointment Brief — CareAgents{% endblock %}
+{% block title %}Visit brief — CareAgents{% endblock %}
 {% block bodyclass %}page-brief{% endblock %}
 {% block content %}
 <main class="hub">
   <div class="hub-head">
     <div>
-      <h1>Appointment Brief</h1>
+      <h1>Visit brief</h1>
       {# No record type or id beside an item: "from Observation demo-obs-a1c"
          is record jargon to a person on a phone (#877). The engine still
          sends both; this page does not show them. #}
@@ -27,7 +27,7 @@
   {% set fields = sections.get('lab-trends', []) %}
   {% if fields %}
   <section class="brief-alert" aria-labelledby="brief-alert-title">
-    <h2 id="brief-alert-title">Something to raise with your clinician</h2>
+    <h2 id="brief-alert-title">Something to raise with your doctor</h2>
     {% for f in fields %}
     <div class="brief-alert-item">
       <span class="brief-label">{{ f.label }}</span>
@@ -40,7 +40,7 @@
 
   {# --- problems --- #}
   <div class="hub-section">
-    <div class="section-head"><h2>Active problems</h2></div>
+    <div class="section-head"><h2>Current conditions</h2></div>
     {% set fields = sections.get('problems', []) %}
     {% if fields %}
     <div class="brief-section">
@@ -113,12 +113,12 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">From your records</span>
+        <span class="brief-source">Based on your age and sex</span>
       </div>
       {% endfor %}
     </div>
     {% elif not care_gaps_ok %}
-    <p class="brief-empty">Screening review unavailable — ask your clinician which preventive care you are due for.</p>
+    <p class="brief-empty">We couldn't check your screenings just now. Ask your doctor which ones you are due for.</p>
     {% else %}
     <p class="brief-empty">We found no preventive care items based on your current records.</p>
     {% endif %}
@@ -143,9 +143,7 @@
     {% endif %}
   </div>
 
-  <div class="hub-section">
-    <p class="brief-disclaimer">This brief is decision support, not medical advice. In an emergency, call 911.</p>
-  </div>
-
+  {# No disclaimer here: the footer on every page carries it, and twice on
+     one screen read as filler (#884 G7). #}
 </main>
 {% endblock %}

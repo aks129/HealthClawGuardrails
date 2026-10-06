@@ -717,7 +717,7 @@
     const what = r.label + (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
-    if (r.state === "done") return { text: what + (r.link ? "ready." : "Done."),
+    if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
       link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
     if (r.state === "failed") return { text: what + "Didn't finish.",
       link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,

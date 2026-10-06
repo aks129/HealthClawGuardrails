@@ -284,7 +284,7 @@ def row_care_gaps(s, base, agent, run):
     if not m:
         return run.step(name, "FAIL", "the brief has no preventive-care section")
     body = m.group("body")
-    if "Screening review unavailable" in body:
+    if "We couldn't check your screenings just now." in body:
         return run.step(name, "UNAVAILABLE",
                         "the page says the screening review did not run")
     items = body.count('class="brief-field"')

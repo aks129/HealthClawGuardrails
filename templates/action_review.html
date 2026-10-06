@@ -1,4 +1,15 @@
 {% extends "review_base.html" %}
+{% macro gate_hint(meds, allergies) -%}
+{%- if meds and allergies -%}
+Answer each medication and each allergy. Then confirm an allergy, or check "I have no known allergies", to continue.
+{%- elif meds -%}
+Answer each medication. Then check "I have no known allergies" if that is true for you, to continue.
+{%- elif allergies -%}
+Answer each allergy. Then confirm one, or check "I have no known allergies", to continue.
+{%- else -%}
+Check "I have no known allergies" if that is true for you, to continue.
+{%- endif -%}
+{%- endmacro %}
 {% block title %}Review your intake form — HealthClaw Guardrails{% endblock %}
 
 {% block content %}
@@ -163,12 +174,13 @@
       </div>
       {% endif %}
 
+      {# The gate names only what is on the page (#884 G7): no "confirm an
+         allergy" when none is listed, no medications when none is. #}
       <div id="review-gate-msg" class="alert alert-secondary" role="alert">
-        Review every medication and allergy, then confirm an allergy or check
-        "I have no known allergies" to continue.
+        {{ gate_hint(meds, allergies) }}
       </div>
 
-      <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve &amp; generate
+      <button type="submit" id="approve-btn" class="btn btn-primary btn-lg" disabled>Approve
       </button>
       <button type="button" id="decline-btn" class="btn btn-outline-secondary btn-lg ms-2">Decline
       </button>
@@ -208,6 +220,8 @@
     var form = document.getElementById('review-form');
     var btn = document.getElementById('approve-btn');
     var gateMsg = document.getElementById('review-gate-msg');
+    // The server wrote the hint for what this page lists; keep that one.
+    var GATE_HINT = gateMsg.textContent.trim();
 
     function medRows() {
       var names = {};
@@ -232,8 +246,8 @@
       btn.disabled = !ok;
       gateMsg.className = ok ? 'alert alert-success' : 'alert alert-secondary';
       gateMsg.textContent = ok
-        ? 'Ready to generate. The server will re-verify every item on submit.'
-        : 'Review every medication and allergy, then confirm an allergy or check "I have no known allergies" to continue.';
+        ? "Ready. We'll check each item again when you approve."
+        : GATE_HINT;
       return ok;
     }
     form.addEventListener('change', evaluate);

@@ -3025,7 +3025,7 @@ def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
 
 _CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
                       "brief-section-care-gaps")
-_UNAVAILABLE_COPY = b"Screening review unavailable"
+_UNAVAILABLE_COPY = b"We couldn't check your screenings just now."
 _NO_GAPS_COPY = b"no preventive care items"
 
 

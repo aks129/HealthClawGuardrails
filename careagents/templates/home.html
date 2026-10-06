@@ -65,7 +65,7 @@
       {% for a in hub.agents %}
       <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
-        <div class="hub-card-sub">{% if a.reads %}Reads {{ a.reads }}{% endif %}</div>
+        <div class="hub-card-sub">{% if a.reads %}Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}{% endif %}</div>
         <p class="card-note">Visit brief: a one-page summary of your records to bring to an appointment.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
@@ -246,30 +246,32 @@
 <div class="modal" id="consent-modal" hidden>
   <div class="modal-card consent-card">
     <h3>Before you connect your real records</h3>
-    <p class="consent-lead">Plain answers to the questions that matter.
-      Take the 30 seconds.</p>
+    {# Plain words (#884 G7). The meaning of each point is unchanged, so
+       CONSENT_VERSION is not bumped here; a change of meaning would need
+       one (careagents/tester_terms.py). #}
+    <p class="consent-lead">Short answers to the questions that matter.
+      It takes 30 seconds.</p>
     <ul class="consent-points">
-      <li><b>You're using your own right of access.</b> You are retrieving your
-        own health records and pointing them at a tool you chose. CareAgents is
-        not your doctor and not a hospital — different rules apply than you may
-        be used to.</li>
+      <li><b>These are your records, and you have a right to them.</b> You
+        are getting your own health records and sending them to a tool you
+        chose. CareAgents is not your doctor or a hospital, so some rules
+        work differently than you may expect.</li>
       <li><b>Where your records live:</b> with HealthClaw, in a private space
         just for you. Your name and details are taken out before your
         assistant reads a record, and every look is logged.
-        <b>CareAgents itself stores no health data</b> — only your account and
-        a pointer to that space.</li>
+        <b>CareAgents keeps only your account, not your health records.</b></li>
       <li><b>What the AI sees:</b> your records with your name and details
-        taken out, only when a question needs them. Your data is <b>never used to train models</b> and never sold.</li>
-      <li><b>The AI can be wrong</b> — and your connected records may be
-        incomplete. Don't treat either as a substitute for your official
-        records or for professional medical judgment.</li>
-      <li><b>Leaving:</b> you can do it yourself, right here, whenever you
-        like. <b>Disconnect</b> stops new records arriving and keeps what's
-        already there; <b>Delete</b> permanently removes the records
-        themselves and tells you how many were deleted. We keep a log of who
-        looked at your records, with no health details in it — a deletion
-        shouldn't be able to erase the record of the access that came before
-        it. Stuck? Email
+        taken out, only when a question needs them. Your records are
+        <b>never used to train AI</b> and never sold.</li>
+      <li><b>The AI can be wrong,</b> and your records may be missing things.
+        Don't use either in place of your official records or your doctor's
+        advice.</li>
+      <li><b>Leaving:</b> you can leave yourself, any time, right here.
+        <b>Disconnect</b> stops new records coming in and keeps what's
+        already here. <b>Delete</b> removes the records for good and tells
+        you how many were deleted. We keep a list of when your records were
+        looked at, with no health details. Deleting your records doesn't
+        delete that list. Stuck? Email
         <a href="mailto:contactus@healthclaw.io">contactus@healthclaw.io</a>.</li>
     </ul>
     {% if tester_terms_approved %}{% with terms_id = "tester-terms" %}{% include "_tester_terms.html" %}{% endwith %}{% endif %}
