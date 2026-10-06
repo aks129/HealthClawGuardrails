@@ -39,6 +39,7 @@ from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
+from careagents import beta_signup
 from careagents.agent import GENERIC_FAILURE_TEXT
 from careagents.config import Config
 from careagents.healthclaw import (HealthClawClient, HealthClawError,
@@ -444,7 +445,7 @@ def create_app(config: Config | None = None,
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
-            hub=view,
+            hub=view, text_tile=beta_signup.text_tile(cfg, view),
             # "Connected" only once a real connection is active; has_real
             # also counts one still connecting.
             banner_records=("your records are connected"
@@ -2769,5 +2770,6 @@ def create_app(config: Config | None = None,
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
     operator_cli.register(app, svc)
+    beta_signup.register(app, svc, cfg)
 
     return app

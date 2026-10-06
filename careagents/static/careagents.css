@@ -730,3 +730,24 @@ textarea:focus-visible {
 .recent-list li { margin: 4px 0; }
 .recent-list a { color: var(--clay-deep); font-weight: 700; }
 .recent-note { margin: 10px 0 0; color: var(--clay-deep); }
+
+/* --- /beta (beta onboarding brief section 1) ------------------------------
+   Read on a phone: body text at 16px or more, nothing wider than 375px. */
+.beta-page { font-size: 17px; max-width: 560px; min-width: 0; }
+.beta-page, .beta-page * { overflow-wrap: anywhere; }
+.beta-page h1 { font-size: 30px; margin-bottom: 14px; }
+.beta-page p { margin: 0 0 14px; }
+.beta-page .field-label { font-size: 16px; text-transform: none;
+  letter-spacing: 0; color: var(--ink); }
+.beta-page .form-error, .beta-page .form-ok { font-size: 16px; }
+.beta-steps { margin: 6px 0 16px; padding-left: 22px; }
+.beta-steps li { margin: 8px 0; }
+.beta-form-title { font-size: 24px; margin: 26px 0 12px; }
+.beta-consent { display: flex; gap: 10px; align-items: flex-start;
+  margin-top: 20px; font-size: 16px; }
+.beta-consent input { width: 22px; height: 22px; flex: none; margin-top: 2px; }
+.beta-fine { font-size: 16px; color: var(--ink-soft); margin-top: 18px; }
+/* The honeypot: off-screen for people, still in the form for bots. */
+.beta-pot { position: absolute; left: -10000px; width: 1px; height: 1px;
+  overflow: hidden; }
+.hub-feedback { margin-top: 30px; }
