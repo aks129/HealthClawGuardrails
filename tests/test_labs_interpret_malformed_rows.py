@@ -47,6 +47,12 @@ MALFORMED = [
     pytest.param({"code": ["2160-0"]}, id="code-list"),
     pytest.param({"code": {"coding": None}}, id="coding-null"),
     pytest.param({"code": {"coding": [None, "x"]}}, id="coding-holds-junk"),
+    # #878 QA F1: the range falls back to the table, and annotating the
+    # result inserted the table range into a referenceRange that was not a
+    # list (r6/labs/report.py annotate_observation).
+    pytest.param({"referenceRange": "0.6-1.3"}, id="referenceRange-string"),
+    pytest.param({"referenceRange": {"low": {"value": 0.6}}},
+                 id="referenceRange-object"),
 ]
 
 
@@ -58,7 +64,7 @@ MALFORMED = [
 def test_one_malformed_row_does_not_break_the_call(
         app, client, tenant_headers, tenant_id, bad, path):
     _store(app, tenant_id, _obs("good-1"))
-    _store(app, tenant_id, _obs("bad-1", **bad))
+    _store(app, tenant_id, {**_obs("bad-1"), **bad})
     r = client.post(path, headers=tenant_headers)
     assert r.status_code == 200, r.get_data(as_text=True)
     # The good row is still interpreted.
@@ -111,3 +117,20 @@ def test_interpret_observation_survives_other_non_object_fields(field, value):
     obs[field] = value
     res = interpret_observation(obs)
     assert "flag" in res
+
+
+@pytest.mark.parametrize("stored", ["0.6-1.3", {"low": {"value": 0.6}}, None])
+def test_annotating_replaces_a_reference_range_that_is_not_a_list(stored):
+    """The stored value is upstream junk: it is replaced by the table range
+    we used, never kept beside it and never a 500."""
+    from r6.labs.interpret import interpret_observation
+    from r6.labs.report import annotate_observation
+    obs = _obs("x", value=0.9)
+    obs["valueQuantity"]["code"] = "mg/dL"
+    obs["referenceRange"] = stored
+    res = interpret_observation(obs)
+    assert res["range_source"] == "table"
+    out = annotate_observation(obs, res)
+    assert isinstance(out["referenceRange"], list)
+    assert len(out["referenceRange"]) == 1
+    assert "population default" in out["referenceRange"][0]["text"]

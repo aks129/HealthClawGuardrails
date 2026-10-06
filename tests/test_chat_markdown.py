@@ -122,7 +122,10 @@ def test_italics_lists_and_line_breaks():
     assert "em" in tags and "strong" in tags
     assert tags.count("ul") == 1 and tags.count("ol") == 1
     assert tags.count("li") == 4
-    assert "br" in tags
+    # A line break is a newline in the text (drawn by .msg's pre-wrap), not
+    # a <br>, so it survives in textContent for a screen reader (#878).
+    assert "br" not in tags
+    assert "labs are in.\nHere:" in "".join(_texts(result["tree"]))
     assert "- " not in "".join(_texts(result["tree"]))
 
 

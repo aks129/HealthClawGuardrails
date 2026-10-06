@@ -34,7 +34,13 @@ def annotate_observation(obs, result):
             rng["low"] = {"value": result["low"], "unit": result.get("unit")}
         if result.get("high") is not None:
             rng["high"] = {"value": result["high"], "unit": result.get("unit")}
-        out.setdefault("referenceRange", []).insert(0, rng)
+        # A stored referenceRange that is not a list is upstream junk the
+        # interpreter already ignored (r6/labs/interpret.py `_list`). It is
+        # replaced by the range actually used; inserting into it raised and
+        # made $interpret 500 for the whole tenant (#878 QA, #869).
+        existing = out.get("referenceRange")
+        out["referenceRange"] = [rng] + (
+            existing if isinstance(existing, list) else [])
     return out
 
 

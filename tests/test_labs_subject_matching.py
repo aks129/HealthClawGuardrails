@@ -85,6 +85,15 @@ OTHER_PATIENT = [
     pytest.param(f"https://ehr.example.org/fhir/Patient/{PID}/Observation/o9",
                  id="path-past-the-patient"),
     pytest.param(f"Patient/{PID}#contained", id="fragment"),
+    # #878 QA: a relative reference is exactly Patient/<id>, an absolute
+    # one ends in /Patient/<id> with no dot-segment, and nothing trails.
+    pytest.param(f"Group/Patient/{PID}", id="relative-nested-under-group"),
+    pytest.param(f"Observation/Patient/{PID}", id="relative-nested"),
+    pytest.param(f"Patient/../Patient/{PID}", id="relative-dot-segment"),
+    pytest.param(f"https://ehr.example.org/fhir/../Patient/{PID}",
+                 id="absolute-dot-segment"),
+    pytest.param(f"Patient/{PID}\n", id="trailing-newline"),
+    pytest.param(f"FakePatient/{PID}", id="fake-patient"),
     pytest.param(f"Group/{PID}", id="not-a-patient"),
     pytest.param(f"https://ehr.example.org/fhir/Group/{PID}",
                  id="absolute-not-a-patient"),
@@ -107,6 +116,54 @@ def test_another_patients_reference_does_not_match(
     _row(app, tenant_id, _obs("o1", ref))
     _, ids = _interpret(client, tenant_headers, f"Patient/{PID}")
     assert ids == []
+
+
+@pytest.mark.parametrize("ref,expected", [
+    ("Patient/p1", "p1"),
+    ("Patient/p1/_history/2", "p1"),
+    ("https://ehr.example.org/fhir/Patient/p1", "p1"),
+    ("https://ehr.example.org/fhir/Patient/p1/_history/2", "p1"),
+    ("urn:uuid:p1", "p1"),
+    ("FakePatient/p1", None),
+    ("Group/Patient/p1", None),
+    ("Observation/Patient/p1", None),
+    ("Patient/../Patient/p1", None),
+    ("Patient/..", None),
+    ("https://x.example/a/../Patient/p1", None),
+    ("https://x.example/Patient/..", None),
+    ("Patient/p1\n", None),
+    ("Patient/p1/", None),
+    (" Patient/p1", None),
+    ("patient/p1", None),
+    ("Patient/" + "a" * 128, "a" * 128),
+    ("Patient/" + "a" * 129, None),
+])
+def test_the_reference_forms_the_matcher_accepts(ref, expected):
+    from r6.caregaps.routes import referenced_patient_id
+    assert referenced_patient_id(ref) == expected
+
+
+def test_a_109_character_id_matches(app, client, tenant_id, tenant_headers):
+    """Live Epic Patient ids reach 109 characters (#878 security)."""
+    long_id = ("e" + "Xy3.-" * 22)[:109]
+    assert len(long_id) == 109
+    _patient(app, tenant_id, long_id)
+    _row(app, tenant_id, _obs("o1", f"Patient/{long_id}"))
+    _row(app, tenant_id, _obs("o2", no_subject=True))
+    _, ids = _interpret(client, tenant_headers, f"Patient/{long_id}")
+    assert sorted(ids) == ["o1", "o2"]
+
+
+def test_an_identifier_only_subject_is_not_counted_as_malformed(
+        app, client, tenant_id, tenant_headers):
+    """No reference to resolve is not a broken row: it is not this
+    patient's, and it is not `ignored`."""
+    _patient(app, tenant_id)
+    obs = _obs("o1")
+    obs["subject"] = {"identifier": {"system": "urn:mrn", "value": "x"}}
+    _row(app, tenant_id, obs)
+    summary, ids = _interpret(client, tenant_headers, f"Patient/{PID}")
+    assert ids == [] and summary["ignored"] == 0
 
 
 def test_no_subject_belongs_to_the_only_patient(
@@ -199,6 +256,22 @@ def test_the_subject_branch_is_capped_like_the_fallback(
     assert with_subject["total"] == without["total"] == STORED_OBSERVATION_CAP
     assert ids_with == ids_without
     # The oldest five are the ones left out.
+    assert "o000" not in ids_with and f"o{n - 1:03d}" in ids_with
+
+
+def test_at_the_cap_a_last_update_tie_is_broken_by_id(
+        app, client, tenant_id, tenant_headers):
+    """Every row updated at the same instant: which 200 are kept is decided
+    by id, highest first, on both branches, not by the database's whim."""
+    from r6.labs.routes import STORED_OBSERVATION_CAP
+    _patient(app, tenant_id)
+    same = datetime(2026, 1, 1)
+    n = STORED_OBSERVATION_CAP + 1
+    for i in range(n):
+        _row(app, tenant_id, _obs(f"o{i:03d}", f"Patient/{PID}"), when=same)
+    _, ids_with = _interpret(client, tenant_headers, f"Patient/{PID}")
+    _, ids_without = _interpret(client, tenant_headers)
+    assert ids_with == ids_without
     assert "o000" not in ids_with and f"o{n - 1:03d}" in ids_with
 
 

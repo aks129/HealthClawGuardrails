@@ -41,16 +41,48 @@ def _page(app, svc, monkeypatch, brief):  # noqa: F811
     return resp.get_data(as_text=True)
 
 
-def test_the_page_shows_the_trend_in_its_own_section(app, svc, monkeypatch):  # noqa: F811
+HEADING = "Something to raise with your clinician"
+
+
+def _alert(body):
+    """The trend section's own markup, start tag to its closing </section>."""
+    start = body.index('class="brief-alert"')
+    return body[start:body.index("</section>", start)]
+
+
+def test_the_page_leads_with_the_trend(app, svc, monkeypatch):  # noqa: F811
+    """#878 patient tester V4: the one thing to act on comes first, under
+    the intro and above every list, as an alert at full width."""
     body = _page(app, svc, monkeypatch, _brief_with_trend())
-    assert "Lab trends" in body
-    assert RISE in body and PROMPTLY in body
+    alert = _alert(body)
+    assert HEADING in alert
+    assert RISE in alert and PROMPTLY in alert
+    intro = body.index("A read-only snapshot of your records")
+    assert intro < body.index(HEADING) < body.index("Active problems")
+
+
+def test_the_trend_names_no_resource_type_or_id(app, svc, monkeypatch):  # noqa: F811
+    """#878 patient tester G7: "from Observation obs-9" means nothing to a
+    patient. The section says where it came from in words."""
+    alert = _alert(_page(app, svc, monkeypatch, _brief_with_trend()))
+    assert "From your lab results" in alert
+    assert "Observation" not in alert and "obs-9" not in alert
+    assert "brief-source-id" not in alert
+
+
+def test_the_alert_spans_the_card_width():
+    import pathlib
+    css = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+           / "static" / "careagents.css").read_text()
+    rule = css[css.index(".brief-alert {"):]
+    rule = rule[:rule.index("}")]
+    assert "width: 100%" in rule or "grid-column: 1 / -1" in rule
 
 
 def test_the_page_has_no_trend_section_without_a_trend(app, svc, monkeypatch):  # noqa: F811
     body = _page(app, svc, monkeypatch, {"resourceType": "Basic",
                                          "extension": []})
-    assert "Lab trends" not in body
+    assert HEADING not in body and "brief-alert" not in body
 
 
 def test_the_brief_tool_asks_for_the_trend_as_written():

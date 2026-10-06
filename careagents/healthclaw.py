@@ -20,10 +20,11 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-#: A FHIR resource id, as the engine checks it (r6/routes.py
-#: `_FHIR_ID_PATTERN`). A Patient id from an upstream feed is checked against
-#: it before it goes into a query string.
-_FHIR_ID = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
+#: A resource id: the FHIR charset, up to 128 characters, as the engine's
+#: subject matcher reads it (r6/caregaps/routes.py). Live Epic Patient ids
+#: reach 109 (#878), past FHIR's nominal 64. A Patient id from an upstream
+#: feed is checked against it, in full, before it goes into a query string.
+_FHIR_ID = re.compile(r"[A-Za-z0-9\-.]{1,128}")
 
 #: How long a tenant's resolved `Patient/<id>` is reused (#867).
 PATIENT_SUBJECT_TTL_SECONDS = 300.0
@@ -358,7 +359,15 @@ class HealthClawClient:
         hit = self._subjects.get(tenant)
         if hit and hit[1] > now:
             return hit[0]
-        subject = self._find_patient_subject(tenant)
+        try:
+            subject = self._find_patient_subject(tenant)
+        except HealthClawError as exc:
+            # The search is an addition to a read that worked without it.
+            # Losing it costs the trend, never the labs (#878 QA): post with
+            # no subject, as before #867, and try again next time.
+            logger.warning("patient lookup failed for labs (%s); "
+                           "interpreting without a subject", exc.status)
+            subject = None
         if subject:
             if len(self._subjects) >= 4096:
                 self._subjects = {t: v for t, v in self._subjects.items()
@@ -378,7 +387,8 @@ class HealthClawClient:
         if not isinstance(res, dict) or res.get("resourceType") != "Patient":
             return None
         pid = res.get("id")
-        if not isinstance(pid, str) or not _FHIR_ID.match(pid):
+        if not isinstance(pid, str) or not _FHIR_ID.fullmatch(pid) \
+                or pid in (".", ".."):
             return None
         return f"Patient/{pid}"
 

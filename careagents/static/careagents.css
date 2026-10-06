@@ -531,6 +531,16 @@ button.linkish { background: none; border: 0; color: var(--clay-deep);
   padding: 14px 0; margin: 0; }
 .brief-disclaimer { font-size: 12.5px; color: var(--ink-soft);
   border-top: 1px solid var(--hairline); padding-top: 16px; }
+/* The one thing on the brief to act on (#878): first on the page, the
+   clay tint the inline problem messages use, the full width of the card. */
+.brief-alert { box-sizing: border-box; width: 100%; margin-top: 24px;
+  background: #FBE9E2; border: 1.5px solid var(--clay);
+  border-radius: var(--radius); padding: 16px 18px; }
+.brief-alert h2 { margin: 0 0 6px; font-size: 18px; color: var(--clay-deep); }
+.brief-alert-item + .brief-alert-item { margin-top: 12px; }
+.brief-alert-text { margin: 4px 0; font-size: 15px; color: var(--ink);
+  line-height: 1.45; }
+.brief-alert-source { font-size: 12.5px; color: var(--ink-soft); }
 
 /* --- lab timeline card ---------------------------------------------------
    Rendered inline in the conversation, not in an iframe: an iframe of the

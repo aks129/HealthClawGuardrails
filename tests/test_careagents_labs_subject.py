@@ -94,7 +94,8 @@ def test_one_patient_is_passed_as_the_subject():
     pytest.param([{"resourceType": "Patient", "id": "a/b"}], id="slash"),
     pytest.param([{"resourceType": "Patient", "id": "a&subject=x"}],
                  id="query-injection"),
-    pytest.param([{"resourceType": "Patient", "id": "x" * 65}], id="too-long"),
+    pytest.param([{"resourceType": "Patient", "id": "x" * 129}], id="too-long"),
+    pytest.param([{"resourceType": "Patient", "id": "a\nb"}], id="newline"),
     pytest.param([{"resourceType": "Patient", "id": ""}], id="empty"),
     pytest.param([{"resourceType": "Patient", "id": 7}], id="not-a-string"),
     pytest.param([{"resourceType": "Patient"}], id="no-id"),
@@ -105,6 +106,44 @@ def test_no_subject_unless_exactly_one_valid_patient(patients):
     hc = _client(patients)
     hc.interpret_labs("t1")
     assert _interpret_subject(hc) is None
+
+
+def test_a_109_character_epic_id_is_passed():
+    """Live Epic Patient ids reach 109 characters (#878 security)."""
+    long_id = ("e" + "Xy3.-" * 22)[:109]
+    hc = _client([{"resourceType": "Patient", "id": long_id}])
+    hc.interpret_labs("t1")
+    assert _interpret_subject(hc) == [f"Patient/{long_id}"]
+
+
+@pytest.mark.parametrize("failure", ["status", "transport", "not-json"])
+def test_a_failed_patient_search_falls_back_to_no_subject(failure):
+    """Labs must never fail where they used to work: the Patient search is
+    an addition, so losing it costs the trend, never the labs."""
+    import requests
+    hc = _client([{"resourceType": "Patient", "id": "p-one"}])
+    wire_get = hc.http.get
+
+    def get(url, params=None, headers=None, timeout=None):
+        if url.endswith("/Patient"):
+            hc.http.calls.append(("GET", url, params or {}))
+            if failure == "transport":
+                raise requests.ConnectionError("down")
+            if failure == "not-json":
+                r = _Resp(200, None)
+                r.json = lambda: (_ for _ in ()).throw(ValueError("html"))
+                return r
+            return _Resp(503, {})
+        return wire_get(url, params=params, headers=headers, timeout=timeout)
+    hc.http.get = get
+    out = hc.interpret_labs("t1")
+    assert _interpret_subject(hc) is None
+    assert isinstance(out, dict)
+    # Not cached: the next read tries again.
+    hc.http.get = wire_get
+    hc.http.calls.clear()
+    hc.interpret_labs("t1")
+    assert _interpret_subject(hc) == ["Patient/p-one"]
 
 
 def _patient_searches(hc):

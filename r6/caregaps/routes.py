@@ -93,11 +93,16 @@ def patient_for(subject, tenant_id):
         tenant_id=tenant_id, is_deleted=False).first()
     return row.to_fhir_json() if row else None
 
-#: `Patient/<id>`, optionally versioned, at the end of a relative or
-#: absolute reference. The id is the FHIR id shape the write path enforces.
-_PATIENT_REF = re.compile(
-    r"(?:^|/)Patient/([A-Za-z0-9\-.]{1,64})(?:/_history/[A-Za-z0-9\-.]{1,64})?$")
-_URN_UUID = re.compile(r"^urn:uuid:([A-Za-z0-9\-.]{1,64})$")
+#: A resource id: the FHIR charset, up to 128 characters. Live Epic Patient
+#: ids reach 109 (#878), past FHIR's nominal 64.
+_ID = r"[A-Za-z0-9\-.]{1,128}"
+_VERSION = rf"(?:/_history/{_ID})?"
+#: Each is matched in full (`fullmatch`): nothing before, nothing after, not
+#: even a trailing newline. A relative reference is exactly Patient/<id>; an
+#: absolute one is a URL whose path ENDS in /Patient/<id>.
+_RELATIVE = re.compile(rf"Patient/({_ID}){_VERSION}")
+_ABSOLUTE = re.compile(rf"https?://[^/\s?#]+(?:/[^/\s?#]+)*/Patient/({_ID}){_VERSION}")
+_URN_UUID = re.compile(rf"urn:uuid:({_ID})")
 
 
 def referenced_patient_id(ref):
@@ -119,7 +124,12 @@ def referenced_patient_id(ref):
     """
     if not isinstance(ref, str):
         return None
-    m = _PATIENT_REF.search(ref) or _URN_UUID.match(ref)
+    # A dot-segment can walk a path anywhere ("Patient/../Patient/x",
+    # "https://h/a/../Patient/x"), and "." or ".." is no one's id.
+    if "." in ref and any(seg in (".", "..") for seg in ref.split("/")):
+        return None
+    m = (_RELATIVE.fullmatch(ref) or _ABSOLUTE.fullmatch(ref)
+         or _URN_UUID.fullmatch(ref))
     return m.group(1) if m else None
 
 
