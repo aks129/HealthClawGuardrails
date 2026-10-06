@@ -19,6 +19,7 @@ from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
 from r6.smbp.report import build_report, render_html, render_pdf
+from r6.safe_read import subject_reference
 from r6.body_guard import json_body_within_depth
 from r6.read_auth import authenticate_tenant_read
 
@@ -151,7 +152,7 @@ def report(session_id):
     observations = []
     for r in rows:
         obs = r.to_fhir_json()
-        if obs.get("subject", {}).get("reference") == session.patient_ref:
+        if subject_reference(obs) == session.patient_ref:
             observations.append(obs)
 
     label = session.patient_ref.split("/")[-1]
