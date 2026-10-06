@@ -43,17 +43,27 @@ def test_an_unparseable_date_is_not_charted_as_a_date():
 @pytest.mark.parametrize("code,want", [
     ("mg/dL", "mg/dL"), ("mmol/L", "mmol/L"), ("umol/L", "umol/L"),
     ("%", "%"), ("g/dL", "g/dL"), ("mm[Hg]", "mm[Hg]"),
-    ("mL/min/{1.73_m2}", "mL/min/{1.73_m2}"),
-    ("JaneDoe", "mg/dL"), ("mg/dL2", "mg/dL"), ("", "mg/dL"),
+    ("mL/min/{1.73_m2}", "mL/min/{1.73_m2}"), ("mmol/mol", "mmol/mol"),
+    # #884 QA F1: a unit the reading stated but we do not recognise is not
+    # swapped for the analyte's usual one. It used to read "mg/dL".
+    ("JaneDoe", None), ("mg/dL2", None),
+    # Nothing stated: the usual unit.
+    ("", "mg/dL"),
 ])
 def test_a_ucum_code_must_be_a_known_unit(code, want):
     reading = {"code": code, "system": UCUM}
     assert agent._coded_unit(reading, {"key": "ldl"}) == want
 
 
-def test_a_known_code_outside_ucum_is_still_not_trusted():
+def test_a_known_token_is_recognised_in_any_system_or_the_unit_string():
+    """#884 QA F1: an exact allowlist token is the reading's own unit
+    whatever system it names, and in `unit` as well as `code`."""
     assert agent._coded_unit({"code": "mmol/L", "system": "local"},
-                             {"key": "ldl"}) == "mg/dL"
+                             {"key": "ldl"}) == "mmol/L"
+    assert agent._coded_unit({"unit": "µmol/L"},
+                             {"key": "creatinine"}) == "µmol/L"
+    assert agent._coded_unit({"unit": "MG/DL"}, {"key": "ldl"}) is None
+    assert agent._coded_unit({}, {"key": "ldl"}) == "mg/dL"
 
 
 def _obs(code, flag, date="2026-03-01"):

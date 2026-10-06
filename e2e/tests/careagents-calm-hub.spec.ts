@@ -21,7 +21,7 @@ const PHONE = {
 };
 
 const CLOSED_LINE =
-  "Coming for invited testers: your doctor's records, Apple Health and " +
+  "Coming later in the beta: your doctor's records, Apple Health and " +
   'wearables, uploading a file from your patient portal.';
 
 test.describe('calm hub, real records closed', () => {
@@ -89,7 +89,7 @@ test.describe('calm hub, real records closed', () => {
 
   test('the banner names the sample for a new account', async ({ page }) => {
     await expect(page.locator('.beta-banner'))
-      .toHaveText('Beta: sample records. Things will break, tell us.');
+      .toHaveText('Beta: made-up records. Things will break, tell us.');
   });
 
   test('the hub has no horizontal scroll at 375px', async ({ page }) => {

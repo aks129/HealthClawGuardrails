@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from r6 import terminology
+from r6.labs.interpret import LOINC_RANGES
+from r6.safe_read import as_dict, codes, is_number
+
 
 @dataclass
 class BriefField:
@@ -88,28 +92,83 @@ UNLABELLED = "Recorded, name unavailable"
 #: No code element at all. There is nothing to name.
 UNKNOWN = "Unknown"
 
+#: A medicine on the list whose name we cannot show (#884 G7).
+MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
+                    "Ask your doctor.")
+
+#: What the brief says where the record holds no value it can show.
+DOSE_NOT_LISTED = "Dose not listed in your records"
+RESULT_NOT_LISTED = "Result not listed in your records"
+
+
+def _concept_label(concept) -> str | None:
+    """The server's name for a CodeableConcept, looked up by code in
+    r6/terminology.py, or None.
+
+    Never `text` or `coding[].display`. Those are the two fields a real feed
+    puts patient names in, and CLAUDE.md forbids carrying them. The route
+    redacts first, which strips both and writes back table labels; the
+    engine does not lean on that (#884 QA F3), so it reads only the codes.
+    """
+    if not isinstance(concept, dict):
+        return None
+    for coding in concept.get("coding") or []:
+        if isinstance(coding, dict):
+            label = terminology.lookup(coding.get("system"), coding.get("code"))
+            if label:
+                return label
+    return None
+
+
+def _has_code(concept) -> bool:
+    return isinstance(concept, dict) and any(
+        isinstance(c, dict) and c.get("code")
+        for c in concept.get("coding") or [])
+
 
 def _code_text(resource: dict) -> str:
     """Best human-readable label from a FHIR code element.
 
     Three outcomes, never two: a label we can stand behind, a code we hold
-    but cannot name, or nothing recorded. `text` and `coding[].display` are
-    read only because `apply_redaction` has already replaced them with
-    server-derived values keyed by code (r6/terminology.py) — on an
-    unredacted resource these are the two fields that carry PHI, which is
-    why `_resources_for` must never hand this function raw feed data.
+    but cannot name, or nothing recorded.
     """
     code = resource.get("code") or resource.get("medicationCodeableConcept") or {}
-    text = code.get("text", "")
-    if text:
-        return text
-    codings = code.get("coding") or []
-    for coding in codings:
-        if isinstance(coding, dict) and coding.get("display"):
-            return coding["display"]
-    if any(isinstance(c, dict) and c.get("code") for c in codings):
+    label = _concept_label(code)
+    if label:
+        return label
+    if _has_code(code):
         return UNLABELLED
     return UNKNOWN
+
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _date_display(value: str) -> str:
+    """One date style on the brief (#884 G7): "Oct 6, 2026", or "Oct 2026"
+    / "2026" when the record holds only that much. Anything unreadable is
+    left out rather than shown raw."""
+    if not isinstance(value, str):
+        return ""
+    parts = value[:10].split("-")
+    try:
+        year = int(parts[0])
+        if len(parts) == 1:
+            return str(year)
+        month_n = int(parts[1])
+        # Month 00 indexed _MONTHS[-1] and read as December (#884 QA).
+        if not 1 <= month_n <= 12:
+            return ""
+        month = _MONTHS[month_n - 1]
+        if len(parts) == 2:
+            return f"{month} {year}"
+        day = int(parts[2])
+        if not 1 <= day <= 31:
+            return ""
+        return f"{month} {day}, {year}"
+    except (ValueError, IndexError):
+        return ""
 
 
 def _onset_display(resource: dict) -> str:
@@ -121,7 +180,7 @@ def _onset_display(resource: dict) -> str:
         or ""
     )
     if onset and len(onset) >= 7:
-        return onset[:7]  # YYYY-MM
+        return _date_display(onset[:7])  # month precision: "Mar 2021"
     return ""
 
 
@@ -134,57 +193,153 @@ def _effective_display(resource: dict) -> str:
         or ""
     )
     if dt and len(dt) >= 10:
-        return dt[:10]  # YYYY-MM-DD
+        return _date_display(dt)
+    return ""
+
+
+#: The units the brief recognises, each mapped to how it reads. A closed
+#: list of exact, case-sensitive tokens, as careagents/agent.py keeps for
+#: the model (R875-3): any other string, however unit-shaped, could be a
+#: word, so it is never shown (R884-1). Every value here is itself a key,
+#: so only an exact allowlist token ever reaches the page. UCUM's bracket
+#: forms read as their plain spelling; both spellings are accepted.
+_UNIT_DISPLAY = {
+    # US conventional
+    "mg/dL": "mg/dL", "g/dL": "g/dL", "ng/mL": "ng/mL", "pg/mL": "pg/mL",
+    "ng/dL": "ng/dL", "ug/dL": "ug/dL", "mEq/L": "mEq/L",
+    # SI
+    "mmol/L": "mmol/L", "umol/L": "umol/L", "µmol/L": "µmol/L",
+    "nmol/L": "nmol/L", "pmol/L": "pmol/L", "mmol/mol": "mmol/mol",
+    "g/L": "g/L", "mg/L": "mg/L", "ug/L": "ug/L",
+    "10*9/L": "10^9/L", "10^9/L": "10^9/L", "10*12/L": "10^12/L",
+    "10^12/L": "10^12/L",
+    # either
+    "%": "%", "U/L": "U/L", "[IU]/L": "IU/L", "IU/L": "IU/L",
+    "mm[Hg]": "mmHg", "mmHg": "mmHg",
+    "mL/min/{1.73_m2}": "mL/min/1.73m2", "mL/min/1.73m2": "mL/min/1.73m2",
+    "10*3/uL": "10^3/uL", "10^3/uL": "10^3/uL",
+    "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
+    "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
+    "[pH]": "pH", "pH": "pH",
+}
+
+
+def _number(value) -> str | None:
+    """A finite number as text ("128", "6.1"), else None: a string, a bool,
+    NaN or an infinity in `value` is not a measurement (R884-1)."""
+    if not is_number(value):
+        return None
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def _unit(vq: dict, analyte_codes) -> str | None:
+    """The unit the reading stated, as the brief shows it, or None when it
+    stated one the brief does not recognise (#884 QA F1).
+
+    Never a unit the reading did not state: a creatinine reported in
+    umol/L is not "mg/dL" because that is creatinine's usual unit. So:
+    - its code (any system, or none) or its unit string is an exact
+      allowlist token: that unit;
+    - neither is present at all: the analyte's usual unit, or none;
+    - anything else: None, and the caller shows no number.
+    """
+    vq = as_dict(vq)
+    stated = [v for v in (vq.get("code"), vq.get("unit"))
+              if v is not None and v != ""]
+    for value in stated:
+        if isinstance(value, str) and value in _UNIT_DISPLAY:
+            return _UNIT_DISPLAY[value]
+    if stated:
+        return None
+    for analyte in analyte_codes:
+        known = _KNOWN_UNITS.get(analyte) or (
+            LOINC_RANGES.get(analyte) or {}).get("unit")
+        if known in _UNIT_DISPLAY:
+            return _UNIT_DISPLAY[known]
     return ""
 
 
 def _obs_value(obs: dict) -> str:
-    """Human-readable value + unit from an Observation."""
+    """Human-readable value + unit from an Observation: a finite number and
+    the unit it stated, or "" (the caller says the result is not listed)."""
     if "valueQuantity" in obs:
-        vq = obs["valueQuantity"]
-        value = vq.get("value", "")
-        unit = vq.get("unit") or vq.get("code", "")
-        return f"{value} {unit}".strip() if value != "" else ""
-    if "valueString" in obs:
-        return obs["valueString"]
+        vq = as_dict(obs["valueQuantity"])
+        value = _number(vq.get("value"))
+        unit = _unit(vq, codes(obs.get("code")))
+        if value is None or unit is None:
+            return ""
+        return f"{value} {unit}".strip()
+    # No valueString branch. It is free text from the source system with no
+    # code to label it by, so nothing here can stand behind it (#877). The
+    # route strips it already (apply_redaction); the engine does not lean
+    # on that, because the brief reaches chat and text messages.
     if "valueCodeableConcept" in obs:
-        cc = obs["valueCodeableConcept"]
-        return cc.get("text") or next(
-            (c.get("display", "") for c in cc.get("coding", [])), ""
-        )
-    return ""
+        return _concept_label(obs["valueCodeableConcept"]) or ""
+    return _blood_pressure(obs)
+
+
+#: LOINC systolic and diastolic, the two components of a blood pressure
+#: panel. The panel itself has no value; the numbers live here.
+_SYSTOLIC, _DIASTOLIC = "8480-6", "8462-4"
+
+#: Known units for codes LOINC_RANGES does not carry.
+_KNOWN_UNITS = {_SYSTOLIC: "mm[Hg]", _DIASTOLIC: "mm[Hg]"}
+
+
+def _blood_pressure(obs: dict) -> str:
+    """"120/80 mmHg" from a panel's components, or "" (#884 G7: the row
+    showed a date and no numbers)."""
+    values = {}
+    unit = ""
+    for comp in obs.get("component") or []:
+        if not isinstance(comp, dict):
+            continue
+        comp_codes = codes(comp.get("code"))
+        vq = as_dict(comp.get("valueQuantity"))
+        value = _number(vq.get("value"))
+        if value is None:
+            continue
+        for key in (_SYSTOLIC, _DIASTOLIC):
+            if key in comp_codes:
+                comp_unit = _unit(vq, [key])
+                if comp_unit is None:
+                    return ""       # a unit we do not recognise: not shown
+                values[key] = value
+                unit = unit or comp_unit
+    if _SYSTOLIC not in values or _DIASTOLIC not in values:
+        return ""
+    return f"{values[_SYSTOLIC]}/{values[_DIASTOLIC]} {unit}".strip()
 
 
 def _medication_display(resource: dict) -> str:
-    """Human-readable medication name from a MedicationRequest."""
-    # Try medicationCodeableConcept first, then medicationReference display
+    """Human-readable medication name from a MedicationRequest, by code.
+
+    medicationReference.display is upstream text with no code behind it, so
+    it is never shown (#884 QA F3). A reference or a code we cannot name is
+    the plain sentence MEDICINE_UNNAMED, as is a request with nothing to
+    name it by (#884 G7).
+    """
     cc = resource.get("medicationCodeableConcept")
-    if cc:
-        text = cc.get("text", "")
-        if text:
-            return text
-        for coding in cc.get("coding", []):
-            if coding.get("display"):
-                return coding["display"]
-    ref = resource.get("medicationReference", {})
-    return ref.get("display", "Unknown medication")
+    label = _concept_label(cc)
+    if label:
+        return label
+    if _has_code(cc) or (resource.get("medicationReference") or {}).get(
+            "reference"):
+        return MEDICINE_UNNAMED
+    return MEDICINE_UNNAMED
 
 
 def _encounter_display(enc: dict) -> str:
-    """Human-readable label for an Encounter."""
+    """Human-readable label for an Encounter: the visit type by code, never
+    its upstream text."""
     type_text = ""
     for t in enc.get("type", []):
-        type_text = t.get("text", "")
-        if not type_text:
-            for coding in t.get("coding", []):
-                type_text = coding.get("display", "")
+        type_text = _concept_label(t) or ""
         if type_text:
             break
-    date = ""
     period = enc.get("period", {})
-    date = period.get("start") or enc.get("meta", {}).get("lastUpdated", "")
-    if date and len(date) >= 10:
-        date = date[:10]
+    date = _date_display(
+        period.get("start") or enc.get("meta", {}).get("lastUpdated", ""))
     return (type_text or "Visit") + (f" ({date})" if date else "")
 
 
@@ -227,14 +382,11 @@ def build_medications(medication_requests: list[dict]) -> list[BriefField]:
         if status not in _ACTIVE_MED_STATUSES:
             continue
         label = _medication_display(m)
-        dosage = ""
-        for d in m.get("dosageInstruction", []):
-            dosage = d.get("text", "")
-            if dosage:
-                break
+        # Dosage.text is free text from the source system, with no code to
+        # label it by, so it is not shown (#884 QA F3).
         out.append(BriefField(
             label=label,
-            value=dosage or "See record for dosage",
+            value=DOSE_NOT_LISTED,
             source_type="MedicationRequest",
             source_id=m.get("id", ""),
         ))
@@ -261,7 +413,9 @@ def build_labs(observations: list[dict]) -> list[BriefField]:
         label = _code_text(obs)
         value = _obs_value(obs)
         date = _effective_display(obs)
-        display_value = value + (f" ({date})" if date else "") if value else (date or "See record")
+        if not value:
+            value = RESULT_NOT_LISTED
+        display_value = value + (f" ({date})" if date else "")
         out.append(BriefField(
             label=label,
             value=display_value,

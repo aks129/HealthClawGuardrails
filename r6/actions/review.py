@@ -48,6 +48,7 @@ from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
+from r6.brief.engine import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
@@ -332,8 +333,31 @@ def _leaf_value(repeat_item, leaf_link_id):
     return None
 
 
+_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def _shown(value):
+    """How one answer reads on the page, never what is stored (#884 G7): a
+    date as "Mar 15, 1985" and a lowercase code such as "female" with a
+    capital. The QuestionnaireResponse keeps the value as it was."""
+    if not isinstance(value, str):
+        return value
+    parts = value.split('-')
+    if len(parts) == 3 and all(p.isdigit() for p in parts) and len(parts[0]) == 4:
+        month, day = int(parts[1]), int(parts[2])
+        # Month 00 indexed _MONTHS[-1] and read as December (#884 QA).
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return value
+        return f'{_MONTHS[month - 1]} {day}, {parts[0]}'
+    if value.isalpha() and value.islower():
+        return value.capitalize()
+    return value
+
+
 def _demographics(draft_qr):
-    """Ordered (label, value) pairs from the populated demographics group."""
+    """Ordered (label, value) pairs from the populated demographics group,
+    as the page shows them."""
     labels = {
         'demographics.given-name': 'First name',
         'demographics.family-name': 'Last name',
@@ -360,7 +384,7 @@ def _demographics(draft_qr):
                         or ans['valueCoding'].get('code')
             if value is not None:
                 out.append((labels.get(child.get('linkId'),
-                                       child.get('linkId')), value))
+                                       child.get('linkId')), _shown(value)))
     return out
 
 
@@ -369,7 +393,9 @@ def _view_rows(draft_qr):
     meds = []
     for row in _section_repeats(draft_qr, 'medications', 'medications.item'):
         meds.append({
-            'name': _leaf_value(row, 'medications.item.name') or 'Medication',
+            # The brief's sentence for a medicine we cannot name (#884 G7).
+            'name': (_leaf_value(row, 'medications.item.name')
+                     or MEDICINE_UNNAMED),
             'dose': _leaf_value(row, 'medications.item.dose'),
         })
     allergies = []

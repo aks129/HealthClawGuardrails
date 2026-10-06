@@ -82,8 +82,39 @@ def build_caregaps_summary(results):
     return {**buckets, "total": len(results), "gaps": gaps}
 
 
+def _sentence(note):
+    """The rule's note as a sentence of its own. Notes are written to follow
+    a dash elsewhere, so they start lowercase; after ". " that read as a
+    typo (#877)."""
+    note = note or ""
+    return note[:1].upper() + note[1:]
+
+
+#: The word a person uses for a test a title names in brackets.
+_DETAIL_WORDS = {"Pap": "Pap test"}
+
+
+def _screening_phrase(title, cadence):
+    """"a cervical cancer screening (Pap test, every 3 years)" from the
+    rule's title and cadence (#884 G7). One shape for every screening line:
+    an article, the name in lowercase, and what the title names in brackets
+    beside how often."""
+    title = title or "screening"
+    name, detail = title, ""
+    if title.endswith(")") and " (" in title:
+        name, detail = title[:-1].split(" (", 1)
+        detail = _DETAIL_WORDS.get(detail, detail)
+    name = name[:1].lower() + name[1:]
+    inside = ", ".join(p for p in (detail, cadence) if p)
+    article = "" if name.endswith("monitoring") else (
+        "an " if name[:1] in "aeiou" else "a ")
+    return f"{article}{name}" + (f" ({inside})" if inside else "")
+
+
 def _consumer_line(r):
-    title, cadence, note = r.get("title"), r.get("cadence"), r.get("note")
+    title, cadence = r.get("title"), r.get("cadence")
+    note = _sentence(r.get("note"))
+    phrase = _screening_phrase(title, cadence)
     status = r.get("status")
     # `status` travels with the line so a consumer can separate due from
     # up-to-date without re-deriving it from the prose. The brief's care-gaps
@@ -91,7 +122,7 @@ def _consumer_line(r):
     # a second copy of a fact this module already owns (#387).
     if status == "due":
         return {"rule_id": r.get("rule_id"), "title": title, "status": status,
-                "message": f"You may be due for {title.lower()} ({cadence}). {note}"}
+                "message": f"You may be due for {phrase}. {note}".strip()}
     if status == "up_to_date":
         # "Up to date" is a statement about WHEN, and it was being read as a
         # statement about WHAT. A recorded demo had the assistant tell a
@@ -126,7 +157,8 @@ def _consumer_line(r):
                 # a status by swapping underscores for spaces, which gives
                 # "due" and "up to date" and would give "indeterminate".
                 "status_label": "could not check",
-                "message": f"We could not check {title.lower()} ({cadence}). {note}"}
+                "message": (f"We could not check whether you are due for "
+                            f"{phrase}. {note}").strip()}
     return None
 
 

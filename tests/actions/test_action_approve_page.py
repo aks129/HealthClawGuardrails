@@ -180,5 +180,5 @@ def test_the_form_fill_page_still_renders_the_form(
     _seed(app, tenant_headers['X-Tenant-Id'], [PATIENT, MED_A])
     action_id = _staged_form_fill(client, tenant_headers, auth_headers)
     html = _get(client, auth_headers, action_id).get_data(as_text=True)
-    assert 'Review each item before we generate your form' in html
+    assert 'Check each item before we make your form' in html
     assert 'Approve this request?' not in html

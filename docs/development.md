@@ -216,6 +216,10 @@ terminals, all from the repo root; every value below is local-only:
 # 1. the engine (SQLite), on a port that does not collide with AirPlay
 export SQLALCHEMY_DATABASE_URI=sqlite:////tmp/hc-local/engine.db
 export INTERNAL_TOKEN_MINT_SECRET=local-mint STEP_UP_SECRET=local-step-up-secret-32chars-long
+# Approvals: without this an approved intake form fails as
+# PROVIDER_NOT_CONFIGURED, since the PDF link is built from it
+# (r6/actions/rails/form_fill.py). It is the engine's own address.
+export PUBLIC_BASE_URL=http://127.0.0.1:5099
 PORT=5099 uv run flask --app main init-db && PORT=5099 uv run python main.py
 
 # 2. CareAgents web — the Flask dev server, not gunicorn (see below)

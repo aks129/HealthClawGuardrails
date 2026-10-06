@@ -103,7 +103,7 @@ def test_the_assistant_card_has_chat_brief_and_a_menu(app, svc, monkeypatch):
     body = c.get("/home").get_data(as_text=True)
     assert f'href="/chat?agent={agent}">Chat</a>' in body
     assert f'href="/brief?agent={agent}">Visit brief</a>' in body
-    assert "Reads Sample records" in body
+    assert "Reads sample records" in body
     assert 'class="agent-rename"' in body and 'class="agent-delete"' in body
     # One active connection: nothing to change records to.
     assert 'class="agent-move"' not in body
@@ -164,7 +164,7 @@ def test_the_closed_menu_is_one_action_and_one_line(svc, monkeypatch):
     menu = _menu(c.get("/home").get_data(as_text=True))
     assert menu.count('id="explore-sample"') == 1
     assert "Explore with made-up records" in menu
-    assert ("Coming for invited testers: your doctor's records, Apple "
+    assert ("Coming later in the beta: your doctor's records, Apple "
             "Health and wearables, uploading a file from your patient "
             "portal.") in menu
     assert "Coming soon" not in menu and "menu-group" not in menu

@@ -272,7 +272,7 @@ def test_consumer_line_is_plain_and_calm_and_dated():
     assert line["message"] == (
         "Between Sep 1 and Sep 7, 2026, your creatinine rose from 0.8 to "
         "1.3 mg/dL in 6 days. A rise like this can mean the kidneys are under "
-        "strain. Contact your clinician promptly.")
+        "strain. Contact your doctor promptly.")
     assert "AKI" not in line["message"] and "injury" not in line["message"]
 
 
@@ -303,7 +303,7 @@ def test_stale_result_softens_the_consumer_line_but_keeps_the_flag():
         r, now=T0 + timedelta(days=6 + 30, seconds=1))["message"]
     assert msg == (
         "In Sep 2026, your creatinine rose from 0.8 to 1.3 mg/dL in 6 days. "
-        "If you haven't already, ask your clinician whether this was "
+        "If you haven't already, ask your doctor whether this was "
         "followed up.")
     assert "promptly" not in msg
 
@@ -311,7 +311,7 @@ def test_stale_result_softens_the_consumer_line_but_keeps_the_flag():
 def test_exactly_30_days_old_is_not_yet_stale():
     r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6))])
     msg = kdigo_consumer_line(r, now=T0 + timedelta(days=36))["message"]
-    assert msg.endswith("Contact your clinician promptly.")
+    assert msg.endswith("Contact your doctor promptly.")
 
 
 def test_consumer_line_quotes_the_labs_own_umol_numbers():
@@ -594,7 +594,7 @@ def test_subject_interpret_reports_the_trend(app, client, tenant_headers, tenant
     consumer = json.loads(_param(body, "consumerSummary")["valueString"])
     msg = consumer["trends"][0]["message"]
     assert "your creatinine rose from 0.8 to 1.3 mg/dL in 6 days." in msg
-    assert msg.endswith("Contact your clinician promptly.")
+    assert msg.endswith("Contact your doctor promptly.")
     assert "Jane Doe" not in r.get_data(as_text=True)
 
 

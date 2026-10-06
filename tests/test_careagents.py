@@ -3025,7 +3025,7 @@ def test_brief_unknown_agent_redirects(app, svc, monkeypatch):
 
 _CARE_GAPS_SECTION = ("https://healthclaw.io/fhir/StructureDefinition/"
                       "brief-section-care-gaps")
-_UNAVAILABLE_COPY = b"Screening review unavailable"
+_UNAVAILABLE_COPY = b"We couldn't check your screenings just now."
 _NO_GAPS_COPY = b"no preventive care items"
 
 
@@ -5974,7 +5974,7 @@ def test_real_record_tiles_are_coming_soon_when_the_switch_is_off(
     for tile in _REAL_RECORD_TILES:
         assert f'data-connector="{tile}"' not in body, tile
     assert 'id="explore-sample"' in body
-    assert "Coming for invited testers" in body
+    assert "Coming later in the beta" in body
 
 
 def test_real_record_connect_posts_are_refused_with_503_when_off(
@@ -6426,7 +6426,7 @@ def test_the_password_reassurance_is_absent_while_those_logins_are_closed(
     body = closed.get("/home").get_data(as_text=True)
     assert note not in body
     # The tiles it contradicted are gone; the closed line says it instead.
-    assert "Coming for invited testers" in body
+    assert "Coming later in the beta" in body
 
     app = _beta_app(svc, CARE_REAL_RECORDS="allowlist",
                     CARE_REAL_RECORDS_ALLOWLIST="dr.who@example.org")

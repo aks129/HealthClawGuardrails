@@ -3,6 +3,7 @@
 (function () {
   const AGENT = window.CARE_AGENT || "";
   const CONVERSATION = window.CARE_CONVERSATION || "";
+  const AGENT_NAME = window.CARE_AGENT_NAME || "Your assistant";
   const log = document.getElementById("log");
   const box = document.getElementById("box");
   const composer = document.getElementById("composer");
@@ -160,12 +161,16 @@
     } else {
       c.appendChild(el("h4", null, "Review & approve your intake form"));
       c.appendChild(el("p", null,
-        "Your agent filled it from the records — now every medication and " +
-        "allergy waits for your say-so. Nothing is generated until you approve."));
+        AGENT_NAME + " filled it in from your records. Check each " +
+        "medication and allergy. Nothing is made until you approve."));
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
-    a.target = "_blank"; a.rel = "noopener";
+    // Same tab on a phone: a new tab in an in-app browser can lose the
+    // sign-in (#876). A wide screen keeps the chat open beside it.
+    if (window.matchMedia && window.matchMedia("(min-width: 700px)").matches) {
+      a.target = "_blank"; a.rel = "noopener";
+    }
     c.appendChild(a);
     log.appendChild(c); scroll();
     // Only the intake form ends in a PDF; polling for one on any other
@@ -177,7 +182,7 @@
     const c = el("div", "card pdf");
     c.appendChild(el("h4", null, "Your intake form is ready"));
     c.appendChild(el("p", null,
-      "Reviewed by you, provenance-stamped, and delivered over a signed link."));
+      "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");
     a.href = url; a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
@@ -366,9 +371,9 @@
           // `done` here the outer loop reconnects — and because that stream
           // now ends CLEANLY it also resets `reconnectFailures`, so a
           // persistent event-poll failure becomes an unbounded ~2.5 req/s
-          // retry loop that prints a fresh ⚠️ on every pass, aimed at the
+          // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
-          typing.remove(); addAgentText("⚠️ " + ev.text); state.done = true;
+          typing.remove(); addAgentText(ev.text); state.done = true;
         } else if (ev.type === "done") {
           state.done = true;
         }
@@ -479,7 +484,7 @@
   fetch("/api/trust").then((r) => r.json()).then((d) => {
     const pill = document.getElementById("trust-pill");
     const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "guardrails " + grade;
+    pill.textContent = "Safety grade: " + grade;
   }).catch(() => {});
 
   box.focus();

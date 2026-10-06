@@ -693,4 +693,13 @@ def test_a_deadline_with_no_running_tool_is_still_not_audited(
                         headers=auth_headers)
     assert detail.status_code == 200
     assert detail.get_json()["status"] == "failed"
-    assert _events(app) == []
+    # The run's own transition is still exempt. Since #884 the timer also
+    # writes the turn's answer, and a ConversationMessage is audited on
+    # every path that creates one (the command centre's route and
+    # finalize_run do the same), so that one row is expected.
+    assert _events(app, "AgentRun") == []
+    events = _events(app)
+    assert [(e["action"], e["resource_type"]) for e in events] == [
+        ("create", "ConversationMessage")], events
+    assert "chars=" in events[0]["detail"] and "Something" not in \
+        events[0]["detail"]

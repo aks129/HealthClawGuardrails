@@ -121,16 +121,34 @@ def test_the_text_trend_uses_the_ucum_code_not_free_text():
     assert "Maria" not in json.dumps(words)
 
 
-def test_without_a_ucum_code_the_unit_comes_from_the_known_map():
+def test_an_unrecognised_unit_gives_no_numbers_or_direction():
+    """#884 QA F1: it used to borrow the known unit for a reading that
+    stated another; a number beside a unit it was not measured in is a
+    false reading."""
     from careagents.agent import _timeline_in_words
-    words = _timeline_in_words(_series("ldl", "free text unit"))
+    for series in (_series("ldl", "free text unit"),
+                   _series("ldl", "free text", "mg/dL Maria",
+                           "http://example.org/not-ucum"),
+                   _series("unknown-key", "free text unit")):
+        words = _timeline_in_words(series)
+        assert "latest" not in words and "direction" not in words
+        assert "free text" not in json.dumps(words)
+        assert "Maria" not in json.dumps(words)
+
+
+def test_without_any_unit_the_unit_comes_from_the_known_map():
+    from careagents.agent import _timeline_in_words
+    words = _timeline_in_words(_series("ldl", ""))
     assert words["latest"]["unit"] == "mg/dL"
-    words = _timeline_in_words(_series("ldl", "free text", "mg/dL Maria",
-                                       "http://example.org/not-ucum"))
-    assert words["latest"]["unit"] == "mg/dL"
-    words = _timeline_in_words(_series("unknown-key", "free text unit"))
-    assert words["latest"]["unit"] == ""
-    assert "free text" not in json.dumps(words)
+    assert words["direction"] == "lower"
+
+
+def test_two_units_give_no_direction():
+    from careagents.agent import _timeline_in_words
+    series = _series("glucose", "mg/dL")
+    series["readings"][1]["unit"] = "mmol/L"
+    words = _timeline_in_words(series)
+    assert "direction" not in words
 
 
 # --- the chart link's first paint, the review tab -----------------------------

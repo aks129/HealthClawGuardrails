@@ -311,4 +311,4 @@ def test_the_brief_finds_the_rise_across_reference_styles(
     _row(app, tenant_id, _obs("a", f"urn:uuid:{PID}", value=0.8, days_ago=6))
     _row(app, tenant_id, _obs("b", value=1.3, days_ago=0, no_subject=True))
     r = client.get("/r6/fhir/AppointmentBrief", headers=tenant_headers)
-    assert "Contact your clinician promptly." in r.get_data(as_text=True)
+    assert "Contact your doctor promptly." in r.get_data(as_text=True)

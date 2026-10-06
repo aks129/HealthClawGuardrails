@@ -764,3 +764,20 @@ textarea:focus-visible {
 .beta-err { margin: 18px 0 0; }
 .beta-err + .btn-primary { margin-top: 12px; }
 .beta-keep { margin-top: 12px; }
+
+/* The delete confirmation, calm and spaced (#884 G7): room between the
+   warnings, the typed confirmation and the two buttons. */
+.modal-card .delete-warn { line-height: 1.55; }
+.modal-card .delete-warn + .field-label { margin-top: 20px; }
+.modal-card #delete-cancel { margin-top: 12px; }
+.leaving p { margin: 14px 0; line-height: 1.55; }
+
+/* The account-deleted note on the landing page (#884 G7): calm, with room
+   below it before the hero copy. */
+.deleted-note { background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 14px; padding: 14px 16px; color: var(--ink-soft);
+  margin-bottom: 24px; }
+
+/* /safety (#884 G7): the way back and the technical report on one line. */
+.safety-links { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 16px; margin-top: 20px; font-size: 14.5px; }

@@ -11,7 +11,7 @@ from tests.test_beta_acceptance_rows import BASE, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
 
-PROMPTLY = "Contact your clinician promptly."
+PROMPTLY = "Contact your doctor promptly."
 RISE = "creatinine rose from 0.8 to 1.3 mg/dL in 6 days"
 
 def _brief_with_trend():
@@ -41,7 +41,7 @@ def _page(app, svc, monkeypatch, brief):  # noqa: F811
     return resp.get_data(as_text=True)
 
 
-HEADING = "Something to raise with your clinician"
+HEADING = "Something to raise with your doctor"
 
 
 def _alert(body):
@@ -57,8 +57,8 @@ def test_the_page_leads_with_the_trend(app, svc, monkeypatch):  # noqa: F811
     alert = _alert(body)
     assert HEADING in alert
     assert RISE in alert and PROMPTLY in alert
-    intro = body.index("A read-only snapshot of your records")
-    assert intro < body.index(HEADING) < body.index("Active problems")
+    intro = body.index("A snapshot of your records")
+    assert intro < body.index(HEADING) < body.index("Current conditions")
 
 
 def test_the_trend_names_no_resource_type_or_id(app, svc, monkeypatch):  # noqa: F811

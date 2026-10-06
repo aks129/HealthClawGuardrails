@@ -454,10 +454,12 @@ def kdigo_consumer_line(result, now=None):
     now = now or datetime.now(timezone.utc)
     if now - end > STALE_AFTER:
         message = (f"In {end:%b} {end.year}, your {rise} If you haven't "
-                   f"already, ask your clinician whether this was followed up.")
+                   f"already, ask your doctor whether this was followed up.")
     else:
+        # "doctor", the word a patient uses (#884 G7); "promptly" is the
+        # physician advisor's word and stays.
         message = (f"{_when_said(start, end)}, your {rise} A rise like this "
                    f"can mean the kidneys are under strain. Contact your "
-                   f"clinician promptly.")
+                   f"doctor promptly.")
     return {"analyte": result["analyte"], "check": result["check"],
             "message": message}

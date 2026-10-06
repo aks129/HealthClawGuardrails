@@ -30,7 +30,7 @@ from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _login, _turn, cfg, svc)
 from tests.test_careagents_imessage_demo import _Call, _Turn
 
-PROMPTLY = "Contact your clinician promptly."
+PROMPTLY = "Contact your doctor promptly."
 
 
 # --- 1. the subject, at the client --------------------------------------------

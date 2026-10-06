@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Safety — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block content %}
+{# What the "Safety grade" pill and the landing page link to (#884 G7):
+   what is tested, in plain words, and today's grade. The technical report
+   stays one small link away for anyone who wants it. #}
+<main class="setup-wrap">
+  <div class="setup-card">
+    <h1>How we keep you safe</h1>
+    <p class="setup-sub">Each day we test that your name is hidden, every
+      look at your records is logged, and nothing is sent without your OK.
+      {% if grade %}Today's grade: {{ grade }}.{% endif %}</p>
+    {% if not grade %}
+    <p class="setup-sub">We couldn't fetch today's grade just now.
+      <a href="{{ report_url }}">See today's grade</a> on the live report.</p>
+    {% endif %}
+    <p class="safety-links">
+      <a class="safety-back" href="{{ back_href }}">{{ back_label }}</a>
+      <a class="safety-report" href="{{ report_url }}">Technical report</a>
+    </p>
+  </div>
+</main>
+{% endblock %}
