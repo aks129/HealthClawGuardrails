@@ -115,6 +115,18 @@ def test_the_window_is_configurable(cfg, svc, monkeypatch):  # noqa: F811
     assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
 
 
+def test_once_asked_only_a_confirm_lifts_it(cfg, svc, monkeypatch):  # noqa: F811
+    """The owner has been told we asked. A window widened afterwards does
+    not quietly answer the handle again."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    _age(svc, verified_days=61, inbound_days=1)
+    assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
+    monkeypatch.setattr(app.extensions["careagents_imessage"],
+                        "reverify_seconds", 90 * DAY)
+    assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
+
+
 def test_a_binding_with_no_verified_time_counts_from_bound_then_fails_closed(
         cfg, svc, monkeypatch):  # noqa: F811
     """No verified_at reads as the migration would fill it: bound_at. With
