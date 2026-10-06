@@ -15,6 +15,15 @@ Until both exist, use this line only with sample-record accounts and testers
 who know it is not a HIPAA channel. An agent's answer can quote a lab value,
 and that text goes through Sendblue.
 
+The code enforces this. `SENDBLUE_REAL_RECORDS` is off unless set to `1`,
+`true`, `yes` or `on`. While it is off, a text to an agent whose connection
+is anything but the sample starts no run. It is answered with "Your
+assistant is using your real records, so I can't send answers by text yet.
+Open careagents.cloud to read it." The worker checks again before it sends,
+so an answer queued before the agent moved to real records is withheld the
+same way. Switch the flag on only after the HIPAA instance and the BAA are
+in place.
+
 ## The sandbox
 
 - The sandbox line is a **shared number**. Our own number comes with a paid
@@ -41,6 +50,7 @@ one.
 | `SENDBLUE_WEBHOOK_SECRET` | The secret you set on the webhook in the dashboard |
 | `SENDBLUE_FROM_NUMBER` | Our Sendblue line, E.164 (`+1...`) |
 | `SENDBLUE_API_BASE` | Optional. Default `https://api.sendblue.co`. The docs also show `https://api.sendblue.com`. |
+| `SENDBLUE_REAL_RECORDS` | Optional. Off by default. Leave it off until the HIPAA instance and BAA exist. |
 
 The line is on only when the first four are all set. With any one missing,
 the webhook answers 404 and the worker does not start the deliverer.

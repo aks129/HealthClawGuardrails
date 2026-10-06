@@ -34,6 +34,24 @@ from careagents.healthclaw import HealthClawError
 logger = logging.getLogger(__name__)
 
 MEDIA_ONLY_TEXT = "I can only read text for now."
+
+
+def real_records_text(origin: str) -> str:
+    host = origin.split("://", 1)[-1].rstrip("/") or origin
+    return ("Your assistant is using your real records, so I can't send "
+            f"answers by text yet. Open {host} to read it.")
+
+
+def real_records_blocked(cfg, ctx: dict) -> bool:
+    """Whether this agent's answers must stay off the Sendblue line.
+
+    Sendblue carries real records only once its HIPAA instance and BAA are
+    in place, and SENDBLUE_REAL_RECORDS says so. Anything but the sample
+    connection counts as real, so a new connection kind is held back too.
+    """
+    if cfg.sendblue_real_records:
+        return False
+    return (ctx.get("connection") or {}).get("kind") != "sample"
 #: How often the worker looks for finished runs to deliver.
 DELIVERY_POLL_SECONDS = 2.0
 
@@ -119,7 +137,10 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
                 # The engine's request ids are [A-Za-z0-9._:-]; Sendblue's
                 # handle format is not ours to promise, so it is hashed.
                 out, status = imessage.handle_inbound(
-                    deps, raw, content, request_id=f"sendblue-{key[:32]}")
+                    deps, raw, content, request_id=f"sendblue-{key[:32]}",
+                    transport_block=lambda ctx: (
+                        real_records_text(cfg.origin)
+                        if real_records_blocked(cfg, ctx) else None))
             run_id = out.get("run_id")
             if run_id:
                 surface = svc.find_surface_by_handle(to, kind="imessage",
@@ -199,9 +220,14 @@ class Deliverer:
                 return
             # Could not ask: try again next pass, unless it is too late.
         if page is not None and page.get("status") in imessage.FINAL_STATUSES:
-            text = imessage.run_reply(page.get("events") or [],
-                                      self.cfg.origin, agent_id)
-            outcome = "sent"
+            if real_records_blocked(self.cfg, ctx):
+                # Read fresh at delivery: a connection switched to real
+                # records after the turn was queued still holds it back.
+                text, outcome = real_records_text(self.cfg.origin), "withheld"
+            else:
+                text = imessage.run_reply(page.get("events") or [],
+                                          self.cfg.origin, agent_id)
+                outcome = "sent"
         elif self.clock() - float(row.get("created_at") or 0) >= (
                 self.timeout_seconds):
             text, outcome = imessage.timeout_text(self.cfg.origin), "timeout"

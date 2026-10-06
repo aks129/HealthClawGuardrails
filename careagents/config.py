@@ -101,6 +101,13 @@ class Config:
         self.sendblue_from_number = from_number or ""
         self.sendblue_api_base = (e.get("SENDBLUE_API_BASE")
                                   or "https://api.sendblue.co").rstrip("/")
+        # Real-record answers over Sendblue: off unless switched on, and it
+        # must stay off until Sendblue's HIPAA instance and BAA exist. Off,
+        # an agent on a non-sample connection gets no turn and no answer by
+        # text, only a pointer to the app (careagents/sendblue_surface.py).
+        self.sendblue_real_records = (e.get("SENDBLUE_REAL_RECORDS") or ""
+                                      ).strip().lower() in (
+                                          "1", "true", "yes", "on")
         self.sendblue_enabled = all((
             self.sendblue_api_key_id, self.sendblue_api_secret,
             self.sendblue_webhook_secret, self.sendblue_from_number))

@@ -106,6 +106,7 @@ SENDBLUE_API_SECRET=
 SENDBLUE_WEBHOOK_SECRET=
 SENDBLUE_FROM_NUMBER=
 SENDBLUE_API_BASE=
+SENDBLUE_REAL_RECORDS=
 
 # Provider: ANTHROPIC_API_KEY (claude-sonnet-5) takes precedence when set.
 # Otherwise the OpenAI-compatible fallback is used — works with OpenAI or,

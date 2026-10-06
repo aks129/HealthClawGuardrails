@@ -463,3 +463,94 @@ def test_numbers_and_words_never_reach_the_log(
     assert PHONE not in logged and "0100123" not in logged
     assert "my private words" not in logged
     assert SECRET not in logged and "key-secret" not in logged
+
+
+# --- real records stay off the Sendblue line unless switched on --------------
+
+def _make_real(svc, agent_id, kind="fasten"):  # noqa: F811
+    """Point the agent's connection at real records, as a Fasten connect
+    would leave it."""
+    from careagents.models import Agent, Connection
+    with svc.session() as s:
+        conn = s.get(Connection, s.get(Agent, agent_id).connection_id)
+        conn.kind = kind
+
+
+def test_sendblue_real_records_is_off_by_default(cfg):  # noqa: F811
+    assert Config(env=_env(cfg)).sendblue_real_records is False
+    assert Config(env=_env(cfg, SENDBLUE_REAL_RECORDS="1")
+                  ).sendblue_real_records is True
+
+
+@pytest.mark.parametrize("kind", ["fasten", "wearables", "somethingnew"])
+def test_a_real_records_agent_is_told_to_open_the_app_and_no_run_starts(
+        sb_cfg, sb_svc, monkeypatch, kind):
+    app, c, fake, hc, agent_id = _app(sb_cfg, sb_svc, monkeypatch)
+    _pair(c, agent_id)
+    _make_real(sb_svc, agent_id, kind)
+    fake.sent.clear()
+    monkeypatch.setattr("careagents.worker.llm.complete",
+                        lambda *a, **k: pytest.fail("model was called"))
+    runs_before = len(hc.runs)
+    assert _hook(c, "how is my a1c?", handle="real-1").status_code == 200
+    assert fake.sent == [(PHONE, sendblue_surface.real_records_text(
+        sb_cfg.origin))]
+    assert fake.typing == []
+    assert len(hc.runs) == runs_before
+    _run(app)
+    _deliverer(app, fake).once()
+    assert len(fake.sent) == 1
+
+
+def test_the_notice_names_the_app(sb_cfg):
+    assert sendblue_surface.real_records_text("https://careagents.cloud") == (
+        "Your assistant is using your real records, so I can't send answers "
+        "by text yet. Open careagents.cloud to read it.")
+
+
+def test_an_answer_owed_from_before_a_switch_to_real_records_is_withheld(
+        sb_cfg, sb_svc, monkeypatch):
+    app, c, fake, hc, agent_id = _app(sb_cfg, sb_svc, monkeypatch,
+                                      reply="Your A1c is 6.1.")
+    _pair(c, agent_id)
+    _hook(c, "how is my a1c?", handle="real-2")    # queued while sample
+    _run(app)
+    _make_real(sb_svc, agent_id)
+    fake.sent.clear()
+    _deliverer(app, fake).once()
+    assert fake.sent == [(PHONE, sendblue_surface.real_records_text(
+        sb_cfg.origin))]
+    assert "6.1" not in fake.sent[0][1]
+
+
+def test_a_sample_agent_is_answered_normally(sb_cfg, sb_svc, monkeypatch):
+    app, c, fake, hc, agent_id = _app(sb_cfg, sb_svc, monkeypatch,
+                                      reply="Sample answer.")
+    _pair(c, agent_id)
+    fake.sent.clear()
+    _hook(c, "hello", handle="sample-1")
+    assert fake.typing == [PHONE]
+    _run(app)
+    _deliverer(app, fake).once()
+    assert fake.sent == [(PHONE, "Sample answer.")]
+
+
+def test_the_flag_lets_real_records_through(cfg, monkeypatch):  # noqa: F811
+    from careagents.accounts import AccountService
+    on = Config(env=_env(cfg, SENDBLUE_REAL_RECORDS="true"))
+    svc_on = AccountService(on)
+    try:
+        app, c, fake, hc, agent_id = _app(on, svc_on, monkeypatch,
+                                          reply="Real answer.")
+        _pair(c, agent_id)
+        _make_real(svc_on, agent_id)
+        fake.sent.clear()
+        _hook(c, "hello", handle="flag-1")
+        assert fake.typing == [PHONE]                # a run was queued
+        _run(app)
+        _deliverer(app, fake).once()
+        assert len(fake.sent) == 1
+        assert fake.sent[0][1] != sendblue_surface.real_records_text(
+            on.origin)
+    finally:
+        svc_on.engine.dispose()

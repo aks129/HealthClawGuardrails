@@ -306,8 +306,13 @@ def bind_by_code(deps: Deps, handle: str, code: str,
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
                    request_id: str | None = None,
-                   conversation_id: str | None = None) -> tuple[dict, int]:
-    """One inbound text, from any transport. See the module docstring."""
+                   conversation_id: str | None = None,
+                   transport_block: Callable[[dict], str | None] | None = None,
+                   ) -> tuple[dict, int]:
+    """One inbound text, from any transport. See the module docstring.
+
+    `transport_block(ctx)` lets a transport refuse a turn for its own
+    reasons: a sentence answered instead, and no run is queued."""
     svc = deps.svc
     raw = str(raw_handle or "").strip()
     if not raw:
@@ -356,6 +361,9 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     ctx = svc.imessage_agent_context(surface)
     if not ctx:
         return {"reply": no_agent_text(deps.origin)}, 200
+    refused = transport_block(ctx) if transport_block else None
+    if refused:
+        return {"reply": refused}, 200
     if not text:
         return {"error": "empty message"}, 400
     if len(text) > 2000:

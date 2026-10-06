@@ -200,7 +200,7 @@ class SendblueMessage(Base):
     surface_id = Column(String(32), nullable=True)
     run_id = Column(String(64), nullable=True)
     delivered_at = Column(Float, nullable=True, index=True)
-    # sent | failed | timeout | unbound | absent
+    # sent | withheld | failed | timeout | unbound | absent
     outcome = Column(String(16), nullable=True)
 
 
