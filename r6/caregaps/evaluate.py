@@ -24,13 +24,33 @@ from __future__ import annotations
 
 from datetime import date
 
-from r6.safe_read import codes
+from r6.safe_read import codes, string_field
 
 REFERENCES = {
     "uspstf": "U.S. Preventive Services Task Force recommendations (adult, general population).",
     "acip": "CDC/ACIP adult immunization schedule.",
     "ada": "American Diabetes Association Standards of Care.",
+    "cdc-cvx": "CDC IIS code set CVX - Vaccines Administered "
+               "(https://www2a.cdc.gov/vaccines/iis/iisstandards/vaccines.asp"
+               "?rpt=cvx). Seasonal influenza codes only. Used by the "
+               "flu-immunization rule's `satisfied_by` codes.",
 }
+
+#: Seasonal influenza vaccine codes in the CDC CVX table (`cdc-cvx`), active
+#: and retired alike: a retired code can only appear on an old record, which
+#: the 12-month window already sets aside. Left out on purpose:
+#:   - pandemic and avian vaccines (H1N1 125-128, H5N1 123 and 160, H5N8
+#:     321-322, H5 unspecified 323) and parainfluenza (69), which are not a
+#:     seasonal flu shot;
+#:   - the Southern Hemisphere formulations (194, 200-202, 231, 331, 337),
+#:     whose strains are chosen for the other hemisphere's season. Leaving
+#:     them out keeps the gap due, the direction that repeats a reminder
+#:     rather than withholding one.
+_FLU_CVX = frozenset({
+    "15", "16", "88", "111", "135", "140", "141", "144", "149", "150", "151",
+    "153", "155", "158", "161", "166", "168", "171", "185", "186", "197",
+    "205", "320", "333", "338",
+})
 
 # Each rule:
 #   applies: {sex: "female"|"male"|None, min_age, max_age}  (age in years, at as_of)
@@ -119,8 +139,8 @@ CARE_GAP_RULES = [
         "id": "flu-immunization", "title": "Influenza (flu) vaccine",
         "applies": {"sex": None, "min_age": 18, "max_age": 120},
         "cadence_months": 12,
-        "satisfied_by": {"resource": "Immunization",
-                         "codes": {"88", "140", "141", "150", "158", "161", "171"}},
+        "satisfied_by": {"resource": "Immunization", "codes": _FLU_CVX,
+                         "code_source": "cdc-cvx"},
         "source": "acip",
         "related_ecqm": "CMS147",
     },
@@ -173,20 +193,47 @@ def _months_between(earlier, later):
     return (later.year - earlier.year) * 12 + (later.month - earlier.month)
 
 
-def _codes_of(resource):
+#: Where each resource type keeps the code a rule matches. An Immunization
+#: has no `code`; its code is `vaccineCode`, so read as `code` no stored
+#: Immunization could ever close the flu gap (#880).
+_CODE_FIELD = {"Immunization": "vaccineCode"}
+
+#: The date fields that say when the thing was done, per resource type. An
+#: Immunization's is `occurrenceDateTime` alone: `occurrenceString` ("last
+#: autumn") is undated and cannot close a gap, and `recorded` is when the
+#: row was written, not when the shot was given.
+_DATE_FIELDS = {"Immunization": ("occurrenceDateTime",)}
+_DEFAULT_DATE_FIELDS = ("effectiveDateTime", "performedDateTime",
+                        "occurrenceDateTime", "authoredOn")
+
+
+def _codes_of(resource, resource_type=None):
     # String codes only. A stored `code` that is a string, a null `coding`, a
     # null Coding or a list-valued code is a row we cannot read, not a 500
-    # for the whole $care-gaps call (#869).
-    return set(codes(resource.get("code")))
+    # for the whole $care-gaps call (#869). Codings only: `text` is never
+    # read as a code.
+    field = _CODE_FIELD.get(resource_type, "code")
+    return set(codes(resource.get(field)))
 
 
-def _resource_date(resource):
-    for f in ("effectiveDateTime", "performedDateTime", "occurrenceDateTime",
-              "authoredOn"):
+def _resource_date(resource, resource_type=None):
+    for f in _DATE_FIELDS.get(resource_type, _DEFAULT_DATE_FIELDS):
         d = _parse_date(resource.get(f))
         if d:
             return d
     return None
+
+
+def _counts(resource, resource_type):
+    """Whether a record's status lets it close a gap.
+
+    An Immunization closes one only when `completed`: `not-done` records a
+    shot that was NOT given, and `entered-in-error` one that never happened.
+    Other types are not filtered here (the register says so).
+    """
+    if resource_type == "Immunization":
+        return string_field(resource, "status") == "completed"
+    return True
 
 
 def _has_diabetes(conditions):
@@ -199,12 +246,15 @@ def _has_diabetes(conditions):
     return False
 
 
-def _most_recent(resources, wanted_codes, as_of_date, cadence_months):
+def _most_recent(resources, wanted_codes, as_of_date, cadence_months,
+                 resource_type=None):
     """Most recent matching resource within the cadence window -> its date, else None."""
     best = None
     for r in resources or []:
-        if _codes_of(r) & wanted_codes:
-            d = _resource_date(r)
+        if not _counts(r, resource_type):
+            continue
+        if _codes_of(r, resource_type) & wanted_codes:
+            d = _resource_date(r, resource_type)
             # future-dated records never satisfy a gap — bad source data
             # must not produce a false "up to date"
             if d and d <= as_of_date and (best is None or d > best):
@@ -317,9 +367,10 @@ def evaluate_care_gaps(patient, conditions=None, observations=None,
         # Is there a satisfying record in the connected data? `cadence_months`
         # is never None below: the age gate above returns for `age is None`,
         # and only a banded rule with no age has no cadence.
-        last = _most_recent(by_resource[rule["satisfied_by"]["resource"]],
-                            rule["satisfied_by"]["codes"], as_of_date,
-                            cadence_months)
+        satisfied = rule["satisfied_by"]
+        last = _most_recent(by_resource[satisfied["resource"]],
+                            satisfied["codes"], as_of_date, cadence_months,
+                            satisfied["resource"])
         if last is not None:
             results.append({**base, "applicable": True, "status": "up_to_date",
                             "last_done": last.isoformat(),
