@@ -286,3 +286,187 @@ def test_a_stored_bad_code_does_not_break_or_leak_on_tenant_reads(
     assert r.status_code == 200, r.get_data(as_text=True)[:300]
     assert CANARY not in r.get_data(as_text=True)
     _strict_body(r)
+
+
+# --- R886-1: every Coding-shaped dict, not only those in a `coding` list -------
+
+#: Places a Coding sits with no `coding` list around it.
+BARE_PLACES = {
+    "valueCoding": lambda r, c: r.__setitem__("valueCoding", c),
+    "extension.valueCoding": lambda r, c: r.__setitem__(
+        "extension", [{"url": "http://x.example/e", "valueCoding": c}]),
+    "deep-extension.valueCoding": lambda r, c: r.__setitem__(
+        "extension", [{"url": "http://x.example/e", "extension": [
+            {"url": "inner", "extension": [
+                {"url": "deeper", "valueCoding": c}]}]}]),
+    "class": lambda r, c: r.__setitem__("class", c),
+    "meta.tag": lambda r, c: r.__setitem__("meta", {"tag": [c]}),
+    "meta.security": lambda r, c: r.__setitem__("meta", {"security": [c]}),
+}
+
+BARE_BAD = [
+    pytest.param("system", {"foo": CANARY}, id="system-object"),
+    pytest.param("system", [CANARY], id="system-list"),
+    pytest.param("system", 5, id="system-int"),
+    pytest.param("code", {"foo": CANARY}, id="code-object"),
+    pytest.param("code", {"value": {"deep": CANARY}}, id="code-object-deep"),
+    pytest.param("code", [CANARY], id="code-list"),
+    pytest.param("code", 1.5, id="code-float"),
+    pytest.param("code", True, id="code-bool"),
+]
+
+
+def _bare(rid, place, field, value):
+    res = _obs(rid, LOINC)
+    coding = {"system": LOINC, "code": "2160-0"}
+    coding[field] = value
+    BARE_PLACES[place](res, coding)
+    return res
+
+
+def _find_bare(out, place):
+    if place == "valueCoding":
+        return out["valueCoding"]
+    if place == "class":
+        return out["class"]
+    if place.startswith("meta."):
+        return out["meta"][place.split(".")[1]][0]
+    node = out["extension"][0]
+    while "extension" in node:
+        node = node["extension"][0]
+    return node["valueCoding"]
+
+
+@pytest.mark.parametrize("place", sorted(BARE_PLACES))
+@pytest.mark.parametrize("field,value", BARE_BAD)
+def test_redaction_cleans_a_bare_coding(place, field, value):
+    from r6.redaction import apply_redaction
+    out = apply_redaction(_bare("o1", place, field, value))
+    assert CANARY not in json.dumps(out)
+    coding = _find_bare(out, place)
+    assert field not in coding
+    other = "code" if field == "system" else "system"
+    assert other in coding
+
+
+@pytest.mark.parametrize("place", sorted(BARE_PLACES))
+def test_redaction_keeps_a_bare_int_code_as_its_string(place):
+    from r6.redaction import apply_redaction
+    out = apply_redaction(_bare("o1", place, "code", 2160))
+    assert _find_bare(out, place)["code"] == "2160"
+
+
+@pytest.mark.parametrize("place", sorted(BARE_PLACES))
+@pytest.mark.parametrize("field,value", BARE_BAD)
+def test_the_validator_refuses_a_bare_coding(
+        app, client, tenant_id, auth_headers, place, field, value):
+    before = _count(app, tenant_id)
+    r = client.post("/r6/fhir/Observation", data=json.dumps(
+        _bare("wb", place, field, value)), headers=_write_headers(auth_headers))
+    body = r.get_data(as_text=True)
+    assert r.status_code == 422, body[:300]
+    assert CANARY not in body
+    assert f"Coding.{field}" in body
+    assert _count(app, tenant_id) == before
+
+
+#: Shapes that are NOT a malformed Coding and must survive untouched.
+def test_a_codeableconcept_valued_code_is_not_mistaken_for_a_coding():
+    """component.code is a CodeableConcept, including one carrying only an
+    extension (data-absent-reason); none of them is dropped."""
+    from r6.redaction import apply_redaction
+    res = _obs("o1", LOINC)
+    res.pop("valueQuantity")
+    dar = {"extension": [{
+        "url": "http://hl7.org/fhir/StructureDefinition/data-absent-reason",
+        "valueCode": "unknown"}]}
+    res["component"] = [
+        {"code": {"coding": [{"system": LOINC, "code": "8480-6"}]},
+         "valueQuantity": {"value": 120, "unit": "mm[Hg]",
+                           "system": "http://unitsofmeasure.org",
+                           "code": "mm[Hg]"}},
+        {"code": dar, "valueQuantity": {"value": 80}}]
+    out = apply_redaction(res)
+    assert out["component"][0]["code"]["coding"][0]["code"] == "8480-6"
+    assert out["component"][0]["valueQuantity"]["code"] == "mm[Hg]"
+    assert out["component"][1]["code"]["extension"][0]["valueCode"] == "unknown"
+
+
+def test_a_questionnaire_item_code_list_of_codings_is_kept():
+    from r6.redaction import apply_redaction
+    q = {"resourceType": "Questionnaire", "status": "active", "item": [{
+        "linkId": "1", "type": "decimal",
+        "code": [{"system": LOINC, "code": "29463-7"},
+                 {"system": [CANARY], "code": {"x": CANARY}}, CANARY]}]}
+    out = apply_redaction(q)
+    codes = out["item"][0]["code"]
+    assert CANARY not in json.dumps(out)
+    assert codes[0]["code"] == "29463-7" and codes[0]["system"] == LOINC
+    assert len(codes) == 2 and codes[1] == {}
+
+
+def test_a_valid_questionnaire_and_coded_resources_still_write(
+        app, client, tenant_id, auth_headers):
+    hdrs = _write_headers(auth_headers)
+    q = {"resourceType": "Questionnaire", "status": "active", "item": [{
+        "linkId": "1", "type": "choice",
+        "code": [{"system": LOINC, "code": "29463-7"}],
+        "answerOption": [{"valueCoding": {"system": LOINC,
+                                          "code": "LA33-6"}}]}]}
+    r = client.post("/r6/fhir/Questionnaire", data=json.dumps(q), headers=hdrs)
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+    obs = _obs("w-ok", LOINC)
+    obs["meta"] = {"tag": [{"system": "https://x.example/t", "code": "t1"}],
+                   "security": [{"system": "http://terminology.hl7.org/"
+                                 "CodeSystem/v3-Confidentiality",
+                                 "code": "N"}]}
+    obs["valueQuantity"]["system"] = "http://unitsofmeasure.org"
+    obs["valueQuantity"]["code"] = "mg/dL"
+    r = client.post("/r6/fhir/Observation", data=json.dumps(obs), headers=hdrs)
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+
+
+# --- QA: patient-controlled redaction on a malformed meta.tag -------------------
+
+@pytest.mark.parametrize("tag", [
+    pytest.param({"system": "https://x.example", "code": {"foo": CANARY}},
+                 id="code-object"),
+    pytest.param({"system": "https://x.example", "code": [CANARY]},
+                 id="code-list"),
+    pytest.param({"system": "https://x.example", "code": {"text": CANARY}},
+                 id="code-cc-shaped"),
+    pytest.param("not-a-coding", id="tag-string"),
+    pytest.param(None, id="tag-null"),
+])
+def test_patient_controlled_redaction_survives_a_malformed_meta_tag(tag):
+    from r6.redaction import apply_patient_controlled_redaction
+    res = _obs("o1", LOINC)
+    res["meta"] = {"tag": [tag]}
+    out = apply_patient_controlled_redaction(res, "hc-patient-1")
+    assert CANARY not in json.dumps(out)
+    codes = [t.get("code") for t in out["meta"]["tag"] if isinstance(t, dict)]
+    assert "ANONYED" in codes and "patient-controlled" in codes
+
+
+@pytest.mark.parametrize("meta", [
+    pytest.param({"tag": {"code": "x"}}, id="tag-object"),
+    pytest.param({"tag": "x"}, id="tag-string"),
+    pytest.param("x", id="meta-string"),
+])
+def test_patient_controlled_redaction_survives_a_malformed_meta(meta):
+    from r6.redaction import apply_patient_controlled_redaction
+    res = _obs("o1", LOINC)
+    res["meta"] = meta
+    out = apply_patient_controlled_redaction(res, "hc-patient-1")
+    codes = [t.get("code") for t in out["meta"]["tag"] if isinstance(t, dict)]
+    assert "ANONYED" in codes and "patient-controlled" in codes
+
+
+def test_patient_controlled_redaction_does_not_restamp_an_existing_tag():
+    from r6.redaction import apply_patient_controlled_redaction
+    res = _obs("o1", LOINC)
+    res["meta"] = {"tag": [{"system": "https://healthclaw.io/tags",
+                            "code": "patient-controlled"}]}
+    out = apply_patient_controlled_redaction(res, "hc-patient-1")
+    codes = [t.get("code") for t in out["meta"]["tag"]]
+    assert codes.count("patient-controlled") == 1

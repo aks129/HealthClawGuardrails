@@ -27,6 +27,7 @@ on all resource access paths (not just context ingestion).
 
 import json
 
+from r6.safe_read import code_shape, is_coding_shaped
 from r6.terminology import label_codings
 
 
@@ -232,6 +233,27 @@ _ATTACHMENT_ONLY_KEYS = (
 )
 
 
+def _clean_coding(coding, *, in_coding_list):
+    """Drop a non-string system and a code that is no code, in place."""
+    if 'system' in coding and not isinstance(coding['system'], str):
+        coding.pop('system')
+    if 'code' not in coding:
+        return
+    shape = code_shape(coding['code'], in_coding_list=in_coding_list)
+    if shape == 'int':
+        coding['code'] = str(coding['code'])
+    elif shape == 'codings':
+        # Each item is a Coding, cleaned when the walk reaches it; anything
+        # that is not an object is no Coding and is dropped.
+        kept = [c for c in coding['code'] if isinstance(c, dict)]
+        if kept:
+            coding['code'] = kept
+        else:
+            coding.pop('code')
+    elif shape == 'bad':
+        coding.pop('code')
+
+
 def _redact_recursive(obj):
     """Recursively minimize common PHI-bearing FHIR datatypes in-place."""
     if isinstance(obj, list):
@@ -248,16 +270,14 @@ def _redact_recursive(obj):
     # tenant (#885), and can carry whatever text was packed into it. It is
     # dropped, never echoed. Coding.code likewise: a string stays, an int
     # (CVX 3 written as 3) is kept as its string form, and anything else,
-    # an object or a list among them, is dropped.
+    # an object or a list among them, is dropped. The same holds for every
+    # Coding-shaped dict, wherever it sits (R886-1); r6/safe_read.code_shape
+    # is the rule the validator applies on write too.
     for coding in obj.get('coding') if isinstance(obj.get('coding'), list) else ():
-        if not isinstance(coding, dict):
-            continue
-        if 'system' in coding and not isinstance(coding['system'], str):
-            coding.pop('system')
-        if 'code' in coding and not isinstance(coding['code'], str):
-            code = coding.pop('code')
-            if isinstance(code, int) and not isinstance(code, bool):
-                coding['code'] = str(code)
+        if isinstance(coding, dict):
+            _clean_coding(coding, in_coding_list=True)
+    if is_coding_shaped(obj):
+        _clean_coding(obj, in_coding_list=False)
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an
@@ -377,10 +397,20 @@ def apply_patient_controlled_redaction(resource, patient_id):
     if 'text' in result:
         result.pop('text')
 
-    # Stamp meta.tag with deidentified + patient-controlled
-    meta = result.setdefault('meta', {})
-    tags = meta.get('tag', [])
-    existing_codes = {t.get('code') for t in tags}
+    # Stamp meta.tag with deidentified + patient-controlled. A stored meta or
+    # tag of the wrong shape is not trusted to hold Codings: only object
+    # tags are kept, and only a string code counts as already stamped. An
+    # object code here raised TypeError in the set below (QA on #886).
+    meta = result.get('meta')
+    if not isinstance(meta, dict):
+        meta = result['meta'] = {}
+    tags = meta.get('tag')
+    if isinstance(tags, dict):
+        tags = [tags]
+    tags = [t for t in tags if isinstance(t, dict)] \
+        if isinstance(tags, list) else []
+    existing_codes = {t['code'] for t in tags
+                      if isinstance(t.get('code'), str)}
     if 'deidentified' not in existing_codes:
         tags.append({
             'system': (

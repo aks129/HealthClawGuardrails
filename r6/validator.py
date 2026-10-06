@@ -11,6 +11,8 @@ import os
 import time
 import requests
 
+from r6.safe_read import code_shape, is_coding_shaped
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,6 +154,34 @@ def _coverage_note(resource_type):
     )
 
 
+def _coding_issues(coding, path, *, in_coding_list):
+    """The errors for one Coding, by the rule redaction applies on read."""
+    issues = []
+    if 'system' in coding and not isinstance(coding['system'], str):
+        issues.append({
+            'severity': 'error',
+            'code': 'structure',
+            'diagnostics': 'Coding.system must be a string (a URI)',
+            'expression': [f'{path}.system'],
+        })
+    if 'code' in coding:
+        shape = code_shape(coding['code'], in_coding_list=in_coding_list)
+        if shape == 'codings':
+            # A list of Codings (Questionnaire.item.code): each item must be
+            # an object; the walk checks each one as a Coding.
+            bad = any(not isinstance(c, dict) for c in coding['code'])
+        else:
+            bad = shape == 'bad'
+        if bad:
+            issues.append({
+                'severity': 'error',
+                'code': 'structure',
+                'diagnostics': 'Coding.code must be a string',
+                'expression': [f'{path}.code'],
+            })
+    return issues
+
+
 def _coding_system_issues(node, path):
     """An error for every Coding whose `system` is present and not a string,
     or whose `code` is present and neither a string nor an int.
@@ -172,23 +202,13 @@ def _coding_system_issues(node, path):
     codings = node.get('coding')
     if isinstance(codings, list):
         for i, coding in enumerate(codings):
-            if isinstance(coding, dict) and 'system' in coding \
-                    and not isinstance(coding['system'], str):
-                issues.append({
-                    'severity': 'error',
-                    'code': 'structure',
-                    'diagnostics': 'Coding.system must be a string (a URI)',
-                    'expression': [f'{path}.coding[{i}].system'],
-                })
-            if isinstance(coding, dict) and 'code' in coding and (
-                    isinstance(coding['code'], bool)
-                    or not isinstance(coding['code'], (str, int))):
-                issues.append({
-                    'severity': 'error',
-                    'code': 'structure',
-                    'diagnostics': 'Coding.code must be a string',
-                    'expression': [f'{path}.coding[{i}].code'],
-                })
+            if isinstance(coding, dict):
+                issues.extend(_coding_issues(
+                    coding, f'{path}.coding[{i}]', in_coding_list=True))
+    # Every Coding-shaped dict, wherever it sits: valueCoding, an extension's
+    # valueCoding at any depth, `class`, meta.tag, meta.security (R886-1).
+    if is_coding_shaped(node):
+        issues.extend(_coding_issues(node, path, in_coding_list=False))
     for key, value in node.items():
         if isinstance(value, (dict, list)):
             issues.extend(_coding_system_issues(value, f'{path}.{key}'))
