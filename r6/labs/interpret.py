@@ -13,6 +13,8 @@ a test enforces it. Values are adult defaults and should be clinician-reviewed
 Decision support, not diagnosis.
 """
 
+from r6.safe_read import as_dict, as_list, is_number
+
 # Citable provenance for the ranges below. Keys are referenced by each entry.
 REFERENCES = {
     "adult-cc": "Standard adult clinical-chemistry reference ranges "
@@ -94,19 +96,11 @@ UNIT_MISMATCH = "unit-mismatch"            #: units differ from the range's
 RANGE_NOT_ASSERTED = "range-not-asserted"  #: one-sided lab range, wrong side
 
 
-def _dict(value):
-    """`value` when it is a JSON object, else {}.
-
-    The write API stores what it is given, so any field may hold a string,
-    a list or null where FHIR says object. One such row used to raise here
-    and turn the whole $interpret call into a 500 for every patient in the
-    tenant (#869). r6/labs/trend.py reads its fields the same way.
-    """
-    return value if isinstance(value, dict) else {}
-
-
-def _list(value):
-    return value if isinstance(value, list) else []
+# The write API stores what it is given, so any field may hold a string, a
+# list or null where FHIR says object. One such row used to raise here and
+# turn the whole $interpret call into a 500 for every patient in the tenant
+# (#869). The readers are shared with every other engine route (#879).
+_dict, _list = as_dict, as_list
 
 
 def _loinc(obs):
@@ -117,9 +111,9 @@ def _loinc(obs):
     return None
 
 
-def _is_number(value):
-    # bool is an int subclass — exclude it.
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+# Finite only: a stored NaN or Infinity is not a measurement, and an
+# infinite value read as "high" put a bare Infinity token in the response.
+_is_number = is_number
 
 
 def _apply_sex(entry, patient):
