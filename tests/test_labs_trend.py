@@ -172,6 +172,15 @@ def test_baseline_is_lowest_in_the_seven_days():
     assert r["criteria"]["B"]["baseline"]["value_mg_dl"] == 0.8
 
 
+def test_a_rise_already_recovering_is_judged_at_the_latest_result():
+    # End-point design, flagged for our physician advisor: only the latest
+    # result is the end point, so a peak that has come back down is B not-met.
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.5, T0 + timedelta(days=2)),
+                                 _cr(1.0, T0 + timedelta(days=5))])
+    assert r["kdigo_criterion"] == []
+    assert r["criteria"]["B"]["status"] == "not-met"
+
+
 def test_falling_creatinine_fires_nothing():
     r = evaluate_creatinine_aki([_cr(1.3, T0), _cr(0.8, T0 + timedelta(days=6))])
     assert _criteria(r) == []
@@ -246,19 +255,70 @@ def test_kdigo_is_cited_in_references():
 
 # --- consumer wording ---------------------------------------------------------
 
-def test_consumer_line_is_plain_and_calm():
+RECENT = T0 + timedelta(days=8)  # "now" for a result that is not stale
+
+
+def test_consumer_line_is_plain_and_calm_and_dated():
     r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6))])
-    line = kdigo_consumer_line(r)
+    line = kdigo_consumer_line(r, now=RECENT)
     assert line["message"] == (
-        "Your creatinine rose from 0.8 to 1.3 mg/dL in 6 days. A rise like "
-        "this can mean the kidneys are under strain. Contact your clinician "
-        "promptly.")
+        "Between Sep 1 and Sep 7, 2026, your creatinine rose from 0.8 to "
+        "1.3 mg/dL in 6 days. A rise like this can mean the kidneys are under "
+        "strain. Contact your clinician promptly.")
     assert "AKI" not in line["message"] and "injury" not in line["message"]
+
+
+def test_consumer_line_across_a_year_boundary():
+    t = datetime(2025, 12, 30, 8, 0, tzinfo=timezone.utc)
+    r = evaluate_creatinine_aki([_cr(0.8, t), _cr(1.3, t + timedelta(days=4))])
+    msg = kdigo_consumer_line(r, now=t + timedelta(days=5))["message"]
+    assert msg.startswith("Between Dec 30, 2025 and Jan 3, 2026, your creatinine")
 
 
 def test_consumer_line_uses_hours_under_two_days():
     r = evaluate_creatinine_aki([_cr(0.9, T0), _cr(1.25, T0 + timedelta(hours=40))])
-    assert "from 0.9 to 1.25 mg/dL in 40 hours" in kdigo_consumer_line(r)["message"]
+    msg = kdigo_consumer_line(r, now=RECENT)["message"]
+    assert "from 0.9 to 1.25 mg/dL in 40 hours" in msg
+
+
+def test_consumer_line_under_an_hour_on_one_day():
+    r = evaluate_creatinine_aki([_cr(0.9, T0), _cr(1.2, T0 + timedelta(minutes=30))])
+    msg = kdigo_consumer_line(r, now=RECENT)["message"]
+    assert msg.startswith("On Sep 1, 2026, your creatinine rose from 0.9 to "
+                          "1.2 mg/dL within an hour.")
+
+
+def test_stale_result_softens_the_consumer_line_but_keeps_the_flag():
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6))])
+    assert r["kdigo_criterion"] == ["B"] and r["stage"] == 1
+    msg = kdigo_consumer_line(
+        r, now=T0 + timedelta(days=6 + 30, seconds=1))["message"]
+    assert msg == (
+        "In Sep 2026, your creatinine rose from 0.8 to 1.3 mg/dL in 6 days. "
+        "If you haven't already, ask your clinician whether this was "
+        "followed up.")
+    assert "promptly" not in msg
+
+
+def test_exactly_30_days_old_is_not_yet_stale():
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6))])
+    msg = kdigo_consumer_line(r, now=T0 + timedelta(days=36))["message"]
+    assert msg.endswith("Contact your clinician promptly.")
+
+
+def test_consumer_line_quotes_the_labs_own_umol_numbers():
+    r = evaluate_creatinine_aki([_cr(80, T0, unit="umol/L"),
+                                 _cr(133, T0 + timedelta(days=6), unit="umol/L")])
+    msg = kdigo_consumer_line(r, now=RECENT)["message"]
+    assert "rose from 80 to 133 µmol/L in 6 days" in msg
+    assert "mg/dL" not in msg
+
+
+def test_mixed_units_are_quoted_in_the_latest_results_unit():
+    r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                 _cr(133, T0 + timedelta(days=6), unit="umol/L")])
+    msg = kdigo_consumer_line(r, now=RECENT)["message"]
+    assert "rose from 70.7 to 133 µmol/L" in msg
 
 
 def test_no_consumer_line_when_nothing_fired():
@@ -271,11 +331,140 @@ def test_consumer_summary_carries_trends_separately_from_lines():
     r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6))])
     out = build_consumer_summary([], trends=[r])
     assert out["lines"] == []
-    assert out["trends"][0]["message"].startswith("Your creatinine rose")
+    assert "your creatinine rose" in out["trends"][0]["message"]
 
 
 def test_consumer_summary_without_trends_is_unchanged():
     assert "trends" not in build_consumer_summary([])
+
+
+def test_unevaluated_note_does_not_contradict_the_trend():
+    # A umol/L result is a unit mismatch for the range check, but the trend
+    # converts it. The note must not read as "creatinine was not looked at".
+    latest = _cr(133, T0 + timedelta(days=6), unit="umol/L")
+    r = evaluate_creatinine_aki([_cr(80, T0, unit="umol/L"), latest])
+    out = build_consumer_summary([interpret_observation(latest)], trends=[r])
+    assert out["unevaluated_analytes"] == ["Creatinine"]
+    assert ("Creatinine was still compared with its own earlier results"
+            in out["unevaluated_note"])
+
+
+def test_unevaluated_note_unchanged_when_the_trend_did_not_fire():
+    latest = _cr(133, T0 + timedelta(days=60), unit="umol/L")
+    r = evaluate_creatinine_aki([_cr(80, T0, unit="umol/L"), latest])
+    out = build_consumer_summary([interpret_observation(latest)], trends=[r])
+    assert "compared with its own earlier" not in out["unevaluated_note"]
+
+
+# --- F1: malformed shapes never raise -----------------------------------------
+
+def test_status_as_a_list_is_skipped_not_raised():
+    r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                 _cr(1.3, T0 + timedelta(days=2), status=["final"])])
+    assert r["status"] == "abstained"
+    assert r["abstained_reason"] == "latest-not-comparable"
+    assert "malformed-field" in {s["reason"] for s in r["skipped"]}
+
+
+def _bare(**fields):
+    obs = {"resourceType": "Observation", "id": "m",
+           "code": {"coding": [{"system": "http://loinc.org",
+                                "code": CREATININE_LOINC}]},
+           "effectiveDateTime": T0.isoformat(),
+           "valueQuantity": {"value": 1.0, "unit": "mg/dL"}}
+    obs.update(fields)
+    return obs
+
+
+def test_malformed_shapes_never_raise():
+    shapes = [
+        {"code": None}, {"code": "2160-0"}, {"code": {"coding": None}},
+        {"code": {"coding": [None, "x"]}},
+        {"code": {"coding": [{"system": "http://loinc.org", "code": ["2160-0"]}]}},
+        {"valueQuantity": None}, {"valueQuantity": [1.0]},
+        {"valueQuantity": {"value": [1.0], "unit": "mg/dL"}},
+        {"valueQuantity": {"value": 1.0, "unit": ["mg/dL"]}},
+        {"valueQuantity": {"value": 1.0, "unit": "mg/dL",
+                           "system": "http://unitsofmeasure.org", "code": {}}},
+        {"effectiveDateTime": 20260901}, {"effectiveDateTime": ["2026-09-01"]},
+        {"effectiveDateTime": "not a date"}, {"status": {"a": 1}},
+        {"id": ["x"]},
+    ]
+    for shape in shapes:
+        r = evaluate_creatinine_aki([_bare(**shape),
+                                     _cr(1.3, T0 + timedelta(days=2))])
+        json.dumps(r, allow_nan=False)
+    assert evaluate_creatinine_aki(["junk", None, 3]) is None
+
+
+# --- F2c: a newer draw we cannot place -----------------------------------------
+
+def test_newer_date_only_result_abstains():
+    newer = _cr(0.8, T0, rid="newer")
+    newer["effectiveDateTime"] = "2026-09-20"
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6)),
+                                 newer])
+    assert r["status"] == "abstained"
+    assert r["abstained_reason"] == "newer-result-unusable"
+    assert r["kdigo_criterion"] == [] and kdigo_consumer_line(r) is None
+
+
+def test_newer_naive_time_result_abstains():
+    newer = _cr(0.8, T0, rid="newer")
+    newer["effectiveDateTime"] = "2026-09-08T08:00:00"
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6)),
+                                 newer])
+    assert r["abstained_reason"] == "newer-result-unusable"
+
+
+def test_newer_year_month_result_abstains():
+    newer = _cr(0.8, T0, rid="newer")
+    newer["effectiveDateTime"] = "2026-10"
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6)),
+                                 newer])
+    assert r["abstained_reason"] == "newer-result-unusable"
+
+
+def test_date_only_result_on_the_same_day_does_not_abstain():
+    same = _cr(0.8, T0, rid="same")
+    same["effectiveDateTime"] = "2026-09-07"
+    r = evaluate_creatinine_aki([_cr(0.8, T0), _cr(1.3, T0 + timedelta(days=6)),
+                                 same])
+    assert r["kdigo_criterion"] == ["B"]
+
+
+# --- F4: tolerance compares, not rounding --------------------------------------
+
+def test_ratio_just_under_one_and_a_half_does_not_round_up():
+    # 1.999 / 1.333 = 1.49962...; rounding to 3 places would call it 1.5.
+    r = evaluate_creatinine_aki([_cr(1.333, T0), _cr(1.999, T0 + timedelta(days=5))])
+    assert "B" not in r["kdigo_criterion"]
+    # ...and the reported ratio must not read as on the threshold either.
+    assert r["criteria"]["B"]["ratio"] < 1.5
+
+
+def test_umol_rise_just_under_0_3_mg_dl_does_not_fire_a():
+    # 26.5 umol/L = 0.2998 mg/dL; rounding each value first made it 0.300.
+    r = evaluate_creatinine_aki([_cr(88, T0, unit="umol/L"),
+                                 _cr(114.5, T0 + timedelta(hours=24), unit="umol/L")])
+    assert "A" not in r["kdigo_criterion"]
+
+
+def test_stage_3_cutoff_uses_a_tolerance():
+    # 1.2 / 0.4 is 2.9999999999999996 in binary floating point.
+    r = evaluate_creatinine_aki([_cr(0.4, T0), _cr(1.2, T0 + timedelta(days=3))])
+    assert r["stage"] == 3
+
+
+# --- F5: implausible values --------------------------------------------------------
+
+def test_zero_negative_and_non_finite_values_are_skipped():
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        base = _cr(bad, T0, rid="bad")
+        r = evaluate_creatinine_aki([base, _cr(1.3, T0 + timedelta(days=2))])
+        assert {"id": "bad", "reason": "implausible-value"} in r["skipped"]
+        assert r["kdigo_criterion"] == []
+        json.dumps(r, allow_nan=False)
 
 
 # --- #54: triglycerides -------------------------------------------------------
@@ -309,8 +498,10 @@ def _param(body, name):
 
 
 def test_subject_interpret_reports_the_trend(app, client, tenant_headers, tenant_id):
-    _store(app, tenant_id, _cr(0.8, T0, rid="cr-a"))
-    _store(app, tenant_id, _cr(1.3, T0 + timedelta(days=6), rid="cr-b"))
+    # Relative to now, so the consumer line is the not-stale wording.
+    t = datetime.now(timezone.utc) - timedelta(days=8)
+    _store(app, tenant_id, _cr(0.8, t, rid="cr-a"))
+    _store(app, tenant_id, _cr(1.3, t + timedelta(days=6), rid="cr-b"))
     r = client.post("/r6/fhir/Observation/$interpret?subject=Patient/p1",
                     headers=tenant_headers)
     assert r.status_code == 200
@@ -319,9 +510,22 @@ def test_subject_interpret_reports_the_trend(app, client, tenant_headers, tenant
     assert summary["trends"][0]["kdigo_criterion"] == ["B"]
     assert summary["trends"][0]["stage"] == 1
     consumer = json.loads(_param(body, "consumerSummary")["valueString"])
-    assert consumer["trends"][0]["message"].startswith(
-        "Your creatinine rose from 0.8 to 1.3 mg/dL in 6 days.")
+    msg = consumer["trends"][0]["message"]
+    assert "your creatinine rose from 0.8 to 1.3 mg/dL in 6 days." in msg
+    assert msg.endswith("Contact your clinician promptly.")
     assert "Jane Doe" not in r.get_data(as_text=True)
+
+
+def test_subject_interpret_survives_a_list_status(
+        app, client, tenant_headers, tenant_id):
+    _store(app, tenant_id, _cr(0.8, T0, rid="cr-s1"))
+    _store(app, tenant_id, _cr(1.3, T0 + timedelta(days=2), rid="cr-s2",
+                               status=["final"]))
+    r = client.post("/r6/fhir/Observation/$interpret?subject=Patient/p1",
+                    headers=tenant_headers)
+    assert r.status_code == 200
+    summary = json.loads(_param(r.get_json(), "summary")["valueString"])
+    assert summary["trends"][0]["abstained_reason"] == "latest-not-comparable"
 
 
 def test_no_subject_means_no_trend(app, client, tenant_headers, tenant_id):

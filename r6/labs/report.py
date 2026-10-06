@@ -169,4 +169,15 @@ def build_consumer_summary(results, trends=None):
                    if line]
     if trend_lines:
         out["trends"] = trend_lines
+        # The range check and the trend check read the same result
+        # differently: a umol/L creatinine is a unit mismatch against the
+        # mg/dL range, while the trend converts it. Left alone, the note
+        # would say creatinine was not evaluated beside a line saying it
+        # rose. Both are true; say which check each one is about.
+        for line in trend_lines:
+            if line["analyte"] in (marker or {}).get("unevaluated_analytes", ()):
+                out["unevaluated_note"] += (
+                    f" {line['analyte']} was still compared with its own "
+                    f"earlier results; that comparison is described "
+                    f"separately.")
     return out

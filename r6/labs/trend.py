@@ -13,13 +13,21 @@ draws are usually days or weeks apart, so a 48-hour-only rule almost never
 fires there; our physician advisor's example — 0.8 -> 1.3 mg/dL over six
 days, 1.625 x — is criterion B, stage 1, and is invisible to A.
 
+The end point is always the latest comparable result. A rise that has
+already come back down (0.8 -> 1.5 -> 1.0 within 5 days) is B not-met: the
+question is about the current value, not the peak.
+
 Comparability before arithmetic (#62). A value enters the arithmetic only
-when it is a plain valueQuantity on LOINC 2160-0, in mg/dL or umol/L, with a
-timezone-qualified effective time, and no comparator or dataAbsentReason.
-Anything else is skipped with a reason, and when what is left cannot answer
-the question the check abstains instead of guessing. "Did not fire" is
-never reported as "kidneys fine": a criterion with no prior result inside
-its window is `not-evaluable`, not `not-met`.
+when it is a plain, positive, finite valueQuantity on LOINC 2160-0, in mg/dL
+or umol/L, with a timezone-qualified effective time, and no comparator or
+dataAbsentReason. Anything else is skipped with a reason, and when what is
+left cannot answer the question the check abstains instead of guessing.
+"Did not fire" is never reported as "kidneys fine": a criterion with no
+prior result inside its window is `not-evaluable`, not `not-met`.
+
+Every field is read defensively: the write API stores what it is given, so
+a list where a string belongs must be skipped with a reason, never raise —
+one malformed row otherwise turns the whole $interpret call into a 500.
 
 The analyte label comes from LOINC_RANGES keyed by code — never from the
 Observation's own `display` or `code.text`, which is where real feeds put a
@@ -27,7 +35,9 @@ patient's name.
 
 Decision support, not diagnosis.
 """
-from datetime import datetime, timedelta
+import math
+import re
+from datetime import date, datetime, timedelta, timezone
 
 from r6.labs.interpret import LOINC_RANGES, LOINC_SYSTEM
 
@@ -42,18 +52,28 @@ UCUM_SYSTEM = "http://unitsofmeasure.org"
 
 _ANALYTE = LOINC_RANGES[CREATININE_LOINC]["name"]
 
-#: mg/dL per unit. Creatinine molar mass 113.12 g/mol gives
+#: umol/L per mg/dL. Creatinine molar mass 113.12 g/mol gives
 #: 1 mg/dL = 88.4 umol/L — a creatinine-specific factor, not a general one
-#: (source "si-creatinine" in interpret.REFERENCES). Both micro spellings
-#: (U+00B5 micro sign, U+03BC Greek mu) appear in real feeds.
-_TO_MG_DL = {"mg/dL": 1.0, "umol/L": 1 / 88.4, "µmol/L": 1 / 88.4,
-             "μmol/L": 1 / 88.4}
+#: (source "si-creatinine" in interpret.REFERENCES).
+UMOL_PER_MG_DL = 88.4
+#: Accepted units, mapped to the canonical name used for quoting. Both micro
+#: spellings (U+00B5 micro sign, U+03BC Greek mu) appear in real feeds.
+_UNITS = {"mg/dL": "mg/dL", "umol/L": "umol/L", "µmol/L": "umol/L",
+          "μmol/L": "umol/L"}
 
 WINDOW_A = timedelta(hours=48)
 WINDOW_B = timedelta(days=7)
 RISE_A_MG_DL = 0.3
 RATIO_B = 1.5
 STAGE_3_ABSOLUTE_MG_DL = 4.0
+#: Threshold comparisons allow this much binary floating-point error, and no
+#: more: 1.2 / 0.8 is 1.4999999999999998 and must count as 1.5, while
+#: 1.999 / 1.333 is 1.4996 and must not. Rounding to a few places, which
+#: this replaced, got the second case wrong.
+_EPS = 1e-9
+#: A consumer line about a result older than this is softened from "contact
+#: your clinician promptly" to "ask whether this was followed up".
+STALE_AFTER = timedelta(days=30)
 
 _NOT_A_RESULT = {"entered-in-error", "cancelled"}
 
@@ -62,12 +82,15 @@ NOT_SERUM = "not-serum-creatinine"
 AMBIGUOUS_TIME = "ambiguous-time"
 DATA_ABSENT = "data-absent"
 NO_NUMERIC_VALUE = "no-numeric-value"
+IMPLAUSIBLE = "implausible-value"
 CENSORED = "censored-value"
 UNIT_NOT_COMPARABLE = "unit-not-comparable"
 NOT_A_RESULT = "not-a-result"
+MALFORMED = "malformed-field"
 
 #: Why the check as a whole, or one criterion, could not be decided.
 LATEST_NOT_COMPARABLE = "latest-not-comparable"
+NEWER_UNUSABLE = "newer-result-unusable"
 INSUFFICIENT = "insufficient-comparable-results"
 NO_PRIOR_IN_WINDOW = "no-prior-in-window"
 
@@ -75,15 +98,34 @@ _BASELINE_NOTE = (
     "Criterion B baseline is the lowest comparable creatinine in the 7 days "
     "before the latest result (inclusive of exactly 7 days); criterion A "
     "compares against the lowest comparable result in the 48 hours before "
-    "it. Results that were censored (<, >), absent, in another unit, or "
-    "without a timezone-qualified time were not used.")
+    "it. The end point is the latest comparable result, so a rise that has "
+    "already come back down is not reported. Results that were censored "
+    "(<, >), absent, non-positive, in another unit, or without a "
+    "timezone-qualified time were not used.")
+
+
+def _str(value):
+    return value if isinstance(value, str) else None
+
+
+def _id(obs):
+    return _str(obs.get("id"))
 
 
 def _loinc(obs):
-    for c in obs.get("code", {}).get("coding", []):
-        if c.get("system") == LOINC_SYSTEM and c.get("code"):
+    code = obs.get("code")
+    coding = code.get("coding") if isinstance(code, dict) else None
+    if not isinstance(coding, list):
+        return None
+    for c in coding:
+        if isinstance(c, dict) and c.get("system") == LOINC_SYSTEM \
+                and _str(c.get("code")):
             return c["code"]
     return None
+
+
+def _raw_time(obs):
+    return _str(obs.get("effectiveDateTime")) or _str(obs.get("effectiveInstant"))
 
 
 def _when(obs):
@@ -94,8 +136,8 @@ def _when(obs):
     up to a day, and a naive datetime cannot be compared with an aware one.
     effectivePeriod is not used: which end the draw happened at is unknown.
     """
-    raw = obs.get("effectiveDateTime") or obs.get("effectiveInstant")
-    if not isinstance(raw, str) or "T" not in raw:
+    raw = _raw_time(obs)
+    if raw is None or "T" not in raw:
         return None
     try:
         when = datetime.fromisoformat(raw)
@@ -104,11 +146,38 @@ def _when(obs):
     return when if when.tzinfo is not None else None
 
 
+_PARTIAL_DATE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
+
+
+def _earliest_date(obs):
+    """For a result `_when` could not place: the earliest calendar date it
+    could have been drawn on, or None if even that is unreadable.
+
+    Earliest, so "after the latest result" means definitely after: a bare
+    year or a month that overlaps the latest result's date does not count.
+    """
+    raw = _raw_time(obs)
+    if raw is None:
+        return None
+    if "T" in raw:
+        try:
+            return datetime.fromisoformat(raw).date()
+        except ValueError:
+            return None
+    m = _PARTIAL_DATE.match(raw)
+    if not m:
+        return None
+    try:
+        return date(int(m[1]), int(m[2] or 1), int(m[3] or 1))
+    except ValueError:
+        return None
+
+
 def _unit(vq):
     """The coded UCUM unit when present, else the human-readable unit."""
-    if vq.get("system") == UCUM_SYSTEM and vq.get("code"):
+    if vq.get("system") == UCUM_SYSTEM and _str(vq.get("code")):
         return vq["code"]
-    return vq.get("unit")
+    return _str(vq.get("unit"))
 
 
 def _gate(obs):
@@ -121,20 +190,25 @@ def _gate(obs):
     value = vq.get("value")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, NO_NUMERIC_VALUE
+    if not math.isfinite(value) or value <= 0:
+        return None, IMPLAUSIBLE
     if vq.get("comparator"):
         # "<0.5" is a bound, not the point 0.5 — subtracting it would
         # manufacture a rise.
         return None, CENSORED
-    factor = _TO_MG_DL.get(_unit(vq))
-    if factor is None:
+    unit = _UNITS.get(_unit(vq))
+    if unit is None:
         return None, UNIT_NOT_COMPARABLE
-    return round(value * factor, 3), None
+    # Not rounded: rounding each value before comparing moved a 0.2998 mg/dL
+    # rise onto the 0.3 threshold. Values are rounded only for display.
+    return (value if unit == "mg/dL" else value / UMOL_PER_MG_DL), None
 
 
 def _point(obs, when, mg_dl):
-    return {"id": obs.get("id"), "effective": when.isoformat(),
-            "value_mg_dl": mg_dl,
-            "original_unit": _unit(obs.get("valueQuantity") or {})}
+    vq = obs.get("valueQuantity")
+    return {"id": _id(obs), "effective": when.isoformat(),
+            "value_mg_dl": round(mg_dl, 3), "value": vq["value"],
+            "original_unit": _UNITS[_unit(vq)]}
 
 
 def _lowest_prior(points, latest_when, window):
@@ -151,10 +225,14 @@ def _not_evaluable(reason):
     return {"status": "not-evaluable", "reason": reason}
 
 
+def _at_least(value, threshold):
+    return value >= threshold - _EPS
+
+
 def _stage_for_ratio(ratio):
-    if ratio >= 3.0:
+    if _at_least(ratio, 3.0):
         return 3
-    if ratio >= 2.0:
+    if _at_least(ratio, 2.0):
         return 2
     return 1
 
@@ -169,7 +247,6 @@ def _abstain(reason, skipped):
             "latest": None, "skipped": skipped, "note": _BASELINE_NOTE}
 
 
-
 def evaluate_creatinine_aki(observations):
     """Evaluate KDIGO criteria A and B on one patient's Observations.
 
@@ -179,28 +256,38 @@ def evaluate_creatinine_aki(observations):
     `stage` (1-3 or None), per-criterion detail with the compared results,
     and `skipped` (id + reason for every result left out).
     """
-    points, unusable, skipped, seen = [], [], [], False
+    points, unusable, unplaced, skipped, seen = [], [], [], [], False
     for obs in observations:
         if not isinstance(obs, dict):
             continue
         code = _loinc(obs)
         if code == WHOLE_BLOOD_CREATININE_LOINC:
             seen = True
-            skipped.append({"id": obs.get("id"), "reason": NOT_SERUM})
+            skipped.append({"id": _id(obs), "reason": NOT_SERUM})
             continue
         if code != CREATININE_LOINC:
             continue
         seen = True
-        if obs.get("status") in _NOT_A_RESULT:
-            skipped.append({"id": obs.get("id"), "reason": NOT_A_RESULT})
+        status = obs.get("status")
+        if isinstance(status, str) and status in _NOT_A_RESULT:
+            skipped.append({"id": _id(obs), "reason": NOT_A_RESULT})
             continue
         when = _when(obs)
         if when is None:
-            skipped.append({"id": obs.get("id"), "reason": AMBIGUOUS_TIME})
+            skipped.append({"id": _id(obs), "reason": AMBIGUOUS_TIME})
+            day = _earliest_date(obs)
+            if day is not None:
+                unplaced.append(day)
+            continue
+        if status is not None and not isinstance(status, str):
+            # Could be anything, including entered-in-error. A timed result
+            # we cannot read still counts as a draw, so it can block below.
+            skipped.append({"id": _id(obs), "reason": MALFORMED})
+            unusable.append(when)
             continue
         mg_dl, reason = _gate(obs)
         if reason:
-            skipped.append({"id": obs.get("id"), "reason": reason})
+            skipped.append({"id": _id(obs), "reason": reason})
             unusable.append(when)
             continue
         points.append((when, mg_dl, obs))
@@ -216,25 +303,26 @@ def evaluate_creatinine_aki(observations):
     # question about the past as if it were the present.
     if any(u >= latest_when for u in unusable):
         return _abstain(LATEST_NOT_COMPARABLE, skipped)
+    # The same holds for a draw we can see but cannot place to the hour: if
+    # it was on a later calendar date, the pair below is no longer current.
+    if any(day > latest_when.date() for day in unplaced):
+        return _abstain(NEWER_UNUSABLE, skipped)
     if len(points) < 2:
         return _abstain(INSUFFICIENT, skipped)
 
-    # Rounded before comparing: in binary floating point 1.2 - 0.9 is
-    # 0.29999999999999993 and 1.2 / 0.8 is 1.4999999999999998, so a result
-    # exactly on a KDIGO threshold would otherwise miss it.
     criteria, met, stages = {}, [], []
 
     prior_a = _lowest_prior(points, latest_when, WINDOW_A)
     if prior_a is None:
         criteria["A"] = _not_evaluable(NO_PRIOR_IN_WINDOW)
     else:
-        delta = round(latest_val - prior_a[1], 3)
-        ok = delta >= RISE_A_MG_DL
+        delta = latest_val - prior_a[1]
+        ok = _at_least(delta, RISE_A_MG_DL)
         criteria["A"] = {"status": "met" if ok else "not-met",
                          "prior": _point(prior_a[2], prior_a[0], prior_a[1]),
-                         "rise_mg_dl": delta,
+                         "rise_mg_dl": round(delta, 4),
                          "elapsed_hours": round(
-                             (latest_when - prior_a[0]).total_seconds() / 3600, 1)}
+                             (latest_when - prior_a[0]).total_seconds() / 3600, 2)}
         if ok:
             met.append("A")
             stages.append(1)
@@ -243,19 +331,19 @@ def evaluate_creatinine_aki(observations):
     if baseline is None:
         criteria["B"] = _not_evaluable(NO_PRIOR_IN_WINDOW)
     else:
-        ratio = round(latest_val / baseline[1], 3) if baseline[1] > 0 else None
-        ok = ratio is not None and ratio >= RATIO_B
+        ratio = latest_val / baseline[1]  # baseline > 0: _gate guarantees it
+        ok = _at_least(ratio, RATIO_B)
         criteria["B"] = {"status": "met" if ok else "not-met",
                          "baseline": _point(baseline[2], baseline[0], baseline[1]),
-                         "ratio": ratio,
+                         "ratio": round(ratio, 4),
                          "elapsed_hours": round(
-                             (latest_when - baseline[0]).total_seconds() / 3600, 1)}
+                             (latest_when - baseline[0]).total_seconds() / 3600, 2)}
         if ok:
             met.append("B")
             stages.append(_stage_for_ratio(ratio))
 
     stage = max(stages) if stages else None
-    if stage is not None and latest_val >= STAGE_3_ABSOLUTE_MG_DL:
+    if stage is not None and _at_least(latest_val, STAGE_3_ABSOLUTE_MG_DL):
         stage = 3  # KDIGO stage 3 includes a rise to >= 4.0 mg/dL
     return {"check": "kdigo-aki-creatinine", "analyte": _ANALYTE,
             "loinc": CREATININE_LOINC, "source": "kdigo-2012",
@@ -265,35 +353,71 @@ def evaluate_creatinine_aki(observations):
             "skipped": skipped, "note": _BASELINE_NOTE}
 
 
-def _fmt(mg_dl):
-    return f"{mg_dl:.2f}".rstrip("0").rstrip(".")
+def _num(value, unit):
+    # mg/dL is reported to two places, umol/L to whole numbers or one place.
+    places = 2 if unit == "mg/dL" else 1
+    return f"{value:.{places}f}".rstrip("0").rstrip(".")
+
+
+def _quoted(point, unit):
+    """`point`'s value in `unit`: the lab's own number when it was reported
+    in that unit, else converted."""
+    if point["original_unit"] == unit:
+        return _num(point["value"], unit)
+    mg_dl = point["value"] / UMOL_PER_MG_DL \
+        if point["original_unit"] == "umol/L" else point["value"]
+    return _num(mg_dl if unit == "mg/dL" else mg_dl * UMOL_PER_MG_DL, unit)
 
 
 def _span(hours):
+    if hours < 1:
+        return "within an hour"
     if hours < 48:
         n = round(hours)
-        return f"{n} hour" + ("" if n == 1 else "s")
-    n = round(hours / 24)
-    return f"{n} days"
+        return f"in {n} hour" + ("" if n == 1 else "s")
+    return f"in {round(hours / 24)} days"
 
 
-def kdigo_consumer_line(result):
+def _day(d, with_year):
+    return f"{d:%b} {d.day}" + (f", {d.year}" if with_year else "")
+
+
+def _when_said(start, end):
+    if start.date() == end.date():
+        return f"On {_day(end, True)}"
+    return (f"Between {_day(start, start.year != end.year)} and "
+            f"{_day(end, True)}")
+
+
+def kdigo_consumer_line(result, now=None):
     """The plain-language sentence for a fired check, or None.
 
-    Says what the numbers did and what to do, never a diagnosis. Criterion
-    B's baseline is quoted when B fired, since it is the lower of the two
-    comparisons; otherwise criterion A's.
+    Says when, what the numbers did and what to do — never a diagnosis.
+    Numbers are quoted in the latest result's own unit, so a lab that
+    reports umol/L is quoted in umol/L. Criterion B's baseline is quoted
+    when B fired, since it is the lower of the two comparisons; otherwise
+    criterion A's. A result more than 30 days before `now` keeps its flag
+    but is worded as a question about follow-up, not an instruction to act.
     """
     if not result or not result.get("kdigo_criterion"):
         return None
     crit = result["criteria"]["B" if "B" in result["kdigo_criterion"] else "A"]
     before = crit.get("baseline") or crit.get("prior")
     latest = result["latest"]
+    unit = latest["original_unit"]
+    start = datetime.fromisoformat(before["effective"])
+    end = datetime.fromisoformat(latest["effective"])
+    rise = (f"{result['analyte'].lower()} rose from {_quoted(before, unit)} "
+            f"to {_quoted(latest, unit)} "
+            f"{'mg/dL' if unit == 'mg/dL' else chr(0xB5) + 'mol/L'} "
+            f"{_span(crit['elapsed_hours'])}.")
+    now = now or datetime.now(timezone.utc)
+    if now - end > STALE_AFTER:
+        message = (f"In {end:%b} {end.year}, your {rise} If you haven't "
+                   f"already, ask your clinician whether this was followed up.")
+    else:
+        message = (f"{_when_said(start, end)}, your {rise} A rise like this "
+                   f"can mean the kidneys are under strain. Contact your "
+                   f"clinician promptly.")
     return {"analyte": result["analyte"], "check": result["check"],
-            "message": (
-                f"Your {result['analyte'].lower()} rose from "
-                f"{_fmt(before['value_mg_dl'])} to "
-                f"{_fmt(latest['value_mg_dl'])} mg/dL in "
-                f"{_span(crit['elapsed_hours'])}. A rise like this can mean "
-                f"the kidneys are under strain. Contact your clinician "
-                f"promptly.")}
+            "message": message}
