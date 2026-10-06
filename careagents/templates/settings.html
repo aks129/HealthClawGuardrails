@@ -32,7 +32,10 @@
          home.js has nothing to bind. The tile is a label, not a control. #}
       <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
       {% if imessage_connected %}
-      <div class="surface on"><b>iMessage</b><span>connected</span></div>
+      {# Masked: enough for the owner to recognise, not the whole handle. #}
+      <div class="surface on" id="im-connected"><b>iMessage</b>
+        <span id="im-state">Connected: {{ imessage_connected }}</span>
+        <button type="button" class="pill" id="im-disconnect">Disconnect</button></div>
       {% elif imessage_handle %}
       <div class="surface" id="im-surface" data-agent="{{ first_agent }}"><b>iMessage</b>
         <span id="im-state">connect →</span></div>
@@ -41,9 +44,6 @@
       {% endif %}
       <div class="surface soon"><b>Phone app</b><span>install from browser</span></div>
     </div>
-    {% if imessage_connected %}
-    <button type="button" class="pill" id="im-disconnect">Disconnect iMessage</button>
-    {% endif %}
     <p class="inline-msg" id="surfaces-msg" role="status" aria-live="polite"
        hidden></p>
   </section>
@@ -89,7 +89,7 @@
 <div class="modal" id="code-card" role="dialog" aria-modal="true"
      aria-labelledby="code-title" hidden>
   <div class="modal-card">
-    <h3 id="code-title">Your pairing code</h3>
+    <h3 id="code-title">Text this to connect</h3>
     <p id="code-instructions"></p>
     <div id="pair-code"></div>
     <button type="button" class="btn-secondary btn-block" id="copy-code">

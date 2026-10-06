@@ -16,6 +16,7 @@ Nothing here logs a message body or a full handle. Use `mask()`.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import secrets
 from dataclasses import dataclass
@@ -42,8 +43,16 @@ WELCOME_TEXT = (
     "your next visit. If something needs your OK, I'll send a link so you "
     "can approve it. Text STOP any time to stop.")
 
-HELP_TEXT = ("CareAgents answers questions about your health records. Text "
-             f"STOP to stop. Need a person? Write to {CONTACT}.")
+# A text that names the help address names both brands, so the address
+# does not read as a stranger's.
+HELP_TEXT = ("CareAgents (by HealthClaw) answers questions about your health "
+             f"records. Text STOP to stop. Need a person? Write to {CONTACT}.")
+
+#: HELP from a handle that is not connected: say how to start.
+STRANGER_HELP_TEXT = (
+    "CareAgents (by HealthClaw) answers questions about your health "
+    "records. Text anything else and I'll send you a sign-in link. Text "
+    f"STOP to stop. Need a person? Write to {CONTACT}.")
 
 STOP_TEXT = ("Done. CareAgents won't text you anymore. Text START if you "
              "want to come back.")
@@ -59,10 +68,18 @@ CODE_FAILED_TEXT = ("That code didn't work or has expired. Get a new one in "
 
 CODE_LOCKED_TEXT = "Too many tries. Please wait 30 minutes and try again."
 
-BUSY_TEXT = "One moment — too many messages just now. Try again in a bit."
+def busy_text(window_seconds: float) -> str:
+    """The burst limit, in the limiter's own window."""
+    minutes = max(1, math.ceil(window_seconds / 60))
+    wait = "a minute" if minutes == 1 else f"about {minutes} minutes"
+    return (f"You've sent a lot of messages quickly. Please wait {wait}, "
+            "then try again.")
 
 UNAVAILABLE_TEXT = ("Sorry, I can't answer right now. Please try again in a "
                     "few minutes.")
+
+START_CAPPED_TEXT = ("Welcome back. You've asked for a few links already — "
+                     "use the last one I sent, or try again in 30 minutes.")
 
 TOO_LONG_TEXT = "That message is too long. Please send a shorter one."
 
@@ -72,6 +89,37 @@ def link_text(url: str) -> str:
             f"in or make an account: {url}\n"
             "The link works once, for 30 minutes. Text HELP for help or "
             "STOP to stop.")
+
+
+def welcome_back_text(url: str) -> str:
+    return ("Welcome back. Tap this link to sign in and reconnect this "
+            f"phone: {url}\nThe link works once, for 30 minutes.")
+
+
+def connected_notice(handle: str) -> str:
+    """The one line emailed to the account owner when a phone connects."""
+    if "@" in handle:
+        what = f"An Apple ID ({mask(handle)})"
+    else:
+        what = f"A phone ending in {handle[-4:]}"
+    return (f"{what} was connected to your CareAgents account. If this "
+            "wasn't you, open Settings and disconnect it.")
+
+
+def display_handle(handle: str | None) -> str:
+    """A US number as (555) 010-0177 on a page; anything else as stored."""
+    s = str(handle or "")
+    if re.fullmatch(r"\+1\d{10}", s):
+        return f"({s[2:5]}) {s[5:8]}-{s[8:]}"
+    return s
+
+
+def masked_display(handle: str | None) -> str:
+    """For Settings: enough to recognise, not the whole handle."""
+    s = str(handle or "")
+    if "@" in s:
+        return f"Apple ID {mask(s)}"
+    return f"phone ending in {s[-4:]}" if len(s) >= 4 else "a phone"
 
 
 def no_agent_text(origin: str) -> str:
@@ -125,11 +173,19 @@ def mask(handle: object) -> str:
     return f"***{s[-2:]}" if len(s) > 2 else "***"
 
 
+#: The carriers' opt-out words (CTIA), all read as STOP. Only ever as the
+#: whole message: "cancel my appointment" is a question for the assistant.
+STOP_WORDS = frozenset({"stop", "stopall", "unsubscribe", "cancel", "end",
+                        "quit"})
+
+
 def keyword(text: str) -> str | None:
-    """STOP, HELP or START when that is the whole message, else None.
-    Case-insensitive; trailing punctuation is ignored."""
+    """"stop", "help" or "start" when the whole message is that word (or a
+    STOP synonym), else None. Case-insensitive; trailing . or ! ignored."""
     word = text.strip().rstrip(".!").strip().lower()
-    return word if word in ("stop", "help", "start") else None
+    if word in STOP_WORDS:
+        return "stop"
+    return word if word in ("help", "start") else None
 
 
 def pairing_code(text: str) -> str | None:
@@ -160,10 +216,28 @@ class Deps:
     #: (ctx, text, request_id, conversation_id) -> run dict, or raises.
     queue_turn: Callable[[dict, str, str, str | None], dict]
     queue_error: type = Exception
+    #: The burst limiter's window, for the sentence that names it.
+    burst_window_seconds: float = 600
+    #: (account_id, handle) after a handle is newly bound. Tells the owner.
+    on_connected: Callable[[str, str], None] | None = None
 
 
-def bind_by_code(deps: Deps, handle: str, code: str) -> tuple[dict, int]:
-    """Pair `handle` with the pending surface behind `code`."""
+def link_url(origin: str, token: str) -> str:
+    """The token rides in the query string: the access log records the
+    path only (deploy/careagents/Dockerfile), so it never sees the token."""
+    return f"{origin}/link?t={token}"
+
+
+def notify_connected(deps: Deps, account_id: str, handle: str) -> None:
+    if deps.on_connected is not None:
+        deps.on_connected(account_id, handle)
+
+
+def bind_by_code(deps: Deps, handle: str, code: str,
+                 raw: str | None = None) -> tuple[dict, int]:
+    """Pair `handle` with the pending surface behind `code`. `raw` is the
+    handle as it arrived, so a row bound under it before normalization
+    still counts as bound."""
     svc = deps.svc
     if svc.imessage_bind_locked(handle):
         return {"error": "too many attempts", "reply": CODE_LOCKED_TEXT}, 429
@@ -172,9 +246,11 @@ def bind_by_code(deps: Deps, handle: str, code: str) -> tuple[dict, int]:
         svc.imessage_note_bind_failure(handle)
         return {"error": "unknown code", "reply": CODE_FAILED_TEXT}, 404
     outcome = svc.bind_imessage_handle(
-        surface["account_id"], handle, pending_surface_id=surface["id"])
+        surface["account_id"], handle, pending_surface_id=surface["id"],
+        also=raw)
     if outcome == "taken":
         return {"error": "handle taken", "reply": TAKEN_TEXT}, 409
+    notify_connected(deps, surface["account_id"], handle)
     return {"ok": True, "reply": WELCOME_TEXT}, 200
 
 
@@ -193,30 +269,36 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
                                          also=raw)
 
     if word == "help":
-        return {"reply": HELP_TEXT}, 200
+        return {"reply": HELP_TEXT if surface else STRANGER_HELP_TEXT}, 200
     if word == "stop":
-        # Unbind and remember the choice. Said once: a second STOP from a
-        # handle already opted out gets nothing.
-        first = svc.imessage_stop(handle or raw)
+        # Unbind (either spelling of the handle), void its unused links,
+        # and remember the choice. Said once: a second STOP from a handle
+        # already opted out gets nothing.
+        first = svc.imessage_stop(handle or raw, also=raw)
         return ({"reply": STOP_TEXT} if first or surface else {}), 200
     code = pairing_code(text)
     if code:
         if not handle:
             return {"error": "unsupported handle"}, 400
-        return bind_by_code(deps, handle, code)
+        return bind_by_code(deps, handle, code, raw=raw)
 
     if surface is None:
         if not handle:
             # A short code or something we cannot text back: stay silent.
             return {"error": "unbound handle"}, 404
-        if svc.imessage_opted_out(handle):
+        returning = svc.imessage_opted_out(handle)
+        if returning:
             if word != "start":
                 return {}, 200
             svc.imessage_opt_in(handle)
         token = svc.issue_imessage_link(handle)
         if token is None:            # past the per-window link allowance
-            return {}, 200
-        return {"reply": link_text(f"{deps.origin}/link/{token}")}, 200
+            # START is always answered; anything else stays quiet.
+            return ({"reply": START_CAPPED_TEXT} if word == "start"
+                    else {}), 200
+        url = link_url(deps.origin, token)
+        return {"reply": welcome_back_text(url) if returning
+                else link_text(url)}, 200
 
     if word == "start":
         return {"reply": START_BOUND_TEXT}, 200
@@ -233,7 +315,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         return {"error": "run_workers_unavailable",
                 "reply": UNAVAILABLE_TEXT}, 503
     if not deps.allow_turn(surface["account_id"]):
-        return {"reply": BUSY_TEXT}, 200
+        return {"reply": busy_text(deps.burst_window_seconds)}, 200
     blocked = deps.admission_block(surface["account_id"], ctx)
     if blocked:
         return {"reply": blocked}, 200

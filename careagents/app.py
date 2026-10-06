@@ -29,8 +29,9 @@ from flask import (Flask, Response, jsonify, redirect, render_template,
 from markupsafe import Markup, escape
 
 from careagents.accounts import (AccountService, AuthError, MailError,
-                                 MailUnconfirmed, new_binding_code)
-from careagents import advisors, analytics, connectors, consent
+                                 MailUnconfirmed, new_binding_code,
+                                 secret_matches)
+from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
 from careagents import hub as hub_view
 from careagents import intake_state
@@ -421,6 +422,8 @@ def create_app(config: Config | None = None,
         if session.get("account_id") and not enroll:
             return redirect(url_for("home"))
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
+                               imessage_pending=bool(
+                                   session.get("imessage_link")),
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
                                privacy_url=f"{cfg.healthclaw_public_base}/privacy")
 
@@ -483,9 +486,11 @@ def create_app(config: Config | None = None,
                                        data["connections"]),
             first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
             imessage_handle=cfg.imessage_handle,
-            imessage_connected=any(
-                x["kind"] == "imessage" and x["status"] == "active"
-                for x in data["surfaces"]))
+            imessage_connected=next(
+                (imessage.masked_display(x["handle"])
+                 for x in data["surfaces"]
+                 if x["kind"] == "imessage" and x["status"] == "active"),
+                None))
 
     @app.post("/logout")
     def logout():
@@ -2306,7 +2311,7 @@ def create_app(config: Config | None = None,
     def telegram_bind():
         """Called by the OpenClaw bot's /start handler with the code + chat_id.
         Gated by the mint secret (server-to-server)."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
         code = str(body.get("code") or "").replace("care_", "")
@@ -2349,6 +2354,26 @@ def create_app(config: Config | None = None,
             tenant, user_message_id, cfg.run_deadline_seconds)
         return {**run, "duplicate": not created}
 
+    def _relay_secret_ok() -> bool:
+        """X-Internal-Secret, compared in constant time."""
+        given = request.headers.get("X-Internal-Secret") or ""
+        return secret_matches(given, cfg.mint_secret)
+
+    def _imessage_connected(account_id: str, handle: str) -> None:
+        """Tell the owner by email that a phone was connected. One line, the
+        handle masked. Skipped quietly when email is not set up."""
+        if not cfg.resend_api_key:
+            return
+        acct = svc.get_account(account_id)
+        if acct is None:
+            return
+        try:
+            mail.send_notice(cfg, acct.email,
+                             "A phone was connected to CareAgents",
+                             imessage.connected_notice(handle))
+        except Exception:               # pragma: no cover - defensive
+            logger.warning("connected notice failed to send")
+
     imessage_deps = imessage.Deps(
         origin=cfg.origin, svc=svc,
         workers_ready=lambda: _worker_state(
@@ -2356,7 +2381,9 @@ def create_app(config: Config | None = None,
         allow_turn=lambda account_id: _allow_turn(account_id),
         admission_block=_imessage_admission_block,
         queue_turn=_imessage_queue_turn,
-        queue_error=HealthClawError)
+        queue_error=HealthClawError,
+        burst_window_seconds=cfg.chat_window_seconds,
+        on_connected=_imessage_connected)
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
 
@@ -2391,7 +2418,7 @@ def create_app(config: Config | None = None,
     def imessage_bind():
         """An older relay calls this for `care <code>`. Inbound handles the
         same line now; kept so a relay not yet updated keeps pairing."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
         code = str(body.get("code") or "").replace("care_", "").replace(
@@ -2399,8 +2426,12 @@ def create_app(config: Config | None = None,
         raw = str(body.get("handle") or "").strip()
         if not raw:
             return jsonify({"error": "missing handle"}), 400
-        handle = imessage.normalize_handle(raw) or raw.lower()
-        reply, status = imessage.bind_by_code(imessage_deps, handle, code)
+        handle = imessage.normalize_handle(raw)
+        if not handle:
+            # The same rule as inbound: nothing we cannot text back is bound.
+            return jsonify({"error": "unsupported handle"}), 400
+        reply, status = imessage.bind_by_code(imessage_deps, handle, code,
+                                              raw=raw)
         return jsonify(reply), status
 
     @app.post("/api/surfaces/imessage/inbound")
@@ -2408,7 +2439,7 @@ def create_app(config: Config | None = None,
         """Relay POSTs an inbound message {handle, text}. Answers
         {reply?, run_id?}: send `reply` now if present, then poll `run_id`
         for the agent's answer."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
         request_id = body.get("request_id")
@@ -2422,12 +2453,16 @@ def create_app(config: Config | None = None,
             conversation_id=conversation_id)
         return jsonify(reply), status
 
-    @app.get("/link/<token>")
-    def imessage_link(token):
-        """The sign-in link texted to a new handle. Parks the link in the
-        session, then the ordinary sign-in (or sign-up) runs; the handle is
-        bound once someone is signed in."""
-        link_id = svc.peek_imessage_link(token) if len(token) <= 64 else None
+    @app.get("/link")
+    def imessage_link():
+        """The sign-in link texted to a new handle, `/link?t=<token>`. The
+        token is in the query string so the access log, which records the
+        path only, never holds it. Parks the link's id in the session, then
+        the ordinary sign-in (or sign-up) runs; the handle is bound once
+        someone signed in says yes."""
+        token = str(request.args.get("t") or "")
+        link_id = (svc.peek_imessage_link(token)
+                   if 0 < len(token) <= 64 else None)
         if not link_id:
             return render_template("imessage_link.html", outcome="expired"), 410
         session["imessage_link"] = link_id
@@ -2451,19 +2486,34 @@ def create_app(config: Config | None = None,
                 return render_template("imessage_link.html",
                                        outcome="expired"), 410
             return render_template("imessage_link.html", outcome="confirm",
-                                   handle=handle)
+                                   handle=imessage.display_handle(handle))
         link_id = session.pop("imessage_link", None)
-        if not link_id or request.form.get("connect") != "yes":
+        if not link_id:
             return redirect(url_for("home"))
-        outcome = svc.claim_imessage_link(link_id, current_account().id)
+        if request.form.get("connect") != "yes":
+            # Spent, so the same link opened again reads as used.
+            svc.void_imessage_link(link_id)
+            return render_template("imessage_link.html", outcome="declined")
+        acct = current_account()
+        handle = svc.imessage_link_handle(link_id)
+        outcome = svc.claim_imessage_link(link_id, acct.id)
+        if outcome == "connected":
+            if handle:
+                _imessage_connected(acct.id, handle)
+            if not svc.list_home(acct.id)["agents"]:
+                outcome = "connected_setup"
         return render_template("imessage_link.html", outcome=outcome)
 
     @app.get("/api/surfaces/imessage/runs/<run_id>")
     def imessage_run_result(run_id):
         """Mint-secret-gated projection polled by the Mac relay."""
-        if request.headers.get("X-Internal-Secret") != cfg.mint_secret:
+        if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
-        raw = str(request.args.get("handle") or "").strip()
+        # A header, not the query string: the access log keeps neither,
+        # but a URL travels further than a header does. The query form is
+        # still read for a relay not yet updated.
+        raw = str(request.headers.get("X-Imessage-Handle")
+                  or request.args.get("handle") or "").strip()
         surface = svc.find_surface_by_handle(
             imessage.normalize_handle(raw) or raw, kind="imessage", also=raw)
         if not surface or not surface.get("agent_id"):

@@ -474,6 +474,83 @@ def _ensure_usage_day_unique(engine) -> None:
                            else "duplicate added during collapse")
 
 
+#: One active iMessage binding per handle (#866 security F2): a partial
+#: unique index, so pending rows (which carry a pairing code in `handle`)
+#: and other surface kinds are untouched.
+IMESSAGE_HANDLE_UNIQUE = "uq_ca_surfaces_imessage_active_handle"
+
+#: Advisory-lock key for that migration; distinct from the usage-day one.
+_IMESSAGE_HANDLE_LOCK_KEY = 8_660_002
+
+
+def _imessage_handle_is_unique(conn_or_engine) -> bool:
+    return any(i["name"] == IMESSAGE_HANDLE_UNIQUE
+               for i in inspect(conn_or_engine).get_indexes("ca_surfaces"))
+
+
+def _ensure_imessage_handle_unique(engine) -> None:
+    """Create the partial unique index on active iMessage handles,
+    idempotently, on SQLite and Postgres.
+
+    A table from before it may hold one handle active on two rows (the race
+    the index closes). Each such group keeps its newest binding (latest
+    `bound_at`, then highest id) and the rest are deleted, in the same
+    transaction as the index. On Postgres an advisory lock serialises peers
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    from careagents.imessage import normalize_handle
+    if "ca_surfaces" not in inspect(engine).get_table_names():
+        return
+    if _imessage_handle_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _IMESSAGE_HANDLE_LOCK_KEY})
+                    if _imessage_handle_is_unique(conn):
+                        return
+                # Rows bound before handles were normalized are rewritten to
+                # the normalized form first, so two spellings of one sender
+                # meet in the dedupe below. One that will not normalize keeps
+                # its spelling (still found by the raw-handle fallback).
+                rows = conn.execute(text(
+                    "SELECT id, handle, bound_at FROM ca_surfaces "
+                    "WHERE kind = 'imessage' AND status = 'active'")).all()
+                groups: dict = {}
+                for row_id, handle, bound_at in rows:
+                    norm = normalize_handle(handle) or handle
+                    groups.setdefault(norm, []).append(
+                        (bound_at or 0.0, row_id, handle))
+                for norm, members in groups.items():
+                    members.sort()
+                    keep_bound, keep_id, keep_handle = members[-1]
+                    for _, row_id, _h in members[:-1]:
+                        conn.execute(text(
+                            "DELETE FROM ca_surfaces WHERE id = :i"),
+                            {"i": row_id})
+                    if keep_handle != norm:
+                        conn.execute(text(
+                            "UPDATE ca_surfaces SET handle = :h "
+                            "WHERE id = :i"), {"h": norm, "i": keep_id})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                    f"{IMESSAGE_HANDLE_UNIQUE} ON ca_surfaces (handle) "
+                    "WHERE kind = 'imessage' AND status = 'active'"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            logger.warning("ca_surfaces handle index migration retried")
+
+
 #: What a peer creating the same table first looks like, by backend. SQLite
 #: and Postgres both say "already exists"; Postgres can instead trip the
 #: unique index on its type catalogue when two CREATE TABLEs overlap.
@@ -528,6 +605,7 @@ def make_engine(url: str):
     _create_tables(engine)
     _ensure_columns(engine)
     _ensure_usage_day_unique(engine)
+    _ensure_imessage_handle_unique(engine)
     return engine
 
 

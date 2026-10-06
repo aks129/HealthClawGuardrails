@@ -20,15 +20,25 @@
     <h1>You're connected.</h1>
     <p class="setup-sub">Go back to Messages and text your question. To
       stop any time, text STOP.</p>
-    <a class="btn-primary btn-block" href="/home">Go to your hub</a>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
+    {% elif outcome == "connected_setup" %}
+    <h1>You're connected.</h1>
+    <p class="setup-sub">One more step: choose your records so your
+      assistant can answer. Then text your question.</p>
+    <a class="btn-primary btn-block" href="/home">Choose my records</a>
+    {% elif outcome == "declined" %}
+    <h1>Not connected.</h1>
+    <p class="setup-sub">OK, we didn't connect that phone. If you didn't
+      text us, you can ignore the message.</p>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% elif outcome == "taken" %}
     <h1>Already connected.</h1>
     <p class="setup-sub">That chat is connected to another CareAgents
       account. Text STOP from it first, then text us again for a new
       link.</p>
-    <a class="btn-primary btn-block" href="/home">Go to your hub</a>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% else %}
-    <h1>This link has expired.</h1>
+    <h1>This link has already been used or has expired.</h1>
     <p class="setup-sub">Links work once, for 30 minutes. Text us again and
       we'll send a new one.</p>
     <a class="btn-primary btn-block" href="/">Go to CareAgents</a>

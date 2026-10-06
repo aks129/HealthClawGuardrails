@@ -4902,12 +4902,12 @@ def test_the_imessage_relay_is_told_to_retry_not_that_the_run_vanished(
                   json={"agent_id": agent_id}).get_json()["code"]
     headers = {"X-Internal-Secret": cfg.mint_secret}
     assert c.post("/api/surfaces/imessage/bind", headers=headers,
-                  json={"code": code, "handle": "im-test-handle"}
+                  json={"code": code, "handle": "+15550100999"}
                   ).status_code == 200
 
     fake.get_agent_run = _unreachable
     r = c.get("/api/surfaces/imessage/runs/run-1", headers=headers,
-              query_string={"handle": "im-test-handle"})
+              query_string={"handle": "+15550100999"})
     assert r.status_code == 503
     assert r.get_json()["error"] == "run service unavailable"
 
@@ -4965,7 +4965,7 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
                       json={"code": code, "handle": "+15559998888"}
                       ).status_code == 200
     assert relay.post("/api/surfaces/imessage/bind", headers=hdrs,
-                      json={"code": "bogus", "handle": "+1"}
+                      json={"code": "bogus", "handle": "+15550100998"}
                       ).status_code == 404
 
     # inbound: fake the worker's model turn, assert the reply is relayed back
@@ -4989,7 +4989,7 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
     stranger = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
                           json={"handle": "+15550100777", "text": "hi"})
     assert stranger.status_code == 200
-    assert "/link/" in stranger.get_json()["reply"]
+    assert "/link?t=" in stranger.get_json()["reply"]
     assert "run_id" not in stranger.get_json()
     # one we cannot text back (a short code) gets nothing at all
     assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,

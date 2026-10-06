@@ -943,7 +943,11 @@
       imOff.disabled = false;
       return say(imOff, $("surfaces-msg"), "Couldn't disconnect. Try again.");
     }
-    location.reload();
+    imOff.remove();
+    $("im-connected").classList.remove("on");
+    $("im-state").textContent = "disconnected";
+    say($("im-connected"), $("surfaces-msg"),
+      "Disconnected. Texts from that phone won't reach your assistant.");
   });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a

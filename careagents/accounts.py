@@ -925,18 +925,34 @@ class AccountService:
 
     def bind_imessage_handle(self, account_id: str, handle: str,
                              pending_surface_id: str | None = None,
-                             welcome: bool = False) -> str:
+                             welcome: bool = False,
+                             also: str | None = None) -> str:
         """Bind a handle to an account: "connected" or "taken".
 
         A handle is bound to at most one account. Bound elsewhere, nothing
         changes until that binding is undone (STOP, or disconnect on the
         web). Bound here already, the older binding is replaced, so a new
-        pairing code moves the handle to that code's assistant.
+        pairing code moves the handle to that code's assistant. `also` is
+        the handle as it arrived, for a row bound before normalization.
+
+        The check below is a read; the partial unique index on active
+        iMessage handles (models._ensure_imessage_handle_unique) is what
+        holds when two binds race, and its refusal reads as "taken".
         """
+        try:
+            return self._bind_imessage_handle(
+                account_id, handle, pending_surface_id, welcome, also)
+        except IntegrityError:
+            return "taken"
+
+    def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
+                              welcome, also) -> str:
+        names = {h for h in (handle, also) if h}
         with self.session() as s:
             bound = (s.query(Surface)
-                     .filter_by(kind="imessage", handle=handle,
-                                status="active").all())
+                     .filter(Surface.kind == "imessage",
+                             Surface.handle.in_(names),
+                             Surface.status == "active").all())
             if any(x.account_id != account_id for x in bound):
                 return "taken"
             if pending_surface_id:
@@ -951,6 +967,9 @@ class AccountService:
                 s.add(x)
             for old in bound:
                 s.delete(old)
+            # Deleted before the new row takes the handle, or the unique
+            # index sees both at once.
+            s.flush()
             x.handle = handle
             x.status = "active"
             x.bound_at = now()
@@ -1006,12 +1025,19 @@ class AccountService:
             s.add(st)
         return st
 
-    def imessage_stop(self, handle: str) -> bool:
-        """Unbind the handle and remember the STOP. True if this is news:
-        the handle was not already opted out."""
+    def imessage_stop(self, handle: str, also: str | None = None) -> bool:
+        """Unbind the handle (and the raw spelling `also`, for a row bound
+        before normalization), void its unused sign-in links, and remember
+        the STOP. True if this is news: not already opted out."""
+        names = list({h for h in (handle, also) if h})
         with self.session() as s:
-            s.query(Surface).filter_by(kind="imessage", handle=handle,
-                                       status="active").delete()
+            s.query(Surface).filter(
+                Surface.kind == "imessage", Surface.handle.in_(names),
+                Surface.status == "active").delete(synchronize_session=False)
+            s.query(ImessageLink).filter(
+                ImessageLink.handle.in_(names),
+                ImessageLink.used_at.is_(None)).update(
+                    {"used_at": now()}, synchronize_session=False)
             st = self._handle_state(s, handle)
             first = st.opted_out_at is None
             st.opted_out_at = st.opted_out_at or now()
@@ -1073,6 +1099,14 @@ class AccountService:
                     .filter(ImessageLink.used_at.is_(None),
                             ImessageLink.exp > now()).first())
             return link.id if link else None
+
+    def void_imessage_link(self, link_id: str) -> None:
+        """Spend a link without binding anything ("No, this isn't mine")."""
+        with self.session() as s:
+            s.execute(update(ImessageLink)
+                      .where(ImessageLink.id == link_id,
+                             ImessageLink.used_at.is_(None))
+                      .values(used_at=now()))
 
     def imessage_link_handle(self, link_id: str) -> str | None:
         """The handle a live link would bind, for the confirm page."""
@@ -1141,6 +1175,23 @@ def _surf_dict(x: Surface) -> dict:
 def _opts_to_dict(options_json: str) -> dict:
     import json
     return json.loads(options_json)
+
+
+def secret_matches(provided: str, expected: str) -> bool:
+    """A shared secret from a request header, compared in constant time.
+
+    Both sides are hashed here first, so `compare_digest` only ever meets
+    two hexdigests this process computed: no caller spelling (non-ASCII, a
+    lone surrogate) can raise inside it (#557). An empty expected secret
+    matches nothing.
+    """
+    if not expected:
+        return False
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(
+            str(value).encode("utf-8", "surrogatepass")).hexdigest()
+    return hmac.compare_digest(digest(provided), digest(expected))
 
 
 def _handle_key(handle: str) -> str:

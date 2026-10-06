@@ -29,7 +29,7 @@ def _inbound(c, handle, text, **extra):
 
 
 def _link_token(reply: str) -> str:
-    m = re.search(r"/link/([A-Za-z0-9_-]+)", reply)
+    m = re.search(r"/link\?t=([A-Za-z0-9_-]+)", reply)
     assert m, reply
     return m.group(1)
 
@@ -103,7 +103,7 @@ def test_an_unbound_handle_gets_a_one_time_link_stored_hashed(
     assert "run_id" not in body
     assert body["reply"].startswith("Hi, this is CareAgents.")
     token = _link_token(body["reply"])
-    assert f"{cfg.origin}/link/{token}" in body["reply"]
+    assert f"{cfg.origin}/link?t={token}" in body["reply"]
     with svc.session() as s:
         rows = s.query(ImessageLink).all()
         assert [x.handle for x in rows] == ["+15550100199"]
@@ -131,7 +131,7 @@ def test_the_link_signs_in_then_binds_and_works_once(
     token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
 
     phone = app.test_client()                     # the texter's browser
-    r = phone.get(f"/link/{token}")
+    r = phone.get(f"/link?t={token}")
     assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
     _login(phone, svc, monkeypatch, email="texter@example.com")
     r = phone.get("/home")
@@ -139,7 +139,7 @@ def test_the_link_signs_in_then_binds_and_works_once(
     assert r.headers["Location"].endswith("/link/done")
     ask = phone.get("/link/done")
     assert ask.status_code == 200
-    assert "+15550100123" in ask.get_data(as_text=True)
+    assert "(555) 010-0123" in ask.get_data(as_text=True)
     assert svc.find_surface_by_handle(PHONE) is None    # asking binds nothing
     done = phone.post("/link/done", data={"connect": "yes"})
     assert done.status_code == 200
@@ -149,7 +149,7 @@ def test_the_link_signs_in_then_binds_and_works_once(
     acct_id = _acct_id(svc, "texter@example.com")
     assert surface and surface["account_id"] == acct_id
     # Spent: the same link again is refused, signed in or not.
-    again = app.test_client().get(f"/link/{token}")
+    again = app.test_client().get(f"/link?t={token}")
     assert again.status_code == 410
     assert "expired" in again.get_data(as_text=True)
 
@@ -161,13 +161,13 @@ def test_an_expired_link_is_refused(cfg, svc, monkeypatch):  # noqa: F811
     with svc.session() as s:
         for x in s.query(ImessageLink).all():
             x.exp = 1.0
-    assert app.test_client().get(f"/link/{token}").status_code == 410
+    assert app.test_client().get(f"/link?t={token}").status_code == 410
 
 
 def test_a_signed_in_person_binds_straight_away(cfg, svc, monkeypatch):  # noqa: F811
     app, c, *_ = _chat_app(cfg, svc, monkeypatch)
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
-    r = c.get(f"/link/{token}")
+    r = c.get(f"/link?t={token}")
     assert r.headers["Location"].endswith("/link/done")
     assert "Connect this phone?" in c.get("/link/done").get_data(as_text=True)
     assert "You're connected." in _confirm(c).get_data(as_text=True)
@@ -180,15 +180,18 @@ def test_a_forwarded_link_binds_nothing_without_a_yes(cfg, svc, monkeypatch):  #
     stranger's phone to their records."""
     app, c, *_ = _chat_app(cfg, svc, monkeypatch)
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
-    c.get(f"/link/{token}")
+    c.get(f"/link?t={token}")
     c.get("/link/done")
     assert svc.find_surface_by_handle(PHONE) is None
     no = c.post("/link/done", data={"connect": "no"})
-    assert no.status_code == 302
+    assert no.status_code == 200
+    assert "we didn't connect that phone" in no.get_data(as_text=True)
     assert svc.find_surface_by_handle(PHONE) is None
     # The "no" spent the parked link from the session: a later yes is inert.
     assert c.post("/link/done", data={"connect": "yes"}).status_code == 302
     assert svc.find_surface_by_handle(PHONE) is None
+    # And it voided the link itself: opening it again reads as used.
+    assert app.test_client().get(f"/link?t={token}").status_code == 410
 
 
 # --- the welcome ------------------------------------------------------------
@@ -198,7 +201,7 @@ def test_the_first_reply_after_a_link_bind_is_the_welcome(
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
                                            reply="Your A1c is in range.")
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
-    c.get(f"/link/{token}")
+    c.get(f"/link?t={token}")
     _confirm(c)
 
     first = _inbound(c, PHONE, "how is my a1c?")
@@ -232,7 +235,7 @@ def test_a_new_account_without_an_assistant_is_told_what_to_do(
     app, owner, *_ = _chat_app(cfg, svc, monkeypatch)
     token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
     phone = app.test_client()
-    phone.get(f"/link/{token}")
+    phone.get(f"/link?t={token}")
     _login(phone, svc, monkeypatch, email="new@example.com")
     _confirm(phone)
     r = _inbound(owner, PHONE, "what are my labs?")
@@ -263,11 +266,12 @@ def test_stop_unbinds_and_then_only_start_gets_an_answer(
     assert _inbound(c, PHONE, "hello?").get_json() == {}
     assert _inbound(c, PHONE, "STOP").get_json() == {}   # said once
     assert _inbound(c, PHONE, "help").get_json() == {
-        "reply": imessage.HELP_TEXT}
+        "reply": imessage.STRANGER_HELP_TEXT}
     start = _inbound(c, PHONE, "start").get_json()
-    assert "/link/" in start["reply"]
+    assert start["reply"].startswith("Welcome back. Tap this link")
+    assert "/link?t=" in start["reply"]
     # Opted back in: a plain text is answered again.
-    assert "/link/" in _inbound(c, PHONE, "hi").get_json()["reply"]
+    assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
 
 
 def test_stop_from_a_stranger_is_confirmed_and_kept(cfg, svc, monkeypatch):  # noqa: F811
@@ -391,7 +395,10 @@ def test_the_burst_limit_answers_in_words(cfg, svc, monkeypatch):  # noqa: F811
     assert _inbound(c, PHONE, "one").status_code == 202
     r = _inbound(c, PHONE, "two")
     assert r.status_code == 200
-    assert r.get_json() == {"reply": imessage.BUSY_TEXT}
+    assert r.get_json() == {"reply": imessage.busy_text(
+        cfg.chat_window_seconds)}
+    minutes = -(-cfg.chat_window_seconds // 60)
+    assert f"about {minutes} minutes" in r.get_json()["reply"]
 
 
 def test_no_workers_answers_in_words(cfg, svc, monkeypatch):  # noqa: F811
@@ -431,7 +438,7 @@ def test_settings_disconnects_imessage(cfg, svc, monkeypatch):  # noqa: F811
     assert r.status_code == 200 and r.get_json()["removed"] == 1
     assert svc.find_surface_by_handle(PHONE) is None
     # Not opted out: texting again offers a fresh link.
-    assert "/link/" in _inbound(c, PHONE, "hi").get_json()["reply"]
+    assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
     assert app.test_client().post(
         "/api/surfaces/imessage/disconnect").status_code == 401
 
@@ -478,7 +485,9 @@ def test_relay_says_so_when_a_run_times_out(monkeypatch):
     monkeypatch.setattr(mod.time, "monotonic", lambda: next(clock))
     mod._handle_message(PHONE, "hi")
     assert sent == [(PHONE, mod.TIMEOUT_TEXT)]
-    assert mod.TIMEOUT_TEXT.startswith("That took too long.")
+    assert mod.TIMEOUT_TEXT == ("Sorry, I couldn't answer in time. "
+                                "Please try again, or open "
+                                "careagents.cloud.")
 
 
 def test_relay_masks_handles_in_its_log(monkeypatch, capsys):
@@ -509,3 +518,239 @@ def test_relay_keeps_one_senders_messages_in_order(monkeypatch):
     d._pool.shutdown(wait=True)
     assert [t for h, t in seen if h == PHONE] == [f"m{i}" for i in range(20)]
     assert len(seen) == 40
+
+
+# --- #866 sign-off fixes -------------------------------------------------------
+
+def _access_log_formats():
+    """The access-log format each deployment runs, as gunicorn reads it."""
+    root = Path(__file__).resolve().parents[1] / "deploy" / "careagents"
+    docker = re.search(r"--access-logformat '([^']*)'",
+                       (root / "Dockerfile").read_text()).group(1)
+    service = re.search(r"--access-logformat '([^']*)'",
+                        (root / "careagents.service").read_text()).group(1)
+    # Dockerfile: inside a JSON string (\" escapes); systemd: %% escapes.
+    return [docker.replace('\\"', '"'), service.replace("%%", "%")]
+
+
+@pytest.mark.parametrize("fmt", _access_log_formats())
+def test_the_access_log_never_holds_a_link_token_or_a_handle(fmt):
+    """Rendered by gunicorn itself, for the two URLs that carry a secret."""
+    import datetime
+    from types import SimpleNamespace
+
+    from gunicorn.config import Config as GConfig
+    from gunicorn.glogging import Logger
+
+    log = Logger(GConfig())
+    for path, query in (("/link", "t=SECRETTOKEN123"),
+                        ("/api/surfaces/imessage/runs/run-1",
+                         "handle=%2B15550100123")):
+        environ = {"REQUEST_METHOD": "GET", "RAW_URI": f"{path}?{query}",
+                   "PATH_INFO": path, "QUERY_STRING": query,
+                   "SERVER_PROTOCOL": "HTTP/1.1", "REMOTE_ADDR": "10.0.0.1"}
+        resp = SimpleNamespace(status="200 OK", sent=10, headers=[])
+        req = SimpleNamespace(headers=[("X-IMESSAGE-HANDLE", PHONE)])
+        line = fmt % log.atoms(resp, req, environ,
+                               datetime.timedelta(milliseconds=5))
+        assert path in line
+        for secret in ("SECRETTOKEN123", "0100123", "%2B1555"):
+            assert secret not in line, line
+
+
+def test_the_texted_link_keeps_its_token_out_of_the_path(cfg, svc, monkeypatch):  # noqa: F811
+    from urllib.parse import parse_qs, urlparse
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    reply = _inbound(c, PHONE, "hi").get_json()["reply"]
+    url = urlparse(re.search(r"https?://\S+", reply).group(0))
+    assert url.path == "/link"
+    assert parse_qs(url.query)["t"] == [_link_token(reply)]
+
+
+def test_the_runs_endpoint_reads_the_handle_from_a_header(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch,
+                                           reply="from the header")
+    _pair(c, agent_id)
+    run_id = _inbound(c, PHONE, "hi").get_json()["run_id"]
+    _run(app)
+    r = c.get(f"/api/surfaces/imessage/runs/{run_id}",
+              headers={**HDRS, "X-Imessage-Handle": PHONE})
+    assert r.get_json()["reply"] == "from the header"
+
+
+def test_stop_voids_links_still_waiting(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
+    _inbound(c, PHONE, "STOP")
+    assert app.test_client().get(f"/link?t={token}").status_code == 410
+
+
+@pytest.mark.parametrize("word", ["UNSUBSCRIBE", "stopall", "End", "quit",
+                                  "cancel", "Cancel."])
+def test_carrier_stop_words_stop(cfg, svc, monkeypatch, word):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    assert _inbound(c, PHONE, word).get_json() == {
+        "reply": imessage.STOP_TEXT}
+    assert svc.find_surface_by_handle(PHONE) is None
+
+
+def test_cancel_inside_a_sentence_is_a_question(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    r = _inbound(c, PHONE, "cancel my appointment")
+    assert r.status_code == 202 and r.get_json()["run_id"]
+
+
+def test_start_is_answered_even_past_the_link_allowance(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    for _ in range(imessage.LINKS_PER_WINDOW):
+        _inbound(c, PHONE, "hi")
+    _inbound(c, PHONE, "STOP")
+    assert _inbound(c, PHONE, "START").get_json() == {
+        "reply": imessage.START_CAPPED_TEXT}
+
+
+def test_stranger_help_says_how_to_start_and_names_both_brands(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    reply = _inbound(c, PHONE, "help").get_json()["reply"]
+    assert reply == imessage.STRANGER_HELP_TEXT
+    assert "sign-in link" in reply
+    for text in (imessage.HELP_TEXT, imessage.STRANGER_HELP_TEXT):
+        assert "CareAgents (by HealthClaw)" in text
+        assert imessage.CONTACT in text
+
+
+def test_the_older_bind_route_refuses_an_untextable_handle(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    code = c.post("/api/surfaces/imessage",
+                  json={"agent_id": agent_id}).get_json()["code"]
+    r = c.post("/api/surfaces/imessage/bind", headers=HDRS,
+               json={"code": code, "handle": "12345"})
+    assert r.status_code == 400
+    assert svc.find_surface_by_code(code, kind="imessage")   # unspent
+
+
+def test_the_owner_is_emailed_one_masked_line_on_connect(
+        cfg, svc, monkeypatch):  # noqa: F811
+    from careagents import mail
+    sent = []
+    monkeypatch.setattr(mail, "send_notice",
+                        lambda cfg, email, subject, line:
+                        sent.append((email, line)) or mail.SENT)
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    assert sent == []                    # no email configured: skipped
+    monkeypatch.setattr(cfg, "resend_api_key", "re_test")
+    _pair(c, agent_id)
+    assert sent == [("gene@example.com",
+                     "A phone ending in 0123 was connected to your "
+                     "CareAgents account. If this wasn't you, open "
+                     "Settings and disconnect it.")]
+    # The link path tells the owner too.
+    other = "+15550100124"
+    token = _link_token(_inbound(c, other, "hi").get_json()["reply"])
+    c.get(f"/link?t={token}")
+    _confirm(c)
+    assert "ending in 0124" in sent[-1][1] and other not in sent[-1][1]
+
+
+def test_settings_shows_the_handle_masked_with_disconnect_in_the_tile(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    page = c.get("/settings").get_data(as_text=True)
+    assert "Connected: phone ending in 0123" in page
+    assert "0100123" not in page
+    tile = page[page.index('id="im-connected"'):]
+    assert tile.index('id="im-disconnect"') < tile.index("</div>")
+    assert "Text this to connect" in page
+    assert "Your pairing code" not in page
+
+
+def test_link_done_without_an_assistant_asks_for_records(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, owner, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
+    phone = app.test_client()
+    phone.get(f"/link?t={token}")
+    _login(phone, svc, monkeypatch, email="fresh@example.com")
+    page = _confirm(phone).get_data(as_text=True)
+    assert "One more step: choose your records" in page
+    assert "Choose my records" in page
+    assert "Go back to Messages" not in page
+    assert "Go to your hub" not in page
+
+
+def test_auth_says_why_while_a_link_is_waiting(cfg, svc, monkeypatch):  # noqa: F811
+    app, owner, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
+    phone = app.test_client()
+    assert "connect your phone" not in phone.get("/auth").get_data(
+        as_text=True)
+    phone.get(f"/link?t={token}")
+    assert ("Sign in to connect your phone to CareAgents."
+            in phone.get("/auth").get_data(as_text=True))
+
+
+def test_handles_display_as_a_us_number():
+    assert imessage.display_handle("+15550100177") == "(555) 010-0177"
+    assert imessage.display_handle("a@example.com") == "a@example.com"
+    assert imessage.masked_display("+15550100177") == "phone ending in 0177"
+
+
+# --- the one-handle index -------------------------------------------------------
+
+def test_the_active_handle_index_exists(svc):  # noqa: F811
+    from sqlalchemy import inspect
+
+    from careagents.models import IMESSAGE_HANDLE_UNIQUE
+    names = {i["name"] for i in inspect(svc.engine).get_indexes("ca_surfaces")}
+    assert IMESSAGE_HANDLE_UNIQUE in names
+
+
+def test_boot_dedupes_and_normalizes_rows_from_before_the_index(tmp_path):
+    """A database from before #866: two spellings of one Apple ID active on
+    two accounts, and a phone stored raw. The next boot keeps the newest
+    binding per sender, stores it normalized, and adds the index."""
+    from sqlalchemy import create_engine, inspect, text
+
+    from careagents.models import (IMESSAGE_HANDLE_UNIQUE, Base,
+                                   make_engine)
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    old = create_engine(url)
+    Base.metadata.create_all(old)
+    with old.begin() as conn:
+        for row_id, handle, bound in (("s1", "Person@Example.COM", 1.0),
+                                      ("s2", "person@example.com", 2.0),
+                                      ("s3", "(555) 010-0123", 1.0),
+                                      ("s4", "code123", None)):
+            conn.execute(text(
+                "INSERT INTO ca_surfaces (id, kind, handle, status, bound_at) "
+                "VALUES (:i, 'imessage', :h, :s, :b)"),
+                {"i": row_id, "h": handle, "b": bound,
+                 "s": "pending" if bound is None else "active"})
+    old.dispose()
+
+    engine = make_engine(url)
+    with engine.connect() as conn:
+        rows = dict(conn.execute(text(
+            "SELECT id, handle FROM ca_surfaces ORDER BY id")).all())
+    assert rows == {"s2": "person@example.com", "s3": PHONE,
+                    "s4": "code123"}
+    assert IMESSAGE_HANDLE_UNIQUE in {
+        i["name"] for i in inspect(engine).get_indexes("ca_surfaces")}
+    engine.dispose()
+    make_engine(url).dispose()              # idempotent on the next boot
+
+
+def test_a_non_ascii_secret_is_refused_not_a_crash(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    r = c.post("/api/surfaces/imessage/inbound",
+               headers={"X-Internal-Secret": "café"},
+               json={"handle": PHONE, "text": "hi"})
+    assert r.status_code == 403

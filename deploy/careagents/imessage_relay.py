@@ -56,7 +56,8 @@ HTTP_TIMEOUT = 20
 RUN_TIMEOUT = 180
 WORKERS = 4
 _HOST = urllib.parse.urlparse(BASE).netloc or "careagents.cloud"
-TIMEOUT_TEXT = f"That took too long. Please try again or open {_HOST}."
+TIMEOUT_TEXT = (f"Sorry, I couldn't answer in time. Please try again, or "
+                f"open {_HOST}.")
 
 
 def _mask(handle: str) -> str:
@@ -91,10 +92,17 @@ def _post(path: str, payload: dict) -> dict:
 
 
 def _get(path: str, params: dict) -> tuple[int, dict]:
+    """GET a run. The sender's handle goes in a header, never the URL: a
+    URL is what access logs and proxies write down."""
+    params = dict(params)
+    headers = {"X-Internal-Secret": SECRET}
+    handle = params.pop("handle", None)
+    if handle:
+        headers["X-Imessage-Handle"] = handle
     query = urllib.parse.urlencode(params)
     req = urllib.request.Request(
-        f"{BASE}{path}?{query}", method="GET",
-        headers={"X-Internal-Secret": SECRET})
+        f"{BASE}{path}" + (f"?{query}" if query else ""), method="GET",
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
