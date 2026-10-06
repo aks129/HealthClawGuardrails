@@ -33,6 +33,19 @@ _DISCLAIMER = ("Advisory decision support, not a diagnosis. Reference ranges are
                "context. The performing lab's own reference range takes precedence.")
 
 
+def _subject_reference(obs):
+    """`subject.reference` when it is a string, else None.
+
+    The write API stores what it is given, so `subject` can be a string or a
+    list. Read as `obs.get("subject", {}).get("reference")`, one such row
+    raised AttributeError and made the call 500 for every patient in the
+    tenant (#869).
+    """
+    subject = obs.get("subject")
+    ref = subject.get("reference") if isinstance(subject, dict) else None
+    return ref if isinstance(ref, str) else None
+
+
 def register_labs_routes(blueprint, deps):
     authenticate_tenant_read = deps["authenticate_tenant_read"]
 
@@ -47,7 +60,8 @@ def register_labs_routes(blueprint, deps):
         rows = (R6Resource.query
                 .filter_by(resource_type="Observation", tenant_id=tenant_id,
                            is_deleted=False)
-                .order_by(R6Resource.last_updated.desc())
+                .order_by(R6Resource.last_updated.desc(),
+                          R6Resource.id.desc())
                 .limit(STORED_OBSERVATION_CAP)
                 .all())
         return [row.to_fhir_json() for row in rows]
@@ -95,13 +109,17 @@ def register_labs_routes(blueprint, deps):
                         subject = ref.get("reference") or subject
         observations, ignored = [], 0
         if subject:
-            rows = R6Resource.query.filter_by(
-                resource_type="Observation", tenant_id=tenant_id,
-                is_deleted=False).all()
-            for row in rows:
-                obs = row.to_fhir_json()
-                if obs.get("subject", {}).get("reference") == subject:
-                    observations.append(obs)
+            # The reader care gaps and the brief use, so the three agree
+            # about whose result a row is: relative, absolute and urn:uuid
+            # references all resolve, and on a one-Patient tenant a result
+            # with no subject is that patient's (#867). A subject we cannot
+            # read is counted in `ignored`, never a 500 for the tenant
+            # (#869). Capped like the fallback below, in the same order, so
+            # with one Patient the two branches read the same rows.
+            from r6.caregaps.routes import subject_rows
+            observations, ignored = subject_rows(
+                "Observation", subject, tenant_id,
+                limit=STORED_OBSERVATION_CAP)
         elif body.get("resourceType") == "Bundle":
             for e in body.get("entry", []):
                 res = e.get("resource", {}) if isinstance(e, dict) else {}
@@ -118,16 +136,20 @@ def register_labs_routes(blueprint, deps):
         return observations, ignored, (subject or None)
 
     def _patient_for(obs, tenant_id, cache):
-        ref = obs.get("subject", {}).get("reference")
-        if not ref or not ref.startswith("Patient/"):
+        # Resolved the way the ?subject branch matches (#867), so an
+        # absolute or urn:uuid reference still selects the sex-specific
+        # range rather than the non-specific one.
+        from r6.caregaps.routes import referenced_patient_id
+        pid = referenced_patient_id(_subject_reference(obs))
+        if not pid:
             return None
-        if ref in cache:
-            return cache[ref]
+        if pid in cache:
+            return cache[pid]
         row = R6Resource.query.filter_by(
-            resource_type="Patient", id=ref.split("/", 1)[1],
+            resource_type="Patient", id=pid,
             tenant_id=tenant_id, is_deleted=False).first()
-        cache[ref] = row.to_fhir_json() if row else None
-        return cache[ref]
+        cache[pid] = row.to_fhir_json() if row else None
+        return cache[pid]
 
     @blueprint.route("/Observation/$interpret", methods=["POST"])
     def interpret_labs():

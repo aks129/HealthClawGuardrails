@@ -89,6 +89,7 @@ def _brief_to_extension(result: BriefResult) -> list[dict]:
         _section("problems", result.problems),
         _section("medications", result.medications),
         _section("labs", result.labs),
+        _section("lab-trends", result.lab_trends),
         _section("care-gaps", result.care_gaps, care_gap_state),
         _section("visits", result.visits),
     ]
@@ -147,6 +148,44 @@ def _care_gap_result(tenant_id: str) -> dict:
                 "reason": CARE_GAPS_REASON_ENGINE_ERROR}
 
 
+def _lab_trend_lines(tenant_id: str) -> list[dict]:
+    """The creatinine trend sentence for the tenant's one Patient, or [].
+
+    Trends need one person's history, so the subject is the one the
+    care-gaps section resolves, and only that Patient's Observations are
+    compared: the same rule `Observation/$interpret?subject=` follows
+    (r6/labs/routes.py). No Patient or more than one is [], not a guess.
+
+    Read unredacted, as $interpret reads them: the check needs values and
+    times. What leaves is `kdigo_consumer_line`'s own sentence, labelled by
+    code from LOINC_RANGES, and the latest result's id, never the record's
+    display or text.
+    """
+    try:
+        from r6.caregaps.routes import resolve_subject, subject_resources
+        from r6.labs.trend import evaluate_creatinine_aki, kdigo_consumer_line
+
+        subject, state = resolve_subject(None, tenant_id)
+        if state != "tenant-default":
+            return []
+        from r6.labs.routes import STORED_OBSERVATION_CAP
+        # Capped as Observation/$interpret?subject= is, so the brief and
+        # the chat compare the same rows.
+        result = evaluate_creatinine_aki(subject_resources(
+            "Observation", subject, tenant_id,
+            limit=STORED_OBSERVATION_CAP))
+        line = kdigo_consumer_line(result)
+        if not line:
+            return []
+        return [{"analyte": line["analyte"], "message": line["message"],
+                 "source_id": (result.get("latest") or {}).get("id") or ""}]
+    except Exception as exc:
+        # The brief must not 500 over one section. No section is no claim.
+        logger.warning("appointment brief: lab trend check failed (%s)",
+                       type(exc).__name__)
+        return []
+
+
 def register_brief_routes(blueprint, deps):
     authenticate_tenant_read = deps["authenticate_tenant_read"]
 
@@ -185,6 +224,7 @@ def register_brief_routes(blueprint, deps):
             observations=observations,
             encounters=encounters,
             care_gap_result=care_gap,
+            lab_trends=_lab_trend_lines(tenant_id),
         )
 
         resource = {

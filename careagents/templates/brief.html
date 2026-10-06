@@ -14,6 +14,27 @@
     </div>
   </div>
 
+  {# --- lab trends --- #}
+  {# How a result moved over time (the creatinine check, #867). The one item
+     on this page that asks the person to act, so it comes first, under the
+     intro (#878 V4). Shown only when the engine sent a sentence: an empty
+     section would read as "nothing changed", which nobody checked. No
+     resource type or id: "from Observation obs-9" means nothing to a
+     patient (#878 G7). #}
+  {% set fields = sections.get('lab-trends', []) %}
+  {% if fields %}
+  <section class="brief-alert" aria-labelledby="brief-alert-title">
+    <h2 id="brief-alert-title">Something to raise with your clinician</h2>
+    {% for f in fields %}
+    <div class="brief-alert-item">
+      <span class="brief-label">{{ f.label }}</span>
+      <p class="brief-alert-text">{{ f.value }}</p>
+      <span class="brief-alert-source">From your lab results</span>
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   {# --- problems --- #}
   <div class="hub-section">
     <div class="section-head"><h2>Active problems</h2></div>

@@ -100,8 +100,11 @@
       list = null;
       appendInline(node, line);
       const next = lines[i + 1];
+      // A newline, not a <br>: .msg is white-space: pre-wrap, so it draws
+      // the same break, and it stays in textContent, so a screen reader or
+      // a copy does not run two paragraphs into one sentence (#878).
       if (next !== undefined && !LIST_ITEM.test(next))
-        node.appendChild(el("br"));
+        node.appendChild(document.createTextNode("\n"));
     });
   }
 

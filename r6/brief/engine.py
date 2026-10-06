@@ -61,6 +61,9 @@ class BriefResult:
     problems: list[BriefField] = field(default_factory=list)
     medications: list[BriefField] = field(default_factory=list)
     labs: list[BriefField] = field(default_factory=list)
+    # How a result moved over time (the KDIGO creatinine check, #867), kept
+    # apart from `labs`, which lists single readings.
+    lab_trends: list[BriefField] = field(default_factory=list)
     care_gaps: list[BriefField] = field(default_factory=list)
     visits: list[BriefField] = field(default_factory=list)
     # care_gaps alone cannot say whether it is empty because nothing is due or
@@ -268,6 +271,28 @@ def build_labs(observations: list[dict]) -> list[BriefField]:
     return out
 
 
+def build_lab_trends(trend_lines: list[dict]) -> list[BriefField]:
+    """Trend sentences from r6/labs/trend.py, one field each.
+
+    Each item is {"analyte", "message", "source_id"}: the label is the
+    engine's name for the code and the value its own sentence, both already
+    written by r6/labs/trend.py and repeated here unchanged. No trend is an
+    empty list, never a sentence: "no rise found" would be a statement about
+    the person's kidneys that nothing here made.
+    """
+    out = []
+    for item in trend_lines or []:
+        if not isinstance(item, dict) or not item.get("message"):
+            continue
+        out.append(BriefField(
+            label=item.get("analyte") or "Lab trend",
+            value=item["message"],
+            source_type="Observation",
+            source_id=item.get("source_id") or "",
+        ))
+    return out
+
+
 def build_care_gaps(care_gap_result: dict) -> CareGapsSection:
     """Open preventive-care gaps from the $care-gaps output.
 
@@ -356,6 +381,7 @@ def generate_brief(
     observations: list[dict],
     encounters: list[dict],
     care_gap_result: dict,
+    lab_trends: list[dict] | None = None,
 ) -> BriefResult:
     """Generate a structured appointment brief from FHIR resource lists.
 
@@ -370,6 +396,7 @@ def generate_brief(
         problems=build_problems(conditions),
         medications=build_medications(medication_requests),
         labs=build_labs(observations),
+        lab_trends=build_lab_trends(lab_trends or []),
         care_gaps=gaps.fields,
         visits=build_visits(encounters),
         care_gaps_status=gaps.status,
