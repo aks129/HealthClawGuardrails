@@ -86,7 +86,19 @@ class Config:
         self.sendblue_api_key_id = e.get("SENDBLUE_API_KEY_ID", "")
         self.sendblue_api_secret = e.get("SENDBLUE_API_SECRET", "")
         self.sendblue_webhook_secret = e.get("SENDBLUE_WEBHOOK_SECRET", "")
-        self.sendblue_from_number = e.get("SENDBLUE_FROM_NUMBER", "")
+        # The line is sent as `from_number` and shown in settings, so it is
+        # held as E.164, normalized the way inbound handles are. A value that
+        # is not a phone number switches Sendblue off rather than sending
+        # from a malformed line. Imported here: imessage pulls in the agent.
+        from careagents.imessage import mask, normalize_handle
+        raw_from = (e.get("SENDBLUE_FROM_NUMBER") or "").strip()
+        from_number = normalize_handle(raw_from) if raw_from else None
+        if from_number and "@" in from_number:
+            from_number = None
+        if raw_from and not from_number:
+            logger.warning("SENDBLUE_FROM_NUMBER %s is not a phone number; "
+                           "Sendblue is off", mask(raw_from))
+        self.sendblue_from_number = from_number or ""
         self.sendblue_api_base = (e.get("SENDBLUE_API_BASE")
                                   or "https://api.sendblue.co").rstrip("/")
         self.sendblue_enabled = all((

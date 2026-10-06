@@ -117,6 +117,29 @@ def test_enabled_only_when_every_required_setting_is_present(cfg):  # noqa: F811
     ).sendblue_api_base == "https://api.sendblue.com"
 
 
+@pytest.mark.parametrize("raw", [
+    "+1 (555) 010-0100", "555-010-0100", "(555) 010 0100", "+15550100100"])
+def test_the_from_number_is_normalized_to_e164(cfg, raw):  # noqa: F811
+    c = Config(env=_env(cfg, SENDBLUE_FROM_NUMBER=raw))
+    assert c.sendblue_enabled is True
+    assert c.sendblue_from_number == "+15550100100"
+    assert c.imessage_handle == "+15550100100"
+
+
+@pytest.mark.parametrize("raw", [
+    "12345", "not a number", "line@example.com", "+1000"])
+def test_an_unusable_from_number_switches_sendblue_off(
+        cfg, raw, caplog):  # noqa: F811
+    caplog.set_level(logging.WARNING, logger="careagents.config")
+    c = Config(env=_env(cfg, SENDBLUE_FROM_NUMBER=raw))
+    assert c.sendblue_enabled is False
+    assert c.imessage_handle == ""
+    warnings = [r for r in caplog.records if "SENDBLUE_FROM_NUMBER" in
+                r.getMessage()]
+    assert len(warnings) == 1
+    assert raw not in caplog.text
+
+
 def test_the_text_us_handle_is_the_sendblue_line_unless_overridden(cfg):  # noqa: F811
     assert Config(env=_env(cfg)).imessage_handle == LINE
     assert Config(env=_env(cfg, CARE_IMESSAGE_HANDLE="+15550100999")
