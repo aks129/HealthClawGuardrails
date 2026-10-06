@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone
 from flask import request, jsonify
 from r6.body_guard import json_body_within_depth
+from r6.redaction import clean_codings
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,10 @@ def _strip_deidentification_preview(resource):
 
     # Strip CodeableConcept.text fields (may contain regional identifiers)
     _strip_codeable_concept_text(resource)
+
+    # A junk Coding.system or code (an object or list can carry any text)
+    # is dropped here as on the other two redaction paths (#886).
+    clean_codings(resource)
 
     # Attachment payloads and signed URLs can carry PHI directly.
     if ('contentType' in resource

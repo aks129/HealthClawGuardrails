@@ -11,6 +11,8 @@ import os
 import time
 import requests
 
+from r6.safe_read import code_shape, is_coding_shaped
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,6 +154,67 @@ def _coverage_note(resource_type):
     )
 
 
+def _coding_issues(coding, path, *, in_coding_list):
+    """The errors for one Coding, by the rule redaction applies on read."""
+    issues = []
+    if 'system' in coding and not isinstance(coding['system'], str):
+        issues.append({
+            'severity': 'error',
+            'code': 'structure',
+            'diagnostics': 'Coding.system must be a string (a URI)',
+            'expression': [f'{path}.system'],
+        })
+    if 'code' in coding:
+        shape = code_shape(coding['code'], in_coding_list=in_coding_list)
+        if shape == 'codings':
+            # A list of Codings (Questionnaire.item.code): each item must be
+            # an object; the walk checks each one as a Coding.
+            bad = any(not isinstance(c, dict) for c in coding['code'])
+        else:
+            bad = shape == 'bad'
+        if bad:
+            issues.append({
+                'severity': 'error',
+                'code': 'structure',
+                'diagnostics': 'Coding.code must be a string',
+                'expression': [f'{path}.code'],
+            })
+    return issues
+
+
+def _coding_system_issues(node, path):
+    """An error for every Coding whose `system` is present and not a string,
+    or whose `code` is present and neither a string nor an int.
+
+    A list, object or number in `system` made redaction raise on every read
+    of the tenant, and the write that stored it returned 500 after
+    committing (#885). An object or list in either can carry text. An int
+    code is accepted; redaction returns it as its string form. The value is
+    never echoed: only its path.
+    """
+    issues = []
+    if isinstance(node, list):
+        for i, item in enumerate(node):
+            issues.extend(_coding_system_issues(item, f'{path}[{i}]'))
+        return issues
+    if not isinstance(node, dict):
+        return issues
+    codings = node.get('coding')
+    if isinstance(codings, list):
+        for i, coding in enumerate(codings):
+            if isinstance(coding, dict):
+                issues.extend(_coding_issues(
+                    coding, f'{path}.coding[{i}]', in_coding_list=True))
+    # Every Coding-shaped dict, wherever it sits: valueCoding, an extension's
+    # valueCoding at any depth, `class`, meta.tag, meta.security (R886-1).
+    if is_coding_shaped(node):
+        issues.extend(_coding_issues(node, path, in_coding_list=False))
+    for key, value in node.items():
+        if isinstance(value, (dict, list)):
+            issues.extend(_coding_system_issues(value, f'{path}.{key}'))
+    return issues
+
+
 class R6Validator:
     """Validates FHIR R6 resources."""
 
@@ -175,6 +238,16 @@ class R6Validator:
         Returns:
             dict with 'valid' (bool) and 'operation_outcome' (FHIR OperationOutcome)
         """
+        # Checked first and on every path: the external validator, when it is
+        # up, replaces the structural checks below, and a write this check
+        # refuses must never reach commit (#885).
+        if isinstance(resource, dict):
+            issues = _coding_system_issues(
+                resource, str(resource.get('resourceType') or 'Resource'))
+            if issues:
+                return {'valid': False, 'operation_outcome': {
+                    'resourceType': 'OperationOutcome', 'issue': issues}}
+
         # Try external validator first
         if self._is_validator_available():
             try:

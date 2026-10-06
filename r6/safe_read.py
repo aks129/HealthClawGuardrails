@@ -74,6 +74,44 @@ def codes(concept):
     return [c for c in map(coding_code, codings(concept)) if c]
 
 
+#: Keys that make a dict a CodeableConcept rather than a Coding's own value.
+_CONCEPT_KEYS = ("coding", "text", "extension")
+
+
+def is_coding_shaped(node):
+    """A dict that is, or poses as, a Coding: it has `system` or `code`, no
+    `coding` list of its own, and is not a resource. Where it sits does not
+    matter: valueCoding, an extension's valueCoding at any depth, `class`,
+    meta.tag and meta.security all hold Codings with no `coding` around
+    them (R886-1)."""
+    return (isinstance(node, dict) and "resourceType" not in node
+            and "coding" not in node and ("system" in node or "code" in node))
+
+
+def code_shape(value, *, in_coding_list):
+    """What a `code` beside a `system` holds, for redaction and the validator
+    to treat alike: "string", "int", "codings", "concept" or "bad".
+
+    Inside a `coding` list the dict is known to be a Coding, so its code is a
+    string or an int and nothing else. Elsewhere a `code` key can belong to
+    a parent element instead: a list of Codings (Questionnaire.item.code) or
+    a CodeableConcept (component.code, even one carrying only an extension).
+    Anything else, an object with none of a CodeableConcept's keys among
+    them, is no code and can carry any text.
+    """
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if in_coding_list:
+        return "bad"
+    if isinstance(value, list):
+        return "codings"
+    if isinstance(value, dict) and any(k in value for k in _CONCEPT_KEYS):
+        return "concept"
+    return "bad"
+
+
 def string_field(res, field):
     """`res[field]` when it is a string, else ""."""
     value = as_dict(res).get(field)
