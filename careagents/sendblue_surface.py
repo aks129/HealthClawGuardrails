@@ -19,7 +19,6 @@ database keeps pointers only (models.SendblueMessage).
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import threading
 import time
@@ -29,6 +28,7 @@ from typing import Callable
 from flask import jsonify, request
 
 from careagents import imessage, sendblue
+from careagents.accounts import secret_matches
 from careagents.healthclaw import HealthClawError
 
 logger = logging.getLogger(__name__)
@@ -91,12 +91,9 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
         if not cfg.sendblue_enabled:
             return jsonify({"error": "not found"}), 404
         got = request.headers.get("sb-signing-secret") or ""
-        # An empty configured secret never gets here (sendblue_enabled), so
-        # an empty header can never match an empty secret. Both sides are
-        # bytes before they meet, so no header shape can raise (#557).
-        if not got or not hmac.compare_digest(
-                got.encode("utf-8", "surrogatepass"),
-                cfg.sendblue_webhook_secret.encode("utf-8", "surrogatepass")):
+        # secret_matches hashes both sides first (no header shape can raise,
+        # #557) and an empty configured secret matches nothing.
+        if not got or not secret_matches(got, cfg.sendblue_webhook_secret):
             logger.warning("sendblue webhook refused: bad signing secret")
             return jsonify({"error": "unauthorized"}), 401
         body = request.get_json(silent=True)

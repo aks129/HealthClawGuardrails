@@ -206,7 +206,7 @@ def test_an_unbound_sender_is_texted_a_sign_in_link(sb_cfg, sb_svc, monkeypatch)
     number, text = fake.sent[0]
     assert number == PHONE
     assert text.startswith("Hi, this is CareAgents.")
-    assert f"{sb_cfg.origin}/link/" in text
+    assert f"{sb_cfg.origin}/link?t=" in text
 
 
 def test_a_sendblue_retry_is_answered_once(sb_cfg, sb_svc, monkeypatch):

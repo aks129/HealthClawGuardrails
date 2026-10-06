@@ -111,10 +111,6 @@ _COMPARE_DIGEST_HOMES = {
         'they meet — the presented tag encoded as ASCII with non-ASCII '
         'dropped, and a hexdigest this process just computed — so the #557 '
         'TypeError cannot arise. CareAgents cannot import r6, as above',
-    'careagents/sendblue_surface.py':
-        'the Sendblue webhook secret: the header and the configured secret '
-        'are both encoded to bytes (surrogatepass) before they meet, so the '
-        '#557 TypeError cannot arise. CareAgents cannot import r6, as above',
 }
 
 
