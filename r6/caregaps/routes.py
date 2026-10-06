@@ -20,7 +20,7 @@ from r6.models import R6Resource
 from r6.audit import add_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
-from r6.safe_read import strict_dumps
+from r6.safe_read import as_dict, strict_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -145,17 +145,39 @@ def sole_patient_id(tenant_id):
     return rows[0].id if len(rows) == 1 else None
 
 
-def subject_match(res, patient_id, sole_id):
+#: Resource types that name their patient somewhere other than `subject`.
+#: An Immunization has no `subject`; its patient is `Immunization.patient`
+#: (FHIR R4 and R6). Read as `subject`, every Immunization fell to the
+#: no-subject rule below, which on a one-Patient tenant handed that Patient
+#: other people's shots (#880).
+_SUBJECT_FIELD = {"Immunization": "patient"}
+_REFERENCE_FIELDS = ("subject", "patient")
+
+
+def subject_field(resource_type):
+    """The element that names the patient on `resource_type`."""
+    return _SUBJECT_FIELD.get(resource_type, "subject")
+
+
+def subject_match(res, patient_id, sole_id, field="subject"):
     """True when `res` is this patient's, False when it is not, and None when
     its subject cannot be read at all (malformed, #869).
 
-    A resource with no subject belongs to the tenant's one Patient when the
+    `field` is where this resource type names its patient (`subject_field`).
+
+    A resource that names nobody belongs to the tenant's one Patient when the
     tenant has exactly one and it is the one asked about: a single-patient
     record set is that person's. With two or more it belongs to nobody we
-    can name, and is left out rather than guessed.
+    can name, and is left out rather than guessed. "Names nobody" means
+    neither `subject` nor `patient` is present. A resource carrying the field
+    its type does not use, an Immunization with a `subject`, names somebody
+    we do not read, and is unreadable rather than the sole Patient's (#880).
     """
-    subject = res.get("subject")
+    res = as_dict(res)
+    subject = res.get(field)
     if subject is None:
+        if any(res.get(f) is not None for f in _REFERENCE_FIELDS):
+            return None
         return sole_id is not None and sole_id == patient_id
     if not isinstance(subject, dict):
         return None
@@ -182,6 +204,7 @@ def subject_rows(resource_type, subject, tenant_id, limit=None):
     """
     patient_id = referenced_patient_id(subject)
     sole_id = sole_patient_id(tenant_id) if patient_id else None
+    field = subject_field(resource_type)
     query = R6Resource.query.filter_by(
         resource_type=resource_type, tenant_id=tenant_id, is_deleted=False)
     if limit is not None:
@@ -191,10 +214,10 @@ def subject_rows(resource_type, subject, tenant_id, limit=None):
     for row in query.yield_per(500):
         res = row.to_fhir_json()
         if patient_id is None:
-            ref = res.get("subject")
+            ref = res.get(field)
             match = isinstance(ref, dict) and ref.get("reference") == subject
         else:
-            match = subject_match(res, patient_id, sole_id)
+            match = subject_match(res, patient_id, sole_id, field)
         if match is None:
             unreadable += 1
         elif match:

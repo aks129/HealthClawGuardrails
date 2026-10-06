@@ -164,8 +164,8 @@ telling them to raise it with their clinician (#425, #428, #436).
 | Population | Any sex, ages 18–120 |
 | Cadence | Every 12 months |
 | Source | `acip` — "CDC/ACIP adult immunization schedule." Schedule year: **not encoded** |
-| What closes the gap | `Immunization` with code `88`, `140`, `141`, `150`, `158`, `161` or `171` |
-| What is NOT read | The influenza season. The window is 12 rolling months from the last dose, not a season boundary, so someone vaccinated in one season reads as covered part-way into the next |
+| What closes the gap | `Immunization` with `status` `completed`, an `occurrenceDateTime`, and a `vaccineCode` of `15`, `16`, `88`, `111`, `135`, `140`, `141`, `144`, `149`, `150`, `151`, `153`, `155`, `158`, `161`, `166`, `168`, `171`, `185`, `186`, `197`, `205`, `320`, `333` or `338`. These are the seasonal influenza codes in the CDC CVX table (`cdc-cvx`), active and retired alike |
+| What is NOT read | The influenza season. The window is 12 rolling months from the last dose, not a season boundary, so someone vaccinated in one season reads as covered part-way into the next. Southern Hemisphere formulations (CVX 194, 200-202, 231, 331, 337) are deliberately left out, so a shot given abroad with one of them reads as due. Pandemic and avian vaccines (CVX 123, 125-128, 160, 321-323) are not a seasonal flu shot and are left out. An `occurrenceString` ("last autumn") is undated and cannot close the gap |
 | Related eCQM | CMS147 (related, not implemented) |
 | Status | released |
 
@@ -178,15 +178,18 @@ what a verdict above means.
 
 **Code matching**
 
-- A code matches on its **value alone** — `code.coding[].code`. The code system
-  is never compared, so an identical numeric code from a different system would
-  match. Encoded as such; there is no allowlist of systems.
+- A code matches on its **value alone** — `code.coding[].code`, or
+  `vaccineCode.coding[].code` for an `Immunization`, which has no `code`. The
+  code system is never compared, so an identical numeric code from a different
+  system would match. Encoded as such; there is no allowlist of systems.
+  `text` is never read as a code.
 
 **Dates**
 
 - A record's date is read from the first of `effectiveDateTime`,
-  `performedDateTime`, `occurrenceDateTime`, `authoredOn`. A record carrying
-  none of these has **no date and cannot close a gap**.
+  `performedDateTime`, `occurrenceDateTime`, `authoredOn`; an `Immunization`'s
+  from `occurrenceDateTime` alone. A record carrying none of these has **no
+  date and cannot close a gap**.
 - **Future-dated records never close a gap**, so bad source data cannot produce
   a false "up to date".
 - A matching record **older than the cadence** is treated exactly as if it were
@@ -200,10 +203,26 @@ what a verdict above means.
 
 **Resource status**
 
-- The `status` of a closing record is **never checked**. A `Procedure`,
-  `Observation` or `Immunization` marked `entered-in-error` closes the gap. This
-  applies to all seven rules.
+- An `Immunization` closes a gap only when its `status` is `completed`:
+  `not-done` and `entered-in-error` never do (#880).
+- The `status` of every other closing record is **never checked**. A
+  `Procedure` or `Observation` marked `entered-in-error` closes the gap. This
+  applies to the six rules other than `flu-immunization`.
 - Soft-deleted records are excluded (#422).
+
+**Whose record it is**
+
+- A record is the patient's when its reference names them: `subject` on every
+  type read here except `Immunization`, which names its patient in `patient`
+  (#880). Relative, absolute and `urn:uuid:` references all resolve (#867).
+- A record that names **nobody** (neither `subject` nor `patient`) counts as
+  the patient's when the tenant holds exactly one Patient, and as nobody's
+  otherwise (#878). This is a disclosed policy, not a finding: on a
+  one-Patient tenant, a record with no patient reference closes that
+  patient's gap.
+- A record carrying the reference its type does not use (an `Immunization`
+  with a `subject`), or a reference of the wrong shape, is unreadable and
+  closes nothing.
 
 **When something is unknown**
 
@@ -251,8 +270,9 @@ what a verdict above means.
    recommendation a cadence came from without reading the commit that set it.
 2. **`diabetes-a1c` is patient-visible and has never been clinically
    reviewed** (#389, PRD 5 §3).
-3. **Resource `status` is ignored on every closing record**, so an
-   `entered-in-error` result can report a patient as up to date.
+3. **Resource `status` is ignored on every closing record except an
+   `Immunization`**, so an `entered-in-error` result or procedure can report a
+   patient as up to date.
 4. **`diabetes-a1c` decides before it knows the patient's age.** The diagnosis
    gate precedes the age gate, so an unknown date of birth yields
    `not_applicable` rather than `indeterminate`. Neither caller reaches this
