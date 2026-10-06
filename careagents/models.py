@@ -383,12 +383,19 @@ def _ensure_columns(engine) -> None:
             if name not in cols:
                 _add_column(engine, "ca_surfaces", name, "FLOAT")
         # A binding from before #871 counts as verified when it was bound,
-        # or now if that was never recorded. Idempotent: only NULLs change.
+        # or now if that was never recorded, and as last heard from now:
+        # silence counts from the deploy, so existing testers are not all
+        # asked (and their owners emailed) that day. Idempotent: only NULLs
+        # change.
         with engine.begin() as conn:
             conn.execute(text(
                 "UPDATE ca_surfaces SET verified_at = COALESCE(bound_at, :t) "
                 "WHERE kind = 'imessage' AND status = 'active' "
                 "AND verified_at IS NULL"), {"t": now()})
+            conn.execute(text(
+                "UPDATE ca_surfaces SET last_inbound_at = :t "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND last_inbound_at IS NULL"), {"t": now()})
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:

@@ -212,6 +212,12 @@ class Deliverer:
             # STOP or disconnect since: the answer is not sent anywhere.
             self._close(row, "unbound")
             return
+        if imessage.reverify_due(surface, self.clock(),
+                                 self.cfg.imessage_reverify_days * 86400):
+            # Queued while fresh, due now (#871): whoever holds the number
+            # may not be its owner. Nothing is sent.
+            self._close(row, "withheld")
+            return
         agent_id = surface["agent_id"]
         ctx = self.svc.get_agent_context(surface["account_id"], agent_id)
         if not ctx:

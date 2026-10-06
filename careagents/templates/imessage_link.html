@@ -5,7 +5,17 @@
 {# The page a texted sign-in link ends on (careagents.imessage). #}
 <main class="setup-wrap">
   <div class="setup-card">
-    {% if outcome == "confirm" %}
+    {% if outcome == "confirm" and again %}
+    <h1>Is this still your phone?</h1>
+    <p class="setup-sub">Texts from <b>{{ handle }}</b> can ask about your
+      health records.</p>
+    <form method="post" action="/link/done">
+      <button class="btn-primary btn-block" name="connect" value="yes">Yes, it's still mine</button>
+    </form>
+    <form method="post" action="/link/done">
+      <button class="btn-secondary btn-block" name="connect" value="no">No, it isn't</button>
+    </form>
+    {% elif outcome == "confirm" %}
     <h1>Connect this phone?</h1>
     <p class="setup-sub">Texts from <b>{{ handle }}</b> will be able to ask
       about your health records. Only say yes if this is your own phone or

@@ -2405,8 +2405,7 @@ def create_app(config: Config | None = None,
         if acct is None:
             return
         try:
-            mail.send_notice(cfg, acct.email,
-                             "CareAgents asked your phone to confirm",
+            mail.send_notice(cfg, acct.email, imessage.REVERIFY_SUBJECT,
                              imessage.reverify_notice(handle))
         except Exception:               # pragma: no cover - defensive
             logger.warning("reverify notice failed to send")
@@ -2564,7 +2563,12 @@ def create_app(config: Config | None = None,
                 session.pop("imessage_link", None)
                 return render_template("imessage_link.html",
                                        outcome="expired"), 410
+            # Already this account's phone: the link is a re-confirm.
+            bound = svc.find_surface_by_handle(handle)
+            again = bool(bound and bound["account_id"]
+                         == current_account().id)
             return render_template("imessage_link.html", outcome="confirm",
+                                   again=again,
                                    handle=imessage.display_handle(handle))
         link_id = session.pop("imessage_link", None)
         if not link_id:
@@ -2595,7 +2599,11 @@ def create_app(config: Config | None = None,
                   or request.args.get("handle") or "").strip()
         surface = svc.find_surface_by_handle(
             imessage.normalize_handle(raw) or raw, kind="imessage", also=raw)
-        if not surface or not surface.get("agent_id"):
+        if (not surface or not surface.get("agent_id")
+                or imessage.reverify_due(surface, time.time(),
+                                         imessage_deps.reverify_seconds)):
+            # Due to re-confirm (#871): read as unbound, so the relay sends
+            # nothing to whoever holds the number now.
             return jsonify({"error": "unbound handle"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
         if not ctx:

@@ -916,14 +916,7 @@ class AccountService:
                          Surface.status == "active")
                  .order_by(Surface.bound_at.desc())
                  .first())
-            if x is None:
-                return None
-            # The re-verification clocks ride along (#871).
-            return _surf_dict(x) | {
-                "account_id": x.account_id, "bound_at": x.bound_at,
-                "verified_at": x.verified_at,
-                "last_inbound_at": x.last_inbound_at,
-                "reverify_notified_at": x.reverify_notified_at}
+            return _surf_dict(x) | _reverify_fields(x) if x else None
 
     def bind_surface(self, surface_id: str, handle: str) -> None:
         with self.session() as s:
@@ -1038,12 +1031,17 @@ class AccountService:
             s.execute(update(Surface).where(Surface.id == surface_id)
                       .values(last_inbound_at=now()))
 
-    def imessage_mark_reverify(self, surface_id: str) -> bool:
+    def imessage_mark_reverify(self, surface_id: str,
+                               verified_at: float | None) -> bool:
         """True once per re-verification: the first time it is required.
-        A conditional update, so two racing texts email the owner once."""
+        A conditional update, so two racing texts email the owner once.
+        `verified_at` is the value read with the surface: if a confirm has
+        changed it since, nothing is set (compare-and-set)."""
+        same = (Surface.verified_at.is_(None) if verified_at is None
+                else Surface.verified_at == verified_at)
         with self.session() as s:
             res = s.execute(update(Surface)
-                            .where(Surface.id == surface_id,
+                            .where(Surface.id == surface_id, same,
                                    Surface.reverify_notified_at.is_(None))
                             .values(reverify_notified_at=now()))
             return res.rowcount == 1
@@ -1189,7 +1187,7 @@ class AccountService:
             x = s.get(Surface, surface_id)
             if x is None or x.status != "active":
                 return None
-            return _surf_dict(x) | {"account_id": x.account_id}
+            return _surf_dict(x) | _reverify_fields(x)
 
     # --- Sendblue: seen-once inbound texts and owed answers ------------------
     # Pointers only (models.SendblueMessage). `key` is a hash of Sendblue's
@@ -1284,6 +1282,15 @@ def _agent_dict(a: Agent) -> dict:
 def _surf_dict(x: Surface) -> dict:
     return {"id": x.id, "kind": x.kind, "handle": x.handle,
             "status": x.status, "agent_id": x.agent_id}
+
+
+def _reverify_fields(x: Surface) -> dict:
+    """An active iMessage surface's account and re-verification clocks
+    (#871), for careagents.imessage.reverify_due."""
+    return {"account_id": x.account_id, "bound_at": x.bound_at,
+            "verified_at": x.verified_at,
+            "last_inbound_at": x.last_inbound_at,
+            "reverify_notified_at": x.reverify_notified_at}
 
 
 def _opts_to_dict(options_json: str) -> dict:

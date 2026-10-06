@@ -122,8 +122,13 @@ class Config:
         # Days a bound iMessage handle is answered before its owner
         # re-confirms it with a texted link (#871): numbers get reassigned.
         # At least 1, or a confirm would be stale the moment it is made.
-        self.imessage_reverify_days = max(1, int(e.get(
-            "CARE_IMESSAGE_REVERIFY_DAYS", "60")))
+        try:
+            reverify_days = int(e.get("CARE_IMESSAGE_REVERIFY_DAYS", "60"))
+        except ValueError:
+            logger.warning("CARE_IMESSAGE_REVERIFY_DAYS is not a whole "
+                           "number of days; using 60")
+            reverify_days = 60
+        self.imessage_reverify_days = max(1, reverify_days)
         # Where a new /beta request is announced (careagents/beta_signup.py).
         # Unset = no announcement; the request is still saved.
         self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")

@@ -182,14 +182,23 @@ def masked_display(handle: str | None) -> str:
     return f"phone ending in {s[-4:]}" if len(s) >= 4 else "a phone"
 
 
+REVERIFY_SUBJECT = "Please confirm your phone for CareAgents texts"
+
+
 def reverify_notice(handle: str) -> str:
-    """The one line emailed to the owner when a handle must re-confirm."""
+    """The email to the owner when a handle must re-confirm: why, and what
+    to do. The texter's reply says none of this (#866)."""
     if "@" in handle:
-        what = f"the Apple ID {mask(handle)}"
+        what = f"your Apple ID {mask(handle)}"
     else:
-        what = f"the phone ending in {handle[-4:]}"
-    return (f"We asked {what} to confirm it's still yours before "
-            "answering texts.")
+        what = f"your phone ending in {handle[-4:]}"
+    return (f"It's been a while since {what} was confirmed, so before "
+            "CareAgents answers more texts we sent it a sign-in link. Phone "
+            "numbers sometimes change hands, and this keeps your records "
+            "private. To keep texting, tap the link in that text and sign "
+            "in. It takes a few seconds, and then text your question again. "
+            "If you haven't texted CareAgents lately, you don't need to do "
+            "anything.")
 
 
 def no_agent_text(origin: str) -> str:
@@ -498,23 +507,37 @@ def reverify_due(surface: dict, now: float, window_seconds: float) -> bool:
             or now - last >= REVERIFY_SILENCE_SECONDS)
 
 
+def sign_in_reply(deps: Deps, handle: str, word: str | None
+                  ) -> tuple[dict, int]:
+    """A sign-in link for a handle we will not answer: one we have never
+    seen, or one due to re-confirm. One function for both, so the two can
+    never read differently: the reader of the second may be a number's new
+    holder, who must not learn it was connected (#866)."""
+    token = deps.svc.issue_imessage_link(handle)
+    if token is None:            # past the per-window link allowance
+        # START is always answered; anything else stays quiet.
+        return ({"reply": START_CAPPED_TEXT} if word == "start"
+                else {}), 200
+    url = link_url(deps.origin, token)
+    return {"reply": start_text(url) if word == "start"
+            else link_text(url)}, 200
+
+
 def ask_to_reverify(deps: Deps, surface: dict, word: str | None
                     ) -> tuple[dict, int]:
-    """No run: a sign-in link, under the same allowance as any other. On
-    confirm by the same account, accounts.bind_imessage_handle refreshes
-    the binding; another account meets the usual "taken".
+    """No run: the sign-in link a stranger would get. On confirm by the
+    same account, accounts.bind_imessage_handle refreshes the binding;
+    another account meets the usual "taken". The owner's email is where
+    this is explained.
 
-    The words are START's to a number we have never seen: the reader may
-    be the number's new holder, who must not learn it was connected
-    (#866). The owner's email is where this is explained."""
+    The flag is set only if the binding is still the one read with
+    `surface`: a confirm that lands while this text is in flight wins."""
     svc = deps.svc
     handle = surface["handle"]
-    if svc.imessage_mark_reverify(surface["id"]) and deps.on_reverify:
+    if svc.imessage_mark_reverify(
+            surface["id"], surface.get("verified_at")) and deps.on_reverify:
         deps.on_reverify(surface["account_id"], handle)
-    token = svc.issue_imessage_link(handle)
-    if token is None:            # past the per-window link allowance
-        return ({"reply": START_CAPPED_TEXT} if word == "start" else {}), 200
-    return {"reply": start_text(link_url(deps.origin, token))}, 200
+    return sign_in_reply(deps, handle, word)
 
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
@@ -559,14 +582,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
             if word != "start":
                 return {}, 200
             svc.imessage_opt_in(handle)
-        token = svc.issue_imessage_link(handle)
-        if token is None:            # past the per-window link allowance
-            # START is always answered; anything else stays quiet.
-            return ({"reply": START_CAPPED_TEXT} if word == "start"
-                    else {}), 200
-        url = link_url(deps.origin, token)
-        return {"reply": start_text(url) if word == "start"
-                else link_text(url)}, 200
+        return sign_in_reply(deps, handle, word)
 
     # Before anything that speaks for the account: START would say it is
     # connected, APPROVALS would give its count. STOP and HELP stay above.

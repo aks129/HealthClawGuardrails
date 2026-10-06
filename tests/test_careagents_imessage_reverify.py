@@ -13,6 +13,8 @@ Rows are aged by writing their timestamps directly. Synthetic handles only
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from careagents import imessage
@@ -48,10 +50,12 @@ def _row(svc, handle=PHONE):  # noqa: F811
 
 
 def _is_reverify(body: dict) -> bool:
+    """A sign-in link and no run: START's words or the first-text words,
+    as a stranger would get for the same text."""
     reply = body.get("reply") or ""
+    url = imessage.link_url("http://localhost", _link_token(reply))
     return ("run_id" not in body
-            and reply == imessage.start_text(
-                imessage.link_url("http://localhost", _link_token(reply))))
+            and reply in (imessage.start_text(url), imessage.link_text(url)))
 
 
 def _links(svc):  # noqa: F811
@@ -138,6 +142,17 @@ def test_a_gated_text_does_not_reset_the_silence_clock(cfg, svc, monkeypatch):  
     for _ in range(2):
         assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
     assert _row(svc)["last_inbound_at"] == before
+
+
+@pytest.mark.parametrize("raw", ["sixty", "1.5", ""])
+def test_a_non_integer_window_falls_back_to_sixty(raw, caplog):
+    import logging
+
+    from careagents.config import Config
+    caplog.set_level(logging.WARNING, logger="careagents.config")
+    assert Config(env={"CARE_IMESSAGE_REVERIFY_DAYS": raw}
+                  ).imessage_reverify_days == 60
+    assert "CARE_IMESSAGE_REVERIFY_DAYS" in caplog.text
 
 
 def test_a_binding_with_no_verified_time_counts_from_bound_then_fails_closed(
@@ -229,12 +244,12 @@ def test_the_reply_is_the_strangers_sign_in_link(cfg, svc, monkeypatch):  # noqa
     _pair(c, agent_id)
     _age(svc, verified_days=90)
     reply = _inbound(c, PHONE, "hello").get_json()["reply"]
-    stranger = _inbound(c, "+15550100199", "start").get_json()["reply"]
+    stranger = _inbound(c, "+15550100199", "hello").get_json()["reply"]
 
     def shape(text):
         return text.replace(_link_token(text), "<token>")
     assert shape(reply) == shape(stranger)
-    assert reply == imessage.start_text(
+    assert reply == imessage.link_text(
         f"http://localhost/link?t={_link_token(reply)}")
     for tell in ("while", "still", "again", "connected", agent_id,
                  "gene", "Juniper", "example.com"):
@@ -257,6 +272,12 @@ def test_reconfirming_refreshes_and_keeps_the_assistant(cfg, svc, monkeypatch): 
     token = _link_token(_inbound(c, PHONE, "hello").get_json()["reply"])
     assert _row(svc)["reverify_notified_at"] is not None
     c.get(f"/link?t={token}")
+    ask = c.get("/link/done").get_data(as_text=True)
+    words = " ".join(re.sub(r"<[^>]+>", " ", ask).split())
+    assert ("Is this still your phone? Texts from (555) 010-0123 can ask "
+            "about your health records.") in words
+    assert "Yes, it's still mine" in words and "No, it isn't" in words
+    assert "Connect this phone?" not in ask
     page = _confirm(c).get_data(as_text=True)
     assert "Confirmed. This phone is still connected to CareAgents." in page
     assert "You're connected." not in page
@@ -342,8 +363,15 @@ def test_the_owner_is_emailed_once_with_the_handle_masked(
     assert len(sent) == 1
     email, subject, line = sent[0]
     assert email == "gene@example.com"
-    assert line == ("We asked the phone ending in 0123 to confirm it's "
-                    "still yours before answering texts.")
+    assert subject == "Please confirm your phone for CareAgents texts"
+    assert line == (
+        "It's been a while since your phone ending in 0123 was confirmed, "
+        "so before CareAgents answers more texts we sent it a sign-in "
+        "link. Phone numbers sometimes change hands, and this keeps your "
+        "records private. To keep texting, tap the link in that text and "
+        "sign in. It takes a few seconds, and then text your question "
+        "again. If you haven't texted CareAgents lately, you don't need to "
+        "do anything.")
     assert PHONE not in subject + line
 
     # Confirmed, then stale again later: a new episode, a new email.
@@ -370,6 +398,8 @@ def test_a_first_link_connect_still_reads_and_emails_as_connected(
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
     c.get(f"/link?t={token}")
+    ask = c.get("/link/done").get_data(as_text=True)
+    assert "Connect this phone?" in ask and "still your phone" not in ask
     page = _confirm(c).get_data(as_text=True)
     assert "You're connected." in page and "Confirmed." not in page
     assert len(sent) == 1 and "was connected" in sent[0]
@@ -391,7 +421,8 @@ def test_no_email_when_mail_is_not_set_up(cfg, svc, monkeypatch):  # noqa: F811
 def test_the_notice_masks_an_apple_id():
     line = imessage.reverify_notice("person@example.com")
     assert "person@example.com" not in line
-    assert "p***@example.com" in line
+    assert line.startswith("It's been a while since your Apple ID "
+                           "p***@example.com was confirmed")
 
 
 # --- the Sendblue webhook, end to end --------------------------------------------
@@ -416,7 +447,7 @@ def test_sendblue_texts_the_link_then_answers_after_confirm(
         to, text = fake.sent[0]
         assert to == sb.PHONE
         token = _link_token(text)
-        assert text == imessage.start_text(
+        assert text == imessage.link_text(
             imessage.link_url("http://localhost", token))
         assert fake.typing == []                 # no run, so no typing
         assert sb_svc.sendblue_pending() == []   # nothing owed
@@ -433,12 +464,44 @@ def test_sendblue_texts_the_link_then_answers_after_confirm(
         sb_svc.engine.dispose()
 
 
+def test_sendblue_withholds_an_answer_once_the_binding_is_stale(
+        cfg, monkeypatch):  # noqa: F811
+    """A run queued while fresh, finished after the binding went due: the
+    answer is not sent to whoever holds the number now."""
+    from careagents.accounts import AccountService
+    from careagents.config import Config
+    from careagents.models import SendblueMessage
+    from tests import test_careagents_sendblue as sb
+
+    sb_cfg = Config(env=sb._env(cfg))
+    sb_svc = AccountService(sb_cfg)
+    try:
+        app, c, fake, fake_hc, agent_id = sb._app(
+            sb_cfg, sb_svc, monkeypatch, reply="Your A1c is in range.")
+        assert sb._pair(c, agent_id).status_code == 200
+        assert sb._hook(c, "how is my a1c?", handle="m-2").status_code == 200
+        assert fake.typing == [sb.PHONE]         # queued while fresh
+        fake.sent.clear()
+        sb._run(app)
+        _age(sb_svc, verified_days=61, handle=sb.PHONE)
+        sb._deliverer(app, fake).once()
+        assert fake.sent == []
+        with sb_svc.session() as s:
+            assert [m.outcome for m in s.query(SendblueMessage)
+                    .filter(SendblueMessage.run_id.isnot(None))] == [
+                        "withheld"]
+    finally:
+        sb_svc.engine.dispose()
+
+
 # --- the migration -----------------------------------------------------------------
 
 def test_boot_adds_the_columns_and_backfills_verified(tmp_path):
     """A database from before #871: no verified_at / last_inbound_at /
     reverify_notified_at. The next boot adds them, and each active iMessage
-    row gets verified_at = bound_at, or now when bound_at is empty.
+    row gets verified_at = bound_at (or now when bound_at is empty) and
+    last_inbound_at = now, so silence counts from the deploy rather than
+    gating and emailing every existing tester that day.
 
     Postgres: the same path runs there. `_add_column` gives each ALTER its
     own transaction and tolerates a peer process adding it first, and the
@@ -479,8 +542,9 @@ def test_boot_adds_the_columns_and_backfills_verified(tmp_path):
         rows = {r[0]: r[1:] for r in conn.execute(text(
             "SELECT id, verified_at, last_inbound_at, reverify_notified_at "
             "FROM ca_surfaces")).all()}
-    assert rows["s1"] == (1000.0, None, None)
-    assert rows["s2"][0] >= before and rows["s2"][1:] == (None, None)
+    assert rows["s1"][0] == 1000.0 and rows["s1"][1] >= before
+    assert rows["s2"][0] >= before and rows["s2"][1] >= before
+    assert rows["s1"][2] is None and rows["s2"][2] is None
     assert rows["s3"] == (None, None, None)      # pending: nothing to verify
     assert rows["s4"] == (None, None, None)      # not iMessage
     engine.dispose()
