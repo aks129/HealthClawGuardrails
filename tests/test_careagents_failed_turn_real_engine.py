@@ -196,3 +196,30 @@ def test_a_run_swept_without_a_worker_is_answered_once(
     rows = _rows(chain)
     assert [r[0] for r in rows] == ["user", "assistant"], rows
     assert rows[-1][1] == GENERIC_FAILURE_TEXT
+
+
+def test_a_run_cancelled_at_its_deadline_gets_no_failure_answer(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """QA round 2: the answer belongs to a run the engine FAILS. A run the
+    person cancelled ends `cancelled` at the deadline, and "something went
+    wrong" there would be untrue."""
+    from careagents.worker import RunWorker
+    from models import db
+    from r6.agent_runs.models import AgentRun
+    from r6.agent_runs.service import expire_overdue_runs
+    chain = Chain(cfg, svc, monkeypatch)
+    c = chain.app.test_client()
+    _login(c, svc, monkeypatch, email="acceptance@example.com")
+    RunWorker(cfg, chain.hc, svc, "qa-worker").run_once()
+    r = c.post("/api/chat", json={"agent_id": chain.agent, "message": "hi",
+                                  "request_id": "qa-cancel"}, buffered=False)
+    r.close()
+    _set_deadline(chain, -1)
+    with chain.engine_app.app_context():
+        [run] = AgentRun.query.filter_by(tenant_id=TENANT).all()
+        run.cancel_requested = True
+        db.session.commit()
+    with chain.engine_app.test_request_context():
+        assert expire_overdue_runs() == 1
+    assert _run(chain)["status"] == "cancelled"
+    assert [r[0] for r in _rows(chain)] == ["user"]
