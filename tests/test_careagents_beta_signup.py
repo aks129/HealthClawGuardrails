@@ -37,7 +37,9 @@ def _cfg(**extra) -> Config:
         engine.dispose()
     env = {"CARE_DATABASE_URL": url, "CARE_RP_ID": "localhost",
            "CARE_ORIGIN": "http://localhost", "OPENAI_API_KEY": "k",
-           "HEALTHCLAW_MINT_SECRET": "mint-secret"}
+           "HEALTHCLAW_MINT_SECRET": "mint-secret",
+           # Every test that sets a provider key fakes the provider (`sent`).
+           "CARE_ALLOW_REAL_MAIL": "1"}
     env.update(extra)
     return Config(env=env)
 
@@ -87,7 +89,7 @@ def _form(**over):
 
 def _post(client, ip="203.0.113.7", **over):
     return client.post("/beta", json=_form(**over),
-                       headers={"X-Forwarded-For": ip})
+                       headers={"X-Real-IP": ip})
 
 
 def _rows(svc):
@@ -582,16 +584,25 @@ def test_submits_are_limited_per_ip(made):
     assert _post(c, email="late@example.com").status_code == 429
     assert _post(c, ip="198.51.100.4",
                  email="other@example.com").status_code == 200
-    # Only the right-hand entry, the one the edge wrote, is a bucket.
-    r = _post(c, ip="192.0.2.1, 203.0.113.7", email="forged@example.com")
-    assert r.status_code == 429
 
 
-def test_an_internal_forwarded_address_is_not_its_own_bucket(made):
+def test_x_forwarded_for_is_never_read(made):
+    """The key is X-Real-IP, which Railway's edge sets, or the peer.
+    X-Forwarded-For, private or public, opens no bucket of its own."""
     app, _ = made()
     c = app.test_client()
-    codes = [_post(c, ip=f"10.0.0.{i}", email=f"t{i}@example.com"
-                   ).status_code for i in range(10)]
+    codes = [c.post("/beta", json=_form(email=f"t{i}@example.com"),
+                    headers={"X-Forwarded-For": f"203.0.113.{i}"}
+                    ).status_code for i in range(10)]
+    assert codes.count(429) == 10 - beta_signup.SUBMITS_PER_WINDOW
+
+
+def test_a_garbled_x_real_ip_falls_back_to_the_peer(made):
+    app, _ = made()
+    c = app.test_client()
+    codes = [c.post("/beta", json=_form(email=f"t{i}@example.com"),
+                    headers={"X-Real-IP": f"not-an-ip-{i}"}).status_code
+             for i in range(10)]
     assert codes.count(429) == 10 - beta_signup.SUBMITS_PER_WINDOW
 
 
@@ -801,10 +812,11 @@ def test_mark_added_deletes_the_mobile_and_sends_the_text_hi_email(
     assert row["status"] == "added" and row["mobile"] is None
     (to, _, html, text), = sent
     assert to == "avery@example.com"
-    assert ("Text hi to +15550109000. You'll get a link back to sign in, "
+    assert ("Text hi to +1 555-010-9000. You'll get a link back to sign in, "
             "then your assistant answers there.") in text
     assert ("Your texts pass through a texting company we use, so only use "
             "the made-up records here.") in text
+    assert "<a href='sms:+15550109000'>+1 555-010-9000</a>" in html
     assert "mailto:contactus@healthclaw.io?subject=tester" in html
     assert row["removal_hash"] == beta_signup.hash_token(_token(html))
 
@@ -878,7 +890,7 @@ def test_purge_keeps_what_the_page_promises(made, sent, monkeypatch):
 
 # --- hub ----------------------------------------------------------------------
 
-def _hub(app, svc, monkeypatch, kinds):
+def _hub(app, svc, monkeypatch, kinds, request_status="added"):
     c = app.test_client()
     _login(c, svc, monkeypatch, email="gene@example.com")
     with c.session_transaction() as s:
@@ -886,21 +898,39 @@ def _hub(app, svc, monkeypatch, kinds):
     for kind in kinds:
         svc.add_connection(aid, kind, f"t-{kind}", kind.title(),
                            consent_version="2026-08-01")
+    if request_status:
+        with svc.session() as s:
+            s.add(beta_signup.BetaRequest(
+                email="gene@example.com", first_name="Gene",
+                status=request_status, created_at=time.time(),
+                updated_at=time.time(), confirmed_at=time.time()))
     return c.get("/home").get_data(as_text=True)
 
 
-def test_the_text_tile_shows_for_a_sample_account_while_sendblue_is_on(
-        made, monkeypatch):
+@pytest.mark.parametrize("status", ["added", "active"])
+def test_the_text_tile_shows_for_an_added_tester_on_sample_records(
+        made, monkeypatch, status):
     app, svc = made(**SENDBLUE)
-    body = _hub(app, svc, monkeypatch, ["sample"])
+    body = _hub(app, svc, monkeypatch, ["sample"], request_status=status)
     tile = body[body.index('id="text-tile"'):]
     tile = tile[:tile.index("</section>")]
     assert "Text your assistant" in tile
-    assert ("Text hi to +15550109000. You'll get a link back to sign in, "
-            "then your assistant answers there.") in tile
+    assert ('Text hi to <a href="sms:+15550109000">+1 555-010-9000</a>. '
+            "You'll get a link back to sign in, then your assistant answers "
+            "there.") in " ".join(tile.split())
     assert ("Your texts pass through a texting company we use, so only use "
             "the made-up records here.") in tile
     assert "code" not in tile.lower()
+
+
+@pytest.mark.parametrize("status", [None, "pending", "new", "waitlist",
+                                    "removed"])
+def test_the_text_tile_is_hidden_from_anyone_not_added(made, monkeypatch,
+                                                       status):
+    """Only the Sendblue sandbox's contacts can reach the line."""
+    app, svc = made(**SENDBLUE)
+    body = _hub(app, svc, monkeypatch, ["sample"], request_status=status)
+    assert 'id="text-tile"' not in body
 
 
 def test_the_text_tile_is_hidden_with_a_real_connection(made, monkeypatch):
@@ -919,3 +949,219 @@ def test_the_hub_links_testers_to_feedback(made, monkeypatch):
     app, svc = made()
     body = _hub(app, svc, monkeypatch, [])
     assert "mailto:contactus@healthclaw.io?subject=tester" in body
+
+
+def test_the_hub_banner_says_made_up_records(made, monkeypatch):
+    app, svc = made()
+    body = _hub(app, svc, monkeypatch, ["sample"])
+    banner = re.search(r'class="beta-banner"[^>]*>(.*?)</p>', body,
+                       re.S).group(1)
+    assert "made-up records" in banner
+
+
+# --- round 3: mailboxes, spots, lapsed changes, promotions -------------------
+
+@pytest.mark.parametrize("typed,box", [
+    ("Victim@Example.net", "victim@example.net"),
+    ("victim+beta@example.net", "victim@example.net"),
+    ("victim+a+b@example.net", "victim@example.net"),
+    ("v.i.c.t.i.m@example.net", "v.i.c.t.i.m@example.net"),
+    ("V.ictim+x@gmail.com", "victim@gmail.com"),
+    ("victim@googlemail.com", "victim@gmail.com"),
+    ("vic.tim+1@GoogleMail.com", "victim@gmail.com"),
+])
+def test_mailbox_folds_aliases_of_one_inbox(typed, box):
+    assert beta_signup.mailbox(typed) == box
+
+
+def test_the_cap_is_keyed_on_the_mailbox_hash(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    _post(c, ip="198.51.100.1", email="v.ictim+1@gmail.com")
+    _post(c, ip="198.51.100.2", email="victim@googlemail.com")
+    assert len(sent) == 1
+    with svc.session() as s:
+        keys = [k for (k,) in s.query(beta_signup.BetaMailCap.email_hash)]
+    assert keys == [beta_signup.hash_token("victim@gmail.com")]
+
+
+def test_one_spot_per_mailbox_with_a_note(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, ip="198.51.100.1", email="pat@example.com",
+          mobile="+15550100101")
+    _age_caps(svc)
+    _join(app, sent, ip="198.51.100.2", email="pat+2@example.com",
+          mobile="+15550100102")
+    assert _row(svc, "pat+2@example.com")["status"] == "waitlist"
+    out = app.test_cli_runner().invoke(args=["beta-requests", "list"]).output
+    line = next(x for x in out.splitlines() if "pat+2@example.com" in x)
+    assert "same mailbox" in line
+
+
+def test_one_spot_per_mobile_with_a_note(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, ip="198.51.100.1", email="a@example.com",
+          mobile="+15550100101")
+    _join(app, sent, ip="198.51.100.2", email="b@example.com",
+          mobile="(555) 010-0101")
+    assert _row(svc, "b@example.com")["status"] == "waitlist"
+    out = app.test_cli_runner().invoke(args=["beta-requests", "list"]).output
+    line = next(x for x in out.splitlines() if "b@example.com" in x)
+    assert "same mobile" in line
+
+
+def test_a_duplicate_is_not_promoted_while_its_twin_holds_a_spot(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, ip="198.51.100.1", email="a@example.com",
+          mobile="+15550100101")
+    _join(app, sent, ip="198.51.100.2", email="b@example.com",
+          mobile="+15550100101")
+    with svc.session() as s:
+        assert beta_signup.promote(s) == []
+    assert _row(svc, "b@example.com")["status"] == "waitlist"
+
+
+def test_the_confirm_page_shows_what_is_confirmed(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    _post(c, first_name="Vic", mobile="+15550100123")
+    page = _visible(c.get(
+        f"/beta/confirm?t={_confirm_token(sent[0][3])}").get_data(
+            as_text=True))
+    assert "A new request" in page
+    assert "Vic" in page and "a mobile ending in 0123" in page
+    assert "+15550100123" not in page
+    assert "Not right? Ignore this email and nothing changes." in page
+
+
+def test_the_confirm_page_shows_a_change_and_no_mobile(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, mobile="+15550100123")
+    _age_caps(svc)
+    sent.clear()
+    c = app.test_client()
+    _post(c, ip="198.51.100.5", first_name="Ava")
+    page = _visible(c.get(
+        f"/beta/confirm?t={_confirm_token(sent[0][3])}").get_data(
+            as_text=True))
+    assert "A change to your request" in page and "Ava" in page
+    # The number on file stays; the change carries none.
+    assert "no new mobile" in page
+
+
+def test_confirmed_says_what_to_do_next(made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    r = _join(app, sent)
+    assert ("Next: open careagents.cloud and sign up with this email."
+            in _visible(r.get_data(as_text=True)))
+
+
+def test_keep_my_request_lands_on_a_plain_page(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _post(app.test_client())
+    c = app.test_client()
+    ask = c.get(f"/beta/remove?t={_token(sent[0][2])}").get_data(as_text=True)
+    href = re.search(r'href="([^"]+)"[^>]*>Keep my request', ask).group(1)
+    assert href == "/beta/kept"
+    page = c.get(href)
+    assert page.status_code == 200
+    text = _visible(page.get_data(as_text=True))
+    assert "Your request is kept. Nothing changed." in text
+    assert 'href="/auth"' in page.get_data(as_text=True)
+    assert len(_rows(svc)) == 1
+
+
+def _lapse(svc, email="avery@example.com"):
+    with svc.session() as s:
+        s.get(beta_signup.BetaRequest, email).confirm_expires_at = (
+            time.time() - 1)
+
+
+def test_a_lapsed_change_is_cleared_on_the_next_read(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, mobile="+15550100101")
+    _age_caps(svc)
+    _post(app.test_client(), ip="198.51.100.5", first_name="Mal",
+          mobile="+15550100666")
+    assert _row(svc)["pending_mobile"] == "+15550100666"
+    _lapse(svc)
+    app.test_cli_runner().invoke(args=["beta-requests", "list"])
+    row = _row(svc)
+    assert row["pending_mobile"] is None and row["pending_first_name"] is None
+    assert row["confirm_hash"] is None
+    assert row["mobile"] == "+15550100101"
+
+
+def test_a_lapsed_unconfirmed_mobile_is_cleared_by_purge(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _post(app.test_client(), mobile="+15550100666")
+    _lapse(svc)
+    beta_signup.purge(svc.session)
+    row = _row(svc)
+    assert row["mobile"] is None and row["status"] == "pending"
+
+
+def test_a_live_change_is_kept(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, mobile="+15550100101")
+    _age_caps(svc)
+    _post(app.test_client(), ip="198.51.100.5", mobile="+15550100666")
+    beta_signup.purge(svc.session)
+    assert _row(svc)["pending_mobile"] == "+15550100666"
+
+
+def test_a_promoted_tester_is_emailed_and_logged_masked(made, sent, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="careagents.beta_signup")
+    app, svc = made(RESEND_API_KEY="re_test", **SENDBLUE)
+    _queue(app, sent, svc)
+    t0 = [m for m in sent if m[0] == "t0@example.com"][-1]
+    sent.clear()
+    app.test_client().post("/beta/remove", data={"t": _token(t0[2])})
+    (to, subject, html, text), = sent
+    assert to == "w1@example.com"
+    flat = " ".join(text.split())
+    assert "Hi Avery, thanks for helping test CareAgents." in flat
+    assert ("Text hi to +1 555-010-9000. You'll get a link back to sign in, "
+            "then your assistant answers there.") in flat
+    assert "w1@example.com" not in caplog.text
+    assert "promoted" in caplog.text and "e***.com" in caplog.text
+    assert _row(svc, "w1@example.com")["promoted_at"] is None   # sent
+
+
+def test_purge_and_delete_account_email_the_promoted(made, sent,
+                                                     monkeypatch):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _queue(app, sent, svc)
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="t0@example.com")
+    sent.clear()
+    assert c.post("/api/account/delete",
+                  json={"confirm": "DELETE"}).status_code == 200
+    assert [m[0] for m in sent] == ["w1@example.com"]
+    sent.clear()
+    with svc.session() as s:
+        s.get(beta_signup.BetaRequest, "t1@example.com").created_at = 1.0
+    app.test_cli_runner().invoke(args=["beta-requests", "purge"])
+    assert [m[0] for m in sent] == ["w2@example.com"]
+
+
+def test_mark_new_respects_the_cap_unless_forced(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _queue(app, sent, svc)
+    run = app.test_cli_runner()
+    r = run.invoke(args=["beta-requests", "mark", "w2@example.com", "new"])
+    assert r.exit_code != 0 and "--force" in r.output
+    assert _row(svc, "w2@example.com")["status"] == "waitlist"
+    r = run.invoke(args=["beta-requests", "mark", "w2@example.com", "new",
+                         "--force"])
+    assert r.exit_code == 0, r.output
+    assert _row(svc, "w2@example.com")["status"] == "new"
+
+
+@pytest.mark.parametrize("raw,shown", [
+    ("+15550109999", "+1 555-010-9999"),
+    ("+447700900123", "+447700900123"),
+])
+def test_numbers_are_shown_the_way_people_write_them(raw, shown):
+    assert beta_signup.show_number(raw) == shown
