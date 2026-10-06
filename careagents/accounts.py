@@ -916,7 +916,7 @@ class AccountService:
                          Surface.status == "active")
                  .order_by(Surface.bound_at.desc())
                  .first())
-            return _surf_dict(x) | {"account_id": x.account_id} if x else None
+            return _surf_dict(x) | _reverify_fields(x) if x else None
 
     def bind_surface(self, surface_id: str, handle: str) -> None:
         with self.session() as s:
@@ -933,7 +933,9 @@ class AccountService:
                              pending_surface_id: str | None = None,
                              welcome: bool = False,
                              also: str | None = None) -> str:
-        """Bind a handle to an account: "connected" or "taken".
+        """Bind a handle to an account: "connected", "confirmed" or
+        "taken". "confirmed" is the sign-in link re-confirming a handle
+        already bound here (#871): nothing new was connected.
 
         A handle is bound to at most one account. Bound elsewhere, nothing
         changes until that binding is undone (STOP, or disconnect on the
@@ -961,6 +963,13 @@ class AccountService:
                              Surface.status == "active").all())
             if any(x.account_id != account_id for x in bound):
                 return "taken"
+            if bound and not pending_surface_id:
+                # Bound here already: the sign-in link re-confirms (#871).
+                # Refreshed in place, so the handle keeps its assistant.
+                for x in bound:
+                    x.verified_at = x.last_inbound_at = now()
+                    x.reverify_notified_at = None
+                return "confirmed"
             if pending_surface_id:
                 x = s.get(Surface, pending_surface_id)
                 if x is None or x.account_id != account_id:
@@ -981,6 +990,8 @@ class AccountService:
             x.bound_at = now()
             x.code_exp = None
             x.welcome_due = 1 if welcome else 0
+            x.verified_at = x.last_inbound_at = now()
+            x.reverify_notified_at = None
             st = self._handle_state(s, handle)
             st.opted_out_at = None
             return "connected"
@@ -1012,6 +1023,27 @@ class AccountService:
                             .where(Surface.id == surface_id,
                                    Surface.welcome_due == 1)
                             .values(welcome_due=0))
+            return res.rowcount == 1
+
+    def imessage_note_inbound(self, surface_id: str) -> None:
+        """A bound handle's text was let through: it is not silent."""
+        with self.session() as s:
+            s.execute(update(Surface).where(Surface.id == surface_id)
+                      .values(last_inbound_at=now()))
+
+    def imessage_mark_reverify(self, surface_id: str,
+                               verified_at: float | None) -> bool:
+        """True once per re-verification: the first time it is required.
+        A conditional update, so two racing texts email the owner once.
+        `verified_at` is the value read with the surface: if a confirm has
+        changed it since, nothing is set (compare-and-set)."""
+        same = (Surface.verified_at.is_(None) if verified_at is None
+                else Surface.verified_at == verified_at)
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id, same,
+                                   Surface.reverify_notified_at.is_(None))
+                            .values(reverify_notified_at=now()))
             return res.rowcount == 1
 
     def disconnect_imessage(self, account_id: str,
@@ -1136,7 +1168,8 @@ class AccountService:
 
     def claim_imessage_link(self, link_id: str, account_id: str) -> str:
         """Spend a link for a signed-in account and bind its handle:
-        "connected", "taken" or "expired". Spent exactly once."""
+        "connected", "confirmed", "taken" or "expired". Spent exactly
+        once."""
         with self.session() as s:
             res = s.execute(update(ImessageLink)
                             .where(ImessageLink.id == link_id,
@@ -1154,7 +1187,7 @@ class AccountService:
             x = s.get(Surface, surface_id)
             if x is None or x.status != "active":
                 return None
-            return _surf_dict(x) | {"account_id": x.account_id}
+            return _surf_dict(x) | _reverify_fields(x)
 
     # --- Sendblue: seen-once inbound texts and owed answers ------------------
     # Pointers only (models.SendblueMessage). `key` is a hash of Sendblue's
@@ -1249,6 +1282,15 @@ def _agent_dict(a: Agent) -> dict:
 def _surf_dict(x: Surface) -> dict:
     return {"id": x.id, "kind": x.kind, "handle": x.handle,
             "status": x.status, "agent_id": x.agent_id}
+
+
+def _reverify_fields(x: Surface) -> dict:
+    """An active iMessage surface's account and re-verification clocks
+    (#871), for careagents.imessage.reverify_due."""
+    return {"account_id": x.account_id, "bound_at": x.bound_at,
+            "verified_at": x.verified_at,
+            "last_inbound_at": x.last_inbound_at,
+            "reverify_notified_at": x.reverify_notified_at}
 
 
 def _opts_to_dict(options_json: str) -> dict:
