@@ -21,7 +21,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from careagents.agent import GENERIC_FAILURE_TEXT
 
@@ -288,13 +288,21 @@ _MD_EMPHASIS = re.compile(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])")
 # A URL to an engine document, or any URL carrying a signature: a bearer
 # link. The tool never hands one to the model on a text surface; this
 # catches one the model still writes (#875 QA).
-_SIGNED_URL = re.compile(
-    r"(?:https?://|www\.)?[^\s<>\"']*(?:/r6/sdc/documents/|[?&]sig=)"
-    r"[^\s<>\"']*", re.IGNORECASE)
+#
+# Each run of non-space characters is tested on its percent-decoded form
+# (twice, for a double encoding), because the server decodes `%73ig=` and
+# `%64ocuments` and the link still works (R875-2).
+_TOKEN = re.compile(r"[^\s<>\"']+")
+_SIGNED_MARKER = re.compile(r"/r6/sdc/documents/|[?&]sig=", re.IGNORECASE)
+
+
+def _is_signed_url(token: str) -> bool:
+    return bool(_SIGNED_MARKER.search(unquote(unquote(token))))
 
 
 def strip_signed_urls(text: str) -> str:
-    stripped = _SIGNED_URL.sub("", text)
+    stripped = _TOKEN.sub(
+        lambda m: "" if _is_signed_url(m.group(0)) else m.group(0), text)
     if stripped == text:
         return text
     # Tidy the gap the URL left; text without one is left exactly as is.

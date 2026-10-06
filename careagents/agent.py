@@ -17,7 +17,6 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
-import re
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
@@ -346,18 +345,46 @@ MAX_BRIEF_FIELDS = 6
 _UCUM_SYSTEM = "http://unitsofmeasure.org"
 # A UCUM code's shape: no spaces, so no words. Free text that claims the
 # UCUM system still has to look like a unit.
-_UCUM_CODE = re.compile(r"^[A-Za-z0-9%/.*^\[\]{}'\-]{1,16}$")
+#: UCUM codes a lab reading may carry to the model. A closed list: any
+#: other string, however unit-shaped, could be a word (R875-3).
+_UCUM_ALLOWED = frozenset({
+    "mg/dL", "mmol/L", "umol/L", "%", "g/dL", "g/L", "mg/L", "ng/mL",
+    "pg/mL", "U/L", "[IU]/L", "mm[Hg]", "mL/min/{1.73_m2}", "10*3/uL",
+    "10*6/uL", "fL", "pg", "mEq/L", "mg/mmol", "mg/g", "[pH]",
+})
 
 
 def _coded_unit(reading: dict, series: dict) -> str:
-    """The reading's UCUM code, else the analyte's known unit, else "".
-    Never `valueQuantity.unit`: that is free text, and real feeds put
-    anything there."""
+    """The reading's UCUM code when it is on the allowlist, else the
+    analyte's known unit, else "". Never `valueQuantity.unit`: that is free
+    text, and real feeds put anything there."""
     code = reading.get("code")
-    if (reading.get("system") == _UCUM_SYSTEM and isinstance(code, str)
-            and _UCUM_CODE.match(code)):
+    if reading.get("system") == _UCUM_SYSTEM and code in _UCUM_ALLOWED:
         return code
     return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
+
+
+#: The engine's analyte name per LOINC code, mirrored from
+#: r6.labs.interpret.LOINC_RANGES (CareAgents imports nothing from the
+#: engine; a test holds the two equal). The labs pairing checks each
+#: consumer line's analyte against it.
+ENGINE_ANALYTE_LABELS = {
+    "2951-2": "Sodium", "2823-3": "Potassium", "2075-0": "Chloride",
+    "2028-9": "Carbon dioxide", "3094-0": "Urea nitrogen (BUN)",
+    "2160-0": "Creatinine", "2345-7": "Glucose", "17861-6": "Calcium",
+    "33914-3": "eGFR", "718-7": "Hemoglobin",
+    "6690-2": "White blood cell count", "777-3": "Platelets",
+    "2093-3": "Total cholesterol", "13457-7": "LDL cholesterol",
+    "2085-9": "HDL cholesterol", "2571-8": "Triglycerides",
+    "4548-4": "Hemoglobin A1c",
+}
+
+
+def _obs_date(resource: dict) -> str | None:
+    """The reading's calendar date, if it starts with a real YYYY-MM-DD;
+    else None. Never a cut string: anything can sit in the field (R875-4)."""
+    return labs_timeline.parse_date(
+        resource.get("effectiveDateTime") or resource.get("issued")) or None
 
 
 _LOINC_SYSTEM = "http://loinc.org"
@@ -402,26 +429,33 @@ def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
               for e in (bundle.get("entry") or [])]
     scored = [r for r in scored if r.get("resourceType") == "Observation"
               and _obs_flag(r)]
+    # Flag AND analyte, the analyte against the engine's own name for the
+    # Observation's LOINC code: a line paired with the wrong reading would
+    # put one test's message beside another's value and date.
     if len(scored) != len(lines) or any(
             not isinstance(line, dict) or line.get("flag") != _obs_flag(r)
+            or line.get("analyte") != ENGINE_ANALYTE_LABELS.get(
+                _obs_loinc(r) or "")
             for line, r in zip(lines, scored)):
         return None
-    groups: dict[str, list[tuple[str, dict, dict]]] = {}
+    groups: dict[str, list[tuple[tuple, dict, dict]]] = {}
     for line, r in zip(lines, scored):
-        key = _obs_loinc(r) or str(line.get("analyte"))
-        when = str(r.get("effectiveDateTime") or r.get("issued") or "")
-        groups.setdefault(key, []).append((when, line, r))
+        date = _obs_date(r)
+        # A parsed date orders the readings, its full timestamp breaks a
+        # same-day tie; a reading with no valid date sorts first and keeps
+        # the Observations' order.
+        raw = str(r.get("effectiveDateTime") or r.get("issued") or "")
+        order = (date is not None, date or "", raw if date else "")
+        groups.setdefault(_obs_loinc(r), []).append((order, line, r))
     out = []
     for key, readings in groups.items():
-        # Dated readings in date order; undated ones keep the
-        # Observations' order and sort before any dated one.
-        readings = sorted(readings, key=lambda x: (bool(x[0]), x[0]))
-        when, line, r = readings[-1]
+        readings = sorted(readings, key=lambda x: x[0])
+        (_, date, _), line, r = readings[-1]
         vq = r.get("valueQuantity") or {}
         value = vq.get("value")
         out.append({
             "analyte": line.get("analyte"),
-            "date": when[:10] or None,
+            "date": date or None,
             "value": (value if isinstance(value, (int, float))
                       and not isinstance(value, bool) else None),
             "unit": _coded_unit(vq, {"key": _ANALYTE_KEY.get(key)}),
@@ -499,7 +533,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 f"{consumer.get('unevaluated_count')} result(s) were not "
                 "evaluated. Zero flagged results here means nothing was "
                 "SCORED as abnormal, not that nothing is abnormal. Report the "
-                "lines you were given AND say, using unevaluated_note, which "
+                + ("latest readings" if latest is not None else "lines")
+                + " you were given AND say, using unevaluated_note, which "
                 "results were not evaluated and why. Do not describe an "
                 "unevaluated result as normal, fine, or within range.")
         return json.dumps(out)

@@ -22,6 +22,9 @@ least a shared constant we refuse to let diverge.
 
 from __future__ import annotations
 
+import datetime as _dt
+import re
+
 LOINC = "http://loinc.org"
 
 # An analyte is a SET of codes. The same test arrives under different LOINCs
@@ -103,9 +106,25 @@ def _flag_of(resource: dict) -> str:
     return "IND"
 
 
+_DATE_PREFIX = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def parse_date(raw: object) -> str:
+    """The YYYY-MM-DD a FHIR date or dateTime starts with, checked as a real
+    calendar date, or "". Never a cut string: upstream can put anything in
+    the field, and a cut string would pass it on as a date (R875-4)."""
+    m = _DATE_PREFIX.match(raw) if isinstance(raw, str) else None
+    if not m:
+        return ""
+    try:
+        return _dt.date(*(int(g) for g in m.groups())).isoformat()
+    except ValueError:
+        return ""
+
+
 def _date_of(resource: dict) -> str:
-    raw = resource.get("effectiveDateTime") or resource.get("issued") or ""
-    return str(raw)[:10]
+    return parse_date(resource.get("effectiveDateTime")
+                      or resource.get("issued"))
 
 
 def build_series(interpret_bundle: dict,
