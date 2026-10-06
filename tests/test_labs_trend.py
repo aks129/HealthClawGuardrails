@@ -443,11 +443,29 @@ def test_ratio_just_under_one_and_a_half_does_not_round_up():
     assert r["criteria"]["B"]["ratio"] < 1.5
 
 
-def test_umol_rise_just_under_0_3_mg_dl_does_not_fire_a():
-    # 26.5 umol/L = 0.2998 mg/dL; rounding each value first made it 0.300.
+def test_umol_pair_compares_against_26_5_umol_per_litre():
+    # KDIGO 2012 (Recommendation 2.1.1, Table 2) writes criterion A as
+    # ">=0.3 mg/dL (>=26.5 umol/L)". A pair reported in umol/L is held to
+    # the umol/L figure, so 88 -> 114.5 (exactly 26.5) fires even though it
+    # is 0.2998 mg/dL after conversion.
     r = evaluate_creatinine_aki([_cr(88, T0, unit="umol/L"),
                                  _cr(114.5, T0 + timedelta(hours=24), unit="umol/L")])
+    assert "A" in r["kdigo_criterion"]
+    assert r["criteria"]["A"]["compared_in"] == "umol/L"
+
+
+def test_umol_pair_just_under_26_5_does_not_fire_a():
+    r = evaluate_creatinine_aki([_cr(88, T0, unit="umol/L"),
+                                 _cr(114.4, T0 + timedelta(hours=24), unit="umol/L")])
     assert "A" not in r["kdigo_criterion"]
+
+
+def test_mixed_unit_pair_compares_in_mg_dl():
+    # 0.8 mg/dL -> 97.2 umol/L is 0.2995 mg/dL: under 0.3, so A does not fire.
+    r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                 _cr(97.2, T0 + timedelta(hours=24), unit="umol/L")])
+    assert "A" not in r["kdigo_criterion"]
+    assert r["criteria"]["A"]["compared_in"] == "mg/dL"
 
 
 def test_stage_3_cutoff_uses_a_tolerance():
@@ -465,6 +483,29 @@ def test_zero_negative_and_non_finite_values_are_skipped():
         assert {"id": "bad", "reason": "implausible-value"} in r["skipped"]
         assert r["kdigo_criterion"] == []
         json.dumps(r, allow_nan=False)
+
+
+def test_an_integer_too_large_for_a_float_is_implausible_not_raised():
+    # JSON allows 10**400; float() of it raises OverflowError.
+    r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                 _cr(10**400, T0 + timedelta(days=2), rid="huge")])
+    assert {"id": "huge", "reason": "implausible-value"} in r["skipped"]
+    assert r["status"] == "abstained"
+    assert r["abstained_reason"] == "latest-not-comparable"
+    json.dumps(r, allow_nan=False)
+
+
+def test_creatinine_above_40_mg_dl_is_implausible():
+    for value, unit in ((40.1, "mg/dL"), (3537, "umol/L")):
+        r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                     _cr(value, T0 + timedelta(days=2), rid="hi",
+                                         unit=unit)])
+        assert {"id": "hi", "reason": "implausible-value"} in r["skipped"]
+    # The bound itself is plausible.
+    for value, unit in ((40, "mg/dL"), (3536, "umol/L")):
+        r = evaluate_creatinine_aki([_cr(0.8, T0),
+                                     _cr(value, T0 + timedelta(days=2), unit=unit)])
+        assert r["kdigo_criterion"] == ["A", "B"]
 
 
 # --- #54: triglycerides -------------------------------------------------------
@@ -526,6 +567,18 @@ def test_subject_interpret_survives_a_list_status(
     assert r.status_code == 200
     summary = json.loads(_param(r.get_json(), "summary")["valueString"])
     assert summary["trends"][0]["abstained_reason"] == "latest-not-comparable"
+
+
+def test_subject_interpret_survives_a_huge_integer(
+        app, client, tenant_headers, tenant_id):
+    _store(app, tenant_id, _cr(0.8, T0, rid="cr-h1"))
+    _store(app, tenant_id, _cr(10**400, T0 + timedelta(days=2), rid="cr-h2"))
+    r = client.post("/r6/fhir/Observation/$interpret?subject=Patient/p1",
+                    headers=tenant_headers)
+    assert r.status_code == 200
+    summary = json.loads(_param(r.get_json(), "summary")["valueString"])
+    assert {"id": "cr-h2", "reason": "implausible-value"} in \
+        summary["trends"][0]["skipped"]
 
 
 def test_no_subject_means_no_trend(app, client, tenant_headers, tenant_id):

@@ -63,9 +63,17 @@ _UNITS = {"mg/dL": "mg/dL", "umol/L": "umol/L", "µmol/L": "umol/L",
 
 WINDOW_A = timedelta(hours=48)
 WINDOW_B = timedelta(days=7)
+#: KDIGO 2012 writes criterion A as ">=0.3 mg/dL (>=26.5 umol/L)"
+#: (Recommendation 2.1.1; Table 2). The two are not equal after conversion
+#: (26.5 / 88.4 = 0.2998), so a pair the lab reported in umol/L is held to
+#: the umol/L figure and every other pair to the mg/dL one.
 RISE_A_MG_DL = 0.3
+RISE_A_UMOL_L = 26.5
 RATIO_B = 1.5
 STAGE_3_ABSOLUTE_MG_DL = 4.0
+#: Above this a serum creatinine is a unit or entry error, not a result:
+#: 40 mg/dL = 3536 umol/L, beyond any reported clinical value.
+MAX_PLAUSIBLE_MG_DL = 40.0
 #: Threshold comparisons allow this much binary floating-point error, and no
 #: more: 1.2 / 0.8 is 1.4999999999999998 and must count as 1.5, while
 #: 1.999 / 1.333 is 1.4996 and must not. Rounding to a few places, which
@@ -181,7 +189,8 @@ def _unit(vq):
 
 
 def _gate(obs):
-    """(value in mg/dL, None) for a comparable result, else (None, reason)."""
+    """((mg/dL, value as float, canonical unit), None) for a comparable
+    result, else (None, reason)."""
     if obs.get("dataAbsentReason"):
         return None, DATA_ABSENT
     vq = obs.get("valueQuantity")
@@ -190,6 +199,13 @@ def _gate(obs):
     value = vq.get("value")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, NO_NUMERIC_VALUE
+    # JSON integers are unbounded, and float(10**400) raises OverflowError.
+    # Convert once, here, so nothing after this line does arithmetic on a
+    # value that has not already been made a finite float.
+    try:
+        value = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None, IMPLAUSIBLE
     if not math.isfinite(value) or value <= 0:
         return None, IMPLAUSIBLE
     if vq.get("comparator"):
@@ -201,14 +217,17 @@ def _gate(obs):
         return None, UNIT_NOT_COMPARABLE
     # Not rounded: rounding each value before comparing moved a 0.2998 mg/dL
     # rise onto the 0.3 threshold. Values are rounded only for display.
-    return (value if unit == "mg/dL" else value / UMOL_PER_MG_DL), None
+    mg_dl = value if unit == "mg/dL" else value / UMOL_PER_MG_DL
+    if mg_dl > MAX_PLAUSIBLE_MG_DL + _EPS:
+        return None, IMPLAUSIBLE
+    return (mg_dl, value, unit), None
 
 
-def _point(obs, when, mg_dl):
-    vq = obs.get("valueQuantity")
+def _point(p):
+    when, mg_dl, obs, value, unit = p
     return {"id": _id(obs), "effective": when.isoformat(),
-            "value_mg_dl": round(mg_dl, 3), "value": vq["value"],
-            "original_unit": _UNITS[_unit(vq)]}
+            "value_mg_dl": round(mg_dl, 3), "value": value,
+            "original_unit": unit}
 
 
 def _lowest_prior(points, latest_when, window):
@@ -285,19 +304,21 @@ def evaluate_creatinine_aki(observations):
             skipped.append({"id": _id(obs), "reason": MALFORMED})
             unusable.append(when)
             continue
-        mg_dl, reason = _gate(obs)
+        gated, reason = _gate(obs)
         if reason:
             skipped.append({"id": _id(obs), "reason": reason})
             unusable.append(when)
             continue
-        points.append((when, mg_dl, obs))
+        mg_dl, value, unit = gated
+        points.append((when, mg_dl, obs, value, unit))
     if not seen:
         return None
     if not points:
         return _abstain(INSUFFICIENT, skipped)
 
     points.sort(key=lambda p: p[0])
-    latest_when, latest_val, latest_obs = points[-1]
+    latest = points[-1]
+    latest_when, latest_val = latest[0], latest[1]
     # The most recent result is the one the question is about. If it is
     # censored or otherwise not comparable, an older "latest" would answer a
     # question about the past as if it were the present.
@@ -317,10 +338,16 @@ def evaluate_creatinine_aki(observations):
         criteria["A"] = _not_evaluable(NO_PRIOR_IN_WINDOW)
     else:
         delta = latest_val - prior_a[1]
-        ok = _at_least(delta, RISE_A_MG_DL)
+        if prior_a[4] == latest[4] == "umol/L":
+            compared_in = "umol/L"
+            ok = _at_least(latest[3] - prior_a[3], RISE_A_UMOL_L)
+        else:
+            compared_in = "mg/dL"
+            ok = _at_least(delta, RISE_A_MG_DL)
         criteria["A"] = {"status": "met" if ok else "not-met",
-                         "prior": _point(prior_a[2], prior_a[0], prior_a[1]),
+                         "prior": _point(prior_a),
                          "rise_mg_dl": round(delta, 4),
+                         "compared_in": compared_in,
                          "elapsed_hours": round(
                              (latest_when - prior_a[0]).total_seconds() / 3600, 2)}
         if ok:
@@ -334,7 +361,7 @@ def evaluate_creatinine_aki(observations):
         ratio = latest_val / baseline[1]  # baseline > 0: _gate guarantees it
         ok = _at_least(ratio, RATIO_B)
         criteria["B"] = {"status": "met" if ok else "not-met",
-                         "baseline": _point(baseline[2], baseline[0], baseline[1]),
+                         "baseline": _point(baseline),
                          "ratio": round(ratio, 4),
                          "elapsed_hours": round(
                              (latest_when - baseline[0]).total_seconds() / 3600, 2)}
@@ -349,7 +376,7 @@ def evaluate_creatinine_aki(observations):
             "loinc": CREATININE_LOINC, "source": "kdigo-2012",
             "status": "evaluated", "abstained_reason": None,
             "kdigo_criterion": met, "stage": stage, "criteria": criteria,
-            "latest": _point(latest_obs, latest_when, latest_val),
+            "latest": _point(latest),
             "skipped": skipped, "note": _BASELINE_NOTE}
 
 
