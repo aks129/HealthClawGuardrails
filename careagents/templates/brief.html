@@ -71,6 +71,26 @@
     {% endif %}
   </div>
 
+  {# --- lab trends --- #}
+  {# How a result moved over time (the creatinine check, #867), apart from
+     the single readings above. Shown only when the engine sent a sentence:
+     an empty section would read as "nothing changed", which nobody checked. #}
+  {% set fields = sections.get('lab-trends', []) %}
+  {% if fields %}
+  <div class="hub-section">
+    <div class="section-head"><h2>Lab trends</h2></div>
+    <div class="brief-section">
+      {% for f in fields %}
+      <div class="brief-field">
+        <span class="brief-label">{{ f.label }}</span>
+        <span class="brief-value">{{ f.value }}</span>
+        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   {# --- care gaps --- #}
   <div class="hub-section">
     <div class="section-head"><h2>Preventive care due</h2></div>

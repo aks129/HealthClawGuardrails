@@ -108,7 +108,11 @@ def subject_resources(resource_type, subject, tenant_id):
     out = []
     for row in rows:
         res = row.to_fhir_json()
-        if res.get("subject", {}).get("reference") == subject:
+        # The write API stores what it is given: a `subject` that is a string
+        # or a list is skipped, not read with `.get` (#869). The brief's lab
+        # trend reads through here too (#867).
+        ref = res.get("subject")
+        if isinstance(ref, dict) and ref.get("reference") == subject:
             out.append(res)
     return out
 

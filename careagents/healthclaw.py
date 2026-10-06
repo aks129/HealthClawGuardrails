@@ -9,14 +9,21 @@ browser never sees (the mint secret and tenant-bound step-up tokens).
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
+from urllib.parse import quote
 
 import logging
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+#: A FHIR resource id, as the engine checks it (r6/routes.py
+#: `_FHIR_ID_PATTERN`). A Patient id from an upstream feed is checked against
+#: it before it goes into a query string.
+_FHIR_ID = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 
 
 class HealthClawError(RuntimeError):
@@ -321,9 +328,48 @@ class HealthClawClient:
                 r.status_code)
         return self._json_object(r, f"read {resource_type}")
 
+    def _patient_subject(self, tenant: str) -> str | None:
+        """`Patient/<id>` for the tenant's one Patient, else None.
+
+        CareAgents stores no patient id: a connection holds a tenant and
+        nothing inside it. The id lives in the tenant — `demo-patient-rivera`
+        for the sample records (r6/seed.py), the upstream Patient's own id
+        for Fasten. So the tenant is asked, and only one answer counts.
+
+        Two rows are enough to know the match is not unique, and with no
+        Patient or more than one there is no subject: one person's trend
+        must not be computed over two people's results (#865). The id comes
+        from a feed, so it must have the FHIR id shape before it goes into a
+        query string. The search is redacted and audited like any other read;
+        only the id is kept, and only for this call.
+        """
+        bundle = self.search(tenant, "Patient", {"_count": "2"})
+        entries = bundle.get("entry")
+        if not isinstance(entries, list) or len(entries) != 1:
+            return None
+        res = entries[0].get("resource") if isinstance(entries[0], dict) \
+            else None
+        if not isinstance(res, dict) or res.get("resourceType") != "Patient":
+            return None
+        pid = res.get("id")
+        if not isinstance(pid, str) or not _FHIR_ID.match(pid):
+            return None
+        return f"Patient/{pid}"
+
     def interpret_labs(self, tenant: str) -> dict:
-        """POST $interpret; returns {'summary','consumer','disclaimer'}."""
-        r = self._send("POST", f"{self.fhir}/Observation/$interpret", json={},
+        """POST $interpret; returns {'summary','consumer','disclaimer'}.
+
+        With the tenant's one Patient as `subject` when there is exactly one
+        (`_patient_subject`), which is what lets the engine run its trend
+        checks (#867). Every caller goes through here — the chat's get_labs,
+        the timeline tool and the chart endpoint — so they read the same set
+        of results and cannot disagree about a value.
+        """
+        subject = self._patient_subject(tenant)
+        url = f"{self.fhir}/Observation/$interpret"
+        if subject:
+            url += "?subject=" + quote(subject, safe="/")
+        r = self._send("POST", url, json={},
                        headers=self._headers(tenant), what="$interpret")
         if r.status_code != 200:
             raise HealthClawError(f"$interpret failed ({r.status_code})",

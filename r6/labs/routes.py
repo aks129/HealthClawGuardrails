@@ -33,6 +33,19 @@ _DISCLAIMER = ("Advisory decision support, not a diagnosis. Reference ranges are
                "context. The performing lab's own reference range takes precedence.")
 
 
+def _subject_reference(obs):
+    """`subject.reference` when it is a string, else None.
+
+    The write API stores what it is given, so `subject` can be a string or a
+    list. Read as `obs.get("subject", {}).get("reference")`, one such row
+    raised AttributeError and made the call 500 for every patient in the
+    tenant (#869).
+    """
+    subject = obs.get("subject")
+    ref = subject.get("reference") if isinstance(subject, dict) else None
+    return ref if isinstance(ref, str) else None
+
+
 def register_labs_routes(blueprint, deps):
     authenticate_tenant_read = deps["authenticate_tenant_read"]
 
@@ -100,7 +113,15 @@ def register_labs_routes(blueprint, deps):
                 is_deleted=False).all()
             for row in rows:
                 obs = row.to_fhir_json()
-                if obs.get("subject", {}).get("reference") == subject:
+                if "subject" not in obs:
+                    continue  # no one's result, and not malformed
+                ref = _subject_reference(obs)
+                if ref is None:
+                    # A subject we cannot read cannot be shown to be this
+                    # patient's. Skipped and counted, never a 500 for the
+                    # whole tenant (#869).
+                    ignored += 1
+                elif ref == subject:
                     observations.append(obs)
         elif body.get("resourceType") == "Bundle":
             for e in body.get("entry", []):
@@ -118,7 +139,7 @@ def register_labs_routes(blueprint, deps):
         return observations, ignored, (subject or None)
 
     def _patient_for(obs, tenant_id, cache):
-        ref = obs.get("subject", {}).get("reference")
+        ref = _subject_reference(obs)
         if not ref or not ref.startswith("Patient/"):
             return None
         if ref in cache:

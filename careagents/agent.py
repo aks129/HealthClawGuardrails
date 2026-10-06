@@ -466,6 +466,18 @@ def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
     return out
 
 
+#: For a trend sentence from the engine's KDIGO creatinine check (#867),
+#: wherever the model meets one: get_labs' `trends` and the brief's
+#: lab-trends section. The sentence already says what to do and stops short
+#: of a diagnosis; a paraphrase is where a diagnosis would creep in.
+_TREND_NOTE = (
+    "Each trend line compares the person's own results over time. Report it "
+    "as written, in its own sentence: do not paraphrase it into a diagnosis "
+    "or name a condition it does not name. When it says to contact the "
+    "clinician promptly, tell the person to contact their clinician "
+    "promptly.")
+
+
 def _timeline_in_words(series: dict) -> dict:
     """What a text needs instead of a chart: the first and latest reading
     and the direction, worked out here so the model never computes one.
@@ -507,9 +519,17 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         return json.dumps(parts)
     if name == "get_labs":
         labs = hc.interpret_labs(tenant)
-        out = {"consumer_summary": labs["consumer"],
-               "disclaimer": labs["disclaimer"][:200]}
         consumer = labs["consumer"] if isinstance(labs["consumer"], dict) else {}
+        # Trend sentences (the KDIGO creatinine check, #867) are about how a
+        # result moved, not where one reading sits against a range, so they
+        # travel in their own key and never among the range lines. The
+        # engine's consumer sentence only: the raw check in `summary` carries
+        # ids, ratios and baselines the model has no use for.
+        trends = [t["message"] for t in consumer.get("trends") or ()
+                  if isinstance(t, dict) and isinstance(t.get("message"), str)]
+        consumer = {k: v for k, v in consumer.items() if k != "trends"}
+        out = {"consumer_summary": consumer,
+               "disclaimer": labs["disclaimer"][:200]}
         latest = _latest_per_analyte(consumer, labs.get("bundle") or {})
         if latest is not None:
             # One undated line per reading read an old high as current and
@@ -537,6 +557,12 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 + " you were given AND say, using unevaluated_note, which "
                 "results were not evaluated and why. Do not describe an "
                 "unevaluated result as normal, fine, or within range.")
+        if trends:
+            out["trends"] = trends
+            out["note"] = ((out["note"] + " ") if out.get("note") else "") + (
+                _TREND_NOTE + (
+                    " In a text, keep the trend sentence whole even when you "
+                    "shorten everything else." if on_text else ""))
         return json.dumps(out)
     if name == "show_lab_timeline":
         topic = str(args.get("topic") or "")
@@ -660,6 +686,8 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
             notes.append("The screening review did not complete. Do not say "
                          "no screenings are due.")
+        if sections.get("lab-trends"):
+            notes.append(_TREND_NOTE)
         events.append({"type": "card", "kind": "brief"})
         notes.append("Summarize in a few short lines; a link to the full "
                      "brief is included below your answer."
