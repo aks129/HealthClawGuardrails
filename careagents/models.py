@@ -181,9 +181,6 @@ class ImessageHandleState(Base):
     fail_window_start = Column(Float, nullable=True)
     link_count = Column(Integer, default=0)
     link_window_start = Column(Float, nullable=True)
-    #: When this handle was first bound to an account, so START can say
-    #: "reconnect" to a returning texter and "sign in" to anyone else.
-    ever_bound_at = Column(Float, nullable=True)
 
 
 class Grant(Base):

@@ -266,9 +266,9 @@ def test_stop_unbinds_and_then_only_start_gets_an_answer(
     assert _inbound(c, PHONE, "hello?").get_json() == {}
     assert _inbound(c, PHONE, "STOP").get_json() == {}   # said once
     assert _inbound(c, PHONE, "help").get_json() == {
-        "reply": imessage.OPTED_OUT_HELP_TEXT}
+        "reply": imessage.HELP_TEXT}
     start = _inbound(c, PHONE, "start").get_json()
-    assert start["reply"].startswith("Welcome back. Tap this link")
+    assert start["reply"].startswith("Tap this link to sign in to CareAgents")
     assert "/link?t=" in start["reply"]
     # Opted back in: a plain text is answered again.
     assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
@@ -613,15 +613,14 @@ def test_start_is_answered_even_past_the_link_allowance(
         "reply": imessage.START_CAPPED_TEXT}
 
 
-def test_stranger_help_says_how_to_start_and_names_both_brands(
+def test_help_says_how_to_start_and_names_both_brands(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, *_ = _chat_app(cfg, svc, monkeypatch)
     reply = _inbound(c, PHONE, "help").get_json()["reply"]
-    assert reply == imessage.STRANGER_HELP_TEXT
-    assert "sign-in link" in reply
-    for text in (imessage.HELP_TEXT, imessage.STRANGER_HELP_TEXT):
-        assert "CareAgents (by HealthClaw)" in text
-        assert imessage.CONTACT in text
+    assert reply == imessage.HELP_TEXT == (
+        "CareAgents (by HealthClaw) answers questions about your health "
+        "records. Text START or any message for a sign-in link, or STOP to "
+        "stop. Need a person? Write to contactus@healthclaw.io.")
 
 
 def test_the_older_bind_route_refuses_an_untextable_handle(
@@ -761,8 +760,8 @@ def test_a_non_ascii_secret_is_refused_not_a_crash(cfg, svc, monkeypatch):  # no
 def test_start_past_the_allowance_says_wait_not_use_a_voided_link(
         cfg, svc, monkeypatch):  # noqa: F811
     assert imessage.START_CAPPED_TEXT == (
-        "Welcome back. I've sent several links in the last half hour, so "
-        "please wait 30 minutes, then text START again.")
+        "I've sent several links in the last half hour. Please wait 30 "
+        "minutes, then text START again.")
     assert "use the last one" not in imessage.START_CAPPED_TEXT
 
 
@@ -778,29 +777,69 @@ def test_web_disconnect_gives_the_phone_a_fresh_link(cfg, svc, monkeypatch):  # 
     assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
 
 
-def test_help_after_stop_says_how_to_come_back(cfg, svc, monkeypatch):  # noqa: F811
-    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
-    _pair(c, agent_id)
-    _inbound(c, PHONE, "STOP")
-    assert _inbound(c, PHONE, "help").get_json() == {
-        "reply": imessage.OPTED_OUT_HELP_TEXT}
-    assert "text START to come back" in imessage.OPTED_OUT_HELP_TEXT
-    # A handle that never stopped still gets the stranger's HELP.
-    assert _inbound(c, "+15550100555", "help").get_json() == {
-        "reply": imessage.STRANGER_HELP_TEXT}
+def _answers_to_help_and_start(c, handle):
+    return (_inbound(c, handle, "help").get_json()["reply"],
+            re.sub(r"t=[A-Za-z0-9_-]+", "t=X",
+                   _inbound(c, handle, "start").get_json()["reply"]))
 
 
-def test_start_says_reconnect_only_to_a_phone_that_was_connected(
+def test_a_recycled_number_learns_nothing_from_help_or_start(
         cfg, svc, monkeypatch):  # noqa: F811
+    """A number's next holder texts HELP, then START. The words must be the
+    same whether the last holder was connected and stopped, only stopped,
+    or never texted at all."""
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
-    stranger = "+15550100556"
-    _inbound(c, stranger, "STOP")
-    first_time = _inbound(c, stranger, "START").get_json()["reply"]
-    assert "sign in" in first_time and "reconnect" not in first_time
+    was_connected, only_stopped, fresh = (PHONE, "+15550100556",
+                                          "+15550100557")
+    _pair(c, agent_id)
+    _inbound(c, was_connected, "STOP")
+    _inbound(c, only_stopped, "STOP")
+    answers = {_answers_to_help_and_start(c, h)
+               for h in (was_connected, only_stopped, fresh)}
+    assert len(answers) == 1
+    help_text, start = answers.pop()
+    assert help_text == imessage.HELP_TEXT
+    assert start == ("Tap this link to sign in to CareAgents: "
+                     f"{cfg.origin}/link?t=X\n"
+                     "The link works once, for 30 minutes.")
+    for word in ("Welcome back", "reconnect", "stopped", "come back"):
+        assert word not in help_text + start
+
+
+def test_the_capped_start_is_the_same_for_every_number(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
     _inbound(c, PHONE, "STOP")
-    back = _inbound(c, PHONE, "START").get_json()["reply"]
-    assert back.startswith("Welcome back.") and "reconnect" in back
+    other = "+15550100556"
+    for h in (PHONE, other):
+        for _ in range(imessage.LINKS_PER_WINDOW):
+            svc.issue_imessage_link(h)
+    assert {_inbound(c, h, "START").get_json()["reply"]
+            for h in (PHONE, other)} == {imessage.START_CAPPED_TEXT}
+
+
+def test_no_column_remembers_that_a_number_was_ever_connected():
+    from careagents.models import ImessageHandleState
+    assert "ever_bound_at" not in ImessageHandleState.__table__.columns
+
+
+@pytest.mark.parametrize("route", ["/api/surfaces/imessage",
+                                   "/api/surfaces/imessage/disconnect",
+                                   "/api/surfaces/imessage/bind",
+                                   "/api/surfaces/imessage/inbound"])
+@pytest.mark.parametrize("body", [["x"], "text", 7, None])
+def test_imessage_routes_refuse_a_non_object_body(
+        cfg, svc, monkeypatch, route, body):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    r = c.post(route, headers=HDRS, json=body)
+    assert r.status_code == 400 if body is not None else r.status_code < 500
+
+
+def test_each_disconnect_button_names_its_phone(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    page = c.get("/settings").get_data(as_text=True)
+    assert 'aria-label="Disconnect phone ending in 0123"' in page
 
 
 def test_auth_puts_the_link_line_under_the_heading(cfg, svc, monkeypatch):  # noqa: F811

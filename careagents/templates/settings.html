@@ -38,7 +38,8 @@
       <div class="surface on im-connected"><b>iMessage</b>
         <span class="im-state">Connected: {{ phone.label }}</span>
         <button type="button" class="pill im-disconnect"
-                data-surface="{{ phone.id }}">Disconnect</button></div>
+                data-surface="{{ phone.id }}"
+                aria-label="Disconnect {{ phone.label }}">Disconnect</button></div>
       {% endfor %}
       {% elif imessage_handle %}
       <div class="surface" id="im-surface" data-agent="{{ first_agent }}"><b>iMessage</b>

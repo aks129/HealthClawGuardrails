@@ -977,7 +977,6 @@ class AccountService:
             x.welcome_due = 1 if welcome else 0
             st = self._handle_state(s, handle)
             st.opted_out_at = None
-            st.ever_bound_at = st.ever_bound_at or now()
             return "connected"
 
     def imessage_agent_context(self, surface: dict) -> dict | None:
@@ -1028,11 +1027,6 @@ class AccountService:
                         st.link_count, st.link_window_start = 0, None
                 s.delete(x)
             return len(rows)
-
-    def imessage_was_bound(self, handle: str) -> bool:
-        with self.session() as s:
-            st = s.get(ImessageHandleState, _handle_key(handle))
-            return bool(st and st.ever_bound_at)
 
     def _handle_state(self, s, handle: str) -> ImessageHandleState:
         key = _handle_key(handle)

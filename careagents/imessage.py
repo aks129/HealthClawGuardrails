@@ -45,14 +45,14 @@ WELCOME_TEXT = (
 
 # A text that names the help address names both brands, so the address
 # does not read as a stranger's.
-HELP_TEXT = ("CareAgents (by HealthClaw) answers questions about your health "
-             f"records. Text STOP to stop. Need a person? Write to {CONTACT}.")
-
-#: HELP from a handle that is not connected: say how to start.
-STRANGER_HELP_TEXT = (
+#
+# HELP and START read the same for every handle. A phone number is
+# recycled: its new holder must not learn from our words that the last one
+# used CareAgents, connected or stopped.
+HELP_TEXT = (
     "CareAgents (by HealthClaw) answers questions about your health "
-    "records. Text anything else and I'll send you a sign-in link. Text "
-    f"STOP to stop. Need a person? Write to {CONTACT}.")
+    "records. Text START or any message for a sign-in link, or STOP to "
+    f"stop. Need a person? Write to {CONTACT}.")
 
 STOP_TEXT = ("Done. CareAgents won't text you anymore. Text START if you "
              "want to come back.")
@@ -78,15 +78,8 @@ def busy_text(window_seconds: float) -> str:
 UNAVAILABLE_TEXT = ("Sorry, I can't answer right now. Please try again in a "
                     "few minutes.")
 
-START_CAPPED_TEXT = ("Welcome back. I've sent several links in the last "
-                     "half hour, so please wait 30 minutes, then text START "
-                     "again.")
-
-#: HELP from a handle that texted STOP: say how to come back.
-OPTED_OUT_HELP_TEXT = (
-    "CareAgents (by HealthClaw) answers questions about your health "
-    "records. You've stopped texts from this number — text START to come "
-    f"back. Need a person? Write to {CONTACT}.")
+START_CAPPED_TEXT = ("I've sent several links in the last half hour. "
+                     "Please wait 30 minutes, then text START again.")
 
 TOO_LONG_TEXT = "That message is too long. Please send a shorter one."
 
@@ -98,9 +91,10 @@ def link_text(url: str) -> str:
             "STOP to stop.")
 
 
-def welcome_back_text(url: str) -> str:
-    return ("Welcome back. Tap this link to sign in and reconnect this "
-            f"phone: {url}\nThe link works once, for 30 minutes.")
+def start_text(url: str) -> str:
+    """START from a handle that is not connected: the same for everyone."""
+    return (f"Tap this link to sign in to CareAgents: {url}\n"
+            "The link works once, for 30 minutes.")
 
 
 def connected_notice(handle: str) -> str:
@@ -276,11 +270,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
                                          also=raw)
 
     if word == "help":
-        if surface:
-            return {"reply": HELP_TEXT}, 200
-        if svc.imessage_opted_out(handle or raw):
-            return {"reply": OPTED_OUT_HELP_TEXT}, 200
-        return {"reply": STRANGER_HELP_TEXT}, 200
+        return {"reply": HELP_TEXT}, 200
     if word == "stop":
         # Unbind (either spelling of the handle), void its unused links,
         # and remember the choice. Said once: a second STOP from a handle
@@ -297,8 +287,7 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         if not handle:
             # A short code or something we cannot text back: stay silent.
             return {"error": "unbound handle"}, 404
-        returning = svc.imessage_opted_out(handle)
-        if returning:
+        if svc.imessage_opted_out(handle):
             if word != "start":
                 return {}, 200
             svc.imessage_opt_in(handle)
@@ -308,11 +297,8 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
             return ({"reply": START_CAPPED_TEXT} if word == "start"
                     else {}), 200
         url = link_url(deps.origin, token)
-        # "Reconnect" only for a handle that was bound once; a stranger who
-        # texted STOP and then START is still signing in for the first time.
-        if returning and svc.imessage_was_bound(handle):
-            return {"reply": welcome_back_text(url)}, 200
-        return {"reply": link_text(url)}, 200
+        return {"reply": start_text(url) if word == "start"
+                else link_text(url)}, 200
 
     if word == "start":
         return {"reply": START_BOUND_TEXT}, 200

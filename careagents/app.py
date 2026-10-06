@@ -2410,6 +2410,8 @@ def create_app(config: Config | None = None,
     def connect_imessage():
         acct = current_account()
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "body must be a JSON object"}), 400
         agent_id = body.get("agent_id", "")
         if not svc.get_agent_context(acct.id, agent_id):
             return jsonify({"error": "unknown agent"}), 404
@@ -2431,6 +2433,8 @@ def create_app(config: Config | None = None,
         text again later and get a fresh sign-in link."""
         acct = current_account()
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "body must be a JSON object"}), 400
         surface_id = body.get("surface_id")
         if surface_id is not None and not isinstance(surface_id, str):
             return jsonify({"error": "invalid surface_id"}), 400
@@ -2446,6 +2450,8 @@ def create_app(config: Config | None = None,
         if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "body must be a JSON object"}), 400
         code = str(body.get("code") or "").replace("care_", "").replace(
             "care ", "").strip().lower()
         raw = str(body.get("handle") or "").strip()
@@ -2467,6 +2473,8 @@ def create_app(config: Config | None = None,
         if not _relay_secret_ok():
             return jsonify({"error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "body must be a JSON object"}), 400
         request_id = body.get("request_id")
         conversation_id = body.get("conversation_id")
         if request_id is not None and not 1 <= len(str(request_id)) <= 128:
