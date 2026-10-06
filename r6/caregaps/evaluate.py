@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from r6.safe_read import codes
+
 REFERENCES = {
     "uspstf": "U.S. Preventive Services Task Force recommendations (adult, general population).",
     "acip": "CDC/ACIP adult immunization schedule.",
@@ -172,11 +174,10 @@ def _months_between(earlier, later):
 
 
 def _codes_of(resource):
-    out = set()
-    for c in resource.get("code", {}).get("coding", []):
-        if c.get("code"):
-            out.add(c["code"])
-    return out
+    # String codes only. A stored `code` that is a string, a null `coding`, a
+    # null Coding or a list-valued code is a row we cannot read, not a 500
+    # for the whole $care-gaps call (#869).
+    return set(codes(resource.get("code")))
 
 
 def _resource_date(resource):

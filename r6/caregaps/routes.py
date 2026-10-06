@@ -8,7 +8,6 @@ supplied, against the tenant's stored Conditions, Observations, Immunizations,
 and Procedures. The `subjectResolution` parameter reports which of those
 happened, and names the failure when neither could.
 """
-import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ from r6.models import R6Resource
 from r6.audit import add_audit_event
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_caregaps_summary, build_consumer_summary
+from r6.safe_read import strict_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,11 @@ def referenced_patient_id(ref):
         return None
     m = (_RELATIVE.fullmatch(ref) or _ABSOLUTE.fullmatch(ref)
          or _URN_UUID.fullmatch(ref))
-    return m.group(1) if m else None
+    # The split above cannot see a `urn:uuid:` form, which has no "/", so
+    # "urn:uuid:.." resolved to the id "..". Refuse it on the captured id,
+    # which covers every form.
+    pid = m.group(1) if m else None
+    return None if pid in (".", "..") else pid
 
 
 def sole_patient_id(tenant_id):
@@ -320,11 +324,11 @@ def register_caregaps_routes(blueprint, deps):
         return jsonify({
             "resourceType": "Parameters",
             "parameter": [
-                {"name": "summary", "valueString": json.dumps(summary)},
-                {"name": "consumerSummary", "valueString": json.dumps(consumer)},
+                {"name": "summary", "valueString": strict_dumps(summary)},
+                {"name": "consumerSummary", "valueString": strict_dumps(consumer)},
                 {"name": "subjectResolution",
-                 "valueString": json.dumps({"state": state, "subject": subject})},
-                {"name": "detail", "valueString": json.dumps(results)},
+                 "valueString": strict_dumps({"state": state, "subject": subject})},
+                {"name": "detail", "valueString": strict_dumps(results)},
                 {"name": "disclaimer", "valueString": _DISCLAIMER},
             ],
         }), 200

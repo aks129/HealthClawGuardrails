@@ -6,7 +6,6 @@ authenticated + AuditEvent (PHI-free detail). Interprets a single Observation,
 a Bundle, or the tenant's stored Observations for ?subject=Patient/<id>.
 """
 import copy
-import json
 import logging
 
 from flask import request, jsonify
@@ -18,6 +17,7 @@ from r6.audit import add_audit_event
 from r6.labs.interpret import interpret_observation
 from r6.labs.trend import evaluate_creatinine_aki
 from r6.redaction import apply_redaction
+from r6.safe_read import strict_dumps, subject_reference
 from r6.labs.report import (
     annotate_observation, build_interpretation_summary, build_consumer_summary,
 )
@@ -31,19 +31,6 @@ STORED_OBSERVATION_CAP = 200
 _DISCLAIMER = ("Advisory decision support, not a diagnosis. Reference ranges are "
                "adult population defaults and vary by lab, age, sex, and clinical "
                "context. The performing lab's own reference range takes precedence.")
-
-
-def _subject_reference(obs):
-    """`subject.reference` when it is a string, else None.
-
-    The write API stores what it is given, so `subject` can be a string or a
-    list. Read as `obs.get("subject", {}).get("reference")`, one such row
-    raised AttributeError and made the call 500 for every patient in the
-    tenant (#869).
-    """
-    subject = obs.get("subject")
-    ref = subject.get("reference") if isinstance(subject, dict) else None
-    return ref if isinstance(ref, str) else None
 
 
 def register_labs_routes(blueprint, deps):
@@ -140,7 +127,7 @@ def register_labs_routes(blueprint, deps):
         # absolute or urn:uuid reference still selects the sex-specific
         # range rather than the non-specific one.
         from r6.caregaps.routes import referenced_patient_id
-        pid = referenced_patient_id(_subject_reference(obs))
+        pid = referenced_patient_id(subject_reference(obs))
         if not pid:
             return None
         if pid in cache:
@@ -215,8 +202,8 @@ def register_labs_routes(blueprint, deps):
                 {"name": "return",
                  "resource": {"resourceType": "Bundle", "type": "collection",
                               "entry": annotated}},
-                {"name": "summary", "valueString": json.dumps(summary)},
-                {"name": "consumerSummary", "valueString": json.dumps(consumer)},
+                {"name": "summary", "valueString": strict_dumps(summary)},
+                {"name": "consumerSummary", "valueString": strict_dumps(consumer)},
                 {"name": "disclaimer", "valueString": _DISCLAIMER},
             ],
         }), 200

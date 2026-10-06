@@ -28,6 +28,7 @@ beside it.
 
 from r6.smbp.monitoring import _components, slot_of
 from r6.smbp.triage import HOME_DIASTOLIC, HOME_SYSTOLIC
+from r6.safe_read import string_field
 
 # Canvas geometry. Wide enough for three years without crushing the recent
 # fortnight, which is where all the density is.
@@ -42,7 +43,7 @@ def _readings(observations):
         systolic, diastolic = _components(obs)
         if systolic is None or diastolic is None:
             continue
-        out.append((obs.get("effectiveDateTime", ""), systolic, diastolic,
+        out.append((string_field(obs, "effectiveDateTime"), systolic, diastolic,
                     bool(obs.get("encounter"))))
     return sorted(out, key=lambda r: r[0])
 
