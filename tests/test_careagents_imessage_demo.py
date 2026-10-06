@@ -139,7 +139,8 @@ def test_a_trend_question_by_text_gets_words_and_a_link(
 
 def test_the_text_prompt_asks_for_short_plain_text_and_links():
     text = system_prompt("Juniper", "calm", surface="imessage")
-    for phrase in ("plain text", "no markdown", "600", "I'll send a link"):
+    for phrase in ("plain text", "no markdown", "600",
+                   "a link is included below"):
         assert phrase in text, phrase
     assert "review card will appear" not in text
 
@@ -158,7 +159,7 @@ def test_the_worker_hands_the_text_prompt_to_a_texted_turn(
     seen: list = []
     _model(monkeypatch, answer="Hi.", seen=seen)
     _ask(app, c, fake, "hello", "style-1")
-    assert "I'll send a link" in seen[0]["system"]
+    assert "a link is included below" in seen[0]["system"]
 
 
 def test_the_intake_form_on_text_promises_a_link_not_a_card():
@@ -348,11 +349,12 @@ def test_an_oversized_paragraph_breaks_between_words():
     assert " ".join(parts) == text
 
 
-def test_past_four_texts_the_rest_is_on_the_web():
+def test_past_four_texts_the_rest_is_in_the_chat():
     paras = [f"P{i} " + "y" * 900 for i in range(10)]
-    parts = imessage.split_reply("\n\n".join(paras), ORIGIN)
+    parts = imessage.split_reply("\n\n".join(paras), ORIGIN, "ag_1")
     assert len(parts) == imessage.MAX_TEXT_PARTS == 4
-    assert parts[-1].endswith("Open localhost for the rest.")
+    assert parts[-1].endswith(
+        f"The rest is in your chat: {ORIGIN}/chat?agent=ag_1")
     assert all(len(p) <= imessage.TEXT_PART_LIMIT for p in parts)
 
 
@@ -410,9 +412,9 @@ def test_connect_points_to_add_records_on_the_web(sb_cfg, sb_svc, monkeypatch): 
     _hook(c, "Connect", handle="conn-1")
     assert fake.sent == [(PHONE, imessage.connect_text(ORIGIN))]
     assert imessage.connect_text("https://careagents.cloud") == (
-        "To connect your records, open "
-        "careagents.cloud/home#connect-section on your phone and look under "
-        "Add records. Texts stay on sample records for now.")
+        "Connecting your own records is open to invited testers for now. "
+        "You can see where it will be at https://careagents.cloud/home under "
+        "Add records. Texting works with sample records.")
     assert fake.typing == []
 
 

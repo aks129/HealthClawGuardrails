@@ -296,12 +296,17 @@ def test_a_review_card_is_delivered_as_a_link(sb_cfg, sb_svc, monkeypatch):
             "type": "card", "kind": "review", "action_id": "act-1",
             "provider_call_id": "p", "event_key": "p:0"}},
         {"type": "agent.card", "payload": {
-            "type": "card", "kind": "pdf", "url": "https://example.com/f.pdf"}},
+            "type": "card", "kind": "pdf", "url": "https://example.com/f.pdf",
+            "action_id": "act-2"}},
     ]
     reply = imessage.run_reply(events, "http://localhost", "ag_1")
     assert reply.startswith("Here it is.")
     assert "http://localhost/review/ag_1/act-1" in reply
-    assert "https://example.com/f.pdf" in reply
+    # The PDF is reached from its review page; the engine's signed URL is
+    # never texted.
+    assert ("Your intake form is ready: http://localhost/review/ag_1/act-2"
+            in reply)
+    assert "https://example.com/f.pdf" not in reply
     assert imessage.run_reply([], "http://x", "a").endswith(
         "Please try again.")
 

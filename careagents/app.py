@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -151,6 +152,18 @@ class OwnershipUnknown(Exception):
     testing the `validate_step_up_token` tuple, which is a standing
     non-negotiable in this repo. An exception cannot be mis-read that way.
     """
+
+
+#: The engine review page's tab title ends "— HealthClaw Guardrails".
+_REVIEW_TAB_BRAND = re.compile(
+    r"(<title>[^<]*?)HealthClaw Guardrails(\s*</title>)")
+
+
+def _connection_is_live(ctx: dict) -> bool:
+    """Whether an agent context's connection may still reach the tenant's
+    requests: not revoked (#215). The one rule for every approval surface,
+    the web pages and APPROVALS by text alike."""
+    return (ctx.get("connection") or {}).get("status") != "revoked"
 
 
 def _parse_care_gaps_status(resource: dict | None) -> str:
@@ -1751,9 +1764,7 @@ def create_app(config: Config | None = None,
         view all resolve ownership here, on the server. A revoked
         connection is not a pathway to the tenant's requests."""
         ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
-        if not ctx:
-            return None
-        if (ctx.get("connection") or {}).get("status") == "revoked":
+        if not ctx or not _connection_is_live(ctx):
             return None
         return ctx
 
@@ -2065,7 +2076,9 @@ def create_app(config: Config | None = None,
                 message="This form is no longer awaiting review."), 404
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
-        return html
+        # The engine names its own product in the tab; here the page is
+        # CareAgents', reached from a CareAgents chat or text.
+        return _REVIEW_TAB_BRAND.sub(r"\1CareAgents\2", html, count=1)
 
     def _count_approval(agent_id):
         """One approval on a real-record assistant, for the weekly number
@@ -2349,6 +2362,14 @@ def create_app(config: Config | None = None,
         except Exception:               # pragma: no cover - defensive
             logger.warning("connected notice failed to send")
 
+    def _imessage_pending_count(ctx: dict) -> int:
+        # The approvals page's rule (#215): a revoked connection is not a
+        # pathway to the tenant's requests, so it is not asked. Raised as
+        # "could not check", never answered as zero.
+        if not _connection_is_live(ctx):
+            raise HealthClawError("connection revoked", 0)
+        return len(hc.pending_actions(ctx["tenant"]))
+
     imessage_deps = imessage.Deps(
         origin=cfg.origin, svc=svc,
         workers_ready=lambda: _worker_state(
@@ -2361,7 +2382,7 @@ def create_app(config: Config | None = None,
         on_connected=_imessage_connected,
         # APPROVALS by text: the approvals page's own source and its rule —
         # an engine that cannot answer raises, never reads as zero (#215).
-        pending_count=lambda ctx: len(hc.pending_actions(ctx["tenant"])))
+        pending_count=_imessage_pending_count)
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
     sendblue_surface.register(app, cfg, svc, imessage_deps)

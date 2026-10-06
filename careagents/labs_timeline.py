@@ -30,13 +30,20 @@ LOINC = "http://loinc.org"
 # order.
 ANALYTES = [
     {"key": "total-cholesterol", "name": "Total cholesterol",
-     "codes": ["2093-3"]},
-    {"key": "ldl", "name": "LDL cholesterol", "codes": ["13457-7", "18262-6"]},
-    {"key": "hdl", "name": "HDL cholesterol", "codes": ["2085-9"]},
-    {"key": "triglycerides", "name": "Triglycerides", "codes": ["2571-8"]},
-    {"key": "a1c", "name": "Hemoglobin A1c", "codes": ["4548-4", "17856-6"]},
-    {"key": "glucose", "name": "Glucose", "codes": ["2345-7"]},
+     "codes": ["2093-3"], "unit": "mg/dL"},
+    {"key": "ldl", "name": "LDL cholesterol", "codes": ["13457-7", "18262-6"],
+     "unit": "mg/dL"},
+    {"key": "hdl", "name": "HDL cholesterol", "codes": ["2085-9"], "unit": "mg/dL"},
+    {"key": "triglycerides", "name": "Triglycerides", "codes": ["2571-8"],
+     "unit": "mg/dL"},
+    {"key": "a1c", "name": "Hemoglobin A1c", "codes": ["4548-4", "17856-6"],
+     "unit": "%"},
+    {"key": "glucose", "name": "Glucose", "codes": ["2345-7"], "unit": "mg/dL"},
 ]
+
+#: Each analyte's usual UCUM unit, for when a reading's own coded unit is
+#: missing. Never the reading's free-text `unit`.
+KNOWN_UNITS = {a["key"]: a["unit"] for a in ANALYTES}
 
 # Free-text search terms -> analyte keys, so "how's my cholesterol?" narrows to
 # the lipid panel instead of dumping every series into the chat.
@@ -132,6 +139,10 @@ def build_series(interpret_bundle: dict,
                 "date": _date_of(resource),
                 "value": value,
                 "unit": quantity.get("unit") or "",
+                # The coded unit, for any reader that must not pass the
+                # free-text `unit` on (careagents/agent.py, text surfaces).
+                "code": quantity.get("code"),
+                "system": quantity.get("system"),
                 "flag": _flag_of(resource),
             })
         if not readings:

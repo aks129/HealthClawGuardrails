@@ -79,9 +79,10 @@ TEXT_STYLE = (
     "plain text with no markdown: no asterisks, no headings, no tables. Keep "
     "the whole answer short, under about 600 characters, a few sentences or "
     "a short numbered list. Nothing can appear on their screen but your "
-    "words, so never say a card or a chart will appear; say \"I'll send a "
-    "link\" instead. When you start the intake form, say I'll send a link to "
-    "review it and that nothing is sent until they approve each item.")
+    "words, so never say a card or a chart will appear. Any link arrives "
+    "with your answer, so say \"a link is included below\" instead. When you "
+    "start the intake form, say a link to review it is included below and "
+    "that nothing is sent until they approve each item.")
 
 
 def system_prompt(agent_name: str, persona_key: str,

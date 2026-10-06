@@ -628,6 +628,7 @@ def test_help_says_how_to_start_and_names_both_brands(
         "4. Has my cholesterol changed?\n"
         "5. Get me ready for my visit\n"
         "6. Fill out my intake form\n"
+        "Just type your question, or reply with a number.\n"
         "Text START for a sign-in link, APPROVALS for requests waiting on "
         "you, or STOP to stop. Need a person? Write to "
         "contactus@healthclaw.io.")

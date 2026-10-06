@@ -18,7 +18,11 @@
     </div>
   </div>
 
-  <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'>
+  {# Opened from a texted chart link (?chart=): the history stays hidden
+     until chat.js has drawn the chart and scrolled to it, so the page does
+     not paint at the top of the history first. #}
+  <div class="chat-log" id="log" data-pending-reviews='{{ pending_reviews | tojson }}'
+       {%- if request.args.get('chart') is not none %} data-chart-pending style="visibility:hidden"{% endif %}>
     {# An outstanding import is news on every visit, not only the first. The
        greeting is where a patient looks for "did my records land?", and it
        used to be computed only for a first visit — so the one person actually

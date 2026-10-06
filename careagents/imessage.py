@@ -43,12 +43,25 @@ CONTACT = "contactus@healthclaw.io"
 #: Things to ask, for HELP and the welcome. Each one reaches a feature: the
 #: health summary, labs, care gaps, the lab trend, the visit brief and the
 #: intake form.
-MENU_TEXT = ("1. What medications am I on?\n"
-             "2. What do my labs say?\n"
-             "3. Any screenings due?\n"
-             "4. Has my cholesterol changed?\n"
-             "5. Get me ready for my visit\n"
-             "6. Fill out my intake form")
+MENU = ("What medications am I on?",
+        "What do my labs say?",
+        "Any screenings due?",
+        "Has my cholesterol changed?",
+        "Get me ready for my visit",
+        "Fill out my intake form")
+MENU_TEXT = ("\n".join(f"{i}. {q}" for i, q in enumerate(MENU, start=1))
+             + "\nJust type your question, or reply with a number.")
+
+# A whole-message 1-6, optionally followed by "." or ")".
+_MENU_NUMBER = re.compile(r"^([1-9])[.)]?$")
+
+
+def menu_question(text: str) -> str | None:
+    """The menu question a bare number stands for, or None."""
+    m = _MENU_NUMBER.match(text.strip())
+    if not m or not 1 <= int(m.group(1)) <= len(MENU):
+        return None
+    return MENU[int(m.group(1)) - 1]
 
 WELCOME_TEXT = (
     "You're connected to CareAgents. Text me questions about your health "
@@ -120,9 +133,9 @@ def approvals_text(count: int, origin: str, agent_id: str) -> str:
 def connect_text(origin: str) -> str:
     """CONNECT points to the web: records are connected there, after the
     consent card, never by text."""
-    return ("To connect your records, open "
-            f"{_host(origin)}/home#connect-section on your phone and look "
-            "under Add records. Texts stay on sample records for now.")
+    return ("Connecting your own records is open to invited testers for now. "
+            f"You can see where it will be at {origin}/home under Add "
+            "records. Texting works with sample records.")
 
 
 def link_text(url: str) -> str:
@@ -301,10 +314,11 @@ def _break_long(paragraph: str, limit: int) -> list[str]:
     return pieces
 
 
-def split_reply(text: str, origin: str) -> list[str]:
+def split_reply(text: str, origin: str, agent_id: str = "") -> list[str]:
     """A reply as texts of at most TEXT_PART_LIMIT characters, cut at
     paragraph breaks where it can, in order. At most MAX_TEXT_PARTS; a
-    longer answer ends by pointing to the web."""
+    longer answer ends by pointing to the web chat, where the whole answer
+    is."""
     chunks: list[str] = []
     for paragraph in (p.strip() for p in text.split("\n\n")):
         if not paragraph:
@@ -316,7 +330,8 @@ def split_reply(text: str, origin: str) -> list[str]:
                 chunks.append(piece)
     if len(chunks) <= MAX_TEXT_PARTS:
         return chunks or [text]
-    tail = f"Open {_host(origin)} for the rest."
+    tail = (f"The rest is in your chat: {origin}/chat?agent={agent_id}"
+            if agent_id else f"The rest is in your chat at {origin}")
     last = _break_long(chunks[MAX_TEXT_PARTS - 1],
                        TEXT_PART_LIMIT - len(tail) - 2)[0]
     return [*chunks[:MAX_TEXT_PARTS - 1], f"{last}\n\n{tail}"]
@@ -351,9 +366,14 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
                     "I've prepared a form for your review — approve each "
                     f"item here: {origin}/review/{agent_id}/"
                     f"{payload.get('action_id', '')}")
-            elif card == "pdf" and payload.get("url"):
+            elif card == "pdf":
+                # The review page has the PDF button. The engine's signed
+                # URL is a bearer link to the document: never texted.
+                action_id = str(payload.get("action_id") or "")
                 extras.append(
-                    f"Your signed document is ready: {payload['url']}")
+                    f"Your intake form is ready: {origin}/review/{agent_id}/"
+                    f"{quote(action_id, safe='')}" if action_id else
+                    "Your intake form is ready in your CareAgents chat.")
         elif kind == "agent.error":
             parts.append(payload.get("text") or GENERIC_FAILURE_TEXT)
     return "\n\n".join([*parts, *extras]).strip() or (
@@ -489,6 +509,9 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     refused = transport_block(ctx) if transport_block else None
     if refused:
         return {"reply": refused}, 200
+    # A bare 1-6 answers the menu in HELP and the welcome. Mapped here,
+    # before admission, so it is admitted and charged as the question.
+    text = menu_question(text) or text
     if not text:
         return {"error": "empty message"}, 400
     if len(text) > 2000:

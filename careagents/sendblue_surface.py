@@ -254,7 +254,7 @@ class Deliverer:
         # A long answer goes as several texts, in order. A part that fails
         # stops the rest: a later part without the one before it reads as
         # a different answer.
-        for part in imessage.split_reply(text, self.cfg.origin):
+        for part in imessage.split_reply(text, self.cfg.origin, agent_id):
             if not self.client.send_message(surface["handle"], part).ok:
                 self.svc.sendblue_set_outcome(row["id"], "failed")
                 return

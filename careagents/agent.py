@@ -17,6 +17,7 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
+import re
 
 from careagents import brief as brief_mod
 from careagents import labs_timeline, llm
@@ -341,6 +342,23 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
 MAX_BRIEF_FIELDS = 6
 
 
+_UCUM_SYSTEM = "http://unitsofmeasure.org"
+# A UCUM code's shape: no spaces, so no words. Free text that claims the
+# UCUM system still has to look like a unit.
+_UCUM_CODE = re.compile(r"^[A-Za-z0-9%/.*^\[\]{}'\-]{1,16}$")
+
+
+def _coded_unit(reading: dict, series: dict) -> str:
+    """The reading's UCUM code, else the analyte's known unit, else "".
+    Never `valueQuantity.unit`: that is free text, and real feeds put
+    anything there."""
+    code = reading.get("code")
+    if (reading.get("system") == _UCUM_SYSTEM and isinstance(code, str)
+            and _UCUM_CODE.match(code)):
+        return code
+    return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
+
+
 def _timeline_in_words(series: dict) -> dict:
     """What a text needs instead of a chart: the first and latest reading
     and the direction, worked out here so the model never computes one.
@@ -352,9 +370,9 @@ def _timeline_in_words(series: dict) -> dict:
     dated = [r for r in series["readings"] if r["date"]]
     first, latest = dated[0], dated[-1]
     out["first"] = {"date": first["date"], "value": first["value"],
-                    "unit": first["unit"] or series["unit"]}
+                    "unit": _coded_unit(first, series)}
     out["latest"] = {"date": latest["date"], "value": latest["value"],
-                     "unit": latest["unit"] or series["unit"]}
+                     "unit": _coded_unit(latest, series)}
     out["direction"] = ("higher" if latest["value"] > first["value"]
                         else "lower" if latest["value"] < first["value"]
                         else "unchanged")
@@ -417,7 +435,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                 "note": ("The chart cannot be shown in a text message. "
                          "Describe the trend in words in one or two "
                          "sentences, using first, latest and direction; a "
-                         "link to the chart is sent with your answer. A "
+                         "link to the chart is included below your answer. A "
                          "series with trend_plottable false has a single "
                          "reading — say so, and never describe it as rising "
                          "or falling."
@@ -491,7 +509,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
             "action_id": action_id, "status": "awaiting_confirmation",
             "note": ("Proposed. The person gets a link to review and "
                      "approve each item; nothing is generated until they "
-                     "do. Say you'll send a link."
+                     "do. Say a link is included below."
                      if on_text else
                      "Proposed. A Review & approve card is now visible to "
                      "the person; nothing is generated until they approve "
@@ -523,7 +541,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "no screenings are due.")
         events.append({"type": "card", "kind": "brief"})
         notes.append("Summarize in a few short lines; a link to the full "
-                     "brief is sent with your answer."
+                     "brief is included below your answer."
                      if on_text else
                      "Summarize briefly; the full brief is on the person's "
                      "Visit brief page.")
