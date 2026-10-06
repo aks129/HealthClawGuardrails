@@ -407,6 +407,7 @@ def test_send_code_calls_a_lost_answer_unconfirmed_not_failed(monkeypatch):
     class _Cfg:
         resend_api_key = "key"
         resend_from = "codes@example.com"
+        allow_real_mail = True          # the provider is faked below
 
     def sending(raises=None, status=None):
         def _post(*a, **kw):
@@ -6090,7 +6091,7 @@ def test_the_beta_banner_is_on_the_landing_page_and_the_hub(app, svc,
                          re.S).group(1)
     words = re.sub(r"<[^>]+>", "", sentence).split()
     assert len(words) < 15, words
-    assert "Beta" in sentence and "sample records" in sentence
+    assert "Beta" in sentence and "made-up records" in sentence
 
 
 def test_no_canonical_host_means_no_redirect(app):

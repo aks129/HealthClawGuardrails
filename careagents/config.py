@@ -69,6 +69,9 @@ class Config:
         self.origin = (e.get("CARE_ORIGIN")
                        or f"https://{self.rp_id}").rstrip("/")
         self.resend_api_key = e.get("RESEND_API_KEY", "")
+        # Real mail leaves only production, unless this is "1"
+        # (careagents/mail.py, real_mail_allowed).
+        self.allow_real_mail = e.get("CARE_ALLOW_REAL_MAIL", "") == "1"
         self.resend_from = e.get("CARE_EMAIL_FROM",
                                  "CareAgents <hello@careagents.cloud>")
         # Fasten (verified-provider real records) — the connect flow runs on
@@ -116,6 +119,9 @@ class Config:
         # Empty = surface hidden.
         self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE") or (
             self.sendblue_from_number if self.sendblue_enabled else "")
+        # Where a new /beta request is announced (careagents/beta_signup.py).
+        # Unset = no announcement; the request is still saved.
+        self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.
