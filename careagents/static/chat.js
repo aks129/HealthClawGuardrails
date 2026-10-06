@@ -370,9 +370,9 @@
           // `done` here the outer loop reconnects — and because that stream
           // now ends CLEANLY it also resets `reconnectFailures`, so a
           // persistent event-poll failure becomes an unbounded ~2.5 req/s
-          // retry loop that prints a fresh ⚠️ on every pass, aimed at the
+          // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
-          typing.remove(); addAgentText("⚠️ " + ev.text); state.done = true;
+          typing.remove(); addAgentText(ev.text); state.done = true;
         } else if (ev.type === "done") {
           state.done = true;
         }

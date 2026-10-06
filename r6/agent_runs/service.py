@@ -223,6 +223,66 @@ def _preserve_ambiguous_tools(
     return True
 
 
+#: The answer a failed turn leaves in the transcript (#876). CareAgents'
+#: worker writes the same sentence when it fails a run itself
+#: (careagents/agent.py GENERIC_FAILURE_TEXT); the two are pinned equal by
+#: tests/test_careagents_failed_turn_real_engine.py. Fixed text, never the
+#: cause: nothing about the record or the error reaches the transcript.
+RUN_FAILED_TEXT = "Something went wrong on our side. Try asking again."
+
+
+def failed_reply_request_id(run_id: str) -> str:
+    """One answer per failed run, whichever side failed it."""
+    return f"run:{run_id}:failed"
+
+
+def _answer_failed_run(run: AgentRun) -> None:
+    """Write the failure sentence as the turn's answer, inside the caller's
+    transaction, unless it is already there.
+
+    Without it a run the engine failed at its deadline left the question
+    alone in the transcript, and asking again put it twice in a row. The
+    worker writes the same row, by the same request id, when it is the side
+    that fails the run; only one side can move a run to failed, so the row
+    is written once."""
+    request_id = failed_reply_request_id(run.id)
+    if ConversationMessage.query.filter_by(
+            tenant_id=run.tenant_id,
+            conversation_id=run.conversation_id,
+            request_id=request_id).first() is not None:
+        return
+    conversation = Conversation.query.filter_by(
+        tenant_id=run.tenant_id, id=run.conversation_id).first()
+    if conversation is None:
+        return
+    message = ConversationMessage(
+        tenant_id=run.tenant_id,
+        conversation_id=run.conversation_id,
+        agent_id=run.agent_id,
+        channel=run.surface,
+        role="assistant",
+        text=RUN_FAILED_TEXT,
+        request_id=request_id,
+        reply_to=run.message_id,
+        metadata_json=_dump({"careagents_agent_id": run.agent_id}),
+    )
+    db.session.add(message)
+    conversation.updated_at = utcnow()
+    db.session.flush()
+    # The same record finalize_run leaves for an answer. PHI-free: ids, role
+    # and a length.
+    audit(
+        tenant=run.tenant_id,
+        event_type="create",
+        resource_type="ConversationMessage",
+        resource_id=message.id,
+        agent_id=run.agent_id,
+        detail=_detail(run=run.id, conversation=run.conversation_id,
+                       role="assistant", channel=run.surface,
+                       chars=len(RUN_FAILED_TEXT)),
+    )
+
+
 def _terminalize_at_deadline(
     run: AgentRun,
     *,
@@ -238,6 +298,7 @@ def _terminalize_at_deadline(
             event_type="run.cancelled_at_deadline",
             commit=commit,
         )
+    _answer_failed_run(run)
     return transition_run(
         run,
         "failed",

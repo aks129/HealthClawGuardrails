@@ -110,3 +110,89 @@ def test_a_worker_without_the_lease_writes_nothing_on_the_engine(
     assert "agent.error" in calls
     assert _run(chain)["status"] == "running"
     assert [r[0] for r in _rows(chain)] == ["user"]
+
+
+# --- #884 QA F1: the engine fails the run at its deadline ---------------------
+
+def _set_deadline(chain, seconds_from_now):
+    from datetime import timedelta
+
+    from models import db
+    from r6.agent_runs.models import AgentRun, utcnow
+    with chain.engine_app.app_context():
+        [run] = AgentRun.query.filter_by(tenant_id=TENANT).all()
+        run.deadline_at = utcnow() + timedelta(seconds=seconds_from_now)
+        db.session.commit()
+
+
+def test_the_failure_sentences_are_one_sentence():
+    """Either side may fail a run, and both write this answer by the same
+    request id; two texts would be a 409 on the second, not one row."""
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    from r6.agent_runs.service import RUN_FAILED_TEXT
+    assert GENERIC_FAILURE_TEXT == RUN_FAILED_TEXT
+
+
+def test_a_run_past_its_deadline_is_answered_once(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """Deadline about 1s, the model takes 2s: the engine fails the run at
+    the worker's next write, and the transcript ends with an answer."""
+    import time
+
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    from careagents.worker import RunWorker
+    chain = Chain(cfg, svc, monkeypatch)
+
+    class _Turn:
+        text, tool_calls, raw_tool_calls = "a late answer", [], []
+
+    def _slow(*_a, **_k):
+        time.sleep(2)
+        return _Turn()
+    monkeypatch.setattr("careagents.worker.llm.complete", _slow)
+    c = chain.app.test_client()
+    _login(c, svc, monkeypatch, email="acceptance@example.com")
+    RunWorker(cfg, chain.hc, svc, "qa-worker").run_once()
+    r = c.post("/api/chat", json={"agent_id": chain.agent, "message": "hi",
+                                  "request_id": "qa-deadline"},
+               buffered=False)
+    r.close()
+    _set_deadline(chain, 1)
+    RunWorker(cfg, chain.hc, svc, "qa-worker").run_once()
+
+    run = _run(chain)
+    assert run["status"] == "failed"
+    rows = _rows(chain)
+    assert [r[0] for r in rows] == ["user", "assistant"], rows
+    assert rows[-1][1] == GENERIC_FAILURE_TEXT
+    assert rows[-1][3] == f"run:{run['id']}:failed"
+
+
+def test_a_run_swept_without_a_worker_is_answered_once(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """No worker ever claimed it: the control-plane sweep fails it, and a
+    second sweep or a late worker write adds nothing."""
+    from careagents.agent import GENERIC_FAILURE_TEXT
+    from careagents.worker import RunWorker
+    from r6.agent_runs.service import expire_overdue_runs
+    chain = Chain(cfg, svc, monkeypatch)
+    c = chain.app.test_client()
+    _login(c, svc, monkeypatch, email="acceptance@example.com")
+    RunWorker(cfg, chain.hc, svc, "qa-worker").run_once()
+    r = c.post("/api/chat", json={"agent_id": chain.agent, "message": "hi",
+                                  "request_id": "qa-sweep"}, buffered=False)
+    r.close()
+    _set_deadline(chain, -1)
+    with chain.engine_app.test_request_context():
+        assert expire_overdue_runs() == 1
+        assert expire_overdue_runs() == 0
+    run = _run(chain)
+    assert run["status"] == "failed"
+    # The engine answered, before any worker wrote anything.
+    assert [r[0] for r in _rows(chain)] == ["user", "assistant"]
+    full = chain.hc.get_agent_run(TENANT, run["id"])
+    RunWorker(cfg, chain.hc, svc, "qa-worker")._answer_failed_turn(
+        full, GENERIC_FAILURE_TEXT)
+    rows = _rows(chain)
+    assert [r[0] for r in rows] == ["user", "assistant"], rows
+    assert rows[-1][1] == GENERIC_FAILURE_TEXT

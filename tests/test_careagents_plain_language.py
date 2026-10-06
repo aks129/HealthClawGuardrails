@@ -100,7 +100,68 @@ def test_a_lab_value_never_carries_upstream_free_text():
         "valueString": "Jane Doe: positive, see note",
         "effectiveDateTime": "2026-09-01T08:00:00Z"}])
     assert "Jane" not in field.value
-    assert field.value == "2026-09-01"
+    assert field.value == "Result not listed in your records (Sep 1, 2026)"
+
+
+def test_no_upstream_text_or_display_reaches_the_brief():
+    """#884 QA F3, the CLAUDE.md rule: labels come from r6/terminology.py by
+    code. A canary in every text/display field the engine could read is
+    absent from every field it writes, on unredacted input."""
+    from r6.brief.engine import (
+        UNLABELLED, build_labs, build_medications, build_problems,
+        build_visits)
+    loinc_a1c = {"system": "http://loinc.org", "code": "4548-4",
+                 "display": "CANARY-1"}
+    obs = {"resourceType": "Observation", "id": "o1",
+           "code": {"coding": [loinc_a1c], "text": "CANARY-2"},
+           "valueCodeableConcept": {
+               "coding": [{"system": "urn:x", "code": "pos",
+                           "display": "CANARY-3"}], "text": "CANARY-4"},
+           "effectiveDateTime": "2026-09-01"}
+    meds = [
+        {"resourceType": "MedicationRequest", "id": "m1", "status": "active",
+         "medicationCodeableConcept": {
+             "coding": [{"system": "urn:x", "code": "zz",
+                         "display": "CANARY-5"}], "text": "CANARY-6"},
+         "dosageInstruction": [{"text": "CANARY-7"}]},
+        {"resourceType": "MedicationRequest", "id": "m2", "status": "active",
+         "medicationReference": {"reference": "Medication/x",
+                                 "display": "CANARY-8"}},
+    ]
+    cond = {"resourceType": "Condition", "id": "c1",
+            "clinicalStatus": {"coding": [{"code": "active"}]},
+            "code": {"coding": [{"system": "urn:x", "code": "q",
+                                 "display": "CANARY-9"}],
+                     "text": "CANARY-10"}}
+    enc = {"resourceType": "Encounter", "id": "e1", "status": "finished",
+           "type": [{"coding": [{"system": "urn:x", "code": "v",
+                                 "display": "CANARY-11"}],
+                     "text": "CANARY-12"}]}
+    fields = (build_labs([obs]) + build_medications(meds)
+              + build_problems([cond]) + build_visits([enc]))
+    for f in fields:
+        assert "CANARY" not in f.label + f.value, f
+    labs = build_labs([obs])
+    assert labs[0].label == "Hemoglobin A1c"        # by code, from the table
+    assert [m.label for m in build_medications(meds)] == [UNLABELLED] * 2
+
+
+def test_a_blood_pressure_panel_shows_its_numbers():
+    """#884 G7: the row showed a date and no reading."""
+    from r6.brief.engine import build_labs
+    [field] = build_labs([{
+        "resourceType": "Observation", "id": "bp",
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "85354-9"}]},
+        "component": [
+            {"code": {"coding": [{"system": "http://loinc.org",
+                                  "code": "8480-6"}]},
+             "valueQuantity": {"value": 120, "unit": "mmHg"}},
+            {"code": {"coding": [{"system": "http://loinc.org",
+                                  "code": "8462-4"}]},
+             "valueQuantity": {"value": 80.0, "unit": "mmHg"}}],
+        "effectiveDateTime": "2026-10-06T08:00:00Z"}])
+    assert field.value == "120/80 mmHg (Oct 6, 2026)"
 
 
 def test_a_screening_note_starts_its_own_sentence():

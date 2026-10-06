@@ -40,7 +40,9 @@ MAX_HISTORY_MESSAGES = 40
 # empty-event fallbacks — imports these rather than carrying its own copy;
 # four sites had diverging literals, and one of them was yielding str(exc),
 # which showed a patient "model call failed (HTTP 429)" verbatim.
-GENERIC_FAILURE_TEXT = "Something went wrong on our side."
+# The same sentence as r6/agent_runs/service.py RUN_FAILED_TEXT: either
+# side may be the one that fails a run, and both write this answer.
+GENERIC_FAILURE_TEXT = "Something went wrong on our side. Try asking again."
 RATE_LIMITED_TEXT = (
     "I'm getting more requests than I can answer right now. Nothing is wrong "
     "with your records — try asking again in a moment.")

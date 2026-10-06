@@ -179,6 +179,10 @@ class RunWorker:
                     event_type="run.deadline_exceeded",
                     payload={"status": "failed"},
                     error_class="RunDeadlineExceeded")
+                # This worker failed it, so this worker answers. When the
+                # engine got there first it wrote the answer itself.
+                self._answer_failed_turn(run, _failure_text(
+                    RunDeadlineExceeded()))
             except HealthClawError:
                 # The authoritative heartbeat may already have committed the
                 # same terminal deadline transition and revoked this lease.
