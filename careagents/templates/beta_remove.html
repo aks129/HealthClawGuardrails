@@ -1,12 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Remove my request — CareAgents{% endblock %}
+{% block title %}Your beta request — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
-{# The link from a beta email. Opening it only asks: mail scanners open
-   links, and a GET that deleted would be spent before the person saw it. #}
+{# The links in a beta email. Opening one only asks: mail scanners open
+   links, and a GET that acted would be spent before the person saw it. #}
 {% block content %}
 <main class="setup-wrap">
   <div class="setup-card beta-page">
-    {% if outcome == "ask" %}
+    {% if outcome == "confirm_ask" %}
+    <h1>Confirm your request</h1>
+    <p>Tap Confirm if you asked to test CareAgents.</p>
+    <form method="post" action="/beta/confirm">
+      <input type="hidden" name="t" value="{{ token }}">
+      <button class="btn-primary btn-block" type="submit">Confirm</button>
+    </form>
+    {% elif outcome == "confirmed" %}
+    <h1>You're confirmed</h1>
+    {% if done.kind == "join" %}
+    <p>Thanks, {{ done.first_name }}. We sent an email to {{ done.email }}.
+      If it isn't there in a few minutes, check spam.</p>
+    {% else %}
+    <p>Thanks, {{ done.first_name }}. Your request is updated.</p>
+    {% endif %}
+    {% elif outcome == "ask" %}
     <h1>Remove my request</h1>
     <p>This deletes your beta request: your name, email and phone number.
       It does not delete a CareAgents account. You can do that in Settings.</p>
@@ -14,13 +29,14 @@
       <input type="hidden" name="t" value="{{ token }}">
       <button class="btn-primary btn-block" type="submit">Remove my request</button>
     </form>
+    <a class="btn-secondary btn-block beta-keep" href="/">Keep my request</a>
     {% elif outcome == "removed" %}
     <h1>Done</h1>
     <p>Your beta request is removed.</p>
     {% else %}
     <h1>This link no longer works</h1>
-    <p>It was used already, or a newer email replaced it. Use the link in our
-      latest email, or <a href="{{ feedback }}">write to us</a>.</p>
+    <p>It was used already, it ran out, or a newer email replaced it. Use the
+      link in our latest email, or <a href="{{ feedback }}">write to us</a>.</p>
     {% endif %}
   </div>
 </main>

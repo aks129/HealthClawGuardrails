@@ -11,7 +11,12 @@
     mobile: "Please check the mobile number, or leave it empty.",
     rate_limited: "Too many tries. Please wait a few minutes.",
   };
-  function fail(msg) { err.textContent = msg; err.hidden = false; }
+  // Shown next to Send, and scrolled to, so it is never off-screen.
+  function fail(msg) {
+    err.textContent = msg;
+    err.hidden = false;
+    err.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -31,9 +36,15 @@
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
+        // textContent: the name and address are shown back, never parsed.
+        const done = $("beta-done");
+        done.textContent = "Thanks, " + field("first_name").trim() +
+          ". Check your email to confirm. We sent an email to " +
+          field("email").trim() +
+          ". If it isn't there in a few minutes, check spam.";
         form.hidden = true;
-        $("beta-done").textContent = "Thanks. Check your email.";
-        $("beta-done").hidden = false;
+        done.hidden = false;
+        done.scrollIntoView({ block: "center", behavior: "smooth" });
         return;
       }
       fail(MESSAGES[d.error] || "Something went wrong. Please try again.");

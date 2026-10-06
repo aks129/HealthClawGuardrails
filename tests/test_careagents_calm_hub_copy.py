@@ -39,7 +39,7 @@ def test_the_hub_banner_matches_the_account(app, svc, monkeypatch):
 
 def test_the_landing_banner_keeps_its_words_without_the_em_dash(app):
     assert _banner(app.test_client().get("/").get_data(as_text=True)) == (
-        "Beta: synthetic records only. Things will break, tell us.")
+        "Beta: made-up records only. Things will break, tell us.")
 
 
 def test_the_stale_telegram_handler_is_gone():
