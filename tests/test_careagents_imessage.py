@@ -266,7 +266,7 @@ def test_stop_unbinds_and_then_only_start_gets_an_answer(
     assert _inbound(c, PHONE, "hello?").get_json() == {}
     assert _inbound(c, PHONE, "STOP").get_json() == {}   # said once
     assert _inbound(c, PHONE, "help").get_json() == {
-        "reply": imessage.STRANGER_HELP_TEXT}
+        "reply": imessage.OPTED_OUT_HELP_TEXT}
     start = _inbound(c, PHONE, "start").get_json()
     assert start["reply"].startswith("Welcome back. Tap this link")
     assert "/link?t=" in start["reply"]
@@ -430,10 +430,10 @@ def test_a_paused_account_hears_so_through_the_runs_endpoint(
 def test_settings_disconnects_imessage(cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     page = c.get("/settings").get_data(as_text=True)
-    assert 'id="im-disconnect"' not in page
+    assert 'im-disconnect' not in page
     _pair(c, agent_id)
     page = c.get("/settings").get_data(as_text=True)
-    assert 'id="im-disconnect"' in page and "connected" in page
+    assert 'class="pill im-disconnect"' in page and "connected" in page
     r = c.post("/api/surfaces/imessage/disconnect")
     assert r.status_code == 200 and r.get_json()["removed"] == 1
     assert svc.find_surface_by_handle(PHONE) is None
@@ -666,8 +666,8 @@ def test_settings_shows_the_handle_masked_with_disconnect_in_the_tile(
     page = c.get("/settings").get_data(as_text=True)
     assert "Connected: phone ending in 0123" in page
     assert "0100123" not in page
-    tile = page[page.index('id="im-connected"'):]
-    assert tile.index('id="im-disconnect"') < tile.index("</div>")
+    tile = page[page.index('im-connected'):]
+    assert tile.index('im-disconnect') < tile.index("</div>")
     assert "Text this to connect" in page
     assert "Your pairing code" not in page
 
@@ -754,3 +754,134 @@ def test_a_non_ascii_secret_is_refused_not_a_crash(cfg, svc, monkeypatch):  # no
                headers={"X-Internal-Secret": "café"},
                json={"handle": PHONE, "text": "hi"})
     assert r.status_code == 403
+
+
+# --- #866 round 3 -----------------------------------------------------------
+
+def test_start_past_the_allowance_says_wait_not_use_a_voided_link(
+        cfg, svc, monkeypatch):  # noqa: F811
+    assert imessage.START_CAPPED_TEXT == (
+        "Welcome back. I've sent several links in the last half hour, so "
+        "please wait 30 minutes, then text START again.")
+    assert "use the last one" not in imessage.START_CAPPED_TEXT
+
+
+def test_web_disconnect_gives_the_phone_a_fresh_link(cfg, svc, monkeypatch):  # noqa: F811
+    """A phone that used up its links, then connected, then was
+    disconnected on the web, is answered with a link, not silence."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    for _ in range(imessage.LINKS_PER_WINDOW):
+        _inbound(c, PHONE, "hi")
+    assert _inbound(c, PHONE, "hi").get_json() == {}       # capped
+    _pair(c, agent_id)
+    assert c.post("/api/surfaces/imessage/disconnect").status_code == 200
+    assert "/link?t=" in _inbound(c, PHONE, "hi").get_json()["reply"]
+
+
+def test_help_after_stop_says_how_to_come_back(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    _inbound(c, PHONE, "STOP")
+    assert _inbound(c, PHONE, "help").get_json() == {
+        "reply": imessage.OPTED_OUT_HELP_TEXT}
+    assert "text START to come back" in imessage.OPTED_OUT_HELP_TEXT
+    # A handle that never stopped still gets the stranger's HELP.
+    assert _inbound(c, "+15550100555", "help").get_json() == {
+        "reply": imessage.STRANGER_HELP_TEXT}
+
+
+def test_start_says_reconnect_only_to_a_phone_that_was_connected(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    stranger = "+15550100556"
+    _inbound(c, stranger, "STOP")
+    first_time = _inbound(c, stranger, "START").get_json()["reply"]
+    assert "sign in" in first_time and "reconnect" not in first_time
+    _pair(c, agent_id)
+    _inbound(c, PHONE, "STOP")
+    back = _inbound(c, PHONE, "START").get_json()["reply"]
+    assert back.startswith("Welcome back.") and "reconnect" in back
+
+
+def test_auth_puts_the_link_line_under_the_heading(cfg, svc, monkeypatch):  # noqa: F811
+    app, owner, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
+    phone = app.test_client()
+    phone.get(f"/link?t={token}")
+    page = phone.get("/auth").get_data(as_text=True)
+    after_h1 = page[page.index("</h1>"):]
+    assert after_h1.index("Sign in to connect your phone") < after_h1.index(
+        "Sign in with your face")
+
+
+def test_disconnect_success_is_not_drawn_as_an_error():
+    root = Path(__file__).resolve().parents[1] / "careagents" / "static"
+    js = (root / "home.js").read_text()
+    block = js[js.index('document.querySelectorAll(".im-disconnect")'):]
+    block = block[:block.index("--- grants")]
+    assert block.index('classList.add("is-ok")') < block.index(
+        "Disconnected. Texts from that phone")
+    css = (root / "careagents.css").read_text()
+    assert ".inline-msg.is-ok { color: var(--ink); }" in css
+
+
+@pytest.mark.parametrize("path", ["/link?t=nope", "/auth"])
+def test_the_link_path_sends_no_referrer(cfg, svc, monkeypatch, path):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    r = app.test_client().get(path)
+    assert r.headers.get("Referrer-Policy") == "no-referrer"
+
+
+def test_link_done_sends_no_referrer(cfg, svc, monkeypatch):  # noqa: F811
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
+    c.get(f"/link?t={token}")
+    assert c.get("/link/done").headers.get("Referrer-Policy") == "no-referrer"
+
+
+def test_each_phone_is_listed_and_disconnected_on_its_own(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    second = "+15550100124"
+    _pair(c, agent_id)
+    _pair(c, agent_id, handle=second)
+    page = c.get("/settings").get_data(as_text=True)
+    assert "Connected: phone ending in 0123" in page
+    assert "Connected: phone ending in 0124" in page
+    assert page.count('class="pill im-disconnect"') == 2
+    one = svc.find_surface_by_handle(PHONE)["id"]
+    r = c.post("/api/surfaces/imessage/disconnect", json={"surface_id": one})
+    assert r.status_code == 200 and r.get_json()["removed"] == 1
+    assert svc.find_surface_by_handle(PHONE) is None
+    assert svc.find_surface_by_handle(second)
+    # Someone else's phone, or one already gone, is not removed.
+    assert c.post("/api/surfaces/imessage/disconnect",
+                  json={"surface_id": one}).status_code == 404
+    other = app.test_client()
+    _login(other, svc, monkeypatch, email="other@example.com")
+    theirs = svc.find_surface_by_handle(second)["id"]
+    assert other.post("/api/surfaces/imessage/disconnect",
+                      json={"surface_id": theirs}).status_code == 404
+    assert svc.find_surface_by_handle(second)
+
+
+def test_a_link_survives_a_session_whose_account_was_deleted(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """The link is parked in a browser whose session points at an account
+    that no longer exists. login_required clears that session; the parked
+    link must come through it, so the sign-in that follows still binds."""
+    from careagents.models import Account
+    app, owner, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(owner, PHONE, "hi").get_json()["reply"])
+    phone = app.test_client()
+    with phone.session_transaction() as sess:
+        sess["account_id"] = "acct_gone"
+    phone.get(f"/link?t={token}")
+    with svc.session() as s:
+        assert s.get(Account, "acct_gone") is None
+    assert phone.get("/home").status_code == 302          # the stale clear
+    with phone.session_transaction() as sess:
+        assert "account_id" not in sess and sess.get("imessage_link")
+    _login(phone, svc, monkeypatch, email="back@example.com")
+    assert "Connect this phone?" in phone.get("/link/done").get_data(
+        as_text=True)

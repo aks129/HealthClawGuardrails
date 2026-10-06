@@ -32,10 +32,14 @@
          home.js has nothing to bind. The tile is a label, not a control. #}
       <div class="surface soon"><b>Telegram</b><span>coming soon</span></div>
       {% if imessage_connected %}
-      {# Masked: enough for the owner to recognise, not the whole handle. #}
-      <div class="surface on" id="im-connected"><b>iMessage</b>
-        <span id="im-state">Connected: {{ imessage_connected }}</span>
-        <button type="button" class="pill" id="im-disconnect">Disconnect</button></div>
+      {# One tile per connected phone, masked: enough for the owner to
+         recognise, not the whole handle. Disconnect removes that one. #}
+      {% for phone in imessage_connected %}
+      <div class="surface on im-connected"><b>iMessage</b>
+        <span class="im-state">Connected: {{ phone.label }}</span>
+        <button type="button" class="pill im-disconnect"
+                data-surface="{{ phone.id }}">Disconnect</button></div>
+      {% endfor %}
       {% elif imessage_handle %}
       <div class="surface" id="im-surface" data-agent="{{ first_agent }}"><b>iMessage</b>
         <span id="im-state">connect →</span></div>

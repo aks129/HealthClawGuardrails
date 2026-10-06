@@ -5,12 +5,12 @@
 <main class="setup-wrap">
   <div class="setup-card" id="auth-card">
     <h1>Your health, your keys</h1>
-    <p class="setup-sub">Sign in with your face or fingerprint. No passwords —
-    a passkey lives on your device and can't be phished.</p>
     {% if imessage_pending %}
     <p class="setup-sub" id="imessage-pending">
       Sign in to connect your phone to CareAgents.</p>
     {% endif %}
+    <p class="setup-sub">Sign in with your face or fingerprint. No passwords —
+    a passkey lives on your device and can't be phished.</p>
 
     <div id="err" class="form-error" hidden></div>
 

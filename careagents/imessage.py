@@ -78,8 +78,15 @@ def busy_text(window_seconds: float) -> str:
 UNAVAILABLE_TEXT = ("Sorry, I can't answer right now. Please try again in a "
                     "few minutes.")
 
-START_CAPPED_TEXT = ("Welcome back. You've asked for a few links already — "
-                     "use the last one I sent, or try again in 30 minutes.")
+START_CAPPED_TEXT = ("Welcome back. I've sent several links in the last "
+                     "half hour, so please wait 30 minutes, then text START "
+                     "again.")
+
+#: HELP from a handle that texted STOP: say how to come back.
+OPTED_OUT_HELP_TEXT = (
+    "CareAgents (by HealthClaw) answers questions about your health "
+    "records. You've stopped texts from this number — text START to come "
+    f"back. Need a person? Write to {CONTACT}.")
 
 TOO_LONG_TEXT = "That message is too long. Please send a shorter one."
 
@@ -269,7 +276,11 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
                                          also=raw)
 
     if word == "help":
-        return {"reply": HELP_TEXT if surface else STRANGER_HELP_TEXT}, 200
+        if surface:
+            return {"reply": HELP_TEXT}, 200
+        if svc.imessage_opted_out(handle or raw):
+            return {"reply": OPTED_OUT_HELP_TEXT}, 200
+        return {"reply": STRANGER_HELP_TEXT}, 200
     if word == "stop":
         # Unbind (either spelling of the handle), void its unused links,
         # and remember the choice. Said once: a second STOP from a handle
@@ -297,8 +308,11 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
             return ({"reply": START_CAPPED_TEXT} if word == "start"
                     else {}), 200
         url = link_url(deps.origin, token)
-        return {"reply": welcome_back_text(url) if returning
-                else link_text(url)}, 200
+        # "Reconnect" only for a handle that was bound once; a stranger who
+        # texted STOP and then START is still signing in for the first time.
+        if returning and svc.imessage_was_bound(handle):
+            return {"reply": welcome_back_text(url)}, 200
+        return {"reply": link_text(url)}, 200
 
     if word == "start":
         return {"reply": START_BOUND_TEXT}, 200

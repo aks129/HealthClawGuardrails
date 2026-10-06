@@ -975,9 +975,9 @@ class AccountService:
             x.bound_at = now()
             x.code_exp = None
             x.welcome_due = 1 if welcome else 0
-            st = s.get(ImessageHandleState, _handle_key(handle))
-            if st is not None:
-                st.opted_out_at = None
+            st = self._handle_state(s, handle)
+            st.opted_out_at = None
+            st.ever_bound_at = st.ever_bound_at or now()
             return "connected"
 
     def imessage_agent_context(self, surface: dict) -> dict | None:
@@ -1009,12 +1009,30 @@ class AccountService:
                             .values(welcome_due=0))
             return res.rowcount == 1
 
-    def disconnect_imessage(self, account_id: str) -> int:
-        """Remove every iMessage binding and pending code on the account."""
+    def disconnect_imessage(self, account_id: str,
+                            surface_id: str | None = None) -> int:
+        """Remove one iMessage binding on the account (`surface_id`), or
+        every binding and pending code. Each freed handle gets its link
+        allowance back, so its next text is answered with a fresh link
+        rather than silence."""
         with self.session() as s:
-            return (s.query(Surface)
-                    .filter_by(account_id=account_id, kind="imessage")
-                    .delete())
+            q = s.query(Surface).filter_by(account_id=account_id,
+                                           kind="imessage")
+            if surface_id is not None:
+                q = q.filter_by(id=surface_id, status="active")
+            rows = q.all()
+            for x in rows:
+                if x.status == "active" and x.handle:
+                    st = s.get(ImessageHandleState, _handle_key(x.handle))
+                    if st is not None:
+                        st.link_count, st.link_window_start = 0, None
+                s.delete(x)
+            return len(rows)
+
+    def imessage_was_bound(self, handle: str) -> bool:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.ever_bound_at)
 
     def _handle_state(self, s, handle: str) -> ImessageHandleState:
         key = _handle_key(handle)

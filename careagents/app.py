@@ -339,6 +339,19 @@ def create_app(config: Config | None = None,
 
     # --- page-view counting (careagents/analytics.py) ------------------------
 
+    #: Pages on the texted-link path. No Referer leaves them: /link carries a
+    #: live token in its query string, and the two pages after it are where
+    #: a person on that path clicks out. Scoped, not app-wide: an outbound
+    #: connector flow may rely on the default policy.
+    _NO_REFERRER_ENDPOINTS = frozenset(
+        {"imessage_link", "imessage_link_claim", "auth"})
+
+    @app.after_request
+    def _no_referrer_on_the_link_path(response):
+        if request.endpoint in _NO_REFERRER_ENDPOINTS:
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
     @app.after_request
     def _count_a_public_page_view(response):
         """One integer per day per public page, when the flag says so.
@@ -379,7 +392,12 @@ def create_app(config: Config | None = None,
             # the one place all protected routes pass through.
             if current_account() is None:
                 if session.get("account_id"):
+                    # A texted link parked before this session went stale
+                    # survives, so the sign-in that follows still binds it.
+                    imessage_link = session.get("imessage_link")
                     session.clear()
+                    if isinstance(imessage_link, str):
+                        session["imessage_link"] = imessage_link
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
@@ -486,11 +504,11 @@ def create_app(config: Config | None = None,
                                        data["connections"]),
             first_agent=(data["agents"][0]["id"] if data["agents"] else ""),
             imessage_handle=cfg.imessage_handle,
-            imessage_connected=next(
-                (imessage.masked_display(x["handle"])
-                 for x in data["surfaces"]
-                 if x["kind"] == "imessage" and x["status"] == "active"),
-                None))
+            # Every connected phone, masked, each with its own Disconnect.
+            imessage_connected=[
+                {"id": x["id"], "label": imessage.masked_display(x["handle"])}
+                for x in data["surfaces"]
+                if x["kind"] == "imessage" and x["status"] == "active"])
 
     @app.post("/logout")
     def logout():
@@ -2408,11 +2426,18 @@ def create_app(config: Config | None = None,
     @app.post("/api/surfaces/imessage/disconnect")
     @login_required
     def disconnect_imessage():
-        """Settings' Disconnect: unbind every iMessage handle on the account.
-        The handle may text again later and get a fresh sign-in link."""
+        """Settings' Disconnect: unbind one phone ({surface_id}), or every
+        iMessage handle on the account when none is named. A freed phone may
+        text again later and get a fresh sign-in link."""
         acct = current_account()
-        return jsonify({"ok": True,
-                        "removed": svc.disconnect_imessage(acct.id)})
+        body = request.get_json(silent=True) or {}
+        surface_id = body.get("surface_id")
+        if surface_id is not None and not isinstance(surface_id, str):
+            return jsonify({"error": "invalid surface_id"}), 400
+        removed = svc.disconnect_imessage(acct.id, surface_id)
+        if surface_id is not None and not removed:
+            return jsonify({"error": "unknown phone"}), 404
+        return jsonify({"ok": True, "removed": removed})
 
     @app.post("/api/surfaces/imessage/bind")
     def imessage_bind():

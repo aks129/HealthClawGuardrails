@@ -922,6 +922,7 @@
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
     $("surfaces-msg").hidden = true;
+    $("surfaces-msg").classList.remove("is-ok");
     const agentId = im.dataset.agent;
     if (!agentId) {
       return say(im, $("surfaces-msg"),
@@ -933,21 +934,28 @@
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
   });
-  // Disconnect: the texts stop reaching the assistant. Texting again later
-  // sends a fresh sign-in link.
-  const imOff = $("im-disconnect");
-  if (imOff) imOff.addEventListener("click", async () => {
-    imOff.disabled = true;
-    const res = await post("/api/surfaces/imessage/disconnect", {});
-    if (!res.ok) {
-      imOff.disabled = false;
-      return say(imOff, $("surfaces-msg"), "Couldn't disconnect. Try again.");
-    }
-    imOff.remove();
-    $("im-connected").classList.remove("on");
-    $("im-state").textContent = "disconnected";
-    say($("im-connected"), $("surfaces-msg"),
-      "Disconnected. Texts from that phone won't reach your assistant.");
+  // Disconnect, one phone per tile: its texts stop reaching the assistant.
+  // Texting again later sends a fresh sign-in link. Success is said in the
+  // calm style; only a failure uses the error colour.
+  document.querySelectorAll(".im-disconnect").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tile = btn.closest(".surface");
+      const msg = $("surfaces-msg");
+      btn.disabled = true;
+      const res = await post("/api/surfaces/imessage/disconnect",
+                             { surface_id: btn.dataset.surface });
+      if (!res.ok) {
+        btn.disabled = false;
+        msg.classList.remove("is-ok");
+        return say(tile, msg, "Couldn't disconnect. Try again.");
+      }
+      btn.remove();
+      tile.classList.remove("on");
+      tile.querySelector(".im-state").textContent = "disconnected";
+      msg.classList.add("is-ok");
+      say(tile, msg,
+        "Disconnected. Texts from that phone won't reach your assistant.");
+    });
   });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a
