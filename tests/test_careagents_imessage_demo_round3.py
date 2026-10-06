@@ -115,6 +115,56 @@ def test_get_labs_gives_the_latest_reading_per_analyte(
         assert "earlier" in out["note"].lower() or "latest" in out["note"]
 
 
+def _scored(oid, when, value, flag, unit="mg/dL", system=None):
+    return {"resource": {
+        "resourceType": "Observation", "id": oid,
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "2160-0"}]},
+        "effectiveDateTime": when,
+        "valueQuantity": {"value": value, "unit": unit, "code": "mg/dL",
+                          "system": system or "http://unitsofmeasure.org"},
+        "interpretation": [{"coding": [{
+            "system": ("http://terminology.hl7.org/CodeSystem/"
+                       "v3-ObservationInterpretation"), "code": flag}]}]}}
+
+
+def _line(flag):
+    word = "above" if flag == "H" else "within"
+    return {"analyte": "Creatinine", "flag": flag,
+            "message": f"Your creatinine is {word} the typical range."}
+
+
+def test_the_latest_is_chosen_by_date_not_by_order():
+    entries = [_scored("a", "2025-01-01T00:00:00Z", 0.8, "N"),
+               _scored("b", "2026-10-01T00:00:00Z", 1.3, "H"),
+               _scored("c", "2026-03-01T00:00:00Z", 0.9, "N")]
+
+    class _HC:
+        def interpret_labs(self, _t):
+            return {"summary": {}, "disclaimer": "d",
+                    "consumer": {"lines": [_line("N"), _line("H"),
+                                           _line("N")]},
+                    "bundle": {"entry": entries}}
+    out = json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    [latest] = out["consumer_summary"]["latest"]
+    assert (latest["date"], latest["value"], latest["flag"]) == (
+        "2026-10-01", 1.3, "H")
+    assert latest["earlier_readings"] == 2
+
+
+def test_lines_that_do_not_match_the_observations_are_passed_as_they_came():
+    class _HC:
+        def interpret_labs(self, _t):
+            return {"summary": {}, "disclaimer": "d",
+                    "consumer": {"lines": [_line("N"), _line("N")]},
+                    "bundle": {"entry": [
+                        _scored("a", "2025-01-01T00:00:00Z", 0.8, "N"),
+                        _scored("b", "2026-10-01T00:00:00Z", 1.3, "H")]}}
+    out = json.loads(_execute_tool(_HC(), "t", "get_labs", {}, []))
+    assert "latest" not in out["consumer_summary"]
+    assert len(out["consumer_summary"]["lines"]) == 2
+
+
 def test_labs_without_matching_observations_fall_back_to_the_lines():
     class _HC:
         def interpret_labs(self, _t):
