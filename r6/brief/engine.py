@@ -145,8 +145,10 @@ def _obs_value(obs: dict) -> str:
         value = vq.get("value", "")
         unit = vq.get("unit") or vq.get("code", "")
         return f"{value} {unit}".strip() if value != "" else ""
-    if "valueString" in obs:
-        return obs["valueString"]
+    # No valueString branch. It is free text from the source system with no
+    # code to label it by, so nothing here can stand behind it (#877). The
+    # route strips it already (apply_redaction); the engine does not lean
+    # on that, because the brief reaches chat and text messages.
     if "valueCodeableConcept" in obs:
         cc = obs["valueCodeableConcept"]
         return cc.get("text") or next(

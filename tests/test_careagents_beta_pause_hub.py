@@ -71,7 +71,7 @@ def test_an_invited_person_waiting_on_the_terms_is_told_so(monkeypatch):
     accounts.invite_real_records(EMAIL, "ops-1")
     page = c.get("/home").get_data(as_text=True)
     assert "You're invited. This opens soon." in page.replace("&#39;", "'")
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
 
 
 def test_someone_with_real_records_is_not_promised_them_again(monkeypatch):
@@ -81,7 +81,7 @@ def test_someone_with_real_records_is_not_promised_them_again(monkeypatch):
                             "Uploaded records", status="active",
                             consent_version="2026-08-01")
     page = c.get("/home").get_data(as_text=True)
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
     assert "Adding more records isn" in page
 
 
@@ -95,7 +95,7 @@ def test_a_real_connection_with_no_records_yet_is_not_promised_again(
                             "Your doctor's records", status=status,
                             consent_version="2026-08-01")
     page = c.get("/home").get_data(as_text=True)
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
     assert "Adding more records isn" in page
     # The beta banner still says "connected" only for an active one.
     assert "your records are connected" not in page
@@ -103,7 +103,7 @@ def test_a_real_connection_with_no_records_yet_is_not_promised_again(
 
 def test_an_uninvited_newcomer_still_sees_what_is_coming(monkeypatch):
     c, _ = _stage1(monkeypatch)
-    assert "Coming for invited testers" in c.get("/home").get_data(
+    assert "Coming later in the beta" in c.get("/home").get_data(
         as_text=True)
 
 
@@ -113,7 +113,7 @@ def test_a_paused_hub_shows_no_terms_prompt_and_no_invite_line(monkeypatch):
     accounts.set_paused(EMAIL, True)
     page = c.get("/home").get_data(as_text=True).replace("&#39;", "'")
     assert "You're invited" not in page
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
     assert 'data-reconsent=' not in page
 
 

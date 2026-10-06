@@ -207,10 +207,33 @@ class RunWorker:
                     event_type="run.failed",
                     payload={"status": "failed"},
                     error_class=_error_class(exc))
+                # Only once the engine took this worker's failure: a worker
+                # that lost its lease lands here too, and the run may yet
+                # finish elsewhere with a real answer.
+                self._answer_failed_turn(run, _failure_text(exc))
             except HealthClawError:
                 logger.exception("could not record failure for run %s", run_id)
         else:
             heartbeat.stop()
+
+    def _answer_failed_turn(self, run: dict, text: str) -> None:
+        """Put the failure sentence in the transcript as the turn's answer.
+
+        A completed run's answer is written by finalize; a failed run wrote
+        nothing, so on reload the question stood alone and asking again put
+        it twice in a row (#876). The text is one of agent.py's fixed
+        sentences, never the exception. One request id per run, so a
+        replayed failure writes it once. Losing it costs only the line."""
+        tenant = str(run.get("tenant_id") or "")
+        if not tenant:
+            return
+        self.hc.log_message(
+            tenant, "assistant", text,
+            agent_id=str(run.get("agent_id") or "") or None,
+            conversation_id=run.get("conversation_id"),
+            surface=str(run.get("surface") or "web"),
+            reply_to=run.get("message_id"),
+            request_id=f"run:{run['id']}:failed")
 
     def _execute(self, run: dict, heartbeat: LeaseHeartbeat) -> None:
         run_id = str(run["id"])

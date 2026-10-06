@@ -1,5 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Sign in — CareAgents{% endblock %}
+{# "Sign in or sign up": the beta emails say "sign up", and this is the
+   page they land on. The first sign-in with an email creates the account
+   (#876). #}
+{% block title %}Sign in or sign up — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
 {% block content %}
 <main class="setup-wrap">
@@ -24,6 +27,7 @@
              autocomplete="email" placeholder="you@example.com" autofocus>
       <button class="btn-secondary btn-block" id="email-btn">
         Email me a code</button>
+      <p class="auth-fine">New here? The same steps sign you up.</p>
       <p class="auth-fine">By continuing you agree to the
         <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
         <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy

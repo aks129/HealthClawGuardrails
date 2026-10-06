@@ -573,9 +573,12 @@ def test_the_shared_link_tile_does_not_promise_what_is_coming_soon():
 
 
 def test_the_hub_lists_at_most_five_recent_requests(cfg, svc, monkeypatch):
+    # Within the last day: an older failure leaves the hub (#876).
+    start = datetime.now(timezone.utc) - timedelta(hours=1)
     recent = [{"id": f"act-{i}", "kind": "sms", "to": "Dr. Lee",
                "status": "failed",
-               "updated_at": f"2026-10-01T10:0{i}:00Z"} for i in range(8)]
+               "updated_at": (start + timedelta(minutes=i)).strftime(
+                   "%Y-%m-%dT%H:%M:%SZ")} for i in range(8)]
     fake = OutcomeClient(pending=[], recent=recent)
     c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     items = c.get("/api/approvals/count").get_json()["recent"]

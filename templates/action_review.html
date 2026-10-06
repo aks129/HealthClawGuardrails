@@ -18,11 +18,13 @@
     <form id="review-form" method="post"
           action="/r6/actions/{{ action_id }}/review">
 
-      <!-- Demographics: read-only, straight from your records -->
+      <!-- About you: shown as it is in your records, not edited here.
+           Plain words for a phone (#876): not "Demographics", not
+           "read-only". -->
       <div class="card mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span>Demographics</span>
-          <span class="badge bg-secondary">read-only · from your records</span>
+          <span>About you</span>
+          <span class="badge bg-secondary">From your records</span>
         </div>
         <div class="card-body">
           {% if demographics %}
@@ -33,7 +35,7 @@
             {% endfor %}
           </dl>
           {% elif record_readable %}
-          <p class="text-muted mb-0">No demographic details found in your records.</p>
+          <p class="text-muted mb-0">No details about you found in your records.</p>
           {% else %}
           <p class="text-muted mb-0">We could not read your records, so nothing has been filled in here.</p>
           {% endif %}

@@ -164,7 +164,7 @@ def test_the_closed_menu_is_one_action_and_one_line(svc, monkeypatch):
     menu = _menu(c.get("/home").get_data(as_text=True))
     assert menu.count('id="explore-sample"') == 1
     assert "Explore with made-up records" in menu
-    assert ("Coming for invited testers: your doctor's records, Apple "
+    assert ("Coming later in the beta: your doctor's records, Apple "
             "Health and wearables, uploading a file from your patient "
             "portal.") in menu
     assert "Coming soon" not in menu and "menu-group" not in menu

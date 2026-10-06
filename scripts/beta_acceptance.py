@@ -273,7 +273,7 @@ def row_care_gaps(s, base, agent, run):
         return run.step(name, "UNAVAILABLE",
                         "the page says the screening review did not run")
     items = body.count('class="brief-field"')
-    sourced = body.count("brief-source-id")
+    sourced = body.count('class="brief-source"')
     if items:
         ok = sourced == items
         return run.step(name, "PASS" if ok else "FAIL",
@@ -620,11 +620,12 @@ def main():
              "the question is on the page" if reopened else
              ("no turn to reopen" if conversation is None else "the earlier turn is not on the page"))
 
-    # 7. The appointment brief: every field it shows names its source record,
-    #    and a missing section says so — never a fabricated negative.
+    # 7. The appointment brief: every field it shows says it came from the
+    #    records, and a missing section says so — never a fabricated
+    #    negative. The words, not the record type or id (#877).
     r = s.get(f"{base}/brief", params={"agent": agent}, timeout=30)
     html = r.text if r.status_code == 200 else ""
-    sourced = html.count("brief-source-id")
+    sourced = html.count('class="brief-source"')
     missing = html.count("Not available from your connected records")
     unreachable = "could not reach your records" in html
     if r.status_code != 200:

@@ -165,7 +165,11 @@
     }
     const a = el("a", "btn-primary", "Open the review");
     a.href = "/review/" + AGENT + "/" + actionId;
-    a.target = "_blank"; a.rel = "noopener";
+    // Same tab on a phone: a new tab in an in-app browser can lose the
+    // sign-in (#876). A wide screen keeps the chat open beside it.
+    if (window.matchMedia && window.matchMedia("(min-width: 700px)").matches) {
+      a.target = "_blank"; a.rel = "noopener";
+    }
     c.appendChild(a);
     log.appendChild(c); scroll();
     // Only the intake form ends in a PDF; polling for one on any other
@@ -177,7 +181,7 @@
     const c = el("div", "card pdf");
     c.appendChild(el("h4", null, "Your intake form is ready"));
     c.appendChild(el("p", null,
-      "Reviewed by you, provenance-stamped, and delivered over a signed link."));
+      "You checked it, and the PDF says so. The link works for one day."));
     const a = el("a", "btn-primary", "Open the PDF");
     a.href = url; a.target = "_blank"; a.rel = "noopener";
     c.appendChild(a);
@@ -479,7 +483,7 @@
   fetch("/api/trust").then((r) => r.json()).then((d) => {
     const pill = document.getElementById("trust-pill");
     const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "guardrails " + grade;
+    pill.textContent = "Safety " + grade;
   }).catch(() => {});
 
   box.focus();

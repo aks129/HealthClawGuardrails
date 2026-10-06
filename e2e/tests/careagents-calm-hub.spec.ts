@@ -21,7 +21,7 @@ const PHONE = {
 };
 
 const CLOSED_LINE =
-  "Coming for invited testers: your doctor's records, Apple Health and " +
+  "Coming later in the beta: your doctor's records, Apple Health and " +
   'wearables, uploading a file from your patient portal.';
 
 test.describe('calm hub, real records closed', () => {

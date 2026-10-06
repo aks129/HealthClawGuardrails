@@ -171,7 +171,7 @@
     {% elif hub.has_real %}
     <p class="menu-closed-line">Adding more records isn't open right now.</p>
     {% else %}
-    <p class="menu-closed-line">Coming for invited testers: your doctor's records, Apple Health and wearables, uploading a file from your patient portal.</p>
+    <p class="menu-closed-line">Coming later in the beta: your doctor's records, Apple Health and wearables, uploading a file from your patient portal.</p>
     {% endif %}
     {% elif not hub.records %}
     <p class="onboard-lead">Start with sample records, or find your own.</p>
@@ -253,13 +253,13 @@
         own health records and pointing them at a tool you chose. CareAgents is
         not your doctor and not a hospital — different rules apply than you may
         be used to.</li>
-      <li><b>Where your records live:</b> behind the HealthClaw guardrail
-        layer, in a private space scoped to you — with identifier redaction on
-        reads and an audit log of every access.
+      <li><b>Where your records live:</b> with HealthClaw, in a private space
+        just for you. Your name and details are taken out before your
+        assistant reads a record, and every look is logged.
         <b>CareAgents itself stores no health data</b> — only your account and
         a pointer to that space.</li>
-      <li><b>What the AI sees:</b> redacted records, when a question needs
-        them. Your data is <b>never used to train models</b> and never sold.</li>
+      <li><b>What the AI sees:</b> your records with your name and details
+        taken out, only when a question needs them. Your data is <b>never used to train models</b> and never sold.</li>
       <li><b>The AI can be wrong</b> — and your connected records may be
         incomplete. Don't treat either as a substitute for your official
         records or for professional medical judgment.</li>

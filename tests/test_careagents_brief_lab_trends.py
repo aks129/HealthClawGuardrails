@@ -57,7 +57,7 @@ def test_the_page_leads_with_the_trend(app, svc, monkeypatch):  # noqa: F811
     alert = _alert(body)
     assert HEADING in alert
     assert RISE in alert and PROMPTLY in alert
-    intro = body.index("A read-only snapshot of your records")
+    intro = body.index("A snapshot of your records")
     assert intro < body.index(HEADING) < body.index("Active problems")
 
 

@@ -391,9 +391,11 @@
               // failure printed for an outcome nobody observed. Here the
               // engine observed it. Naming what failed matters — the
               // approval landed, the work after it did not.
+              // Plain words first (#876). This handler serves every kind
+              // of request, so "this request", not "your form".
               gateMsg.textContent =
-                'Your approval went through and this request could not be ' +
-                'completed. Approving again will not retry it. ' +
+                "We couldn't finish this request. " +
+                "Approving again won't retry it. " +
                 'Ask your assistant to try again. ' +
                 'Your hub lists it as not finished.';
               return;

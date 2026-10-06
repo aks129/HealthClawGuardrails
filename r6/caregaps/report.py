@@ -82,8 +82,17 @@ def build_caregaps_summary(results):
     return {**buckets, "total": len(results), "gaps": gaps}
 
 
+def _sentence(note):
+    """The rule's note as a sentence of its own. Notes are written to follow
+    a dash elsewhere, so they start lowercase; after ". " that read as a
+    typo (#877)."""
+    note = note or ""
+    return note[:1].upper() + note[1:]
+
+
 def _consumer_line(r):
-    title, cadence, note = r.get("title"), r.get("cadence"), r.get("note")
+    title, cadence = r.get("title"), r.get("cadence")
+    note = _sentence(r.get("note"))
     status = r.get("status")
     # `status` travels with the line so a consumer can separate due from
     # up-to-date without re-deriving it from the prose. The brief's care-gaps

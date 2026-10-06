@@ -146,7 +146,7 @@ TOOLS = [
 ]
 
 TOOL_LABELS = {
-    "get_health_summary": "Reading your records — redacted view",
+    "get_health_summary": "Reading your records",
     "get_labs": "Interpreting your labs",
     "show_lab_timeline": "Charting your results over time",
     "get_care_gaps": "Checking preventive care gaps",

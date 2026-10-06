@@ -195,8 +195,8 @@ def _page_session(page):
 def test_care_gaps_brief_row_passes_sourced_items_and_an_honest_none(run):
     due = ('<h2>Preventive care due</h2><div class="brief-section">'
            '<div class="brief-field"><span class="brief-label">Screening</span>'
-           '<span class="brief-source">from Observation '
-           '<span class="brief-source-id">o1</span></span></div></div>'
+           '<span class="brief-source">From your records</span>'
+           '</div></div>'
            '<h2>Recent and upcoming visits</h2>')
     assert ba.row_care_gaps(_page_session(due), BASE, "a", run)
     assert run.steps[-1]["due_items"] == 1

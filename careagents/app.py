@@ -1944,7 +1944,7 @@ def create_app(config: Config | None = None,
         for tenant, (agent, conn) in tenants.items():
             for a in hc.recent_actions(tenant):
                 state = hub_view.recent_state(a.get("status"))
-                if not state:
+                if not state or _failed_long_ago(state, a, now):
                     continue
                 item = {"id": a.get("id"), "state": state,
                         "label": _KIND_LABELS.get(a.get("kind"),
@@ -1970,6 +1970,22 @@ def create_app(config: Config | None = None,
                     item["link"] = link
             out.append(item)
         return out
+
+    def _failed_long_ago(state, action, now):
+        """A failed request leaves the hub after a day (#876). It could not
+        be cleared, and sat beside the ready form that a retry made. Only
+        `failed`: a line that asks the person to check with us stays, and
+        so does one we cannot date."""
+        if state != "failed":
+            return False
+        try:
+            when = datetime.fromisoformat(
+                str(action.get("updated_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return now - when.timestamp() > 86400
 
     def _pdf_link(tenant, action_id, now):
         try:

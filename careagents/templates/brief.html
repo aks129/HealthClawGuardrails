@@ -6,7 +6,10 @@
   <div class="hub-head">
     <div>
       <h1>Appointment Brief</h1>
-      <div class="hub-sub">A read-only snapshot of your records before your visit. Every item links to the source record it came from.</div>
+      {# No record type or id beside an item: "from Observation demo-obs-a1c"
+         is record jargon to a person on a phone (#877). The engine still
+         sends both; this page does not show them. #}
+      <div class="hub-sub">A snapshot of your records to bring to your visit.</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin-top:4px">
       <a class="pill" href="/chat?agent={{ agent_id|urlencode }}">← chat</a>
@@ -45,7 +48,7 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+        <span class="brief-source">From your records</span>
       </div>
       {% endfor %}
     </div>
@@ -64,7 +67,7 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+        <span class="brief-source">From your records</span>
       </div>
       {% endfor %}
     </div>
@@ -83,7 +86,7 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+        <span class="brief-source">From your records</span>
       </div>
       {% endfor %}
     </div>
@@ -110,7 +113,7 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+        <span class="brief-source">From your records</span>
       </div>
       {% endfor %}
     </div>
@@ -131,7 +134,7 @@
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
         <span class="brief-value">{{ f.value }}</span>
-        <span class="brief-source">from {{ f.sourceType }} <span class="brief-source-id">{{ f.sourceId }}</span></span>
+        <span class="brief-source">From your records</span>
       </div>
       {% endfor %}
     </div>
