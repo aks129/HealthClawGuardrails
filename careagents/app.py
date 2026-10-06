@@ -2396,6 +2396,21 @@ def create_app(config: Config | None = None,
         except Exception:               # pragma: no cover - defensive
             logger.warning("connected notice failed to send")
 
+    def _imessage_reverify(account_id: str, handle: str) -> None:
+        """Tell the owner, once, that their phone was asked to re-confirm
+        (#871). Masked, and skipped quietly when email is not set up."""
+        if not cfg.resend_api_key:
+            return
+        acct = svc.get_account(account_id)
+        if acct is None:
+            return
+        try:
+            mail.send_notice(cfg, acct.email,
+                             "CareAgents asked your phone to confirm",
+                             imessage.reverify_notice(handle))
+        except Exception:               # pragma: no cover - defensive
+            logger.warning("reverify notice failed to send")
+
     def _imessage_pending_count(ctx: dict) -> int:
         # The approvals page's rule (#215): a revoked connection is not a
         # pathway to the tenant's requests, so it is not asked. Raised as
@@ -2414,6 +2429,8 @@ def create_app(config: Config | None = None,
         queue_error=HealthClawError,
         burst_window_seconds=cfg.chat_window_seconds,
         on_connected=_imessage_connected,
+        reverify_seconds=cfg.imessage_reverify_days * 86400,
+        on_reverify=_imessage_reverify,
         # APPROVALS by text: the approvals page's own source and its rule —
         # an engine that cannot answer raises, never reads as zero (#215).
         pending_count=_imessage_pending_count)

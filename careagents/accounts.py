@@ -916,7 +916,14 @@ class AccountService:
                          Surface.status == "active")
                  .order_by(Surface.bound_at.desc())
                  .first())
-            return _surf_dict(x) | {"account_id": x.account_id} if x else None
+            if x is None:
+                return None
+            # The re-verification clocks ride along (#871).
+            return _surf_dict(x) | {
+                "account_id": x.account_id, "bound_at": x.bound_at,
+                "verified_at": x.verified_at,
+                "last_inbound_at": x.last_inbound_at,
+                "reverify_notified_at": x.reverify_notified_at}
 
     def bind_surface(self, surface_id: str, handle: str) -> None:
         with self.session() as s:
@@ -961,6 +968,13 @@ class AccountService:
                              Surface.status == "active").all())
             if any(x.account_id != account_id for x in bound):
                 return "taken"
+            if bound and not pending_surface_id:
+                # Bound here already: the sign-in link re-confirms (#871).
+                # Refreshed in place, so the handle keeps its assistant.
+                for x in bound:
+                    x.verified_at = x.last_inbound_at = now()
+                    x.reverify_notified_at = None
+                return "connected"
             if pending_surface_id:
                 x = s.get(Surface, pending_surface_id)
                 if x is None or x.account_id != account_id:
@@ -981,6 +995,8 @@ class AccountService:
             x.bound_at = now()
             x.code_exp = None
             x.welcome_due = 1 if welcome else 0
+            x.verified_at = x.last_inbound_at = now()
+            x.reverify_notified_at = None
             st = self._handle_state(s, handle)
             st.opted_out_at = None
             return "connected"
@@ -1012,6 +1028,22 @@ class AccountService:
                             .where(Surface.id == surface_id,
                                    Surface.welcome_due == 1)
                             .values(welcome_due=0))
+            return res.rowcount == 1
+
+    def imessage_note_inbound(self, surface_id: str) -> None:
+        """A bound handle's text was let through: it is not silent."""
+        with self.session() as s:
+            s.execute(update(Surface).where(Surface.id == surface_id)
+                      .values(last_inbound_at=now()))
+
+    def imessage_mark_reverify(self, surface_id: str) -> bool:
+        """True once per re-verification: the first time it is required.
+        A conditional update, so two racing texts email the owner once."""
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id,
+                                   Surface.reverify_notified_at.is_(None))
+                            .values(reverify_notified_at=now()))
             return res.rowcount == 1
 
     def disconnect_imessage(self, account_id: str,

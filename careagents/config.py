@@ -119,6 +119,11 @@ class Config:
         # Empty = surface hidden.
         self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE") or (
             self.sendblue_from_number if self.sendblue_enabled else "")
+        # Days a bound iMessage handle is answered before its owner
+        # re-confirms it with a texted link (#871): numbers get reassigned.
+        # At least 1, or a confirm would be stale the moment it is made.
+        self.imessage_reverify_days = max(1, int(e.get(
+            "CARE_IMESSAGE_REVERIFY_DAYS", "60")))
         # Where a new /beta request is announced (careagents/beta_signup.py).
         # Unset = no announcement; the request is still saved.
         self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")

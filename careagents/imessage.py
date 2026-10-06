@@ -19,6 +19,7 @@ import hashlib
 import math
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import quote, unquote
@@ -34,6 +35,10 @@ BIND_ATTEMPTS = 5
 #: Sign-in links one sender can be sent per window. Past it, no reply.
 LINKS_PER_WINDOW = 3
 WINDOW_SECONDS = 30 * 60
+#: A bound handle silent this long re-confirms before its next answer,
+#: even inside the re-verify window (#871): a reassigned number goes quiet
+#: before its new holder texts.
+REVERIFY_SILENCE_SECONDS = 30 * 86400
 
 CONTACT = "contactus@healthclaw.io"
 
@@ -175,6 +180,24 @@ def masked_display(handle: str | None) -> str:
     if "@" in s:
         return f"Apple ID {mask(s)}"
     return f"phone ending in {s[-4:]}" if len(s) >= 4 else "a phone"
+
+
+def reverify_text(url: str) -> str:
+    """A bound handle due to re-confirm. The same for every handle: the
+    reader may be a number's new holder, so nothing here says whose it
+    was (#866)."""
+    return ("It's been a while. Tap this link to confirm this is still "
+            f"your phone: {url} The link works once, for 30 minutes.")
+
+
+def reverify_notice(handle: str) -> str:
+    """The one line emailed to the owner when a handle must re-confirm."""
+    if "@" in handle:
+        what = f"the Apple ID {mask(handle)}"
+    else:
+        what = f"the phone ending in {handle[-4:]}"
+    return (f"We asked {what} to confirm it's still yours before "
+            "answering texts.")
 
 
 def no_agent_text(origin: str) -> str:
@@ -427,6 +450,11 @@ class Deps:
     #: ctx -> how many requests wait for this person's OK. Raises
     #: `queue_error` when that could not be found out; never 0 for it.
     pending_count: Callable[[dict], int] | None = None
+    #: How long a binding holds before its owner re-confirms it (#871).
+    reverify_seconds: float = 60 * 86400
+    #: (account_id, handle) the first time a handle must re-confirm.
+    #: Tells the owner.
+    on_reverify: Callable[[str, str], None] | None = None
 
 
 def link_url(origin: str, token: str) -> str:
@@ -459,6 +487,38 @@ def bind_by_code(deps: Deps, handle: str, code: str,
         return {"error": "handle taken", "reply": TAKEN_TEXT}, 409
     notify_connected(deps, surface["account_id"], handle)
     return {"ok": True, "reply": WELCOME_TEXT}, 200
+
+
+def reverify_due(surface: dict, now: float, window_seconds: float) -> bool:
+    """True when a bound handle must re-confirm before it is answered:
+    already asked, verified longer ago than the window, or silent for
+    REVERIFY_SILENCE_SECONDS. A binding with no verified time counts from
+    when it was bound, as the migration backfills; with neither, it is due
+    (fail closed). One with no recorded text counts from its verification.
+    """
+    if surface.get("reverify_notified_at"):
+        return True
+    verified = surface.get("verified_at") or surface.get("bound_at")
+    if not verified:
+        return True
+    last = max(verified, surface.get("last_inbound_at") or 0)
+    return (now - verified >= window_seconds
+            or now - last >= REVERIFY_SILENCE_SECONDS)
+
+
+def ask_to_reverify(deps: Deps, surface: dict, word: str | None
+                    ) -> tuple[dict, int]:
+    """No run: a sign-in link, under the same allowance as any other. On
+    confirm by the same account, accounts.bind_imessage_handle refreshes
+    the binding; another account meets the usual "taken"."""
+    svc = deps.svc
+    handle = surface["handle"]
+    if svc.imessage_mark_reverify(surface["id"]) and deps.on_reverify:
+        deps.on_reverify(surface["account_id"], handle)
+    token = svc.issue_imessage_link(handle)
+    if token is None:            # past the per-window link allowance
+        return ({"reply": START_CAPPED_TEXT} if word == "start" else {}), 200
+    return {"reply": reverify_text(link_url(deps.origin, token))}, 200
 
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
@@ -511,6 +571,13 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         url = link_url(deps.origin, token)
         return {"reply": start_text(url) if word == "start"
                 else link_text(url)}, 200
+
+    # Before anything that speaks for the account: START would say it is
+    # connected, APPROVALS would give its count. STOP and HELP stay above.
+    if reverify_due(surface, time.time(), deps.reverify_seconds):
+        return ask_to_reverify(deps, surface, word)
+    # Only once let through, so a stranger's texts never reset the clock.
+    svc.imessage_note_inbound(surface["id"])
 
     if word == "start":
         return {"reply": START_BOUND_TEXT}, 200
