@@ -243,6 +243,15 @@ def _redact_recursive(obj):
 
     _redact_fields(obj, narrative=bool(obj.get('resourceType')))
 
+    # A Coding.system is a URI string. Anything else (a list, an object, a
+    # number) is not a system, made labelling raise for every read on the
+    # tenant (#885), and can carry whatever text was packed into it. It is
+    # dropped, never echoed.
+    for coding in obj.get('coding') if isinstance(obj.get('coding'), list) else ():
+        if isinstance(coding, dict) and 'system' in coding \
+                and not isinstance(coding['system'], str):
+            coding.pop('system')
+
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an
     # Attachment-only key, or `data` (SampledData also has `data`, with

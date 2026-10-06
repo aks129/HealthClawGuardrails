@@ -52,6 +52,7 @@ from __future__ import annotations
 import collections
 
 from r6 import terminology_resolver as _resolver_mod
+from r6.safe_read import coding_system
 
 # System URIs, canonical form.
 LOINC = "http://loinc.org"
@@ -261,8 +262,13 @@ _MISSES: collections.Counter = collections.Counter()
 
 
 def canonical_system(system: str | None) -> str:
-    """Normalize a code system URI (OIDs and http/https variants all appear)."""
-    if not system:
+    """Normalize a code system URI (OIDs and http/https variants all appear).
+
+    A system that is not a string (a list, an object, a number) reads as
+    absent. Stored as written, one such Coding made every redacted read on
+    the tenant raise here and return 500 (#885).
+    """
+    if not isinstance(system, str) or not system:
         return ""
     return _SYSTEM_ALIASES.get(system.strip(), system.strip())
 
@@ -278,7 +284,10 @@ def lookup(system: str | None, code: str | None) -> str | None:
     so a test can replace `r6.terminology_resolver.resolve` by path and have
     this see it.
     """
-    if not code:
+    # A code is a string; an int (CVX "3" written as 3) still reads as one.
+    # A list, an object or a bool is no code, and is never stringified into
+    # the miss counter (#885).
+    if isinstance(code, bool) or not isinstance(code, (str, int)) or code == "":
         return None
     key = (canonical_system(system), str(code).strip())
     label = _LABELS.get(key)
@@ -329,7 +338,7 @@ def label_codings(obj):
         for coding in codings:
             if not isinstance(coding, dict):
                 continue
-            label = lookup(coding.get("system"), coding.get("code"))
+            label = lookup(coding_system(coding), coding.get("code"))
             if label:
                 coding["display"] = label
                 labels.append(label)
