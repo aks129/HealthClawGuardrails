@@ -2396,6 +2396,20 @@ def create_app(config: Config | None = None,
         except Exception:               # pragma: no cover - defensive
             logger.warning("connected notice failed to send")
 
+    def _imessage_reverify(account_id: str, handle: str) -> None:
+        """Tell the owner, once, that their phone was asked to re-confirm
+        (#871). Masked, and skipped quietly when email is not set up."""
+        if not cfg.resend_api_key:
+            return
+        acct = svc.get_account(account_id)
+        if acct is None:
+            return
+        try:
+            mail.send_notice(cfg, acct.email, imessage.REVERIFY_SUBJECT,
+                             imessage.reverify_notice(handle))
+        except Exception:               # pragma: no cover - defensive
+            logger.warning("reverify notice failed to send")
+
     def _imessage_pending_count(ctx: dict) -> int:
         # The approvals page's rule (#215): a revoked connection is not a
         # pathway to the tenant's requests, so it is not asked. Raised as
@@ -2414,6 +2428,8 @@ def create_app(config: Config | None = None,
         queue_error=HealthClawError,
         burst_window_seconds=cfg.chat_window_seconds,
         on_connected=_imessage_connected,
+        reverify_seconds=cfg.imessage_reverify_days * 86400,
+        on_reverify=_imessage_reverify,
         # APPROVALS by text: the approvals page's own source and its rule —
         # an engine that cannot answer raises, never reads as zero (#215).
         pending_count=_imessage_pending_count)
@@ -2547,14 +2563,27 @@ def create_app(config: Config | None = None,
                 session.pop("imessage_link", None)
                 return render_template("imessage_link.html",
                                        outcome="expired"), 410
+            # Already this account's phone: the link is a re-confirm.
+            bound = svc.find_surface_by_handle(handle)
+            again = bool(bound and bound["account_id"]
+                         == current_account().id)
             return render_template("imessage_link.html", outcome="confirm",
+                                   again=again,
                                    handle=imessage.display_handle(handle))
         link_id = session.pop("imessage_link", None)
         if not link_id:
             return redirect(url_for("home"))
         if request.form.get("connect") != "yes":
+            handle = svc.imessage_link_handle(link_id)
             # Spent, so the same link opened again reads as used.
             svc.void_imessage_link(link_id)
+            # The owner says their own phone isn't theirs any more (#871):
+            # disconnect it as Settings does. Only this account's binding.
+            bound = svc.find_surface_by_handle(handle) if handle else None
+            if bound and bound["account_id"] == current_account().id:
+                svc.disconnect_imessage(bound["account_id"], bound["id"])
+                return render_template("imessage_link.html",
+                                       outcome="disconnected")
             return render_template("imessage_link.html", outcome="declined")
         acct = current_account()
         handle = svc.imessage_link_handle(link_id)
@@ -2578,7 +2607,11 @@ def create_app(config: Config | None = None,
                   or request.args.get("handle") or "").strip()
         surface = svc.find_surface_by_handle(
             imessage.normalize_handle(raw) or raw, kind="imessage", also=raw)
-        if not surface or not surface.get("agent_id"):
+        if (not surface or not surface.get("agent_id")
+                or imessage.reverify_due(surface, time.time(),
+                                         imessage_deps.reverify_seconds)):
+            # Due to re-confirm (#871): read as unbound, so the relay sends
+            # nothing to whoever holds the number now.
             return jsonify({"error": "unbound handle"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
         if not ctx:

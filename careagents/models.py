@@ -149,6 +149,14 @@ class Surface(Base):
     # 1 when the next reply on this surface should open with the welcome:
     # set by a bind that had no message to answer (the sign-in link).
     welcome_due = Column(Integer, default=0)
+    # iMessage re-verification (#871): a number can be reassigned to someone
+    # else. When the owner last proved the handle is theirs (a bind, or a
+    # re-confirm through /link), when it last texted, and when we first
+    # asked it to re-confirm (NULL while nothing is pending). See
+    # careagents.imessage.reverify_due.
+    verified_at = Column(Float, nullable=True)
+    last_inbound_at = Column(Float, nullable=True)
+    reverify_notified_at = Column(Float, nullable=True)
     account = relationship("Account", back_populates="surfaces")
 
 
@@ -370,6 +378,24 @@ def _ensure_columns(engine) -> None:
         if "welcome_due" not in cols:
             _add_column(engine, "ca_surfaces", "welcome_due",
                         "INTEGER DEFAULT 0")
+        for name in ("verified_at", "last_inbound_at",
+                     "reverify_notified_at"):
+            if name not in cols:
+                _add_column(engine, "ca_surfaces", name, "FLOAT")
+        # A binding from before #871 counts as verified when it was bound,
+        # or now if that was never recorded, and as last heard from now:
+        # silence counts from the deploy, so existing testers are not all
+        # asked (and their owners emailed) that day. Idempotent: only NULLs
+        # change.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE ca_surfaces SET verified_at = COALESCE(bound_at, :t) "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND verified_at IS NULL"), {"t": now()})
+            conn.execute(text(
+                "UPDATE ca_surfaces SET last_inbound_at = :t "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND last_inbound_at IS NULL"), {"t": now()})
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:

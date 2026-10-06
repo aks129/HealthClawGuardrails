@@ -5,7 +5,17 @@
 {# The page a texted sign-in link ends on (careagents.imessage). #}
 <main class="setup-wrap">
   <div class="setup-card">
-    {% if outcome == "confirm" %}
+    {% if outcome == "confirm" and again %}
+    <h1>Is this still your phone?</h1>
+    <p class="setup-sub">Texts from <b>{{ handle }}</b> can ask about your
+      health records.</p>
+    <form method="post" action="/link/done">
+      <button class="btn-primary btn-block" name="connect" value="yes">Yes, it's still mine</button>
+    </form>
+    <form method="post" action="/link/done">
+      <button class="btn-secondary btn-block" name="connect" value="no">No, it isn't</button>
+    </form>
+    {% elif outcome == "confirm" %}
     <h1>Connect this phone?</h1>
     <p class="setup-sub">Texts from <b>{{ handle }}</b> will be able to ask
       about your health records. Only say yes if this is your own phone or
@@ -21,11 +31,21 @@
     <p class="setup-sub">Go back to Messages and text your question. To
       stop any time, text STOP.</p>
     <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
+    {% elif outcome == "confirmed" %}
+    <h1>Confirmed. This phone is still connected to CareAgents.</h1>
+    <p class="setup-sub">Go back to Messages and text your question. To
+      stop any time, text STOP.</p>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% elif outcome == "connected_setup" %}
     <h1>You're connected.</h1>
     <p class="setup-sub">One more step: choose your records so your
       assistant can answer. Then text your question.</p>
     <a class="btn-primary btn-block" href="/home">Choose my records</a>
+    {% elif outcome == "disconnected" %}
+    <h1>Disconnected.</h1>
+    <p class="setup-sub">Texts from that phone won't reach your
+      assistant.</p>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% elif outcome == "declined" %}
     <h1>Not connected.</h1>
     <p class="setup-sub">OK, we didn't connect that phone. If you didn't
