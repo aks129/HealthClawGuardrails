@@ -344,10 +344,11 @@ def _shown(value):
         return value
     parts = value.split('-')
     if len(parts) == 3 and all(p.isdigit() for p in parts) and len(parts[0]) == 4:
-        try:
-            return f'{_MONTHS[int(parts[1]) - 1]} {int(parts[2])}, {parts[0]}'
-        except IndexError:
+        month, day = int(parts[1]), int(parts[2])
+        # Month 00 indexed _MONTHS[-1] and read as December (#884 QA).
+        if not (1 <= month <= 12 and 1 <= day <= 31):
             return value
+        return f'{_MONTHS[month - 1]} {day}, {parts[0]}'
     if value.isalpha() and value.islower():
         return value.capitalize()
     return value

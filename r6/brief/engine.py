@@ -92,6 +92,10 @@ UNLABELLED = "Recorded, name unavailable"
 #: No code element at all. There is nothing to name.
 UNKNOWN = "Unknown"
 
+#: A medicine on the list whose name we cannot show (#884 G7).
+MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
+                    "Ask your doctor.")
+
 #: What the brief says where the record holds no value it can show.
 DOSE_NOT_LISTED = "Dose not listed in your records"
 RESULT_NOT_LISTED = "Result not listed in your records"
@@ -152,10 +156,17 @@ def _date_display(value: str) -> str:
         year = int(parts[0])
         if len(parts) == 1:
             return str(year)
-        month = _MONTHS[int(parts[1]) - 1]
+        month_n = int(parts[1])
+        # Month 00 indexed _MONTHS[-1] and read as December (#884 QA).
+        if not 1 <= month_n <= 12:
+            return ""
+        month = _MONTHS[month_n - 1]
         if len(parts) == 2:
             return f"{month} {year}"
-        return f"{month} {int(parts[2])}, {year}"
+        day = int(parts[2])
+        if not 1 <= day <= 31:
+            return ""
+        return f"{month} {day}, {year}"
     except (ValueError, IndexError):
         return ""
 
@@ -279,7 +290,8 @@ def _medication_display(resource: dict) -> str:
 
     medicationReference.display is upstream text with no code behind it, so
     it is never shown (#884 QA F3). A reference or a code we cannot name is
-    "Recorded, name unavailable"; nothing at all is "Unknown medication".
+    the plain sentence MEDICINE_UNNAMED, as is a request with nothing to
+    name it by (#884 G7).
     """
     cc = resource.get("medicationCodeableConcept")
     label = _concept_label(cc)
@@ -287,8 +299,8 @@ def _medication_display(resource: dict) -> str:
         return label
     if _has_code(cc) or (resource.get("medicationReference") or {}).get(
             "reference"):
-        return UNLABELLED
-    return "Unknown medication"
+        return MEDICINE_UNNAMED
+    return MEDICINE_UNNAMED
 
 
 def _encounter_display(enc: dict) -> str:

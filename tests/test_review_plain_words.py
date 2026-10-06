@@ -70,6 +70,24 @@ def test_about_you_reads_like_a_person_wrote_it():
                                  ("City", "Springfield")]
 
 
+@pytest.mark.parametrize("bad", ["1985-00-15", "1985-13-15", "1985-03-00"])
+def test_an_impossible_date_is_shown_as_it_came(bad):
+    """Month 00 indexed the month list at -1 and read as December."""
+    from r6.actions.review import _shown
+    assert _shown(bad) == bad
+
+
+def test_the_heading_and_the_declined_page_read_plainly(app):
+    html = _render(app)
+    assert "Check each item before we make your form" in html
+    assert "ask for it to be proposed again" not in HANDLERS
+    assert HANDLERS.count("ask your assistant to start it again") == 2
+    declined = HANDLERS[HANDLERS.index("res.b.declined === true"):]
+    declined = declined[:declined.index("return;")]
+    assert "form.querySelectorAll('input')" in declined
+    assert "el.disabled = true;" in declined
+
+
 def test_decline_goes_with_an_approval_that_may_have_gone_through():
     """A failed approval left Decline live beside a locked Approve: a second,
     contrary answer to a request that may have run."""

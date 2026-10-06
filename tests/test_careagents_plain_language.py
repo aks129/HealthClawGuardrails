@@ -147,7 +147,11 @@ def test_no_upstream_text_or_display_reaches_the_brief():
         assert "CANARY" not in f.label + f.value, f
     labs = build_labs([obs])
     assert labs[0].label == "Hemoglobin A1c"        # by code, from the table
-    assert [m.label for m in build_medications(meds)] == [UNLABELLED] * 2
+    from r6.brief.engine import MEDICINE_UNNAMED
+    assert [m.label for m in build_medications(meds)] == [MEDICINE_UNNAMED] * 2
+    assert MEDICINE_UNNAMED == ("A medicine is listed, but we can't show "
+                                "its name. Ask your doctor.")
+    assert UNLABELLED  # still the label for an unnamed condition or lab
 
 
 def test_a_blood_pressure_panel_shows_its_numbers():
@@ -187,6 +191,14 @@ def test_a_lab_value_is_a_finite_number_with_a_coded_unit(vq, shown):
                              "code": "4548-4"}]},
         "valueQuantity": vq, "effectiveDateTime": "2026-09-01"}])
     assert field.value == f"{shown} (Sep 1, 2026)"
+
+
+@pytest.mark.parametrize("bad", ["2026-00-15", "2026-13-01", "2026-09-00",
+                                 "2026-00"])
+def test_an_impossible_date_is_left_out_of_the_brief(bad):
+    """Month 00 indexed the month list at -1 and read as December."""
+    from r6.brief.engine import _date_display
+    assert _date_display(bad) == ""
 
 
 def test_a_screening_note_starts_its_own_sentence():
@@ -349,14 +361,50 @@ def test_the_local_stack_names_public_base_url():
 
 # --- #884 patient tester, G7 ------------------------------------------------
 
-def test_the_safety_pill_is_a_link_to_the_grade(cfg, svc, monkeypatch):  # noqa: F811
+def test_the_safety_pill_is_a_link_to_the_safety_page(cfg, svc, monkeypatch):  # noqa: F811
     _app, c, fake, agent_id, tenant, _ = _chat_app(cfg, svc, monkeypatch)
     page = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     pill = re.search(r'<a [^>]*id="trust-pill"[^>]*>', page)
     assert pill, "the pill is not a link"
-    assert "$conformance" in pill.group(0)
+    assert 'href="/safety"' in pill.group(0)
+    assert "_blank" not in pill.group(0)          # the same tab
     js = (ROOT / "careagents" / "static" / "chat.js").read_text()
     assert 'pill.textContent = "Safety grade: " + grade;' in js
+
+
+def test_the_safety_page_says_what_is_tested_and_the_grade(app, svc):  # noqa: F811
+    """#884 G7: a plain page, public like the landing, with today's grade
+    read from the engine, and a small link to the technical report."""
+    r = app.test_client().get("/safety")
+    assert r.status_code == 200
+    page = r.get_data(as_text=True)
+    words = " ".join(_visible(page).split())
+    assert ("Each day we test that your name is hidden, every look at your "
+            "records is logged, and nothing is sent without your OK. "
+            "Today's grade: A.") in words
+    report = re.search(r'<a [^>]*>\s*Technical report\s*</a>', page)
+    assert report and "$conformance" in report.group(0)
+    for word in JARGON:
+        assert word.lower() not in words.lower(), word
+
+
+def test_the_safety_page_without_a_grade_links_the_live_one(app, svc,  # noqa: F811
+                                                            monkeypatch):
+    from careagents.healthclaw import HealthClawError
+
+    def down(self):
+        raise HealthClawError("down", 503)
+    monkeypatch.setattr(FakeClient, "conformance_badge", down)
+    page = app.test_client().get("/safety").get_data(as_text=True)
+    words = " ".join(_visible(page).split())
+    assert "Today's grade: A" not in words
+    assert re.search(r"<a [^>]*\$conformance[^>]*>\s*See today's grade",
+                     page.replace("&#39;", "'"))
+
+
+def test_the_landing_page_links_the_safety_page(app, svc):  # noqa: F811
+    page = app.test_client().get("/").get_data(as_text=True)
+    assert re.search(r'<a href="/safety">See today(’|\')s grade</a>', page)
 
 
 def test_the_review_card_names_the_assistant(cfg, svc, monkeypatch):  # noqa: F811

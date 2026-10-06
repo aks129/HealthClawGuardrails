@@ -5,7 +5,7 @@
 <main class="hero">
   <div class="hero-inner">
     {% if request.args.get("deleted") == "1" %}
-    <p class="inline-msg" role="status">Your account is deleted. The records behind every connection were deleted first. We keep a log of who looked at your records, with no health details in it.</p>
+    <p class="inline-msg deleted-note" role="status">Your account is deleted. The records behind every connection were deleted first. We keep a log of who looked at your records, with no health details in it.</p>
     {% endif %}
     <p class="kicker">Your health, with someone finally on your side of the desk</p>
     <h1>An agent that actually<br>knows your health —<br><em>and asks before it acts.</em></h1>
@@ -72,7 +72,7 @@
     (<a href="https://healthclaw.io" target="_blank" rel="noopener">HealthClaw</a>)
     checks itself on each of these and gives itself a grade from A to F, live,
     in public.
-    <a href="https://app.healthclaw.io/r6/fhir/$conformance?format=text" target="_blank" rel="noopener">See today’s grade</a>.</p>
+    <a href="/safety">See today’s grade</a>.</p>
   </div>
 </section>
 

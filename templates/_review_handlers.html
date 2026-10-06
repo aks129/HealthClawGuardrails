@@ -460,7 +460,7 @@
               gateMsg.className = 'alert alert-secondary';
               gateMsg.textContent =
                 'This request was declined and will not be carried out. ' +
-                'If you change your mind, ask for it to be proposed again.';
+                'If you change your mind, ask your assistant to start it again.';
               return;
             }
             if (tries < 4) { setTimeout(poll, 2000 * tries); return; }
@@ -513,10 +513,15 @@
           return { status: 0, b: {} }; })
         .then(function (res) {
           if (res.status === 200 && res.b.declined === true) {
+            // Declined: nothing on the page is a question any more, so no
+            // choice stays live to suggest otherwise (#884 G7).
+            form.querySelectorAll('input').forEach(function (el) {
+              el.disabled = true;
+            });
             gateMsg.className = 'alert alert-secondary';
             gateMsg.textContent =
               'This request was declined and will not be carried out. ' +
-              'If you change your mind, ask for it to be proposed again.';
+              'If you change your mind, ask your assistant to start it again.';
             showBackToChat();
             return;
           }

@@ -11,7 +11,7 @@ from tests.test_beta_acceptance_rows import BASE, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
 
-PROMPTLY = "Contact your clinician promptly."
+PROMPTLY = "Contact your doctor promptly."
 RISE = "creatinine rose from 0.8 to 1.3 mg/dL in 6 days"
 
 def _brief_with_trend():

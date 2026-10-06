@@ -14,11 +14,10 @@
     <div class="chat-tools">
       <a class="pill" href="/home">← hub</a>
       <a class="pill" href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
-      {# A link to what the grade means, the same page the landing links
-         (#884 G7). Off-site, so a new tab: the chat stays where it was. #}
-      <a class="pill pill-quiet" id="trust-pill" title="See how the safety grade is worked out"
-         href="https://app.healthclaw.io/r6/fhir/$conformance?format=text"
-         target="_blank" rel="noopener">Safety grade: …</a>
+      {# A link to what the grade means, the page the landing links too
+         (#884 G7). Ours, so the same tab. #}
+      <a class="pill pill-quiet" id="trust-pill" title="What the safety grade means"
+         href="/safety">Safety grade: …</a>
     </div>
   </div>
 

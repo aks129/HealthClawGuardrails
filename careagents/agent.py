@@ -476,8 +476,7 @@ _TREND_NOTE = (
     "Each trend line compares the person's own results over time. Report it "
     "as written, in its own sentence: do not paraphrase it into a diagnosis "
     "or name a condition it does not name. When it says to contact the "
-    "clinician promptly, tell the person to contact their clinician "
-    "promptly.")
+    "doctor promptly, tell the person to contact their doctor promptly.")
 
 
 def _timeline_in_words(series: dict) -> dict:

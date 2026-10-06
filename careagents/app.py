@@ -2665,6 +2665,23 @@ def create_app(config: Config | None = None,
             badge = {}
         return jsonify({"badge": badge.get("message", "unavailable")})
 
+    @app.get("/safety")
+    def safety():
+        """What the safety grade means, in plain words (#884 G7). Public,
+        like the landing page that links it. The grade is the engine's,
+        read as /api/trust reads it; without one, the page links the live
+        report instead of showing a grade nobody fetched."""
+        try:
+            message = str(hc.conformance_badge().get("message") or "")
+        except HealthClawError:
+            message = ""
+        grade = message.split(" ")[0] if message else ""
+        return render_template(
+            "safety.html",
+            grade=grade if grade in ("A", "B", "C", "D", "F") else None,
+            report_url=(cfg.healthclaw_public_base.rstrip("/")
+                        + "/r6/fhir/$conformance?format=text"))
+
     @app.get("/manifest.webmanifest")
     def manifest():
         return jsonify({

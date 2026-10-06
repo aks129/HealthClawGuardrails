@@ -771,3 +771,9 @@ textarea:focus-visible {
 .modal-card .delete-warn + .field-label { margin-top: 20px; }
 .modal-card #delete-cancel { margin-top: 12px; }
 .leaving p { margin: 14px 0; line-height: 1.55; }
+
+/* The account-deleted note on the landing page (#884 G7): calm, with room
+   below it before the hero copy. */
+.deleted-note { background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 14px; padding: 14px 16px; color: var(--ink-soft);
+  margin-bottom: 24px; }
