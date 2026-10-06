@@ -22,6 +22,8 @@ import secrets
 from dataclasses import dataclass
 from typing import Callable
 
+from careagents.agent import GENERIC_FAILURE_TEXT
+
 #: A texted sign-in link works once, for this long.
 LINK_TTL_SECONDS = 30 * 60
 #: A pairing code from settings works for this long.
@@ -212,6 +214,43 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# --- a finished run, as one text --------------------------------------------
+
+#: Run statuses after which nothing more will be said.
+FINAL_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "waiting_for_human"})
+
+def timeout_text(origin: str) -> str:
+    host = origin.split("://", 1)[-1].rstrip("/") or origin
+    return f"That took too long. Please try again or open {host}."
+
+
+def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
+    """A finished run's events as the text sent back: the agent's words,
+    then a review link for a form and the URL of a signed document. Both
+    the relay's runs endpoint and the Sendblue deliverer send this."""
+    parts: list[str] = []
+    extras: list[str] = []
+    for event in events or []:
+        kind = event.get("type")
+        payload = event.get("payload") or {}
+        if kind == "agent.text" and payload.get("text"):
+            parts.append(payload["text"])
+        elif kind == "agent.card" and payload.get("type") == "card":
+            if payload.get("kind") == "review":
+                extras.append(
+                    "I've prepared a form for your review — approve each "
+                    f"item here: {origin}/review/{agent_id}/"
+                    f"{payload.get('action_id', '')}")
+            elif payload.get("kind") == "pdf" and payload.get("url"):
+                extras.append(
+                    f"Your signed document is ready: {payload['url']}")
+        elif kind == "agent.error":
+            parts.append(payload.get("text") or GENERIC_FAILURE_TEXT)
+    return "\n\n".join([*parts, *extras]).strip() or (
+        GENERIC_FAILURE_TEXT + " Please try again.")
+
+
 # --- the transport-agnostic core -----------------------------------------
 
 @dataclass
@@ -267,8 +306,13 @@ def bind_by_code(deps: Deps, handle: str, code: str,
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,
                    request_id: str | None = None,
-                   conversation_id: str | None = None) -> tuple[dict, int]:
-    """One inbound text, from any transport. See the module docstring."""
+                   conversation_id: str | None = None,
+                   transport_block: Callable[[dict], str | None] | None = None,
+                   ) -> tuple[dict, int]:
+    """One inbound text, from any transport. See the module docstring.
+
+    `transport_block(ctx)` lets a transport refuse a turn for its own
+    reasons: a sentence answered instead, and no run is queued."""
     svc = deps.svc
     raw = str(raw_handle or "").strip()
     if not raw:
@@ -317,6 +361,9 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
     ctx = svc.imessage_agent_context(surface)
     if not ctx:
         return {"reply": no_agent_text(deps.origin)}, 200
+    refused = transport_block(ctx) if transport_block else None
+    if refused:
+        return {"reply": refused}, 200
     if not text:
         return {"error": "empty message"}, 400
     if len(text) > 2000:

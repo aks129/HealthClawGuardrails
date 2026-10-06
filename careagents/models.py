@@ -183,6 +183,27 @@ class ImessageHandleState(Base):
     link_window_start = Column(Float, nullable=True)
 
 
+class SendblueMessage(Base):
+    """One inbound Sendblue text, as pointers: seen once, and the run whose
+    answer the worker owes it.
+
+    `key_hash` is a SHA-256 of Sendblue's message_handle, so a webhook
+    retry is recognised without keeping Sendblue's id. No content, no
+    number: the answer is read from the run when it is sent, and the
+    number from the surface. `surface_id` is a plain pointer, not a foreign
+    key, because STOP and disconnect delete the surface.
+    """
+    __tablename__ = "ca_sendblue_messages"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("sbm"))
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(Float, default=now)
+    surface_id = Column(String(32), nullable=True)
+    run_id = Column(String(64), nullable=True)
+    delivered_at = Column(Float, nullable=True, index=True)
+    # sent | withheld | failed | timeout | unbound | absent
+    outcome = Column(String(16), nullable=True)
+
+
 class Grant(Base):
     """A consent the person gave a third-party agent to read one connection
     through HealthClaw's MCP server (spec §13.4). A pointer and a decision:

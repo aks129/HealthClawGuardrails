@@ -29,7 +29,7 @@ from careagents import mail
 from careagents.models import (Account, ActivityDay, Agent, Connection,
                                EmailToken, Grant, ImessageHandleState,
                                ImessageLink, Passkey, RealRecordInvite,
-                               Surface, UsageDay, make_engine,
+                               SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -1141,6 +1141,67 @@ class AccountService:
                 return "expired"
             handle = s.get(ImessageLink, link_id).handle
         return self.bind_imessage_handle(account_id, handle, welcome=True)
+
+    def get_surface(self, surface_id: str) -> dict | None:
+        """An active surface by id, with its account, or None."""
+        with self.session() as s:
+            x = s.get(Surface, surface_id)
+            if x is None or x.status != "active":
+                return None
+            return _surf_dict(x) | {"account_id": x.account_id}
+
+    # --- Sendblue: seen-once inbound texts and owed answers ------------------
+    # Pointers only (models.SendblueMessage). `key` is a hash of Sendblue's
+    # message_handle, made by the caller.
+
+    def sendblue_claim_inbound(self, key: str) -> bool:
+        """True the first time `key` is seen; False for a webhook retry."""
+        try:
+            with self.session() as s:
+                s.add(SendblueMessage(key_hash=key))
+            return True
+        except IntegrityError:
+            return False
+
+    def sendblue_release_inbound(self, key: str) -> None:
+        """Forget `key`, so Sendblue's retry is handled afresh."""
+        with self.session() as s:
+            s.query(SendblueMessage).filter_by(key_hash=key).delete()
+
+    def sendblue_track_run(self, key: str, surface_id: str,
+                           run_id: str) -> None:
+        with self.session() as s:
+            x = s.query(SendblueMessage).filter_by(key_hash=key).first()
+            if x is not None:
+                x.surface_id, x.run_id = surface_id, run_id
+
+    def sendblue_pending(self, limit: int = 50) -> list[dict]:
+        """Owed answers, oldest first."""
+        with self.session() as s:
+            rows = (s.query(SendblueMessage)
+                    .filter(SendblueMessage.run_id.isnot(None),
+                            SendblueMessage.delivered_at.is_(None))
+                    .order_by(SendblueMessage.created_at)
+                    .limit(limit).all())
+            return [{"id": x.id, "surface_id": x.surface_id,
+                     "run_id": x.run_id, "created_at": x.created_at}
+                    for x in rows]
+
+    def sendblue_mark_delivered(self, row_id: str, outcome: str) -> bool:
+        """Close an owed answer. True for the one caller that closed it, so
+        two worker processes never both send it."""
+        with self.session() as s:
+            res = s.execute(update(SendblueMessage)
+                            .where(SendblueMessage.id == row_id,
+                                   SendblueMessage.delivered_at.is_(None))
+                            .values(delivered_at=now(), outcome=outcome))
+            return res.rowcount == 1
+
+    def sendblue_set_outcome(self, row_id: str, outcome: str) -> None:
+        with self.session() as s:
+            x = s.get(SendblueMessage, row_id)
+            if x is not None:
+                x.outcome = outcome
 
 
 # --- detach helpers: return plain dict-ish objects usable after the session --

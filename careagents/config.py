@@ -78,9 +78,44 @@ class Config:
         self.fasten_public_key = e.get("FASTEN_PUBLIC_KEY", "")
         # Telegram deep-link target for surface binding.
         self.telegram_bot = e.get("CARE_TELEGRAM_BOT", "")
-        # iMessage handle (phone/email) the Mac-mini relay sends/receives on —
-        # shown to users as "text your agent here". Empty = surface hidden.
-        self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE", "")
+        # Sendblue, a hosted iMessage line (careagents/sendblue.py). On only
+        # when every required setting is present; the webhook refuses
+        # everything otherwise. Real records must not go over this line
+        # until Sendblue's HIPAA instance and BAA are in place
+        # (docs/runbooks/sendblue-imessage.md).
+        self.sendblue_api_key_id = e.get("SENDBLUE_API_KEY_ID", "")
+        self.sendblue_api_secret = e.get("SENDBLUE_API_SECRET", "")
+        self.sendblue_webhook_secret = e.get("SENDBLUE_WEBHOOK_SECRET", "")
+        # The line is sent as `from_number` and shown in settings, so it is
+        # held as E.164, normalized the way inbound handles are. A value that
+        # is not a phone number switches Sendblue off rather than sending
+        # from a malformed line. Imported here: imessage pulls in the agent.
+        from careagents.imessage import mask, normalize_handle
+        raw_from = (e.get("SENDBLUE_FROM_NUMBER") or "").strip()
+        from_number = normalize_handle(raw_from) if raw_from else None
+        if from_number and "@" in from_number:
+            from_number = None
+        if raw_from and not from_number:
+            logger.warning("SENDBLUE_FROM_NUMBER %s is not a phone number; "
+                           "Sendblue is off", mask(raw_from))
+        self.sendblue_from_number = from_number or ""
+        self.sendblue_api_base = (e.get("SENDBLUE_API_BASE")
+                                  or "https://api.sendblue.co").rstrip("/")
+        # Real-record answers over Sendblue: off unless switched on, and it
+        # must stay off until Sendblue's HIPAA instance and BAA exist. Off,
+        # an agent on a non-sample connection gets no turn and no answer by
+        # text, only a pointer to the app (careagents/sendblue_surface.py).
+        self.sendblue_real_records = (e.get("SENDBLUE_REAL_RECORDS") or ""
+                                      ).strip().lower() in (
+                                          "1", "true", "yes", "on")
+        self.sendblue_enabled = all((
+            self.sendblue_api_key_id, self.sendblue_api_secret,
+            self.sendblue_webhook_secret, self.sendblue_from_number))
+        # iMessage handle (phone/email) shown to users as "text your agent
+        # here": the Mac-mini relay's, or the Sendblue line when that is on.
+        # Empty = surface hidden.
+        self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE") or (
+            self.sendblue_from_number if self.sendblue_enabled else "")
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.

@@ -33,6 +33,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
                                  secret_matches)
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
+from careagents import sendblue_surface
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -2404,6 +2405,7 @@ def create_app(config: Config | None = None,
         on_connected=_imessage_connected)
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
+    sendblue_surface.register(app, cfg, svc, imessage_deps)
 
     def _imessage_json_object() -> dict | None:
         """The request's JSON object, {} when there is no body at all, or
@@ -2579,33 +2581,11 @@ def create_app(config: Config | None = None,
             # The relay retries on 503. Answering 404 retired the run as
             # non-existent and dropped the patient's reply (#410).
             return jsonify({"error": "run service unavailable"}), 503
-        if page.get("status") not in (
-                "completed", "failed", "cancelled", "waiting_for_human"):
+        if page.get("status") not in imessage.FINAL_STATUSES:
             return jsonify({"run_id": run_id,
                             "status": page.get("status")}), 202
-
-        parts: list[str] = []
-        extras: list[str] = []
-        for raw in page.get("events") or []:
-            event = _event_for_browser(raw)
-            if not event:
-                continue
-            if event.get("type") == "text" and event.get("text"):
-                parts.append(event["text"])
-            elif event.get("type") == "card" and (
-                    event.get("kind") == "review"):
-                extras.append(
-                    "I've prepared a form for your review — approve each "
-                    f"item here: {cfg.origin}/review/{surface['agent_id']}/"
-                    f"{event.get('action_id', '')}")
-            elif event.get("type") == "card" and (
-                    event.get("kind") == "pdf" and event.get("url")):
-                extras.append(
-                    f"Your signed document is ready: {event['url']}")
-            elif event.get("type") == "error":
-                parts.append(event.get("text") or GENERIC_FAILURE_TEXT)
-        reply = "\n\n".join([*parts, *extras]).strip() or (
-            GENERIC_FAILURE_TEXT + " Please try again.")
+        reply = imessage.run_reply(page.get("events") or [], cfg.origin,
+                                   surface["agent_id"])
         return jsonify({"run_id": run_id, "status": page.get("status"),
                         "reply": reply})
 
