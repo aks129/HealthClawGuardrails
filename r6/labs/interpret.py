@@ -20,6 +20,15 @@ REFERENCES = {
     "panic": "Common critical (panic) value conventions "
              "(consensus laboratory critical-value tables).",
     "ata-lipid": "Adult lipid/HbA1c targets (ATP III / ADA-style thresholds).",
+    "kdigo-2012": "Kidney Disease: Improving Global Outcomes (KDIGO) Acute "
+                  "Kidney Injury Work Group. KDIGO Clinical Practice Guideline "
+                  "for Acute Kidney Injury. Kidney Int Suppl. 2012;2(1):1-138 "
+                  "(creatinine criteria and staging, sections 2.1.1-2.1.2). "
+                  "Used by r6/labs/trend.py.",
+    "si-creatinine": "Creatinine SI conversion: 1 mg/dL = 88.4 umol/L "
+                     "(molar mass 113.12 g/mol; AMA Manual of Style SI "
+                     "conversion table). Creatinine-specific; not a general "
+                     "mass-to-molar factor. Used by r6/labs/trend.py.",
 }
 
 # unit = expected UCUM unit; low/high optional (one-sided ranges allowed);
