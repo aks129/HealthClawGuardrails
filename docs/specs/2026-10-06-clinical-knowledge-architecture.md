@@ -1,6 +1,6 @@
 # Clinical knowledge architecture
 
-Status: proposed, 2026-10-06. This came out of a research and architecture sprint: an inventory of the clinical logic in the code, external best practice, and a review of the roadmap and governance docs.
+Status: proposed, 2026-10-06. It comes from a research and architecture sprint. The sprint inventoried the clinical logic in the code, reviewed external best practice, and checked the roadmap and governance docs.
 
 HealthClaw's clinical logic works, but it is hand-coded in about 20 places. Almost none of it is signed by a clinician, and in places it contradicts itself. This plan makes every number a patient sees come from one versioned, cited, clinician-signed rule. The agent only explains that result. The work comes in three steps, each tied to a beta stage. There is no big rewrite and no CQL engine yet.
 
@@ -23,7 +23,7 @@ Defects, filed as issues:
 - #890: blood pressure crisis guidance disagrees across `r6/smbp/triage.py`, the skill, and `r6/smbp/content.py`. There are four red-flag symptom lists.
 - #891: the visit brief reads problems, medications, labs and visits tenant-wide.
 - #892: chat passes the free-text lab unit to the model.
-- #893: quality and SMBP match the patient by exact string; SMBP adherence counts every Observation; a birth date given as a year only drops the patient from the measure.
+- #893: quality and SMBP match the patient by exact string. SMBP adherence counts every Observation. A year-only birth date drops the patient from the measure.
 - #894: analyte names come from three tables, and code comments contradict the label table.
 
 Structural problems:
