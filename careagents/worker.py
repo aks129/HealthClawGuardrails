@@ -426,7 +426,8 @@ class RunWorker:
                 content = _execute_tool(
                     self.hc, tenant, tool_name, arguments, side_events,
                     agent_id=str(run.get("agent_id") or ""),
-                    surface=str(run.get("surface") or ""))
+                    surface=str(run.get("surface") or ""),
+                    origin=self.cfg.origin)
             except HealthClawError as exc:
                 content = json.dumps({"error": str(exc)})
             envelope = {"content": content, "ui_events": side_events}

@@ -2007,8 +2007,11 @@ def create_app(config: Config | None = None,
         state = status.get("status")
         shown = ("ready" if state == "completed" and link else
                  "preparing" if state == "executing" else "done")
+        # Corrections and other requests pass this way too; only a form
+        # (the intake rail, or an engine that names no kind) is "your form".
+        is_form = status.get("kind") in (None, "form-fill")
         return render_template("form_done.html", state=shown, link=link,
-                               agent_id=agent_id)
+                               agent_id=agent_id, is_form=is_form)
 
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this

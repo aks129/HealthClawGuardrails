@@ -285,6 +285,23 @@ _MD_BULLET = re.compile(r"(?m)^([ \t]*)\*[ \t]+")
 _MD_EMPHASIS = re.compile(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])")
 
 
+# A URL to an engine document, or any URL carrying a signature: a bearer
+# link. The tool never hands one to the model on a text surface; this
+# catches one the model still writes (#875 QA).
+_SIGNED_URL = re.compile(
+    r"(?:https?://|www\.)?[^\s<>\"']*(?:/r6/sdc/documents/|[?&]sig=)"
+    r"[^\s<>\"']*", re.IGNORECASE)
+
+
+def strip_signed_urls(text: str) -> str:
+    stripped = _SIGNED_URL.sub("", text)
+    if stripped == text:
+        return text
+    # Tidy the gap the URL left; text without one is left exactly as is.
+    stripped = re.sub(r"[ \t]+([.,;:!?])", r"\1", stripped)
+    return re.sub(r"[ \t]{2,}", " ", stripped).strip()
+
+
 def plain_text(text: str) -> str:
     """Markdown stripped, as a backstop to the texting style prompt."""
     text = text.replace("**", "")
@@ -348,7 +365,7 @@ def run_reply(events: list[dict], origin: str, agent_id: str) -> str:
         kind = event.get("type")
         payload = event.get("payload") or {}
         if kind == "agent.text" and payload.get("text"):
-            parts.append(plain_text(payload["text"]))
+            parts.append(plain_text(strip_signed_urls(payload["text"])))
         elif kind == "agent.card" and payload.get("type") == "card":
             card = payload.get("kind")
             if card == "lab-timeline":
