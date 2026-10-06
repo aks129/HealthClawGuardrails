@@ -17,6 +17,8 @@ import pathlib
 import re
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, app, cfg, svc)
 
@@ -164,6 +166,27 @@ def test_a_blood_pressure_panel_shows_its_numbers():
              "valueQuantity": {"value": 80.0, "unit": "mmHg"}}],
         "effectiveDateTime": "2026-10-06T08:00:00Z"}])
     assert field.value == "120/80 mmHg (Oct 6, 2026)"
+
+
+@pytest.mark.parametrize("vq,shown", [
+    ({"value": float("nan"), "unit": "%"}, "Result not listed in your records"),
+    ({"value": True, "unit": "%"}, "Result not listed in your records"),
+    ({"value": "6.1", "unit": "%"}, "Result not listed in your records"),
+    ({"value": 6.1, "unit": "%"}, "6.1 %"),     # the analyte's known unit
+    ({"value": 6.1, "system": "http://unitsofmeasure.org",
+      "code": "mmol/mol"}, "6.1 %"),           # off the list: known unit
+    ({"value": 6.1, "system": "urn:other", "code": "mg/dL"}, "6.1 %"),
+])
+def test_a_lab_value_is_a_finite_number_with_a_coded_unit(vq, shown):
+    """R884-1: never valueQuantity.unit, never a value that is not a
+    finite number."""
+    from r6.brief.engine import build_labs
+    [field] = build_labs([{
+        "resourceType": "Observation", "id": "o1",
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "4548-4"}]},
+        "valueQuantity": vq, "effectiveDateTime": "2026-09-01"}])
+    assert field.value == f"{shown} (Sep 1, 2026)"
 
 
 def test_a_screening_note_starts_its_own_sentence():

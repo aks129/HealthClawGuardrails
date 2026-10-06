@@ -23,7 +23,11 @@ from r6.agent_runs.state import (
     require_run_transition,
     require_tool_transition,
 )
-from r6.command_center.models import Conversation, ConversationMessage
+from r6.command_center.models import (
+    Conversation,
+    ConversationMessage,
+    audit_channel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +149,8 @@ def create_run(
             resource_id=run.id,
             agent_id=run.agent_id,
             detail=_detail(conversation=run.conversation_id,
-                           message=run.message_id, surface=run.surface,
+                           message=run.message_id,
+                           surface=audit_channel(run.surface),
                            deadline_s=deadline_seconds),
         )
         db.session.commit()
@@ -278,7 +283,7 @@ def _answer_failed_run(run: AgentRun) -> None:
         resource_id=message.id,
         agent_id=run.agent_id,
         detail=_detail(run=run.id, conversation=run.conversation_id,
-                       role="assistant", channel=run.surface,
+                       role="assistant", channel=audit_channel(run.surface),
                        chars=len(RUN_FAILED_TEXT)),
     )
 
@@ -1058,7 +1063,7 @@ def finalize_run(
             resource_id=message.id,
             agent_id=run.agent_id,
             detail=_detail(run=run.id, conversation=run.conversation_id,
-                           role="assistant", channel=run.surface,
+                           role="assistant", channel=audit_channel(run.surface),
                            chars=len(text)),
         )
     _audit_run_change(run, previous, checkpoint=checkpoint_id,

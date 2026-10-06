@@ -112,11 +112,14 @@ def _med_request(id_, name, dosage="10mg daily", status="active"):
 
 
 def _observation(id_, code_text, value, unit, date="2026-07-01T09:00:00Z"):
+    # The unit is read from the UCUM code only, never `unit` (R884-1).
     return {
         "resourceType": "Observation",
         "id": id_,
         "code": _coded(code_text),
-        "valueQuantity": {"value": value, "unit": unit},
+        "valueQuantity": {"value": value, "unit": unit,
+                          "system": "http://unitsofmeasure.org",
+                          "code": unit},
         "effectiveDateTime": date,
     }
 
@@ -163,7 +166,7 @@ class TestFullRecords:
         _med_request("m-3", "Cetirizine", "10mg as needed", status="completed"),  # excluded
     ]
     OBSERVATIONS = [
-        _observation("o-1", "Blood pressure", 128, "mmHg", "2026-07-15T08:00:00Z"),
+        _observation("o-1", "Blood pressure", 128, "mm[Hg]", "2026-07-15T08:00:00Z"),
         _observation("o-2", "HbA1c", 7.2, "%", "2026-06-01T09:00:00Z"),
         _observation("o-3", "Total cholesterol", 195, "mg/dL", "2026-05-10T08:00:00Z"),
     ]

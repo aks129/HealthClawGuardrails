@@ -20,6 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from r6 import terminology
+from r6.labs.interpret import LOINC_RANGES
+from r6.safe_read import as_dict, codes, is_number
 
 
 @dataclass
@@ -184,13 +186,55 @@ def _effective_display(resource: dict) -> str:
     return ""
 
 
+_UCUM_SYSTEM = "http://unitsofmeasure.org"
+
+#: UCUM codes the brief may show, each with how it reads. A closed list, as
+#: careagents/agent.py keeps for the model (R875-3): any other string,
+#: however unit-shaped, could be a word. `valueQuantity.unit` is free text
+#: that redaction keeps, so it is never read (R884-1).
+_UNIT_DISPLAY = {
+    "mg/dL": "mg/dL", "mmol/L": "mmol/L", "umol/L": "umol/L", "%": "%",
+    "g/dL": "g/dL", "g/L": "g/L", "mg/L": "mg/L", "ng/mL": "ng/mL",
+    "pg/mL": "pg/mL", "U/L": "U/L", "[IU]/L": "IU/L", "mm[Hg]": "mmHg",
+    "mL/min/{1.73_m2}": "mL/min/1.73m2", "10*3/uL": "10^3/uL",
+    "10*6/uL": "10^6/uL", "fL": "fL", "pg": "pg", "mEq/L": "mEq/L",
+    "mg/mmol": "mg/mmol", "mg/g": "mg/g", "[pH]": "pH",
+}
+
+
+def _number(value) -> str | None:
+    """A finite number as text ("128", "6.1"), else None: a string, a bool,
+    NaN or an infinity in `value` is not a measurement (R884-1)."""
+    if not is_number(value):
+        return None
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def _unit(vq: dict, analyte_codes) -> str:
+    """The unit by code: the reading's UCUM code when it is on the list,
+    else the analyte's known unit, else nothing."""
+    vq = as_dict(vq)
+    code = vq.get("code")
+    if vq.get("system") == _UCUM_SYSTEM and isinstance(code, str) \
+            and code in _UNIT_DISPLAY:
+        return _UNIT_DISPLAY[code]
+    for analyte in analyte_codes:
+        known = _KNOWN_UNITS.get(analyte) or (
+            LOINC_RANGES.get(analyte) or {}).get("unit")
+        if known in _UNIT_DISPLAY:
+            return _UNIT_DISPLAY[known]
+    return ""
+
+
 def _obs_value(obs: dict) -> str:
-    """Human-readable value + unit from an Observation."""
+    """Human-readable value + unit from an Observation: a finite number and
+    a unit by code, or "" (the caller says the result is not listed)."""
     if "valueQuantity" in obs:
-        vq = obs["valueQuantity"]
-        value = vq.get("value", "")
-        unit = vq.get("unit") or vq.get("code", "")
-        return f"{value} {unit}".strip() if value != "" else ""
+        vq = as_dict(obs["valueQuantity"])
+        value = _number(vq.get("value"))
+        if value is None:
+            return ""
+        return f"{value} {_unit(vq, codes(obs.get('code')))}".strip()
     # No valueString branch. It is free text from the source system with no
     # code to label it by, so nothing here can stand behind it (#877). The
     # route strips it already (apply_redaction); the engine does not lean
@@ -204,6 +248,9 @@ def _obs_value(obs: dict) -> str:
 #: panel. The panel itself has no value; the numbers live here.
 _SYSTOLIC, _DIASTOLIC = "8480-6", "8462-4"
 
+#: Known units for codes LOINC_RANGES does not carry.
+_KNOWN_UNITS = {_SYSTOLIC: "mm[Hg]", _DIASTOLIC: "mm[Hg]"}
+
 
 def _blood_pressure(obs: dict) -> str:
     """"120/80 mmHg" from a panel's components, or "" (#884 G7: the row
@@ -213,22 +260,18 @@ def _blood_pressure(obs: dict) -> str:
     for comp in obs.get("component") or []:
         if not isinstance(comp, dict):
             continue
-        codes = {c.get("code") for c in (comp.get("code") or {}).get("coding") or []
-                 if isinstance(c, dict)}
-        vq = comp.get("valueQuantity") or {}
-        value = vq.get("value")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        comp_codes = codes(comp.get("code"))
+        vq = as_dict(comp.get("valueQuantity"))
+        value = _number(vq.get("value"))
+        if value is None:
             continue
         for key in (_SYSTOLIC, _DIASTOLIC):
-            if key in codes:
+            if key in comp_codes:
                 values[key] = value
-                unit = unit or vq.get("unit") or vq.get("code") or ""
+                unit = unit or _unit(vq, [key])
     if _SYSTOLIC not in values or _DIASTOLIC not in values:
         return ""
-
-    def _n(v):
-        return str(int(v)) if float(v).is_integer() else str(v)
-    return f"{_n(values[_SYSTOLIC])}/{_n(values[_DIASTOLIC])} {unit}".strip()
+    return f"{values[_SYSTOLIC]}/{values[_DIASTOLIC]} {unit}".strip()
 
 
 def _medication_display(resource: dict) -> str:
