@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 #: it before it goes into a query string.
 _FHIR_ID = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 
+#: How long a tenant's resolved `Patient/<id>` is reused (#867).
+PATIENT_SUBJECT_TTL_SECONDS = 300.0
+
 
 class HealthClawError(RuntimeError):
     def __init__(self, message: str, status: int = 0, code: str = "",
@@ -75,6 +78,9 @@ class HealthClawClient:
         # the layer; refresh comfortably before expiry.
         self._tokens: dict[str, tuple[str, float]] = {}
         self._token_ttl = 240.0
+        # patient-subject cache: tenant -> (subject, expires_at), monotonic.
+        # A pointer, not PHI; held in memory only, never in a table.
+        self._subjects: dict[str, tuple[str, float]] = {}
 
     # --- transport ------------------------------------------------------------
     #
@@ -341,8 +347,28 @@ class HealthClawClient:
         must not be computed over two people's results (#865). The id comes
         from a feed, so it must have the FHIR id shape before it goes into a
         query string. The search is redacted and audited like any other read;
-        only the id is kept, and only for this call.
+        only the id is kept.
+
+        Kept in memory per tenant for PATIENT_SUBJECT_TTL_SECONDS, so a chat
+        turn that reads labs twice searches once. Only a found subject is
+        kept: a tenant whose records are still arriving must get its subject
+        as soon as its Patient lands, not minutes later.
         """
+        now = time.monotonic()
+        hit = self._subjects.get(tenant)
+        if hit and hit[1] > now:
+            return hit[0]
+        subject = self._find_patient_subject(tenant)
+        if subject:
+            if len(self._subjects) >= 4096:
+                self._subjects = {t: v for t, v in self._subjects.items()
+                                  if v[1] > now}
+            self._subjects[tenant] = (subject, now + PATIENT_SUBJECT_TTL_SECONDS)
+        else:
+            self._subjects.pop(tenant, None)
+        return subject
+
+    def _find_patient_subject(self, tenant: str) -> str | None:
         bundle = self.search(tenant, "Patient", {"_count": "2"})
         entries = bundle.get("entry")
         if not isinstance(entries, list) or len(entries) != 1:
@@ -712,6 +738,8 @@ class HealthClawClient:
         Deliberately not best-effort: "deleted" is only reported to the
         patient when the engine confirms it, never fire-and-forget.
         """
+        # The Patient goes with the records; so does our pointer to it.
+        self._subjects.pop(tenant, None)
         r = self._send(
             "POST", f"{self.fhir}/internal/purge-tenant",
             json={"tenant_id": tenant},

@@ -107,6 +107,69 @@ def test_no_subject_unless_exactly_one_valid_patient(patients):
     assert _interpret_subject(hc) is None
 
 
+def _patient_searches(hc):
+    return [c for c in hc.http.calls if c[0] == "GET"
+            and c[1].endswith("/Patient")]
+
+
+def test_the_patient_id_is_cached_per_tenant(monkeypatch):
+    """A chat turn may read labs more than once; the Patient search runs once
+    per tenant per few minutes, and one tenant's id never answers another's."""
+    hc = _client([{"resourceType": "Patient", "id": "p-one"}])
+    hc.interpret_labs("t1")
+    hc.interpret_labs("t1")
+    assert len(_patient_searches(hc)) == 1
+
+    hc.http.patients = [{"resourceType": "Patient", "id": "p-two"}]
+    hc.http.calls.clear()
+    hc.interpret_labs("t2")
+    assert len(_patient_searches(hc)) == 1
+    assert _interpret_subject(hc) == ["Patient/p-two"]
+
+    hc.http.calls.clear()
+    hc.interpret_labs("t1")
+    assert _patient_searches(hc) == []
+    assert _interpret_subject(hc) == ["Patient/p-one"]
+
+
+def test_the_cached_id_expires(monkeypatch):
+    from careagents import healthclaw
+    now = [1000.0]
+    monkeypatch.setattr(healthclaw.time, "monotonic", lambda: now[0])
+    hc = _client([{"resourceType": "Patient", "id": "p-one"}])
+    hc.interpret_labs("t1")
+    now[0] += healthclaw.PATIENT_SUBJECT_TTL_SECONDS + 1
+    hc.http.calls.clear()
+    hc.interpret_labs("t1")
+    assert len(_patient_searches(hc)) == 1
+
+
+def test_a_purge_drops_the_cached_id():
+    hc = _client([{"resourceType": "Patient", "id": "p-one"}])
+    hc.interpret_labs("t1")
+    hc.interpret_labs("t2")
+    try:
+        hc.purge_tenant("t1")
+    except Exception:
+        pass  # the fake wire does not answer a purge; the pointer still goes
+    hc.http.calls.clear()
+    hc.interpret_labs("t1")
+    hc.interpret_labs("t2")
+    # t1 searches again; t2 keeps its cached id.
+    assert len(_patient_searches(hc)) == 1
+
+
+def test_no_patient_is_not_cached():
+    """A tenant whose records are still arriving must not be stuck with no
+    subject for minutes after its Patient lands."""
+    hc = _client([])
+    hc.interpret_labs("t1")
+    hc.http.patients = [{"resourceType": "Patient", "id": "p-one"}]
+    hc.http.calls.clear()
+    hc.interpret_labs("t1")
+    assert _interpret_subject(hc) == ["Patient/p-one"]
+
+
 # --- 2. the trend key in get_labs ---------------------------------------------
 
 _TREND = {"analyte": "Creatinine", "check": "kdigo-aki-creatinine",

@@ -168,8 +168,12 @@ def _lab_trend_lines(tenant_id: str) -> list[dict]:
         subject, state = resolve_subject(None, tenant_id)
         if state != "tenant-default":
             return []
-        result = evaluate_creatinine_aki(
-            subject_resources("Observation", subject, tenant_id))
+        from r6.labs.routes import STORED_OBSERVATION_CAP
+        # Capped as Observation/$interpret?subject= is, so the brief and
+        # the chat compare the same rows.
+        result = evaluate_creatinine_aki(subject_resources(
+            "Observation", subject, tenant_id,
+            limit=STORED_OBSERVATION_CAP))
         line = kdigo_consumer_line(result)
         if not line:
             return []
