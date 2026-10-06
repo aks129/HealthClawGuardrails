@@ -11,6 +11,7 @@ import copy
 
 from r6.labs.interpret import (NO_NUMERIC_VALUE, RANGE_NOT_ASSERTED,
                                UNIT_MISMATCH, UNKNOWN_ANALYTE)
+from r6.labs.trend import kdigo_consumer_line
 from r6.terminology import LOINC, lookup
 
 V3_INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
@@ -151,7 +152,11 @@ def _consumer_line(r):
                        f"worth discussing with your clinician."}
 
 
-def build_consumer_summary(results):
+def build_consumer_summary(results, trends=None):
+    """`trends` are r6/labs/trend.py results for ONE patient. A fired check
+    lands under its own `trends` key, not in `lines`: `lines` is shaped per
+    result with a range flag, and CareAgents and the brief read it that way.
+    """
     lines = [_consumer_line(r) for r in results if r.get("flag")]
     out = {"lines": lines,
            "note": "This is general information to help you understand your "
@@ -160,4 +165,19 @@ def build_consumer_summary(results):
     marker = _unevaluated_marker(results)
     if marker:
         out.update(marker)
+    trend_lines = [line for line in map(kdigo_consumer_line, trends or ())
+                   if line]
+    if trend_lines:
+        out["trends"] = trend_lines
+        # The range check and the trend check read the same result
+        # differently: a umol/L creatinine is a unit mismatch against the
+        # mg/dL range, while the trend converts it. Left alone, the note
+        # would say creatinine was not evaluated beside a line saying it
+        # rose. Both are true; say which check each one is about.
+        for line in trend_lines:
+            if line["analyte"] in (marker or {}).get("unevaluated_analytes", ()):
+                out["unevaluated_note"] += (
+                    f" {line['analyte']} was still compared with its own "
+                    f"earlier results; that comparison is described "
+                    f"separately.")
     return out

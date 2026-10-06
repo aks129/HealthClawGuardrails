@@ -16,6 +16,7 @@ from models import db
 from r6.models import R6Resource
 from r6.audit import add_audit_event
 from r6.labs.interpret import interpret_observation
+from r6.labs.trend import evaluate_creatinine_aki
 from r6.redaction import apply_redaction
 from r6.labs.report import (
     annotate_observation, build_interpretation_summary, build_consumer_summary,
@@ -52,7 +53,9 @@ def register_labs_routes(blueprint, deps):
         return [row.to_fhir_json() for row in rows]
 
     def _observations_from_request(tenant_id):
-        """Return (observations, ignored_count). Tolerates malformed input.
+        """Return (observations, ignored_count, subject). Tolerates
+        malformed input. `subject` is set only on the ?subject branch, the
+        one input guaranteed to hold a single patient's results.
 
         Four inputs, in precedence order: an explicit ?subject (or Parameters
         subject), a Bundle, a single Observation, or NOTHING — in which case
@@ -112,7 +115,7 @@ def register_labs_routes(blueprint, deps):
             ignored += 1
         else:
             observations = _stored_observations(tenant_id)
-        return observations, ignored
+        return observations, ignored, (subject or None)
 
     def _patient_for(obs, tenant_id, cache):
         ref = obs.get("subject", {}).get("reference")
@@ -134,7 +137,7 @@ def register_labs_routes(blueprint, deps):
         if auth_err is not None:
             return auth_err[0], auth_err[1]
 
-        observations, ignored = _observations_from_request(tenant_id)
+        observations, ignored, subject = _observations_from_request(tenant_id)
         cache, results, annotated = {}, [], []
         for obs in observations:
             patient = _patient_for(obs, tenant_id, cache)
@@ -159,9 +162,23 @@ def register_labs_routes(blueprint, deps):
             safe = apply_redaction(copy.deepcopy(obs))
             annotated.append({"resource": annotate_observation(safe, res)})
 
+        # Trend checks need one patient's history, so they run on the
+        # ?subject branch only. A Bundle or the stored fallback can hold
+        # several people, and a creatinine "rise" across two of them is
+        # arithmetic on the wrong person. Computed from the stored
+        # resources, before redaction; the result carries values, times and
+        # ids, never upstream display or text.
+        trends = []
+        if subject:
+            aki = evaluate_creatinine_aki(observations)
+            if aki is not None:
+                trends.append(aki)
+
         summary = build_interpretation_summary(results)
         summary["ignored"] = ignored
-        consumer = build_consumer_summary(results)
+        if trends:
+            summary["trends"] = trends
+        consumer = build_consumer_summary(results, trends=trends)
 
         add_audit_event(
             "read", resource_type="Observation", resource_id=None,
