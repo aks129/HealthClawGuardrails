@@ -233,6 +233,20 @@ _ATTACHMENT_ONLY_KEYS = (
 )
 
 
+def clean_codings(obj):
+    """Apply the Coding rule to one dict: its `coding` list, and the dict
+    itself when it is Coding-shaped. Not recursive; each redaction path
+    calls it on every dict its own walk reaches. Shared by the standard and
+    patient-controlled profiles (via `_redact_recursive`) and by the
+    $deidentify preview in r6/health_compliance.py, so a junk system or
+    code is echoed by none of the three."""
+    for coding in obj.get('coding') if isinstance(obj.get('coding'), list) else ():
+        if isinstance(coding, dict):
+            _clean_coding(coding, in_coding_list=True)
+    if is_coding_shaped(obj):
+        _clean_coding(obj, in_coding_list=False)
+
+
 def _clean_coding(coding, *, in_coding_list):
     """Drop a non-string system and a code that is no code, in place."""
     if 'system' in coding and not isinstance(coding['system'], str):
@@ -273,11 +287,7 @@ def _redact_recursive(obj):
     # an object or a list among them, is dropped. The same holds for every
     # Coding-shaped dict, wherever it sits (R886-1); r6/safe_read.code_shape
     # is the rule the validator applies on write too.
-    for coding in obj.get('coding') if isinstance(obj.get('coding'), list) else ():
-        if isinstance(coding, dict):
-            _clean_coding(coding, in_coding_list=True)
-    if is_coding_shaped(obj):
-        _clean_coding(obj, in_coding_list=False)
+    clean_codings(obj)
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an

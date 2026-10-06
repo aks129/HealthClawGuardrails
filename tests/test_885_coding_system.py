@@ -470,3 +470,80 @@ def test_patient_controlled_redaction_does_not_restamp_an_existing_tag():
     out = apply_patient_controlled_redaction(res, "hc-patient-1")
     codes = [t.get("code") for t in out["meta"]["tag"]]
     assert codes.count("patient-controlled") == 1
+
+
+# --- the third redaction path: $deidentify (deidentified-preview, default) ----
+
+#: QA's shapes: a junk system or code in code, category, valueCoding and an
+#: extension's valueCoding, stored as an upstream feed would land them.
+DEID_SHAPES = {
+    "code-system-object": lambda r: r.__setitem__("code", {"coding": [
+        {"system": {"foo": CANARY}, "code": "2160-0"}]}),
+    "code-system-list": lambda r: r.__setitem__("code", {"coding": [
+        {"system": [CANARY], "code": "2160-0"}]}),
+    "code-code-object": lambda r: r.__setitem__("code", {"coding": [
+        {"system": LOINC, "code": {"foo": CANARY}}]}),
+    "category-system-list": lambda r: r.__setitem__("category", [{"coding": [
+        {"system": [CANARY], "code": "laboratory"}]}]),
+    "category-code-list": lambda r: r.__setitem__("category", [{"coding": [
+        {"system": LOINC, "code": [CANARY]}]}]),
+    "valueCoding-code-object": lambda r: r.__setitem__("valueCoding", {
+        "system": LOINC, "code": {"foo": CANARY}}),
+    "valueCoding-system-list": lambda r: r.__setitem__("valueCoding", {
+        "system": [CANARY], "code": "x"}),
+    "extension-valueCoding-code-list": lambda r: r.__setitem__("extension", [
+        {"url": "http://x.example/e", "valueCoding": {
+            "system": LOINC, "code": [CANARY]}}]),
+    "deep-extension-valueCoding-system-object": lambda r: r.__setitem__(
+        "extension", [{"url": "http://x.example/e", "extension": [
+            {"url": "inner", "valueCoding": {
+                "system": {"foo": CANARY}, "code": "x"}}]}]),
+}
+
+
+def _deid_row(app, tenant_id, rid, shape):
+    res = _obs(rid, LOINC)
+    DEID_SHAPES[shape](res)
+    _row(app, tenant_id, res)
+
+
+@pytest.mark.parametrize("shape", sorted(DEID_SHAPES))
+def test_deidentify_default_mode_never_echoes_a_junk_system_or_code(
+        app, client, tenant_id, auth_headers, shape):
+    _patient(app, tenant_id)
+    _deid_row(app, tenant_id, "deid-1", shape)
+    r = client.get("/r6/fhir/Observation/deid-1/$deidentify",
+                   headers=auth_headers)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    assert CANARY not in r.get_data(as_text=True)
+    _strict_body(r)
+
+
+@pytest.mark.parametrize("shape", sorted(DEID_SHAPES))
+def test_deidentify_patient_controlled_mode_never_echoes_either(
+        app, client, tenant_id, auth_headers, shape):
+    _patient(app, tenant_id)
+    _deid_row(app, tenant_id, "deid-2", shape)
+    r = client.get("/r6/fhir/Observation/deid-2/$deidentify"
+                   "?mode=patient-controlled", headers=auth_headers)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    assert CANARY not in r.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("shape", sorted(DEID_SHAPES))
+def test_deidentify_resource_engine_cleans_codings(shape):
+    from r6.health_compliance import deidentify_resource
+    res = _obs("o1", LOINC)
+    DEID_SHAPES[shape](res)
+    assert CANARY not in json.dumps(deidentify_resource(res))
+
+
+def test_deidentify_keeps_good_codings_and_an_int_code_as_string():
+    from r6.health_compliance import deidentify_resource
+    res = _obs("o1", LOINC)
+    res["code"] = {"coding": [{"system": LOINC, "code": "2160-0"}]}
+    res["valueCoding"] = {"system": "http://x.example/cs", "code": 7}
+    out = deidentify_resource(res)
+    assert out["code"]["coding"][0] == {"system": LOINC, "code": "2160-0"}
+    assert out["valueCoding"] == {"system": "http://x.example/cs", "code": "7"}
+    assert out["meta"]["security"][-1]["code"] == "ANONYED"
