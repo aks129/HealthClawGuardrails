@@ -248,6 +248,19 @@ def test_a_second_submit_after_removed_starts_again(made):
     assert _rows(svc)[0]["status"] == "new"
 
 
+def test_coming_back_after_removed_counts_against_the_ten(made):
+    app, svc = made()
+    c = app.test_client()
+    _post(c, ip="198.51.100.200", mobile="+15550100101")
+    beta_signup.mark(svc.session, "avery@example.com", "removed")
+    for i in range(beta_signup.IMESSAGE_SPOTS):
+        _post(c, ip=f"198.51.100.{i}", email=f"t{i}@example.com",
+              mobile=f"+1555010{i:04d}")
+    _post(c, ip="198.51.100.201", mobile="+15550100101")
+    by = {r["email"]: r["status"] for r in _rows(svc)}
+    assert by["avery@example.com"] == "waitlist"
+
+
 def test_a_filled_honeypot_answers_the_same_and_keeps_nothing(made, sent):
     app, svc = made(RESEND_API_KEY="re_test")
     r = _post(app.test_client(), website="http://spam.example")

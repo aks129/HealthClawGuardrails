@@ -127,7 +127,10 @@ def submit(session_scope, first_name: str, email: str, mobile: str | None,
             row = BetaRequest(email=email, status="new", created_at=now())
             s.add(row)
         elif row.status == "removed":
+            # Starting again: its old spot was given up, so it is counted
+            # against the ten like any new request.
             row.status = "new"
+            row.mobile_given_at = None
         row.first_name = first_name
         if ref:
             row.ref = ref
