@@ -41,6 +41,11 @@
     <p class="setup-sub">One more step: choose your records so your
       assistant can answer. Then text your question.</p>
     <a class="btn-primary btn-block" href="/home">Choose my records</a>
+    {% elif outcome == "disconnected" %}
+    <h1>Disconnected.</h1>
+    <p class="setup-sub">Texts from that phone won't reach your
+      assistant.</p>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% elif outcome == "declined" %}
     <h1>Not connected.</h1>
     <p class="setup-sub">OK, we didn't connect that phone. If you didn't

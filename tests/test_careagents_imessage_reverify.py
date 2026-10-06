@@ -294,6 +294,49 @@ def test_reconfirming_refreshes_and_keeps_the_assistant(cfg, svc, monkeypatch): 
     assert app.test_client().get(f"/link?t={token}").status_code == 410
 
 
+def test_no_on_the_reconfirm_page_disconnects_the_phone(cfg, svc, monkeypatch):  # noqa: F811
+    """The owner says the phone is not theirs any more: the binding goes,
+    as Settings' per-phone disconnect does it, and the phone's next text
+    is a stranger's (a fresh link, the allowance reset)."""
+    from careagents.models import ImessageHandleState
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    _age(svc, verified_days=61)
+    token = _link_token(_inbound(c, PHONE, "hello").get_json()["reply"])
+    c.get(f"/link?t={token}")
+    assert "still your phone" in c.get("/link/done").get_data(as_text=True)
+    page = c.post("/link/done", data={"connect": "no"}).get_data(
+        as_text=True)
+    assert ("Disconnected. Texts from that phone won't reach your "
+            "assistant.") in " ".join(re.sub(r"<[^>]+>", " ", page).split())
+    assert svc.find_surface_by_handle(PHONE) is None
+    with svc.session() as s:
+        st = s.get(ImessageHandleState, imessage.handle_key(PHONE))
+        assert (st.link_count or 0) == 0           # allowance reset
+    assert app.test_client().get(f"/link?t={token}").status_code == 410
+    # A stranger now: the first-text link, no run.
+    nxt = _inbound(c, PHONE, "hello").get_json()
+    assert "run_id" not in nxt and "/link?t=" in nxt["reply"]
+
+
+def test_no_on_a_first_connect_still_just_declines(cfg, svc, monkeypatch):  # noqa: F811
+    """A phone not on this account: "no" binds nothing and unbinds nothing
+    (another account's binding is never touched from here)."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    owner = _row(svc)["account_id"]
+    _age(svc, verified_days=61)
+    token = _link_token(_inbound(c, PHONE, "hello").get_json()["reply"])
+    holder = app.test_client()
+    _login(holder, svc, monkeypatch, email=OTHER_EMAIL)
+    holder.get(f"/link?t={token}")
+    page = holder.post("/link/done", data={"connect": "no"}).get_data(
+        as_text=True)
+    assert "we didn't connect that phone" in page
+    assert "Disconnected." not in page
+    assert _row(svc)["account_id"] == owner
+
+
 def test_a_different_account_cannot_take_the_handle_by_the_link(
         cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)

@@ -2574,8 +2574,16 @@ def create_app(config: Config | None = None,
         if not link_id:
             return redirect(url_for("home"))
         if request.form.get("connect") != "yes":
+            handle = svc.imessage_link_handle(link_id)
             # Spent, so the same link opened again reads as used.
             svc.void_imessage_link(link_id)
+            # The owner says their own phone isn't theirs any more (#871):
+            # disconnect it as Settings does. Only this account's binding.
+            bound = svc.find_surface_by_handle(handle) if handle else None
+            if bound and bound["account_id"] == current_account().id:
+                svc.disconnect_imessage(bound["account_id"], bound["id"])
+                return render_template("imessage_link.html",
+                                       outcome="disconnected")
             return render_template("imessage_link.html", outcome="declined")
         acct = current_account()
         handle = svc.imessage_link_handle(link_id)
