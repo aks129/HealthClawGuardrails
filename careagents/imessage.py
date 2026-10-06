@@ -131,7 +131,17 @@ def no_agent_text(origin: str) -> str:
 # --- parsing --------------------------------------------------------------
 
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
-_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_email(s: str) -> bool:
+    """One @, no whitespace, a dot inside the domain. A plain check rather
+    than a regex: the overlapping classes in the old pattern could backtrack
+    polynomially on a crafted handle (CodeQL py/polynomial-redos)."""
+    local, at, domain = s.partition("@")
+    if not at or not local or "@" in domain or any(c.isspace() for c in s):
+        return False
+    name, dot, tld = domain.rpartition(".")
+    return bool(dot and name and tld)
 # `care <code>` or `care_<code>`, the whole message. Codes are lowercase
 # base32 (accounts.new_binding_code); the match is case-insensitive.
 _CODE_LINE = re.compile(r"^care[ _]+([a-z2-7]{6,16})$", re.IGNORECASE)
@@ -147,7 +157,7 @@ def normalize_handle(raw: object) -> str | None:
         s = s.split(":", 1)[1].strip()
     if "@" in s:
         s = s.lower()
-        return s if _EMAIL.match(s) and len(s) <= 120 else None
+        return s if len(s) <= 120 and _is_email(s) else None
     plus = s.startswith("+")
     digits = re.sub(r"\D", "", s)
     if re.search(r"[^\d\s().+\-]", s):

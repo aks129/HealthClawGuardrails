@@ -970,3 +970,18 @@ def test_every_stop_is_confirmed_the_same_way(cfg, svc, monkeypatch, word):  # n
                for r in (first, repeat, never_seen)]
     assert replies == [(200, {"reply": imessage.STOP_TEXT})] * 3
     assert svc.imessage_opted_out(PHONE)
+
+
+def test_apple_id_check_is_linear_and_still_accepts_real_addresses():
+    """CodeQL py/polynomial-redos on the old email regex: a crafted handle
+    must be judged quickly, and ordinary Apple IDs still normalize."""
+    import time
+    from careagents.imessage import normalize_handle
+    assert normalize_handle("Person@Example.COM") == "person@example.com"
+    assert normalize_handle("a.b+c@icloud.com") == "a.b+c@icloud.com"
+    for bad in ("a@b", "@example.com", "a@@b.com", "a b@c.com", "a@b.", "a@.com"):
+        assert normalize_handle(bad) is None, bad
+    crafted = "!@!." + "!." * 50_000
+    t0 = time.perf_counter()
+    assert normalize_handle(crafted) is None
+    assert time.perf_counter() - t0 < 0.5
