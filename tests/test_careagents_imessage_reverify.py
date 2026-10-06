@@ -127,6 +127,19 @@ def test_once_asked_only_a_confirm_lifts_it(cfg, svc, monkeypatch):  # noqa: F81
     assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
 
 
+def test_a_gated_text_does_not_reset_the_silence_clock(cfg, svc, monkeypatch):  # noqa: F811
+    """Whoever holds the number now cannot make it look recently used: a
+    text that only got a link leaves last_inbound_at where it was. Pinned
+    on its own, since the pending flag otherwise hides the clock."""
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    _pair(c, agent_id)
+    _age(svc, verified_days=40, inbound_days=31)
+    before = _row(svc)["last_inbound_at"]
+    for _ in range(2):
+        assert _is_reverify(_inbound(c, PHONE, "hello").get_json())
+    assert _row(svc)["last_inbound_at"] == before
+
+
 def test_a_binding_with_no_verified_time_counts_from_bound_then_fails_closed(
         cfg, svc, monkeypatch):  # noqa: F811
     """No verified_at reads as the migration would fill it: bound_at. With
