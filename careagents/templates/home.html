@@ -99,14 +99,14 @@
     </div>
   </section>
 
-  {# Sample accounts only, while Sendblue is on (beta onboarding brief
-     section 3). `text_tile` is the line's number. The same texting
-     instruction as the "Text hi" email (beta_signup.text_hi_line). #}
+  {# Sample accounts the owner added to the Sendblue sandbox, while Sendblue
+     is on (beta_signup.text_tile): nobody else's text is answered. The
+     same texting instruction as the "Text hi" email. #}
   {% if text_tile %}
   <section class="hub-section" id="text-tile">
     <div class="hub-card">
       <div class="hub-card-name">Text your assistant</div>
-      <p class="card-note">Text hi to {{ text_tile }}. You'll get a link back to sign in, then your assistant answers there.</p>
+      <p class="card-note">Text hi to <a href="{{ text_tile.sms }}">{{ text_tile.number }}</a>. You'll get a link back to sign in, then your assistant answers there.</p>
       <p class="card-note">Your texts pass through a texting company we use, so only use the made-up records here.</p>
     </div>
   </section>

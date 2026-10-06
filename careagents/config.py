@@ -69,6 +69,9 @@ class Config:
         self.origin = (e.get("CARE_ORIGIN")
                        or f"https://{self.rp_id}").rstrip("/")
         self.resend_api_key = e.get("RESEND_API_KEY", "")
+        # Real mail leaves only production, unless this is "1"
+        # (careagents/mail.py, real_mail_allowed).
+        self.allow_real_mail = e.get("CARE_ALLOW_REAL_MAIL", "") == "1"
         self.resend_from = e.get("CARE_EMAIL_FROM",
                                  "CareAgents <hello@careagents.cloud>")
         # Fasten (verified-provider real records) — the connect flow runs on

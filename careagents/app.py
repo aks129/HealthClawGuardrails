@@ -445,13 +445,14 @@ def create_app(config: Config | None = None,
             stale_consent=stale_consent,
             paused=paused, paused_line=beta.PAUSED_HUB_TEXT,
             invited=invited,
-            hub=view, text_tile=beta_signup.text_tile(cfg, view),
+            hub=view, text_tile=beta_signup.text_tile(
+                cfg, view, svc.session, acct.email),
             # "Connected" only once a real connection is active; has_real
-            # also counts one still connecting.
+            # also counts one still connecting. "Made-up", as on /beta.
             banner_records=("your records are connected"
                             if any(not r["is_sample"]
                                    for r in view["active_records"])
-                            else "sample records"),
+                            else "made-up records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
             has_grants=bool(svc.list_grants(acct.id)),

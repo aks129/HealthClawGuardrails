@@ -29,7 +29,7 @@ def test_the_hub_banner_matches_the_account(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     assert _banner(c.get("/home").get_data(as_text=True)) == (
-        "Beta: sample records. Things will break, tell us.")
+        "Beta: made-up records. Things will break, tell us.")
     with c.session_transaction() as s:
         aid = s["account_id"]
     svc.add_connection(aid, "direct", "ca-real", "Upload", status="active")

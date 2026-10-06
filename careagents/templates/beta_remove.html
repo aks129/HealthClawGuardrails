@@ -8,7 +8,14 @@
   <div class="setup-card beta-page">
     {% if outcome == "confirm_ask" %}
     <h1>Confirm your request</h1>
-    <p>Tap Confirm if you asked to test CareAgents.</p>
+    {# What is being confirmed, so a request someone else typed for this
+       address is seen before it is accepted. The last four digits only. #}
+    <p>{% if preview.kind == "join" %}A new request{% else %}A change to your request{% endif %} to test CareAgents:</p>
+    <ul class="beta-steps">
+      <li>First name: <b>{{ preview.first_name }}</b></li>
+      <li>{% if preview.tail %}Mobile: a mobile ending in {{ preview.tail }}{% elif preview.kind == "join" %}Mobile: no mobile{% else %}Mobile: no new mobile{% endif %}</li>
+    </ul>
+    <p>Not right? Ignore this email and nothing changes.</p>
     <form method="post" action="/beta/confirm">
       <input type="hidden" name="t" value="{{ token }}">
       <button class="btn-primary btn-block" type="submit">Confirm</button>
@@ -18,6 +25,8 @@
     {% if done.kind == "join" %}
     <p>Thanks, {{ done.first_name }}. We sent an email to {{ done.email }}.
       If it isn't there in a few minutes, check spam.</p>
+    <p>Next: open <a href="https://careagents.cloud">careagents.cloud</a>
+      and sign up with this email.</p>
     {% else %}
     <p>Thanks, {{ done.first_name }}. Your request is updated.</p>
     {% endif %}
@@ -29,7 +38,11 @@
       <input type="hidden" name="t" value="{{ token }}">
       <button class="btn-primary btn-block" type="submit">Remove my request</button>
     </form>
-    <a class="btn-secondary btn-block beta-keep" href="/">Keep my request</a>
+    <a class="btn-secondary btn-block beta-keep" href="/beta/kept">Keep my request</a>
+    {% elif outcome == "kept" %}
+    <h1>Kept</h1>
+    <p>Your request is kept. Nothing changed.</p>
+    <p><a href="/auth">Sign in to CareAgents</a></p>
     {% elif outcome == "removed" %}
     <h1>Done</h1>
     <p>Your beta request is removed.</p>
