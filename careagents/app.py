@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -34,6 +35,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
 from careagents import sendblue_surface
+from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
 from careagents import labs_timeline as labs_timeline_mod
@@ -108,7 +110,12 @@ _UPLOAD_MIME_TYPES = frozenset({
     "application/json+fhir",
 })
 
-_BRIEF_SECTION_PREFIX = "https://healthclaw.io/fhir/StructureDefinition/brief-section-"
+# The brief is read in careagents/brief.py, shared with the agent's
+# appointment_brief tool; these names are kept for this module's callers.
+_BRIEF_SECTION_PREFIX = brief_mod.SECTION_PREFIX
+_parse_brief_sections = brief_mod.parse_sections
+_care_gaps_marker = brief_mod.care_gaps_marker
+_CARE_GAPS_OK = brief_mod.CARE_GAPS_OK
 
 
 #: What a pending request is called on the approvals page, by engine kind.
@@ -147,54 +154,16 @@ class OwnershipUnknown(Exception):
     """
 
 
-def _parse_brief_sections(resource: dict) -> dict[str, list[dict]]:
-    """Deserialize a FHIR Basic AppointmentBrief into section→field lists.
-
-    Each section is a list of dicts with keys: label, value, sourceType, sourceId.
-    Returns {} on any parse error so the template always gets a plain dict —
-    empty sections render as 'not available from connected records'.
-    """
-    out: dict[str, list[dict]] = {}
-    try:
-        for ext in resource.get("extension", []):
-            url = ext.get("url", "")
-            if not url.startswith(_BRIEF_SECTION_PREFIX):
-                continue
-            name = url[len(_BRIEF_SECTION_PREFIX):]
-            fields = []
-            for fe in ext.get("extension", []):
-                raw = fe.get("valueString")
-                if raw:
-                    try:
-                        fields.append(json.loads(raw))
-                    except (ValueError, TypeError):
-                        pass
-            out[name] = fields
-    except (AttributeError, TypeError):
-        pass
-    return out
+#: The engine review page's tab title ends "— HealthClaw Guardrails".
+_REVIEW_TAB_BRAND = re.compile(
+    r"(<title>[^<]*?)HealthClaw Guardrails(\s*</title>)")
 
 
-# Mirrors r6.brief.engine.CARE_GAPS_OK. CareAgents talks to HealthClaw over
-# HTTP and imports nothing from it, so the string is repeated rather than
-# shared.
-_CARE_GAPS_OK = "ok"
-
-
-def _care_gaps_marker(resource: dict | None, key: str) -> str:
-    """One `status`/`reason` sub-extension of the brief's care-gaps section,
-    or "" when the brief, the section or the marker is missing or unreadable."""
-    care_gaps_url = _BRIEF_SECTION_PREFIX + "care-gaps"
-    try:
-        for ext in (resource or {}).get("extension", []):
-            if ext.get("url") != care_gaps_url:
-                continue
-            for sub in ext.get("extension", []):
-                if sub.get("url") == key:
-                    return sub.get("valueString") or ""
-    except (AttributeError, TypeError):
-        pass
-    return ""
+def _connection_is_live(ctx: dict) -> bool:
+    """Whether an agent context's connection may still reach the tenant's
+    requests: not revoked (#215). The one rule for every approval surface,
+    the web pages and APPROVALS by text alike."""
+    return (ctx.get("connection") or {}).get("status") != "revoked"
 
 
 def _parse_care_gaps_status(resource: dict | None) -> str:
@@ -1795,9 +1764,7 @@ def create_app(config: Config | None = None,
         view all resolve ownership here, on the server. A revoked
         connection is not a pathway to the tenant's requests."""
         ctx = svc.get_agent_context(acct.id, agent_id) if acct else None
-        if not ctx:
-            return None
-        if (ctx.get("connection") or {}).get("status") == "revoked":
+        if not ctx or not _connection_is_live(ctx):
             return None
         return ctx
 
@@ -2014,6 +1981,38 @@ def create_app(config: Config | None = None,
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
+    def _form_past_review(tenant, agent_id, action_id):
+        """A form the engine no longer offers for review: ready with its PDF,
+        still being made, or done. The PDF link comes from the action's
+        outcome, as the post-approve screen reads it (/api/form)."""
+        try:
+            status = hc.action_status(tenant, action_id)
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return render_template("chat_error.html",
+                                       message="That form isn't yours."), 404
+            logger.exception("form status failed for %s", action_id)
+            return render_template("chat_error.html",
+                                   message=_REVIEW_UNCHECKABLE), 503
+        outcome = {}
+        try:
+            outcome = json.loads(status.get("outcome_summary") or "{}")
+        except (TypeError, ValueError):
+            pass
+        link = outcome.get("delivery_link") if isinstance(outcome, dict) else None
+        # Only an http(s) link becomes an href, as on the post-approve screen.
+        if not (isinstance(link, str)
+                and re.match(r"^https?://", link, re.IGNORECASE)):
+            link = None
+        state = status.get("status")
+        shown = ("ready" if state == "completed" and link else
+                 "preparing" if state == "executing" else "done")
+        # Corrections and other requests pass this way too; only a form
+        # (the intake rail, or an engine that names no kind) is "your form".
+        is_form = status.get("kind") in (None, "form-fill")
+        return render_template("form_done.html", state=shown, link=link,
+                               agent_id=agent_id, is_form=is_form)
+
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this
         agent's.
@@ -2104,12 +2103,14 @@ def create_app(config: Config | None = None,
                                status, action_id)
                 return render_template("chat_error.html",
                                        message=_REVIEW_UNCHECKABLE), 503
-            return render_template(
-                "chat_error.html",
-                message="This form is no longer awaiting review."), 404
+            # Past review. The texted "Your intake form is ready" link lands
+            # here after approval, so show the form, not a dead end (#875).
+            return _form_past_review(tenant, agent_id, action_id)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
-        return html
+        # The engine names its own product in the tab; here the page is
+        # CareAgents', reached from a CareAgents chat or text.
+        return _REVIEW_TAB_BRAND.sub(r"\1CareAgents\2", html, count=1)
 
     def _count_approval(agent_id):
         """One approval on a real-record assistant, for the weekly number
@@ -2393,6 +2394,14 @@ def create_app(config: Config | None = None,
         except Exception:               # pragma: no cover - defensive
             logger.warning("connected notice failed to send")
 
+    def _imessage_pending_count(ctx: dict) -> int:
+        # The approvals page's rule (#215): a revoked connection is not a
+        # pathway to the tenant's requests, so it is not asked. Raised as
+        # "could not check", never answered as zero.
+        if not _connection_is_live(ctx):
+            raise HealthClawError("connection revoked", 0)
+        return len(hc.pending_actions(ctx["tenant"]))
+
     imessage_deps = imessage.Deps(
         origin=cfg.origin, svc=svc,
         workers_ready=lambda: _worker_state(
@@ -2402,7 +2411,10 @@ def create_app(config: Config | None = None,
         queue_turn=_imessage_queue_turn,
         queue_error=HealthClawError,
         burst_window_seconds=cfg.chat_window_seconds,
-        on_connected=_imessage_connected)
+        on_connected=_imessage_connected,
+        # APPROVALS by text: the approvals page's own source and its rule —
+        # an engine that cannot answer raises, never reads as zero (#215).
+        pending_count=_imessage_pending_count)
     # A second transport (a hosted provider's webhook) calls the same core.
     app.extensions["careagents_imessage"] = imessage_deps
     sendblue_surface.register(app, cfg, svc, imessage_deps)

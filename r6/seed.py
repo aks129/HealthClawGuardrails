@@ -9,7 +9,7 @@ Shared seed logic for the demo tenant. Used by:
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from models import db
 from r6.models import R6Resource
@@ -30,9 +30,51 @@ logger = logging.getLogger(__name__)
 # tests/test_demo_tenant_stays_one_patient.py holds the line.
 # ---------------------------------------------------------------------------
 
+#: Dated lab series, so the sample records can show a trend (CareAgents'
+#: "Has my cholesterol changed?" and the KDIGO creatinine check, #865).
+#: (id suffix, LOINC, UCUM unit, [(days before seeding, value), ...]).
+#: Synthetic values. No `display`: labels come from r6/terminology.py by
+#: code, never from the resource's own text.
+_LAB_SERIES = (
+    ("ldl", "13457-7", "mg/dL",
+     [(540, 162), (360, 148), (180, 131), (30, 112)]),
+    ("chol", "2093-3", "mg/dL",
+     [(540, 248), (360, 232), (180, 214), (30, 196)]),
+    # The fourth A1c is demo-obs-a1c below, dated at seeding.
+    ("a1c", "4548-4", "%",
+     [(540, 9.2), (360, 8.8), (180, 8.4)]),
+    # Stable, then 0.8 -> 1.3 mg/dL over six days: KDIGO criterion B
+    # (1.625 x baseline within 7 days), stage 1, and invisible to A.
+    ("creat", "2160-0", "mg/dL",
+     [(540, 0.8), (360, 0.82), (180, 0.79), (6, 0.8), (0, 1.3)]),
+)
+
+
+def _lab_series(now: datetime) -> list[dict]:
+    out = []
+    for name, loinc, unit, points in _LAB_SERIES:
+        for n, (days_ago, value) in enumerate(points, start=1):
+            when = (now - timedelta(days=days_ago)).strftime(
+                '%Y-%m-%dT%H:%M:%SZ')
+            out.append({
+                "resourceType": "Observation",
+                "id": f"demo-obs-{name}-{n}",
+                "status": "final",
+                "code": {"coding": [{"system": "http://loinc.org",
+                                     "code": loinc}]},
+                "subject": {"reference": "Patient/__PATIENT_ID__"},
+                "valueQuantity": {"value": value, "unit": unit,
+                                  "system": "http://unitsofmeasure.org",
+                                  "code": unit},
+                "effectiveDateTime": when,
+            })
+    return out
+
+
 def _built_in_resources() -> list[dict]:
     """Return the default demo resource set."""
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    moment = datetime.now(timezone.utc)
+    now = moment.strftime('%Y-%m-%dT%H:%M:%SZ')
     return [
         {
             "resourceType": "Patient",
@@ -90,6 +132,7 @@ def _built_in_resources() -> list[dict]:
             "subject": {"reference": "Patient/__PATIENT_ID__"},
             "medicationCodeableConcept": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": "860975", "display": "Metformin 500 MG Oral Tablet"}]},
         },
+        *_lab_series(moment),
         intake_questionnaire(),
     ]
 

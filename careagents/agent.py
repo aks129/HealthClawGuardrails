@@ -17,11 +17,17 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
+from careagents import brief as brief_mod
 from careagents import labs_timeline, llm
 from careagents.healthclaw import HealthClawClient, HealthClawError
 
 MAX_TOOL_ROUNDS = 6
+
+#: Surfaces that are a phone's text thread: no cards, no charts, no
+#: markdown. A card there becomes a link back to the web app.
+TEXT_SURFACES = frozenset({"imessage", "sms"})
 
 # Keep a conversation from growing without limit. Nothing trimmed these before,
 # so a heavy user's cost per turn climbed forever and eventually the request
@@ -118,6 +124,12 @@ TOOLS = [
              "MedicationStatement",
              "AllergyIntolerance", "Immunization", "Procedure"]},
      }, "required": ["resource_type"]}},
+    {"name": "appointment_brief",
+     "description": ("A short pre-visit brief from the person's records: "
+                     "problems, medications, recent labs, screenings due and "
+                     "recent visits. Use for 'get me ready for my visit' or "
+                     "'what should I bring up with my doctor'."),
+     "parameters": {"type": "object", "properties": {}, "required": []}},
     {"name": "start_intake_form",
      "description": ("Start filling the new-patient intake form from the "
                      "person's records. This only PROPOSES the form — a "
@@ -139,6 +151,7 @@ TOOL_LABELS = {
     "show_lab_timeline": "Charting your results over time",
     "get_care_gaps": "Checking preventive care gaps",
     "search_records": "Searching your records",
+    "appointment_brief": "Preparing your visit brief",
     "start_intake_form": "Preparing your intake form",
     "check_form_status": "Checking your form",
 }
@@ -325,8 +338,159 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
     return out
 
 
+#: Fields per brief section handed to the model; the page has the rest.
+MAX_BRIEF_FIELDS = 6
+
+
+_UCUM_SYSTEM = "http://unitsofmeasure.org"
+# A UCUM code's shape: no spaces, so no words. Free text that claims the
+# UCUM system still has to look like a unit.
+#: UCUM codes a lab reading may carry to the model. A closed list: any
+#: other string, however unit-shaped, could be a word (R875-3).
+_UCUM_ALLOWED = frozenset({
+    "mg/dL", "mmol/L", "umol/L", "%", "g/dL", "g/L", "mg/L", "ng/mL",
+    "pg/mL", "U/L", "[IU]/L", "mm[Hg]", "mL/min/{1.73_m2}", "10*3/uL",
+    "10*6/uL", "fL", "pg", "mEq/L", "mg/mmol", "mg/g", "[pH]",
+})
+
+
+def _coded_unit(reading: dict, series: dict) -> str:
+    """The reading's UCUM code when it is on the allowlist, else the
+    analyte's known unit, else "". Never `valueQuantity.unit`: that is free
+    text, and real feeds put anything there."""
+    code = reading.get("code")
+    if reading.get("system") == _UCUM_SYSTEM and code in _UCUM_ALLOWED:
+        return code
+    return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
+
+
+#: The engine's analyte name per LOINC code, mirrored from
+#: r6.labs.interpret.LOINC_RANGES (CareAgents imports nothing from the
+#: engine; a test holds the two equal). The labs pairing checks each
+#: consumer line's analyte against it.
+ENGINE_ANALYTE_LABELS = {
+    "2951-2": "Sodium", "2823-3": "Potassium", "2075-0": "Chloride",
+    "2028-9": "Carbon dioxide", "3094-0": "Urea nitrogen (BUN)",
+    "2160-0": "Creatinine", "2345-7": "Glucose", "17861-6": "Calcium",
+    "33914-3": "eGFR", "718-7": "Hemoglobin",
+    "6690-2": "White blood cell count", "777-3": "Platelets",
+    "2093-3": "Total cholesterol", "13457-7": "LDL cholesterol",
+    "2085-9": "HDL cholesterol", "2571-8": "Triglycerides",
+    "4548-4": "Hemoglobin A1c",
+}
+
+
+def _obs_date(resource: dict) -> str | None:
+    """The reading's calendar date, if it starts with a real YYYY-MM-DD;
+    else None. Never a cut string: anything can sit in the field (R875-4)."""
+    return labs_timeline.parse_date(
+        resource.get("effectiveDateTime") or resource.get("issued")) or None
+
+
+_LOINC_SYSTEM = "http://loinc.org"
+_INTERPRETATION = ("http://terminology.hl7.org/CodeSystem/"
+                   "v3-ObservationInterpretation")
+#: LOINC -> labs_timeline analyte key, for the known-unit fallback.
+_ANALYTE_KEY = {code: a["key"] for a in labs_timeline.ANALYTES
+                for code in a["codes"]}
+
+
+def _obs_loinc(resource: dict) -> str | None:
+    for c in ((resource.get("code") or {}).get("coding") or []):
+        if isinstance(c, dict) and c.get("system") == _LOINC_SYSTEM:
+            return c.get("code")
+    return None
+
+
+def _obs_flag(resource: dict) -> str | None:
+    for i in resource.get("interpretation") or []:
+        for c in (i or {}).get("coding") or []:
+            if isinstance(c, dict) and c.get("system") == _INTERPRETATION:
+                return c.get("code")
+    return None
+
+
+def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
+    """The latest reading per analyte, with its date and how many earlier
+    readings there are, or None when the engine's answer cannot be read
+    that way.
+
+    `$interpret` gives one consumer line per scored result, in the order of
+    the annotated Observations in its bundle, and only the scored ones carry
+    an interpretation. The two are paired in that order and checked flag by
+    flag; any disagreement falls back to the lines as they came. Labels and
+    messages are the engine's (its code table); the unit is the coded one
+    (`_coded_unit`), never the free-text `unit`.
+    """
+    lines = consumer.get("lines")
+    if not isinstance(lines, list) or not lines:
+        return None
+    scored = [(e or {}).get("resource") or {}
+              for e in (bundle.get("entry") or [])]
+    scored = [r for r in scored if r.get("resourceType") == "Observation"
+              and _obs_flag(r)]
+    # Flag AND analyte, the analyte against the engine's own name for the
+    # Observation's LOINC code: a line paired with the wrong reading would
+    # put one test's message beside another's value and date.
+    if len(scored) != len(lines) or any(
+            not isinstance(line, dict) or line.get("flag") != _obs_flag(r)
+            or line.get("analyte") != ENGINE_ANALYTE_LABELS.get(
+                _obs_loinc(r) or "")
+            for line, r in zip(lines, scored)):
+        return None
+    groups: dict[str, list[tuple[tuple, dict, dict]]] = {}
+    for line, r in zip(lines, scored):
+        date = _obs_date(r)
+        # A parsed date orders the readings, its full timestamp breaks a
+        # same-day tie; a reading with no valid date sorts first and keeps
+        # the Observations' order.
+        raw = str(r.get("effectiveDateTime") or r.get("issued") or "")
+        order = (date is not None, date or "", raw if date else "")
+        groups.setdefault(_obs_loinc(r), []).append((order, line, r))
+    out = []
+    for key, readings in groups.items():
+        readings = sorted(readings, key=lambda x: x[0])
+        (_, date, _), line, r = readings[-1]
+        vq = r.get("valueQuantity") or {}
+        value = vq.get("value")
+        out.append({
+            "analyte": line.get("analyte"),
+            "date": date or None,
+            "value": (value if isinstance(value, (int, float))
+                      and not isinstance(value, bool) else None),
+            "unit": _coded_unit(vq, {"key": _ANALYTE_KEY.get(key)}),
+            "flag": line.get("flag"),
+            "message": line.get("message"),
+            "earlier_readings": len(readings) - 1,
+        })
+    return out
+
+
+def _timeline_in_words(series: dict) -> dict:
+    """What a text needs instead of a chart: the first and latest reading
+    and the direction, worked out here so the model never computes one.
+    A single reading has no direction, so it gets neither."""
+    out = {"name": series["name"], "readings": len(series["readings"]),
+           "trend_plottable": series["trend_plottable"]}
+    if not series["trend_plottable"]:
+        return out
+    dated = [r for r in series["readings"] if r["date"]]
+    first, latest = dated[0], dated[-1]
+    out["first"] = {"date": first["date"], "value": first["value"],
+                    "unit": _coded_unit(first, series)}
+    out["latest"] = {"date": latest["date"], "value": latest["value"],
+                     "unit": _coded_unit(latest, series)}
+    out["direction"] = ("higher" if latest["value"] > first["value"]
+                        else "lower" if latest["value"] < first["value"]
+                        else "unchanged")
+    return out
+
+
 def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
-                  args: dict, events: list, agent_id: str = "") -> str:
+                  args: dict, events: list, agent_id: str = "",
+                  surface: str = "", origin: str = "") -> str:
+    on_text = surface in TEXT_SURFACES
+    origin = (origin or "").rstrip("/")
     if name == "get_health_summary":
         parts = {}
         med_resolver = _medication_resolver(hc, tenant)
@@ -346,18 +510,31 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         out = {"consumer_summary": labs["consumer"],
                "disclaimer": labs["disclaimer"][:200]}
         consumer = labs["consumer"] if isinstance(labs["consumer"], dict) else {}
+        latest = _latest_per_analyte(consumer, labs.get("bundle") or {})
+        if latest is not None:
+            # One undated line per reading read an old high as current and
+            # buried the newest result (#875 QA). Every surface gets this.
+            out["consumer_summary"] = {
+                **{k: v for k, v in consumer.items() if k != "lines"},
+                "latest": latest}
+            out["note"] = (
+                "Each analyte shows its LATEST reading, with its date; "
+                "earlier readings are counted, not listed. Describe the "
+                "latest as the person's current result, and an earlier high "
+                "or low only as history.")
         if consumer.get("unevaluated"):
             # The marker arriving is necessary and not sufficient. Care gaps
             # learned that a model handed lines plus an unevaluated note leads
             # with the lines (#417); handed "high: 0, critical: 0" plus a note,
             # it leads with the zeros, which is how four stage 2 readings were
             # summarised as nothing flagged (#689). Say what the zeros mean.
-            out["note"] = (
+            out["note"] = ((out["note"] + " ") if out.get("note") else "") + (
                 "This lab answer is INCOMPLETE: "
                 f"{consumer.get('unevaluated_count')} result(s) were not "
                 "evaluated. Zero flagged results here means nothing was "
                 "SCORED as abnormal, not that nothing is abnormal. Report the "
-                "lines you were given AND say, using unevaluated_note, which "
+                + ("latest readings" if latest is not None else "lines")
+                + " you were given AND say, using unevaluated_note, which "
                 "results were not evaluated and why. Do not describe an "
                 "unevaluated result as normal, fine, or within range.")
         return json.dumps(out)
@@ -369,6 +546,26 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         if series:
             events.append({"type": "card", "kind": "lab-timeline",
                            "topic": topic})
+        if on_text:
+            # A text thread cannot show the chart, so the words have to
+            # carry it: first, latest and direction per plottable series.
+            # The card still goes out; run_reply turns it into a link.
+            return json.dumps({
+                "chart_shown": False,
+                "series": [_timeline_in_words(s) for s in series],
+                "note": ("The chart cannot be shown in a text message. "
+                         "Describe the trend in words in one or two "
+                         "sentences, using first, latest and direction; a "
+                         "link to the chart is included below your answer. A "
+                         "series with trend_plottable false has a single "
+                         "reading — say so, and never describe it as rising "
+                         "or falling."
+                         if series else
+                         "No lab series matched in the CONNECTED records. "
+                         "That is not the same as the person never having "
+                         "had this test — say so, and do not report it as "
+                         "absent."),
+            })
         # The model gets SHAPE, not the readings: how many series, how many
         # points, whether a trend is even plottable. The chart carries the
         # numbers. Handing them over too would invite the model to restate
@@ -431,9 +628,45 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                        "review_url": f"/review/{agent_id}/{action_id}"})
         return json.dumps({
             "action_id": action_id, "status": "awaiting_confirmation",
-            "note": ("Proposed. A Review & approve card is now visible to "
+            "note": ("Proposed. The person gets a link to review and "
+                     "approve each item; nothing is generated until they "
+                     "do. Say a link is included below."
+                     if on_text else
+                     "Proposed. A Review & approve card is now visible to "
                      "the person; nothing is generated until they approve "
                      "each item themselves.")})
+    if name == "appointment_brief":
+        raw = hc.fetch_appointment_brief(tenant)
+        if raw is None:
+            # The engine answered and has no brief. That says nothing about
+            # whether the person has a visit, or any history.
+            return json.dumps({
+                "brief": None,
+                "note": ("No visit brief could be built from the connected "
+                         "records. That does not mean the person has no "
+                         "visit or no history — say the brief is not "
+                         "available here and do not report anything as "
+                         "absent.")})
+        sections = {}
+        notes = []
+        for section, fields in brief_mod.parse_sections(raw).items():
+            sections[section] = [
+                {"label": f.get("label"), "value": f.get("value")}
+                for f in fields[:MAX_BRIEF_FIELDS] if isinstance(f, dict)]
+            if len(fields) > MAX_BRIEF_FIELDS:
+                notes.append(f"Only {MAX_BRIEF_FIELDS} of {len(fields)} "
+                             f"{section} items are shown; do not describe "
+                             "that list as complete.")
+        if brief_mod.care_gaps_marker(raw, "status") != brief_mod.CARE_GAPS_OK:
+            notes.append("The screening review did not complete. Do not say "
+                         "no screenings are due.")
+        events.append({"type": "card", "kind": "brief"})
+        notes.append("Summarize in a few short lines; a link to the full "
+                     "brief is included below your answer."
+                     if on_text else
+                     "Summarize briefly; the full brief is on the person's "
+                     "Visit brief page.")
+        return json.dumps({"sections": sections, "note": " ".join(notes)})
     if name == "check_form_status":
         action_id = str(args.get("action_id") or "")
         status = hc.action_status(tenant, action_id)
@@ -446,6 +679,15 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         if status.get("status") == "completed" and link:
             events.append({"type": "card", "kind": "pdf", "url": link,
                            "action_id": action_id})
+        if on_text:
+            # The signed delivery link is a bearer URL to the document. A
+            # model that echoes it would text it, so a text surface gets the
+            # review page, which has the PDF button (#875 QA).
+            out = {"status": status.get("status")}
+            if status.get("status") == "completed" and origin and agent_id:
+                out["form_link"] = (f"{origin}/review/{agent_id}/"
+                                    f"{quote(action_id, safe='')}")
+            return json.dumps(out)
         return json.dumps({"status": status.get("status"),
                            "delivery_link": link})
     return json.dumps({"error": f"unknown tool {name}"})

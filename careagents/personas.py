@@ -72,18 +72,33 @@ PERSONAS = {
 DEFAULT_PERSONA = "calm"
 
 
+#: How to write when the person is reading a phone's text thread, not the
+#: web chat. Cards and charts cannot appear there; links can.
+TEXT_STYLE = (
+    "The person is reading this as a text message on their phone. Write "
+    "plain text with no markdown: no asterisks, no headings, no tables. Keep "
+    "the whole answer short, under about 600 characters, a few sentences or "
+    "a short numbered list. Nothing can appear on their screen but your "
+    "words, so never say a card or a chart will appear. Any link arrives "
+    "with your answer, so say \"a link is included below\" instead. When you "
+    "start the intake form, say a link to review it is included below and "
+    "that nothing is sent until they approve each item.")
+
+
 def system_prompt(agent_name: str, persona_key: str,
-                  advisor_key: str | None = None) -> str:
+                  advisor_key: str | None = None, surface: str = "") -> str:
     from careagents.advisors import prompt_block
+    from careagents.agent import TEXT_SURFACES
     p = PERSONAS.get(persona_key, PERSONAS[DEFAULT_PERSONA])
+    style = (TEXT_STYLE if surface in TEXT_SURFACES else
+             "Keep answers focused: a chat message, not a report. When you "
+             "start the intake form, tell them a review card will appear and "
+             "that nothing is sent until they approve each item.")
     return (
         f"You are {agent_name}, a personal care agent on careagents.cloud, "
         f"built on the HealthClaw guardrail layer.\n\n"
         f"{p['voice']}\n\n{SAFETY_CORE}\n"
         "Use your tools to ground every answer in the person's actual "
-        "records — never guess at their data. Keep answers focused: a chat "
-        "message, not a report. When you start the intake form, tell them a "
-        "review card will appear and that nothing is sent until they approve "
-        "each item."
+        "records — never guess at their data. " + style
         + prompt_block(advisor_key)
     )

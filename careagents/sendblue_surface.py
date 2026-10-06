@@ -33,7 +33,7 @@ from careagents.healthclaw import HealthClawError
 
 logger = logging.getLogger(__name__)
 
-MEDIA_ONLY_TEXT = "I can only read text for now."
+PHOTO_TEXT = "I can only read text for now, so I didn't see the photo."
 
 
 def real_records_text(origin: str) -> str:
@@ -92,10 +92,10 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
     ext = SendblueSurface(client=sendblue.Client(cfg))
     app.extensions["careagents_sendblue"] = ext
 
-    def _send_later(to: str, reply: str | None, typing: bool) -> None:
+    def _send_later(to: str, replies: list[str], typing: bool) -> None:
         def job() -> None:
             try:
-                if reply:
+                for reply in replies:                # in order
                     ext.client.send_message(to, reply)
                 if typing:
                     ext.client.send_typing(to)       # best effort
@@ -129,10 +129,16 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
         if not svc.sendblue_claim_inbound(key):
             return jsonify({"ok": True, "duplicate": True}), 200
         content = str(body.get("content") or "")
-        to = imessage.normalize_handle(raw) or raw
+        handle = imessage.normalize_handle(raw)
+        to = handle or raw
+        has_media = bool(body.get("media_url"))
+        run_id = None
         try:
-            if not content.strip() and body.get("media_url"):
-                out, status = {"reply": MEDIA_ONLY_TEXT}, 200
+            if not content.strip() and has_media:
+                # Only to a number we can text that has not said STOP.
+                out, status = ({"reply": PHOTO_TEXT}, 200) if (
+                    handle and not svc.imessage_opted_out(handle)) else (
+                    {}, 200)
             else:
                 # The engine's request ids are [A-Za-z0-9._:-]; Sendblue's
                 # handle format is not ours to promise, so it is hashed.
@@ -141,6 +147,12 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
                     transport_block=lambda ctx: (
                         real_records_text(cfg.origin)
                         if real_records_blocked(cfg, ctx) else None))
+                if has_media and (out.get("reply") or out.get("run_id")) and (
+                        imessage.keyword(content) is None):
+                    # The caption is answered; the photo is said to be
+                    # unseen, first. Silence (an opted-out number) stays
+                    # silence, and a keyword's confirmation stays one text.
+                    out = {**out, "notice": PHOTO_TEXT}
             run_id = out.get("run_id")
             if run_id:
                 surface = svc.find_surface_by_handle(to, kind="imessage",
@@ -154,8 +166,9 @@ def register(app, cfg, svc, deps: imessage.Deps) -> None:
             return jsonify({"error": "inbound failed"}), 500
         logger.info("sendblue inbound from %s: %s%s", imessage.mask(to),
                     status, " (run queued)" if run_id else "")
-        if out.get("reply") or run_id:
-            _send_later(to, out.get("reply"), bool(run_id))
+        replies = [r for r in (out.get("notice"), out.get("reply")) if r]
+        if replies or run_id:
+            _send_later(to, replies, bool(run_id))
         return jsonify({"ok": True}), 200
 
 
@@ -238,6 +251,10 @@ class Deliverer:
         # it.
         if not self._close(row, outcome):
             return
-        result = self.client.send_message(surface["handle"], text)
-        if not result.ok:
-            self.svc.sendblue_set_outcome(row["id"], "failed")
+        # A long answer goes as several texts, in order. A part that fails
+        # stops the rest: a later part without the one before it reads as
+        # a different answer.
+        for part in imessage.split_reply(text, self.cfg.origin, agent_id):
+            if not self.client.send_message(surface["handle"], part).ok:
+                self.svc.sendblue_set_outcome(row["id"], "failed")
+                return

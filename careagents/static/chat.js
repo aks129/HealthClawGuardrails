@@ -274,7 +274,7 @@
       body.appendChild(el("p", "muted",
         "Couldn't load the chart just now — your records are fine, this " +
         "view isn't. Ask again in a moment."));
-      return;
+      return c;
     }
 
     body.textContent = "";
@@ -284,7 +284,7 @@
       body.appendChild(el("p", "muted",
         "No readings for that test in the records connected here. That's " +
         "not the same as never having had one."));
-      return;
+      return c;
     }
     series.forEach((s) => {
       const panel = el("div", "timeline-series");
@@ -303,6 +303,7 @@
       body.appendChild(el("p", "muted small", data.disclaimer));
     }
     scroll();
+    return c;
   }
 
   function watchForm(actionId) {
@@ -443,6 +444,30 @@
   try { pendingReviews = JSON.parse(log.dataset.pendingReviews || "[]"); }
   catch (e) { pendingReviews = []; }
   pendingReviews.forEach((r) => addReviewCard(r.id, null, r.form ? null : r.label));
+
+  // A texted answer cannot carry a chart, so it links here with ?chart=
+  // (careagents/imessage.py run_reply). The topic only narrows the series;
+  // the readings still come from /api/labs/timeline under this session.
+  // The server renders the history hidden (data-chart-pending) so it does
+  // not paint at the top first; it is shown once the chart has drawn, or
+  // failed to, with the chart in view.
+  const chartTopic = new URLSearchParams(window.location.search).get("chart");
+  if (chartTopic !== null) {
+    const chartPending = log.hasAttribute("data-chart-pending");
+    // The log scrolls smoothly (careagents.css). On this first render that
+    // animated from the top of the history to the chart, so jump instead,
+    // then give new messages their smooth scroll back.
+    log.style.scrollBehavior = "auto";
+    const reveal = (card) => {
+      if (chartPending) {
+        log.style.visibility = "";
+        log.removeAttribute("data-chart-pending");
+      }
+      if (card) card.scrollIntoView({ block: "start", behavior: "auto" });
+      requestAnimationFrame(() => { log.style.scrollBehavior = ""; });
+    };
+    addLabTimelineCard(chartTopic.slice(0, 64)).then(reveal, () => reveal(null));
+  }
 
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>
