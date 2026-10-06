@@ -116,6 +116,9 @@ class Config:
         # Empty = surface hidden.
         self.imessage_handle = e.get("CARE_IMESSAGE_HANDLE") or (
             self.sendblue_from_number if self.sendblue_enabled else "")
+        # Where a new /beta request is announced (careagents/beta_signup.py).
+        # Unset = no announcement; the request is still saved.
+        self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.

@@ -99,6 +99,19 @@
     </div>
   </section>
 
+  {# Sample accounts only, while iMessage is on (beta onboarding brief
+     section 3). The number itself is emailed once the owner adds it, so
+     nobody is told to text a line that won't answer. #}
+  {% if text_tile %}
+  <section class="hub-section" id="text-tile">
+    <div class="hub-card">
+      <div class="hub-card-name">Text your assistant</div>
+      <p class="card-note">Texts go through an outside messaging service. Use it with sample records only.</p>
+      <div class="card-actions"><a class="pill" href="/settings">Set it up in Settings</a></div>
+    </div>
+  </section>
+  {% endif %}
+
   <!-- 3. YOUR RECORDS -->
   <section class="hub-section" id="records-section">
     <div class="section-head"><h2>Your records</h2></div>
@@ -221,6 +234,9 @@
     </div>
   </details>
   {% endif %}
+
+  <p class="hub-link hub-feedback">Something broke, or a question?
+    <a href="mailto:contactus@healthclaw.io?subject=tester">Tell us</a>.</p>
 </main>
 
 <!-- Consent card: shown before any REAL-record connection starts.
