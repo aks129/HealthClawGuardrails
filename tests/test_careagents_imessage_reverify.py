@@ -50,7 +50,7 @@ def _row(svc, handle=PHONE):  # noqa: F811
 def _is_reverify(body: dict) -> bool:
     reply = body.get("reply") or ""
     return ("run_id" not in body
-            and reply == imessage.reverify_text(
+            and reply == imessage.start_text(
                 imessage.link_url("http://localhost", _link_token(reply))))
 
 
@@ -208,17 +208,24 @@ def test_keywords_on_a_stale_handle_get_the_link(
     assert _is_reverify(_inbound(c, PHONE, word).get_json())
 
 
-def test_the_reply_names_nothing_about_the_account(cfg, svc, monkeypatch):  # noqa: F811
+def test_the_reply_is_the_strangers_sign_in_link(cfg, svc, monkeypatch):  # noqa: F811
+    """The reader may be the number's new holder: the reply is word for
+    word what a number we have never seen gets for START, so it says
+    nothing about a previous binding (#866). The owner's email explains."""
     app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
     _pair(c, agent_id)
     _age(svc, verified_days=90)
     reply = _inbound(c, PHONE, "hello").get_json()["reply"]
-    assert reply == (
-        "It's been a while. Tap this link to confirm this is still your "
-        f"phone: http://localhost/link?t={_link_token(reply)} The link "
-        "works once, for 30 minutes.")
-    for secret in (agent_id, "gene", "Juniper", "example.com"):
-        assert secret not in reply
+    stranger = _inbound(c, "+15550100199", "start").get_json()["reply"]
+
+    def shape(text):
+        return text.replace(_link_token(text), "<token>")
+    assert shape(reply) == shape(stranger)
+    assert reply == imessage.start_text(
+        f"http://localhost/link?t={_link_token(reply)}")
+    for tell in ("while", "still", "again", "connected", agent_id,
+                 "gene", "Juniper", "example.com"):
+        assert tell not in reply
 
 
 # --- confirming --------------------------------------------------------------
@@ -237,7 +244,9 @@ def test_reconfirming_refreshes_and_keeps_the_assistant(cfg, svc, monkeypatch): 
     token = _link_token(_inbound(c, PHONE, "hello").get_json()["reply"])
     assert _row(svc)["reverify_notified_at"] is not None
     c.get(f"/link?t={token}")
-    assert "You're connected." in _confirm(c).get_data(as_text=True)
+    page = _confirm(c).get_data(as_text=True)
+    assert "Confirmed. This phone is still connected to CareAgents." in page
+    assert "You're connected." not in page
 
     row = _row(svc)
     assert row["verified_at"] > now() - 60
@@ -327,11 +336,30 @@ def test_the_owner_is_emailed_once_with_the_handle_masked(
     # Confirmed, then stale again later: a new episode, a new email.
     c.get(f"/link?t={_link_token(replies[0])}")
     _confirm(c)
-    sent.clear()                                  # the connect notice
+    assert len(sent) == 1        # a re-confirm is not a new connection
+    sent.clear()
     _age(svc, verified_days=61)
     _inbound(c, PHONE, "hello")
     _inbound(c, PHONE, "hello")
     assert len(sent) == 1
+
+
+def test_a_first_link_connect_still_reads_and_emails_as_connected(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """Only a re-confirm is "Confirmed": a handle bound for the first time
+    by the link keeps the connected page and the connect email."""
+    from careagents import mail
+    sent = []
+    monkeypatch.setattr(mail, "send_notice",
+                        lambda cfg, email, subject, line:
+                        sent.append(line) or mail.SENT)
+    monkeypatch.setattr(cfg, "resend_api_key", "re_test")
+    app, c, fake, agent_id, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
+    c.get(f"/link?t={token}")
+    page = _confirm(c).get_data(as_text=True)
+    assert "You're connected." in page and "Confirmed." not in page
+    assert len(sent) == 1 and "was connected" in sent[0]
 
 
 def test_no_email_when_mail_is_not_set_up(cfg, svc, monkeypatch):  # noqa: F811
@@ -375,7 +403,7 @@ def test_sendblue_texts_the_link_then_answers_after_confirm(
         to, text = fake.sent[0]
         assert to == sb.PHONE
         token = _link_token(text)
-        assert text == imessage.reverify_text(
+        assert text == imessage.start_text(
             imessage.link_url("http://localhost", token))
         assert fake.typing == []                 # no run, so no typing
         assert sb_svc.sendblue_pending() == []   # nothing owed

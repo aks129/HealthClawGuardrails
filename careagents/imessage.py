@@ -182,14 +182,6 @@ def masked_display(handle: str | None) -> str:
     return f"phone ending in {s[-4:]}" if len(s) >= 4 else "a phone"
 
 
-def reverify_text(url: str) -> str:
-    """A bound handle due to re-confirm. The same for every handle: the
-    reader may be a number's new holder, so nothing here says whose it
-    was (#866)."""
-    return ("It's been a while. Tap this link to confirm this is still "
-            f"your phone: {url} The link works once, for 30 minutes.")
-
-
 def reverify_notice(handle: str) -> str:
     """The one line emailed to the owner when a handle must re-confirm."""
     if "@" in handle:
@@ -510,7 +502,11 @@ def ask_to_reverify(deps: Deps, surface: dict, word: str | None
                     ) -> tuple[dict, int]:
     """No run: a sign-in link, under the same allowance as any other. On
     confirm by the same account, accounts.bind_imessage_handle refreshes
-    the binding; another account meets the usual "taken"."""
+    the binding; another account meets the usual "taken".
+
+    The words are START's to a number we have never seen: the reader may
+    be the number's new holder, who must not learn it was connected
+    (#866). The owner's email is where this is explained."""
     svc = deps.svc
     handle = surface["handle"]
     if svc.imessage_mark_reverify(surface["id"]) and deps.on_reverify:
@@ -518,7 +514,7 @@ def ask_to_reverify(deps: Deps, surface: dict, word: str | None
     token = svc.issue_imessage_link(handle)
     if token is None:            # past the per-window link allowance
         return ({"reply": START_CAPPED_TEXT} if word == "start" else {}), 200
-    return {"reply": reverify_text(link_url(deps.origin, token))}, 200
+    return {"reply": start_text(link_url(deps.origin, token))}, 200
 
 
 def handle_inbound(deps: Deps, raw_handle: str, text: str,

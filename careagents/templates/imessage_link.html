@@ -21,6 +21,11 @@
     <p class="setup-sub">Go back to Messages and text your question. To
       stop any time, text STOP.</p>
     <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
+    {% elif outcome == "confirmed" %}
+    <h1>Confirmed. This phone is still connected to CareAgents.</h1>
+    <p class="setup-sub">Go back to Messages and text your question. To
+      stop any time, text STOP.</p>
+    <a class="btn-primary btn-block" href="/home">Go to CareAgents</a>
     {% elif outcome == "connected_setup" %}
     <h1>You're connected.</h1>
     <p class="setup-sub">One more step: choose your records so your

@@ -940,7 +940,9 @@ class AccountService:
                              pending_surface_id: str | None = None,
                              welcome: bool = False,
                              also: str | None = None) -> str:
-        """Bind a handle to an account: "connected" or "taken".
+        """Bind a handle to an account: "connected", "confirmed" or
+        "taken". "confirmed" is the sign-in link re-confirming a handle
+        already bound here (#871): nothing new was connected.
 
         A handle is bound to at most one account. Bound elsewhere, nothing
         changes until that binding is undone (STOP, or disconnect on the
@@ -974,7 +976,7 @@ class AccountService:
                 for x in bound:
                     x.verified_at = x.last_inbound_at = now()
                     x.reverify_notified_at = None
-                return "connected"
+                return "confirmed"
             if pending_surface_id:
                 x = s.get(Surface, pending_surface_id)
                 if x is None or x.account_id != account_id:
@@ -1168,7 +1170,8 @@ class AccountService:
 
     def claim_imessage_link(self, link_id: str, account_id: str) -> str:
         """Spend a link for a signed-in account and bind its handle:
-        "connected", "taken" or "expired". Spent exactly once."""
+        "connected", "confirmed", "taken" or "expired". Spent exactly
+        once."""
         with self.session() as s:
             res = s.execute(update(ImessageLink)
                             .where(ImessageLink.id == link_id,
