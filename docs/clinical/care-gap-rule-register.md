@@ -167,7 +167,7 @@ telling them to raise it with their clinician (#425, #428, #436).
 | What closes the gap | `Immunization` with `status` `completed`, an `occurrenceDateTime`, and a `vaccineCode` of `15`, `16`, `88`, `111`, `135`, `140`, `141`, `144`, `149`, `150`, `151`, `153`, `155`, `158`, `161`, `166`, `168`, `171`, `185`, `186`, `197`, `205`, `320`, `333` or `338`. These are the seasonal influenza codes in the CDC CVX table (`cdc-cvx`), active and retired alike |
 | What is NOT read | The influenza season. The window is 12 rolling months from the last dose, not a season boundary, so someone vaccinated in one season reads as covered part-way into the next. Southern Hemisphere formulations (CVX 194, 200-202, 231, 331, 337) are deliberately left out, so a shot given abroad with one of them reads as due. Pandemic and avian vaccines (CVX 123, 125-128, 160, 321-323) are not a seasonal flu shot and are left out. An `occurrenceString` ("last autumn") is undated and cannot close the gap |
 | Related eCQM | CMS147 (related, not implemented) |
-| Status | released |
+| Status | released — **awaiting clinician initial**: the closing codes, the `completed` status gate and the Southern Hemisphere exclusion changed in #880 |
 
 ---
 
@@ -210,7 +210,7 @@ what a verdict above means.
   applies to the six rules other than `flu-immunization`.
 - Soft-deleted records are excluded (#422).
 
-**Whose record it is**
+**Whose record it is** — **awaiting clinician initial** (changed in #880)
 
 - A record is the patient's when its reference names them: `subject` on every
   type read here except `Immunization`, which names its patient in `patient`
@@ -220,6 +220,10 @@ what a verdict above means.
   otherwise (#878). This is a disclosed policy, not a finding: on a
   one-Patient tenant, a record with no patient reference closes that
   patient's gap.
+- **`Immunization` is the exception: one with no `patient` is nobody's**, on
+  any tenant. `Immunization.patient` is required (1..1) in FHIR and the write
+  path refuses an Immunization without it, so a row lacking it is broken
+  data, not an unattributed shot, and it never closes the flu gap.
 - A record carrying the reference its type does not use (an `Immunization`
   with a `subject`), or a reference of the wrong shape, is unreadable and
   closes nothing.

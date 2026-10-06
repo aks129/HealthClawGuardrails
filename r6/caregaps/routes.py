@@ -153,6 +153,13 @@ def sole_patient_id(tenant_id):
 _SUBJECT_FIELD = {"Immunization": "patient"}
 _REFERENCE_FIELDS = ("subject", "patient")
 
+#: Types whose patient reference is required (1..1), so a row without one is
+#: broken data rather than an unattributed record of the tenant's one
+#: Patient. `Immunization.patient` is 1..1 and the write path refuses an
+#: Immunization without it; one that arrives without it anyway closes nobody's
+#: gap, even on a one-Patient tenant (#880).
+_PATIENT_REQUIRED = frozenset({"Immunization"})
+
 
 def subject_field(resource_type):
     """The element that names the patient on `resource_type`."""
@@ -203,7 +210,9 @@ def subject_rows(resource_type, subject, tenant_id, limit=None):
     exact-string comparison rather than to nothing.
     """
     patient_id = referenced_patient_id(subject)
-    sole_id = sole_patient_id(tenant_id) if patient_id else None
+    sole_id = (sole_patient_id(tenant_id)
+               if patient_id and resource_type not in _PATIENT_REQUIRED
+               else None)
     field = subject_field(resource_type)
     query = R6Resource.query.filter_by(
         resource_type=resource_type, tenant_id=tenant_id, is_deleted=False)

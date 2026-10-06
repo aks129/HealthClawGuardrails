@@ -134,6 +134,18 @@ def test_the_standard_seasonal_influenza_cvx_codes_close_the_gap():
         assert cvx not in codes, cvx
 
 
+@pytest.mark.parametrize("cvx", ["194", "200", "201", "202", "231", "331",
+                                 "337"])
+def test_a_southern_hemisphere_shot_leaves_the_gap_due(cvx):
+    """Excluded on purpose (see `_FLU_CVX`): their strains are chosen for the
+    other hemisphere's season. Adding one back must be a decision, not a
+    quiet edit; the register's flu row says the same.
+
+    MUTATION: add "201" to `_FLU_CVX` -> red.
+    """
+    assert _evaluate(_shot(cvx=cvx))["status"] == "due"
+
+
 def test_conditions_are_still_read_from_code():
     """`_codes_of` serves the diabetes gate too; Conditions keep `code`."""
     cond = {"resourceType": "Condition",
@@ -228,14 +240,30 @@ def test_a_shot_outside_the_window_does_not_close_the_gap_end_to_end(
     assert _care_gaps_flu(client, tenant_headers)["status"] == "due"
 
 
-def test_a_shot_with_neither_field_follows_the_no_subject_rule(
+def test_a_shot_with_no_patient_is_nobodys_even_on_a_one_patient_tenant(
         app, client, tenant_id, tenant_headers):
-    """The disclosed policy (#878): a row naming nobody belongs to the
-    tenant's one Patient. An Immunization with no `patient` is such a row."""
+    """The no-subject rule (#878) does not reach Immunization.
+    `Immunization.patient` is 1..1 and the write path refuses a row without
+    it, so one that is stored anyway is broken data and closes no gap.
+
+    MUTATION: drop Immunization from `_PATIENT_REQUIRED` -> red.
+    """
     _patient_row(app, tenant_id)
     _row(app, tenant_id, _shot(no_patient=True, when=_recent()))
-    assert _rows(app, tenant_id) == (["imm1"], 0)
-    assert _care_gaps_flu(client, tenant_headers)["status"] == "up_to_date"
+    assert _rows(app, tenant_id) == ([], 0)
+    assert _care_gaps_flu(client, tenant_headers)["status"] == "due"
+
+
+def test_an_observation_with_no_subject_still_follows_the_no_subject_rule(
+        app, tenant_id):
+    """The exception is Immunization's alone (#878 is unchanged)."""
+    from r6.caregaps.routes import subject_rows
+    from tests.test_labs_subject_matching import _obs
+    _patient_row(app, tenant_id)
+    _row(app, tenant_id, _obs("o1", no_subject=True))
+    with app.app_context():
+        rows, _ = subject_rows("Observation", f"Patient/{PID}", tenant_id)
+    assert [r["id"] for r in rows] == ["o1"]
 
 
 def test_a_shot_with_no_patient_belongs_to_nobody_on_a_shared_tenant(
