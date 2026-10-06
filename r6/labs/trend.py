@@ -218,7 +218,7 @@ def _gate(obs):
     # Not rounded: rounding each value before comparing moved a 0.2998 mg/dL
     # rise onto the 0.3 threshold. Values are rounded only for display.
     mg_dl = value if unit == "mg/dL" else value / UMOL_PER_MG_DL
-    if mg_dl > MAX_PLAUSIBLE_MG_DL + _EPS:
+    if mg_dl > MAX_PLAUSIBLE_MG_DL:
         return None, IMPLAUSIBLE
     return (mg_dl, value, unit), None
 
