@@ -15,7 +15,10 @@ mailbox gets at most one confirmation email a day, however many times or
 from wherever it is submitted; the page answers the same either way. The
 mailbox is the address lowercased with any `+tag` dropped, and for Gmail
 with the dots dropped and googlemail.com folded into gmail.com, so
-`pat+1@` and `p.a.t@gmail.com` count as the inbox they reach.
+`pat+1@` and `p.a.t@gmail.com` count as the inbox they reach. Before that,
+the domain is converted to its ASCII form (IDNA/UTS-46) and stored that
+way, so a lookalike such as fullwidth `ｇｍａｉｌ.com` is `gmail.com`; a
+domain with a trailing dot, or one that does not convert, is refused.
 
 The confirm page shows what is being confirmed: a new request or a change,
 the first name, and the last four digits of the mobile, or no mobile.
@@ -59,8 +62,34 @@ spot holder becomes `new`. The log records it with the domain masked, and
 `mark` and `purge` print it. The tester is emailed that a spot opened and
 that we will email again within a day once their number is ready to text,
 so add them to Sendblue and `mark ... added` within a day: that sends the
-"Text hi" email. The promotion email never says to text. `mark ... new` on
-a waitlisted request respects the ten; `--force` goes past them.
+"Text hi" email. The promotion email never says to text.
+
+`mark` refuses a request nobody confirmed (`pending`), because only the
+mailbox's owner can say yes. `mark ... new` on a waitlisted request
+respects the ten spots and the one-per-mailbox-or-mobile rule. `--force`
+overrides both; use it only when you have confirmed with the person
+yourself.
+
+## Known gaps (accepted)
+
+Two findings from the security review are documented, not fixed. Each is
+pinned by a strict-xfail test in
+`tests/test_careagents_beta_signup_exploits_r3.py`, which goes red if the
+behaviour changes, so this section gets updated with it.
+
+- **R7, provider aliases beyond Gmail.** `mailbox` folds `+tag` everywhere
+  and dots only for Gmail. Proton Mail delivers `j.doe`, `j-doe` and
+  `j_doe` to `jdoe`, and Fastmail delivers `anything@jdoe.fastmail.com` to
+  `jdoe@fastmail.com`, so one such inbox can get a few confirmation emails
+  a day and hold more than one spot. Bounded by the per-IP limit, and each
+  spot still needs a confirmed address; watch `list` for lookalike names.
+- **R9, mobiles are not verified.** Whoever confirms a number first holds
+  its spot, so someone who types another person's mobile puts that person
+  on the waitlist with "same mobile as another request". When that note
+  appears, check with both people, `mark` the wrong one `removed`, and
+  `mark ... new --force` the right one if needed. Fixing this means texting
+  a code to the number before it counts, which waits on the Sendblue
+  question in the brief.
 
 ## Adding someone to iMessage
 

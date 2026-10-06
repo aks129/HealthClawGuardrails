@@ -13,9 +13,9 @@
     <p>{% if preview.kind == "join" %}A new request{% else %}A change to your request{% endif %} to test CareAgents:</p>
     <ul class="beta-steps">
       <li>First name: <b>{{ preview.first_name }}</b></li>
-      <li>{% if preview.tail %}Mobile: a mobile ending in {{ preview.tail }}{% elif preview.kind == "join" %}Mobile: no mobile{% else %}Mobile: no new mobile{% endif %}</li>
+      <li>{% if preview.tail %}Mobile: ending in {{ preview.tail }}{% elif preview.kind == "join" %}Mobile: no mobile{% else %}Mobile: no new mobile{% endif %}</li>
     </ul>
-    <p>Not right? Ignore this email and nothing changes.</p>
+    <p>Not right? Close this page and nothing changes.</p>
     <form method="post" action="/beta/confirm">
       <input type="hidden" name="t" value="{{ token }}">
       <button class="btn-primary btn-block" type="submit">Confirm</button>

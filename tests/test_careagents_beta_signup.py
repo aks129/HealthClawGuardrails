@@ -229,6 +229,8 @@ def test_the_browser_refuses_while_the_box_is_unticked():
     assert "scrollIntoView" in _JS
     assert '"Thanks, "' in _JS and "Check your email to confirm." in _JS
     assert "If it isn't there in a few minutes, check spam." in _JS
+    assert "If you already asked today, use the email we sent earlier." \
+        in _JS
     assert "innerHTML" not in _JS
 
 
@@ -835,8 +837,8 @@ def test_mark_added_with_sendblue_off_sends_nothing_and_says_so(made, sent):
 
 @pytest.mark.parametrize("status", ["new", "waitlist", "active", "removed"])
 def test_mark_other_statuses(made, sent, status):
-    app, svc = made()
-    _post(app.test_client(), mobile="+15550100101")
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, mobile="+15550100101")
     r = app.test_cli_runner().invoke(
         args=["beta-requests", "mark", "avery@example.com", status])
     assert r.exit_code == 0, r.output
@@ -1029,9 +1031,10 @@ def test_the_confirm_page_shows_what_is_confirmed(made, sent):
         f"/beta/confirm?t={_confirm_token(sent[0][3])}").get_data(
             as_text=True))
     assert "A new request" in page
-    assert "Vic" in page and "a mobile ending in 0123" in page
+    assert "Vic" in page and "Mobile: ending in 0123" in page
+    assert "a mobile" not in page
     assert "+15550100123" not in page
-    assert "Not right? Ignore this email and nothing changes." in page
+    assert "Not right? Close this page and nothing changes." in page
 
 
 def test_the_confirm_page_shows_a_change_and_no_mobile(made, sent):
@@ -1170,3 +1173,83 @@ def test_mark_new_respects_the_cap_unless_forced(made, sent):
 ])
 def test_numbers_are_shown_the_way_people_write_them(raw, shown):
     assert beta_signup.show_number(raw) == shown
+
+
+# --- round 4: domains, operator guards, tile aliases, waitlist reason --------
+
+@pytest.mark.parametrize("typed,stored", [
+    ("victim@ｇｍａｉｌ.com", "victim@gmail.com"),
+    ("victim@bücher.example", "victim@xn--bcher-kva.example"),
+])
+def test_a_domain_is_stored_in_its_ascii_form(made, typed, stored):
+    app, svc = made()
+    assert _post(app.test_client(), email=typed).status_code == 200
+    assert [r["email"] for r in _rows(svc)] == [stored]
+
+
+@pytest.mark.parametrize("email", ["victim@gmail.com.", "victim@a..example",
+                                   "victim@-x.example"])
+def test_a_trailing_dot_or_unencodable_domain_is_refused(made, email):
+    app, svc = made()
+    r = _post(app.test_client(), email=email)
+    assert r.status_code == 400 and r.get_json()["error"] == "email"
+    assert _rows(svc) == []
+
+
+def test_mark_refuses_a_pending_row_unless_forced(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test", **SENDBLUE)
+    _post(app.test_client())
+    run = app.test_cli_runner()
+    sent.clear()
+    r = run.invoke(args=["beta-requests", "mark", "avery@example.com",
+                         "added"])
+    assert r.exit_code != 0 and "not confirmed" in r.output
+    assert _row(svc)["status"] == "pending" and sent == []
+    r = run.invoke(args=["beta-requests", "mark", "avery@example.com",
+                         "added", "--force"])
+    assert r.exit_code == 0, r.output
+    assert _row(svc)["status"] == "added"
+
+
+def test_mark_new_refuses_a_twin_unless_forced(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, ip="198.51.100.1", email="a@example.com",
+          mobile="+15550100101")
+    _join(app, sent, ip="198.51.100.2", email="b@example.com",
+          mobile="+15550100101")
+    run = app.test_cli_runner()
+    r = run.invoke(args=["beta-requests", "mark", "b@example.com", "new"])
+    assert r.exit_code != 0 and "same mobile" in r.output
+    assert _row(svc, "b@example.com")["status"] == "waitlist"
+    r = run.invoke(args=["beta-requests", "mark", "b@example.com", "new",
+                         "--force"])
+    assert r.exit_code == 0 and _row(svc, "b@example.com")["status"] == "new"
+
+
+def test_the_tile_finds_the_request_by_mailbox(made, monkeypatch):
+    app, svc = made(**SENDBLUE)
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email="g.ene@gmail.com")
+    with c.session_transaction() as s:
+        aid = s["account_id"]
+    svc.add_connection(aid, "sample", "t-sample", "Sample",
+                       consent_version="2026-08-01")
+    with svc.session() as s:
+        s.add(beta_signup.BetaRequest(
+            email="gene+beta@gmail.com", first_name="Gene", status="added",
+            created_at=time.time(), updated_at=time.time(),
+            confirmed_at=time.time()))
+    assert 'id="text-tile"' in c.get("/home").get_data(as_text=True)
+
+
+def test_a_twin_on_the_waitlist_is_not_told_the_line_is_full(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    _join(app, sent, ip="198.51.100.1", email="a@example.com",
+          mobile="+15550100101")
+    sent.clear()
+    _join(app, sent, ip="198.51.100.2", email="b@example.com",
+          mobile="+15550100101")
+    welcome = [m for m in sent if m[1].startswith("You're in")][0][3]
+    assert ("Your request is on the waitlist for iMessage. The web app "
+            "works today.") in welcome
+    assert "iMessage is full" not in welcome

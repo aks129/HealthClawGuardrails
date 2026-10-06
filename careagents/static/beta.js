@@ -41,7 +41,8 @@
         done.textContent = "Thanks, " + field("first_name").trim() +
           ". Check your email to confirm. We sent an email to " +
           field("email").trim() +
-          ". If it isn't there in a few minutes, check spam.";
+          ". If it isn't there in a few minutes, check spam. " +
+          "If you already asked today, use the email we sent earlier.";
         form.hidden = true;
         done.hidden = false;
         done.scrollIntoView({ block: "center", behavior: "smooth" });

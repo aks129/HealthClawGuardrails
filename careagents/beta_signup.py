@@ -36,6 +36,9 @@ import unicodedata
 from collections import OrderedDict, deque
 
 import click
+# A dependency of `requests`, so always installed; the stdlib codec is
+# IDNA 2003 and has no UTS-46 mapping.
+import idna
 from flask import jsonify, make_response, render_template, request
 from markupsafe import escape
 from sqlalchemy import Column, Float, String, update
@@ -142,6 +145,25 @@ def has_control(value: str) -> bool:
 def valid_email(value: str) -> bool:
     return (len(value) <= 254 and value.count("@") == 1
             and not has_control(value) and bool(_EMAIL.fullmatch(value)))
+
+
+def ascii_email(value: str) -> str | None:
+    """The address with its domain in ASCII, or None. The domain is
+    encoded with IDNA/UTS-46 and the encoded form is kept, so a lookalike
+    (`ｇｍａｉｌ.com`) is the host it resolves to (`gmail.com`) before
+    `mailbox` folds it. A trailing dot (`gmail.com.`, the same host in
+    DNS) and a domain that does not encode are refused."""
+    if not valid_email(value):
+        return None
+    local, domain = value.split("@")
+    if domain.endswith("."):
+        return None
+    try:
+        encoded = idna.encode(domain, uts46=True).decode("ascii")
+    except (idna.IDNAError, UnicodeError):
+        return None
+    email = f"{local}@{encoded.lower()}"
+    return email if valid_email(email) else None
 
 
 def mailbox(email: str) -> str:
@@ -374,7 +396,7 @@ def confirm(session_scope, token: str) -> dict | None:
         return {"kind": kind, "email": row.email,
                 "first_name": row.first_name, "status": row.status,
                 "gave_mobile": row.mobile_given_at is not None,
-                "ref": row.ref}
+                "ref": row.ref, "note": row.note}
 
 
 def promote(s) -> list[str]:
@@ -434,14 +456,25 @@ def remove(session_scope, token: str) -> bool:
         return True
 
 
-def spot_is_free(session_scope, email: str) -> bool:
-    """Would `new` fit under the ten for this request?"""
+def why_not(session_scope, email: str, status: str) -> str | None:
+    """Why `mark` should refuse without --force, or None. A request
+    nobody confirmed is not the owner's to set (double opt-in), and `new`
+    must fit the ten spots and the one-per-mailbox-or-mobile rule."""
     with session_scope() as s:
         row = s.get(BetaRequest, email)
-        if (row is None or row.mobile_given_at is None
+        if row is None:
+            return None
+        if row.status == "pending":
+            return "this request is not confirmed yet"
+        if (status != "new" or row.mobile_given_at is None
                 or row.status in _HOLDS_A_SPOT):
-            return True
-        return len(_spot_holders(s, email)) < IMESSAGE_SPOTS
+            return None
+        wait, note = _why_wait(s, row)
+        if note:
+            return f"it has the {note}"
+        if wait:
+            return f"all {IMESSAGE_SPOTS} iMessage spots are taken"
+        return None
 
 
 def mark(session_scope, email: str, status: str) -> list[str] | None:
@@ -707,8 +740,8 @@ def register(app, svc, cfg) -> None:
         first_name = str(body.get("first_name") or "").strip()
         if not 0 < len(first_name) <= 40 or has_control(first_name):
             return jsonify({"error": "first_name"}), 400
-        email = str(body.get("email") or "").strip().lower()
-        if not valid_email(email):
+        email = ascii_email(str(body.get("email") or "").strip().lower())
+        if email is None:
             return jsonify({"error": "email"}), 400
         mobile = None
         raw_mobile = str(body.get("mobile") or "").strip()
@@ -760,7 +793,12 @@ def register(app, svc, cfg) -> None:
         if done["kind"] == "join":
             try:
                 lines = youre_in_lines(cfg, done["first_name"])
-                if done["status"] == "waitlist":
+                if done["status"] == "waitlist" and done["note"]:
+                    # Waiting because a twin holds a spot, not because the
+                    # line is full: no promise of an email when one opens.
+                    lines.append("Your request is on the waitlist for "
+                                 "iMessage. The web app works today.")
+                elif done["status"] == "waitlist":
                     lines.append("iMessage is full for now. We'll email you "
                                  "when a spot opens. The web app works "
                                  "today.")
@@ -832,14 +870,14 @@ def register(app, svc, cfg) -> None:
     def beta_requests_mark(email, status, force):
         """Set a request's status. `added` deletes the mobile and emails
         the tester the number to text. `removed` frees a spot, which goes
-        to the oldest waitlisted request. `new` respects the ten spots
-        unless --force."""
+        to the oldest waitlisted request. A request nobody confirmed is
+        refused, and `new` respects the ten spots and one spot per mailbox
+        or mobile, unless --force."""
         email = email.strip().lower()
-        if (status == "new" and not force
-                and not spot_is_free(svc.session, email)):
+        reason = None if force else why_not(svc.session, email, status)
+        if reason:
             raise click.ClickException(
-                f"all {IMESSAGE_SPOTS} iMessage spots are taken; use "
-                f"--force to go past them")
+                f"not marked: {reason}. Use --force to mark it anyway")
         promoted = mark(svc.session, email, status)
         if promoted is None:
             raise click.ClickException("no request with that email")
@@ -873,12 +911,15 @@ def text_tile(cfg, hub: dict, session_scope, email: str) -> dict | None:
     """The number for "Text your assistant", or None to hide the tile.
     Shown to a sample account whose beta request the owner added to the
     Sendblue sandbox, while Sendblue is on: nobody else's text would be
-    answered."""
+    answered. Matched by mailbox, so an account signed up as an alias of
+    the address that asked still sees it."""
     number = text_number(cfg)
     if not number or not hub["records"] or hub["has_real"]:
         return None
+    box = mailbox(email or "")
     with session_scope() as s:
-        row = s.get(BetaRequest, (email or "").strip().lower())
-        if row is None or row.status not in _CAN_TEXT:
-            return None
+        added = (s.query(BetaRequest.email)
+                 .filter(BetaRequest.status.in_(_CAN_TEXT)).all())
+    if not any(mailbox(e) == box for (e,) in added):
+        return None
     return {"number": show_number(number), "sms": f"sms:{number}"}
