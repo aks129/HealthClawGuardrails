@@ -1074,6 +1074,14 @@ class AccountService:
                             ImessageLink.exp > now()).first())
             return link.id if link else None
 
+    def imessage_link_handle(self, link_id: str) -> str | None:
+        """The handle a live link would bind, for the confirm page."""
+        with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None or link.used_at is not None or link.exp <= now():
+                return None
+            return link.handle
+
     def claim_imessage_link(self, link_id: str, account_id: str) -> str:
         """Spend a link for a signed-in account and bind its handle:
         "connected", "taken" or "expired". Spent exactly once."""

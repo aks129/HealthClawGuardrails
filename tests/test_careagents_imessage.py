@@ -47,6 +47,10 @@ def _acct_id(svc, email):  # noqa: F811
         return s.query(Account).filter_by(email=email).one().id
 
 
+def _confirm(client):
+    return client.post("/link/done", data={"connect": "yes"})
+
+
 def _run(app):
     from careagents.worker import RunWorker
     rt = app.extensions["careagents_runtime"]
@@ -133,7 +137,11 @@ def test_the_link_signs_in_then_binds_and_works_once(
     r = phone.get("/home")
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/link/done")
-    done = phone.get("/link/done")
+    ask = phone.get("/link/done")
+    assert ask.status_code == 200
+    assert "+15550100123" in ask.get_data(as_text=True)
+    assert svc.find_surface_by_handle(PHONE) is None    # asking binds nothing
+    done = phone.post("/link/done", data={"connect": "yes"})
     assert done.status_code == 200
     assert "You're connected." in done.get_data(as_text=True)
 
@@ -161,8 +169,26 @@ def test_a_signed_in_person_binds_straight_away(cfg, svc, monkeypatch):  # noqa:
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
     r = c.get(f"/link/{token}")
     assert r.headers["Location"].endswith("/link/done")
-    assert "You're connected." in c.get("/link/done").get_data(as_text=True)
+    assert "Connect this phone?" in c.get("/link/done").get_data(as_text=True)
+    assert "You're connected." in _confirm(c).get_data(as_text=True)
     assert svc.find_surface_by_handle(PHONE)
+
+
+def test_a_forwarded_link_binds_nothing_without_a_yes(cfg, svc, monkeypatch):  # noqa: F811
+    """Whoever opens a link sees which phone it connects and must say yes:
+    a stranger's link, forwarded to someone signed in, must not tie the
+    stranger's phone to their records."""
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
+    c.get(f"/link/{token}")
+    c.get("/link/done")
+    assert svc.find_surface_by_handle(PHONE) is None
+    no = c.post("/link/done", data={"connect": "no"})
+    assert no.status_code == 302
+    assert svc.find_surface_by_handle(PHONE) is None
+    # The "no" spent the parked link from the session: a later yes is inert.
+    assert c.post("/link/done", data={"connect": "yes"}).status_code == 302
+    assert svc.find_surface_by_handle(PHONE) is None
 
 
 # --- the welcome ------------------------------------------------------------
@@ -173,7 +199,7 @@ def test_the_first_reply_after_a_link_bind_is_the_welcome(
                                            reply="Your A1c is in range.")
     token = _link_token(_inbound(c, PHONE, "hi").get_json()["reply"])
     c.get(f"/link/{token}")
-    c.get("/link/done")
+    _confirm(c)
 
     first = _inbound(c, PHONE, "how is my a1c?")
     assert first.status_code == 202
@@ -208,7 +234,7 @@ def test_a_new_account_without_an_assistant_is_told_what_to_do(
     phone = app.test_client()
     phone.get(f"/link/{token}")
     _login(phone, svc, monkeypatch, email="new@example.com")
-    phone.get("/link/done")
+    _confirm(phone)
     r = _inbound(owner, PHONE, "what are my labs?")
     assert r.status_code == 200
     assert r.get_json() == {"reply": imessage.no_agent_text(cfg.origin)}

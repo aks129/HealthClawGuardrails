@@ -2435,11 +2435,25 @@ def create_app(config: Config | None = None,
             return redirect(url_for("auth"))
         return redirect(url_for("imessage_link_claim"))
 
-    @app.get("/link/done")
+    @app.route("/link/done", methods=["GET", "POST"])
     @login_required
     def imessage_link_claim():
+        """GET asks, POST binds. A link can be forwarded, so whoever opens
+        it must see which phone they are connecting and say yes; otherwise
+        a stranger's number could be tied to their records unnoticed."""
+        if request.method == "GET":
+            link_id = session.get("imessage_link")
+            if not link_id:
+                return redirect(url_for("home"))
+            handle = svc.imessage_link_handle(link_id)
+            if not handle:
+                session.pop("imessage_link", None)
+                return render_template("imessage_link.html",
+                                       outcome="expired"), 410
+            return render_template("imessage_link.html", outcome="confirm",
+                                   handle=handle)
         link_id = session.pop("imessage_link", None)
-        if not link_id:
+        if not link_id or request.form.get("connect") != "yes":
             return redirect(url_for("home"))
         outcome = svc.claim_imessage_link(link_id, current_account().id)
         return render_template("imessage_link.html", outcome=outcome)

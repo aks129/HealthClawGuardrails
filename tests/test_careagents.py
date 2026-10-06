@@ -4984,9 +4984,16 @@ def test_imessage_connect_bind_inbound_flow(app, svc, monkeypatch, cfg):
         json={"handle": "+15559998888", "text": "how's my a1c?"})
     assert ok.status_code == 200
     assert "6.1%" in ok.get_json()["reply"]
-    # an unbound handle is not routed (don't answer strangers)
+    # an unbound handle is not routed to anyone's agent: it gets a sign-in
+    # link and no run (text-first onboarding)
+    stranger = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                          json={"handle": "+15550100777", "text": "hi"})
+    assert stranger.status_code == 200
+    assert "/link/" in stranger.get_json()["reply"]
+    assert "run_id" not in stranger.get_json()
+    # one we cannot text back (a short code) gets nothing at all
     assert relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
-                      json={"handle": "+1000", "text": "hi"}
+                      json={"handle": "12345", "text": "hi"}
                       ).status_code == 404
 
 
