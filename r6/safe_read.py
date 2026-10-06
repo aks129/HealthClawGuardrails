@@ -9,9 +9,9 @@ shape reads as absent, and the row is skipped or counted, never fatal.
 
 The second half is the response. Python's json writes a non-finite float as
 a bare `NaN` or `Infinity` token, which strict parsers, the browser's
-`JSON.parse` among them, refuse. `StrictJSONProvider` turns each one into
-null and then serializes with `allow_nan=False`, so no Flask JSON response
-can carry one. `strict_dumps` does the same for JSON nested in a string,
+`JSON.parse` among them, refuse. `StrictJSONProvider` drops each one (a
+null property is invalid FHIR JSON) and then serializes with
+`allow_nan=False`, so no Flask JSON response can carry one. `strict_dumps` does the same for JSON nested in a string,
 such as a Parameters `valueString`.
 """
 
@@ -80,26 +80,37 @@ def string_field(res, field):
     return value if isinstance(value, str) else ""
 
 
+def _non_finite(value):
+    return isinstance(value, float) and not math.isfinite(value)
+
+
 def finite(value):
-    """`value` with every non-finite float, at any depth, replaced by None."""
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
+    """`value` with every non-finite float, at any depth, dropped: the key
+    from an object, the element from an array. Not written as null, because
+    a null property is invalid FHIR JSON. Only a bare top-level non-finite,
+    which has nowhere to be dropped from, becomes None.
+
+    Only dicts, lists and tuples are walked; dataclasses, UUIDs and Decimals
+    pass through untouched for the JSON provider's `default` to handle.
+    """
+    if _non_finite(value):
+        return None
     if isinstance(value, dict):
-        return {k: finite(v) for k, v in value.items()}
+        return {k: finite(v) for k, v in value.items() if not _non_finite(v)}
     if isinstance(value, (list, tuple)):
-        return [finite(v) for v in value]
+        return [finite(v) for v in value if not _non_finite(v)]
     return value
 
 
 def strict_dumps(value, **kwargs):
-    """json.dumps that writes null for a non-finite float and never emits
-    a bare NaN or Infinity token."""
+    """json.dumps that drops a non-finite float and never emits a bare NaN
+    or Infinity token."""
     kwargs.setdefault("allow_nan", False)
     return json.dumps(finite(value), **kwargs)
 
 
 class StrictJSONProvider(DefaultJSONProvider):
-    """Flask's JSON provider with non-finite floats written as null.
+    """Flask's JSON provider with non-finite floats dropped.
 
     Sanitising first means `allow_nan=False` never raises for a stored NaN:
     the response is strict JSON, not a new 500.

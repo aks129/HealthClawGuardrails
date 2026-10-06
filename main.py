@@ -403,8 +403,8 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
         template_folder=str(_ROOT_DIR / "templates"),
         static_folder=str(_ROOT_DIR / "static"),
     )
-    # Strict JSON: a stored NaN or Infinity goes out as null, never as a bare
-    # token a strict parser refuses (#869).
+    # Strict JSON: a stored NaN or Infinity is dropped from the response,
+    # never sent as a bare token a strict parser refuses (#869).
     flask_app.json = StrictJSONProvider(flask_app)
     flask_app.config.from_mapping(
         APP_ENV=app_env,

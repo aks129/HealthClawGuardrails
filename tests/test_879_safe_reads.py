@@ -354,8 +354,10 @@ def test_no_engine_response_carries_a_bare_nan_or_infinity(
 
 
 def test_the_json_provider_is_strict_and_never_raises_on_a_non_finite(app):
-    """A non-finite float anywhere in a jsonify payload becomes null, and
-    the provider serializes with allow_nan=False."""
+    """A non-finite float anywhere in a jsonify payload is dropped: the key
+    from an object, the element from an array. A null property is invalid
+    FHIR JSON, so null is not the answer either. The provider serializes
+    with allow_nan=False."""
     import json as _json
     from flask import jsonify
     from r6.safe_read import StrictJSONProvider
@@ -363,7 +365,7 @@ def test_the_json_provider_is_strict_and_never_raises_on_a_non_finite(app):
         resp = jsonify({"a": float("nan"), "b": [1.5, float("inf")],
                         "c": {"d": float("-inf"), "e": "NaN"}})
     assert _strict(resp.get_data(as_text=True)) == {
-        "a": None, "b": [1.5, None], "c": {"d": None, "e": "NaN"}}
+        "b": [1.5], "c": {"e": "NaN"}}
     assert isinstance(app.json, StrictJSONProvider)
     seen = {}
     real = _json.dumps
@@ -388,3 +390,26 @@ def test_finite_numbers_and_fhir_output_are_unchanged(
     body = _strict_body(r)
     assert body["valueQuantity"]["value"] == 0.9
     assert body["resourceType"] == "Observation"
+
+
+def test_a_stored_non_finite_value_is_dropped_from_the_echo_not_nulled(
+        app, client, tenant_id, tenant_headers):
+    """The echoed Observation keeps its valueQuantity, minus the value: no
+    bare token, and no null property either."""
+    _patient(app, tenant_id)
+    _row(app, tenant_id, _lab("lab-inf", value=float("inf")))
+    r = client.get("/r6/fhir/Observation/lab-inf", headers=tenant_headers)
+    assert r.status_code == 200
+    text = r.get_data(as_text=True)
+    assert "null" not in text
+    body = _strict_body(r)
+    assert "value" not in body["valueQuantity"]
+    assert body["valueQuantity"]["unit"] == "mg/dL"
+
+
+def test_finite_drops_at_every_depth():
+    from r6.safe_read import finite, strict_dumps
+    assert finite({"a": [float("nan"), {"b": float("inf"), "c": 1}],
+                   "d": (2.0, float("-inf"))}) == {"a": [{"c": 1}], "d": [2.0]}
+    assert strict_dumps({"x": float("nan"), "y": [float("inf")]}) == \
+        '{"y": []}'
