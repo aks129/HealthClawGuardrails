@@ -40,3 +40,20 @@ def test_purge_keeps_a_cap_that_is_still_live(made, sent):  # noqa: F811
     _post(c, ip="198.51.100.2", first_name="Mallory")
     assert len(sent) == 1
     assert _row(svc)["first_name"] != "Mallory"
+
+
+def test_purge_exempts_an_account_reached_by_an_alias(made, monkeypatch):  # noqa: F811
+    """The request side of the purge key: a request typed as an alias of
+    the account's mailbox (dots, +tag) belongs to an account holder. Raw
+    comparison of the request's address survived mutation."""
+    from tests.test_careagents import _login
+    app, svc = made()
+    c = app.test_client()
+    _post(c, email="r.ae+beta@gmail.com")
+    beta_signup.mark(svc.session, "r.ae+beta@gmail.com", "new")
+    _login(c, svc, monkeypatch, email="rae@gmail.com")
+    with svc.session() as s:
+        s.get(beta_signup.BetaRequest, "r.ae+beta@gmail.com").created_at = (
+            time.time() - (beta_signup.REQUEST_DAYS + 1) * 86400)
+    beta_signup.purge(svc.session)
+    assert [r["email"] for r in _rows(svc)] == ["r.ae+beta@gmail.com"]
