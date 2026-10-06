@@ -143,7 +143,44 @@ class Surface(Base):
     handle = Column(String(120), nullable=True)         # chat id / code
     status = Column(String(16), default="pending")      # active|pending
     bound_at = Column(Float, nullable=True)
+    # When a pending pairing code stops working. NULL on a pending row made
+    # before this column existed reads as expired (fail closed).
+    code_exp = Column(Float, nullable=True)
+    # 1 when the next reply on this surface should open with the welcome:
+    # set by a bind that had no message to answer (the sign-in link).
+    welcome_due = Column(Integer, default=0)
     account = relationship("Account", back_populates="surfaces")
+
+
+class ImessageLink(Base):
+    """A one-time sign-in link texted to an unbound iMessage handle.
+
+    Only the token's SHA-256 is stored. Used once, then stamped; expires
+    after 30 minutes. The handle is the sender's address (a phone number or
+    an Apple ID email), the same pointer a bound Surface keeps. No PHI.
+    """
+    __tablename__ = "ca_imessage_links"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("iml"))
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    handle = Column(String(120), nullable=False)
+    created_at = Column(Float, default=now)
+    exp = Column(Float, nullable=False)
+    used_at = Column(Float, nullable=True)
+
+
+class ImessageHandleState(Base):
+    """Per-sender counters and the STOP flag, keyed by a SHA-256 of the
+    normalized handle so the sender's address itself is not kept here.
+
+    Counts only: failed pairing codes and links issued, each in a window.
+    """
+    __tablename__ = "ca_imessage_handles"
+    handle_key = Column(String(64), primary_key=True)
+    opted_out_at = Column(Float, nullable=True)
+    fail_count = Column(Integer, default=0)
+    fail_window_start = Column(Float, nullable=True)
+    link_count = Column(Integer, default=0)
+    link_window_start = Column(Float, nullable=True)
 
 
 class Grant(Base):
@@ -305,6 +342,13 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_surfaces" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
+        if "code_exp" not in cols:
+            _add_column(engine, "ca_surfaces", "code_exp", "FLOAT")
+        if "welcome_due" not in cols:
+            _add_column(engine, "ca_surfaces", "welcome_due",
+                        "INTEGER DEFAULT 0")
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:

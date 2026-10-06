@@ -5019,16 +5019,27 @@ def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
         with svc.session() as s:
             return sum(int(u.turns or 0) for u in s.query(UsageDay).all())
 
-    first = _enqueue_and_run_imessage(
-        app, relay, headers=hdrs,
-        json={"handle": "+15550001111", "text": "hi", "request_id": "im-1"})
-    assert first.get_json()["reply"] == "model answer"
-    assert used() == 1
-    second = _enqueue_and_run_imessage(
-        app, relay, headers=hdrs,
-        json={"handle": "+15550001111", "text": "again", "request_id": "im-2"})
-    assert second.get_json()["reply"] == beta.DAILY_LIMIT_TEXT
+    from careagents.worker import RunWorker
+    runtime = app.extensions["careagents_runtime"]
+    # Both admitted before either runs, so the second meets the cap in the
+    # worker, and the texter reads it through the runs endpoint.
+    runs = [relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": t,
+                             "request_id": f"im-{i}"}).get_json()["run_id"]
+            for i, t in enumerate(("hi", "again"))]
+    for _ in runs:
+        RunWorker(runtime["config"], runtime["client"], runtime["accounts"],
+                  "cap-worker").run_once()
+    replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
+                         query_string={"handle": "+15550001111"}
+                         ).get_json()["reply"] for r in runs]
+    assert replies == ["model answer", beta.DAILY_LIMIT_TEXT]
     assert calls == [1] and used() == 1
+    # Once spent, admission answers it too, without queueing a run.
+    third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,
+                       json={"handle": "+15550001111", "text": "more"})
+    assert third.status_code == 200
+    assert third.get_json() == {"reply": beta.DAILY_LIMIT_TEXT}
 
 
 def test_imessage_reply_collapses_review_card_to_link(monkeypatch, cfg):

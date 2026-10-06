@@ -933,6 +933,18 @@
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
   });
+  // Disconnect: the texts stop reaching the assistant. Texting again later
+  // sends a fresh sign-in link.
+  const imOff = $("im-disconnect");
+  if (imOff) imOff.addEventListener("click", async () => {
+    imOff.disabled = true;
+    const res = await post("/api/surfaces/imessage/disconnect", {});
+    if (!res.ok) {
+      imOff.disabled = false;
+      return say(imOff, $("surfaces-msg"), "Couldn't disconnect. Try again.");
+    }
+    location.reload();
+  });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a
   // failure is announced on the card's live region, never assumed away.

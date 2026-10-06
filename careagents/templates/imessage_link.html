@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}CareAgents on iMessage{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block content %}
+{# The page a texted sign-in link ends on (careagents.imessage). #}
+<main class="setup-wrap">
+  <div class="setup-card">
+    {% if outcome == "connected" %}
+    <h1>You're connected.</h1>
+    <p class="setup-sub">Go back to Messages and text your question. To
+      stop any time, text STOP.</p>
+    <a class="btn-primary btn-block" href="/home">Go to your hub</a>
+    {% elif outcome == "taken" %}
+    <h1>Already connected.</h1>
+    <p class="setup-sub">That chat is connected to another CareAgents
+      account. Text STOP from it first, then text us again for a new
+      link.</p>
+    <a class="btn-primary btn-block" href="/home">Go to your hub</a>
+    {% else %}
+    <h1>This link has expired.</h1>
+    <p class="setup-sub">Links work once, for 30 minutes. Text us again and
+      we'll send a new one.</p>
+    <a class="btn-primary btn-block" href="/">Go to CareAgents</a>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}
