@@ -26,6 +26,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+from careagents import beta_signup
 from careagents.beta_signup import BetaRequest
 from careagents.models import (Account, ActivityDay, Agent, Connection,
                                EmailToken, Grant, ImessageHandleState,
@@ -595,8 +596,10 @@ class AccountService:
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.
             s.query(RealRecordInvite).filter_by(email=acct.email).delete()
-            # So is a beta request (beta onboarding brief section 5).
+            # So is a beta request (beta onboarding brief section 5); its
+            # iMessage spot goes to the oldest waitlisted request.
             s.query(BetaRequest).filter_by(email=acct.email).delete()
+            beta_signup.promote(s)
             s.delete(acct)
             return True
 

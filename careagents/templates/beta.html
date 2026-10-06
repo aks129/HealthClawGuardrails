@@ -2,13 +2,19 @@
 {% block title %}Test CareAgents — CareAgents{% endblock %}
 {% block bodyclass %}page-setup{% endblock %}
 {# Beta onboarding brief section 1. Plain words, read on a phone: no
-   "tenant", no "FHIR". The page keeps nothing a visitor types except
-   through the form, and `ref` reaches it only after clean_ref. #}
+   "tenant", no "FHIR". The ref's value is never shown; that a ref came at
+   all changes the opening line. #}
 {% block content %}
 {% include "_beta_banner.html" %}
 <main class="setup-wrap">
   <div class="setup-card beta-page">
     <h1>Help us test CareAgents</h1>
+    {% if ref %}
+    <p class="beta-open">Someone you know sent you this link. CareAgents is
+      free during the beta.</p>
+    {% else %}
+    <p class="beta-open">CareAgents is free during the beta.</p>
+    {% endif %}
     <p>CareAgents is an assistant that reads health records and drafts
       paperwork, and you approve anything it sends. It is not a doctor, and
       it does not give medical advice.</p>
@@ -26,17 +32,16 @@
       short demo videos</a> to see each step first.</p>
 
     <h2 class="beta-form-title">Join the beta</h2>
-    <div id="beta-err" class="form-error" role="alert" hidden></div>
-    <p id="beta-done" class="form-ok" role="status" hidden>Thanks. Check your email.</p>
+    <p id="beta-done" class="form-ok" role="status" hidden></p>
     <form id="beta-form" novalidate>
       <label class="field-label" for="beta-first">First name</label>
       <input class="field" id="beta-first" name="first_name" maxlength="40"
              autocomplete="given-name" required>
       <label class="field-label" for="beta-email">Email</label>
       <input class="field" id="beta-email" name="email" type="email"
-             inputmode="email" autocomplete="email" maxlength="255" required>
-      <label class="field-label" for="beta-mobile">Mobile, for iMessage
-        (optional)</label>
+             inputmode="email" autocomplete="email" maxlength="254" required>
+      <label class="field-label" for="beta-mobile">Mobile, if you'd like to
+        text your assistant (iPhone only, optional)</label>
       <input class="field" id="beta-mobile" name="mobile" type="tel"
              inputmode="tel" autocomplete="tel" maxlength="24">
       {# A bot fills every field it finds; a person never sees this one. #}
@@ -49,6 +54,8 @@
         <input type="checkbox" id="beta-consent" name="consent" required>
         You can contact me about the beta
       </label>
+      {# Next to Send, so a phone shows the problem where the thumb is. #}
+      <div id="beta-err" class="form-error beta-err" role="alert" hidden></div>
       <button class="btn-primary btn-block" type="submit">Send</button>
     </form>
 
