@@ -13,11 +13,19 @@ from datetime import datetime, timedelta, timezone
 
 from r6.labs.interpret import REFERENCES, UNIT_MISMATCH, interpret_observation
 from r6.labs.report import build_consumer_summary
-from r6.labs.trend import (
-    CREATININE_LOINC, evaluate_creatinine_aki, kdigo_consumer_line,
-)
+from r6.labs import trend
+from r6.labs.trend import CREATININE_LOINC, kdigo_consumer_line
 
 T0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+
+
+def evaluate_creatinine_aki(observations):
+    """The engine, with one assertion added to every call in this file:
+    the result must be strict JSON. A bare `Infinity` or `NaN` token is not
+    JSON, and an inf ratio once raised a false stage-3 alert."""
+    result = trend.evaluate_creatinine_aki(observations)
+    json.dumps(result, allow_nan=False)
+    return result
 
 
 def _cr(value, at, unit="mg/dL", rid=None, loinc=CREATININE_LOINC, **extra):
@@ -495,6 +503,39 @@ def test_an_integer_too_large_for_a_float_is_implausible_not_raised():
     json.dumps(r, allow_nan=False)
 
 
+def test_tiny_positive_baselines_are_implausible_not_raised():
+    # 5e-324 umol/L becomes 0.0 mg/dL after conversion (a divide by zero);
+    # 5e-324 and 1e-300 mg/dL made an inf or astronomic ratio and a false
+    # stage-3 alert reading "rose from 0 to 1.3".
+    for value, unit in ((5e-324, "umol/L"), (5e-324, "mg/dL"), (1e-300, "mg/dL")):
+        r = evaluate_creatinine_aki([_cr(value, T0, rid="tiny", unit=unit),
+                                     _cr(1.3, T0 + timedelta(days=2))])
+        assert {"id": "tiny", "reason": "implausible-value"} in r["skipped"]
+        assert r["kdigo_criterion"] == [] and r["stage"] is None
+
+
+def test_lower_bound_is_0_1_mg_dl():
+    for value, unit in ((0.1, "mg/dL"), (8.84, "umol/L")):
+        r = evaluate_creatinine_aki([_cr(value, T0, unit=unit),
+                                     _cr(0.5, T0 + timedelta(days=2))])
+        assert r["kdigo_criterion"] == ["A", "B"]
+    for value, unit in ((0.0999, "mg/dL"), (8.83, "umol/L")):
+        r = evaluate_creatinine_aki([_cr(value, T0, rid="low", unit=unit),
+                                     _cr(0.5, T0 + timedelta(days=2))])
+        assert {"id": "low", "reason": "implausible-value"} in r["skipped"]
+
+
+def test_ratio_is_guarded_even_without_the_lower_bound(monkeypatch):
+    # The bound is clinical and may be tuned; the division must stay safe
+    # if it is ever lowered to nothing.
+    monkeypatch.setattr(trend, "MIN_PLAUSIBLE_MG_DL", 0.0)
+    for value, unit in ((5e-324, "umol/L"), (5e-324, "mg/dL")):
+        r = evaluate_creatinine_aki([_cr(value, T0, unit=unit),
+                                     _cr(1.3, T0 + timedelta(days=2))])
+        assert r["criteria"]["B"]["status"] == "not-evaluable"
+        assert "B" not in r["kdigo_criterion"]
+
+
 def test_creatinine_above_40_mg_dl_is_implausible():
     for value, unit in ((40.1, "mg/dL"), (3537, "umol/L")):
         r = evaluate_creatinine_aki([_cr(0.8, T0),
@@ -578,6 +619,19 @@ def test_subject_interpret_survives_a_huge_integer(
     assert r.status_code == 200
     summary = json.loads(_param(r.get_json(), "summary")["valueString"])
     assert {"id": "cr-h2", "reason": "implausible-value"} in \
+        summary["trends"][0]["skipped"]
+
+
+def test_subject_interpret_survives_a_subnormal_baseline(
+        app, client, tenant_headers, tenant_id):
+    _store(app, tenant_id, _cr(5e-324, T0, rid="cr-t1", unit="umol/L"))
+    _store(app, tenant_id, _cr(1.3, T0 + timedelta(days=2), rid="cr-t2"))
+    r = client.post("/r6/fhir/Observation/$interpret?subject=Patient/p1",
+                    headers=tenant_headers)
+    assert r.status_code == 200
+    assert "Infinity" not in r.get_data(as_text=True)
+    summary = json.loads(_param(r.get_json(), "summary")["valueString"])
+    assert {"id": "cr-t1", "reason": "implausible-value"} in \
         summary["trends"][0]["skipped"]
 
 

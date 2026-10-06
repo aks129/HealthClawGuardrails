@@ -74,6 +74,10 @@ STAGE_3_ABSOLUTE_MG_DL = 4.0
 #: Above this a serum creatinine is a unit or entry error, not a result:
 #: 40 mg/dL = 3536 umol/L, beyond any reported clinical value.
 MAX_PLAUSIBLE_MG_DL = 40.0
+#: Below this a serum creatinine is a unit or entry error too: 0.1 mg/dL =
+#: 8.84 umol/L. It also keeps a near-zero baseline from producing a huge or
+#: infinite ratio. An interim value; our physician advisor may tune it.
+MIN_PLAUSIBLE_MG_DL = 0.1
 #: Threshold comparisons allow this much binary floating-point error, and no
 #: more: 1.2 / 0.8 is 1.4999999999999998 and must count as 1.5, while
 #: 1.999 / 1.333 is 1.4996 and must not. Rounding to a few places, which
@@ -101,6 +105,7 @@ LATEST_NOT_COMPARABLE = "latest-not-comparable"
 NEWER_UNUSABLE = "newer-result-unusable"
 INSUFFICIENT = "insufficient-comparable-results"
 NO_PRIOR_IN_WINDOW = "no-prior-in-window"
+BASELINE_NOT_USABLE = "baseline-not-usable"
 
 _BASELINE_NOTE = (
     "Criterion B baseline is the lowest comparable creatinine in the 7 days "
@@ -218,7 +223,9 @@ def _gate(obs):
     # Not rounded: rounding each value before comparing moved a 0.2998 mg/dL
     # rise onto the 0.3 threshold. Values are rounded only for display.
     mg_dl = value if unit == "mg/dL" else value / UMOL_PER_MG_DL
-    if mg_dl > MAX_PLAUSIBLE_MG_DL:
+    # The lower bound takes the tolerance because 8.84 / 88.4 is
+    # 0.09999999999999999; the upper one needs none (3536 / 88.4 is 40.0).
+    if mg_dl > MAX_PLAUSIBLE_MG_DL or mg_dl < MIN_PLAUSIBLE_MG_DL - _EPS:
         return None, IMPLAUSIBLE
     return (mg_dl, value, unit), None
 
@@ -357,8 +364,14 @@ def evaluate_creatinine_aki(observations):
     baseline = _lowest_prior(points, latest_when, WINDOW_B)
     if baseline is None:
         criteria["B"] = _not_evaluable(NO_PRIOR_IN_WINDOW)
+    elif not baseline[1] > 0 or not math.isfinite(latest_val / baseline[1]):
+        # Unreachable while MIN_PLAUSIBLE_MG_DL holds, and kept so the
+        # division stays safe if that clinical bound is ever lowered: a
+        # subnormal umol/L value converts to 0.0 mg/dL, and a subnormal
+        # mg/dL one gives an infinite ratio.
+        criteria["B"] = _not_evaluable(BASELINE_NOT_USABLE)
     else:
-        ratio = latest_val / baseline[1]  # baseline > 0: _gate guarantees it
+        ratio = latest_val / baseline[1]
         ok = _at_least(ratio, RATIO_B)
         criteria["B"] = {"status": "met" if ok else "not-met",
                          "baseline": _point(baseline),
