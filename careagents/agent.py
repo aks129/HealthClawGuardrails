@@ -344,25 +344,37 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
 MAX_BRIEF_FIELDS = 6
 
 
-_UCUM_SYSTEM = "http://unitsofmeasure.org"
-# A UCUM code's shape: no spaces, so no words. Free text that claims the
-# UCUM system still has to look like a unit.
-#: UCUM codes a lab reading may carry to the model. A closed list: any
-#: other string, however unit-shaped, could be a word (R875-3).
+#: Units a lab reading may carry to the model: exact, case-sensitive
+#: tokens. A closed list: any other string, however unit-shaped, could be a
+#: word (R875-3). The same list the visit brief keeps (r6/brief/engine.py);
+#: CareAgents imports nothing from the engine, so it is repeated.
 _UCUM_ALLOWED = frozenset({
-    "mg/dL", "mmol/L", "umol/L", "%", "g/dL", "g/L", "mg/L", "ng/mL",
-    "pg/mL", "U/L", "[IU]/L", "mm[Hg]", "mL/min/{1.73_m2}", "10*3/uL",
-    "10*6/uL", "fL", "pg", "mEq/L", "mg/mmol", "mg/g", "[pH]",
+    "mg/dL", "g/dL", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "mEq/L",
+    "mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L", "mmol/mol",
+    "g/L", "mg/L", "ug/L", "10*9/L", "10^9/L", "10*12/L", "10^12/L",
+    "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
+    "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
+    "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
 })
 
 
-def _coded_unit(reading: dict, series: dict) -> str:
-    """The reading's UCUM code when it is on the allowlist, else the
-    analyte's known unit, else "". Never `valueQuantity.unit`: that is free
-    text, and real feeds put anything there."""
-    code = reading.get("code")
-    if reading.get("system") == _UCUM_SYSTEM and code in _UCUM_ALLOWED:
-        return code
+def _coded_unit(reading: dict, series: dict) -> str | None:
+    """The unit the reading stated, or None when it stated one we do not
+    recognise; then its number is not passed on either (#884 QA F1).
+
+    - its code (any system, or none) or its unit string is an exact
+      allowlist token: that token. Only a token from the list ever leaves.
+    - neither is present: the analyte's known unit, else "".
+    - anything else: None. The analyte's usual unit used to stand in, which
+      put a number beside a unit it was not measured in.
+    """
+    stated = [v for v in (reading.get("code"), reading.get("unit"))
+              if v is not None and v != ""]
+    for value in stated:
+        if isinstance(value, str) and value in _UCUM_ALLOWED:
+            return value
+    if stated:
+        return None
     return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
 
 
@@ -455,12 +467,17 @@ def _latest_per_analyte(consumer: dict, bundle: dict) -> list[dict] | None:
         (_, date, _), line, r = readings[-1]
         vq = r.get("valueQuantity") or {}
         value = vq.get("value")
+        unit = _coded_unit(vq, {"key": _ANALYTE_KEY.get(key)})
+        if unit is None:
+            # A unit we do not recognise: no number rather than a number
+            # beside the wrong unit (#884 QA F1).
+            value, unit = None, ""
         out.append({
             "analyte": line.get("analyte"),
             "date": date or None,
             "value": (value if isinstance(value, (int, float))
                       and not isinstance(value, bool) else None),
-            "unit": _coded_unit(vq, {"key": _ANALYTE_KEY.get(key)}),
+            "unit": unit,
             "flag": line.get("flag"),
             "message": line.get("message"),
             "earlier_readings": len(readings) - 1,
@@ -489,10 +506,17 @@ def _timeline_in_words(series: dict) -> dict:
         return out
     dated = [r for r in series["readings"] if r["date"]]
     first, latest = dated[0], dated[-1]
+    first_unit = _coded_unit(first, series)
+    latest_unit = _coded_unit(latest, series)
+    # A unit we do not recognise, or two different units: no numbers and
+    # no direction. "Lower" from 120 mg/dL to 6.5 mmol/L is not a finding
+    # (#884 QA F1).
+    if first_unit is None or latest_unit is None or first_unit != latest_unit:
+        return out
     out["first"] = {"date": first["date"], "value": first["value"],
-                    "unit": _coded_unit(first, series)}
+                    "unit": first_unit}
     out["latest"] = {"date": latest["date"], "value": latest["value"],
-                     "unit": _coded_unit(latest, series)}
+                     "unit": latest_unit}
     out["direction"] = ("higher" if latest["value"] > first["value"]
                         else "lower" if latest["value"] < first["value"]
                         else "unchanged")

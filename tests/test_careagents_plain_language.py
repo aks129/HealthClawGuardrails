@@ -172,25 +172,62 @@ def test_a_blood_pressure_panel_shows_its_numbers():
     assert field.value == "120/80 mmHg (Oct 6, 2026)"
 
 
-@pytest.mark.parametrize("vq,shown", [
-    ({"value": float("nan"), "unit": "%"}, "Result not listed in your records"),
-    ({"value": True, "unit": "%"}, "Result not listed in your records"),
-    ({"value": "6.1", "unit": "%"}, "Result not listed in your records"),
-    ({"value": 6.1, "unit": "%"}, "6.1 %"),     # the analyte's known unit
-    ({"value": 6.1, "system": "http://unitsofmeasure.org",
-      "code": "mmol/mol"}, "6.1 %"),           # off the list: known unit
-    ({"value": 6.1, "system": "urn:other", "code": "mg/dL"}, "6.1 %"),
+NOT_LISTED = "Result not listed in your records"
+A1C, CREATININE, GLUCOSE = "4548-4", "2160-0", "2345-7"
+UCUM = "http://unitsofmeasure.org"
+
+
+@pytest.mark.parametrize("loinc,vq,shown", [
+    # Not a finite number: never shown.
+    (A1C, {"value": float("nan"), "unit": "%"}, NOT_LISTED),
+    (A1C, {"value": True, "unit": "%"}, NOT_LISTED),
+    (A1C, {"value": "6.1", "unit": "%"}, NOT_LISTED),
+    # The reading's own unit, by an exact allowlist token in its code (any
+    # system, or none) or in its unit string.
+    (A1C, {"value": 6.1, "unit": "%"}, "6.1 %"),
+    (A1C, {"value": 43, "system": UCUM, "code": "mmol/mol"}, "43 mmol/mol"),
+    (A1C, {"value": 43, "unit": "mmol/mol"}, "43 mmol/mol"),
+    (CREATININE, {"value": 88, "system": UCUM, "code": "umol/L"},
+     "88 umol/L"),
+    (CREATININE, {"value": 88, "unit": "µmol/L"}, "88 µmol/L"),
+    (GLUCOSE, {"value": 5.4, "unit": "mmol/L"}, "5.4 mmol/L"),
+    (GLUCOSE, {"value": 99, "system": "urn:other", "code": "mg/dL"},
+     "99 mg/dL"),
+    # QA F1: a unit the reading did not state is never attached. These two
+    # rows used to read "6.1 %": the A1c's usual unit on a reading that
+    # said something else.
+    (A1C, {"value": 6.1, "system": UCUM, "code": "mmol/molX"}, NOT_LISTED),
+    (CREATININE, {"value": 88, "unit": "micromoles per litre"}, NOT_LISTED),
+    (GLUCOSE, {"value": 5.4, "unit": "MMOL/L"}, NOT_LISTED),   # exact only
+    # No unit and no code at all: the analyte's usual unit (QA's rule).
+    (A1C, {"value": 6.1}, "6.1 %"),
+    (CREATININE, {"value": 1.1}, "1.1 mg/dL"),
 ])
-def test_a_lab_value_is_a_finite_number_with_a_coded_unit(vq, shown):
-    """R884-1: never valueQuantity.unit, never a value that is not a
-    finite number."""
+def test_a_lab_value_shows_only_the_unit_the_reading_stated(loinc, vq,
+                                                           shown):
+    """R884-1 and QA F1 on #884: a finite number, with the reading's own
+    unit when it is an exact allowlist token; the analyte's usual unit only
+    when the reading stated none; otherwise not shown."""
     from r6.brief.engine import build_labs
     [field] = build_labs([{
         "resourceType": "Observation", "id": "o1",
-        "code": {"coding": [{"system": "http://loinc.org",
-                             "code": "4548-4"}]},
+        "code": {"coding": [{"system": "http://loinc.org", "code": loinc}]},
         "valueQuantity": vq, "effectiveDateTime": "2026-09-01"}])
     assert field.value == f"{shown} (Sep 1, 2026)"
+
+
+def test_a_blood_pressure_in_an_unknown_unit_is_not_listed():
+    from r6.brief.engine import build_labs
+    comp = lambda code, v: {  # noqa: E731
+        "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
+        "valueQuantity": {"value": v, "unit": "kPa?"}}
+    [field] = build_labs([{
+        "resourceType": "Observation", "id": "bp",
+        "code": {"coding": [{"system": "http://loinc.org",
+                             "code": "85354-9"}]},
+        "component": [comp("8480-6", 16), comp("8462-4", 10.7)],
+        "effectiveDateTime": "2026-10-06"}])
+    assert field.value == f"{NOT_LISTED} (Oct 6, 2026)"
 
 
 @pytest.mark.parametrize("bad", ["2026-00-15", "2026-13-01", "2026-09-00",

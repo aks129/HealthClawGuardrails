@@ -197,19 +197,30 @@ def _effective_display(resource: dict) -> str:
     return ""
 
 
-_UCUM_SYSTEM = "http://unitsofmeasure.org"
-
-#: UCUM codes the brief may show, each with how it reads. A closed list, as
-#: careagents/agent.py keeps for the model (R875-3): any other string,
-#: however unit-shaped, could be a word. `valueQuantity.unit` is free text
-#: that redaction keeps, so it is never read (R884-1).
+#: The units the brief recognises, each mapped to how it reads. A closed
+#: list of exact, case-sensitive tokens, as careagents/agent.py keeps for
+#: the model (R875-3): any other string, however unit-shaped, could be a
+#: word, so it is never shown (R884-1). Every value here is itself a key,
+#: so only an exact allowlist token ever reaches the page. UCUM's bracket
+#: forms read as their plain spelling; both spellings are accepted.
 _UNIT_DISPLAY = {
-    "mg/dL": "mg/dL", "mmol/L": "mmol/L", "umol/L": "umol/L", "%": "%",
-    "g/dL": "g/dL", "g/L": "g/L", "mg/L": "mg/L", "ng/mL": "ng/mL",
-    "pg/mL": "pg/mL", "U/L": "U/L", "[IU]/L": "IU/L", "mm[Hg]": "mmHg",
-    "mL/min/{1.73_m2}": "mL/min/1.73m2", "10*3/uL": "10^3/uL",
-    "10*6/uL": "10^6/uL", "fL": "fL", "pg": "pg", "mEq/L": "mEq/L",
-    "mg/mmol": "mg/mmol", "mg/g": "mg/g", "[pH]": "pH",
+    # US conventional
+    "mg/dL": "mg/dL", "g/dL": "g/dL", "ng/mL": "ng/mL", "pg/mL": "pg/mL",
+    "ng/dL": "ng/dL", "ug/dL": "ug/dL", "mEq/L": "mEq/L",
+    # SI
+    "mmol/L": "mmol/L", "umol/L": "umol/L", "µmol/L": "µmol/L",
+    "nmol/L": "nmol/L", "pmol/L": "pmol/L", "mmol/mol": "mmol/mol",
+    "g/L": "g/L", "mg/L": "mg/L", "ug/L": "ug/L",
+    "10*9/L": "10^9/L", "10^9/L": "10^9/L", "10*12/L": "10^12/L",
+    "10^12/L": "10^12/L",
+    # either
+    "%": "%", "U/L": "U/L", "[IU]/L": "IU/L", "IU/L": "IU/L",
+    "mm[Hg]": "mmHg", "mmHg": "mmHg",
+    "mL/min/{1.73_m2}": "mL/min/1.73m2", "mL/min/1.73m2": "mL/min/1.73m2",
+    "10*3/uL": "10^3/uL", "10^3/uL": "10^3/uL",
+    "10*6/uL": "10^6/uL", "10^6/uL": "10^6/uL",
+    "fL": "fL", "pg": "pg", "mg/mmol": "mg/mmol", "mg/g": "mg/g",
+    "[pH]": "pH", "pH": "pH",
 }
 
 
@@ -221,14 +232,25 @@ def _number(value) -> str | None:
     return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
-def _unit(vq: dict, analyte_codes) -> str:
-    """The unit by code: the reading's UCUM code when it is on the list,
-    else the analyte's known unit, else nothing."""
+def _unit(vq: dict, analyte_codes) -> str | None:
+    """The unit the reading stated, as the brief shows it, or None when it
+    stated one the brief does not recognise (#884 QA F1).
+
+    Never a unit the reading did not state: a creatinine reported in
+    umol/L is not "mg/dL" because that is creatinine's usual unit. So:
+    - its code (any system, or none) or its unit string is an exact
+      allowlist token: that unit;
+    - neither is present at all: the analyte's usual unit, or none;
+    - anything else: None, and the caller shows no number.
+    """
     vq = as_dict(vq)
-    code = vq.get("code")
-    if vq.get("system") == _UCUM_SYSTEM and isinstance(code, str) \
-            and code in _UNIT_DISPLAY:
-        return _UNIT_DISPLAY[code]
+    stated = [v for v in (vq.get("code"), vq.get("unit"))
+              if v is not None and v != ""]
+    for value in stated:
+        if isinstance(value, str) and value in _UNIT_DISPLAY:
+            return _UNIT_DISPLAY[value]
+    if stated:
+        return None
     for analyte in analyte_codes:
         known = _KNOWN_UNITS.get(analyte) or (
             LOINC_RANGES.get(analyte) or {}).get("unit")
@@ -239,13 +261,14 @@ def _unit(vq: dict, analyte_codes) -> str:
 
 def _obs_value(obs: dict) -> str:
     """Human-readable value + unit from an Observation: a finite number and
-    a unit by code, or "" (the caller says the result is not listed)."""
+    the unit it stated, or "" (the caller says the result is not listed)."""
     if "valueQuantity" in obs:
         vq = as_dict(obs["valueQuantity"])
         value = _number(vq.get("value"))
-        if value is None:
+        unit = _unit(vq, codes(obs.get("code")))
+        if value is None or unit is None:
             return ""
-        return f"{value} {_unit(vq, codes(obs.get('code')))}".strip()
+        return f"{value} {unit}".strip()
     # No valueString branch. It is free text from the source system with no
     # code to label it by, so nothing here can stand behind it (#877). The
     # route strips it already (apply_redaction); the engine does not lean
@@ -278,8 +301,11 @@ def _blood_pressure(obs: dict) -> str:
             continue
         for key in (_SYSTOLIC, _DIASTOLIC):
             if key in comp_codes:
+                comp_unit = _unit(vq, [key])
+                if comp_unit is None:
+                    return ""       # a unit we do not recognise: not shown
                 values[key] = value
-                unit = unit or _unit(vq, [key])
+                unit = unit or comp_unit
     if _SYSTOLIC not in values or _DIASTOLIC not in values:
         return ""
     return f"{values[_SYSTOLIC]}/{values[_DIASTOLIC]} {unit}".strip()
