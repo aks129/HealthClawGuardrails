@@ -162,7 +162,7 @@ def test_brief_shows_the_screenings_due_for_the_sample_patient(
     four screenings due for the same synthetic patient. A clinician walking
     through the brief saw "did not run" every time.
 
-    Asserted against the operation's own answer as well as the literal four,
+    Asserted against the operation's own answer as well as the literal set,
     so the two cannot drift apart again.
 
     MUTATION: pass patient=None in r6/brief/routes.py::_care_gap_result -> red.
@@ -183,8 +183,9 @@ def test_brief_shows_the_screenings_due_for_the_sample_patient(
     assert _sub(gaps, "reason") is None
 
     shown = {json.loads(f["valueString"])["sourceId"] for f in _fields(gaps)}
-    assert shown == {"lipid-screening", "cervical-screening", "mammography",
-                     "flu-immunization"}
+    # Lipid screening is not due: the sample records carry a recent
+    # cholesterol panel (the dated lab series in r6/seed.py).
+    assert shown == {"cervical-screening", "mammography", "flu-immunization"}
     assert shown == _due_rule_ids_from_the_operation(client, tenant_headers)
 
     # The Patient row reaches the rules unredacted; nothing of it may reach

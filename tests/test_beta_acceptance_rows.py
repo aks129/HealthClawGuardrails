@@ -178,7 +178,9 @@ def test_care_gaps_brief_row_reports_the_section_it_is_shown(cfg, svc,
     assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is True
     step = _only(run)
     assert step["status"] == "PASS"
-    assert step["due_items"] == 4
+    # Three: the sample's recent cholesterol panel leaves lipid screening
+    # not due (r6/seed.py's dated lab series).
+    assert step["due_items"] == 3
 
 
 def _page_session(page):
