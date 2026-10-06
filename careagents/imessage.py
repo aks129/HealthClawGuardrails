@@ -273,10 +273,11 @@ def handle_inbound(deps: Deps, raw_handle: str, text: str,
         return {"reply": HELP_TEXT}, 200
     if word == "stop":
         # Unbind (either spelling of the handle), void its unused links,
-        # and remember the choice. Said once: a second STOP from a handle
-        # already opted out gets nothing.
-        first = svc.imessage_stop(handle or raw, also=raw)
-        return ({"reply": STOP_TEXT} if first or surface else {}), 200
+        # and remember the choice. Every STOP is confirmed (CTIA: one
+        # confirmation per STOP), a repeat included, so the reply never
+        # hints whether this number stopped texts before.
+        svc.imessage_stop(handle or raw, also=raw)
+        return {"reply": STOP_TEXT}, 200
     code = pairing_code(text)
     if code:
         if not handle:

@@ -264,7 +264,8 @@ def test_stop_unbinds_and_then_only_start_gets_an_answer(
     assert r.get_json() == {"reply": imessage.STOP_TEXT}
     assert svc.find_surface_by_handle(PHONE) is None
     assert _inbound(c, PHONE, "hello?").get_json() == {}
-    assert _inbound(c, PHONE, "STOP").get_json() == {}   # said once
+    assert _inbound(c, PHONE, "STOP").get_json() == {   # confirmed again
+        "reply": imessage.STOP_TEXT}
     assert _inbound(c, PHONE, "help").get_json() == {
         "reply": imessage.HELP_TEXT}
     start = _inbound(c, PHONE, "start").get_json()
@@ -924,3 +925,18 @@ def test_a_link_survives_a_session_whose_account_was_deleted(
     _login(phone, svc, monkeypatch, email="back@example.com")
     assert "Connect this phone?" in phone.get("/link/done").get_data(
         as_text=True)
+
+
+@pytest.mark.parametrize("word", ["STOP", "unsubscribe", "Quit."])
+def test_every_stop_is_confirmed_the_same_way(cfg, svc, monkeypatch, word):  # noqa: F811
+    """One confirmation per STOP: a first STOP, a repeat from a number that
+    already stopped, and a STOP from a number never seen read alike, so a
+    recycled number's new holder learns nothing from it."""
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    first = _inbound(c, PHONE, word)
+    repeat = _inbound(c, PHONE, word)
+    never_seen = _inbound(c, "+15550100558", word)
+    replies = [(r.status_code, r.get_json())
+               for r in (first, repeat, never_seen)]
+    assert replies == [(200, {"reply": imessage.STOP_TEXT})] * 3
+    assert svc.imessage_opted_out(PHONE)
