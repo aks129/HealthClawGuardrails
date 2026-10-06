@@ -98,6 +98,14 @@ CARE_TELEGRAM_BOT=
 #     empty = tile hidden). The relay runs deploy/careagents/imessage_relay.py
 #     on the Mac mini with CAREAGENTS_MINT_SECRET=<this mint secret>. ---
 CARE_IMESSAGE_HANDLE=
+# --- Sendblue hosted iMessage line (all four required to switch it on;
+#     docs/runbooks/sendblue-imessage.md). No real records over it until
+#     Sendblue's HIPAA instance and BAA are in place. ---
+SENDBLUE_API_KEY_ID=
+SENDBLUE_API_SECRET=
+SENDBLUE_WEBHOOK_SECRET=
+SENDBLUE_FROM_NUMBER=
+SENDBLUE_API_BASE=
 
 # Provider: ANTHROPIC_API_KEY (claude-sonnet-5) takes precedence when set.
 # Otherwise the OpenAI-compatible fallback is used — works with OpenAI or,

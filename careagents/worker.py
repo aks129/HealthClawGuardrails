@@ -558,6 +558,17 @@ def run_worker_pool(cfg: Config, stop: threading.Event | None = None) -> None:
     threads = [threading.Thread(target=loop, args=(slot,), daemon=False,
                                 name=f"careagents-worker-{slot}")
                for slot in range(cfg.run_worker_concurrency)]
+    if cfg.sendblue_enabled:
+        # The worker, not the web, owns texting an answer back: the owed
+        # answers are rows in the account store, so a web restart loses none.
+        from careagents import sendblue, sendblue_surface
+        deliverer = sendblue_surface.Deliverer(
+            cfg, HealthClawClient(cfg.healthclaw_base, cfg.mint_secret,
+                                  public_base=cfg.healthclaw_public_base),
+            accounts, sendblue.Client(cfg))
+        threads.append(threading.Thread(
+            target=deliverer.run, args=(stop,), daemon=False,
+            name="careagents-sendblue"))
     for thread in threads:
         thread.start()
     for thread in threads:
