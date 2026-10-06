@@ -623,7 +623,9 @@
       announce(msg, d.message || "We couldn't confirm your records were deleted.");
       return;
     }
-    location.assign("/?deleted=1");
+    // replace, not assign: Back must not return to the settings of an
+    // account that is gone (#884 G7).
+    location.replace("/?deleted=1");
   });
 
   // The word, in any case, with the whitespace trimmed: phones capitalise

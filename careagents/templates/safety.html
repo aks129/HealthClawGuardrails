@@ -15,8 +15,10 @@
     <p class="setup-sub">We couldn't fetch today's grade just now.
       <a href="{{ report_url }}">See today's grade</a> on the live report.</p>
     {% endif %}
-    <p class="auth-fine"><a href="{{ report_url }}">Technical report</a></p>
-    <a class="btn-block" href="/home">Back to your hub</a>
+    <p class="safety-links">
+      <a class="safety-back" href="{{ back_href }}">{{ back_label }}</a>
+      <a class="safety-report" href="{{ report_url }}">Technical report</a>
+    </p>
   </div>
 </main>
 {% endblock %}

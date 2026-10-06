@@ -439,6 +439,100 @@ def test_the_safety_page_without_a_grade_links_the_live_one(app, svc,  # noqa: F
                      page.replace("&#39;", "'"))
 
 
+def _back_link(page):
+    m = re.search(r'<a [^>]*class="safety-back"[^>]*href="([^"]+)"[^>]*>'
+                  r'\s*([^<]+?)\s*</a>', page)
+    assert m, page
+    return m.group(1), m.group(2)
+
+
+def test_the_safety_page_goes_back_where_the_person_came_from(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """#884 G7: signed out, "Back" to the landing page; signed in with an
+    assistant, "Back to chat"; signed in without one, "Back to
+    CareAgents". On the same line as "Technical report"."""
+    from careagents.app import create_app
+    a = create_app(config=cfg, client=FakeClient(), accounts=svc)
+    a.config["TESTING"] = True
+    c = a.test_client()
+    page = c.get("/safety").get_data(as_text=True)
+    assert _back_link(page) == ("/", "Back")
+    row = re.search(r'<p class="safety-links">.*?</p>', page, re.S).group(0)
+    assert "Technical report" in row and 'class="safety-back"' in row
+
+    _login(c, svc, monkeypatch)
+    assert _back_link(c.get("/safety").get_data(as_text=True)) == (
+        "/home", "Back to CareAgents")
+    started = c.post("/api/connections/sample").get_json()
+    assert _back_link(c.get("/safety").get_data(as_text=True)) == (
+        f"/chat?agent={started['agent_id']}", "Back to chat")
+
+
+def test_after_an_account_delete_the_address_bar_reads_slash(app, svc):  # noqa: F811
+    """#884 G7: the tester saw /settings after deleting. The hub replaces
+    the history entry, and the landing page shows its note and then sets
+    the bar to plain "/"."""
+    js = (ROOT / "careagents" / "static" / "home.js").read_text()
+    assert 'location.replace("/?deleted=1");' in js
+    assert 'location.assign("/?deleted=1")' not in js
+    page = app.test_client().get("/?deleted=1").get_data(as_text=True)
+    assert "Your account is deleted." in page
+    assert 'history.replaceState(null, "", "/");' in page
+    plain = app.test_client().get("/").get_data(as_text=True)
+    assert "history.replaceState" not in plain
+
+
+def test_the_badge_is_read_once_per_two_minutes_for_both_pages(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """#884 security: /safety is public, so each load was an engine call.
+    One in-process cache, shared with /api/trust, for 120 seconds."""
+    import careagents.app as app_mod
+    from careagents.app import create_app
+
+    class Counting(FakeClient):
+        calls = 0
+
+        def conformance_badge(self):
+            Counting.calls += 1
+            return {"message": "A (7/7)"}
+    clock = [1000.0]
+    monkeypatch.setattr(app_mod.time, "time", lambda: clock[0])
+    a = create_app(config=cfg, client=Counting(), accounts=svc)
+    a.config["TESTING"] = True
+    c = a.test_client()
+    for _ in range(3):
+        assert "Today's grade: A." in c.get("/safety").get_data(as_text=True)
+        assert c.get("/api/trust").get_json()["badge"] == "A (7/7)"
+    assert Counting.calls == 1
+    clock[0] += 119
+    c.get("/safety")
+    assert Counting.calls == 1
+    clock[0] += 2
+    c.get("/api/trust")
+    assert Counting.calls == 2
+
+
+def test_the_badge_call_has_a_short_timeout():
+    """A slow engine must not hold a public page for the client-wide 25s."""
+    from careagents.healthclaw import HealthClawClient
+    seen = {}
+
+    class _R:
+        ok, status_code = True, 200
+
+        def json(self):
+            return {"message": "A (7/7)"}
+
+    class _Http:
+        def get(self, url, timeout=None, **_kw):
+            seen["timeout"] = timeout
+            return _R()
+    hc = HealthClawClient(base="http://engine", mint_secret="x" * 32)
+    hc.http = _Http()
+    assert hc.conformance_badge()["message"] == "A (7/7)"
+    assert seen["timeout"] == 3
+
+
 def test_the_landing_page_links_the_safety_page(app, svc):  # noqa: F811
     page = app.test_client().get("/").get_data(as_text=True)
     assert re.search(r'<a href="/safety">See today(’|\')s grade</a>', page)

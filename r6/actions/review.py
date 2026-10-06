@@ -48,6 +48,7 @@ from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
+from r6.brief.engine import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
@@ -392,7 +393,9 @@ def _view_rows(draft_qr):
     meds = []
     for row in _section_repeats(draft_qr, 'medications', 'medications.item'):
         meds.append({
-            'name': _leaf_value(row, 'medications.item.name') or 'Medication',
+            # The brief's sentence for a medicine we cannot name (#884 G7).
+            'name': (_leaf_value(row, 'medications.item.name')
+                     or MEDICINE_UNNAMED),
             'dose': _leaf_value(row, 'medications.item.dose'),
         })
     allergies = []

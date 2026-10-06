@@ -777,3 +777,7 @@ textarea:focus-visible {
 .deleted-note { background: var(--card); border: 1px solid var(--hairline);
   border-radius: 14px; padding: 14px 16px; color: var(--ink-soft);
   margin-bottom: 24px; }
+
+/* /safety (#884 G7): the way back and the technical report on one line. */
+.safety-links { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 16px; margin-top: 20px; font-size: 14.5px; }

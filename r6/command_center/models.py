@@ -70,7 +70,8 @@ KNOWN_CHANNELS = frozenset({
 def audit_channel(channel) -> str:
     """The channel as audit detail may carry it: a known one, else "other".
     A row stored before the allowlist keeps its value; its audit does not."""
-    return channel if channel in KNOWN_CHANNELS else "other"
+    return (channel if isinstance(channel, str) and channel in KNOWN_CHANNELS
+            else "other")
 
 
 class ConversationMessage(db.Model):

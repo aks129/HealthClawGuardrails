@@ -421,8 +421,10 @@ def api_conversations_create():
         return jsonify({"error": "role must be user, assistant, or system"}), 400
     if not isinstance(text, str):
         return jsonify({"error": "text must be a string"}), 400
-    if channel not in KNOWN_CHANNELS:
+    if not isinstance(channel, str) or channel not in KNOWN_CHANNELS:
         # A closed list, not a length: the value is copied into audit detail.
+        # The type check comes first: `in` on a list or an object raised
+        # TypeError (unhashable), a 500 instead of this 400 (R884-2).
         return jsonify({"error": "invalid channel/surface"}), 400
 
     conversation = Conversation.query.filter_by(

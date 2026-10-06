@@ -5,6 +5,9 @@
 <main class="hero">
   <div class="hero-inner">
     {% if request.args.get("deleted") == "1" %}
+    {# The note is read from ?deleted=1, then the address bar is set to
+       plain "/" (#884 G7): a reload or a shared link does not repeat it. #}
+    <script>history.replaceState(null, "", "/");</script>
     <p class="inline-msg deleted-note" role="status">Your account is deleted. The records behind every connection were deleted first. We keep a log of who looked at your records, with no health details in it.</p>
     {% endif %}
     <p class="kicker">Your health, with someone finally on your side of the desk</p>

@@ -88,6 +88,18 @@ def test_the_heading_and_the_declined_page_read_plainly(app):
     assert "el.disabled = true;" in declined
 
 
+def test_an_unnamed_medicine_reads_as_on_the_brief():
+    """#884 G7: the brief and the review say the same sentence."""
+    from r6.actions.review import _view_rows
+    from r6.brief.engine import MEDICINE_UNNAMED
+    qr = {"item": [{"linkId": "medications", "item": [
+        {"linkId": "medications.item", "item": [
+            {"linkId": "medications.item.dose",
+             "answer": [{"valueString": "10 mg"}]}]}]}]}
+    meds = _view_rows(qr)[0]
+    assert meds[0]["name"] == MEDICINE_UNNAMED
+
+
 def test_decline_goes_with_an_approval_that_may_have_gone_through():
     """A failed approval left Decline live beside a locked Approve: a second,
     contrary answer to a request that may have run."""

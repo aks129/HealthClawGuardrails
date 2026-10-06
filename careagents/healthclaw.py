@@ -1049,10 +1049,15 @@ class HealthClawClient:
 
     # --- trust panel ----------------------------------------------------------
 
+    #: The badge feeds public pages (/safety, /api/trust). A slow engine
+    #: must not hold them for the client-wide timeout (#884 security).
+    BADGE_TIMEOUT = 3
+
     def conformance_badge(self) -> dict:
         r = self._send("GET", f"{self.fhir}/$conformance",
                        params={"format": "shields"},
-                       what="conformance badge")
+                       what="conformance badge",
+                       timeout=min(self.timeout, self.BADGE_TIMEOUT))
         if not r.ok:
             return {"message": "unavailable"}
         return self._json_object(r, "conformance badge")

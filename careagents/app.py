@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
@@ -2654,16 +2655,37 @@ def create_app(config: Config | None = None,
 
     # --- trust + ops ---------------------------------------------------------
 
-    @app.get("/api/trust")
-    def trust():
+    #: How long one read of the engine's badge answers for. /safety and
+    #: /api/trust are public, so each load was an engine call (#884
+    #: security). Per process; the engine keeps its own longer cache.
+    BADGE_TTL = 120
+    badge_cache = {"at": None, "message": "unavailable"}
+    badge_lock = threading.Lock()
+
+    def _badge_message() -> str:
+        """The engine's badge message, read at most once per BADGE_TTL. An
+        unreachable engine is cached too: an outage is when re-asking on
+        every load hurts most."""
+        now = time.time()
+        with badge_lock:
+            at = badge_cache["at"]
+            if at is not None and now - at < BADGE_TTL:
+                return badge_cache["message"]
         try:
-            badge = hc.conformance_badge()
+            message = hc.conformance_badge().get("message", "unavailable")
         except HealthClawError:
             # The badge is a claim about the engine. Unreachable means we do
             # not have one — the same honest answer a non-200 already gives,
             # rather than a 500 on the trust panel (#403).
-            badge = {}
-        return jsonify({"badge": badge.get("message", "unavailable")})
+            message = "unavailable"
+        message = str(message or "unavailable")
+        with badge_lock:
+            badge_cache.update(at=now, message=message)
+        return message
+
+    @app.get("/api/trust")
+    def trust():
+        return jsonify({"badge": _badge_message()})
 
     @app.get("/safety")
     def safety():
@@ -2671,13 +2693,21 @@ def create_app(config: Config | None = None,
         like the landing page that links it. The grade is the engine's,
         read as /api/trust reads it; without one, the page links the live
         report instead of showing a grade nobody fetched."""
-        try:
-            message = str(hc.conformance_badge().get("message") or "")
-        except HealthClawError:
-            message = ""
+        message = _badge_message()
         grade = message.split(" ")[0] if message else ""
+        # Back where the person came from (#884 G7): their chat when they
+        # have an assistant, the hub when they have none, the landing page
+        # when signed out. Reading the session sets no cookie.
+        acct = current_account()
+        agents = svc.list_home(acct.id)["agents"] if acct else []
+        if agents:
+            back = (url_for("chat", agent=agents[0]["id"]), "Back to chat")
+        elif acct:
+            back = ("/home", "Back to CareAgents")
+        else:
+            back = ("/", "Back")
         return render_template(
-            "safety.html",
+            "safety.html", back_href=back[0], back_label=back[1],
             grade=grade if grade in ("A", "B", "C", "D", "F") else None,
             report_url=(cfg.healthclaw_public_base.rstrip("/")
                         + "/r6/fhir/$conformance?format=text"))
