@@ -14,7 +14,7 @@ These five need to be settled before stage 1 opens real records. None of them ne
 | 2 | The FTC Health Breach Notification Rule, previously ruled "n/a" | Revisit with counsel. The 2024 amendment covers non-HIPAA health apps that draw from multiple sources. | Stage 1 |
 | 3 | CPT codes in the care-gap rules | Match on CPT codes but never display CPT descriptors. Prefer LOINC, SNOMED and CVX evidence. Buy an AMA licence only if descriptors must be shown. | Stage 1 |
 | 4 | A second clinical reviewer | Name the P1.4 recruit as a reviewer, so no clinical change waits on one person. | Stage 1 |
-| 5 | A record that names no patient | Until our physician advisor rules, such a record keeps a gap open and never closes one. | Now |
+| 5 | A record that names no patient | Today it counts for the only patient on the account (#878; vaccines excluded by #887). Change this so it never closes a gap until our physician advisor rules. | Now step |
 
 ## What the inventory found
 
