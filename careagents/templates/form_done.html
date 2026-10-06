@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Your form — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{% block content %}
+{# A form past review (#875). The texted "Your intake form is ready" link
+   opens this page after approval, so it shows the form. #}
+<main class="setup-wrap">
+  <div class="setup-card">
+    {% if state == "ready" %}
+    <h1>Your form is ready</h1>
+    <p class="setup-sub">Save it, print it or send it to your new doctor.</p>
+    <a class="btn-primary btn-block" href="{{ link }}" target="_blank"
+       rel="noopener">Open your form (PDF)</a>
+    {% elif state == "preparing" %}
+    <h1>Your form is being prepared</h1>
+    <p class="setup-sub">You approved it. Check back in a moment.</p>
+    {% else %}
+    <h1>Your form is already done.</h1>
+    {% endif %}
+    <a class="btn-block" href="/chat?agent={{ agent_id | urlencode }}">Back to chat</a>
+  </div>
+</main>
+{% endblock %}

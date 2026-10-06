@@ -4542,11 +4542,13 @@ def test_a_gateway_504_never_says_the_form_is_no_longer_awaiting_review(
     assert "no longer awaiting review" not in body
     assert "Nothing has been approved" in body
 
-    # The engine's own answer still means what it says.
+    # The engine's own answer still means what it says: the form is past
+    # review. act-1 is completed in the fake, so the page now shows the
+    # finished form rather than a dead end (#875 V4).
     fake.fetch_review_page = lambda tenant, action_id: (404, "gone")
     gone = c.get(f"/review/{agent}/act-1")
-    assert gone.status_code == 404
-    assert "no longer awaiting review" in gone.get_data(as_text=True)
+    assert gone.status_code == 200
+    assert "Your form is ready" in gone.get_data(as_text=True)
 
 
 def test_a_dead_socket_on_the_review_path_is_not_a_bare_500(

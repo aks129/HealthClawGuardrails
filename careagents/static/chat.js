@@ -454,12 +454,17 @@
   const chartTopic = new URLSearchParams(window.location.search).get("chart");
   if (chartTopic !== null) {
     const chartPending = log.hasAttribute("data-chart-pending");
+    // The log scrolls smoothly (careagents.css). On this first render that
+    // animated from the top of the history to the chart, so jump instead,
+    // then give new messages their smooth scroll back.
+    log.style.scrollBehavior = "auto";
     const reveal = (card) => {
       if (chartPending) {
         log.style.visibility = "";
         log.removeAttribute("data-chart-pending");
       }
-      if (card) card.scrollIntoView({ block: "start" });
+      if (card) card.scrollIntoView({ block: "start", behavior: "auto" });
+      requestAnimationFrame(() => { log.style.scrollBehavior = ""; });
     };
     addLabTimelineCard(chartTopic.slice(0, 64)).then(reveal, () => reveal(null));
   }

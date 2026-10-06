@@ -1981,6 +1981,35 @@ def create_app(config: Config | None = None,
 
     # --- review relay (credential-injecting proxy, agent-scoped) -------------
 
+    def _form_past_review(tenant, agent_id, action_id):
+        """A form the engine no longer offers for review: ready with its PDF,
+        still being made, or done. The PDF link comes from the action's
+        outcome, as the post-approve screen reads it (/api/form)."""
+        try:
+            status = hc.action_status(tenant, action_id)
+        except HealthClawError as exc:
+            if _engine_said_absent(exc):
+                return render_template("chat_error.html",
+                                       message="That form isn't yours."), 404
+            logger.exception("form status failed for %s", action_id)
+            return render_template("chat_error.html",
+                                   message=_REVIEW_UNCHECKABLE), 503
+        outcome = {}
+        try:
+            outcome = json.loads(status.get("outcome_summary") or "{}")
+        except (TypeError, ValueError):
+            pass
+        link = outcome.get("delivery_link") if isinstance(outcome, dict) else None
+        # Only an http(s) link becomes an href, as on the post-approve screen.
+        if not (isinstance(link, str)
+                and re.match(r"^https?://", link, re.IGNORECASE)):
+            link = None
+        state = status.get("status")
+        shown = ("ready" if state == "completed" and link else
+                 "preparing" if state == "executing" else "done")
+        return render_template("form_done.html", state=shown, link=link,
+                               agent_id=agent_id)
+
     def _agent_owns_action(agent_id, action_id):
         """The tenant that owns this action, or None if it is not this
         agent's.
@@ -2071,9 +2100,9 @@ def create_app(config: Config | None = None,
                                status, action_id)
                 return render_template("chat_error.html",
                                        message=_REVIEW_UNCHECKABLE), 503
-            return render_template(
-                "chat_error.html",
-                message="This form is no longer awaiting review."), 404
+            # Past review. The texted "Your intake form is ready" link lands
+            # here after approval, so show the form, not a dead end (#875).
+            return _form_past_review(tenant, agent_id, action_id)
         html = html.replace(f"/r6/actions/{action_id}/review",
                             f"/review/{agent_id}/{action_id}/submit")
         # The engine names its own product in the tab; here the page is

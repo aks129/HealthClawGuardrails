@@ -145,6 +145,8 @@ def test_a_chart_link_hides_the_history_until_the_chart_is_ready(
     assert "data-chart-pending" not in plain
     js = c.get("/static/chat.js").get_data(as_text=True)
     assert "scrollIntoView" in js and "chartPending" in js
+    # The first paint jumps to the chart; it does not animate from the top.
+    assert 'behavior: "auto"' in js and 'scrollBehavior = "auto"' in js
 
 
 def test_the_review_page_is_titled_careagents(sb_cfg, sb_svc, monkeypatch):  # noqa: F811
