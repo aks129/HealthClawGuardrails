@@ -153,11 +153,14 @@ def _coverage_note(resource_type):
 
 
 def _coding_system_issues(node, path):
-    """An error for every Coding whose `system` is present and not a string.
+    """An error for every Coding whose `system` is present and not a string,
+    or whose `code` is present and neither a string nor an int.
 
-    A list, object or number there made redaction raise on every read of
-    the tenant, and the write that stored it returned 500 after committing
-    (#885). The value is never echoed: only its path.
+    A list, object or number in `system` made redaction raise on every read
+    of the tenant, and the write that stored it returned 500 after
+    committing (#885). An object or list in either can carry text. An int
+    code is accepted; redaction returns it as its string form. The value is
+    never echoed: only its path.
     """
     issues = []
     if isinstance(node, list):
@@ -176,6 +179,15 @@ def _coding_system_issues(node, path):
                     'code': 'structure',
                     'diagnostics': 'Coding.system must be a string (a URI)',
                     'expression': [f'{path}.coding[{i}].system'],
+                })
+            if isinstance(coding, dict) and 'code' in coding and (
+                    isinstance(coding['code'], bool)
+                    or not isinstance(coding['code'], (str, int))):
+                issues.append({
+                    'severity': 'error',
+                    'code': 'structure',
+                    'diagnostics': 'Coding.code must be a string',
+                    'expression': [f'{path}.coding[{i}].code'],
                 })
     for key, value in node.items():
         if isinstance(value, (dict, list)):

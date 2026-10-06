@@ -246,11 +246,18 @@ def _redact_recursive(obj):
     # A Coding.system is a URI string. Anything else (a list, an object, a
     # number) is not a system, made labelling raise for every read on the
     # tenant (#885), and can carry whatever text was packed into it. It is
-    # dropped, never echoed.
+    # dropped, never echoed. Coding.code likewise: a string stays, an int
+    # (CVX 3 written as 3) is kept as its string form, and anything else,
+    # an object or a list among them, is dropped.
     for coding in obj.get('coding') if isinstance(obj.get('coding'), list) else ():
-        if isinstance(coding, dict) and 'system' in coding \
-                and not isinstance(coding['system'], str):
+        if not isinstance(coding, dict):
+            continue
+        if 'system' in coding and not isinstance(coding['system'], str):
             coding.pop('system')
+        if 'code' in coding and not isinstance(coding['code'], str):
+            code = coding.pop('code')
+            if isinstance(code, int) and not isinstance(code, bool):
+                coding['code'] = str(code)
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an

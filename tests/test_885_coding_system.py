@@ -36,13 +36,13 @@ BAD_SYSTEMS = [
 ]
 
 
-def _obs(rid, system, where="code"):
+def _obs(rid, system, where="code", code="2160-0"):
     obs = {"resourceType": "Observation", "id": rid, "status": "final",
            "subject": {"reference": f"Patient/{PID}"},
            "effectiveDateTime": "2026-09-01T08:00:00Z",
            "code": {"coding": [{"system": LOINC, "code": "2160-0"}]},
            "valueQuantity": {"value": 0.9, "unit": "mg/dL"}}
-    bad = {"coding": [{"system": system, "code": "2160-0",
+    bad = {"coding": [{"system": system, "code": code,
                        "display": CANARY}], "text": CANARY}
     if where == "code":
         obs["code"] = bad
@@ -186,6 +186,102 @@ def test_a_stored_non_string_system_does_not_break_tenant_reads(
     _patient(app, tenant_id)
     _row(app, tenant_id, _obs("good", LOINC))
     _row(app, tenant_id, _obs("bad", system, where))
+    r = getattr(client, method)(url, headers=tenant_headers)
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    assert CANARY not in r.get_data(as_text=True)
+    _strict_body(r)
+
+
+# --- Coding.code: the same gap, closed the same way ---------------------------
+
+#: Code values that are neither a string nor an int. An object or a list can
+#: carry text the same way an object system could.
+BAD_CODES = [
+    pytest.param({"value": CANARY}, id="object-canary"),
+    pytest.param({"code": "2160-0", "note": {"who": CANARY}},
+                 id="object-nested-canary"),
+    pytest.param([CANARY], id="list-canary"),
+    pytest.param(["2160-0"], id="list"),
+    pytest.param(1.5, id="float"),
+    pytest.param(True, id="bool"),
+    pytest.param(None, id="null"),
+]
+
+
+def _concept(out, where):
+    return (out["code"] if where == "code" else
+            out["category"][0] if where == "category" else
+            out["valueCodeableConcept"])
+
+
+@pytest.mark.parametrize("where", WHERE)
+@pytest.mark.parametrize("code", BAD_CODES)
+def test_apply_redaction_drops_a_code_that_is_not_a_string_or_int(
+        code, where):
+    from r6.redaction import apply_redaction
+    out = apply_redaction(_obs("o1", LOINC, where, code=code))
+    assert CANARY not in json.dumps(out)
+    coding = _concept(out, where)["coding"][0]
+    assert "code" not in coding
+    assert coding["system"] == LOINC
+    assert "display" not in coding
+
+
+@pytest.mark.parametrize("where", WHERE)
+def test_an_int_code_is_kept_as_its_string_form(where):
+    from r6.redaction import apply_redaction
+    from r6.terminology import CVX
+    out = apply_redaction(_obs("o1", CVX, where, code=3))
+    coding = _concept(out, where)["coding"][0]
+    assert coding["code"] == "3"
+    assert coding.get("display") != CANARY
+
+
+@pytest.mark.parametrize("where", WHERE)
+@pytest.mark.parametrize("code", BAD_CODES)
+def test_a_write_with_a_bad_code_is_refused_before_commit(
+        app, client, tenant_id, auth_headers, code, where):
+    before = _count(app, tenant_id)
+    r = client.post("/r6/fhir/Observation", data=json.dumps(
+        _obs("w1", LOINC, where, code=code)),
+        headers=_write_headers(auth_headers))
+    assert r.status_code == 422, r.get_data(as_text=True)[:300]
+    body = r.get_data(as_text=True)
+    assert CANARY not in body
+    assert "Coding.code" in body and ".coding[0].code" in body
+    assert _count(app, tenant_id) == before
+
+
+def test_a_write_with_an_int_code_is_accepted(
+        app, client, tenant_id, auth_headers):
+    r = client.post("/r6/fhir/Observation",
+                    data=json.dumps(_obs("w4", LOINC, code=2160)),
+                    headers=_write_headers(auth_headers))
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+    assert r.get_json()["code"]["coding"][0]["code"] == "2160"
+
+
+def test_an_absent_code_is_not_refused(app, client, tenant_id, auth_headers):
+    obs = _obs("w5", LOINC)
+    obs["code"]["coding"][0].pop("code")
+    r = client.post("/r6/fhir/Observation", data=json.dumps(obs),
+                    headers=_write_headers(auth_headers))
+    assert r.status_code == 201, r.get_data(as_text=True)[:300]
+
+
+@pytest.mark.parametrize("method,url", [
+    ("get", "/r6/fhir/Observation?_count=50"),
+    ("get", "/r6/fhir/Observation/bad"),
+    ("post", "/r6/fhir/Observation/$interpret"),
+    ("post", f"/r6/fhir/Observation/$interpret?subject=Patient/{PID}"),
+])
+@pytest.mark.parametrize("where", WHERE)
+@pytest.mark.parametrize("code", BAD_CODES)
+def test_a_stored_bad_code_does_not_break_or_leak_on_tenant_reads(
+        app, client, tenant_id, tenant_headers, code, where, method, url):
+    _patient(app, tenant_id)
+    _row(app, tenant_id, _obs("good", LOINC))
+    _row(app, tenant_id, _obs("bad", LOINC, where, code=code))
     r = getattr(client, method)(url, headers=tenant_headers)
     assert r.status_code == 200, r.get_data(as_text=True)[:300]
     assert CANARY not in r.get_data(as_text=True)
