@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Your beta request — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# The links in a beta email. Opening one only asks: mail scanners open
+   links, and a GET that acted would be spent before the person saw it. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card beta-page">
+    {% if outcome == "confirm_ask" %}
+    <h1>Confirm your request</h1>
+    {# What is being confirmed, so a request someone else typed for this
+       address is seen before it is accepted. The last four digits only. #}
+    <p>{% if preview.kind == "join" %}A new request{% else %}A change to your request{% endif %} to test CareAgents:</p>
+    <ul class="beta-steps">
+      <li>First name: <b>{{ preview.first_name }}</b></li>
+      <li>{% if preview.tail %}Mobile: ending in {{ preview.tail }}{% elif preview.kind == "join" %}Mobile: no mobile{% else %}Mobile: no new mobile{% endif %}</li>
+    </ul>
+    <p>Not right? Close this page and nothing changes.</p>
+    <form method="post" action="/beta/confirm">
+      <input type="hidden" name="t" value="{{ token }}">
+      <button class="btn-primary btn-block" type="submit">Confirm</button>
+    </form>
+    {% elif outcome == "confirmed" %}
+    <h1>You're confirmed</h1>
+    {% if done.kind == "join" %}
+    <p>Thanks, {{ done.first_name }}. We sent an email to {{ done.email }}.
+      If it isn't there in a few minutes, check spam.</p>
+    <p>Next: open <a href="https://careagents.cloud">careagents.cloud</a>
+      and sign up with this email.</p>
+    {% else %}
+    <p>Thanks, {{ done.first_name }}. Your request is updated.</p>
+    {% endif %}
+    {% elif outcome == "ask" %}
+    <h1>Remove my request</h1>
+    <p>This deletes your beta request: your name, email and phone number.
+      It does not delete a CareAgents account. You can do that in Settings.</p>
+    <form method="post" action="/beta/remove">
+      <input type="hidden" name="t" value="{{ token }}">
+      <button class="btn-primary btn-block" type="submit">Remove my request</button>
+    </form>
+    <a class="btn-secondary btn-block beta-keep" href="/beta/kept">Keep my request</a>
+    {% elif outcome == "kept" %}
+    <h1>Kept</h1>
+    <p>Your request is kept. Nothing changed.</p>
+    <p><a href="/auth">Sign in to CareAgents</a></p>
+    {% elif outcome == "removed" %}
+    <h1>Done</h1>
+    <p>Your beta request is removed.</p>
+    {% else %}
+    <h1>This link no longer works</h1>
+    <p>It was used already, it ran out, or a newer email replaced it. Use the
+      link in our latest email, or <a href="{{ feedback }}">write to us</a>.</p>
+    {% endif %}
+  </div>
+</main>
+{% endblock %}

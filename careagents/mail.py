@@ -26,6 +26,18 @@ NOT_SENT = "not_sent"
 UNCONFIRMED = "unconfirmed"
 
 
+def real_mail_allowed(cfg) -> bool:
+    """Only production sends real mail, unless CARE_ALLOW_REAL_MAIL=1.
+
+    The `flask` CLI loads the repository's .env, which can hold a real
+    provider key, so a local run or a test with the key set would
+    otherwise email real addresses. Anything not production logs
+    "mail suppressed (not production)" instead.
+    """
+    return (getattr(cfg, "app_env", "") == "production"
+            or bool(getattr(cfg, "allow_real_mail", False)))
+
+
 def send_code(cfg, email: str, code: str, purpose: str) -> str:
     """Send a one-time code. Returns SENT, NOT_SENT, or UNCONFIRMED.
 
@@ -39,6 +51,11 @@ def send_code(cfg, email: str, code: str, purpose: str) -> str:
     verb = "Verify your email" if purpose == "verify" else "Your sign-in code"
     if not cfg.resend_api_key:
         logger.warning("DEV email — %s for %s: %s", verb, email, code)
+        return SENT
+    if not real_mail_allowed(cfg):
+        # As with no key: the code is in the log so local sign-in works.
+        logger.warning("mail suppressed (not production) — %s for %s: %s",
+                       verb, email, code)
         return SENT
     html = (
         f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
@@ -77,6 +94,9 @@ def send_notice(cfg, email: str, subject: str, line: str) -> str:
     and nothing is logged: a notice is not needed to sign in."""
     if not cfg.resend_api_key:
         return NOT_SENT
+    if not real_mail_allowed(cfg):
+        logger.warning("mail suppressed (not production)")
+        return NOT_SENT
     html = (f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
             f"<h2 style='color:#22190E'>CareAgents</h2><p>{line}</p></div>")
     try:
@@ -95,5 +115,35 @@ def send_notice(cfg, email: str, subject: str, line: str) -> str:
         return UNCONFIRMED
     if r.status_code not in (200, 201):
         logger.error("resend notice http %s", r.status_code)
+        return NOT_SENT
+    return SENT
+
+
+def send_message(cfg, email: str, subject: str, html: str, text: str) -> str:
+    """Send a short message whose HTML carries links (a beta tester's
+    email). The caller escapes anything a visitor typed. Returns SENT,
+    NOT_SENT or UNCONFIRMED, as send_code does; with no provider key
+    nothing is sent and nothing is logged."""
+    if not cfg.resend_api_key:
+        return NOT_SENT
+    if not real_mail_allowed(cfg):
+        logger.warning("mail suppressed (not production)")
+        return NOT_SENT
+    try:
+        r = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {cfg.resend_api_key}"},
+            json={"from": cfg.resend_from, "to": [email],
+                  "subject": f"{subject} — CareAgents", "html": html,
+                  "text": text},
+            timeout=15)
+    except requests.ConnectionError as exc:
+        logger.error("resend message failed: %s", type(exc).__name__)
+        return NOT_SENT
+    except requests.RequestException as exc:
+        logger.error("resend message unconfirmed: %s", type(exc).__name__)
+        return UNCONFIRMED
+    if r.status_code not in (200, 201):
+        logger.error("resend message http %s", r.status_code)
         return NOT_SENT
     return SENT
