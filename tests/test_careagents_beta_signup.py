@@ -1121,9 +1121,14 @@ def test_a_promoted_tester_is_emailed_and_logged_masked(made, sent, caplog):
     (to, subject, html, text), = sent
     assert to == "w1@example.com"
     flat = " ".join(text.split())
-    assert "Hi Avery, thanks for helping test CareAgents." in flat
-    assert ("Text hi to +1 555-010-9000. You'll get a link back to sign in, "
-            "then your assistant answers there.") in flat
+    assert ("Hi Avery, an iMessage spot opened for you. We'll email you "
+            "again within a day once your number is ready to text. "
+            "Meanwhile the web app works: https://careagents.cloud") in flat
+    assert "href='https://careagents.cloud'" in html
+    # Not added to Sendblue yet: nobody is told to text a line that won't
+    # answer. That waits for `mark ... added`.
+    assert "Text hi" not in flat and "sms:" not in html
+    assert "555-010-9000" not in flat
     assert "w1@example.com" not in caplog.text
     assert "promoted" in caplog.text and "e***.com" in caplog.text
     assert _row(svc, "w1@example.com")["promoted_at"] is None   # sent

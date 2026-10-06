@@ -55,10 +55,12 @@ works today.
 
 When a spot frees up (`mark ... removed`, a tester's removal link, a deleted
 account, the purge), the oldest waitlisted request that is not a twin of a
-spot holder becomes `new`. The log records it with the domain masked, the
-tester is emailed the "You're in" text with the texting line, and `mark`
-and `purge` print it. `mark ... new` on a waitlisted request respects the
-ten; `--force` goes past them.
+spot holder becomes `new`. The log records it with the domain masked, and
+`mark` and `purge` print it. The tester is emailed that a spot opened and
+that we will email again within a day once their number is ready to text,
+so add them to Sendblue and `mark ... added` within a day: that sends the
+"Text hi" email. The promotion email never says to text. `mark ... new` on
+a waitlisted request respects the ten; `--force` goes past them.
 
 ## Adding someone to iMessage
 
@@ -122,9 +124,12 @@ missing or malformed value falls back to the direct peer. `X-Forwarded-For`
 is not read at all: Railway staff on the Railway Help Station (2026-06-12)
 say the client is its first value and another hop may follow, so its
 right-hand entry can be an internal hop shared by every client, and its
-left-hand entries are whatever the client wrote. Sources: the two Railway
-Help Station threads cited in the security tester's round-two report on PR
-874. CareAgents does not use ProxyFix.
+left-hand entries are whatever the client wrote. Sources:
+
+- <https://station.railway.com/questions/edge-proxy-x-forwarded-for-and-x-real-ip-c5a50049>
+- <https://station.railway.com/questions/security-critical-questions-on-edge-prox-8fddd775>
+
+CareAgents does not use ProxyFix.
 
 This trusts the edge: a request that reaches gunicorn without passing
 Railway's edge could choose its own `X-Real-IP`. The per-mailbox email cap

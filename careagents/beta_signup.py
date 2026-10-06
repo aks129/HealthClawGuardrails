@@ -521,6 +521,9 @@ def purge(session_scope, at: float | None = None) -> tuple[int, int]:
 
 #: A line in a tester email that carries the number as an `sms:` link.
 _TEXT_HI = "text_hi"
+#: A line whose web app address becomes a link in the HTML.
+_WEB_LINK = "web_link"
+_WEB = "https://careagents.cloud"
 
 
 def text_hi_line(number: str) -> str:
@@ -539,6 +542,10 @@ def _line(x) -> tuple[str, str]:
         text, shown = text_hi_line(x[1]), show_number(x[1])
         link = f"<a href='sms:{escape(x[1])}'>{escape(shown)}</a>"
         return text, str(escape(text)).replace(str(escape(shown)), link, 1)
+    if isinstance(x, tuple) and x[0] == _WEB_LINK:
+        text = x[1]
+        return text, str(escape(text)).replace(
+            _WEB, f"<a href='{_WEB}'>careagents.cloud</a>", 1)
     return x, str(escape(x))
 
 
@@ -582,10 +589,17 @@ def _texting_lines(cfg) -> list:
     return [(_TEXT_HI, number), TEXTING_COMPANY_LINE] if number else []
 
 
+def spot_opened_line(first_name: str) -> str:
+    return (f"Hi {first_name}, an iMessage spot opened for you. We'll email "
+            f"you again within a day once your number is ready to text. "
+            f"Meanwhile the web app works: {_WEB}")
+
+
 def send_promotions(session_scope, cfg) -> int:
-    """Email everyone promoted from the waitlist and not yet told: the
-    "You're in" text with the texting line, the email the waitlist
-    sentence promised. Returns how many were sent to."""
+    """Email everyone promoted from the waitlist and not yet told, the
+    email the waitlist sentence promised. No texting line: the number is
+    not in the Sendblue sandbox until the owner marks it `added`, which
+    sends the "Text hi" email. Returns how many were sent to."""
     with session_scope() as s:
         rows = s.query(BetaRequest).filter(
             BetaRequest.promoted_at.isnot(None)).all()
@@ -594,12 +608,9 @@ def send_promotions(session_scope, cfg) -> int:
             r.promoted_at = None
     for email, first_name in todo:
         try:
-            _tester_email(cfg, email, "A spot opened: you're in",
-                          youre_in_lines(cfg, first_name)
-                          + _texting_lines(cfg),
-                          new_removal_token(session_scope, email),
-                          link=("Open careagents.cloud",
-                                "https://careagents.cloud"))
+            _tester_email(cfg, email, "An iMessage spot opened",
+                          [(_WEB_LINK, spot_opened_line(first_name))],
+                          new_removal_token(session_scope, email))
         except Exception:                   # pragma: no cover - defensive
             logger.warning("beta promotion email failed to send")
     return len(todo)
