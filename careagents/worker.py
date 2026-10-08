@@ -40,33 +40,42 @@ def _plain(text: str) -> str:
 
 #: A sentence that says the records are made up: one of these words ...
 _MADE_UP = ("made-up", "made up", "sample", "fictional", "fake")
-#: ... and one of these.
-_NOT_YOURS = ("not yours", "arent yours", "isnt yours", "not about you",
-              "isnt about you", "not your", "arent your", "nothing here is "
-              "about you", "not you")
-#: A sentence holding any of these carries content, not only a disclaimer,
-#: so it is never dropped (#908 security review): "The sample person is not
-#: you, but their creatinine rose fast and they should contact a doctor
-#: promptly" is advice.
-_CONTENT_WORDS = ("doctor", "clinician", "nurse", "pharmacist", "contact",
-                  "should", "call", "rose", "fell", "high", "low", "normal",
-                  "result", "lab", "test", "screening", "vaccine", "due",
-                  "medicine", "medication", "dose", "blood", "kidney",
-                  "creatinine", "glucose", "pressure", "cholesterol", "a1c",
-                  "but")
+#: ... and one of these phrases, matched as whole words ("not young" is
+#: not "not you").
+_NOT_YOURS = (("not", "yours"), ("arent", "yours"), ("isnt", "yours"),
+              ("not", "about", "you"), ("isnt", "about", "you"),
+              ("not", "your"), ("arent", "your"), ("not", "you"))
+#: The only words a disclaimer is made of. A sentence is dropped only when
+#: every word in it is one of these, so anything it says about the sample,
+#: a condition, a medicine, a number or advice, keeps it (#908 QA and
+#: security): "The sample person takes metformin, which is not yours" stays.
+_DISCLAIMER_WORDS = frozenset("""
+    these this those they them it its are is were be been all just only
+    the a an and or of for to in on as so from with that which here there
+    records record data chart file person persons patient people someone
+    anyone else nobody nothing anything about you your yours not arent
+    isnt dont doesnt made up made-up sample fictional fake example demo
+    real belong belongs reminder note remember please again quick
+    know own fyi mind keep worth noting heads by way
+    """.split())
 #: A disclaimer is short. Anything longer is treated as content.
 _DISCLAIMER_MAX_WORDS = 16
 
 
+def _has_phrase(words: list[str], phrase: tuple[str, ...]) -> bool:
+    n = len(phrase)
+    return any(tuple(words[i:i + n]) == phrase
+               for i in range(len(words) - n + 1))
+
+
 def _disclaimer_only(s: str) -> bool:
     """A plain sentence that only says the records are made up and not the
-    reader's: no number, no content word, short."""
-    words = re.findall(r"[a-z0-9-]+", s)
-    return (len(words) <= _DISCLAIMER_MAX_WORDS
-            and not any(ch.isdigit() for ch in s)
-            and not any(w in _CONTENT_WORDS for w in words)
-            and any(w in s for w in _MADE_UP)
-            and any(w in s for w in _NOT_YOURS))
+    reader's: short, and every word one a disclaimer is made of."""
+    words = re.findall(r"[a-z0-9-]+", s.replace("'", ""))
+    return (0 < len(words) <= _DISCLAIMER_MAX_WORDS
+            and all(w in _DISCLAIMER_WORDS for w in words)
+            and any(m in s for m in _MADE_UP)
+            and any(_has_phrase(words, p) for p in _NOT_YOURS))
 
 
 def _drop_echo(text: str, lead: str) -> str:
