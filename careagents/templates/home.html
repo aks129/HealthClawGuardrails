@@ -66,7 +66,7 @@
       <div class="hub-card agent-card" data-agent="{{ a.id }}">
         <div class="hub-card-name">{{ a.name }}</div>
         <div class="hub-card-sub">{% if a.reads %}Reads {{ "sample records" if a.reads == "Sample records" else a.reads }}{% endif %}</div>
-        <p class="card-note">Visit brief: a one-page summary of your records to bring to an appointment.</p>
+        <p class="card-note">Visit brief: a one-page summary of {{ "these made-up records, to show how it works" if a.reads == "Sample records" else "your records to bring to an appointment" }}.</p>
         <div class="card-actions">
           <a class="pill pill-cta" href="/chat?agent={{ a.id }}">Chat</a>
           <a class="pill" href="/brief?agent={{ a.id }}">Visit brief</a>

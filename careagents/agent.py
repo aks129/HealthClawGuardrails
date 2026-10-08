@@ -158,6 +158,19 @@ TOOL_LABELS = {
     "check_form_status": "Checking your form",
 }
 
+#: TOOL_LABELS on the sample connection, whose records are made up: a status
+#: line that said "your labs" read as the tester's own (2026-10-08 walk).
+SAMPLE_TOOL_LABELS = {
+    "get_health_summary": "Reading the made-up records",
+    "get_labs": "Interpreting the made-up labs",
+    "show_lab_timeline": "Charting the made-up results over time",
+    "get_care_gaps": "Checking screenings and vaccines",
+    "search_records": "Searching the made-up records",
+    "appointment_brief": "Preparing the sample visit brief",
+    "start_intake_form": "Preparing the sample intake form",
+    "check_form_status": "Checking the sample form",
+}
+
 
 # How many DISTINCT Medication references one tool call may chase. Each is a
 # separately audited read; a pathological bundle must not turn one chat

@@ -461,7 +461,9 @@ def test_visit_brief_and_smart_health_link_are_explained(cfg, svc, monkeypatch):
     fake = FakeClient()
     c, _, _ = _signed_in(_app(cfg, svc, fake), svc, monkeypatch)
     html = c.get("/home").get_data(as_text=True)
-    assert "summary of your records to bring to an appointment" in html
+    # The sample's card (#908); a real one is pinned in
+    # tests/test_careagents_sample_framing_rewalk.py.
+    assert "summary of these made-up records, to show how it works" in html
     shl = connectors._BY_ID["shl"]
     assert "QR code" in shl["blurb"] and "SMART Health Link" in shl["blurb"]
 

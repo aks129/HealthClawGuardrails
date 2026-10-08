@@ -229,7 +229,7 @@ def test_care_gaps_row_never_passes_a_review_that_did_not_run(cfg, svc,
     chain = Chain(cfg, svc, monkeypatch)
     from careagents.healthclaw import HealthClawError
 
-    def outage(tenant):
+    def outage(tenant, **_):
         raise HealthClawError("down", 503)
     monkeypatch.setattr(chain.hc, "fetch_appointment_brief", outage)
     assert ba.row_care_gaps(chain.s, BASE, chain.agent, run) is False

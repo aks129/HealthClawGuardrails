@@ -542,6 +542,13 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
     return app, c, fake, agent_id, fake.tenants[-1], conn["id"]
 
 
+def sample_framed(text: str) -> str:
+    """An answer as `_chat_app`'s sample connection finishes it: opened by
+    the made-up-records line (tests/test_careagents_sample_framing.py)."""
+    from careagents import beta
+    return f"{beta.SAMPLE_FRAME}\n\n{text}"
+
+
 def test_log_message_sends_explicit_agent_and_conversation_identity():
     """The wire contract preserves CareAgents identity across surfaces."""
     import careagents.healthclaw as hcmod
@@ -743,7 +750,7 @@ def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[0]["content"] == "hi there"
-    assert stored[1]["content"] == "here you go"
+    assert stored[1]["content"] == sample_framed("here you go")
 
 
 def test_chat_route_also_accepts_agent_id_as_the_query_param(cfg, svc,
@@ -848,7 +855,8 @@ def test_duplicate_inbound_request_runs_the_model_once(cfg, svc, monkeypatch):
 
     assert calls["count"] == 1
     assert '"type": "accepted"' in replay.get_data(as_text=True)
-    assert '"text": "once"' in replay.get_data(as_text=True)
+    assert ('"text": ' + json.dumps(sample_framed("once"))
+            in replay.get_data(as_text=True))
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [message["role"] for message in stored] == ["user", "assistant"]
     assert first.status_code == replay.status_code == 200
@@ -887,7 +895,7 @@ def test_browser_disconnect_reconnect_replays_without_duplicate_inference(
     body = replay.get_data(as_text=True)
 
     assert calls["count"] == 1
-    assert '"text": "durable answer"' in body
+    assert '"text": ' + json.dumps(sample_framed("durable answer")) in body
     assert '"type": "done"' in body
 
 
@@ -2249,7 +2257,7 @@ class FakeClient:
     def care_gaps(self, tenant):
         return {"summary": {}, "consumer": {"due": []}}
 
-    def fetch_appointment_brief(self, tenant):
+    def fetch_appointment_brief(self, tenant, voice=None):
         return None
 
     def start_form_action(self, tenant):
@@ -2926,7 +2934,7 @@ def test_brief_renders_with_available_records(app, svc, monkeypatch):
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: stub_brief)
+                        lambda self, tenant, **_: stub_brief)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Hypertension" in resp.data
@@ -2944,14 +2952,15 @@ def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
     """Brief page shows 'Not available' when the engine returns nothing."""
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/sample")
+    # A real connection: the sample words this about the sample (#908).
+    r = c.post("/api/connections/direct", json=consented())
     conn_id = r.get_json()["id"]
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Not available from your connected records" in resp.data
@@ -2971,12 +2980,14 @@ def test_an_unreachable_engine_does_not_blame_the_patient_s_records(
     """
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: the sample words this about the sample (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                            "connection_id": conn_id}
                       ).get_json()["id"]
 
-    def _down(self, tenant):
+    def _down(self, tenant, **_):
         raise HealthClawError("appointment brief unavailable (503)", 503)
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief", _down)
@@ -3044,8 +3055,11 @@ def _brief_with_care_gaps(status, fields=()):
 
 
 def _agent_for_brief(c, svc, monkeypatch):
+    """A real connection: these tests pin a real brief's wording, and the
+    sample words it about the sample person (#908)."""
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                        "connection_id": conn_id}
                   ).get_json()["id"]
@@ -3056,7 +3070,7 @@ def test_brief_care_gaps_unavailable_is_not_rendered_as_no_gaps(app, svc,
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("unavailable"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("unavailable"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3068,7 +3082,7 @@ def test_brief_care_gaps_evaluated_and_empty_says_no_items(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("ok"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("ok"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3083,7 +3097,7 @@ def test_brief_care_gaps_evaluated_with_gaps_lists_them(app, svc, monkeypatch):
              '"sourceType":"MeasureReport","sourceId":"gap-1"}')
     monkeypatch.setattr(
         FakeClient, "fetch_appointment_brief",
-        lambda self, tenant: _brief_with_care_gaps("ok", fields=[field]))
+        lambda self, tenant, **_: _brief_with_care_gaps("ok", fields=[field]))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert b"Colorectal cancer screening" in resp.data
@@ -3097,7 +3111,7 @@ def test_brief_missing_care_gaps_marker_is_not_reassurance(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert _UNAVAILABLE_COPY in resp.data
@@ -5044,7 +5058,7 @@ def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
     replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
                          query_string={"handle": "+15550001111"}
                          ).get_json()["reply"] for r in runs]
-    assert replies == ["model answer", beta.DAILY_LIMIT_TEXT]
+    assert replies == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
     assert calls == [1] and used() == 1
     # Once spent, admission answers it too, without queueing a run.
     third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,

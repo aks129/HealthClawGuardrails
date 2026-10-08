@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, app, cfg, svc)
 
@@ -67,12 +68,15 @@ def _brief():
 def _brief_page(app, svc, monkeypatch):  # noqa: F811
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: this pins a real brief's wording; the sample's is
+    # pinned in tests/test_careagents_sample_framing_rewalk.py (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={
         "name": "Ada", "persona": "direct",
         "connection_id": conn_id}).get_json()["id"]
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief())
+                        lambda self, tenant, **_: _brief())
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     return resp.get_data(as_text=True)
@@ -630,7 +634,7 @@ def test_no_tester_screen_uses_the_jargon(app, svc, monkeypatch):  # noqa: F811
     started = c.post("/api/connections/sample").get_json()
     agent = started["agent_id"]
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief())
+                        lambda self, tenant, **_: _brief())
     for path in ("/home", f"/chat?agent={agent}", f"/brief?agent={agent}"):
         page = _visible(c.get(path).get_data(as_text=True))
         for word in JARGON:
