@@ -74,7 +74,22 @@ def _scenario(app, tenant_id, name):
 SCENARIOS = ("seeded", "no-patient", "two-patients", "no-sex")
 
 
+#: The internal secret CareAgents holds. The engine honours the sample voice
+#: only with it (#908 security review; tests/test_brief_sample_voice_security.py
+#: pins the refusals).
+SECRET = "brief-voice-test-secret"
+
+
+@pytest.fixture(autouse=True)
+def _internal_secret(monkeypatch):
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", SECRET)
+
+
 def _get(client, headers, query=""):
+    """The brief as CareAgents asks for it: a voice travels with the
+    internal secret."""
+    if query:
+        headers = {**headers, "X-Internal-Secret": SECRET}
     r = client.get(_URL + query, headers=headers)
     assert r.status_code == 200
     return r.get_json()

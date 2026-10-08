@@ -44,6 +44,29 @@ _MADE_UP = ("made-up", "made up", "sample", "fictional", "fake")
 _NOT_YOURS = ("not yours", "arent yours", "isnt yours", "not about you",
               "isnt about you", "not your", "arent your", "nothing here is "
               "about you", "not you")
+#: A sentence holding any of these carries content, not only a disclaimer,
+#: so it is never dropped (#908 security review): "The sample person is not
+#: you, but their creatinine rose fast and they should contact a doctor
+#: promptly" is advice.
+_CONTENT_WORDS = ("doctor", "clinician", "nurse", "pharmacist", "contact",
+                  "should", "call", "rose", "fell", "high", "low", "normal",
+                  "result", "lab", "test", "screening", "vaccine", "due",
+                  "medicine", "medication", "dose", "blood", "kidney",
+                  "creatinine", "glucose", "pressure", "cholesterol", "a1c",
+                  "but")
+#: A disclaimer is short. Anything longer is treated as content.
+_DISCLAIMER_MAX_WORDS = 16
+
+
+def _disclaimer_only(s: str) -> bool:
+    """A plain sentence that only says the records are made up and not the
+    reader's: no number, no content word, short."""
+    words = re.findall(r"[a-z0-9-]+", s)
+    return (len(words) <= _DISCLAIMER_MAX_WORDS
+            and not any(ch.isdigit() for ch in s)
+            and not any(w in _CONTENT_WORDS for w in words)
+            and any(w in s for w in _MADE_UP)
+            and any(w in s for w in _NOT_YOURS))
 
 
 def _drop_echo(text: str, lead: str) -> str:
@@ -52,16 +75,14 @@ def _drop_echo(text: str, lead: str) -> str:
     The line is in the stored history, so a model may open with it, bold,
     quoted or reworded, and the answer would say it twice (#908 QA). Only
     leading sentences of the first paragraph are dropped, and only when one
-    is the line itself or says the records are made up and not the
-    reader's. The rest of the answer is untouched."""
+    is the line itself or is a disclaimer and nothing else (no number, no
+    advice, no clinical word, short). The rest of the answer is untouched."""
     lead_sentences = {_plain(s) for s in re.split(r"(?<=[.!?])\s+", lead)}
     first, sep, rest = text.partition("\n\n")
     sentences = re.split(r"(?<=[.!?])\s+", first.strip())
     while sentences:
         s = _plain(sentences[0])
-        if not s or s in lead_sentences or (
-                any(w in s for w in _MADE_UP)
-                and any(w in s for w in _NOT_YOURS)):
+        if not s or s in lead_sentences or _disclaimer_only(s):
             sentences.pop(0)
             continue
         break

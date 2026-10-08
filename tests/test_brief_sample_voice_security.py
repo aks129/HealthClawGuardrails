@@ -137,15 +137,53 @@ def test_voice_value_is_never_echoed_and_never_selects_sample(
 
 # --- the open question: a REAL tenant in the sample voice -----------------------
 
-def test_engine_words_an_ingested_tenants_urgent_result_as_the_sample_persons(
-        app, client, tenant_id, tenant_headers):
-    """FINDING (not a V1/V2/V3/V6 break): nothing in the engine ties
-    `voice=sample` to a seeded tenant. Any caller already authorised to read
-    a tenant can have the engine say a person's own urgent creatinine rise
-    belongs to "the sample person". CareAgents only asks on kind=="sample",
-    but the parameter is public on the engine's FHIR surface."""
+_SECRET = "voice-security-test-secret"
+
+
+def _trend(client, headers, query="?voice=sample"):
+    r = client.get(_URL + query, headers=headers)
+    assert r.status_code == 200        # never refused: the brief answers
+    [line] = [s for s in _strings(r.get_json()) if "creatinine rose" in s]
+    return line
+
+
+@pytest.mark.parametrize("secret", [None, "", "wrong-secret",
+                                    _SECRET + "x", _SECRET[:-1]],
+                         ids=["absent", "empty", "wrong", "longer",
+                              "shorter"])
+def test_an_ingested_tenant_keeps_its_own_words_without_the_credential(
+        app, client, tenant_id, tenant_headers, monkeypatch, secret):
+    """FIXED (was the finding): any caller who could read a tenant could have
+    the engine word a person's own urgent creatinine rise as "the sample
+    person's". The voice is now honoured only with the internal secret that
+    only CareAgents holds; without it, or with a wrong one, the brief
+    answers in today's words."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", _SECRET)
     _ingested_creatinine_rise(app, tenant_id)
-    body = client.get(_URL + "?voice=sample", headers=tenant_headers).get_json()
-    [line] = [s for s in _strings(body) if "creatinine rose" in s]
+    headers = dict(tenant_headers)
+    if secret is not None:
+        headers["X-Internal-Secret"] = secret
+    line = _trend(client, headers)
+    assert line == _trend(client, tenant_headers, query="")
+    assert ", your creatinine rose" in line
+    assert "sample person" not in line
+
+
+def test_with_no_secret_configured_nobody_gets_the_sample_voice(
+        app, client, tenant_id, tenant_headers, monkeypatch):
+    """Outside production the internal gate is open when no secret is set;
+    the sample voice is not. With nothing to match, nobody proves they are
+    CareAgents."""
+    monkeypatch.delenv("INTERNAL_TOKEN_MINT_SECRET", raising=False)
+    _ingested_creatinine_rise(app, tenant_id)
+    line = _trend(client, {**tenant_headers, "X-Internal-Secret": ""})
+    assert "sample person" not in line
+
+
+def test_the_credential_alone_selects_the_sample_voice(
+        app, client, tenant_id, tenant_headers, monkeypatch):
+    """The other half: CareAgents, with the secret, does get it."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", _SECRET)
+    _ingested_creatinine_rise(app, tenant_id)
+    line = _trend(client, {**tenant_headers, "X-Internal-Secret": _SECRET})
     assert "the sample person's creatinine rose" in line
-    assert "your" not in line.lower()

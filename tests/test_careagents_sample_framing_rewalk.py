@@ -161,10 +161,11 @@ def test_a_real_brief_asks_the_engine_as_before(cfg, svc, monkeypatch):  # noqa:
 def test_the_client_sends_the_voice_only_for_the_sample():
     from careagents.healthclaw import HealthClawClient, HealthClawError
     hc = HealthClawClient("http://engine", "s")
-    urls = []
+    urls, secrets = [], []
 
-    def _send(method, url, **_):
+    def _send(method, url, headers=None, **_):
         urls.append(url)
+        secrets.append((headers or {}).get("X-Internal-Secret"))
         raise HealthClawError("stop", 503)
     hc._headers = lambda tenant: {}
     hc._send = _send
@@ -175,6 +176,9 @@ def test_the_client_sends_the_voice_only_for_the_sample():
             if "AppointmentBrief" in u] == [
         "AppointmentBrief", "AppointmentBrief?voice=sample",
         "AppointmentBrief"]
+    # The engine honours the voice only with the internal secret; a real
+    # brief's request carries no extra header (#908 security review).
+    assert secrets == [None, "s", None]
 
 
 def test_the_sample_brief_reaches_the_real_engine(cfg, svc, monkeypatch):  # noqa: F811

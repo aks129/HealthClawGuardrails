@@ -9,6 +9,8 @@ synthetic.
 
 from __future__ import annotations
 
+import pytest
+
 from careagents import beta
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
@@ -203,16 +205,27 @@ def test_real_answer_echoing_the_frame_is_passed_through_unchanged(
 
 # --- ee31291: the reworded-echo stripper -------------------------------------
 
-def test_drop_echo_can_drop_a_clinical_first_sentence_on_the_sample():
-    """LOW, sample only: the heuristic drops any leading sentence holding a
-    made-up word and a not-yours word, even one carrying the advice. On
-    synthetic records, so no patient harm; it is a wording loss."""
+def test_drop_echo_keeps_a_first_sentence_that_carries_advice():
+    """FIXED (was LOW): the heuristic dropped any leading sentence holding a
+    made-up word and a not-yours word, even one carrying the advice. Only a
+    disclaimer and nothing else is dropped now."""
     from careagents.worker import _drop_echo
     text = ("The sample person is not you, but their creatinine rose fast "
             "and they should contact a doctor promptly.\n\nAsk about it.")
-    out = _drop_echo(text, beta.SAMPLE_FRAME)
-    assert "promptly" not in out          # pins the over-strip
-    assert out == "Ask about it."
+    assert _drop_echo(text, beta.SAMPLE_FRAME) == text
+
+
+@pytest.mark.parametrize("first", [
+    "These records are made up and not yours, and the A1c is 8.1.",
+    "This is sample data, not yours; ask a doctor about it.",
+    "Not your records: the sample person may be due for a flu vaccine.",
+    "These made-up records are not yours, and nothing in them should "
+    "worry you at all, though some readers like to check again later.",
+], ids=["digit", "doctor", "clinical", "long"])
+def test_drop_echo_keeps_any_sentence_that_is_more_than_a_disclaimer(first):
+    from careagents.worker import _drop_echo
+    text = f"{first}\n\nMore."
+    assert _drop_echo(text, beta.SAMPLE_FRAME) == text
 
 
 def test_drop_echo_never_reaches_past_the_first_paragraph():

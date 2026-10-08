@@ -729,13 +729,18 @@ class HealthClawClient:
         exists, which is the same fact as an unreachable engine.
 
         `voice="sample"` asks the engine to word its sentences about the
-        made-up sample person (r6/voice.py). Without it the request is
-        exactly what it was.
+        made-up sample person (r6/voice.py), with the internal secret the
+        engine requires before it will. Without it the request is exactly
+        what it was.
         """
+        sample = voice == "sample"
+        headers = self._headers(tenant)
+        if sample:
+            headers["X-Internal-Secret"] = self.mint_secret
         r = self._send(
             "GET", f"{self.fhir}/AppointmentBrief"
-            + ("?voice=sample" if voice == "sample" else ""),
-            headers=self._headers(tenant),
+            + ("?voice=sample" if sample else ""),
+            headers=headers,
             what="appointment brief")
         if r.status_code == 200:
             # dict-or-None is what the brief renderer is written against.

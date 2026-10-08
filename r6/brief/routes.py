@@ -215,7 +215,14 @@ def register_brief_routes(blueprint, deps):
 
         # Wording only (r6/voice.py): CareAgents asks for the sample voice
         # on its made-up records. It never reaches a read or the redaction.
+        # Honoured only with the internal secret that only CareAgents holds:
+        # any other reader of a tenant could otherwise have a person's own
+        # urgent result worded as "the sample person's" (#908 security
+        # review). Without it the brief still answers, in today's words.
+        from r6.internal_auth import internal_secret_presented
         voice = voices.parse(request.args.get("voice"))
+        if voice != voices.PATIENT and not internal_secret_presented():
+            voice = voices.PATIENT
 
         conditions = _resources_for(tenant_id, "Condition")
         medication_requests = _resources_for(tenant_id, "MedicationRequest")
