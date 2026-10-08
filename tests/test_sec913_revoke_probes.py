@@ -23,7 +23,7 @@ from r6.fasten.models import (FastenConnection, FastenJob,
                               TenantClosure, tenant_closed)
 from r6.models import AuditEventRecord, R6Resource
 
-SECRET = "sec913-internal-secret"
+SECRET = "test-revoke-secret-913-not-real"
 VICTIM = "sec913-victim"
 ATTACKER = "sec913-attacker"
 REVOKE = "/r6/fhir/internal/fasten-revoke"
