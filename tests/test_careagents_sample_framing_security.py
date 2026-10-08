@@ -254,3 +254,23 @@ def test_drop_echo_never_reaches_past_the_first_paragraph():
     from careagents.worker import _drop_echo
     text = f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"
     assert _drop_echo(text, beta.SAMPLE_FRAME) == text
+
+
+def test_drop_echo_keeps_a_sentence_that_says_the_record_is_real():
+    """No not-yours phrase: never a disclaimer, even with a sample word."""
+    from careagents.worker import _drop_echo
+    text = "This is your real record, not a sample.\n\nMore."
+    assert _drop_echo(text, beta.SAMPLE_FRAME) == text
+
+
+@pytest.mark.parametrize("first", [
+    "Remember, the sample person is not you.",
+    # Exactly 16 words, the length limit.
+    "Just a reminder that all of these records are made up and they are "
+    "not yours.",
+    # Whole-word phrase match: the comma does not hide "not yours".
+    "These are sample records, not, yours.",
+], ids=["not-you", "sixteen-words", "whole-word-phrase"])
+def test_drop_echo_drops_a_disclaimer_only_sentence(first):
+    from careagents.worker import _drop_echo
+    assert _drop_echo(f"{first}\n\nMore.", beta.SAMPLE_FRAME) == "More."
