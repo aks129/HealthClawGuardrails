@@ -512,7 +512,18 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: operations stopped taking an OperationOutcome builder they no longer use.
 #: 3711 -> 3707: the shim migration folded three post-commit audit blocks into
 #: the commit they describe and dropped the demo loop's interim commits.
-_GOD_MODULE_LINES = 3707
+#: 3707 -> 3729: POST /internal/fasten-revoke, the engine half of a CareAgents
+#: Disconnect. Raised deliberately: the route sits beside purge-tenant and
+#: needs this module's _internal_ingest_authorized gate, so only the gate and
+#: the tenant read live here; the transaction is in r6/fasten/revoke.py.
+#: 3729 -> 3733 (#913 security review F3): one require_open_tenant call on
+#: each of create, update, $ingest-context and /internal/ingest-bundle. The
+#: check is a kernel primitive; only its call has to sit at each site.
+#: 3733 -> 3736 (CTO ruling on #913): the revoke route refuses a public
+#: tenant with 422 before any write, matching purge. 3736 -> 3739: the
+#: same call on /internal/seed, $curatr-apply-fix and /demo/agent-loop
+#: (security re-check of #913, R3-R5).
+_GOD_MODULE_LINES = 3739
 
 
 def test_the_god_module_only_shrinks():

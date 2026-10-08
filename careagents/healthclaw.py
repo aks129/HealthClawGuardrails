@@ -773,6 +773,31 @@ class HealthClawClient:
                                   r.status_code)
         return self._json_object(r, "purge")
 
+    def revoke_fasten(self, tenant: str) -> dict:
+        """Stop Fasten bringing records into this tenant. Raises on failure.
+
+        The engine half of Disconnect: it tombstones the tenant, revokes
+        its Fasten connections and stops unfinished jobs. Not best-effort,
+        for the same reason as purge_tenant: "disconnected" is only shown
+        once the engine confirms it. The engine gates this on the internal
+        secret alone, so no step-up token is minted for it.
+        """
+        r = self._send(
+            "POST", f"{self.fhir}/internal/fasten-revoke",
+            json={"tenant_id": tenant},
+            headers={"X-Tenant-Id": tenant,
+                     "X-Internal-Secret": self.mint_secret},
+            what="fasten revoke")
+        if r.status_code != 200:
+            raise HealthClawError(f"fasten revoke failed ({r.status_code})",
+                                  r.status_code)
+        body = self._json_object(r, "fasten revoke")
+        # A 200 that does not say revoked (a proxy page, an older engine) is
+        # not a confirmation, so Disconnect stays fail-closed (review F2).
+        if body.get("revoked") is not True:
+            raise HealthClawError("fasten revoke not confirmed", r.status_code)
+        return body
+
     # --- conversation history -------------------------------------------------
     #
     # Chat history lives in HealthClaw, per tenant, NOT in the CareAgents

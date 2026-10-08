@@ -53,7 +53,7 @@ from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
-from r6.access import Scope, require_grant
+from r6.access import Scope, require_grant, require_open_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +476,8 @@ def review_submit(action_id):
         return _error(400, 'X-Tenant-Id header is required')
     tenant_id = tenant.id
     _require_step_up(tenant)
+    # A closed tenant takes no reviewed QuestionnaireResponse (409, audited).
+    require_open_tenant(tenant)
 
     action = _load_awaiting_action(action_id, tenant_id)
     if action is None:

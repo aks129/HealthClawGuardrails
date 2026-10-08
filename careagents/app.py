@@ -1061,6 +1061,21 @@ def create_app(config: Config | None = None,
     def disconnect_connection(conn_id):
         """Stop new data flowing; keep records already collected."""
         acct = current_account()
+        conn = svc.get_connection(acct.id, conn_id)
+        if conn is None:
+            return jsonify({"error": "unknown connection"}), 404
+        # HealthClaw first, for every kind (a no-op on a sample tenant).
+        # Flipping only our row left the engine importing into the tenant
+        # from an old connect link, a late webhook, a retry or the reaper.
+        # Unconfirmed means the row stays as it was: we never say
+        # "disconnected" while records may still arrive. Nor "still on": a
+        # lost answer can follow a revoke that ran, as in delete_connection.
+        try:
+            hc.revoke_fasten(conn["tenant_id"])
+        except HealthClawError:
+            return jsonify({"error": "disconnect_failed",
+                            "message": "We couldn't confirm the disconnect. "
+                                       "Please try again in a minute."}), 503
         if not svc.revoke_connection(acct.id, conn_id):
             return jsonify({"error": "unknown connection"}), 404
         # The hub shows this after its reload, so the person is told what
@@ -1296,6 +1311,10 @@ def create_app(config: Config | None = None,
                  for c in svc.list_home(acct.id)["connections"]}
         if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
+        # Disconnected: say so. Records that landed earlier made this answer
+        # "active" while the row stayed revoked (QA on #909).
+        if conns[conn_tenant]["status"] == "revoked":
+            return jsonify({"status": "revoked"})
         try:
             landed = hc.tenant_has_records(conn_tenant)
         except HealthClawError:

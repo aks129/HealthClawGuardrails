@@ -45,7 +45,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       require_grant, tenant_from_request)
+                       require_grant, require_open_tenant, tenant_from_request)
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -378,6 +378,7 @@ def create_resource(resource_type):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Validate before storing (agent proposals must pass $validate before commit)
     validation_result = validator.validate_resource(body)
@@ -540,6 +541,7 @@ def update_resource(resource_type, resource_id):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a
@@ -1068,6 +1070,7 @@ def ingest_context():
     if _read_auth_enabled():
         require_grant(scope=Scope.WRITE, tenant=tenant, denied_message=(
             'Bundle ingestion requires a tenant-bound write token'))
+    require_open_tenant(tenant)
 
     try:
         from r6.fasten.ingester import skipped_type_summary
@@ -2055,6 +2058,31 @@ def purge_tenant_route():
     }), 200
 
 
+@r6_blueprint.route('/internal/fasten-revoke', methods=['POST'])
+def fasten_revoke_route():
+    """The engine half of a CareAgents Disconnect; see r6/fasten/revoke.py.
+
+    The internal secret with no public-tenant exemption, like ingest: this
+    decides what may arrive in a tenant, not just who reads it. Checked
+    before the body is read. A repeat answers 200 with already_revoked.
+    """
+    if not _internal_ingest_authorized(None):
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
+    except TenantRejected:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    from r6.command_center.access import is_public
+    if is_public(tenant_id):  # never closed; purge leaves them open too
+        return jsonify({'error': 'public tenant cannot be revoked'}), 422
+    from r6.fasten.revoke import revoke_tenant
+    try:
+        return jsonify(revoke_tenant(tenant_id)), 200
+    except Exception:
+        logger.exception('fasten revoke failed for %s', tenant_id)
+        return jsonify({'error': 'revoke failed', 'revoked': False}), 500
+
+
 @r6_blueprint.route('/internal/seed', methods=['POST'])
 def seed_tenant():
     """
@@ -2088,6 +2116,7 @@ def seed_tenant():
     # (fail-closed for non-public tenants) so it can't be a token oracle.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     # A caller-supplied bundle is INGESTION — the caller chooses what the
     # records say — so it takes the ingest gate, which grants no public-tenant
@@ -2237,6 +2266,7 @@ def ingest_bundle():
         return jsonify({'error': 'invalid tenant_id format'}), 400
     if not _internal_ingest_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     ct_raw = (request.content_type or '').split(';', 1)[0].strip().lower()
     if ct_raw not in _INGEST_BUNDLE_MIME_TYPES:
@@ -2535,6 +2565,7 @@ def demo_agent_loop():
     # authorization rule for a third kind of privileged write.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     steps = []
 
@@ -2897,6 +2928,7 @@ def curatr_apply_fix(resource_type, resource_id):
         operation=operation if production_approval else None,
         absent_status=403, rejected_status=403,
     )
+    require_open_tenant(tenant)
 
     body = request.get_json(silent=True)
     if not body:

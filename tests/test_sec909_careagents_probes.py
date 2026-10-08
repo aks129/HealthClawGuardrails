@@ -143,12 +143,8 @@ def test_reconnect_after_disconnect_mints_a_new_tenant(cfg, svc, monkeypatch):  
     assert _status(svc, first["id"]) == "revoked"
 
 
-# --- the known gap: the engine is never told about a disconnect -------------
+# --- closed by the revoke-on-disconnect PR: the engine is told ------------
 
-@pytest.mark.xfail(strict=True, reason="known gap (CTO design pending): "
-                   "CareAgents disconnect makes no engine call, so the "
-                   "engine's FastenConnection and /connect/<tenant> page "
-                   "stay live for the tenant")
 def test_disconnect_tells_the_engine(cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, *_ = _chat_app(cfg, svc, monkeypatch)
     conn_id = c.post("/api/connections/fasten",
