@@ -222,7 +222,10 @@ def test_drop_echo_keeps_a_first_sentence_that_carries_advice():
     "Not your records: the sample person may be due for a flu vaccine.",
     "These made-up records are not yours, and nothing in them is about "
     "you or anyone you know or have ever met in your whole life.",
-], ids=["digit", "doctor", "clinical", "long"])
+    # Long, though every word is a disclaimer word: kept on length alone.
+    "Just a quick reminder that these sample records are not yours and "
+    "the data here is not about you or anyone else.",
+], ids=["digit", "doctor", "clinical", "long", "long-disclaimer-words"])
 def test_drop_echo_keeps_any_sentence_that_is_more_than_a_disclaimer(first):
     from careagents.worker import _drop_echo
     text = f"{first}\n\nMore."
