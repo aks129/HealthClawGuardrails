@@ -536,8 +536,14 @@ class AccountService:
                 s.execute(stmt)
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
+        """Move every live row on the tenant. A revoked row is never moved:
+        only the person disconnects, and records landing (a poll, an upload,
+        the chat page settling) must not undo it (security review of #904,
+        F3). Revoking goes through revoke_connection, one row at a time."""
         with self.session() as s:
-            for c in s.query(Connection).filter_by(tenant_id=tenant_id).all():
+            for c in (s.query(Connection)
+                      .filter(Connection.tenant_id == tenant_id,
+                              Connection.status != "revoked").all()):
                 c.status = status
 
     def revoke_connection(self, account_id: str, conn_id: str) -> bool:

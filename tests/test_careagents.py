@@ -19,6 +19,7 @@ import pytest
 from careagents.config import Config, ConfigError
 from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import PERSONAS, SAFETY_CORE, system_prompt
+from tests.careagents_consent_helpers import consented
 
 
 # --- config: fail-closed ------------------------------------------------------
@@ -3174,7 +3175,7 @@ def test_wearable_connector_soon_by_default_live_when_enabled(svc, monkeypatch):
     c = a.test_client()
     _login(c, svc, monkeypatch, email="wear@example.com")
     r = c.post("/api/connections/wearable",
-               json={"provider": "apple", "consent": True})
+               json=consented(provider="apple"))
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "pending"
@@ -3200,7 +3201,7 @@ def test_agent_requires_own_connection(app, svc, monkeypatch):
 def test_fasten_connection_returns_verified_provider_url(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200
     d = r.get_json()
     # routes through HealthClaw's own wired-up connect page, not a Fasten URL
@@ -3233,7 +3234,7 @@ def test_refresh_real_connection_returns_reauth_url(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     conn = c.post("/api/connections/fasten",
-                  json={"consent": True}).get_json()["id"]
+                  json=consented()).get_json()["id"]
     r = c.post(f"/api/connections/{conn}/refresh")
     assert r.status_code == 200
     d = r.get_json()
@@ -3261,7 +3262,7 @@ def test_poll_reports_new_records_added_since_the_refresh(cfg, svc, monkeypatch)
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3308,7 +3309,7 @@ def _refresh_then_deliver(cfg, svc, monkeypatch, documents_before,
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3364,7 +3365,7 @@ def test_the_count_is_hedged_not_hidden_when_the_document_probe_fails(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
@@ -3429,7 +3430,7 @@ def test_the_hedge_clause_joins_the_count_cleanly(cfg, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
@@ -3523,7 +3524,7 @@ def test_a_connection_with_no_document_baseline_claims_no_arrival(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
@@ -3550,7 +3551,7 @@ def test_the_refresh_baselines_documents_as_well_as_records(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     conn = created["id"]
     assert c.post(f"/api/connections/{conn}/refresh").status_code == 200
 
@@ -3652,7 +3653,7 @@ def test_the_poll_says_the_engine_is_unreachable_rather_than_pending(
     c = app.test_client()
     _login(c, svc, monkeypatch)
     created = c.post("/api/connections/fasten",
-                     json={"consent": True}).get_json()
+                     json=consented()).get_json()
     tenant = created["connect_url"].rsplit("/connect/", 1)[1]
 
     def down(_tenant):
@@ -3760,7 +3761,7 @@ def test_deleting_the_account_purges_every_tenant_then_removes_the_row(
     _login(c, svc, monkeypatch)
     conn_a = c.post("/api/connections/sample").get_json()["id"]
     conn_b = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     with c.session_transaction() as sess:
         account_id = sess["account_id"]
     with svc.session() as s:
@@ -3880,7 +3881,7 @@ _DIRECT_UPLOAD_ENDPOINT = "/api/connections/{conn}/upload"
 
 def _make_direct_conn(client):
     """Create a `direct` connection via the normal connect+consent flow."""
-    r = client.post("/api/connections/direct", json={"consent": True})
+    r = client.post("/api/connections/direct", json=consented())
     assert r.status_code == 200, r.get_data(as_text=True)
     return r.get_json()["id"]
 
@@ -3917,7 +3918,7 @@ def test_direct_connect_with_consent_creates_empty_connection(
         app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/direct", json={"consent": True})
+    r = c.post("/api/connections/direct", json=consented())
     assert r.status_code == 200
     d = r.get_json()
     assert d["status"] == "empty"
@@ -4413,7 +4414,7 @@ def test_consent_is_recorded_with_version(app, svc, monkeypatch):
     from careagents.tester_terms import CONSENT_VERSION
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200
     with svc.session() as s:
         from careagents.models import Connection
@@ -5981,9 +5982,9 @@ def test_real_record_connect_posts_are_refused_with_503_when_off(
         svc, monkeypatch):
     c = _beta_app(svc).test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
-    for tile, payload in (("fasten", {"consent": True}),
-                          ("wearable", {"provider": "apple", "consent": True}),
-                          ("direct", {"consent": True})):
+    for tile, payload in (("fasten", consented()),
+                          ("wearable", consented(provider="apple")),
+                          ("direct", consented())):
         r = c.post(f"/api/connections/{tile}", json=payload)
         assert r.status_code == 503, tile
         assert "beta" in r.get_json()["error"], tile
@@ -6008,7 +6009,7 @@ def test_allowlisted_account_sees_and_can_use_real_record_tiles(
     assert cat["direct"]["tier"] == "import"
     for tile in _REAL_RECORD_TILES:
         assert cat[tile].get("requires_consent") is True, tile
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 200 and r.get_json()["status"] == "pending"
     # Not listed: same deployment, tiles closed, POST refused.
     other = app.test_client()
@@ -6018,7 +6019,7 @@ def test_allowlisted_account_sees_and_can_use_real_record_tiles(
     for tile in _REAL_RECORD_TILES:
         assert cat[tile]["tier"] == "soon", tile
     assert other.post("/api/connections/fasten",
-                      json={"consent": True}).status_code == 503
+                      json=consented()).status_code == 503
 
 
 def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
@@ -6028,7 +6029,7 @@ def test_real_records_on_opens_the_tiles_to_every_account(svc, monkeypatch):
            c.get("/api/connections/catalog").get_json()["connectors"]}
     assert cat["fasten"]["tier"] == "live"
     assert c.post("/api/connections/direct",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
 
 
 def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
@@ -6042,15 +6043,15 @@ def test_the_switch_gates_new_connections_only(cfg, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     fasten = c.post("/api/connections/fasten",
-                    json={"consent": True}).get_json()
+                    json=consented()).get_json()
     direct = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     tenant = fasten["connect_url"].rsplit("/connect/", 1)[1]
 
     monkeypatch.setattr(cfg, "real_records", "off")
 
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
     r = c.post(f"/api/connections/{fasten['id']}/refresh")
     assert r.status_code == 200 and r.get_json()["status"] == "reauth"
     assert c.get(f"/api/connections/{tenant}/poll").status_code == 200
@@ -6232,7 +6233,7 @@ def test_allowlist_mode_with_an_empty_list_is_closed_to_everyone(svc,
     c = _beta_app(svc, CARE_REAL_RECORDS="allowlist").test_client()
     _login(c, svc, monkeypatch, email="anyone@example.org")
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 503
+                  json=consented()).status_code == 503
 
 
 def test_the_tester_guide_matches_what_the_switch_actually_does():
@@ -6498,9 +6499,9 @@ def test_the_refusal_under_a_closed_tile_is_a_sentence(svc, monkeypatch):
     assert "—" not in msg and "--" not in msg
     c = _beta_app(svc).test_client()
     _login(c, svc, monkeypatch, email="tester@example.org")
-    for tile, payload in (("fasten", {"consent": True}),
-                          ("wearable", {"provider": "apple", "consent": True}),
-                          ("direct", {"consent": True})):
+    for tile, payload in (("fasten", consented()),
+                          ("wearable", consented(provider="apple")),
+                          ("direct", consented())):
         r = c.post(f"/api/connections/{tile}", json=payload)
         assert r.status_code == 503, tile
         assert r.get_json()["error"] == msg, tile

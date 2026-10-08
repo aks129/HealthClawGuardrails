@@ -9,6 +9,7 @@ import pytest
 
 from careagents import beta
 from careagents.models import Account, ActivityDay, Connection
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, _make_account, cfg, svc)
 
@@ -92,7 +93,7 @@ def _real_agent(cfg, svc, monkeypatch):  # noqa: F811
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/fasten", json=consented()).get_json()
     svc.set_connection_status(fake.tenants[-1], "active")
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
