@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import threading
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 
 from careagents import beta, llm, tester_terms
 from careagents.accounts import AccountService
-from careagents.agent import (MAX_TOOL_ROUNDS,
+from careagents.agent import (MAX_TOOL_ROUNDS, SAMPLE_TOOL_LABELS,
                               TOOL_LABELS, TOOLS,
                               failure_text as agent_failure_text,
                               _execute_tool, _trim_history)
@@ -28,6 +29,74 @@ from careagents.healthclaw import HealthClawClient, HealthClawError
 from careagents.personas import system_prompt
 
 logger = logging.getLogger(__name__)
+
+
+def _plain(text: str) -> str:
+    """A sentence reduced for comparison: no markdown emphasis, quotes or
+    apostrophes, one case, single spaces, no end punctuation."""
+    text = re.sub(r"[*_`~>\"'\u2018\u2019\u201c\u201d]", "", text).lower()
+    return " ".join(text.split()).strip(" .!:;,-")
+
+
+#: A sentence that says the records are made up: one of these words ...
+_MADE_UP = ("made-up", "made up", "sample", "fictional", "fake")
+#: ... and one of these phrases, matched as whole words ("not young" is
+#: not "not you").
+_NOT_YOURS = (("not", "yours"), ("arent", "yours"), ("isnt", "yours"),
+              ("not", "about", "you"), ("isnt", "about", "you"),
+              ("not", "your"), ("arent", "your"), ("not", "you"))
+#: The only words a disclaimer is made of. A sentence is dropped only when
+#: every word in it is one of these, so anything it says about the sample,
+#: a condition, a medicine, a number or advice, keeps it (#908 QA and
+#: security): "The sample person takes metformin, which is not yours" stays.
+_DISCLAIMER_WORDS = frozenset("""
+    these this those they them it its are is were be been all just only
+    the a an and or of for to in on as so from with that which here there
+    records record data chart file person persons patient people someone
+    anyone else nobody nothing anything about you your yours not arent
+    isnt dont doesnt made up made-up sample fictional fake example demo
+    real belong belongs reminder note remember please again quick
+    know own fyi mind keep worth noting heads by way
+    """.split())
+#: A disclaimer is short. Anything longer is treated as content.
+_DISCLAIMER_MAX_WORDS = 16
+
+
+def _has_phrase(words: list[str], phrase: tuple[str, ...]) -> bool:
+    n = len(phrase)
+    return any(tuple(words[i:i + n]) == phrase
+               for i in range(len(words) - n + 1))
+
+
+def _disclaimer_only(s: str) -> bool:
+    """A plain sentence that only says the records are made up and not the
+    reader's: short, and every word one a disclaimer is made of."""
+    words = re.findall(r"[a-z0-9-]+", s.replace("'", ""))
+    return (0 < len(words) <= _DISCLAIMER_MAX_WORDS
+            and all(w in _DISCLAIMER_WORDS for w in words)
+            and any(m in s for m in _MADE_UP)
+            and any(_has_phrase(words, p) for p in _NOT_YOURS))
+
+
+def _drop_echo(text: str, lead: str) -> str:
+    """`text` without the model's own copy of `lead` at its start.
+
+    The line is in the stored history, so a model may open with it, bold,
+    quoted or reworded, and the answer would say it twice (#908 QA). Only
+    leading sentences of the first paragraph are dropped, and only when one
+    is the line itself or is a disclaimer and nothing else (no number, no
+    advice, no clinical word, short). The rest of the answer is untouched."""
+    lead_sentences = {_plain(s) for s in re.split(r"(?<=[.!?])\s+", lead)}
+    first, sep, rest = text.partition("\n\n")
+    sentences = re.split(r"(?<=[.!?])\s+", first.strip())
+    while sentences:
+        s = _plain(sentences[0])
+        if not s or s in lead_sentences or _disclaimer_only(s):
+            sentences.pop(0)
+            continue
+        break
+    first = " ".join(sentences)
+    return (first + sep + rest if first else rest).strip()
 
 
 class RunCancelled(RuntimeError):
@@ -268,11 +337,14 @@ class RunWorker:
             except Exception:  # noqa: BLE001 - a count never fails a turn
                 logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
+        # Made-up records answer as made-up, on every surface: the prompt
+        # says whose they are, and the answer opens with beta.SAMPLE_FRAME.
+        sample = context["connection"].get("kind") == "sample"
         # The engine tags each run with the surface its message arrived on;
         # a text thread gets the texting style (careagents/personas.py).
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
-            surface=str(run.get("surface") or ""))
+            surface=str(run.get("surface") or ""), sample=sample)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -351,8 +423,10 @@ class RunWorker:
             self.hc.append_agent_run_event(
                 run_id, self.worker_id, CHARGED_EVENT, {})
 
+        lead = beta.SAMPLE_FRAME if sample else ""
+        labels = SAMPLE_TOOL_LABELS if sample else TOOL_LABELS
         if final_checkpoint is not None:
-            self._finish(run, final_checkpoint, emitted, heartbeat)
+            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             return
 
         while True:
@@ -397,7 +471,8 @@ class RunWorker:
 
             calls = pending_checkpoint.get("tool_calls") or []
             if not calls:
-                self._finish(run, pending_checkpoint, emitted, heartbeat)
+                self._finish(run, pending_checkpoint, emitted, heartbeat,
+                             lead=lead)
                 return
 
             for call in calls:
@@ -407,7 +482,7 @@ class RunWorker:
                 result_event = tool_results.get(call_id)
                 if result_event is None:
                     result_event = self._execute_durable_tool(
-                        run, call, emitted)
+                        run, call, emitted, labels)
                     tool_results[call_id] = result_event
                 history.append({"role": "tool", "tool_call_id": call_id,
                                 "content": result_event.get("content") or "{}"})
@@ -415,7 +490,8 @@ class RunWorker:
             # the next model call; the completed tools remain replayable.
 
     def _execute_durable_tool(self, run: dict, call: dict,
-                              emitted: set[tuple[str, str]]) -> dict:
+                              emitted: set[tuple[str, str]],
+                              labels: dict = TOOL_LABELS) -> dict:
         run_id = str(run["id"])
         tenant = str(run["tenant_id"])
         provider_call_id = str(call["id"])
@@ -430,7 +506,7 @@ class RunWorker:
                 run_id, self.worker_id, "agent.tool",
                 {"provider_call_id": provider_call_id,
                  "name": tool_name,
-                 "label": TOOL_LABELS.get(tool_name, tool_name)})
+                 "label": labels.get(tool_name, tool_name)})
             emitted.add(marker)
 
         if durable.get("status") == "completed":
@@ -495,11 +571,20 @@ class RunWorker:
             emitted.add(marker)
 
     def _finish(self, run: dict, checkpoint: dict,
-                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat) -> None:
+                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
+                lead: str = "") -> None:
+        """`lead` opens a model's answer on its own line (the sample's
+        SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
+        replayed run adds it once, here."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
         text = str(checkpoint.get("text") or "").strip() or "…"
+        if lead:
+            # The line is in the stored history, so a model may already
+            # open with it on a later turn. Say it once. A real answer
+            # (no lead) is never touched.
+            text = f"{lead}\n\n{_drop_echo(text, lead) or '…'}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side

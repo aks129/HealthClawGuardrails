@@ -14,7 +14,7 @@ import pytest
 
 from careagents import sendblue_surface
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, cfg, svc)
+    _chat_app, cfg, sample_framed, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
 from tests.test_careagents_sendblue import _make_real
 
@@ -52,7 +52,7 @@ def test_a_sample_agent_is_answered_through_the_relay(
     _run(app)
     answer = _answer(c, run_id)
     assert answer.status_code == 200
-    assert answer.get_json()["reply"] == "Sample answer."
+    assert answer.get_json()["reply"] == sample_framed("Sample answer.")
 
 
 def test_an_answer_owed_from_before_a_switch_to_real_records_is_withheld(

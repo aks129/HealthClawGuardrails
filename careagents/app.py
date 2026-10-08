@@ -1553,7 +1553,10 @@ def create_app(config: Config | None = None,
                                history_lost=history_lost,
                                intake=intake,
                                summary_counts=intake.counts,
-                               pending_reviews=reviews)
+                               pending_reviews=reviews,
+                               sample_line=(beta.SAMPLE_FRAME
+                                            if conn.get("kind") == "sample"
+                                            else None))
 
     @app.get("/brief")
     @login_required
@@ -1563,8 +1566,12 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return redirect(url_for("home"))
+        sample = (ctx.get("connection") or {}).get("kind") == "sample"
         try:
-            raw = hc.fetch_appointment_brief(ctx["tenant"])
+            # Made-up records ask the engine to word its sentences about
+            # "the sample person" (r6/voice.py). A real brief asks as before.
+            raw = (hc.fetch_appointment_brief(ctx["tenant"], voice="sample")
+                   if sample else hc.fetch_appointment_brief(ctx["tenant"]))
             unavailable = False
         except HealthClawError:
             # "Not available from your connected records" is a statement about
@@ -1577,7 +1584,9 @@ def create_app(config: Config | None = None,
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
-                               care_gaps_note=_parse_care_gaps_reason(raw))
+                               care_gaps_note=_parse_care_gaps_reason(raw),
+                               sample_line=(beta.SAMPLE_FRAME if sample
+                                            else None))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 

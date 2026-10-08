@@ -40,6 +40,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 from r6.labs.interpret import LOINC_RANGES, LOINC_SYSTEM
+from r6.voice import PATIENT, SAMPLE
 
 #: Serum/plasma creatinine, the specimen KDIGO's thresholds are defined on.
 CREATININE_LOINC = "2160-0"
@@ -429,7 +430,7 @@ def _when_said(start, end):
             f"{_day(end, True)}")
 
 
-def kdigo_consumer_line(result, now=None):
+def kdigo_consumer_line(result, now=None, voice=PATIENT):
     """The plain-language sentence for a fired check, or None.
 
     Says when, what the numbers did and what to do — never a diagnosis.
@@ -438,6 +439,9 @@ def kdigo_consumer_line(result, now=None):
     when B fired, since it is the lower of the two comparisons; otherwise
     criterion A's. A result more than 30 days before `now` keeps its flag
     but is worded as a question about follow-up, not an instruction to act.
+
+    `voice="sample"` (r6/voice.py) words it about "the sample person", for
+    made-up records; the numbers, dates and advice are the same.
     """
     if not result or not result.get("kdigo_criterion"):
         return None
@@ -452,7 +456,17 @@ def kdigo_consumer_line(result, now=None):
             f"{'mg/dL' if unit == 'mg/dL' else chr(0xB5) + 'mol/L'} "
             f"{_span(crit['elapsed_hours'])}.")
     now = now or datetime.now(timezone.utc)
-    if now - end > STALE_AFTER:
+    if voice == SAMPLE:
+        if now - end > STALE_AFTER:
+            message = (f"In {end:%b} {end.year}, the sample person's {rise} "
+                       f"If they haven't already, they should ask their "
+                       f"doctor whether this was followed up.")
+        else:
+            message = (f"{_when_said(start, end)}, the sample person's "
+                       f"{rise} A rise like this can mean the kidneys are "
+                       f"under strain. The sample person should contact "
+                       f"their doctor promptly.")
+    elif now - end > STALE_AFTER:
         message = (f"In {end:%b} {end.year}, your {rise} If you haven't "
                    f"already, ask your doctor whether this was followed up.")
     else:

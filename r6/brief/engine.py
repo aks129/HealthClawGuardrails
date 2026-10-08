@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from r6 import terminology
 from r6.labs.interpret import LOINC_RANGES
 from r6.safe_read import as_dict, codes, is_number
+from r6.voice import PATIENT, SAMPLE
 
 
 @dataclass
@@ -97,8 +98,14 @@ MEDICINE_UNNAMED = ("A medicine is listed, but we can't show its name. "
                     "Ask your doctor.")
 
 #: What the brief says where the record holds no value it can show.
-DOSE_NOT_LISTED = "Dose not listed in your records"
+#: Not "Dose not listed": an RxNorm name carries the strength ("Metformin
+#: 500 mg"), so that sat beside the dose it said was missing. What is left
+#: out is the directions, Dosage.text, which is free text from the source
+#: system (#884 QA F3). No "your", so it reads the same on sample records.
+DOSE_NOT_LISTED = "How to take it isn't shown here."
 RESULT_NOT_LISTED = "Result not listed in your records"
+#: RESULT_NOT_LISTED about a made-up sample person (r6/voice.py).
+SAMPLE_RESULT_NOT_LISTED = "Result not listed in these made-up records"
 
 
 def _concept_label(concept) -> str | None:
@@ -396,7 +403,8 @@ def build_medications(medication_requests: list[dict]) -> list[BriefField]:
 _MAX_LABS = 10
 
 
-def build_labs(observations: list[dict]) -> list[BriefField]:
+def build_labs(observations: list[dict],
+               voice: str = PATIENT) -> list[BriefField]:
     """Most recent lab results from Observation resources (capped at 10)."""
 
     def _sort_key(obs: dict) -> str:
@@ -414,7 +422,8 @@ def build_labs(observations: list[dict]) -> list[BriefField]:
         value = _obs_value(obs)
         date = _effective_display(obs)
         if not value:
-            value = RESULT_NOT_LISTED
+            value = (SAMPLE_RESULT_NOT_LISTED if voice == SAMPLE
+                     else RESULT_NOT_LISTED)
         display_value = value + (f" ({date})" if date else "")
         out.append(BriefField(
             label=label,
@@ -536,6 +545,7 @@ def generate_brief(
     encounters: list[dict],
     care_gap_result: dict,
     lab_trends: list[dict] | None = None,
+    voice: str = PATIENT,
 ) -> BriefResult:
     """Generate a structured appointment brief from FHIR resource lists.
 
@@ -549,7 +559,7 @@ def generate_brief(
     return BriefResult(
         problems=build_problems(conditions),
         medications=build_medications(medication_requests),
-        labs=build_labs(observations),
+        labs=build_labs(observations, voice),
         lab_trends=build_lab_trends(lab_trends or []),
         care_gaps=gaps.fields,
         visits=build_visits(encounters),

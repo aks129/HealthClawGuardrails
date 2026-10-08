@@ -7,6 +7,7 @@ the engine's in tests/test_brief_lab_trends.py. Synthetic data only.
 
 import json
 
+from tests.careagents_consent_helpers import consented
 from tests.test_beta_acceptance_rows import BASE, Chain
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
@@ -30,12 +31,15 @@ def _brief_with_trend():
 def _page(app, svc, monkeypatch, brief):  # noqa: F811
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: this pins a real brief's wording; the sample's is
+    # pinned in tests/test_careagents_sample_framing_rewalk.py (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={
         "name": "Ada", "persona": "direct",
         "connection_id": conn_id}).get_json()["id"]
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: brief)
+                        lambda self, tenant, **_: brief)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     return resp.get_data(as_text=True)
@@ -102,4 +106,9 @@ def test_the_brief_page_on_the_real_engine_shows_the_rise(
     chain = Chain(cfg, svc, monkeypatch)
     page = chain.s.get(f"{BASE}/brief", params={"agent": chain.agent})
     assert page.status_code == 200
-    assert RISE in page.text and PROMPTLY in page.text
+    # The chain is the sample connection, so the engine words the rise
+    # about the sample person (#908).
+    assert RISE in page.text
+    assert "The sample person should contact their doctor promptly." in (
+        page.text)
+    assert "your creatinine" not in page.text

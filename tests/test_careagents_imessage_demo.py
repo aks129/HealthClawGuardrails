@@ -18,7 +18,7 @@ from careagents import imessage, sendblue_surface
 from careagents.agent import TOOLS, _execute_tool
 from careagents.personas import system_prompt
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _interpret_payload, cfg)
+    _interpret_payload, cfg, sample_framed)
 from tests.test_careagents_sendblue import (  # noqa: F401
     PHONE, _app, _deliverer, _hook, _pair, _run, sb_cfg, sb_svc)
 
@@ -128,7 +128,8 @@ def test_a_trend_question_by_text_gets_words_and_a_link(
     fake.sent.clear()
     _ask(app, c, fake, "has my cholesterol changed?", "trend-1")
     [(_, text)] = fake.sent
-    assert text.startswith("Your cholesterol went from 210 to 244.")
+    assert text.startswith(sample_framed(
+        "Your cholesterol went from 210 to 244."))
     assert f"/chat?agent={agent_id}&chart=cholesterol" in text
     tool_result = next(m["content"] for m in seen[-1]["history"]
                        if m.get("role") == "tool")
@@ -365,7 +366,8 @@ def test_the_deliverer_sends_the_parts_in_order(sb_cfg, sb_svc, monkeypatch):  #
     _model(monkeypatch, answer=answer)
     fake.sent.clear()
     _ask(app, c, fake, "tell me everything", "long-1")
-    assert [t[:6] for _, t in fake.sent] == ["Part 0", "Part 1", "Part 2"]
+    assert fake.sent[0][1].startswith(sample_framed("Part 0"))
+    assert [t[:6] for _, t in fake.sent[1:]] == ["Part 1", "Part 2"]
     _deliverer(app, fake).once()
     assert len(fake.sent) == 3
 
@@ -384,7 +386,7 @@ def test_a_photo_with_a_caption_is_noticed_and_the_caption_answered(
     assert fake.typing == [PHONE]
     _run(app)
     _deliverer(app, fake).once()
-    assert fake.sent[-1] == (PHONE, "Your labs look steady.")
+    assert fake.sent[-1] == (PHONE, sample_framed("Your labs look steady."))
 
 
 def test_a_photo_alone_gets_only_the_notice(sb_cfg, sb_svc, monkeypatch):  # noqa: F811

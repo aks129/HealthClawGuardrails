@@ -13,7 +13,7 @@ import pytest
 from careagents import beta
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, cfg, svc)
+    _chat_app, cfg, sample_framed, svc)
 
 EMAIL = "gene@example.com"   # the address _login uses
 
@@ -57,7 +57,7 @@ def test_resuming_lets_the_next_turn_through(cfg, svc, monkeypatch):  # noqa: F8
     svc.set_paused(EMAIL, False)
     _queue(c, agent_id, "resumed-1")
     RunWorker(cfg, fake, svc, "resume-worker").run_once()
-    assert _texts(fake) == ["back again"]
+    assert _texts(fake) == [sample_framed("back again")]
 
 
 def test_refresh_and_upload_refuse_while_paused(cfg, svc, monkeypatch):  # noqa: F811

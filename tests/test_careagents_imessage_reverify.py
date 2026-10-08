@@ -20,7 +20,7 @@ import pytest
 from careagents import imessage
 from careagents.models import ImessageLink, Surface, now
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, _login, cfg, svc)
+    _chat_app, _login, cfg, sample_framed, svc)
 from tests.test_careagents_imessage import (
     HDRS, OTHER_EMAIL, PHONE, _acct_id, _confirm, _inbound, _link_token,
     _pair)
@@ -502,7 +502,8 @@ def test_sendblue_texts_the_link_then_answers_after_confirm(
         assert fake.typing == [sb.PHONE]         # a run was queued
         sb._run(app)
         sb._deliverer(app, fake).once()
-        assert fake.sent[-1] == (sb.PHONE, "Your A1c is in range.")
+        assert fake.sent[-1] == (sb.PHONE,
+                                 sample_framed("Your A1c is in range."))
     finally:
         sb_svc.engine.dispose()
 

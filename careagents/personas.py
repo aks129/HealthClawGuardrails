@@ -85,8 +85,25 @@ TEXT_STYLE = (
     "that nothing is sent until they approve each item.")
 
 
+#: For the sample connection only. The records belong to a made-up person,
+#: and the person asking is trying the app. The worker also opens every
+#: sample answer with beta.SAMPLE_FRAME; this keeps the body from saying
+#: "your" about a result that is not theirs.
+SAMPLE_STYLE = (
+    "\n\nThese records are made up. They belong to a made-up sample "
+    "person, not to the person you are talking to. Never say \"you\" or "
+    "\"your\" about anything in them: say \"in these made-up records\" "
+    "or \"the sample person's\". Keep every number, date and piece of "
+    "advice as written, including a trend sentence, but say it about the "
+    "sample person. The app already shows a line saying these records "
+    "are made up, on the page and at the top of every answer, so do not "
+    "write your own. Say \"doctor\", never \"clinician\", and do not "
+    "call the results a \"partial lab list\".")
+
+
 def system_prompt(agent_name: str, persona_key: str,
-                  advisor_key: str | None = None, surface: str = "") -> str:
+                  advisor_key: str | None = None, surface: str = "",
+                  sample: bool = False) -> str:
     from careagents.advisors import prompt_block
     from careagents.agent import TEXT_SURFACES
     p = PERSONAS.get(persona_key, PERSONAS[DEFAULT_PERSONA])
@@ -101,4 +118,5 @@ def system_prompt(agent_name: str, persona_key: str,
         "Use your tools to ground every answer in the person's actual "
         "records — never guess at their data. " + style
         + prompt_block(advisor_key)
+        + (SAMPLE_STYLE if sample else "")
     )

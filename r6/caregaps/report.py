@@ -6,6 +6,8 @@ rules). build_consumer_summary() is the plain-language, outcomes-oriented
 consumer view. Neither summary may be placed in audit detail (PHI).
 """
 
+from r6.voice import PATIENT, SAMPLE
+
 _CONSUMER_NOTE = (
     "These are general preventive-care reminders based on published "
     "guidelines — not personalized medical advice. Your connected "
@@ -54,6 +56,35 @@ _DEMOGRAPHIC_REASONS = {
 _UNKNOWN_DEMOGRAPHICS = (
     "demographics-unavailable",
     "your date of birth and sex were not available to this check")
+
+# The same notes and causes about a made-up sample person (r6/voice.py), keyed
+# alike, so a reason never changes with the voice: only its words do.
+_SAMPLE_NOT_EVALUATED_NOTES = {
+    "no-patient": (
+        "There is no patient record in these made-up records, so this check "
+        "had nothing to read. Nothing was examined, and that is not a finding "
+        "that the sample person has no screenings outstanding."),
+    "ambiguous-patient": (
+        "More than one patient record is in these made-up records, so this "
+        "check could not tell whose preventive care to look at. Nothing was "
+        "examined, and that is not a finding that the sample person has no "
+        "screenings outstanding."),
+    "check-incomplete": (
+        "This check could not be completed for the sample person's record "
+        "right now, so nothing here was decided either way. That is a limit "
+        "on the check and not something found in the record, and it is not a "
+        "finding that the sample person has no screenings outstanding."),
+}
+_SAMPLE_DEMOGRAPHIC_CAUSES = {
+    "birth-date-unavailable":
+        "the sample person's date of birth was not available to this check",
+    "sex-unavailable":
+        "the sample person's sex was not recorded in the records this check "
+        "can read",
+    "demographics-unavailable":
+        "the sample person's date of birth and sex were not available to "
+        "this check",
+}
 
 
 def caller_reasons():
@@ -111,7 +142,36 @@ def _screening_phrase(title, cadence):
     return f"{article}{name}" + (f" ({inside})" if inside else "")
 
 
-def _consumer_line(r):
+def _sample_line(r, phrase):
+    """`_consumer_line`'s message about the sample person. The rule's own
+    note is left out: it is written to "you"."""
+    title, status = r.get("title"), r.get("status")
+    if status == "due":
+        return (f"The sample person may be due for {phrase}. Nothing in these "
+                f"made-up records shows one.")
+    if status == "up_to_date":
+        return (f"The sample person's {title.lower()} is up to date on timing "
+                f"(last on {r.get('last_done')}). This checks when it was "
+                f"done, not what it showed or whether anything has changed "
+                f"since.")
+    unread = r.get("unread_evidence")
+    return (f"We could not check whether the sample person is due for "
+            f"{phrase}." + (f" This check does not read {unread} yet."
+                            if unread else ""))
+
+
+def _consumer_line(r, voice=PATIENT):
+    """One plain-language line per screening, or None. Which screenings get
+    a line is decided by today's wording alone; the sample voice
+    (r6/voice.py) only rewords the message."""
+    line = _consumer_line_today(r)
+    if line and voice == SAMPLE:
+        line["message"] = _sample_line(
+            r, _screening_phrase(r.get("title"), r.get("cadence")))
+    return line
+
+
+def _consumer_line_today(r):
     title, cadence = r.get("title"), r.get("cadence")
     note = _sentence(r.get("note"))
     phrase = _screening_phrase(title, cadence)
@@ -168,11 +228,13 @@ def _name_all(titles):
     return f"{', '.join(titles[:-1])} and {titles[-1]}"
 
 
-def _demographics_marker(undecided, titles):
+def _demographics_marker(undecided, titles, voice=PATIENT):
     """Reason + prose for rules that DID read a record and could not decide."""
     causes = frozenset(
         r.get("indeterminate_reason") for r in undecided) - {None}
     reason, cause = _DEMOGRAPHIC_REASONS.get(causes, _UNKNOWN_DEMOGRAPHICS)
+    if voice == SAMPLE:
+        cause = _SAMPLE_DEMOGRAPHIC_CAUSES[reason]
     n = len(undecided)
     noun, pronoun = ("screening", "it is") if n == 1 else ("screenings", "they are")
     named = f": {_name_all(titles)}" if titles else ""
@@ -203,7 +265,7 @@ def _coverage_marker(undecided, titles):
         f"{pronoun} up to date.")
 
 
-def _unevaluated_marker(results, not_evaluated):
+def _unevaluated_marker(results, not_evaluated, voice=PATIENT):
     """What was not evaluated and why, or None when the answer is whole.
 
     An empty list is ambiguous by construction: "we looked and nothing is
@@ -232,7 +294,9 @@ def _unevaluated_marker(results, not_evaluated):
         return None
     titles = [r["title"] for r in undecided if r.get("title")]
     if not_evaluated:
-        reason, note = not_evaluated, _NOT_EVALUATED_NOTES[not_evaluated]
+        reason, note = not_evaluated, (
+            _SAMPLE_NOT_EVALUATED_NOTES if voice == SAMPLE
+            else _NOT_EVALUATED_NOTES)[not_evaluated]
     else:
         # Two kinds of undecided, and they must not borrow each other's
         # reason. The record failed to say something, or this check failed to
@@ -244,7 +308,7 @@ def _unevaluated_marker(results, not_evaluated):
         record = [r for r in undecided if r not in coverage]
         if coverage and record:
             _, record_note = _demographics_marker(
-                record, [r["title"] for r in record if r.get("title")])
+                record, [r["title"] for r in record if r.get("title")], voice)
             _, coverage_note = _coverage_marker(
                 coverage, [r["title"] for r in coverage if r.get("title")])
             reason = "partly-unchecked"
@@ -252,28 +316,31 @@ def _unevaluated_marker(results, not_evaluated):
         elif coverage:
             reason, note = _coverage_marker(coverage, titles)
         else:
-            reason, note = _demographics_marker(record, titles)
+            reason, note = _demographics_marker(record, titles, voice)
     return {"unevaluated": reason, "unevaluated_count": len(undecided),
             "unevaluated_titles": titles, "unevaluated_note": note}
 
 
-def build_consumer_summary(results, not_evaluated=None):
+def build_consumer_summary(results, not_evaluated=None, voice=PATIENT):
     """`not_evaluated` is the caller's reason the rules never got a record to
     read — no patient, an ambiguous one, or a resolved one the route did not
     hand over. The caller knows all three and the engine can see none of them,
     since an unidentifiable patient produces exactly the rule results a
-    healthy one does."""
+    healthy one does.
+
+    `voice="sample"` (r6/voice.py) words the lines and the marker about "the
+    sample person". Which lines there are, and every reason, stay the same."""
     # Which statuses earn a line is `_consumer_line`'s decision alone. The
     # status check used to be made here as well, so the rule lived in two
     # places and the copies had to be changed together — the generator behind
     # #387/#435 (docs/2026-08-06-two-generators-three-laws.md, Law 2).
     lines = []
     for r in results:
-        line = _consumer_line(r)
+        line = _consumer_line(r, voice)
         if line:
             lines.append(line)
     out = {"lines": lines, "note": _CONSUMER_NOTE}
-    marker = _unevaluated_marker(results, not_evaluated)
+    marker = _unevaluated_marker(results, not_evaluated, voice)
     if marker:
         out.update(marker)
     return out
