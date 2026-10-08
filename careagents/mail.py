@@ -119,24 +119,28 @@ def send_notice(cfg, email: str, subject: str, line: str) -> str:
     return SENT
 
 
-def send_message(cfg, email: str, subject: str, html: str, text: str) -> str:
+def send_message(cfg, email: str, subject: str, html: str, text: str,
+                 reply_to: str | None = None) -> str:
     """Send a short message whose HTML carries links (a beta tester's
-    email). The caller escapes anything a visitor typed. Returns SENT,
-    NOT_SENT or UNCONFIRMED, as send_code does; with no provider key
-    nothing is sent and nothing is logged."""
+    email). The caller escapes anything a visitor typed, and passes only
+    an account's own address as `reply_to`. Returns SENT, NOT_SENT or
+    UNCONFIRMED, as send_code does; with no provider key nothing is sent
+    and nothing is logged."""
     if not cfg.resend_api_key:
         return NOT_SENT
     if not real_mail_allowed(cfg):
         logger.warning("mail suppressed (not production)")
         return NOT_SENT
+    payload = {"from": cfg.resend_from, "to": [email],
+               "subject": f"{subject} — CareAgents", "html": html,
+               "text": text}
+    if reply_to:
+        payload["reply_to"] = reply_to
     try:
         r = requests.post(
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {cfg.resend_api_key}"},
-            json={"from": cfg.resend_from, "to": [email],
-                  "subject": f"{subject} — CareAgents", "html": html,
-                  "text": text},
-            timeout=15)
+            json=payload, timeout=15)
     except requests.ConnectionError as exc:
         logger.error("resend message failed: %s", type(exc).__name__)
         return NOT_SENT
