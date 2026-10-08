@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from careagents import beta
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
 
@@ -185,7 +186,7 @@ def test_real_answer_echoing_the_frame_is_passed_through_unchanged(
         text, tool_calls, raw_tool_calls = "x", [], []
     monkeypatch.setattr(agent_mod.llm, "complete", lambda *a, **k: _T())
     conn = c.post("/api/connections/direct",
-                  json={"consent": True}).get_json()
+                  json=consented()).get_json()
     from careagents.models import Connection
     with svc.session() as s:
         s.get(Connection, conn["id"]).status = "active"

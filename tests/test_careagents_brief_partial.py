@@ -20,6 +20,7 @@ import json
 from r6.brief.engine import CARE_GAPS_UNAVAILABLE, build_care_gaps
 from r6.caregaps.evaluate import evaluate_care_gaps
 from r6.caregaps.report import build_consumer_summary
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, app, cfg, svc)
 
@@ -65,7 +66,7 @@ def _page(app, svc, monkeypatch, brief):  # noqa: F811
     # A real connection: this pins a real brief's wording; the sample's is
     # pinned in tests/test_careagents_sample_framing_rewalk.py (#908).
     conn_id = c.post("/api/connections/direct",
-                     json={"consent": True}).get_json()["id"]
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={
         "name": "Ada", "persona": "direct",
         "connection_id": conn_id}).get_json()["id"]

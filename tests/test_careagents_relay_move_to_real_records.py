@@ -21,7 +21,7 @@ from careagents import sendblue_surface
 from careagents.healthclaw import HealthClawError
 from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, cfg, svc)
+    _chat_app, cfg, sample_framed, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
 
 CANARY = "QA906-OWED-ANSWER"
@@ -86,4 +86,4 @@ def test_a_sample_assistant_still_reads_its_run(
     done = c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
                  query_string={"handle": PHONE})
     assert done.status_code == 200
-    assert done.get_json()["reply"] == CANARY
+    assert done.get_json()["reply"] == sample_framed(CANARY)

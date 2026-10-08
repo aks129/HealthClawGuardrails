@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from careagents import beta
 from careagents.personas import system_prompt
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
 
@@ -32,7 +33,7 @@ def _real_chat_app(cfg, svc, monkeypatch):  # noqa: F811
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn = c.post("/api/connections/direct", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/direct", json=consented()).get_json()
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
         "connection_id": conn["id"]}).get_json()["id"]

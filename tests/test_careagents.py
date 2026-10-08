@@ -2953,7 +2953,7 @@ def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
     c = app.test_client()
     _login(c, svc, monkeypatch)
     # A real connection: the sample words this about the sample (#908).
-    r = c.post("/api/connections/direct", json={"consent": True})
+    r = c.post("/api/connections/direct", json=consented())
     conn_id = r.get_json()["id"]
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
@@ -2982,7 +2982,7 @@ def test_an_unreachable_engine_does_not_blame_the_patient_s_records(
     _login(c, svc, monkeypatch)
     # A real connection: the sample words this about the sample (#908).
     conn_id = c.post("/api/connections/direct",
-                     json={"consent": True}).get_json()["id"]
+                     json=consented()).get_json()["id"]
     agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                            "connection_id": conn_id}
                       ).get_json()["id"]
@@ -3059,7 +3059,7 @@ def _agent_for_brief(c, svc, monkeypatch):
     sample words it about the sample person (#908)."""
     _login(c, svc, monkeypatch)
     conn_id = c.post("/api/connections/direct",
-                     json={"consent": True}).get_json()["id"]
+                     json=consented()).get_json()["id"]
     return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                        "connection_id": conn_id}
                   ).get_json()["id"]
