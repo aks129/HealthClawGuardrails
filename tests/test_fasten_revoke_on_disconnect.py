@@ -448,6 +448,34 @@ def test_purge_twice_keeps_one_tombstone(client, secret):
     assert FastenTenantRevocation.query.filter_by(tenant_id=TENANT).count() == 1
 
 
+def test_purging_a_public_tenant_leaves_it_open(client):
+    """QA on #913: an anonymous purge of a public tenant is allowed by
+    design (the mint gate exempts it), so a tombstone there would close the
+    demo for good: no connect widget, no polling, no writes.
+
+    MUTATION: drop the is_public check in purge_tenant -> tombstoned."""
+    resp = client.post("/r6/fhir/internal/purge-tenant",
+                       json={"tenant_id": "test-tenant"})
+    assert resp.status_code == 200
+    assert not tenant_revoked("test-tenant")
+
+
+def test_a_stop_never_rewrites_a_finished_job(app):
+    """The conditional UPDATE in _stopped_by_disconnect touches only an
+    unfinished job: a revoke landing after 'complete' leaves it complete.
+
+    MUTATION: drop the TERMINAL_STATUSES filter -> 'failed' here."""
+    from r6.fasten.ingester import _stopped_by_disconnect
+    _job(status="complete")
+    job_id = FastenJob.query.filter_by(task_id="task-rv-1").one().id
+    _tombstone()
+    assert _stopped_by_disconnect(job_id, "task-rv-1", TENANT, "oc-rv-1")
+    db.session.expire_all()
+    job = db.session.get(FastenJob, job_id)
+    assert job.status == "complete"
+    assert job.failure_reason is None
+
+
 # --- every other way records arrive (security review of #913, F3) -----------
 
 _OBS = {"resourceType": "Observation", "status": "final",

@@ -3,7 +3,8 @@
 Disconnect used to flip only the CareAgents row, so the engine kept
 accepting Fasten records into the tenant. Now `disconnect_connection` asks
 HealthClaw to revoke the tenant first; if that cannot be confirmed, the row
-is left as it was and the person is told the connection is still on.
+is left as it was and the person is told it could not be confirmed. Not
+that it is "still on": a lost answer can follow a revoke that ran.
 
 The unit tests fake the HealthClaw client, which proves a call is MADE.
 The last test drives the real client onto the real engine WSGI, which
@@ -20,8 +21,8 @@ from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, _login, cfg, svc)
 
-FAILED_MESSAGE = ("We couldn't confirm the disconnect. Your connection is "
-                  "still on. Please try again in a minute.")
+FAILED_MESSAGE = ("We couldn't confirm the disconnect. "
+                  "Please try again in a minute.")
 
 
 def _status(svc, conn_id):  # noqa: F811

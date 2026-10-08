@@ -104,9 +104,13 @@ def purge_tenant(tenant_id):
     # connect link or the boot reaper could start a new import into the
     # emptied tenant. The tombstone is what they check; it holds no PHI and
     # is retained, like the audit trail.
+    # Not for a public tenant: purging one is open by design (the demo
+    # resets), and a permanent tombstone would close it for good.
     from models import db
+    from r6.command_center.access import is_public
     from r6.fasten.models import FastenTenantRevocation
-    if db.session.get(FastenTenantRevocation, tenant_id) is None:
+    if (not is_public(tenant_id)
+            and db.session.get(FastenTenantRevocation, tenant_id) is None):
         db.session.add(FastenTenantRevocation(tenant_id=tenant_id))
 
     return deleted
