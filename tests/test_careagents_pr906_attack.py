@@ -78,8 +78,13 @@ def test_a_run_queued_on_sample_is_not_answered_after_a_move_to_real(
     # The worker refuses a run whose tenant is no longer the agent's.
     _run(app)
     r = _poll(c, run_id)
-    assert r.status_code == 404
-    assert "reply" not in r.get_json()
+    # Was 404, which the relay reads as "no such run" and drops silently.
+    # The agent's current connection is checked before the run lookup, so
+    # the person is told to open the app, and nothing of the run is read.
+    assert r.status_code == 200
+    assert r.get_json()["reply"] == sendblue_surface.real_records_text(
+        cfg.origin)
+    assert "sample words" not in r.get_data(as_text=True)
 
 
 def test_a_real_tenant_run_is_not_texted_after_a_move_back_to_sample(
