@@ -223,6 +223,19 @@ def test_the_sample_brief_page_never_says_your(cfg, svc, monkeypatch, brief):  #
     assert "made-up" in own
 
 
+def test_every_sample_brief_item_says_made_up(cfg, svc, monkeypatch):  # noqa: F811
+    """A brief with an item in every section: each says where it is from."""
+    from tests.test_careagents_plain_language import _brief
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant, **_: _brief())
+    _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
+    main = _main(c.get(f"/brief?agent={agent_id}").get_data(as_text=True))
+    assert main.count("From the made-up records") == 4
+    assert main.count("Based on the sample person's age and sex") == 1
+    assert "From your records" not in main
+    assert "Based on your age" not in main
+
+
 def test_the_sample_banner_is_sticky():
     import pathlib
     css = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
