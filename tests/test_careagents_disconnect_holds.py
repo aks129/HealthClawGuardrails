@@ -190,3 +190,48 @@ def test_home_js_echoes_the_rendered_version_on_every_consent_post():
     sends = re.findall(r"consent_version\s*[:=]\s*shownConsentVersion", js)
     assert len(sends) == 3
     assert "res.d.consent_version" not in js
+
+
+# --- a deploy does not strand a tester on the old home.js -------------------
+
+def test_static_assets_carry_the_build(cfg, svc, monkeypatch):  # noqa: F811
+    """Every static URL names the build, so a deploy that changes home.js
+    is a new URL and the browser fetches it instead of its cached copy."""
+    cfg.build_sha = "abc1234"
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    html = c.get("/home").get_data(as_text=True)
+    for asset in ("home.js", "careagents.css"):
+        assert f"/static/{asset}?v=abc1234" in html, asset
+    assert c.get("/static/home.js?v=abc1234").status_code == 200
+
+
+def test_static_assets_without_a_build_use_the_start_time(
+        cfg, svc, monkeypatch):  # noqa: F811
+    cfg.build_sha = "unknown"
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    html = c.get("/home").get_data(as_text=True)
+    m = re.search(r"/static/home\.js\?v=([^\"&]+)", html)
+    assert m and m.group(1).isdigit()
+
+
+@pytest.mark.parametrize("kind", ["fasten", "direct"])
+def test_an_old_page_without_a_version_is_told_to_reload(
+        cfg, svc, monkeypatch, kind):  # noqa: F811
+    """A page from before this change sends consent with no version and
+    shows `error` as it is. It gets a sentence, not a code."""
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    r = c.post(f"/api/connections/{kind}", json={"consent": True})
+    assert r.status_code == 428
+    body = r.get_json()
+    assert body["error"] == "This page changed. Please reload."
+    assert body["message"] == body["error"]
+    assert _real_rows(svc) == 0
+
+
+def test_no_consent_at_all_still_asks_for_the_card(cfg, svc, monkeypatch):  # noqa: F811
+    """Refresh's first post carries no consent; the code it answers with is
+    what the page uses to show the card, so it stays a code."""
+    app, c, *_ = _chat_app(cfg, svc, monkeypatch)
+    r = c.post("/api/connections/direct", json={})
+    assert r.status_code == 428
+    assert r.get_json()["error"] == "consent_required"

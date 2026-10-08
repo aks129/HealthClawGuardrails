@@ -239,6 +239,17 @@ def create_app(config: Config | None = None,
     cfg = config or Config()
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
+    # Every static URL names the build, so a deploy is a new URL and a
+    # browser cannot keep running the old home.js against the new server
+    # (#909). The deploy stamp when there is one, else this process's start.
+    asset_version = (cfg.build_sha if cfg.build_sha != "unknown"
+                     else str(int(time.time())))
+
+    @app.url_defaults
+    def _versioned_static(endpoint, values):
+        if endpoint == "static":
+            values.setdefault("v", asset_version)
+
     app.jinja_env.filters["contact_links"] = contact_links
     app.jinja_env.filters["chat_links"] = chat_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
@@ -763,6 +774,12 @@ def create_app(config: Config | None = None,
                 and body.get("consent_version")
                 == tester_terms.CONSENT_VERSION):
             return None
+        if body.get("consent") is True and not body.get("consent_version"):
+            # A page loaded before versions were sent (#909) shows `error`
+            # as it is: give it a sentence, not a code.
+            reload_line = "This page changed. Please reload."
+            return jsonify({"error": reload_line, "message": reload_line,
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
         return jsonify({"error": "consent_required",
                         "consent_version": tester_terms.CONSENT_VERSION}), 428
 
