@@ -7,6 +7,7 @@ import pytest
 
 from careagents import beta
 from careagents.models import Connection
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
@@ -19,7 +20,7 @@ def _real_agent(cfg, svc, monkeypatch, email="gene@example.com"):  # noqa: F811
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch, email=email)
-    conn = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/fasten", json=consented()).get_json()
     svc.set_connection_status(fake.tenants[-1], "active")
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
@@ -83,7 +84,7 @@ def test_accepting_again_lets_the_next_turn_reach_the_model(
     c, fake, agent_id, conn_id = _real_agent(cfg, svc, monkeypatch)
     approve_terms(monkeypatch, "2026-10-01")
     assert c.post(f"/api/connections/{conn_id}/consent",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
     run_id = _imessage_turn(fake, agent_id, "fresh-1")
     RunWorker(cfg, fake, svc, "terms-worker").run_once()
     assert _texts(fake, run_id) == ["answered"]
@@ -96,7 +97,7 @@ def test_accepting_again_restamps_the_connection(cfg, svc, monkeypatch):  # noqa
         r = c.post(f"/api/connections/{conn_id}/consent", json=body)
         assert r.status_code == 428
         assert r.get_json()["consent_version"] == "2026-10-01"
-    r = c.post(f"/api/connections/{conn_id}/consent", json={"consent": True})
+    r = c.post(f"/api/connections/{conn_id}/consent", json=consented())
     assert r.status_code == 200
     assert r.get_json() == {"consent_version": "2026-10-01"}
     with svc.session() as s:
@@ -112,7 +113,7 @@ def test_another_accounts_connection_is_a_404(cfg, svc, monkeypatch):  # noqa: F
     other = other_app.test_client()
     _login(other, svc, monkeypatch, email="other@example.com")
     assert other.post(f"/api/connections/{conn_id}/consent",
-                      json={"consent": True}).status_code == 404
+                      json=consented()).status_code == 404
     with svc.session() as s:
         assert s.get(Connection, conn_id).consent_version == "2026-08-01"
     assert svc.record_consent("acct_nobody", conn_id, "2026-10-01") is False
@@ -126,7 +127,7 @@ def test_a_sample_connection_is_not_reconsented(cfg, svc, monkeypatch):  # noqa:
     _login(c, svc, monkeypatch)
     sample = c.post("/api/connections/sample").get_json()["id"]
     assert c.post(f"/api/connections/{sample}/consent",
-                  json={"consent": True}).status_code == 404
+                  json=consented()).status_code == 404
 
 
 def test_the_hub_lists_stale_connections_only_after_a_bump(
@@ -188,7 +189,7 @@ def test_one_prompt_and_one_accept_cover_every_settled_connection(
     with svc.session() as s:
         first = s.get(Connection, conn_id).consented_at
     assert c.post(f"/api/connections/{conn_id}/consent",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
     with svc.session() as s:
         got = {i: s.get(Connection, i) for i in (conn_id, other, waiting, gone)}
         assert got[conn_id].consent_version == "2026-10-01"
@@ -209,7 +210,7 @@ def test_a_connection_still_connecting_is_not_prompted(
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    c.post("/api/connections/fasten", json={"consent": True})   # pending
+    c.post("/api/connections/fasten", json=consented())   # pending
     approve_terms(monkeypatch, "2026-10-01")
     assert 'data-reconsent=' not in c.get("/home").get_data(as_text=True)
 
@@ -234,7 +235,7 @@ def test_a_reaccept_does_not_count_as_a_new_connection(
     with svc.session() as s:     # the first connect, moved to an earlier week
         s.get(Connection, conn_id).consented_at -= 14 * 24 * 3600
     approve_terms(monkeypatch, "2026-10-01")
-    c.post(f"/api/connections/{conn_id}/consent", json={"consent": True})
+    c.post(f"/api/connections/{conn_id}/consent", json=consented())
     after = beta.weekly_counts(svc.session, weeks=1)
     assert before[0]["real_connected"] == 1
     assert after[0]["real_connected"] == 0

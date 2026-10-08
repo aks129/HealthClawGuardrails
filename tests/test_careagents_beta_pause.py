@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from careagents import beta
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 
@@ -62,7 +63,7 @@ def test_resuming_lets_the_next_turn_through(cfg, svc, monkeypatch):  # noqa: F8
 def test_refresh_and_upload_refuse_while_paused(cfg, svc, monkeypatch):  # noqa: F811
     app, c, fake, agent_id, tenant, conn_id = _chat_app(cfg, svc, monkeypatch)
     direct = c.post("/api/connections/direct",
-                    json={"consent": True}).get_json()["id"]
+                    json=consented()).get_json()["id"]
     svc.set_paused(EMAIL, True)
     r = c.post(f"/api/connections/{conn_id}/refresh")
     assert r.status_code == 423

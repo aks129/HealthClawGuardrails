@@ -12,6 +12,7 @@ import pytest
 
 from careagents import beta
 from careagents.app import contact_links, create_app
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import allowlist_cfg
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
@@ -40,8 +41,8 @@ def _stage1(monkeypatch, **env):
 def test_a_paused_hub_says_so_and_offers_no_refresh_or_upload(
         cfg, svc, monkeypatch):  # noqa: F811
     c = _hub(cfg, svc, monkeypatch)
-    c.post("/api/connections/fasten", json={"consent": True})
-    c.post("/api/connections/direct", json={"consent": True})
+    c.post("/api/connections/fasten", json=consented())
+    c.post("/api/connections/direct", json=consented())
     for conn in svc.list_home(_acct(svc))["connections"]:
         svc.set_connection_status(conn["tenant_id"], "active")
     before = c.get("/home").get_data(as_text=True)

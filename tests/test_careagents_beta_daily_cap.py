@@ -12,6 +12,7 @@ import pathlib
 import pytest
 
 from careagents.models import UsageDay
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _chat_app, _login, cfg, svc)
@@ -54,7 +55,7 @@ def test_a_turn_waiting_on_the_terms_does_not_use_the_cap(
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn = c.post("/api/connections/direct", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/direct", json=consented()).get_json()
     agent_id = c.post("/api/agents", json={
         "name": "Juniper", "persona": "calm",
         "connection_id": conn["id"]}).get_json()["id"]

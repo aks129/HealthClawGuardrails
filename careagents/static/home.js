@@ -10,6 +10,16 @@
     return { ok: r.ok, d: await r.json().catch(() => ({})) };
   }
 
+  // The terms version the consent cards on this page show, as rendered.
+  // Every consent sends it back so the server records the wording the
+  // person read. A 428 to a consent that carried it means the terms changed
+  // after this page loaded: reload to show the current card. Never resend
+  // the version the 428 names; that would accept wording nobody saw.
+  const versioned = document.querySelector("[data-consent-version]");
+  const shownConsentVersion = versioned ? versioned.dataset.consentVersion : "";
+  const termsChanged = (res) =>
+    !res.ok && res.d.error === "consent_required";
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
@@ -27,10 +37,12 @@
         const agreed = await showConsentCard();
         if (!agreed) return;
         body.consent = true;
+        body.consent_version = shownConsentVersion;
       }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
+      if (body.consent && termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
@@ -74,7 +86,9 @@
       if (!agreed) return;
       btn.disabled = true;
       const res = await post(
-        `/api/connections/${btn.dataset.reconsent}/consent`, { consent: true });
+        `/api/connections/${btn.dataset.reconsent}/consent`,
+        { consent: true, consent_version: shownConsentVersion });
+      if (termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         btn.disabled = false;
         return announce(btn.parentElement.querySelector(".inline-msg"),
@@ -351,7 +365,8 @@
         const agreed = await showConsentCard();
         if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
         res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
-                         { consent: true });
+                         { consent: true, consent_version: shownConsentVersion });
+        if (termsChanged(res)) { location.reload(); return; }
       }
       btn.disabled = false;
       // `message` first: a coded refusal (records_paused) carries its

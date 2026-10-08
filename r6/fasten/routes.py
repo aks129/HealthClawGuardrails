@@ -140,6 +140,22 @@ def _handle_export_success(payload: dict) -> None:
             'Fasten export_success: unknown org_connection_id (not registered)'
         )
         return
+    # A revoked connection takes no more records: the person took the
+    # authorization back, so a later export is acknowledged and dropped
+    # (security review of #904, F2).
+    if conn.connection_status == 'revoked':
+        add_audit_event(
+            event_type='fasten_import_refused',
+            agent_id='fasten-connect',
+            tenant_id=conn.tenant_id,
+            outcome='failure',
+            # task_id is not type-checked yet here; only a string id
+            # reaches the audit row, never a payload object.
+            detail=('job=' + (task_id[:64] if isinstance(task_id, str)
+                              else '<invalid>') + ' connection revoked'),
+        )
+        db.session.commit()
+        return
 
     # Idempotency with recovery: skip only a COMPLETED job. A job stranded in
     # a non-terminal state (a redeploy/crash killed the daemon thread) or a
@@ -209,6 +225,12 @@ def retry_job(task_id):
     if not job.download_links_json:
         return jsonify({'error': 'no stored download links — re-trigger the '
                                  'export instead'}), 409
+    # A revoked connection takes no more records, from a retry either
+    # (security review of #909).
+    conn = FastenConnection.query.filter_by(
+        org_connection_id=job.org_connection_id).first()
+    if conn is not None and conn.connection_status == 'revoked':
+        return jsonify({'error': 'connection revoked'}), 409
     links = json.loads(job.download_links_json)
     job.status = 'pending'
     job.ingested_resources = 0

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from careagents import tester_terms
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
@@ -56,7 +57,7 @@ def test_a_new_real_connection_records_the_current_version(
     assert r.status_code == 428
     assert r.get_json()["consent_version"] == "2026-10-01"
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
     with svc.session() as s:
         assert s.query(Connection).filter_by(
             kind="fasten").one().consent_version == "2026-10-01"

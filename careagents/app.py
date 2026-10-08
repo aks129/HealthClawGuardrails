@@ -239,6 +239,17 @@ def create_app(config: Config | None = None,
     cfg = config or Config()
     app = Flask(__name__)
     app.secret_key = cfg.session_secret
+    # Every static URL names the build, so a deploy is a new URL and a
+    # browser cannot keep running the old home.js against the new server
+    # (#909). The deploy stamp when there is one, else this process's start.
+    asset_version = (cfg.build_sha if cfg.build_sha != "unknown"
+                     else str(int(time.time())))
+
+    @app.url_defaults
+    def _versioned_static(endpoint, values):
+        if endpoint == "static":
+            values.setdefault("v", asset_version)
+
     app.jinja_env.filters["contact_links"] = contact_links
     app.jinja_env.filters["chat_links"] = chat_links
     app.config.update(SESSION_COOKIE_HTTPONLY=True,
@@ -461,6 +472,7 @@ def create_app(config: Config | None = None,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
             privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             tester_terms_approved=tester_terms.approved(),
+            consent_version=tester_terms.CONSENT_VERSION,
             terms_change=tester_terms.CHANGE_SUMMARY,
             menu=hub_view.menu_items(
                 connectors.catalog(cfg, real_records=real_open), real_open))
@@ -751,6 +763,26 @@ def create_app(config: Config | None = None,
             out["redirect"] = url_for("chat", agent=agent["id"])
         return out
 
+    def _consent_refusal(body):
+        """The 428 for a consent that does not name the current terms, or
+        None. The client echoes the version on the card it showed; a card
+        rendered before a terms change and submitted after it is not
+        acceptance of wording the person never saw (security review of
+        #904, F4). The answer carries the current version so the client
+        can show the current card, never so it can resend that version."""
+        if (body.get("consent") is True
+                and body.get("consent_version")
+                == tester_terms.CONSENT_VERSION):
+            return None
+        if body.get("consent") is True and not body.get("consent_version"):
+            # A page loaded before versions were sent (#909) shows `error`
+            # as it is: give it a sentence, not a code.
+            reload_line = "This page changed. Please reload."
+            return jsonify({"error": reload_line, "message": reload_line,
+                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        return jsonify({"error": "consent_required",
+                        "consent_version": tester_terms.CONSENT_VERSION}), 428
+
     def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
@@ -767,9 +799,9 @@ def create_app(config: Config | None = None,
         # CoC: proactive consent in advance of personal data disclosure).
         consent_version = None
         if plan.get("requires_consent"):
-            if body.get("consent") is not True:
-                return jsonify({"error": "consent_required",
-                                "consent_version": tester_terms.CONSENT_VERSION}), 428
+            refused = _consent_refusal(body)
+            if refused:
+                return refused
             consent_version = tester_terms.CONSENT_VERSION
         if connector_id != "fasten":
             return _persist_connection(connector_id, acct, plan,
@@ -1190,9 +1222,9 @@ def create_app(config: Config | None = None,
                 or conn["status"] == "revoked"):
             return jsonify({"error": "unknown connection"}), 404
         body = request.get_json(silent=True) or {}
-        if body.get("consent") is not True:
-            return jsonify({"error": "consent_required",
-                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        refused = _consent_refusal(body)
+        if refused:
+            return refused
         svc.record_consent(acct.id, conn_id, tester_terms.CONSENT_VERSION)
         return jsonify({"consent_version": tester_terms.CONSENT_VERSION})
 
@@ -1211,6 +1243,16 @@ def create_app(config: Config | None = None,
         conn = svc.get_connection(acct.id, conn_id)
         if conn is None:
             return jsonify({"error": "unknown connection"}), 404
+        # Disconnect stops new records. A refresh hands back the connect URL
+        # for the same tenant, so on a disconnected connection it would
+        # reopen the pipe (security review of #904, F2). Refused before the
+        # sync baseline below is touched; same answer upload gives.
+        if conn["status"] == "revoked":
+            return jsonify({"error": "connection_not_active",
+                            "status": conn["status"],
+                            "message": "This connection has been "
+                                       "disconnected. Connect your records "
+                                       "again to get new ones."}), 409
         if svc.is_paused(acct.id):
             return jsonify({"error": "records_paused",
                             "message": beta.PAUSED_RECORDS_TEXT}), 423
@@ -1225,9 +1267,10 @@ def create_app(config: Config | None = None,
 
         # Same server-side consent gate as the initial connect: a client that
         # skips the card is refused here, on every surface.
-        if plan.get("requires_consent") and body.get("consent") is not True:
-            return jsonify({"error": "consent_required",
-                            "consent_version": tester_terms.CONSENT_VERSION}), 428
+        if plan.get("requires_consent"):
+            refused = _consent_refusal(body)
+            if refused:
+                return refused
 
         # Baseline the count BEFORE re-authorizing so the follow-up poll can
         # report what the refresh actually added — documents on the same

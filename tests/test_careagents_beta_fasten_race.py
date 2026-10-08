@@ -4,6 +4,7 @@ row (#847). The second arrives while the first holds the lease."""
 from __future__ import annotations
 
 from careagents.models import Connection
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
@@ -34,11 +35,11 @@ def test_a_connect_that_arrives_mid_insert_does_not_add_a_row(
         if fired["r"] is None:
             fired["r"] = "in flight"      # the second tab reads once, too
             fired["r"] = second.post("/api/connections/fasten",
-                                     json={"consent": True})
+                                     json=consented())
         return seen
 
     monkeypatch.setattr(svc, "pending_connection", read_then_second_tab)
-    r = first.post("/api/connections/fasten", json={"consent": True})
+    r = first.post("/api/connections/fasten", json=consented())
 
     assert r.status_code == 200
     assert fired["r"] is not None, "the second tab never ran"
@@ -50,7 +51,7 @@ def test_a_connect_that_arrives_mid_insert_does_not_add_a_row(
 
 def test_the_lease_is_released_after_a_connect(cfg, svc, monkeypatch):  # noqa: F811
     first, second = _two_tabs(cfg, svc, monkeypatch)
-    first.post("/api/connections/fasten", json={"consent": True})
+    first.post("/api/connections/fasten", json=consented())
     from careagents.models import Account
     with svc.session() as s:
         assert s.query(Account).one().sample_claim_at is None
@@ -59,8 +60,8 @@ def test_the_lease_is_released_after_a_connect(cfg, svc, monkeypatch):  # noqa: 
 def test_a_second_connect_after_the_first_reuses_the_pending_row(
         cfg, svc, monkeypatch):  # noqa: F811
     first, second = _two_tabs(cfg, svc, monkeypatch)
-    a = first.post("/api/connections/fasten", json={"consent": True})
-    b = second.post("/api/connections/fasten", json={"consent": True})
+    a = first.post("/api/connections/fasten", json=consented())
+    b = second.post("/api/connections/fasten", json=consented())
     assert a.get_json()["id"] == b.get_json()["id"]
     assert b.get_json()["existing"] is True
 
@@ -78,9 +79,9 @@ def test_a_revoked_invite_cannot_reuse_a_pending_row(monkeypatch):
     c = app.test_client()
     _login(c, accounts, monkeypatch)
     assert c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
     accounts.revoke_real_records_invite("gene@example.com")
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 503
     assert "connect_url" not in (r.get_json() or {})
 
@@ -88,8 +89,8 @@ def test_a_revoked_invite_cannot_reuse_a_pending_row(monkeypatch):
 def test_a_paused_account_cannot_reuse_a_pending_row(cfg, svc, monkeypatch):  # noqa: F811
     first, _ = _two_tabs(cfg, svc, monkeypatch)
     assert first.post("/api/connections/fasten",
-                      json={"consent": True}).status_code == 200
+                      json=consented()).status_code == 200
     svc.set_paused("gene@example.com", True)
-    r = first.post("/api/connections/fasten", json={"consent": True})
+    r = first.post("/api/connections/fasten", json=consented())
     assert r.status_code == 503
     assert "connect_url" not in (r.get_json() or {})
