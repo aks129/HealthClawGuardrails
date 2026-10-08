@@ -1,10 +1,37 @@
-{# TESTER-TERMS-PENDING-565
-   Placeholder. The tester terms wait on owner approval (#565). This file is
-   not rendered while careagents/tester_terms.py has TERMS_VERSION = None.
-   Replace the whole file with the approved text, including this comment,
-   and keep the outer <section class="consent-terms" id="{{ terms_id }}">:
-   both consent cards include this file, each with its own id. #}
+{# Tester terms, version tester_terms.TERMS_VERSION. Both consent cards
+   include this file, each with its own terms_id. Each point is checked
+   against what the code does; the PR that changes a point says where.
+   A change of meaning needs a new TERMS_VERSION and CHANGE_SUMMARY in
+   careagents/tester_terms.py, so every tester accepts it once. #}
 <section class="consent-terms" id="{{ terms_id }}">
   <h4>Tester terms</h4>
-  <p>The tester terms are not approved yet.</p>
+  <ul class="consent-points">
+    <li><b>This is a test version.</b> Things will break, and features may
+      change or go away. We may pause your use of your own records, for
+      example while we fix a problem.</li>
+    <li><b>It is not medical advice, and not for emergencies.</b> In an
+      emergency, call 911.</li>
+    <li><b>Answers can be wrong.</b> Check anything important with your
+      doctor or nurse before you act on it.</li>
+    <li><b>Your records:</b> Fasten Health brings them in after you sign in
+      to your health system. HealthClaw keeps them, and your chats, in a
+      private space for your account. The AI comes from Anthropic, OpenAI,
+      Google or Groq. It sees your records with your name and details taken
+      out, but it gets what you type exactly as you type it.</li>
+    <li><b>Texting uses made-up records only.</b> Once your assistant uses
+      your own records, a text to it tells you to open the app instead of
+      answering.</li>
+    <li><b>You can stop at any time.</b> Disconnect stops new records and
+      keeps the ones already here. Delete removes those records, your chats
+      and anything waiting for your OK, for good. Deleting your account also
+      removes your email and passkey. Our log of when your records were
+      looked at stays. It has no health details in it.</li>
+    <li><b>Taking part is up to you.</b> You can say no, or stop later,
+      without giving a reason.</li>
+    <li><b>Tell us what happens.</b> Use the feedback link in the app, or
+      email <a href="mailto:contactus@healthclaw.io">contactus@healthclaw.io</a>.
+      Please leave health details out.</li>
+    <li><b>These terms may change.</b> If they do, we will ask you to accept
+      them again before your assistant uses your records.</li>
+  </ul>
 </section>

@@ -14,7 +14,8 @@ import pytest
 
 from careagents.app import create_app
 from tests.careagents_consent_helpers import consented
-from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
+from tests.careagents_stage1_helpers import (
+    allowlist_cfg, approve_terms, pend_terms)
 from tests.test_careagents import FakeClient, _login
 
 EMAIL = "tester@example.com"
@@ -67,6 +68,7 @@ def test_off_answers_before_any_account_state_is_read(monkeypatch):
 
 def test_an_invite_opens_allowlist_mode_only_once_terms_are_approved(
         monkeypatch):
+    pend_terms(monkeypatch)
     c, svc = _client(allowlist_cfg(), monkeypatch)
     svc.invite_real_records(EMAIL, "operator")
     assert _can_start(c) is False          # terms pending (R6)
@@ -76,7 +78,62 @@ def test_an_invite_opens_allowlist_mode_only_once_terms_are_approved(
     assert _can_start(c) is True
 
 
+def test_an_invite_starts_the_env_allowlist_connect_only_after_acceptance(
+        monkeypatch):
+    """#565 approval, end to end. An invited email (not on the environment
+    list) cannot start a real connection while the terms are pending, nor
+    once they are approved until the terms are accepted. Accepted, it
+    reaches the same connect path an environment-allowlisted account does:
+    the same connector plan, the same answer, the same stored consent."""
+    from careagents import connectors, tester_terms
+    from careagents.models import Connection
+    shipped = tester_terms.TERMS_VERSION
+    assert shipped and tester_terms.approved()   # the terms in this tree
+
+    starts = []
+    real_start = connectors.start
+
+    def _spy(connector_id, provider, cfg, client, *, real_records):
+        starts.append((connector_id, real_records))
+        return real_start(connector_id, provider, cfg, client,
+                          real_records=real_records)
+
+    monkeypatch.setattr(connectors, "start", _spy)
+    cfg = allowlist_cfg(CARE_REAL_RECORDS_ALLOWLIST="listed@example.com")
+    c, svc = _client(cfg, monkeypatch)          # EMAIL: invited, not listed
+    assert EMAIL not in cfg.real_records_allowlist
+    svc.invite_real_records(EMAIL, "operator")
+
+    pend_terms(monkeypatch)
+    r = c.post("/api/connections/fasten", json={"consent": True})
+    assert r.status_code == 503 and starts == [("fasten", False)]
+
+    approve_terms(monkeypatch, shipped)
+    r = c.post("/api/connections/fasten", json={})
+    assert r.status_code == 428
+    assert r.get_json()["consent_version"] == shipped
+    with svc.session() as s:
+        assert s.query(Connection).filter_by(kind="fasten").count() == 0
+
+    invited = c.post("/api/connections/fasten", json={"consent": True})
+    listed_client = c.application.test_client()
+    _login(listed_client, svc, monkeypatch, email="listed@example.com")
+    listed = listed_client.post("/api/connections/fasten",
+                                json={"consent": True})
+    assert invited.status_code == listed.status_code == 200
+    a, b = invited.get_json(), listed.get_json()
+    assert a.keys() == b.keys() == {"id", "status", "connect_url"}
+    assert a["status"] == b["status"] == "pending"
+    assert starts[-3:] == [("fasten", True)] * 3
+    with svc.session() as s:
+        rows = {r.id: r for r in s.query(Connection).filter_by(kind="fasten")}
+        assert {rows[a["id"]].consent_version,
+                rows[b["id"]].consent_version} == {shipped}
+        assert rows[a["id"]].status == rows[b["id"]].status == "pending"
+
+
 def test_the_env_allowlist_still_works_without_approved_terms(monkeypatch):
+    pend_terms(monkeypatch)
     c, _ = _client(allowlist_cfg(CARE_REAL_RECORDS_ALLOWLIST=EMAIL),
                    monkeypatch)
     assert _can_start(c) is True

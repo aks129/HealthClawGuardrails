@@ -1,17 +1,18 @@
 """Tester terms for real-record testers (beta spec section 4.3).
 
-The text waits on owner approval (#565). Until then the terms file carries
-PENDING_MARKER, TERMS_VERSION is None, the consent card shows no terms, the
-consent version stays at BASE_VERSION, and database invites are not honoured
-(careagents/app.py, `_real_records_open`).
+The terms in templates/_tester_terms.html were approved on TERMS_VERSION
+(#565). Database invites are honoured only while approved() is true
+(careagents/app.py, `_real_records_open`), and every real connection must
+carry consent at CONSENT_VERSION before its assistant answers.
 
-To approve: replace the whole of templates/_tester_terms.html with the
-approved text (the marker goes with it), set TERMS_VERSION to the approval
-date, and ship. tests/test_careagents_beta_terms.py fails if only one of the
-two changes is made. Every tester then accepts the new wording once.
-The approved file must keep `<section class="consent-terms"
-id="{{ terms_id }}">` as its outer element: both consent cards include it,
-each with its own id, and the card tests look for those ids.
+To change the terms: edit templates/_tester_terms.html, set TERMS_VERSION
+to the new approval date and CHANGE_SUMMARY to one line saying what
+changed, and ship. Every tester then accepts the new wording once.
+The file must keep `<section class="consent-terms" id="{{ terms_id }}">`
+as its outer element: both consent cards include it, each with its own
+id, and the card tests look for those ids.
+tests/test_careagents_beta_terms.py pins the file, the version and the
+change line together.
 """
 
 from __future__ import annotations
@@ -24,21 +25,21 @@ from __future__ import annotations
 # strongest privacy control in the one place people read carefully.
 BASE_VERSION = "2026-08-01"
 
-#: Set to the approval date ("YYYY-MM-DD") when #565 is approved.
-TERMS_VERSION: str | None = None
+#: The approval date ("YYYY-MM-DD") of the terms in TEMPLATE (#565).
+TERMS_VERSION: str | None = "2026-10-08"
 
 TEMPLATE = "_tester_terms.html"
 PENDING_MARKER = "TESTER-TERMS-PENDING-565"
 
-#: The one line the "Our terms changed" card says about what changed.
-#: Replace it together with the terms file when #565 is approved; the terms
-#: test fails if the terms are approved and this line is still the pending
-#: one. True in both states: no connection made before consent was recorded
-#: has accepted the current wording.
+#: The line the "Our terms changed" card showed before #565 was approved.
+#: Kept so the terms test can check CHANGE_SUMMARY moved on from it.
 PENDING_CHANGE_SUMMARY = ("We now keep a record of which version of our "
                           "terms you accepted, so we're asking you to accept "
                           "the current ones.")
-CHANGE_SUMMARY: str = PENDING_CHANGE_SUMMARY
+#: The one line the "Our terms changed" card says about what changed.
+#: Update it with every new TERMS_VERSION.
+CHANGE_SUMMARY: str = ("We added tester terms for people who connect their "
+                       "own records. Please read them and accept.")
 
 #: What a connection's consent_version must equal to be current. Read as
 #: `tester_terms.CONSENT_VERSION` at call time, never copied at import.

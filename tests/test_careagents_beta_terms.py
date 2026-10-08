@@ -6,7 +6,7 @@ from pathlib import Path
 
 from careagents import tester_terms
 from tests.careagents_consent_helpers import consented
-from tests.careagents_stage1_helpers import approve_terms
+from tests.careagents_stage1_helpers import approve_terms, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
@@ -36,6 +36,7 @@ def test_the_card_hides_pending_terms_and_shows_approved_ones(
     app.config["TESTING"] = True
     c = app.test_client()
     _login(c, svc, monkeypatch)
+    pend_terms(monkeypatch)
     assert 'id="tester-terms"' not in c.get("/home").get_data(as_text=True)
     approve_terms(monkeypatch)
     page = c.get("/home").get_data(as_text=True)
