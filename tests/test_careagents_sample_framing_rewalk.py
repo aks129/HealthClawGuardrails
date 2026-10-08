@@ -279,3 +279,30 @@ def test_the_real_brief_renders_as_main(cfg, svc, monkeypatch, brief):  # noqa: 
         assert ("<p class=\"brief-empty\">We couldn't check your screenings "
                 "just now. Ask your doctor which ones you are due for.</p>"
                 ) in body
+
+
+# --- 375px (re-walk V4) -----------------------------------------------------
+# "Based on the sample person's age and sex" sat in a `white-space: nowrap`
+# column and pushed the sample brief to 434px on a 375px phone, clipping the
+# banner and the alert. Measured with Playwright on rendered pages, sample
+# and real, with long medicine and visit names: 653px and 609px before this
+# rule, 375px after. CareAgents' e2e harness pins the records service to a
+# dead port, so the brief cannot be drawn there; this pins the rule.
+
+def _css_rule(selector):
+    import pathlib
+    css = (pathlib.Path(__file__).resolve().parents[1] / "careagents"
+           / "static" / "careagents.css").read_text()
+    start = css.index(selector + " {")
+    return css[start:css.index("}", start)]
+
+
+def test_every_brief_text_can_wrap_at_375px():
+    assert "nowrap" not in _css_rule(".brief-source")
+    assert "white-space: normal" in _css_rule(".brief-source")
+    # The text column may shrink below its longest word, and a long word
+    # breaks rather than widening the card.
+    assert "minmax(0, 1fr)" in _css_rule(".brief-field")
+    for selector in (".brief-label", ".brief-value", ".brief-source",
+                     ".brief-alert", ".beta-banner.sample-banner"):
+        assert "overflow-wrap: anywhere" in _css_rule(selector), selector
