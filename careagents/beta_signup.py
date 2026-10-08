@@ -40,7 +40,7 @@ import click
 # IDNA 2003 and has no UTS-46 mapping.
 import idna
 from flask import jsonify, make_response, render_template, request
-from markupsafe import escape
+from markupsafe import Markup, escape
 from sqlalchemy import Column, Float, String, update
 from sqlalchemy.exc import IntegrityError
 
@@ -77,7 +77,9 @@ SUBMITS_PER_WINDOW = 5
 WINDOW_SECONDS = 600
 LIMITER_KEYS = 512
 
-FEEDBACK_MAILTO = "mailto:contactus@healthclaw.io?subject=tester"
+#: The tester feedback form (careagents/feedback.py). Emails link it by
+#: its full address, `cfg.origin` + this.
+FEEDBACK_URL = "/feedback"
 DEMO_VIDEOS_URL = ("https://github.com/aks129/HealthClawGuardrails/releases/"
                    "tag/demo-videos-2026-10")
 
@@ -587,9 +589,13 @@ TEXTING_COMPANY_LINE = ("Your texts pass through a texting company we use, "
                         "so only use the made-up records here.")
 
 
-def _line(x) -> tuple[str, str]:
+def _line(x, feedback_url: str = FEEDBACK_URL) -> tuple[str, str]:
     """(text, html) for one line. Every line is escaped; the texting line
-    puts the number in an `sms:` link."""
+    puts the number in an `sms:` link, and the steps are a numbered list."""
+    if x == _STEPS:
+        text = "\n".join(f"{i}. {s}" for i, s in enumerate(NEXT_STEPS, 1))
+        html = "".join(f"<li>{h}</li>" for h in steps_html(feedback_url))
+        return text, f"<ol>{html}</ol>"
     if isinstance(x, tuple) and x[0] == _TEXT_HI:
         text, shown = text_hi_line(x[1]), show_number(x[1])
         link = f"<a href='sms:{escape(x[1])}'>{escape(shown)}</a>"
@@ -607,33 +613,65 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
     the feedback link and the single-use removal link. A name in a line is
     the visitor's own, read back to them, escaped."""
     remove_url = f"{cfg.origin}/beta/remove?t={token}"
-    pairs = [_line(x) for x in lines]
+    feedback_url = f"{cfg.origin}{FEEDBACK_URL}"
+    pairs = [_line(x, feedback_url) for x in lines]
     parts = [t for t, _ in pairs]
     if link:
         parts.append(f"{link[0]}: {link[1]}")
     text = "\n\n".join(
-        parts + ["Something broke, or a question? Write to "
-                 "contactus@healthclaw.io with the subject \"tester\".",
+        parts + [f"Something broke, or a question? Tell us: {feedback_url}",
                  f"Remove my request: {remove_url}"])
-    body = "".join(f"<p>{h}</p>" for _, h in pairs)
+    body = "".join(h if h.startswith("<ol") else f"<p>{h}</p>"
+                   for _, h in pairs)
     if link:
         body += (f"<p><a href='{escape(link[1])}'>{escape(link[0])}</a>"
                  f"</p>")
     html = (f"<div style='font-family:system-ui,sans-serif;max-width:420px'>"
             f"<h2 style='color:#22190E'>CareAgents</h2>{body}"
             f"<p>Something broke, or a question? "
-            f"<a href='{FEEDBACK_MAILTO}'>Tell us</a>.</p>"
+            f"<a href='{escape(feedback_url)}'>Tell us</a>.</p>"
             f"<p style='color:#5E5240;font-size:13px'>"
             f"<a href='{escape(remove_url)}'>Remove my request</a></p></div>")
     return mail.send_message(cfg, email, subject, html, text)
 
 
+#: What to do once confirmed, in the words on the screens: the landing
+#: page's "Get started", auth.html's code steps and the passkey screen a
+#: phone shows after the first code, then the hub. A quoted label must be
+#: on that screen (tests/test_careagents_feedback.py checks each one).
+NEXT_STEPS = (
+    'Open careagents.cloud and tap "Get started".',
+    'Type your email address and tap "Email me a code".',
+    'We email you an 8-digit code. Type it in and tap "Continue".',
+    'If it asks you to add a passkey, you can tap "Skip for now".',
+    'Tap "Explore with made-up records". A chat opens.',
+    "Ask a question, or tap one of the ideas on the screen.",
+    'Tap "Tell us" to send us what you think.',
+)
+#: The line in a tester email that is the numbered steps.
+_STEPS = "next_steps"
+
+
+def steps_html(feedback_url: str = FEEDBACK_URL) -> list:
+    """NEXT_STEPS as escaped HTML, careagents.cloud and "Tell us" linked."""
+    out = []
+    for step in NEXT_STEPS:
+        h = str(escape(step))
+        h = h.replace("careagents.cloud",
+                      f'<a href="{_WEB}">careagents.cloud</a>', 1)
+        h = h.replace("&#34;Tell us&#34;",
+                      f'&#34;<a href="{escape(feedback_url)}">Tell us</a>'
+                      f'&#34;', 1)
+        out.append(Markup(h))
+    return out
+
+
 def youre_in_lines(cfg, first_name: str) -> list:
-    return [f"Hi {first_name}, thanks for helping test CareAgents.",
-            "Open careagents.cloud and sign up with this email. You'll use "
-            "made-up records, not your own, and CareAgents is not a doctor.",
-            "CareAgents is built by HealthClaw, so questions go to "
-            "contactus@healthclaw.io."]
+    return [f"Hi {first_name}, thanks for helping test CareAgents. Here is "
+            "what to do. It takes about 15 minutes.",
+            _STEPS,
+            "You'll use made-up records, not your own. CareAgents is not a "
+            "doctor."]
 
 
 def _texting_lines(cfg) -> list:
@@ -719,7 +757,8 @@ def register(app, svc, cfg) -> None:
 
     def _page(outcome, status=200, **ctx):
         return _no_referrer(make_response(render_template(
-            "beta_remove.html", outcome=outcome, feedback=FEEDBACK_MAILTO,
+            "beta_remove.html", outcome=outcome, feedback=FEEDBACK_URL,
+            steps=steps_html(),
             **ctx), status))
 
     @app.after_request
@@ -737,7 +776,7 @@ def register(app, svc, cfg) -> None:
         # The ref is never shown; that one came at all is the opening line.
         return render_template(
             "beta.html", ref=clean_ref(request.args.get("ref")) or "",
-            demo_url=DEMO_VIDEOS_URL, feedback=FEEDBACK_MAILTO,
+            demo_url=DEMO_VIDEOS_URL, feedback=FEEDBACK_URL,
             mobile_days=MOBILE_DAYS, request_days=REQUEST_DAYS)
 
     @app.post("/beta")
