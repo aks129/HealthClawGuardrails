@@ -2330,6 +2330,11 @@ def create_app(config: Config | None = None,
 
     # --- surfaces ------------------------------------------------------------
 
+    def _telegram_real_records():
+        return jsonify({"error": "real_records",
+                        "message": sendblue_surface.real_records_text(
+                            cfg.origin)}), 409
+
     @app.post("/api/surfaces/telegram")
     @login_required
     def connect_telegram():
@@ -2339,6 +2344,10 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if sendblue_surface.real_records_blocked(cfg, ctx):
+            # The gateway answers Telegram outside the run worker, so no
+            # turn check here would hold it back: refuse the binding.
+            return _telegram_real_records()
         code = new_binding_code()
         sid = svc.add_surface(acct.id, agent_id, "telegram", code,
                               status="pending")
@@ -2359,6 +2368,10 @@ def create_app(config: Config | None = None,
         if not surface or chat_id is None:
             return jsonify({"error": "unknown code"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
+        if ctx and sendblue_surface.real_records_blocked(cfg, ctx):
+            # A code minted while sample does not expire; read fresh here,
+            # so a switch to real records since then binds nothing.
+            return _telegram_real_records()
         if not ctx or not hc.bind_telegram(ctx["tenant"], int(chat_id)):
             return jsonify({"error": "bind failed"}), 502
         svc.bind_surface(surface["id"], str(chat_id))
