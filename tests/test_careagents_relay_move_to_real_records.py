@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from careagents import sendblue_surface
 from careagents.healthclaw import HealthClawError
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
@@ -33,7 +34,7 @@ def _owed_run_then_move(cfg, svc, monkeypatch):  # noqa: F811
     assert r.status_code == 202
     run_id = r.get_json()["run_id"]
     _run(app)
-    real = c.post("/api/connections/direct", json={"consent": True})
+    real = c.post("/api/connections/direct", json=consented())
     assert real.status_code == 200, real.get_json()
     from careagents.models import Connection
     with svc.session() as s:                          # as an upload leaves it
