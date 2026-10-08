@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import threading
 import time
 import unicodedata
 from collections import OrderedDict, deque
 
 from flask import jsonify, render_template, request, session
 from markupsafe import escape
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from careagents import mail
 from careagents.beta_signup import valid_email
@@ -41,6 +43,13 @@ QUESTIONS = (
     ("real", "Would you connect your real records to this? Why or why not?"),
 )
 ANSWER_MAX = 2000
+#: The most an answer may be before cleaning. A browser's maxlength keeps a
+#: tester's answer under ANSWER_MAX; the slack is for line breaks sent as
+#: CRLF. Measured raw, so characters `clean` drops still count.
+RAW_ANSWER_MAX = 2 * ANSWER_MAX
+#: The largest request body read: four answers at RAW_ANSWER_MAX, every
+#: character escaped in JSON as \uXXXX (six bytes), and room for the keys.
+BODY_MAX = 4 * RAW_ANSWER_MAX * 6 + 1024
 
 #: Emails sent per account (or client address) per window, and how many
 #: keys the limiter remembers before it forgets the oldest.
@@ -71,6 +80,8 @@ def read_answers(body) -> tuple[dict | None, str | None]:
             raw = ""
         if not isinstance(raw, str):
             return None, "invalid"
+        if len(raw) > RAW_ANSWER_MAX:
+            return None, "too_long"
         value = clean(raw)
         if len(value) > ANSWER_MAX:
             return None, "too_long"
@@ -101,6 +112,9 @@ def compose(answers: dict, signed_in: bool) -> tuple[str, str]:
 
 def register(app, svc, cfg) -> None:
     sends: OrderedDict[str, deque] = OrderedDict()
+    # gunicorn runs several threads per worker: reading, counting and
+    # re-inserting a window is one step, or a racing burst beats the limit.
+    lock = threading.Lock()
 
     def _client_key() -> str:
         # As /beta does: X-Real-IP, which Railway's edge sets, and never
@@ -113,16 +127,26 @@ def register(app, svc, cfg) -> None:
 
     def _allow(key: str) -> bool:
         moment = time.time()
-        window = sends.pop(key, None) or deque()
-        while window and moment - window[0] > WINDOW_SECONDS:
-            window.popleft()
-        allowed = len(window) < SENDS_PER_WINDOW
-        if allowed:
-            window.append(moment)
-        sends[key] = window                 # newest last
-        while len(sends) > LIMITER_KEYS:
-            sends.popitem(last=False)       # forget the oldest key
-        return allowed
+        with lock:
+            window = sends.pop(key, None) or deque()
+            while window and moment - window[0] > WINDOW_SECONDS:
+                window.popleft()
+            allowed = len(window) < SENDS_PER_WINDOW
+            if allowed:
+                window.append(moment)
+            sends[key] = window             # newest last
+            while len(sends) > LIMITER_KEYS:
+                sends.popitem(last=False)   # forget the oldest key
+            return allowed
+
+    def _refund(key: str) -> None:
+        # A send that did not go out gives its slot back, so "try again in
+        # a few minutes" is not answered with an hour's lockout. The cap
+        # still bounds mail that went out, and the size check runs first.
+        with lock:
+            window = sends.get(key)
+            if window:
+                window.pop()
 
     def _account():
         aid = session.get("account_id")
@@ -143,7 +167,19 @@ def register(app, svc, cfg) -> None:
     def feedback_submit():
         if not request.is_json:
             return jsonify({"error": "json_required"}), 415
-        answers, error = read_answers(request.get_json(silent=True))
+        # Size before parsing, with this route's own cap: an app-wide one
+        # would have to admit a records upload. A body with no
+        # Content-Length (chunked) is cut off at the same size by the
+        # request's limit.
+        clen = request.content_length
+        if clen is not None and clen > BODY_MAX:
+            return jsonify({"error": "too_long"}), 413
+        request.max_content_length = BODY_MAX
+        try:
+            body = request.get_json(silent=True)
+        except RequestEntityTooLarge:
+            return jsonify({"error": "too_long"}), 413
+        answers, error = read_answers(body)
         if error:
             return jsonify({"error": error}), 400
         acct = _account()
@@ -163,6 +199,7 @@ def register(app, svc, cfg) -> None:
             outcome = mail.NOT_SENT
         if outcome == mail.NOT_SENT:
             # Nothing left, so the page keeps the answers and says so.
+            _refund(key)
             return jsonify({"error": "not_sent"}), 503
         # SENT, or UNCONFIRMED: the request went out and the answer was
         # lost, so the mail may have arrived. The thank-you page claims

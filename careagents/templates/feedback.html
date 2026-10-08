@@ -13,6 +13,9 @@
     <h1>Tell us what you think</h1>
     <p>Answer any of these. One is enough, and short answers are fine.</p>
     <p class="feedback-note"><b>Please don't include personal health details.</b></p>
+    {% if signed_in %}
+    <p id="feedback-reply">We'll reply to the email you signed in with.</p>
+    {% endif %}
     <form id="feedback-form" novalidate>
       {% for name, question in questions %}
       <label class="field-label" for="fb-{{ name }}">{{ question }}</label>

@@ -448,3 +448,74 @@ def test_the_send_message_reply_to_is_optional(monkeypatch):
                              reply_to="b@example.com") == mail.SENT
     assert "reply_to" not in seen[0]
     assert seen[1]["reply_to"] == "b@example.com"
+
+
+# --- review fixes (security F1-F3, QA G1 and N1) ------------------------------
+
+def test_a_signed_in_tester_is_told_where_the_reply_goes(made, monkeypatch):
+    app, svc = made()
+    page = _signed_in(app, svc, monkeypatch).get("/feedback")
+    assert ("We'll reply to the email you signed in with."
+            in html.unescape(_visible(page.get_data(as_text=True))))
+    out = app.test_client().get("/feedback").get_data(as_text=True)
+    assert "reply to the email" not in out
+
+
+def test_a_raw_answer_is_measured_before_cleaning(made, sent):
+    # Characters `clean` drops still count toward the cap.
+    app, _ = made(RESEND_API_KEY="re_test")
+    r = _send(app.test_client(),
+              stuck="​" * (feedback.RAW_ANSWER_MAX + 1) + "hi")
+    assert r.status_code == 400 and r.get_json()["error"] == "too_long"
+    assert sent == []
+
+
+def test_a_body_past_the_cap_is_refused_unread(made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    big = '{"stuck": "' + "a" * feedback.BODY_MAX + '"}'
+    r = app.test_client().post("/feedback", data=big,
+                               content_type="application/json")
+    assert r.status_code == 413 and r.get_json()["error"] == "too_long"
+    assert sent == []
+
+
+def test_four_full_answers_fit_the_body_cap(made, sent):
+    # Every character escaped in JSON (ensure_ascii), and it still fits.
+    app, _ = made(RESEND_API_KEY="re_test")
+    full = "é" * feedback.ANSWER_MAX
+    r = _send(app.test_client(), stuck=full, change=full, trust=full,
+              real=full)
+    assert r.status_code == 200
+
+
+def test_a_send_that_did_not_go_gives_its_slot_back(made, sent, monkeypatch):
+    from careagents import mail
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _signed_in(app, svc, monkeypatch)
+    working = mail.requests.post
+
+    def down(*a, **k):
+        raise requests.ConnectionError("down")
+    monkeypatch.setattr(mail.requests, "post", down)
+    for _ in range(feedback.SENDS_PER_WINDOW + 2):
+        assert _send(c, stuck="hi").status_code == 503
+    monkeypatch.setattr(mail.requests, "post", working)
+    for _ in range(feedback.SENDS_PER_WINDOW):
+        assert _send(c, stuck="hi").status_code == 200
+    assert _send(c, stuck="hi").status_code == 429
+    assert len(sent) == feedback.SENDS_PER_WINDOW
+
+
+SAME_EMAIL = "Type the same email you used to join the beta"
+
+
+def test_step_two_says_to_use_the_same_email(made, sent):
+    # The account finds its beta request by mailbox (text_tile, purge), so
+    # a different address loses the text tile and the request.
+    assert any(s.startswith(SAME_EMAIL) for s in beta_signup.NEXT_STEPS)
+    app, _ = made(RESEND_API_KEY="re_test")
+    page = _confirm(app, sent).get_data(as_text=True)
+    assert SAME_EMAIL in html.unescape(_visible(page))
+    (msg,) = [m for m in sent if m["subject"].startswith("You're in")]
+    assert f"2. {SAME_EMAIL}" in msg["text"]
+    assert SAME_EMAIL in html.unescape(msg["html"])
