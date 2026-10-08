@@ -1,7 +1,7 @@
 """Security re-review of #913 at dc419ca: write paths into a closed tenant
 that `require_open_tenant` does not cover yet.
 
-A tenant is closed once it carries a FastenTenantRevocation tombstone (a
+A tenant is closed once it carries a TenantClosure tombstone (a
 CareAgents Disconnect, or a purge). The PR gates FHIR create and update,
 $ingest-context, /internal/ingest-bundle, /shc/ingest and the wearables
 OAuth callback. Every other route that stores an R6Resource is probed
@@ -14,7 +14,7 @@ path that still stores a record in a closed tenant; a fix flips it red.
 import pytest
 
 from models import db
-from r6.fasten.models import FastenTenantRevocation
+from r6.fasten.models import TenantClosure
 from r6.models import AuditEventRecord, R6Resource
 
 SECRET = "sec913-reverify-secret"
@@ -29,7 +29,7 @@ def secret(monkeypatch):
 
 
 def _close(tenant=CLOSED):
-    db.session.add(FastenTenantRevocation(tenant_id=tenant))
+    db.session.add(TenantClosure(tenant_id=tenant))
     db.session.commit()
 
 
@@ -126,8 +126,6 @@ def test_read_auth_off_makes_ingest_context_an_oracle(client, secret,
 
 # --- paths that still write into a closed tenant -----------------------------
 
-@pytest.mark.xfail(strict=True, reason="sec913 R1: POST /r6/smbp/reading "
-                   "stores an Observation in a closed tenant")
 def test_smbp_reading_into_a_closed_tenant(client, secret):
     _close()
     client.post("/r6/smbp/reading",
@@ -138,10 +136,6 @@ def test_smbp_reading_into_a_closed_tenant(client, secret):
     assert _count() == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 R2: GET /r6/smbp/report "
-                   "persists a DocumentReference in a closed tenant, and "
-                   "POST /r6/smbp/enroll (tenant header only) opens the "
-                   "session it needs")
 def test_smbp_enroll_and_report_into_a_closed_tenant(client, secret):
     _close()
     h = {"X-Tenant-Id": CLOSED, "X-Step-Up-Token": _token()}
@@ -155,9 +149,6 @@ def test_smbp_enroll_and_report_into_a_closed_tenant(client, secret):
     assert _count(rtype="DocumentReference") == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 R3: /internal/seed (internal "
-                   "secret) seeds a closed tenant, built-in set and a "
-                   "caller-supplied bundle")
 @pytest.mark.parametrize("bundle", [None, {"resourceType": "Bundle",
                                            "entry": [{"resource": {
                                                **_obs(), "id": "seed-x"}}]}])
@@ -171,9 +162,6 @@ def test_seed_into_a_closed_tenant(client, secret, bundle):
     assert _count() == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 R4: $curatr-apply-fix "
-                   "rewrites a kept record and adds a Provenance in a "
-                   "closed tenant")
 def test_curatr_apply_fix_in_a_closed_tenant(client, secret):
     h = {"X-Tenant-Id": CLOSED, "X-Step-Up-Token": _token(),
          "X-Human-Confirmed": "true"}
@@ -195,8 +183,6 @@ def test_curatr_apply_fix_in_a_closed_tenant(client, secret):
     assert _count(rtype="Provenance") == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 R5: /demo/agent-loop (mint "
-                   "gate: internal secret) writes into a closed tenant")
 def test_demo_agent_loop_into_a_closed_tenant(client, secret):
     _close()
     client.post("/r6/fhir/demo/agent-loop",
@@ -204,20 +190,30 @@ def test_demo_agent_loop_into_a_closed_tenant(client, secret):
     assert _count() == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 R6: the action rail "
-                   "(propose, commit, review submit) stores a reviewed "
-                   "QuestionnaireResponse in a closed tenant")
 def test_action_rail_review_writes_into_a_closed_tenant(
         app, client, tenant_headers, auth_headers):
+    """Commit (the first step-up-gated step) and review submit both refuse;
+    propose stays open because it carries no credential, so a 409 there
+    would tell anyone naming the tenant that it is closed. Confirm is
+    pinned in tests/test_tenant_closure_freeze.py."""
     from tests.test_intake_attestation_gate import (
-        _allergy, _committed_action, _medication, _patient, _review, _store)
+        _allergy, _medication, _patient, _review, _store)
     tenant = tenant_headers["X-Tenant-Id"]
     for resource in (_patient(), _medication(), _allergy()):
         _store(resource, tenant)
     _close(tenant)
-    action_id = _committed_action(client, tenant_headers, auth_headers)
-    _review(client, auth_headers, action_id,
-            **{"med-0": "yes", "allergy-0": "confirm"})
+    proposed = client.post("/r6/actions/propose", headers=tenant_headers,
+                           json={"kind": "form-fill",
+                                 "payload": {"to": "Intake portal",
+                                             "questionnaire": "healthclaw-intake",
+                                             "body": "new patient intake"}})
+    assert proposed.status_code == 201
+    action_id = proposed.get_json()["id"]
+    assert client.post("/r6/actions/%s/commit" % action_id,
+                       headers=auth_headers).status_code == 409
+    assert _review(client, auth_headers, action_id,
+                   **{"med-0": "yes", "allergy-0": "confirm"}
+                   ).status_code == 409
     assert _count(tenant, "QuestionnaireResponse") == 0
 
 
@@ -231,19 +227,18 @@ def test_extract_commits_nothing_today(client, secret):
 
 # --- revoke on a public tenant ------------------------------------------------
 
-def test_revoke_with_the_secret_closes_a_public_tenant_for_good(client,
-                                                               secret):
-    """Accepted only because the secret is infrastructure-only and CareAgents
-    never names a public tenant (every connection gets a fresh ca- id). It
-    is irreversible: no route clears the tombstone, and purge now skips
-    public tenants, so the demo tenant stays closed to writes."""
+def test_revoke_with_the_secret_cannot_close_a_public_tenant(client,
+                                                            secret):
+    """CTO ruling on #913: a public tenant is never closed, matching purge.
+    Before it, this closed the demo tenant for good (no route clears a
+    closure)."""
     r = client.post("/r6/fhir/internal/fasten-revoke",
                     json={"tenant_id": "desktop-demo"},
                     headers={"X-Internal-Secret": SECRET})
-    assert r.status_code == 200
+    assert r.status_code == 422
     tok = _token("desktop-demo")
     assert client.post("/r6/fhir/Observation", json=_obs(),
                        headers={"X-Tenant-Id": "desktop-demo",
                                 "X-Step-Up-Token": tok,
                                 "X-Human-Confirmed": "true"}
-                       ).status_code == 409
+                       ).status_code == 201

@@ -2116,6 +2116,7 @@ def seed_tenant():
     # (fail-closed for non-public tenants) so it can't be a token oracle.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     # A caller-supplied bundle is INGESTION — the caller chooses what the
     # records say — so it takes the ingest gate, which grants no public-tenant
@@ -2564,6 +2565,7 @@ def demo_agent_loop():
     # authorization rule for a third kind of privileged write.
     if not _internal_mint_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     steps = []
 
@@ -2926,6 +2928,7 @@ def curatr_apply_fix(resource_type, resource_id):
         operation=operation if production_approval else None,
         absent_status=403, rejected_status=403,
     )
+    require_open_tenant(tenant)
 
     body = request.get_json(silent=True)
     if not body:

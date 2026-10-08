@@ -443,6 +443,8 @@ def commit_action(action_id):
         absent_status=401,
         rejected_status=401,
     )
+    # A closed tenant arms nothing new (409, audited).
+    require_open_tenant(tenant)
 
     action = ProposedAction.query.filter_by(
         id=action_id, tenant_id=tenant_id).first()
