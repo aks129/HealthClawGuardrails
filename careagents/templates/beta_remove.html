@@ -25,10 +25,15 @@
     {% if done.kind == "join" %}
     <p>Thanks, {{ done.first_name }}. We sent an email to {{ done.email }}.
       If it isn't there in a few minutes, check spam.</p>
-    <p>Next: open <a href="https://careagents.cloud">careagents.cloud</a>
-      and sign up with this email.</p>
+    <h2 class="beta-form-title">What to do next</h2>
+    <ol class="beta-steps">
+      {% for step in steps %}<li>{{ step }}</li>
+      {% endfor %}
+    </ol>
+    <p>The same steps are in the email we sent.</p>
     {% else %}
     <p>Thanks, {{ done.first_name }}. Your request is updated.</p>
+    <p>Something confusing? <a href="{{ feedback }}">Tell us</a>.</p>
     {% endif %}
     {% elif outcome == "ask" %}
     <h1>Remove my request</h1>
@@ -49,7 +54,7 @@
     {% else %}
     <h1>This link no longer works</h1>
     <p>It was used already, it ran out, or a newer email replaced it. Use the
-      link in our latest email, or <a href="{{ feedback }}">write to us</a>.</p>
+      link in our latest email, or <a href="{{ feedback }}">tell us</a>.</p>
     {% endif %}
   </div>
 </main>

@@ -177,7 +177,7 @@ def test_the_page_says_what_the_brief_says_in_plain_words(made):
     assert "made-up" in step2 or "sample" in step2
     assert ("https://github.com/aks129/HealthClawGuardrails/releases/tag/"
             "demo-videos-2026-10") in body
-    assert "mailto:contactus@healthclaw.io?subject=tester" in body
+    assert '<a href="/feedback">Tell us</a>' in body
     assert "We keep your name, email and phone only to run the beta." in text
     assert "30 days" in text and "60 days" in text
     assert "delete your account in Settings" in text
@@ -190,7 +190,7 @@ def test_the_banner_says_made_up_and_links_feedback(made):
         banner = re.search(r'class="beta-banner"[^>]*>(.*?)</p>', body,
                            re.S).group(1)
         assert "made-up records only" in banner
-        assert 'href="mailto:contactus@healthclaw.io?subject=tester"' in banner
+        assert 'href="/feedback"' in banner
         assert "synthetic" not in body.lower()
 
 
@@ -201,8 +201,7 @@ def test_the_form_fields_and_the_unticked_consent_box(made):
     assert 'name="first_name"' in form and 'name="email"' in form
     mobile = re.search(r"<input[^>]*name=\"mobile\"[^>]*>", form).group(0)
     assert "required" not in mobile
-    assert ("Mobile, if you'd like to text your assistant (iPhone only, "
-            "optional)") in " ".join(form.split())
+    assert "Mobile number (optional)" in " ".join(form.split())
     box = re.search(r"<input[^>]*name=\"consent\"[^>]*>", form).group(0)
     assert 'type="checkbox"' in box and "required" in box
     assert "checked" not in box
@@ -285,13 +284,13 @@ def test_confirming_joins_once_and_says_youre_in(made, sent):
     (to, _, html, text), = welcome
     assert to == "avery@example.com"
     flat = " ".join(text.split())
-    assert ("Hi Avery, thanks for helping test CareAgents. Open "
-            "careagents.cloud and sign up with this email. You'll use "
-            "made-up records, not your own, and CareAgents is not a "
-            "doctor. CareAgents is built by HealthClaw, so questions go to "
-            "contactus@healthclaw.io.") in flat
+    assert ("Hi Avery, thanks for helping test CareAgents. Here is what "
+            "to do. It takes about 15 minutes. 1. Open careagents.cloud and "
+            "tap \"Get started\".") in flat
+    assert ("You'll use made-up records, not your own. CareAgents is not a "
+            "doctor.") in flat
     assert "href='https://careagents.cloud'" in html
-    assert "mailto:contactus@healthclaw.io?subject=tester" in html
+    assert "href='http://localhost/feedback'" in html
     assert row["removal_hash"] == beta_signup.hash_token(_token(html))
     # Spent.
     assert c.post("/beta/confirm", data={"t": token}).status_code == 410
@@ -819,7 +818,7 @@ def test_mark_added_deletes_the_mobile_and_sends_the_text_hi_email(
     assert ("Your texts pass through a texting company we use, so only use "
             "the made-up records here.") in text
     assert "<a href='sms:+15550109000'>+1 555-010-9000</a>" in html
-    assert "mailto:contactus@healthclaw.io?subject=tester" in html
+    assert "href='http://localhost/feedback'" in html
     assert row["removal_hash"] == beta_signup.hash_token(_token(html))
 
 
@@ -950,7 +949,7 @@ def test_the_text_tile_is_hidden_while_sendblue_is_off(made, monkeypatch):
 def test_the_hub_links_testers_to_feedback(made, monkeypatch):
     app, svc = made()
     body = _hub(app, svc, monkeypatch, [])
-    assert "mailto:contactus@healthclaw.io?subject=tester" in body
+    assert '<a href="/feedback">Tell us</a>' in body
 
 
 def test_the_hub_banner_says_made_up_records(made, monkeypatch):
@@ -1055,8 +1054,9 @@ def test_the_confirm_page_shows_a_change_and_no_mobile(made, sent):
 def test_confirmed_says_what_to_do_next(made, sent):
     app, _ = made(RESEND_API_KEY="re_test")
     r = _join(app, sent)
-    assert ("Next: open careagents.cloud and sign up with this email."
-            in _visible(r.get_data(as_text=True)))
+    text = _visible(r.get_data(as_text=True))
+    assert "What to do next" in text
+    assert 'Open careagents.cloud and tap &#34;Get started&#34;.' in text
 
 
 def test_keep_my_request_lands_on_a_plain_page(made, sent):

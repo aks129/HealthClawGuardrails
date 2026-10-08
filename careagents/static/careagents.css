@@ -764,6 +764,13 @@ textarea:focus-visible {
 .beta-err { margin: 18px 0 0; }
 .beta-err + .btn-primary { margin-top: 12px; }
 .beta-keep { margin-top: 12px; }
+/* The mobile field's hint on /beta, and the /feedback boxes. */
+.beta-page .field-hint { font-size: 16px; color: var(--ink-soft);
+  margin: 8px 0 0; }
+.feedback-page textarea.field { resize: vertical; min-height: 96px; }
+.chat-feedback { margin: 8px 0 0; font-size: 15px; text-align: center;
+  color: var(--ink-soft); }
+.chat-feedback a { color: var(--clay-deep); }
 
 /* The delete confirmation, calm and spaced (#884 G7): room between the
    warnings, the typed confirmation and the two buttons. */
