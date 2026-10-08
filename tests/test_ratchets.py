@@ -512,7 +512,11 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: operations stopped taking an OperationOutcome builder they no longer use.
 #: 3711 -> 3707: the shim migration folded three post-commit audit blocks into
 #: the commit they describe and dropped the demo loop's interim commits.
-_GOD_MODULE_LINES = 3707
+#: 3707 -> 3729: POST /internal/fasten-revoke, the engine half of a CareAgents
+#: Disconnect. Raised deliberately: the route sits beside purge-tenant and
+#: needs this module's _internal_ingest_authorized gate, so only the gate and
+#: the tenant read live here; the transaction is in r6/fasten/revoke.py.
+_GOD_MODULE_LINES = 3729
 
 
 def test_the_god_module_only_shrinks():

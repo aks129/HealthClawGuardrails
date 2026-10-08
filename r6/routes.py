@@ -2055,6 +2055,28 @@ def purge_tenant_route():
     }), 200
 
 
+@r6_blueprint.route('/internal/fasten-revoke', methods=['POST'])
+def fasten_revoke_route():
+    """The engine half of a CareAgents Disconnect; see r6/fasten/revoke.py.
+
+    The internal secret with no public-tenant exemption, like ingest: this
+    decides what may arrive in a tenant, not just who reads it. Checked
+    before the body is read. A repeat answers 200 with already_revoked.
+    """
+    if not _internal_ingest_authorized(None):
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
+    except TenantRejected:
+        return jsonify({'error': 'tenant_id is required'}), 400
+    from r6.fasten.revoke import revoke_tenant
+    try:
+        return jsonify(revoke_tenant(tenant_id)), 200
+    except Exception:
+        logger.exception('fasten revoke failed for %s', tenant_id)
+        return jsonify({'error': 'revoke failed', 'revoked': False}), 500
+
+
 @r6_blueprint.route('/internal/seed', methods=['POST'])
 def seed_tenant():
     """

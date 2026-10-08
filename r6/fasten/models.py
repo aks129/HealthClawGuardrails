@@ -76,3 +76,41 @@ class FastenJob(db.Model):
     download_links_json = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = db.Column(db.DateTime, nullable=True)
+
+
+class FastenTenantRevocation(db.Model):
+    """A tenant whose account holder disconnected or deleted its records.
+
+    Flipping FastenConnection rows is not enough on its own: a disconnect
+    that lands before patient.connection_success has no row to flip, and
+    the webhook would then create a fresh authorized one. This row is
+    tenant-wide and outlives the connection rows, so every path that could
+    bring records in (webhooks, retry, the boot reaper, a running ingest,
+    the connect page) asks `tenant_revoked` first.
+    """
+    __tablename__ = 'fasten_tenant_revocations'
+
+    # tenant_id is internally generated — 64, like FastenConnection.tenant_id.
+    tenant_id = db.Column(db.String(64), primary_key=True)
+    revoked_at = db.Column(db.DateTime, nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+
+
+def tenant_revoked(tenant_id) -> bool:
+    """True when this tenant's account holder has taken Fasten access back."""
+    if not tenant_id:
+        return False
+    return db.session.get(FastenTenantRevocation, tenant_id) is not None
+
+
+def connection_revoked(org_connection_id) -> bool:
+    """True when Fasten reported this one connection's authorization revoked.
+
+    Read as a column, not through a loaded row, so a long-running caller
+    (the ingest thread) sees a revocation committed after it started.
+    """
+    if not org_connection_id:
+        return False
+    status = (db.session.query(FastenConnection.connection_status)
+              .filter_by(org_connection_id=org_connection_id).scalar())
+    return status == 'revoked'

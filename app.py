@@ -257,6 +257,11 @@ def fasten_connect(tenant_id):
     """
     if not _TENANT_ID_PATTERN.match(tenant_id):
         return 'Invalid tenant id', 400
+    # The account holder disconnected or deleted this tenant: an old link
+    # must not open the widget that would bring records back into it.
+    from r6.fasten.models import tenant_revoked
+    if tenant_revoked(tenant_id):
+        return render_template('fasten_connect_disconnected.html')
     return render_template(
         'fasten_connect.html',
         tenant_id=tenant_id,

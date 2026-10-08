@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Connection disconnected · HealthClaw{% endblock %}
+
+{% block head %}
+<style>
+  .connect-shell {
+    max-width: 760px;
+    margin: 60px auto 80px;
+    padding: 0 24px;
+    color: var(--white);
+  }
+  .connect-title {
+    font-size: 32px;
+    line-height: 1.18;
+    font-weight: 700;
+    margin: 0 0 16px;
+  }
+  .connect-sub {
+    color: var(--gray-dim);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0 0 16px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{#- An old link to a connection the person disconnected or deleted. No
+    widget: opening one here would bring records back into it. #}
+<div class="connect-shell">
+  <h1 class="connect-title">This connection was disconnected.</h1>
+  <p class="connect-sub">
+    No new records will come in through this link. To connect your records
+    again, go back to CareAgents and start a new connection there.
+  </p>
+</div>
+{% endblock %}

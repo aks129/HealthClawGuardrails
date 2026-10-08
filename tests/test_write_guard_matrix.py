@@ -164,6 +164,7 @@ def _setup_fasten_connection(app):
 # POST /r6/fhir/internal/seed              |     |   |    |    |    |  x*  |  x   |  x
 # POST /r6/fhir/internal/ingest-bundle     |  x  | x |    |    |    |  x   |  x   |  x
 # POST /r6/fhir/internal/purge-tenant      |     |   |    |    |    |  x*  |  x   |  x
+# POST /r6/fhir/internal/fasten-revoke     |     |   |    |    |    |  x   |  x   |  x
 # POST /r6/fhir/internal/bind-telegram     |     | x |    | x  |    |      |  x   |  x
 # POST /r6/fhir/demo/agent-loop            |     |   |    |    |    |  x*  |  x   |  x
 # POST /r6/fhir/$share-bundle              |  x  | x |    | x  |    |      |  x   |  x
@@ -295,6 +296,21 @@ MATRIX: tuple = (
         note="Same public-tenant exemption as seed. The delete is audited "
              "with add_audit_event INSIDE the purge transaction, so an "
              "unauditable purge aborts rather than deleting unrecorded.",
+    ),
+    Row(
+        id="internal-fasten-revoke",
+        method="POST", path="/r6/fhir/internal/fasten-revoke",
+        endpoint="r6.fasten_revoke_route",
+        guards=frozenset({INTERNAL_SECRET, TENANT_FILTER, AUDIT}),
+        anon_refusal=(403,), internal_secret_status=403,
+        body={"tenant_id": PRIVATE_TENANT}, tenant_from_body=True,
+        note="The CareAgents Disconnect. Ingest's gate, not seed's: no "
+             "public-tenant exemption, because it decides what may arrive "
+             "in a tenant. The secret is checked before the body is read; "
+             "the body names the tenant and its format is validated through "
+             "tenant_from_request (pinned in "
+             "tests/test_fasten_revoke_on_disconnect.py; TENANT_FORMAT here "
+             "is reserved for header rows).",
     ),
     Row(
         id="internal-bind-telegram",
@@ -1168,7 +1184,7 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
     """
     from models import db
     from r6.fasten import routes as fasten_routes
-    from r6.fasten.models import FastenJob
+    from r6.fasten.models import FastenConnection, FastenJob
     from r6.models import AuditEventRecord
 
     # The real handler starts a daemon ingest thread that shares this
@@ -1178,6 +1194,11 @@ def test_audit_absent_where_the_matrix_says_absent(client, app, tenant_id,
                         lambda *args, **kwargs: None)
 
     with app.app_context():
+        # A live connection row: retry refuses (and audits) a job whose
+        # connection is revoked or gone, which is not the absence pinned here.
+        db.session.add(FastenConnection(
+            org_connection_id="guard-matrix-conn", tenant_id=tenant_id,
+            connection_status="authorized"))
         db.session.add(FastenJob(
             task_id="guard-matrix-task",
             org_connection_id="guard-matrix-conn",

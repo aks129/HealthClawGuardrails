@@ -1973,6 +1973,7 @@ class FakeClient:
         # in the session shared one list and a test's assertion on
         # `len(fake.purged)` depended on which tests ran before it.
         self.purged: list[str] = []
+        self.fasten_revoked: list[str] = []
 
         # Consent handoff (spec §13.3, §13.4): the parked request HealthClaw
         # would answer for any request id, the ids asked about, the consents
@@ -2306,6 +2307,17 @@ class FakeClient:
             raise HealthClawError("purge failed", 500)
         self.purged.append(tenant)
         return {"tenant_id": tenant, "deleted": True, "rows_deleted": 42}
+
+    # The engine-side Disconnect; the tenants it revoked are on
+    # `self.fasten_revoked`.
+    revoke_fasten_fails = False
+
+    def revoke_fasten(self, tenant):
+        if self.revoke_fasten_fails:
+            raise HealthClawError("fasten revoke failed (502)", 502)
+        self.fasten_revoked.append(tenant)
+        return {"tenant_id": tenant, "revoked": True,
+                "already_revoked": False}
 
     def bind_telegram(self, tenant, chat_id):
         self.bound.append((tenant, chat_id))

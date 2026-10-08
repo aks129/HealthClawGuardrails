@@ -534,3 +534,26 @@ class TestSyncNowTenantScope:
         assert body['connections_checked'] == 1
         assert fake.fetched == ['hc-tenant-a']
         assert 'hc-tenant-b' not in fake.fetched
+
+
+class TestRunOnceSkipsDisconnectedTenants:
+    def test_a_disconnected_tenant_is_not_polled(self, app):
+        """A CareAgents Disconnect tombstones the tenant; the wearables
+        poller must stop pulling into it as the Fasten paths do. The row has
+        no status column, so the tombstone is the only signal.
+
+        MUTATION: drop the tenant_revoked check in run_once -> tenant A's
+        connection is fetched here."""
+        from models import db
+        from r6.fasten.models import FastenTenantRevocation
+        from r6.wearables.poller import run_once
+        _seed_two_tenant_connections(app)
+        with app.app_context():
+            db.session.add(FastenTenantRevocation(tenant_id='tenant-a'))
+            db.session.commit()
+        fake = _RecordingClient()
+
+        summary = run_once(app, client=fake)
+
+        assert fake.fetched == ['hc-tenant-b']
+        assert summary['connections_checked'] == 1
