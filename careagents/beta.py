@@ -37,6 +37,14 @@ DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets "
                     "overnight.")
 
 
+#: The sample connection's one line: the banner on its chat page, and the
+#: opening line of every answer the worker finishes on it, web and text
+#: alike. A tester read a sample creatinine rise, dated today and worded
+#: "your", as her own result and stopped (2026-10-08 patient walk).
+SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
+                "you.")
+
+
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
 #: True before and after #565 is approved: a connection made before the

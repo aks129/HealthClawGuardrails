@@ -268,11 +268,14 @@ class RunWorker:
             except Exception:  # noqa: BLE001 - a count never fails a turn
                 logger.warning("could not count activity for run %s", run_id)
         agent = context["agent"]
+        # Made-up records answer as made-up, on every surface: the prompt
+        # says whose they are, and the answer opens with beta.SAMPLE_FRAME.
+        sample = context["connection"].get("kind") == "sample"
         # The engine tags each run with the surface its message arrived on;
         # a text thread gets the texting style (careagents/personas.py).
         prompt = system_prompt(
             agent["name"], agent["persona"], agent.get("advisor"),
-            surface=str(run.get("surface") or ""))
+            surface=str(run.get("surface") or ""), sample=sample)
 
         history = self.hc.recent_messages(
             tenant, limit=40, conversation_id=run["conversation_id"],
@@ -351,8 +354,9 @@ class RunWorker:
             self.hc.append_agent_run_event(
                 run_id, self.worker_id, CHARGED_EVENT, {})
 
+        lead = beta.SAMPLE_FRAME if sample else ""
         if final_checkpoint is not None:
-            self._finish(run, final_checkpoint, emitted, heartbeat)
+            self._finish(run, final_checkpoint, emitted, heartbeat, lead=lead)
             return
 
         while True:
@@ -397,7 +401,8 @@ class RunWorker:
 
             calls = pending_checkpoint.get("tool_calls") or []
             if not calls:
-                self._finish(run, pending_checkpoint, emitted, heartbeat)
+                self._finish(run, pending_checkpoint, emitted, heartbeat,
+                             lead=lead)
                 return
 
             for call in calls:
@@ -495,11 +500,17 @@ class RunWorker:
             emitted.add(marker)
 
     def _finish(self, run: dict, checkpoint: dict,
-                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat) -> None:
+                emitted: set[tuple[str, str]], heartbeat: LeaseHeartbeat,
+                lead: str = "") -> None:
+        """`lead` opens a model's answer on its own line (the sample's
+        SAMPLE_FRAME). The checkpoint keeps the model's text alone, so a
+        replayed run adds it once, here."""
         heartbeat.check()
         self._check_deadline(run)
         run_id = str(run["id"])
         text = str(checkpoint.get("text") or "").strip() or "…"
+        if lead:
+            text = f"{lead}\n\n{text}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
         # HealthClaw owns the final fencing transaction. A client-side

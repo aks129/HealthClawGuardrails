@@ -15,7 +15,7 @@ from careagents.models import UsageDay
 from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import approve_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    FakeClient, _chat_app, _login, cfg, svc)
+    FakeClient, _chat_app, _login, cfg, sample_framed, svc)
 
 
 def _turn(c, agent_id, request_id):
@@ -90,7 +90,7 @@ def test_a_turn_over_the_cap_is_answered_without_the_model(
     assert _used(svc) == 1
     answers = [row["content"] for rows in fake.logged.values()
                for row in rows if row["role"] == "assistant"]
-    assert answers == ["model answer", beta.DAILY_LIMIT_TEXT]
+    assert answers == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
     assert _turn(c, agent_id, "q-3") == 429     # and admission says so
 
 
@@ -221,5 +221,5 @@ def test_a_recovered_run_is_not_charged_twice(cfg, svc, monkeypatch):  # noqa: F
     assert fake.runs[run_id]["status"] == "completed"
     answers = [row["content"] for rows in fake.logged.values()
                for row in rows if row["role"] == "assistant"]
-    assert answers == ["kept answer"]
+    assert answers == [sample_framed("kept answer")]
     assert _used(svc) == 1

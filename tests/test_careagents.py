@@ -542,6 +542,13 @@ def _chat_app(cfg, svc, monkeypatch, reply="here you go"):
     return app, c, fake, agent_id, fake.tenants[-1], conn["id"]
 
 
+def sample_framed(text: str) -> str:
+    """An answer as `_chat_app`'s sample connection finishes it: opened by
+    the made-up-records line (tests/test_careagents_sample_framing.py)."""
+    from careagents import beta
+    return f"{beta.SAMPLE_FRAME}\n\n{text}"
+
+
 def test_log_message_sends_explicit_agent_and_conversation_identity():
     """The wire contract preserves CareAgents identity across surfaces."""
     import careagents.healthclaw as hcmod
@@ -743,7 +750,7 @@ def test_a_chat_turn_is_persisted_to_healthclaw_not_careagents(
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[0]["content"] == "hi there"
-    assert stored[1]["content"] == "here you go"
+    assert stored[1]["content"] == sample_framed("here you go")
 
 
 def test_chat_route_also_accepts_agent_id_as_the_query_param(cfg, svc,
@@ -848,7 +855,8 @@ def test_duplicate_inbound_request_runs_the_model_once(cfg, svc, monkeypatch):
 
     assert calls["count"] == 1
     assert '"type": "accepted"' in replay.get_data(as_text=True)
-    assert '"text": "once"' in replay.get_data(as_text=True)
+    assert ('"text": ' + json.dumps(sample_framed("once"))
+            in replay.get_data(as_text=True))
     stored = fake.logged[(tenant, fake.conversation_id(agent_id))]
     assert [message["role"] for message in stored] == ["user", "assistant"]
     assert first.status_code == replay.status_code == 200
@@ -887,7 +895,7 @@ def test_browser_disconnect_reconnect_replays_without_duplicate_inference(
     body = replay.get_data(as_text=True)
 
     assert calls["count"] == 1
-    assert '"text": "durable answer"' in body
+    assert '"text": ' + json.dumps(sample_framed("durable answer")) in body
     assert '"type": "done"' in body
 
 
@@ -5044,7 +5052,7 @@ def test_imessage_turns_spend_the_daily_cap(app, svc, monkeypatch, cfg):
     replies = [relay.get(f"/api/surfaces/imessage/runs/{r}", headers=hdrs,
                          query_string={"handle": "+15550001111"}
                          ).get_json()["reply"] for r in runs]
-    assert replies == ["model answer", beta.DAILY_LIMIT_TEXT]
+    assert replies == [sample_framed("model answer"), beta.DAILY_LIMIT_TEXT]
     assert calls == [1] and used() == 1
     # Once spent, admission answers it too, without queueing a run.
     third = relay.post("/api/surfaces/imessage/inbound", headers=hdrs,

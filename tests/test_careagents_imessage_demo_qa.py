@@ -11,7 +11,7 @@ from __future__ import annotations
 from careagents import sendblue
 from careagents.models import SendblueMessage
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    cfg, svc)
+    cfg, sample_framed, svc)
 from tests.test_careagents_imessage_demo import _ask, _model
 from tests.test_careagents_sendblue import (  # noqa: F401
     FakeSendblue, _app, _pair, sb_cfg, sb_svc)
@@ -31,7 +31,9 @@ def test_a_failed_part_stops_the_rest(sb_cfg, sb_svc, monkeypatch):  # noqa: F81
     _model(monkeypatch, answer=answer)
     failing = FailsSecondPart()
     _ask(app, c, failing, "tell me everything", "long-fail-1")
-    assert [t[:6] for _, t in failing.sent] == ["Part 0", "Part 1"]
+    assert failing.sent[0][1].startswith(sample_framed("Part 0"))
+    assert failing.sent[1][1][:6] == "Part 1"
+    assert len(failing.sent) == 2
     with sb_svc.session() as s:
         row = s.query(SendblueMessage).filter(
             SendblueMessage.run_id.isnot(None)).one()

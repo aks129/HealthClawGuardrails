@@ -16,7 +16,7 @@ import pytest
 from careagents import imessage, sendblue, sendblue_surface
 from careagents.config import Config
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, cfg, svc)
+    _chat_app, cfg, sample_framed, svc)
 
 SECRET = "sb-test-signing-secret"
 LINE = "+15550100000"           # our Sendblue number
@@ -269,7 +269,7 @@ def test_a_run_is_delivered_once_when_it_finishes(sb_cfg, sb_svc, monkeypatch):
 
     _run(app)
     deliver.once()
-    assert fake.sent == [(PHONE, "Your A1c is in range.")]
+    assert fake.sent == [(PHONE, sample_framed("Your A1c is in range."))]
     deliver.once()
     _deliverer(app, fake).once()            # a second worker process
     assert len(fake.sent) == 1
@@ -537,7 +537,7 @@ def test_a_sample_agent_is_answered_normally(sb_cfg, sb_svc, monkeypatch):
     assert fake.typing == [PHONE]
     _run(app)
     _deliverer(app, fake).once()
-    assert fake.sent == [(PHONE, "Sample answer.")]
+    assert fake.sent == [(PHONE, sample_framed("Sample answer."))]
 
 
 def test_the_flag_lets_real_records_through(cfg, monkeypatch):  # noqa: F811

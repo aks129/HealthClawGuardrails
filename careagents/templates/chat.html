@@ -21,6 +21,10 @@
     </div>
   </div>
 
+  {# Sample records only: one plain line above the log, so it never scrolls
+     away. Every answer on the sample opens with the same line (worker). #}
+  {% if sample_line %}<p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
+
   {# Opened from a texted chart link (?chart=): the history stays hidden
      until chat.js has drawn the chart and scrolled to it, so the page does
      not paint at the top of the history first. #}
@@ -72,7 +76,7 @@
        is now a true total, so the label has to be true too. One line per
        paragraph: .msg draws every newline and indent (pre-wrap). #}
     <div class="msg agent">
-      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in your records. Want me to walk through what they show?</p>
+      {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in {{ 'these made-up' if sample_line else 'your' }} records. Want me to walk through what they show?</p>
       {#- -#}</div>
     {% else %}
     <div class="msg agent">

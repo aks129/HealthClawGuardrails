@@ -1534,7 +1534,10 @@ def create_app(config: Config | None = None,
                                history_lost=history_lost,
                                intake=intake,
                                summary_counts=intake.counts,
-                               pending_reviews=reviews)
+                               pending_reviews=reviews,
+                               sample_line=(beta.SAMPLE_FRAME
+                                            if conn.get("kind") == "sample"
+                                            else None))
 
     @app.get("/brief")
     @login_required

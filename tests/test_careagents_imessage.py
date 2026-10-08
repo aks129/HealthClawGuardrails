@@ -16,7 +16,7 @@ import pytest
 
 from careagents import beta, imessage
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
-    _chat_app, _login, cfg, svc)
+    _chat_app, _login, cfg, sample_framed, svc)
 
 HDRS = {"X-Internal-Secret": "mint-secret"}
 PHONE = "+15550100123"
@@ -214,7 +214,8 @@ def test_the_first_reply_after_a_link_bind_is_the_welcome(
     _run(app)
     answer = c.get(f"/api/surfaces/imessage/runs/{body['run_id']}",
                    headers=HDRS, query_string={"handle": PHONE})
-    assert answer.get_json()["reply"] == "Your A1c is in range."
+    assert answer.get_json()["reply"] == sample_framed(
+        "Your A1c is in range.")
     second = _inbound(c, PHONE, "thanks")
     assert second.status_code == 202 and "reply" not in second.get_json()
 
@@ -578,7 +579,7 @@ def test_the_runs_endpoint_reads_the_handle_from_a_header(
     _run(app)
     r = c.get(f"/api/surfaces/imessage/runs/{run_id}",
               headers={**HDRS, "X-Imessage-Handle": PHONE})
-    assert r.get_json()["reply"] == "from the header"
+    assert r.get_json()["reply"] == sample_framed("from the header")
 
 
 def test_stop_voids_links_still_waiting(cfg, svc, monkeypatch):  # noqa: F811
