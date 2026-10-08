@@ -216,11 +216,11 @@ def test_drop_echo_keeps_a_first_sentence_that_carries_advice():
 
 
 @pytest.mark.parametrize("first", [
-    "These records are made up and not yours, and the A1c is 8.1.",
+    "These made-up records are not yours, and they span 3 years.",
     "This is sample data, not yours; ask a doctor about it.",
     "Not your records: the sample person may be due for a flu vaccine.",
-    "These made-up records are not yours, and nothing in them should "
-    "worry you at all, though some readers like to check again later.",
+    "These made-up records are not yours, and nothing in them is about "
+    "you or anyone you know or have ever met in your whole life.",
 ], ids=["digit", "doctor", "clinical", "long"])
 def test_drop_echo_keeps_any_sentence_that_is_more_than_a_disclaimer(first):
     from careagents.worker import _drop_echo
