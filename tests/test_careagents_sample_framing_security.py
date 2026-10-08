@@ -229,6 +229,22 @@ def test_drop_echo_keeps_any_sentence_that_is_more_than_a_disclaimer(first):
     assert _drop_echo(text, beta.SAMPLE_FRAME) == text
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "LOW, sample only (425ea1d re-review): _CONTENT_WORDS is a denylist, so "
+    "a short first sentence naming a condition or medicine it does not list "
+    "is still dropped as a disclaimer. Goes green when only the frame, or a "
+    "sentence with nothing left after removing disclaimer words, is "
+    "dropped."))
+@pytest.mark.parametrize("first", [
+    "The sample person, not you, has diabetes and anemia.",
+    "This sample person is not you and takes metformin twice daily.",
+], ids=["conditions", "medicine"])
+def test_drop_echo_keeps_a_short_clinical_sentence_off_the_denylist(first):
+    from careagents.worker import _drop_echo
+    text = f"{first}\n\nMore."
+    assert _drop_echo(text, beta.SAMPLE_FRAME) == text
+
+
 def test_drop_echo_never_reaches_past_the_first_paragraph():
     from careagents.worker import _drop_echo
     text = f"{MODEL_TEXT}\n\n{beta.SAMPLE_FRAME}"

@@ -187,3 +187,52 @@ def test_the_credential_alone_selects_the_sample_voice(
     _ingested_creatinine_rise(app, tenant_id)
     line = _trend(client, {**tenant_headers, "X-Internal-Secret": _SECRET})
     assert "the sample person's creatinine rose" in line
+
+
+@pytest.mark.parametrize("where", ["query-header-name", "query-snake",
+                                   "bearer", "dup-right-first",
+                                   "dup-wrong-first"])
+def test_the_secret_only_counts_as_one_exact_header(
+        app, client, tenant_id, tenant_headers, monkeypatch, where):
+    """425ea1d re-review: the secret in the query string, as a bearer, or in
+    a duplicated header never selects the sample voice."""
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", _SECRET)
+    _ingested_creatinine_rise(app, tenant_id)
+    base = list(tenant_headers.items())
+    query = "?voice=sample"
+    if where == "query-header-name":
+        headers, query = base, f"{query}&X-Internal-Secret={_SECRET}"
+    elif where == "query-snake":
+        headers, query = base, f"{query}&internal_secret={_SECRET}"
+    elif where == "bearer":
+        headers = base + [("Authorization", f"Bearer {_SECRET}")]
+    elif where == "dup-right-first":
+        headers = base + [("X-Internal-Secret", _SECRET),
+                          ("X-Internal-Secret", "wrong")]
+    else:
+        headers = base + [("X-Internal-Secret", "wrong"),
+                          ("X-Internal-Secret", _SECRET)]
+    r = client.get(_URL + query, headers=headers)
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert _SECRET not in body
+    [line] = [s for s in _strings(r.get_json()) if "creatinine rose" in s]
+    if where == "dup-right-first":
+        # Werkzeug's headers.get returns the first value; a caller who
+        # already holds the secret gains nothing by adding a second header.
+        return
+    assert "sample person" not in line, where
+
+
+def test_the_secret_does_not_stand_in_for_tenant_read_auth(
+        app, client, tenant_id, monkeypatch):
+    """The internal secret selects wording only; it never opens a
+    non-public tenant without the tenant's own credential."""
+    monkeypatch.setenv("READ_AUTH_ENABLED", "true")
+    monkeypatch.setenv("INTERNAL_TOKEN_MINT_SECRET", _SECRET)
+    _ingested_creatinine_rise(app, "victim-tenant")
+    r = client.get(_URL + "?voice=sample",
+                   headers={"X-Tenant-Id": "victim-tenant",
+                            "X-Internal-Secret": _SECRET})
+    assert r.status_code in (401, 403)
+    assert "creatinine" not in r.get_data(as_text=True)
