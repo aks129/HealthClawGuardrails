@@ -39,14 +39,16 @@ def _real_chat_app(cfg, svc, monkeypatch):  # noqa: F811
     return c, fake, agent_id
 
 
-def _answer(c, fake, agent_id, cfg, svc, monkeypatch, prompts):  # noqa: F811
+def _answer(c, fake, agent_id, cfg, svc, monkeypatch, prompts,  # noqa: F811
+            says=MODEL_TEXT):
     """Ask once and run the worker; the answer as the transcript keeps it.
-    `prompts` collects the system prompt each model call was given."""
+    The model `says` its text; `prompts` collects the system prompt each
+    model call was given."""
     from careagents import agent as agent_mod
     from careagents.worker import RunWorker
 
     class _Turn:
-        text, tool_calls, raw_tool_calls = MODEL_TEXT, [], []
+        text, tool_calls, raw_tool_calls = says, [], []
     monkeypatch.setattr(agent_mod.llm, "complete",
                         lambda _cfg, system, *a, **k:
                         prompts.append(system) or _Turn())
@@ -71,6 +73,16 @@ def test_a_sample_answer_opens_by_saying_the_records_are_made_up(
     assert answer.endswith(MODEL_TEXT)
     # And the model was told whose records these are.
     assert prompts and all("made-up" in p for p in prompts)
+
+
+def test_a_model_that_repeats_the_line_still_shows_it_once(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """From the second turn the model has read its earlier answers, each
+    opening with the line, and may write it itself."""
+    _app, c, fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
+    answer = _answer(c, fake, agent_id, cfg, svc, monkeypatch, [],
+                     says=f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}")
+    assert answer == f"{beta.SAMPLE_FRAME}\n\n{MODEL_TEXT}"
 
 
 def test_a_real_answer_is_exactly_what_the_model_said(

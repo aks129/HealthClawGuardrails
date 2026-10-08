@@ -510,6 +510,10 @@ class RunWorker:
         run_id = str(run["id"])
         text = str(checkpoint.get("text") or "").strip() or "…"
         if lead:
+            # The line is in the stored history, so a model may already
+            # open with it on a later turn. Say it once.
+            if text.startswith(lead):
+                text = text[len(lead):].strip() or "…"
             text = f"{lead}\n\n{text}"
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "final")
         marker = ("agent.text", checkpoint_id)
