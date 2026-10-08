@@ -242,8 +242,10 @@
 <!-- Consent card: shown before any REAL-record connection starts.
      Sample records skip this on purpose — synthetic data, zero risk.
      Copy is versioned server-side (tester_terms.CONSENT_VERSION); keep them
-     in step. -->
-<div class="modal" id="consent-modal" hidden>
+     in step. The version is rendered on the card and home.js sends it back
+     with the consent, so the server records the wording shown. -->
+<div class="modal" id="consent-modal" hidden
+     data-consent-version="{{ consent_version }}">
   <div class="modal-card consent-card">
     <h3>Before you connect your real records</h3>
     {# Plain words (#884 G7). The meaning of each point is unchanged, so
@@ -290,7 +292,8 @@
      wording, not the first-connect card. Explicit buttons only, like the
      consent card. -->
 <div class="modal" id="reconsent-modal" role="dialog" aria-modal="true"
-     aria-labelledby="reconsent-title" hidden>
+     aria-labelledby="reconsent-title" hidden
+     data-consent-version="{{ consent_version }}">
   <div class="modal-card consent-card">
     <h3 id="reconsent-title">Our terms changed</h3>
     <p class="consent-lead">{{ terms_change }}</p>

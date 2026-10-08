@@ -140,6 +140,19 @@ def _handle_export_success(payload: dict) -> None:
             'Fasten export_success: unknown org_connection_id (not registered)'
         )
         return
+    # A revoked connection takes no more records: the person took the
+    # authorization back, so a later export is acknowledged and dropped
+    # (security review of #904, F2).
+    if conn.connection_status == 'revoked':
+        add_audit_event(
+            event_type='fasten_import_refused',
+            agent_id='fasten-connect',
+            tenant_id=conn.tenant_id,
+            outcome='failure',
+            detail=f'job={task_id} connection revoked',
+        )
+        db.session.commit()
+        return
 
     # Idempotency with recovery: skip only a COMPLETED job. A job stranded in
     # a non-terminal state (a redeploy/crash killed the daemon thread) or a

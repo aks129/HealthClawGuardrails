@@ -7,6 +7,7 @@ import re
 
 from careagents import connectors
 from careagents import hub as hub_view
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import _beta_app, _login, _make_account
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
@@ -226,8 +227,8 @@ def test_a_second_tap_on_find_my_records_reuses_the_pending_connection(
     """Two taps made two identical "Records from your doctor" rows, both
     stuck connecting (PR #843 QA). The second reuses the first."""
     c, aid = _signed_in(app, svc, monkeypatch)
-    first = c.post("/api/connections/fasten", json={"consent": True})
-    second = c.post("/api/connections/fasten", json={"consent": True})
+    first = c.post("/api/connections/fasten", json=consented())
+    second = c.post("/api/connections/fasten", json=consented())
     assert first.status_code == 200 and second.status_code == 200
     a, b = first.get_json(), second.get_json()
     assert b["id"] == a["id"] and b["status"] == "pending"
@@ -243,7 +244,7 @@ def test_a_second_tap_on_find_my_records_reuses_the_pending_connection(
 
 def test_the_reused_connection_still_needs_consent(app, svc, monkeypatch):
     c, _ = _signed_in(app, svc, monkeypatch)
-    c.post("/api/connections/fasten", json={"consent": True})
+    c.post("/api/connections/fasten", json=consented())
     r = c.post("/api/connections/fasten", json={})
     assert r.status_code == 428
     assert "connect_url" not in r.get_json()
@@ -253,11 +254,11 @@ def test_a_connected_provider_does_not_block_another(app, svc, monkeypatch):
     """Only a pending row is reused: once records arrive, a second doctor
     is a second connection."""
     c, aid = _signed_in(app, svc, monkeypatch)
-    first = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    first = c.post("/api/connections/fasten", json=consented()).get_json()
     tenant = svc.get_connection(aid, first["id"])["tenant_id"]
     svc.activate_connection(tenant)
     second = c.post("/api/connections/fasten",
-                    json={"consent": True}).get_json()
+                    json=consented()).get_json()
     assert second["id"] != first["id"]
 
 
@@ -279,7 +280,7 @@ def test_a_pending_wearable_is_not_reused_as_a_doctor_connection(
     c, aid = _signed_in(app, svc, monkeypatch)
     wearable = svc.add_connection(aid, "wearable", "ca-wearable1", "Oura",
                                   status="pending")
-    r = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    r = c.post("/api/connections/fasten", json=consented()).get_json()
     assert r["id"] != wearable
     assert "ca-wearable1" not in r["connect_url"]
     fasten = [x for x in svc.list_home(aid)["connections"]

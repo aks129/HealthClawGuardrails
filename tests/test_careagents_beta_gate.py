@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from careagents.app import create_app
+from tests.careagents_consent_helpers import consented
 from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
 from tests.test_careagents import FakeClient, _login
 
@@ -31,7 +32,7 @@ def _client(cfg, monkeypatch):
 
 def _can_start(c) -> bool:
     return c.post("/api/connections/fasten",
-                  json={"consent": True}).status_code == 200
+                  json=consented()).status_code == 200
 
 
 def _tier(c) -> str:

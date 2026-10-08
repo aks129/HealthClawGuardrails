@@ -6,6 +6,7 @@ import pathlib
 import re
 
 from careagents import connectors
+from tests.careagents_consent_helpers import consented
 from tests.test_careagents import FakeClient, _login
 from tests.test_careagents import app as _app_fixture
 from tests.test_careagents import cfg as _cfg_fixture
@@ -79,7 +80,7 @@ def test_the_waiting_chat_notice_reads_as_a_sentence(cfg, svc, monkeypatch):
     a.config["TESTING"] = True
     c = a.test_client()
     _login(c, svc, monkeypatch)
-    conn = c.post("/api/connections/fasten", json={"consent": True}).get_json()
+    conn = c.post("/api/connections/fasten", json=consented()).get_json()
     with c.session_transaction() as s:
         aid = s["account_id"]
     agent = svc.create_agent(aid, "Juniper", "calm", conn["id"])
