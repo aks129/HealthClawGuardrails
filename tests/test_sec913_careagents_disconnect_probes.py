@@ -75,10 +75,6 @@ def test_disconnect_stays_on_when_the_engine_does_not_confirm(
     assert _status(svc, conn_id) == before
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 F2 (low): revoke_fasten "
-                   "accepts any 200 JSON object; a 200 that says revoked "
-                   "false (or {}) is read as a confirmed disconnect. "
-                   "purge_tenant has the same shape")
 @pytest.mark.parametrize("body", [{"revoked": False}, {}])
 def test_a_200_that_does_not_say_revoked_is_not_a_disconnect(
         cfg, svc, monkeypatch, body):  # noqa: F811

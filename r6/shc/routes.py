@@ -46,7 +46,8 @@ from markupsafe import escape
 
 from models import db
 from r6 import constant_time
-from r6.access import TenantRejected, TenantSource, tenant_from_request
+from r6.access import (TenantRejected, TenantSource, require_open_tenant,
+                       tenant_from_request)
 from r6.audit import add_audit_event
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,8 @@ def ingest():
         if exc.reason == TenantRejected.MALFORMED:
             raise
         return jsonify({'error': 'X-Tenant-Id header required'}), 400
+    # Disconnected or deleted in CareAgents: no new records (409, audited).
+    require_open_tenant(tenant_id)
 
     source = request.headers.get('X-Source', 'shc').strip()
 

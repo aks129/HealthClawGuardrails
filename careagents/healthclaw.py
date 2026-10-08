@@ -780,7 +780,12 @@ class HealthClawClient:
         if r.status_code != 200:
             raise HealthClawError(f"fasten revoke failed ({r.status_code})",
                                   r.status_code)
-        return self._json_object(r, "fasten revoke")
+        body = self._json_object(r, "fasten revoke")
+        # A 200 that does not say revoked (a proxy page, an older engine) is
+        # not a confirmation, so Disconnect stays fail-closed (review F2).
+        if body.get("revoked") is not True:
+            raise HealthClawError("fasten revoke not confirmed", r.status_code)
+        return body
 
     # --- conversation history -------------------------------------------------
     #

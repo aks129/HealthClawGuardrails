@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from models import db
 from r6.audit import add_audit_event
 from r6.fasten.models import (FastenConnection, FastenJob,
-                              FastenTenantRevocation)
+                              FastenTenantRevocation, tenant_revoked)
 from r6.fasten.reaper import TERMINAL_STATUSES
 
 logger = logging.getLogger(__name__)
@@ -58,13 +58,21 @@ def revoke_tenant(tenant_id: str) -> dict:
             )
         db.session.commit()
     except IntegrityError:
-        # A concurrent revoke inserted the tombstone first and committed;
-        # that request did this work.
+        # Most likely a concurrent revoke inserted the tombstone first and
+        # committed, and that request did this work. Only a tombstone that
+        # exists after the rollback proves it: any other constraint failure
+        # rolled ours back too, and is not a revoke (security review F1).
         db.session.rollback()
+        if not tenant_revoked(tenant_id):
+            raise
         already, connections, jobs = True, 0, 0
     except Exception:
         db.session.rollback()
         raise
+    # The tenant named in the body, the one revoked; a header on the same
+    # request is never consulted and never logged here.
+    logger.info('fasten revoke: tenant=%s already=%s connections=%d jobs=%d',
+                tenant_id, already, connections, jobs)
     return {
         'tenant_id': tenant_id,
         'revoked': True,

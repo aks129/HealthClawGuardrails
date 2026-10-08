@@ -126,9 +126,6 @@ def test_an_operational_audit_failure_revokes_nothing_and_says_so(client,
                           "oc-sec913-1").connection_status == "authorized"
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 F1: revoke_tenant treats ANY "
-                   "IntegrityError as 'a concurrent revoke won' and answers "
-                   "200 revoked:true without checking a tombstone exists")
 def test_an_integrity_error_that_is_not_the_tombstone_is_not_a_revoke(
         client, secret):
     """An IntegrityError raised by the audit insert (or any statement other
@@ -226,9 +223,6 @@ def test_running_ingest_sees_a_tombstone_from_another_connection(
 
 # --- ways in that do not ask the tombstone (outside the PR's claim) ----------
 
-@pytest.mark.xfail(strict=True, reason="sec913 F3 (residual, outside the "
-                   "PR's claim): /internal/ingest-bundle does not read the "
-                   "tombstone, so an emptied (purged) tenant can be refilled")
 def test_ingest_bundle_into_a_purged_tenant_is_refused(client, secret):
     from r6.purge import purge_tenant
     purge_tenant(VICTIM)
@@ -245,9 +239,6 @@ def test_ingest_bundle_into_a_purged_tenant_is_refused(client, secret):
     assert R6Resource.query.filter_by(tenant_id=VICTIM).count() == 0
 
 
-@pytest.mark.xfail(strict=True, reason="sec913 F3 (residual): a write-scoped "
-                   "step-up token minted before the disconnect still writes "
-                   "into the tombstoned tenant")
 def test_direct_fhir_write_into_a_revoked_tenant_is_refused(client, secret):
     from r6.stepup import generate_step_up_token
     token = generate_step_up_token(VICTIM)
@@ -264,9 +255,12 @@ def test_direct_fhir_write_into_a_revoked_tenant_is_refused(client, secret):
 
 def test_wearable_oauth_callback_after_revoke_brings_no_data(client, secret,
                                                              monkeypatch):
-    """The callback still creates a WearableConnection row in a revoked
-    tenant (no tombstone check there), but the poller skips it, so nothing
-    is ingested. Pinned so the poller check cannot quietly go."""
+    """The callback refuses a revoked tenant (409, no row), and the poller
+    skips the tenant regardless, so nothing is ingested. Pinned so neither
+    check can quietly go.
+
+    MUTATION: drop require_open_tenant from wearables oauth_callback -> 200
+    and a WearableConnection row here."""
     from r6.wearables import poller
     from r6.wearables.models import WearableConnection
     from r6.wearables.routes import _sign_state
@@ -278,8 +272,12 @@ def test_wearable_oauth_callback_after_revoke_brings_no_data(client, secret,
                          "exp": int(time.time()) + 300,
                          "iat": int(time.time())})
     r = client.get(f"/wearables/oauth/callback?state={state}")
-    assert r.status_code == 200, r.get_data(as_text=True)[:200]
-    assert WearableConnection.query.filter_by(tenant_id=VICTIM).count() == 1
+    assert r.status_code == 409, r.get_data(as_text=True)[:200]
+    assert WearableConnection.query.filter_by(tenant_id=VICTIM).count() == 0
+    # A row that predates the revoke is still never polled.
+    db.session.add(WearableConnection(tenant_id=VICTIM, provider="oura",
+                                      ow_user_id=f"hc-{VICTIM}"))
+    db.session.commit()
 
     class _WC:
         def enabled(self):

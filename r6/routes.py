@@ -45,7 +45,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
 from r6.redaction import apply_patient_controlled_redaction
 from r6.redaction import apply_redaction
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
-                       require_grant, tenant_from_request)
+                       require_grant, require_open_tenant, tenant_from_request)
 from r6.stepup import generate_step_up_token
 from r6.oauth import register_oauth_routes
 from r6.read_auth import (
@@ -378,6 +378,7 @@ def create_resource(resource_type):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Validate before storing (agent proposals must pass $validate before commit)
     validation_result = validator.validate_resource(body)
@@ -540,6 +541,7 @@ def update_resource(resource_type, resource_id):
     # hand back verbatim (#478).
     require_grant(scope=Scope.WRITE, tenant=tenant,
                   absent_status=401, rejected_status=401)
+    require_open_tenant(tenant)
 
     # Unlike create, update gates before it parses, so only a token holder
     # reaches this line. That is a smaller blast radius, not a closed one: a
@@ -1068,6 +1070,7 @@ def ingest_context():
     if _read_auth_enabled():
         require_grant(scope=Scope.WRITE, tenant=tenant, denied_message=(
             'Bundle ingestion requires a tenant-bound write token'))
+    require_open_tenant(tenant)
 
     try:
         from r6.fasten.ingester import skipped_type_summary
@@ -2259,6 +2262,7 @@ def ingest_bundle():
         return jsonify({'error': 'invalid tenant_id format'}), 400
     if not _internal_ingest_authorized(tenant_id):
         return jsonify({'error': 'forbidden'}), 403
+    require_open_tenant(tenant_id)
 
     ct_raw = (request.content_type or '').split(';', 1)[0].strip().lower()
     if ct_raw not in _INGEST_BUNDLE_MIME_TYPES:

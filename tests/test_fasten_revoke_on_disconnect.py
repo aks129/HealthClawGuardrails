@@ -446,3 +446,87 @@ def test_purge_twice_keeps_one_tombstone(client, secret):
     purge_tenant(TENANT)
     db.session.commit()
     assert FastenTenantRevocation.query.filter_by(tenant_id=TENANT).count() == 1
+
+
+# --- every other way records arrive (security review of #913, F3) -----------
+
+_OBS = {"resourceType": "Observation", "status": "final",
+        "code": {"coding": [{"system": "http://loinc.org", "code": "8867-4"}]}}
+
+
+def _refusals():
+    return [a for a in AuditEventRecord.query.filter_by(
+        tenant_id=TENANT, outcome="failure").all()
+        if (a.detail or "").endswith("tenant disconnected")]
+
+
+def _write_headers():
+    from r6.stepup import generate_step_up_token
+    return {"X-Tenant-Id": TENANT,
+            "X-Step-Up-Token": generate_step_up_token(TENANT),
+            "X-Human-Confirmed": "true",
+            "Content-Type": "application/fhir+json"}
+
+
+def test_update_into_a_closed_tenant_is_refused_and_audited(client, secret):
+    """MUTATION: drop require_open_tenant from update_resource -> 200."""
+    headers = _write_headers()
+    created = client.post("/r6/fhir/Observation", json=_OBS, headers=headers)
+    assert created.status_code == 201
+    rid = created.get_json()["id"]
+    _tombstone()
+    r = client.put(f"/r6/fhir/Observation/{rid}",
+                   json={**_OBS, "id": rid, "status": "amended"},
+                   headers=headers)
+    assert r.status_code == 409
+    assert r.get_json()["issue"][0]["code"] == "conflict"
+    rows = _refusals()
+    assert len(rows) == 1
+    assert rows[0].event_type == "update"
+    assert rows[0].detail == ("write refused at r6.update_resource: "
+                              "tenant disconnected")
+
+
+def test_ingest_context_into_a_closed_tenant_is_refused(client, secret):
+    """MUTATION: drop require_open_tenant from ingest_context -> 201."""
+    _tombstone()
+    bundle = {"resourceType": "Bundle", "type": "collection",
+              "entry": [{"resource": {**_OBS, "id": "obs-ctx"}}]}
+    r = client.post("/r6/fhir/Bundle/$ingest-context", json=bundle,
+                    headers={"X-Tenant-Id": TENANT})
+    assert r.status_code == 409
+    assert R6Resource.query.filter_by(tenant_id=TENANT).count() == 0
+    assert len(_refusals()) == 1
+
+
+def test_shc_ingest_into_a_closed_tenant_is_refused(client, monkeypatch):
+    """MUTATION: drop require_open_tenant from shc ingest -> 200 and a
+    background ingest."""
+    monkeypatch.setenv("SHC_WEBHOOK_SECRET", "shc-test-secret")
+    _tombstone()
+    with patch("r6.shc.routes.threading.Thread") as thread:
+        r = client.post("/shc/ingest",
+                        json={"resourceType": "Bundle", "type": "collection",
+                              "entry": [{"resource": {**_OBS, "id": "o-1"}}]},
+                        headers={"X-Tenant-Id": TENANT,
+                                 "Authorization": "Bearer shc-test-secret"})
+    assert r.status_code == 409
+    assert not thread.called
+    assert len(_refusals()) == 1
+
+
+def test_the_closed_tenant_check_runs_after_authorization(client, secret):
+    """An anonymous caller learns nothing about which tenants are closed:
+    it gets the auth refusal, never the 409."""
+    _tombstone()
+    r = client.post("/r6/fhir/internal/ingest-bundle",
+                    json={"bundle": {"resourceType": "Bundle", "entry": []}},
+                    headers={"X-Tenant-Id": TENANT})
+    assert r.status_code == 403
+
+
+def test_an_open_tenant_still_takes_writes(client, secret):
+    _tombstone(tenant=OTHER)
+    r = client.post("/r6/fhir/Observation", json=_OBS,
+                    headers=_write_headers())
+    assert r.status_code == 201

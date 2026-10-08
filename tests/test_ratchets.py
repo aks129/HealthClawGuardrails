@@ -516,7 +516,10 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: Disconnect. Raised deliberately: the route sits beside purge-tenant and
 #: needs this module's _internal_ingest_authorized gate, so only the gate and
 #: the tenant read live here; the transaction is in r6/fasten/revoke.py.
-_GOD_MODULE_LINES = 3729
+#: 3729 -> 3733 (#913 security review F3): one require_open_tenant call on
+#: each of create, update, $ingest-context and /internal/ingest-bundle. The
+#: check is a kernel primitive; only its call has to sit at each site.
+_GOD_MODULE_LINES = 3733
 
 
 def test_the_god_module_only_shrinks():

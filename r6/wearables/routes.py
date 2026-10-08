@@ -22,7 +22,7 @@ from markupsafe import escape
 from models import db
 from r6 import constant_time
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       tenant_from_request)
+                       require_open_tenant, tenant_from_request)
 from r6.audit import add_audit_event
 from r6.read_auth import authorize_tenant_read
 from r6.wearables.client import WearablesClient
@@ -165,6 +165,9 @@ def oauth_callback():
         return jsonify({'error': 'invalid or expired state'}), 400
 
     tenant_id = payload['tenant_id']
+    # A signed state outlives a disconnect: no new connection row for a
+    # tenant the account holder disconnected or deleted (409, audited).
+    require_open_tenant(tenant_id)
     provider = payload['provider']
     ow_user_id = payload['ow_user_id']
     patient_ref = request.args.get('patient_ref') or None
