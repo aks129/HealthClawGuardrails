@@ -1,23 +1,24 @@
 """QA for #906: a mid-run switch to real records the way a person makes one.
 
-The PR's own mid-run tests flip `Connection.kind` in place on the same
+The PR's first mid-run tests flipped `Connection.kind` in place on the same
 tenant. Nothing in CareAgents does that: every real-record connection gets
 a new tenant, and a person switches by moving the assistant to it
-(`POST /api/agents/<id>/connection`). Polled after such a move, the run is
-looked up under the new tenant, where it does not exist.
+(`POST /api/agents/<id>/connection`). Polled after such a move, the run
+lives under the old tenant; asked under the new one, the live engine
+answers 401, which the route used to report as an outage (503) that the
+relay retries until it times out.
 
-Two rows: the answer must never come back (holds), and the relay should
-get the app pointer rather than an outage (spec; pinned as a strict xfail
-until the run lookup handles a moved agent).
+The runs route now checks the assistant's current connection before it
+asks anything about the run, so the relay gets the app pointer at once and
+nothing from the run is fetched.
 
 Synthetic data only (555 numbers).
 """
 
 from __future__ import annotations
 
-import pytest
-
 from careagents import sendblue_surface
+from careagents.healthclaw import HealthClawError
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     _chat_app, cfg, svc)
 from tests.test_careagents_imessage import HDRS, PHONE, _inbound, _pair, _run
@@ -40,22 +41,48 @@ def _owed_run_then_move(cfg, svc, monkeypatch):  # noqa: F811
     moved = c.post(f"/api/agents/{agent_id}/connection",
                    json={"connection_id": real.get_json()["id"]})
     assert moved.status_code == 200, moved.get_json()
-    return c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
-                 query_string={"handle": PHONE})
+
+    # From here on, nothing about the run may be fetched. Were it asked,
+    # this stands in for the live engine: 401 under the new tenant.
+    asked = []
+
+    def _trap(*a, **k):
+        asked.append(a)
+        raise HealthClawError("unauthorized", 401)
+    monkeypatch.setattr(hc, "get_agent_run", _trap)
+    monkeypatch.setattr(hc, "agent_run_events", _trap)
+    polls = [c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
+                   query_string={"handle": PHONE}) for _ in range(2)]
+    return polls, asked
 
 
 def test_an_owed_answer_never_follows_a_move_to_real_records(
         cfg, svc, monkeypatch):  # noqa: F811
-    polled = _owed_run_then_move(cfg, svc, monkeypatch)
-    assert CANARY not in polled.get_data(as_text=True)
+    polls, _ = _owed_run_then_move(cfg, svc, monkeypatch)
+    for polled in polls:
+        assert CANARY not in polled.get_data(as_text=True)
 
 
-@pytest.mark.xfail(strict=True, reason="QA #906: after a move to a real "
-                   "connection the run is looked up under the new tenant; "
-                   "the relay gets an error, not the app pointer")
 def test_a_move_to_real_records_mid_run_gets_the_app_pointer(
         cfg, svc, monkeypatch):  # noqa: F811
-    polled = _owed_run_then_move(cfg, svc, monkeypatch)
-    assert polled.status_code == 200, polled.get_json()
-    assert polled.get_json()["reply"] == sendblue_surface.real_records_text(
-        cfg.origin)
+    polls, asked = _owed_run_then_move(cfg, svc, monkeypatch)
+    for polled in polls:                              # every poll, at once
+        assert polled.status_code == 200, polled.get_json()
+        assert polled.get_json()["reply"] == (
+            sendblue_surface.real_records_text(cfg.origin))
+    assert asked == []
+
+
+def test_a_sample_assistant_still_reads_its_run(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, hc, agent_id, *_ = _chat_app(cfg, svc, monkeypatch, reply=CANARY)
+    _pair(c, agent_id)
+    run_id = _inbound(c, PHONE, "hello").get_json()["run_id"]
+    pending = c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
+                    query_string={"handle": PHONE})
+    assert pending.status_code == 202                 # still running
+    _run(app)
+    done = c.get(f"/api/surfaces/imessage/runs/{run_id}", headers=HDRS,
+                 query_string={"handle": PHONE})
+    assert done.status_code == 200
+    assert done.get_json()["reply"] == CANARY

@@ -2658,6 +2658,14 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if _is_real(ctx):
+            # Read fresh at each poll, before anything about the run: an
+            # assistant switched to real records mid-run, by kind or by a
+            # move to a new tenant (where the run lookup would fail and the
+            # relay retry forever), gets the pointer and nothing of the run.
+            return jsonify({"run_id": run_id,
+                            "reply": sendblue_surface.real_records_text(
+                                cfg.origin)})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):
@@ -2673,13 +2681,8 @@ def create_app(config: Config | None = None,
         if page.get("status") not in imessage.FINAL_STATUSES:
             return jsonify({"run_id": run_id,
                             "status": page.get("status")}), 202
-        if _is_real(ctx):
-            # Read fresh at each poll, as Sendblue's delivery does: a
-            # connection switched to real records mid-run withholds it.
-            reply = sendblue_surface.real_records_text(cfg.origin)
-        else:
-            reply = imessage.run_reply(page.get("events") or [], cfg.origin,
-                                       surface["agent_id"])
+        reply = imessage.run_reply(page.get("events") or [], cfg.origin,
+                                   surface["agent_id"])
         return jsonify({"run_id": run_id, "status": page.get("status"),
                         "reply": reply})
 

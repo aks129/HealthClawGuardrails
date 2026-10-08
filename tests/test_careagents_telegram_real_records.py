@@ -3,8 +3,9 @@
 The OpenClaw gateway answers Telegram itself, outside the run worker, so
 the turn check there does not hold it back (careagents/beta.py). The rule
 is applied where CareAgents still has a say: minting a binding code and
-binding a chat. Both read `sendblue_surface.real_records_blocked`, the
-check the Sendblue line and the Mac relay use.
+binding a chat. Both read `_is_real` in careagents/app.py, as the Mac
+relay does: anything but the sample is refused, whatever
+SENDBLUE_REAL_RECORDS says (that flag is Sendblue's BAA only).
 
 Once bound, the engine holds chat -> tenant for the connection the agent
 had at bind time. Every connection gets its own tenant, so moving the
