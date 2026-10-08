@@ -343,7 +343,10 @@
       // Only clear what this poller wrote — the refresh flow shares this
       // element and its message must survive.
       if (saidUnavailable) { msg.hidden = true; saidUnavailable = false; }
-      if (d.status === "active") { clearInterval(iv); location.reload(); }
+      // Disconnected (perhaps in another tab): stop and show the real state.
+      if (d.status === "active" || d.status === "revoked") {
+        clearInterval(iv); location.reload();
+      }
     }, 5000);
   });
 

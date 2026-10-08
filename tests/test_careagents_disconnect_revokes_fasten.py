@@ -237,3 +237,38 @@ def test_cross_layer_disconnect_holds_at_the_engine(cfg, svc, monkeypatch):  # n
     assert not trigger.called
     with engine_app.app_context():
         assert db.session.get(FastenConnection, "oc-xl-late") is None
+
+
+# --- the poll tells the truth about a disconnected connection ---------------
+
+def test_poll_reports_a_disconnected_connection_as_revoked(
+        cfg, svc, monkeypatch):  # noqa: F811
+    """QA on #909: records had landed, so the poll answered "active" for a
+    row that stayed revoked, and the hub read that as live.
+
+    MUTATION: delete the revoked branch in poll_connection -> "active"."""
+    app, c, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+    conn_id, tenant = _fasten(c, fake)
+    assert c.post(f"/api/connections/{conn_id}/disconnect").status_code == 200
+    assert fake.tenant_has_records(tenant)
+    r = c.get(f"/api/connections/{tenant}/poll")
+    assert r.status_code == 200
+    assert r.get_json()["status"] == "revoked"
+    assert _status(svc, conn_id) == "revoked"
+
+
+def test_poll_on_a_live_connection_still_reports_active(
+        cfg, svc, monkeypatch):  # noqa: F811
+    app, c, fake, *_ = _chat_app(cfg, svc, monkeypatch)
+    _conn_id, tenant = _fasten(c, fake)
+    assert c.get(f"/api/connections/{tenant}/poll").get_json()["status"] \
+        == "active"
+
+
+def test_the_pending_poller_stops_on_revoked():
+    """A card left polling in another tab stops and reloads instead of
+    spinning forever on a status it does not know."""
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent.parent
+          / "careagents" / "static" / "home.js").read_text()
+    assert 'd.status === "revoked"' in js

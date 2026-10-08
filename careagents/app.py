@@ -1311,6 +1311,10 @@ def create_app(config: Config | None = None,
                  for c in svc.list_home(acct.id)["connections"]}
         if conn_tenant not in conns:
             return jsonify({"error": "not yours"}), 404
+        # Disconnected: say so. Records that landed earlier made this answer
+        # "active" while the row stayed revoked (QA on #909).
+        if conns[conn_tenant]["status"] == "revoked":
+            return jsonify({"status": "revoked"})
         try:
             landed = hc.tenant_has_records(conn_tenant)
         except HealthClawError:
