@@ -2373,6 +2373,18 @@ def create_app(config: Config | None = None,
 
     # --- surfaces ------------------------------------------------------------
 
+    def _is_real(ctx: dict) -> bool:
+        """Whether the agent is on anything but the sample, for the Mac
+        relay and Telegram. Unconditional: SENDBLUE_REAL_RECORDS stands for
+        Sendblue's BAA only, and these transports have none. An unknown
+        kind counts as real."""
+        return (ctx.get("connection") or {}).get("kind") != "sample"
+
+    def _telegram_real_records():
+        return jsonify({"error": "real_records",
+                        "message": sendblue_surface.real_records_text(
+                            cfg.origin)}), 409
+
     @app.post("/api/surfaces/telegram")
     @login_required
     def connect_telegram():
@@ -2382,6 +2394,10 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(acct.id, agent_id)
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if _is_real(ctx):
+            # The gateway answers Telegram outside the run worker, so no
+            # turn check here would hold it back: refuse the binding.
+            return _telegram_real_records()
         code = new_binding_code()
         sid = svc.add_surface(acct.id, agent_id, "telegram", code,
                               status="pending")
@@ -2402,6 +2418,10 @@ def create_app(config: Config | None = None,
         if not surface or chat_id is None:
             return jsonify({"error": "unknown code"}), 404
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
+        if ctx and _is_real(ctx):
+            # A code minted while sample does not expire; read fresh here,
+            # so a switch to real records since then binds nothing.
+            return _telegram_real_records()
         if not ctx or not hc.bind_telegram(ctx["tenant"], int(chat_id)):
             return jsonify({"error": "bind failed"}), 502
         svc.bind_surface(surface["id"], str(chat_id))
@@ -2588,7 +2608,12 @@ def create_app(config: Config | None = None,
             imessage_deps, str(body.get("handle") or ""),
             str(body.get("text") or ""),
             request_id=str(request_id) if request_id else None,
-            conversation_id=conversation_id)
+            conversation_id=conversation_id,
+            # A real-records agent gets the app pointer and no turn is
+            # queued, whatever SENDBLUE_REAL_RECORDS says (_is_real).
+            transport_block=lambda ctx: (
+                sendblue_surface.real_records_text(cfg.origin)
+                if _is_real(ctx) else None))
         return jsonify(reply), status
 
     @app.get("/link")
@@ -2676,6 +2701,14 @@ def create_app(config: Config | None = None,
         ctx = svc.get_agent_context(surface["account_id"], surface["agent_id"])
         if not ctx:
             return jsonify({"error": "unknown agent"}), 404
+        if _is_real(ctx):
+            # Read fresh at each poll, before anything about the run: an
+            # assistant switched to real records mid-run, by kind or by a
+            # move to a new tenant (where the run lookup would fail and the
+            # relay retry forever), gets the pointer and nothing of the run.
+            return jsonify({"run_id": run_id,
+                            "reply": sendblue_surface.real_records_text(
+                                cfg.origin)})
         try:
             run = hc.get_agent_run(ctx["tenant"], run_id)
             if not _run_belongs_to(run, ctx["tenant"], surface["agent_id"]):

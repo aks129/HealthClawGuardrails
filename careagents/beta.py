@@ -53,7 +53,9 @@ def turn_block(connection: dict, paused: bool,
     Checked in the run worker, the only caller of llm.complete here, so it
     holds for every turn CareAgents runs: web chat and the iMessage relay,
     including runs queued before the change. Telegram is answered by an
-    external gateway, not by this worker, so it is NOT covered.
+    external gateway, not by this worker, so this check does NOT cover it;
+    instead CareAgents refuses to mint a code for, or bind a chat to, an
+    agent on anything but the sample (app.py, `_is_real`).
     Anything that is not the sample needs consent at the current version,
     so an older or unknown kind fails closed.
     """
