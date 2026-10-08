@@ -26,7 +26,7 @@ import httpx
 
 from models import db
 from r6.audit import add_audit_event
-from r6.fasten.models import connection_revoked, tenant_revoked
+from r6.fasten.models import connection_revoked, tenant_closed
 from r6.models import R6Resource
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ def _stopped_by_disconnect(job_id: int, task_id: str, tenant_id: str,
     from r6.fasten.models import FastenJob
     from r6.fasten.reaper import TERMINAL_STATUSES
 
-    if not (tenant_revoked(tenant_id)
+    if not (tenant_closed(tenant_id)
             or connection_revoked(org_connection_id)):
         return False
     db.session.rollback()

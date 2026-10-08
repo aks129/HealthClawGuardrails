@@ -95,12 +95,12 @@ def run_once(
         if tenant_id is not None:
             query = query.filter_by(tenant_id=tenant_id)
         connections = query.all()
-        from r6.fasten.models import tenant_revoked
+        from r6.fasten.models import tenant_closed
         for conn in connections:
             # Disconnected or deleted in CareAgents: nothing new comes in.
             # The row has no status of its own, so the tenant tombstone is
             # the signal, and the row is left untouched.
-            if tenant_revoked(conn.tenant_id):
+            if tenant_closed(conn.tenant_id):
                 continue
             checked += 1
             try:

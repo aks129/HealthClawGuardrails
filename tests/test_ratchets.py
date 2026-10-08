@@ -519,7 +519,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3729 -> 3733 (#913 security review F3): one require_open_tenant call on
 #: each of create, update, $ingest-context and /internal/ingest-bundle. The
 #: check is a kernel primitive; only its call has to sit at each site.
-_GOD_MODULE_LINES = 3733
+#: 3733 -> 3736 (CTO ruling on #913): the revoke route refuses a public
+#: tenant with 422 before any write, matching purge.
+_GOD_MODULE_LINES = 3736
 
 
 def test_the_god_module_only_shrinks():

@@ -864,7 +864,7 @@ def require_open_tenant(tenant: Tenant | str) -> None:
     """Refuse a write that would bring records into a closed tenant.
 
     THE ONE PROPERTY: when this returns, the tenant carries no revocation
-    tombstone (r6.fasten.models.FastenTenantRevocation, written by a
+    tombstone (r6.fasten.models.TenantClosure, written by a
     CareAgents Disconnect and by purge). It says nothing about who the
     caller is: call it AFTER the route's own authorization, so an
     unauthenticated caller cannot learn which tenants are closed.
@@ -874,7 +874,7 @@ def require_open_tenant(tenant: Tenant | str) -> None:
     """
     from r6.fasten import models as _fasten_models_mod
     tenant_id = tenant.id if isinstance(tenant, Tenant) else tenant
-    if _fasten_models_mod.tenant_revoked(tenant_id):
+    if _fasten_models_mod.tenant_closed(tenant_id):
         raise TenantClosed(tenant_id)
 
 

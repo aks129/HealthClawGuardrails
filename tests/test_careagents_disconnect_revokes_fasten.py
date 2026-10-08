@@ -223,8 +223,8 @@ def test_cross_layer_disconnect_holds_at_the_engine(cfg, svc, monkeypatch):  # n
     assert _status(svc, conn_id) == "revoked"
 
     with engine_app.app_context():
-        from r6.fasten.models import FastenConnection, tenant_revoked
-        assert tenant_revoked(tenant)
+        from r6.fasten.models import FastenConnection, tenant_closed
+        assert tenant_closed(tenant)
     page = engine.get(f"/connect/{tenant}").get_data(as_text=True)
     assert "public-xl-key" not in page
 

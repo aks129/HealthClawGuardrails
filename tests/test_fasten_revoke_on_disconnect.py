@@ -21,7 +21,7 @@ import pytest
 
 from models import db
 from r6.fasten.models import (FastenConnection, FastenJob,
-                              FastenTenantRevocation, tenant_revoked)
+                              TenantClosure, tenant_closed)
 from r6.models import AuditEventRecord, R6Resource
 
 SECRET = "revoke-test-internal-secret"
@@ -67,7 +67,7 @@ def _job(tenant=TENANT, task="task-rv-1", status="ingesting", org="oc-rv-1"):
 
 
 def _tombstone(tenant=TENANT):
-    db.session.add(FastenTenantRevocation(tenant_id=tenant))
+    db.session.add(TenantClosure(tenant_id=tenant))
     db.session.commit()
 
 
@@ -83,7 +83,7 @@ def test_revoke_needs_the_internal_secret(client, secret):
     fasten_revoke_route -> 200 here, and a tombstone anyone could write."""
     assert _revoke(client, secret="wrong").status_code == 403
     assert client.post(REVOKE, json={"tenant_id": TENANT}).status_code == 403
-    assert not tenant_revoked(TENANT)
+    assert not tenant_closed(TENANT)
 
 
 def test_revoke_has_no_public_tenant_exemption(client, secret):
@@ -100,7 +100,7 @@ def test_revoke_needs_a_well_formed_tenant(client, secret, body):
     resp = client.post(REVOKE, json=body,
                        headers={"X-Internal-Secret": SECRET})
     assert resp.status_code == 400
-    assert FastenTenantRevocation.query.count() == 0
+    assert TenantClosure.query.count() == 0
 
 
 def test_revoke_tombstones_flips_rows_and_fails_jobs(client, secret):
@@ -120,7 +120,7 @@ def test_revoke_tombstones_flips_rows_and_fails_jobs(client, secret):
     assert body["connections_revoked"] == 2
     assert body["jobs_stopped"] == 2
 
-    assert tenant_revoked(TENANT)
+    assert tenant_closed(TENANT)
     assert {c.connection_status for c in FastenConnection.query.filter_by(
         tenant_id=TENANT)} == {"revoked"}
     jobs = {j.task_id: j for j in FastenJob.query.filter_by(tenant_id=TENANT)}
@@ -130,7 +130,7 @@ def test_revoke_tombstones_flips_rows_and_fails_jobs(client, secret):
     assert jobs["task-done"].status == "complete"
 
     # Another tenant is untouched.
-    assert not tenant_revoked(OTHER)
+    assert not tenant_closed(OTHER)
     assert db.session.get(FastenConnection, "oc-rv-other").connection_status \
         == "authorized"
     assert FastenJob.query.filter_by(task_id="task-other").one().status \
@@ -150,7 +150,7 @@ def test_revoke_is_idempotent(client, secret):
     again = _revoke(client)
     assert again.status_code == 200
     assert again.get_json()["already_revoked"] is True
-    assert FastenTenantRevocation.query.filter_by(tenant_id=TENANT).count() == 1
+    assert TenantClosure.query.filter_by(tenant_id=TENANT).count() == 1
     assert len(_audits("fasten_connection_revoked")) == 1
 
 
@@ -160,7 +160,7 @@ def test_revoke_with_no_fasten_rows_still_tombstones(client, secret):
     resp = _revoke(client)
     assert resp.status_code == 200
     assert resp.get_json()["connections_revoked"] == 0
-    assert tenant_revoked(TENANT)
+    assert tenant_closed(TENANT)
     assert len(_audits("fasten_connection_revoked")) == 1
 
 
@@ -169,7 +169,7 @@ def test_revoke_with_no_fasten_rows_still_tombstones(client, secret):
 def test_connection_success_after_revoke_creates_nothing(client, secret):
     """The disconnect landed before Fasten's connection_success did.
 
-    MUTATION: delete the tenant_revoked check in _handle_connection_success
+    MUTATION: delete the tenant_closed check in _handle_connection_success
     -> a fresh authorized row and a trigger_ehi_export call here."""
     assert _revoke(client).status_code == 200
     resp, trigger, _ = _webhook(client, "patient.connection_success", {
@@ -197,7 +197,7 @@ def test_export_success_on_a_revoked_tenant_opens_no_job(client, secret):
     """The tenant check, not the row status: the row here is still
     authorized, as a row created after the revoke would be.
 
-    MUTATION: delete `tenant_revoked(conn.tenant_id)` from
+    MUTATION: delete `tenant_closed(conn.tenant_id)` from
     _handle_export_success -> a job and an ingest thread here."""
     _connection(org="oc-rv-1")
     _tombstone()
@@ -211,7 +211,7 @@ def test_export_success_on_a_revoked_tenant_opens_no_job(client, secret):
 
 
 def test_retry_after_revoke_is_refused(client, secret, monkeypatch):
-    """MUTATION: delete the tenant_revoked check in retry_job -> 202 and a
+    """MUTATION: delete the tenant_closed check in retry_job -> 202 and a
     relaunched ingest from the stored links."""
     from r6.fasten import routes as fasten_routes
     launched = MagicMock()
@@ -231,7 +231,7 @@ def test_retry_checks_the_tenant_not_only_the_row(client, monkeypatch):
     """The row is still authorized, as one created after the revoke would
     be; only the tombstone says no.
 
-    MUTATION: drop `tenant_revoked(tenant_id)` from retry_job's refusal ->
+    MUTATION: drop `tenant_closed(tenant_id)` from retry_job's refusal ->
     202 here."""
     from r6.fasten import routes as fasten_routes
     launched = MagicMock()
@@ -247,7 +247,7 @@ def test_retry_checks_the_tenant_not_only_the_row(client, monkeypatch):
 
 
 def test_register_after_revoke_is_refused(client, secret):
-    """MUTATION: delete the tenant_revoked check in register_connection ->
+    """MUTATION: delete the tenant_closed check in register_connection ->
     201 and a new authorized row on a disconnected tenant."""
     assert _revoke(client).status_code == 200
     resp = client.post("/fasten/connections",
@@ -261,7 +261,7 @@ def test_agent_access_after_revoke_is_refused(client, secret):
     """Registered and webhook-verified, then disconnected before the page
     collected its read token.
 
-    MUTATION: delete the tenant_revoked check in agent_access -> 200 and a
+    MUTATION: delete the tenant_closed check in agent_access -> 200 and a
     30-day read token for a disconnected tenant."""
     assert client.post("/fasten/connections",
                        headers={"X-Tenant-Id": TENANT},
@@ -288,7 +288,7 @@ def test_agent_access_unknown_connection_is_still_404(client, secret):
 
 def test_reaper_fails_a_revoked_tenants_job_without_triggering(
         app, monkeypatch):
-    """MUTATION: delete the tenant_revoked check in reap_zombie_jobs ->
+    """MUTATION: delete the tenant_closed check in reap_zombie_jobs ->
     trigger_ehi_export called and the job reset to pending."""
     from datetime import datetime, timedelta, timezone
 
@@ -337,7 +337,7 @@ class _Resp:
 
 
 def _run_ingest(app, monkeypatch, revoked_after_calls):
-    """Run stream_ingest on 25 resources; tenant_revoked answers True from
+    """Run stream_ingest on 25 resources; tenant_closed answers True from
     call number `revoked_after_calls + 1` onward."""
     from r6.fasten import ingester
     calls = {"n": 0}
@@ -347,7 +347,7 @@ def _run_ingest(app, monkeypatch, revoked_after_calls):
         return calls["n"] > revoked_after_calls
 
     opened = []
-    monkeypatch.setattr(ingester, "tenant_revoked", fake_revoked)
+    monkeypatch.setattr(ingester, "tenant_closed", fake_revoked)
     monkeypatch.setattr(ingester.httpx, "stream",
                         lambda *a, **k: opened.append(1) or _Resp(_ndjson(25)))
     _job(status="pending")
@@ -403,7 +403,7 @@ def test_an_unrevoked_ingest_still_completes(app, monkeypatch):
 # --- the connect page --------------------------------------------------------
 
 def test_connect_page_for_a_revoked_tenant_has_no_widget(client, monkeypatch):
-    """MUTATION: delete the tenant_revoked check in fasten_connect -> the
+    """MUTATION: delete the tenant_closed check in fasten_connect -> the
     Stitch widget renders for a disconnected tenant."""
     monkeypatch.setenv("FASTEN_PUBLIC_KEY", "public-test-key")
     live = client.get("/connect/revoke-live-tenant").get_data(as_text=True)
@@ -432,7 +432,7 @@ def test_purge_writes_the_tombstone(client, secret):
                        json={"tenant_id": TENANT},
                        headers={"X-Internal-Secret": SECRET})
     assert resp.status_code == 200
-    assert tenant_revoked(TENANT)
+    assert tenant_closed(TENANT)
     _, trigger, _ = _webhook(client, "patient.connection_success", {
         "org_connection_id": "oc-after-purge", "external_id": TENANT})
     assert not trigger.called
@@ -445,7 +445,7 @@ def test_purge_twice_keeps_one_tombstone(client, secret):
     db.session.commit()
     purge_tenant(TENANT)
     db.session.commit()
-    assert FastenTenantRevocation.query.filter_by(tenant_id=TENANT).count() == 1
+    assert TenantClosure.query.filter_by(tenant_id=TENANT).count() == 1
 
 
 def test_purging_a_public_tenant_leaves_it_open(client):
@@ -457,7 +457,7 @@ def test_purging_a_public_tenant_leaves_it_open(client):
     resp = client.post("/r6/fhir/internal/purge-tenant",
                        json={"tenant_id": "test-tenant"})
     assert resp.status_code == 200
-    assert not tenant_revoked("test-tenant")
+    assert not tenant_closed("test-tenant")
 
 
 def test_a_stop_never_rewrites_a_finished_job(app):

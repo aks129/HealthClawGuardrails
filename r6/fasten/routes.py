@@ -29,7 +29,7 @@ from r6.fasten.enrollment import (
     enrollment_tenant,
     establish_enrollment,
 )
-from r6.fasten.models import FastenConnection, FastenJob, tenant_revoked
+from r6.fasten.models import FastenConnection, FastenJob, tenant_closed
 from r6.fasten.verify import verify_webhook
 from r6.fasten.ingester import stream_ingest
 from r6.read_auth import authorize_tenant_read
@@ -145,7 +145,7 @@ def _handle_export_success(payload: dict) -> None:
     # created after the disconnect), or by Fasten's authorization_revoked
     # for this one connection (security review of #904, F2). Acknowledged
     # and dropped, so Fasten stops redelivering.
-    if tenant_revoked(conn.tenant_id) or conn.connection_status == 'revoked':
+    if tenant_closed(conn.tenant_id) or conn.connection_status == 'revoked':
         add_audit_event(
             event_type='fasten_import_refused',
             agent_id='fasten-connect',
@@ -232,7 +232,7 @@ def retry_job(task_id):
     # row gone, which proves no live authorization (security review of #909).
     conn = FastenConnection.query.filter_by(
         org_connection_id=job.org_connection_id).first()
-    if (tenant_revoked(tenant_id) or conn is None
+    if (tenant_closed(tenant_id) or conn is None
             or conn.connection_status == 'revoked'):
         add_audit_event(
             event_type='fasten_import_refused',
@@ -321,7 +321,7 @@ def _handle_connection_success(payload: dict) -> None:
     # row is created or verified, and no export is requested. A registered
     # row's own tenant is the one that counts.
     owner = existing.tenant_id if existing else tenant_id
-    if tenant_revoked(owner):
+    if tenant_closed(owner):
         add_audit_event(
             event_type='fasten_import_refused',
             agent_id='fasten-connect',
@@ -434,7 +434,7 @@ def register_connection():
     if tenant_error is not None:
         return tenant_error
 
-    if tenant_revoked(tenant_id):
+    if tenant_closed(tenant_id):
         return jsonify({'error': 'connection disconnected'}), 409
 
     data = request.get_json(silent=True) or {}
@@ -615,7 +615,7 @@ def agent_access(org_connection_id):
         org_connection_id=org_connection_id, tenant_id=tenant_id).first()
     if conn is None:
         return jsonify({'error': 'not found'}), 404
-    if tenant_revoked(tenant_id):
+    if tenant_closed(tenant_id):
         return jsonify({'error': 'connection disconnected'}), 403
 
     from r6.command_center.access import is_public

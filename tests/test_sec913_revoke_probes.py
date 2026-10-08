@@ -2,7 +2,7 @@
 tenant tombstone.
 
 Rows V1, V2, V3 and V6 of docs/qa/sign-off-standard.md. The PR's own tests
-fake `tenant_revoked` inside the ingest thread and fake the HealthClaw client
+fake `tenant_closed` inside the ingest thread and fake the HealthClaw client
 on the CareAgents side; these probes use a tombstone committed through a
 separate connection and the real client. Synthetic tenant, connection and
 task ids only.
@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from models import db
 from r6.fasten.models import (FastenConnection, FastenJob,
-                              FastenTenantRevocation, tenant_revoked)
+                              TenantClosure, tenant_closed)
 from r6.models import AuditEventRecord, R6Resource
 
 SECRET = "sec913-internal-secret"
@@ -55,8 +55,8 @@ def test_header_tenant_is_ignored_body_tenant_is_revoked(client, secret):
     _connection(tenant=ATTACKER, org="oc-sec913-att")
     r = _revoke(client, tenant=VICTIM, headers={"X-Tenant-Id": ATTACKER})
     assert r.status_code == 200
-    assert tenant_revoked(VICTIM)
-    assert not tenant_revoked(ATTACKER)
+    assert tenant_closed(VICTIM)
+    assert not tenant_closed(ATTACKER)
     assert db.session.get(FastenConnection,
                           "oc-sec913-att").connection_status == "authorized"
 
@@ -68,7 +68,7 @@ def test_production_without_a_configured_secret_refuses(client, monkeypatch):
                         lambda: "production")
     r = client.post(REVOKE, json={"tenant_id": VICTIM})
     assert r.status_code == 403
-    assert not tenant_revoked(VICTIM)
+    assert not tenant_closed(VICTIM)
 
 
 def test_secret_is_checked_before_the_body(client, secret):
@@ -83,7 +83,7 @@ def test_odd_bodies_are_400_not_500(client, secret, body):
     r = client.post(REVOKE, json=body, headers={"X-Internal-Secret": SECRET})
     assert r.status_code == 400
     assert "Traceback" not in r.get_data(as_text=True)
-    assert FastenTenantRevocation.query.count() == 0
+    assert TenantClosure.query.count() == 0
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT", "PATCH", "DELETE"])
@@ -93,7 +93,7 @@ def test_no_verb_on_the_route_clears_a_tombstone(client, secret, method):
                                                  "revoked": False},
                     headers={"X-Internal-Secret": SECRET})
     assert r.status_code == 405
-    assert tenant_revoked(VICTIM)
+    assert tenant_closed(VICTIM)
 
 
 def test_reregistering_or_purging_does_not_clear_the_tombstone(client,
@@ -107,7 +107,7 @@ def test_reregistering_or_purging_does_not_clear_the_tombstone(client,
     from r6.purge import purge_tenant
     purge_tenant(VICTIM)
     db.session.commit()
-    assert tenant_revoked(VICTIM)
+    assert tenant_closed(VICTIM)
 
 
 # --- fail closed on a failed audit write -------------------------------------
@@ -121,7 +121,7 @@ def test_an_operational_audit_failure_revokes_nothing_and_says_so(client,
     assert r.status_code == 500
     assert r.get_json()["revoked"] is False
     db.session.expire_all()
-    assert not tenant_revoked(VICTIM)
+    assert not tenant_closed(VICTIM)
     assert db.session.get(FastenConnection,
                           "oc-sec913-1").connection_status == "authorized"
 
@@ -139,7 +139,7 @@ def test_an_integrity_error_that_is_not_the_tombstone_is_not_a_revoke(
         r = _revoke(client)
     db.session.expire_all()
     revoked_claim = r.status_code == 200 and r.get_json().get("revoked")
-    assert not (revoked_claim and not tenant_revoked(VICTIM)), (
+    assert not (revoked_claim and not tenant_closed(VICTIM)), (
         "200 revoked:true with no tombstone, connection still "
         + db.session.get(FastenConnection, "oc-sec913-1").connection_status)
 
@@ -168,7 +168,7 @@ class _Stream:
 
 def test_running_ingest_sees_a_tombstone_from_another_connection(
         monkeypatch, tmp_path):
-    """No fake tenant_revoked: the tombstone is INSERTed and committed on a
+    """No fake tenant_closed: the tombstone is INSERTed and committed on a
     separate DB connection while the ingest thread's session is mid-export,
     after the first progress commit. File-backed SQLite, so the two
     connections really are two."""
@@ -194,7 +194,7 @@ def test_running_ingest_sees_a_tombstone_from_another_connection(
     def tombstone_elsewhere():
         with engine.connect() as other:
             other.execute(text(
-                "INSERT INTO fasten_tenant_revocations (tenant_id, revoked_at)"
+                "INSERT INTO tenant_closures (tenant_id, revoked_at)"
                 " VALUES (:t, CURRENT_TIMESTAMP)"), {"t": VICTIM})
             other.commit()
 
@@ -227,7 +227,7 @@ def test_ingest_bundle_into_a_purged_tenant_is_refused(client, secret):
     from r6.purge import purge_tenant
     purge_tenant(VICTIM)
     db.session.commit()
-    assert tenant_revoked(VICTIM)
+    assert tenant_closed(VICTIM)
     bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
         {"resource": {"resourceType": "Observation", "id": "obs-refill",
                       "status": "final",

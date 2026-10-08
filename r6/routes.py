@@ -2072,6 +2072,9 @@ def fasten_revoke_route():
         tenant_id = tenant_from_request(sources=(TenantSource.BODY,)).id
     except TenantRejected:
         return jsonify({'error': 'tenant_id is required'}), 400
+    from r6.command_center.access import is_public
+    if is_public(tenant_id):  # never closed; purge leaves them open too
+        return jsonify({'error': 'public tenant cannot be revoked'}), 422
     from r6.fasten.revoke import revoke_tenant
     try:
         return jsonify(revoke_tenant(tenant_id)), 200

@@ -39,7 +39,7 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         "context_envelopes",
         "fasten_connections",
         "fasten_jobs",
-        "fasten_tenant_revocations",
+        "tenant_closures",
         "proposed_actions",
         "action_events",
         "action_confirmations",
@@ -609,7 +609,7 @@ def test_legacy_create_all_upgrade_on_configured_database():
         engine.dispose()
 
 
-def test_fasten_tenant_revocation_migration_is_reversible(tmp_path):
+def test_tenant_closure_migration_is_reversible(tmp_path):
     """0010 creates the tenant-wide disconnect record that every Fasten
     ingest path checks; without it the first disconnect 500s in production.
 
@@ -621,14 +621,14 @@ def test_fasten_tenant_revocation_migration_is_reversible(tmp_path):
 
     command.upgrade(config, "head")
     schema = inspect(engine)
-    assert "fasten_tenant_revocations" in schema.get_table_names()
-    assert schema.get_pk_constraint("fasten_tenant_revocations")[
+    assert "tenant_closures" in schema.get_table_names()
+    assert schema.get_pk_constraint("tenant_closures")[
         "constrained_columns"] == ["tenant_id"]
 
     command.downgrade(config, "0009_audit_append_only")
-    assert "fasten_tenant_revocations" not in inspect(
+    assert "tenant_closures" not in inspect(
         engine).get_table_names()
 
     command.upgrade(config, "head")
-    assert "fasten_tenant_revocations" in inspect(engine).get_table_names()
+    assert "tenant_closures" in inspect(engine).get_table_names()
     engine.dispose()

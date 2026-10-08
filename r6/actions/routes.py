@@ -27,7 +27,7 @@ from flask import Blueprint, jsonify, request
 from models import db
 from r6 import constant_time
 from r6.access import (Scope, TenantRejected, TenantSource, has_grant,
-                       require_grant, tenant_from_request)
+                       require_grant, require_open_tenant, tenant_from_request)
 from r6.actions import errors
 from r6.actions.confirmations import (ACTION_APPROVAL_AUDIENCE,
                                       APPROVED_VIA_VALUES,
@@ -704,6 +704,9 @@ def confirm_action(action_id):
         absent_status=401,
         rejected_status=401,
     )
+    # An approval given before a disconnect does not execute after it: a
+    # closed tenant takes no new records (409, audited, nothing claimed).
+    require_open_tenant(tenant)
 
     # (a) Load, tenant-scoped.
     action = ProposedAction.query.filter_by(

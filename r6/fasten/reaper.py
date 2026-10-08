@@ -29,7 +29,7 @@ from models import db
 from r6.audit import add_audit_event
 from r6.fasten.api import trigger_ehi_export
 from r6.fasten.models import (FastenJob, connection_revoked,
-                              tenant_revoked)
+                              tenant_closed)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def reap_zombie_jobs() -> int:
         # The account holder disconnected or deleted, or Fasten reported
         # this connection revoked: no fresh export, and the job is closed so
         # it is never swept again.
-        if (tenant_revoked(job.tenant_id)
+        if (tenant_closed(job.tenant_id)
                 or connection_revoked(job.org_connection_id)):
             job.status = 'failed'
             job.failure_reason = 'disconnected'

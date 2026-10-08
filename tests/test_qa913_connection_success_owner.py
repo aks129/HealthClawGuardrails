@@ -14,7 +14,7 @@ from tests.test_fasten_revoke_on_disconnect import (  # noqa: F401  (fixture)
     OTHER, TENANT, _audits, _connection, _revoke, _webhook, secret)
 
 from models import db
-from r6.fasten.models import FastenConnection, tenant_revoked
+from r6.fasten.models import FastenConnection, tenant_closed
 
 
 def test_connection_success_naming_another_tenant_still_holds(client, secret):  # noqa: F811
@@ -22,7 +22,7 @@ def test_connection_success_naming_another_tenant_still_holds(client, secret):  
     export is requested and the revoked row is stamped verified."""
     _connection(tenant=TENANT, org="oc-qa913-owner")
     assert _revoke(client).status_code == 200
-    assert not tenant_revoked(OTHER)
+    assert not tenant_closed(OTHER)
 
     resp, trigger, _ = _webhook(client, "patient.connection_success", {
         "org_connection_id": "oc-qa913-owner", "external_id": OTHER})

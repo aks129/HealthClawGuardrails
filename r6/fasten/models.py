@@ -78,17 +78,21 @@ class FastenJob(db.Model):
     completed_at = db.Column(db.DateTime, nullable=True)
 
 
-class FastenTenantRevocation(db.Model):
+class TenantClosure(db.Model):
     """A tenant whose account holder disconnected or deleted its records.
 
-    Flipping FastenConnection rows is not enough on its own: a disconnect
-    that lands before patient.connection_success has no row to flip, and
-    the webhook would then create a fresh authorized one. This row is
-    tenant-wide and outlives the connection rows, so every path that could
-    bring records in (webhooks, retry, the boot reaper, a running ingest,
-    the connect page) asks `tenant_revoked` first.
+    Tenant-wide, and no new records may arrive in a closed tenant. The
+    Fasten paths (webhooks, retry, the boot reaper, a running ingest, the
+    connect page) and the wearables poller ask `tenant_closed`; every
+    record-writing route asks it through r6.access.require_open_tenant.
+    Reads, audit writes and purge stay open.
+
+    It lives with the Fasten models because Fasten is why it exists: a
+    disconnect that lands before patient.connection_success has no
+    FastenConnection row to flip, and the webhook would then create a
+    fresh authorized one.
     """
-    __tablename__ = 'fasten_tenant_revocations'
+    __tablename__ = 'tenant_closures'
 
     # tenant_id is internally generated — 64, like FastenConnection.tenant_id.
     tenant_id = db.Column(db.String(64), primary_key=True)
@@ -96,11 +100,11 @@ class FastenTenantRevocation(db.Model):
                            default=lambda: datetime.now(timezone.utc))
 
 
-def tenant_revoked(tenant_id) -> bool:
-    """True when this tenant's account holder has taken Fasten access back."""
+def tenant_closed(tenant_id) -> bool:
+    """True when the account holder disconnected or deleted this tenant."""
     if not tenant_id:
         return False
-    return db.session.get(FastenTenantRevocation, tenant_id) is not None
+    return db.session.get(TenantClosure, tenant_id) is not None
 
 
 def connection_revoked(org_connection_id) -> bool:
