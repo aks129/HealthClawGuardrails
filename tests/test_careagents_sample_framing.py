@@ -128,3 +128,35 @@ def test_the_prompt_frames_the_sample_and_only_the_sample():
     assert sample.startswith(real.split("\n\n")[0])
     # Off by default: a caller that does not say sample gets today's prompt.
     assert system_prompt("Juniper", "calm", sample=False) == real
+
+
+# --- the visit brief --------------------------------------------------------
+# "Get me ready for my visit" opens /brief, which leads with the engine's
+# trend sentence ("your creatinine rose ..."). The same line goes at the top.
+
+def _brief_page(c, agent_id, monkeypatch):
+    from tests.test_careagents_brief_lab_trends import RISE, _brief_with_trend
+    monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
+                        lambda self, tenant: _brief_with_trend())
+    body = c.get(f"/brief?agent={agent_id}").get_data(as_text=True)
+    assert RISE in body          # the trend section is on the page
+    return body
+
+
+def test_the_sample_brief_says_the_records_are_made_up(
+        cfg, svc, monkeypatch):  # noqa: F811
+    _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
+    body = _brief_page(c, agent_id, monkeypatch)
+    assert 'class="beta-banner sample-banner"' in body
+    # At the top: above the heading and above the trend sentence.
+    at = body.index(beta.SAMPLE_FRAME)
+    assert at < body.index("<h1>Visit brief</h1>")
+    assert at < body.index('class="brief-alert"')
+
+
+def test_a_real_brief_has_no_sample_line(cfg, svc, monkeypatch):  # noqa: F811
+    c, _fake, agent_id = _real_chat_app(cfg, svc, monkeypatch)
+    body = _brief_page(c, agent_id, monkeypatch)
+    assert beta.SAMPLE_FRAME not in body
+    assert "sample-banner" not in body
+    assert "made-up" not in body

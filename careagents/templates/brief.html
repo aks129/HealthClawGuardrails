@@ -3,6 +3,9 @@
 {% block bodyclass %}page-brief{% endblock %}
 {% block content %}
 <main class="hub">
+  {# Sample records only: the chat's line, at the top, above the trend
+     sentence that says "your". #}
+  {% if sample_line %}<p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
   <div class="hub-head">
     <div>
       <h1>Visit brief</h1>

@@ -1561,7 +1561,11 @@ def create_app(config: Config | None = None,
                                brief_unavailable=unavailable,
                                care_gaps_ok=(_parse_care_gaps_status(raw)
                                              == _CARE_GAPS_OK),
-                               care_gaps_note=_parse_care_gaps_reason(raw))
+                               care_gaps_note=_parse_care_gaps_reason(raw),
+                               sample_line=(beta.SAMPLE_FRAME
+                                            if (ctx.get("connection") or {}
+                                                ).get("kind") == "sample"
+                                            else None))
 
     # --- chat API (SSE), scoped to the account's agent -----------------------
 
