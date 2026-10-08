@@ -62,12 +62,15 @@ def _partial_section():
 def _page(app, svc, monkeypatch, brief):  # noqa: F811
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: this pins a real brief's wording; the sample's is
+    # pinned in tests/test_careagents_sample_framing_rewalk.py (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json={"consent": True}).get_json()["id"]
     agent_id = c.post("/api/agents", json={
         "name": "Ada", "persona": "direct",
         "connection_id": conn_id}).get_json()["id"]
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: brief)
+                        lambda self, tenant, **_: brief)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     return resp.get_data(as_text=True)

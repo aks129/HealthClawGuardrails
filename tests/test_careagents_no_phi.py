@@ -56,7 +56,7 @@ class _CanaryClient(FakeClient):
         return {"summary": {}, "consumer": {"due": [CANARY],
                                             "lines": [CANARY]}}
 
-    def fetch_appointment_brief(self, tenant):
+    def fetch_appointment_brief(self, tenant, voice=None):
         field = json.dumps({"label": "Medication", "value": CANARY,
                             "sourceType": "MedicationRequest",
                             "sourceId": "m-1"})

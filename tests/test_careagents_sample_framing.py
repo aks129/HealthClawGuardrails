@@ -137,7 +137,7 @@ def test_the_prompt_frames_the_sample_and_only_the_sample():
 def _brief_page(c, agent_id, monkeypatch):
     from tests.test_careagents_brief_lab_trends import RISE, _brief_with_trend
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_trend())
+                        lambda self, tenant, **_: _brief_with_trend())
     body = c.get(f"/brief?agent={agent_id}").get_data(as_text=True)
     assert RISE in body          # the trend section is on the page
     return body

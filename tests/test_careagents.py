@@ -2257,7 +2257,7 @@ class FakeClient:
     def care_gaps(self, tenant):
         return {"summary": {}, "consumer": {"due": []}}
 
-    def fetch_appointment_brief(self, tenant):
+    def fetch_appointment_brief(self, tenant, voice=None):
         return None
 
     def start_form_action(self, tenant):
@@ -2934,7 +2934,7 @@ def test_brief_renders_with_available_records(app, svc, monkeypatch):
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: stub_brief)
+                        lambda self, tenant, **_: stub_brief)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Hypertension" in resp.data
@@ -2952,14 +2952,15 @@ def test_brief_renders_unavailable_when_fetch_fails(app, svc, monkeypatch):
     """Brief page shows 'Not available' when the engine returns nothing."""
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    r = c.post("/api/connections/sample")
+    # A real connection: the sample words this about the sample (#908).
+    r = c.post("/api/connections/direct", json={"consent": True})
     conn_id = r.get_json()["id"]
     r = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                     "connection_id": conn_id})
     agent_id = r.get_json()["id"]
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
     assert b"Not available from your connected records" in resp.data
@@ -2979,12 +2980,14 @@ def test_an_unreachable_engine_does_not_blame_the_patient_s_records(
     """
     c = app.test_client()
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    # A real connection: the sample words this about the sample (#908).
+    conn_id = c.post("/api/connections/direct",
+                     json={"consent": True}).get_json()["id"]
     agent_id = c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                            "connection_id": conn_id}
                       ).get_json()["id"]
 
-    def _down(self, tenant):
+    def _down(self, tenant, **_):
         raise HealthClawError("appointment brief unavailable (503)", 503)
 
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief", _down)
@@ -3052,8 +3055,11 @@ def _brief_with_care_gaps(status, fields=()):
 
 
 def _agent_for_brief(c, svc, monkeypatch):
+    """A real connection: these tests pin a real brief's wording, and the
+    sample words it about the sample person (#908)."""
     _login(c, svc, monkeypatch)
-    conn_id = c.post("/api/connections/sample").get_json()["id"]
+    conn_id = c.post("/api/connections/direct",
+                     json={"consent": True}).get_json()["id"]
     return c.post("/api/agents", json={"name": "Ada", "persona": "direct",
                                        "connection_id": conn_id}
                   ).get_json()["id"]
@@ -3064,7 +3070,7 @@ def test_brief_care_gaps_unavailable_is_not_rendered_as_no_gaps(app, svc,
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("unavailable"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("unavailable"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3076,7 +3082,7 @@ def test_brief_care_gaps_evaluated_and_empty_says_no_items(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: _brief_with_care_gaps("ok"))
+                        lambda self, tenant, **_: _brief_with_care_gaps("ok"))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert resp.status_code == 200
@@ -3091,7 +3097,7 @@ def test_brief_care_gaps_evaluated_with_gaps_lists_them(app, svc, monkeypatch):
              '"sourceType":"MeasureReport","sourceId":"gap-1"}')
     monkeypatch.setattr(
         FakeClient, "fetch_appointment_brief",
-        lambda self, tenant: _brief_with_care_gaps("ok", fields=[field]))
+        lambda self, tenant, **_: _brief_with_care_gaps("ok", fields=[field]))
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert b"Colorectal cancer screening" in resp.data
@@ -3105,7 +3111,7 @@ def test_brief_missing_care_gaps_marker_is_not_reassurance(app, svc, monkeypatch
     c = app.test_client()
     agent_id = _agent_for_brief(c, svc, monkeypatch)
     monkeypatch.setattr(FakeClient, "fetch_appointment_brief",
-                        lambda self, tenant: None)
+                        lambda self, tenant, **_: None)
 
     resp = c.get(f"/brief?agent={agent_id}")
     assert _UNAVAILABLE_COPY in resp.data

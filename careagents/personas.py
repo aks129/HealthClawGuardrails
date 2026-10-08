@@ -95,7 +95,10 @@ SAMPLE_STYLE = (
     "\"your\" about anything in them: say \"in these made-up records\" "
     "or \"the sample person's\". Keep every number, date and piece of "
     "advice as written, including a trend sentence, but say it about the "
-    "sample person.")
+    "sample person. The app already shows a line saying these records "
+    "are made up, on the page and at the top of every answer, so do not "
+    "write your own. Say \"doctor\", never \"clinician\", and do not "
+    "call the results a \"partial lab list\".")
 
 
 def system_prompt(agent_name: str, persona_key: str,

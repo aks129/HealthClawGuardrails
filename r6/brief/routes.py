@@ -18,6 +18,7 @@ from r6.access import TenantSource, tenant_from_request
 from r6.models import R6Resource
 from r6.audit import record_audit_event
 from r6.redaction import apply_redaction
+from r6 import voice as voices
 from r6.brief.engine import (
     generate_brief,
     BriefResult,
@@ -95,7 +96,7 @@ def _brief_to_extension(result: BriefResult) -> list[dict]:
     ]
 
 
-def _care_gap_result(tenant_id: str) -> dict:
+def _care_gap_result(tenant_id: str, voice: str = voices.PATIENT) -> dict:
     """Run care-gaps evaluation; on failure say so rather than returning {}.
 
     The brief must not 500 when the screening rules break, but the old empty
@@ -121,7 +122,7 @@ def _care_gap_result(tenant_id: str) -> dict:
             # Not guessed and not evaluated: with no one identified, the rules
             # would report on nobody (#542). The caller reason says which.
             return {"consumer": build_consumer_summary(
-                [], not_evaluated=state)}
+                [], not_evaluated=state, voice=voice)}
 
         # Unredacted, as in $care-gaps: the rules read birthDate and gender.
         # It goes to the evaluator and nowhere else — the lines it produces
@@ -129,7 +130,7 @@ def _care_gap_result(tenant_id: str) -> dict:
         patient = patient_for(subject, tenant_id)
         if patient is None:
             return {"consumer": build_consumer_summary(
-                [], not_evaluated="check-incomplete")}
+                [], not_evaluated="check-incomplete", voice=voice)}
 
         results = evaluate_care_gaps(
             patient=patient,
@@ -139,7 +140,7 @@ def _care_gap_result(tenant_id: str) -> dict:
             procedures=subject_resources("Procedure", subject, tenant_id),
             as_of=datetime.now(timezone.utc).date().isoformat(),
         )
-        consumer = build_consumer_summary(results)
+        consumer = build_consumer_summary(results, voice=voice)
         return {"consumer": consumer}
     except Exception as exc:
         logger.warning("appointment brief: care-gaps evaluation failed (%s)",
@@ -148,7 +149,8 @@ def _care_gap_result(tenant_id: str) -> dict:
                 "reason": CARE_GAPS_REASON_ENGINE_ERROR}
 
 
-def _lab_trend_lines(tenant_id: str) -> list[dict]:
+def _lab_trend_lines(tenant_id: str,
+                     voice: str = voices.PATIENT) -> list[dict]:
     """The creatinine trend sentence for the tenant's one Patient, or [].
 
     Trends need one person's history, so the subject is the one the
@@ -174,7 +176,7 @@ def _lab_trend_lines(tenant_id: str) -> list[dict]:
         result = evaluate_creatinine_aki(subject_resources(
             "Observation", subject, tenant_id,
             limit=STORED_OBSERVATION_CAP))
-        line = kdigo_consumer_line(result)
+        line = kdigo_consumer_line(result, voice=voice)
         if not line:
             return []
         return [{"analyte": line["analyte"], "message": line["message"],
@@ -211,12 +213,16 @@ def register_brief_routes(blueprint, deps):
             tenant_id=tenant_id,
         )
 
+        # Wording only (r6/voice.py): CareAgents asks for the sample voice
+        # on its made-up records. It never reaches a read or the redaction.
+        voice = voices.parse(request.args.get("voice"))
+
         conditions = _resources_for(tenant_id, "Condition")
         medication_requests = _resources_for(tenant_id, "MedicationRequest")
         observations = _resources_for(tenant_id, "Observation")
         encounters = _resources_for(tenant_id, "Encounter")
 
-        care_gap = _care_gap_result(tenant_id)
+        care_gap = _care_gap_result(tenant_id, voice)
 
         result = generate_brief(
             conditions=conditions,
@@ -224,7 +230,8 @@ def register_brief_routes(blueprint, deps):
             observations=observations,
             encounters=encounters,
             care_gap_result=care_gap,
-            lab_trends=_lab_trend_lines(tenant_id),
+            lab_trends=_lab_trend_lines(tenant_id, voice),
+            voice=voice,
         )
 
         resource = {

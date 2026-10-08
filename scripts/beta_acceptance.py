@@ -284,7 +284,10 @@ def row_care_gaps(s, base, agent, run):
     if not m:
         return run.step(name, "FAIL", "the brief has no preventive-care section")
     body = m.group("body")
-    if "We couldn't check your screenings just now." in body:
+    # The sample's brief words it about the sample person (#908).
+    if ("We couldn't check your screenings just now." in body
+            or "We couldn't check the sample person's screenings just now."
+            in body):
         return run.step(name, "UNAVAILABLE",
                         "the page says the screening review did not run")
     items = body.count('class="brief-field"')
@@ -641,8 +644,11 @@ def main():
     r = s.get(f"{base}/brief", params={"agent": agent}, timeout=30)
     html = r.text if r.status_code == 200 else ""
     fields = html.count('class="brief-field"')
-    missing = html.count("Not available from your connected records")
-    unreachable = "could not reach your records" in html
+    # A real brief's words, or the sample's (#908).
+    missing = (html.count("Not available from your connected records")
+               + html.count("Not in these made-up records"))
+    unreachable = ("could not reach your records" in html
+                   or "could not reach these made-up records" in html)
     if r.status_code != 200:
         run.step("appointment brief", "FAIL", f"HTTP {r.status_code}")
     elif unreachable:

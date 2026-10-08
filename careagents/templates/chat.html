@@ -19,11 +19,10 @@
       <a class="pill pill-quiet" id="trust-pill" title="What the safety grade means"
          href="/safety">Safety grade: …</a>
     </div>
-  </div>
-
-  {# Sample records only: one plain line above the log, so it never scrolls
-     away. Every answer on the sample opens with the same line (worker). #}
-  {% if sample_line %}<p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
+  </div>{# Sample records only: one plain line above the log, sticky, and
+     written onto this tag so a real chat page renders byte for byte as
+     before. Every sample answer opens with the same line (worker). #}{% if sample_line %}
+  <p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
 
   {# Opened from a texted chart link (?chart=): the history stays hidden
      until chat.js has drawn the chart and scrolled to it, so the page does

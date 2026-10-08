@@ -714,7 +714,8 @@ class HealthClawClient:
             total += int(bundle.get("total") or 0)
         return total
 
-    def fetch_appointment_brief(self, tenant: str) -> dict | None:
+    def fetch_appointment_brief(self, tenant: str,
+                                voice: str | None = None) -> dict | None:
         """The brief, or None when the engine answered and there is none.
 
         Raises HealthClawError when we could not find out. The two were the
@@ -726,9 +727,14 @@ class HealthClawClient:
 
         A malformed 200 raises too: it means we did not learn whether a brief
         exists, which is the same fact as an unreachable engine.
+
+        `voice="sample"` asks the engine to word its sentences about the
+        made-up sample person (r6/voice.py). Without it the request is
+        exactly what it was.
         """
         r = self._send(
-            "GET", f"{self.fhir}/AppointmentBrief",
+            "GET", f"{self.fhir}/AppointmentBrief"
+            + ("?voice=sample" if voice == "sample" else ""),
             headers=self._headers(tenant),
             what="appointment brief")
         if r.status_code == 200:
