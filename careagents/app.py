@@ -2545,7 +2545,12 @@ def create_app(config: Config | None = None,
             imessage_deps, str(body.get("handle") or ""),
             str(body.get("text") or ""),
             request_id=str(request_id) if request_id else None,
-            conversation_id=conversation_id)
+            conversation_id=conversation_id,
+            # Sendblue's rule: a real-records agent gets the app pointer
+            # and no turn is queued.
+            transport_block=lambda ctx: (
+                sendblue_surface.real_records_text(cfg.origin)
+                if sendblue_surface.real_records_blocked(cfg, ctx) else None))
         return jsonify(reply), status
 
     @app.get("/link")
@@ -2648,8 +2653,13 @@ def create_app(config: Config | None = None,
         if page.get("status") not in imessage.FINAL_STATUSES:
             return jsonify({"run_id": run_id,
                             "status": page.get("status")}), 202
-        reply = imessage.run_reply(page.get("events") or [], cfg.origin,
-                                   surface["agent_id"])
+        if sendblue_surface.real_records_blocked(cfg, ctx):
+            # Read fresh at each poll, as Sendblue's delivery does: a
+            # connection switched to real records mid-run withholds it.
+            reply = sendblue_surface.real_records_text(cfg.origin)
+        else:
+            reply = imessage.run_reply(page.get("events") or [], cfg.origin,
+                                       surface["agent_id"])
         return jsonify({"run_id": run_id, "status": page.get("status"),
                         "reply": reply})
 
