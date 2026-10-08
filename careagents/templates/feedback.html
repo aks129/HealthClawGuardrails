@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ "Thank you" if done else "Tell us what you think" }} — CareAgents{% endblock %}
+{% block bodyclass %}page-setup{% endblock %}
+{# Tester feedback (careagents/feedback.py). The answers are emailed to the
+   team and kept nowhere. Plain words, read on a phone. #}
+{% block content %}
+<main class="setup-wrap">
+  <div class="setup-card beta-page feedback-page">
+    {% if done %}
+    <h1>Thank you</h1>
+    <p>Thank you for helping us make CareAgents better.</p>
+    {% else %}
+    <h1>Tell us what you think</h1>
+    <p>Answer any of these. One is enough, and short answers are fine.</p>
+    <p class="feedback-note"><b>Please don't include personal health details.</b></p>
+    {% if signed_in %}
+    <p id="feedback-reply">We'll reply to the email you signed in with.</p>
+    {% endif %}
+    <form id="feedback-form" novalidate>
+      {% for name, question in questions %}
+      <label class="field-label" for="fb-{{ name }}">{{ question }}</label>
+      <textarea class="field" id="fb-{{ name }}" name="{{ name }}" rows="4" maxlength="{{ answer_max }}"></textarea>
+      {% endfor %}
+      {# Next to Send, so a phone shows the problem where the thumb is. #}
+      <div id="feedback-err" class="form-error beta-err" role="alert" hidden></div>
+      <button class="btn-primary btn-block" type="submit">Send</button>
+    </form>
+    {% endif %}
+    {% if signed_in %}
+    <p class="beta-fine"><a href="/home">Back to your hub</a></p>
+    {% else %}
+    <p class="beta-fine"><a href="/">Back to CareAgents</a></p>
+    {% endif %}
+  </div>
+</main>
+{% if not done %}
+<script src="{{ url_for('static', filename='feedback.js') }}"></script>
+{% endif %}
+{% endblock %}
