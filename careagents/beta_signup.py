@@ -911,8 +911,14 @@ def register(app, svc, cfg, first_run=None) -> None:
         if done["kind"] == "join" and not session.get("account_id"):
             # /auth fills this in and opens on the email-code step.
             session[AUTH_EMAIL_KEY] = done["email"]
-        return _page("confirmed", done=done,
-                     signed_in=bool(session.get("account_id")))
+        # Who this browser is signed in as decides the one button: their
+        # hub only if it is this address's own account, else sign out.
+        me = session.get("account_id")
+        me = svc.get_account(me) if me else None
+        mine = me is not None and account_key(me.email) == account_key(
+            done["email"])
+        return _page("confirmed", done=done, signed_in=mine,
+                     someone_else=me is not None and not mine)
 
     @app.get("/beta/remove")
     def beta_remove_ask():

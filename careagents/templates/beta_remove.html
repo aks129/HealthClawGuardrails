@@ -37,6 +37,12 @@
       {{ done.email }}.</p>
     {% if signed_in %}
     <a class="btn-primary btn-block" href="/home">Open CareAgents</a>
+    {% elif someone_else %}
+    <p>Someone else is signed in on this browser. Sign them out, then sign
+      in with {{ done.email }}.</p>
+    <form method="post" action="/logout">
+      <button class="btn-primary btn-block" type="submit">Sign out</button>
+    </form>
     {% else %}
     <p>Sign in with a code we email you to start.</p>
     <a class="btn-primary btn-block" href="/auth">Sign in</a>

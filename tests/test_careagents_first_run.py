@@ -176,6 +176,12 @@ def test_someone_else_signed_in_here_is_not_swapped_out(
     assert r.status_code == 200
     assert _signed_in_as(c) == sam
     assert _account(svc) is None
+    # The one button must not open Sam's hub for Avery: it signs Sam out.
+    body = r.get_data(as_text=True)
+    assert 'href="/home"' not in body.split('class="setup-card')[1]
+    assert re.search(r'<form method="post" action="/logout">\s*<button '
+                     r'class="btn-primary btn-block"', body)
+    assert "Someone else is signed in on this browser" in body
 
 
 def test_a_change_confirmation_never_signs_in(made, sent):
