@@ -14,7 +14,24 @@ quoted back in a response or an audit row; everything else gets a generic
 corrective message (docs/agent-task-guide.md §2).
 """
 
+import re
+
 from r6.models import AuditEventRecord
+
+_PATIENT_REF_PATTERN = re.compile(r'Patient/[A-Za-z0-9\-.]{1,64}')
+_FHIR_ID_PATTERN = re.compile(r'[A-Za-z0-9\-.]{1,64}')
+
+
+def normalize_patient_ref(value):
+    """Return the Patient/{id} form of a `patient` search value, or None.
+
+    `patient` targets only Patient, so FHIR search reads a bare id as
+    Patient/{id}. Anything else (absolute URLs, other types) is refused.
+    """
+    if _FHIR_ID_PATTERN.fullmatch(value):
+        value = f'Patient/{value}'
+    return value if _PATIENT_REF_PATTERN.fullmatch(value) else None
+
 
 # Local-search contract: discovery, validation, corrective messages, and self
 # links all derive from this ordered registry.
