@@ -406,7 +406,9 @@ def create_app(config: Config | None = None,
 
     def full_sign_in_required(fn):
         """For what outlasts or widens a session: a passkey, a grant to an
-        app, a phone or chat bound to the account, real records. A session
+        app, a phone or chat bound to the account, real records; and for
+        what undoes the owner's own choices: deleting the account, revoking
+        a grant. A session
         a confirm link opened is refused until a code or passkey sign-in
         (#920 F1). Goes under @login_required."""
         @wraps(fn)
@@ -782,6 +784,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/api/grants/<grant_id>/revoke")
     @login_required
+    @full_sign_in_required
     def revoke_grant(grant_id):
         """Take a consent back. HealthClaw first, the row here second, so a
         revocation is never shown that did not happen."""
@@ -1269,6 +1272,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/api/account/delete")
     @login_required
+    @full_sign_in_required
     def delete_account():
         """Delete the account itself, end to end (#554).
 

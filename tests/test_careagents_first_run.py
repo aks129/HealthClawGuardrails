@@ -382,3 +382,42 @@ def test_the_confirm_page_names_the_account_in_full(made, sent):
     _, _, page = _ask(app.test_client(), sent)
     assert f"Confirm signs you in as\n        <b>{EMAIL}</b>" in page
     assert page.index(EMAIL) < page.index('type="submit">Confirm')
+
+
+def test_a_forwarded_link_cannot_delete_an_existing_empty_account(
+        made, sent, monkeypatch):
+    """The owner signed up at /auth and has nothing connected, so the link
+    signs in to that account; it must not be able to delete it."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    _login(app.test_client(), svc, monkeypatch, email=EMAIL)
+    owner_id = _account(svc).id
+    stranger = _link_session(app, sent)
+    assert _signed_in_as(stranger) == owner_id
+    r = stranger.post("/api/account/delete", json={"confirm": EMAIL})
+    assert r.status_code == 403
+    assert r.get_json()["error"] == "sign_in_again"
+    assert _account(svc) is not None and _account(svc).id == owner_id
+
+
+def test_a_link_session_cannot_revoke_a_grant(made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    r = c.post("/api/grants/any-grant/revoke")
+    assert r.status_code == 403
+    assert r.get_json()["error"] == "sign_in_again"
+
+
+def test_authorize_parks_the_request_for_a_link_session(made, sent):
+    """Pins the via_link check on /authorize: a link session is sent to
+    sign in with the request held, never shown the consent card."""
+    import time
+    from careagents import consent
+    app, _ = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    exp = str(int(time.time()) + 600)
+    handle = f"req-1.{exp}.{consent.tag('mint-secret', f'req-1.{exp}')}"
+    r = c.get(f"/authorize?req={handle}")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
+    with c.session_transaction() as s:
+        assert s["consent_req"] == handle
+        assert s.get("via_link")
