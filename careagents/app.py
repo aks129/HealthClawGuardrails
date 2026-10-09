@@ -2173,8 +2173,16 @@ def create_app(config: Config | None = None,
             # Pause stops approvals too (beta spec 4.6, #856 review F1).
             return render_template("chat_error.html",
                                    message=beta.PAUSED_HUB_TEXT), 423
+        # Made-up records ask the engine to word the review about "the sample
+        # person" (r6/voice.py), so a tester is not asked to attest about
+        # someone else as "I". Decided from the connection, never the request.
+        ctx = _live_agent_context(current_account(), agent_id) or {}
+        sample = (ctx.get("connection") or {}).get("kind") == "sample"
         try:
-            status, html = hc.fetch_review_page(tenant, action_id)
+            status, html = (hc.fetch_review_page(tenant, action_id,
+                                                 voice="sample")
+                            if sample else
+                            hc.fetch_review_page(tenant, action_id))
         except HealthClawError:
             # A dead socket reached Flask as a 500 before this: no statement
             # about the form, on the approval gate.

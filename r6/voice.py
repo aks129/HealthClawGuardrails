@@ -19,3 +19,10 @@ def parse(value) -> str:
     """The voice a request asked for. Only the exact word "sample" selects
     the sample voice; anything else, absent or malformed, is today's."""
     return SAMPLE if value == SAMPLE else PATIENT
+
+#: The made-up-records line a sample page opens with. CareAgents' own
+#: sentence (careagents/beta.py SAMPLE_FRAME), repeated here because the
+#: engine does not import CareAgents; tests/test_review_sample_voice.py
+#: holds the two equal.
+SAMPLE_BANNER = ("These are made-up records, not yours. Nothing here is "
+                 "about you.")

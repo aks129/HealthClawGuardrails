@@ -2284,7 +2284,7 @@ class FakeClient:
     def decline_action(self, tenant, action_id):
         return 200, {"id": action_id, "status": "declined"}
 
-    def fetch_review_page(self, tenant, action_id):
+    def fetch_review_page(self, tenant, action_id, voice=None):
         return 200, f"<html>/r6/actions/{action_id}/review</html>"
 
     def submit_review(self, tenant, action_id, decisions):
@@ -4563,7 +4563,7 @@ def test_a_gateway_504_never_says_the_form_is_no_longer_awaiting_review(
     agent = c.post("/api/agents", json={"name": "A", "persona": "calm",
                                         "connection_id": conn}).get_json()["id"]
 
-    fake.fetch_review_page = lambda tenant, action_id: (504, "gateway timeout")
+    fake.fetch_review_page = lambda tenant, action_id, **_: (504, "gateway timeout")
     page = c.get(f"/review/{agent}/act-1")
     body = page.get_data(as_text=True)
     assert page.status_code == 503, "a gateway timeout is not a verdict"
@@ -4573,7 +4573,7 @@ def test_a_gateway_504_never_says_the_form_is_no_longer_awaiting_review(
     # The engine's own answer still means what it says: the form is past
     # review. act-1 is completed in the fake, so the page now shows the
     # finished form rather than a dead end (#875 V4).
-    fake.fetch_review_page = lambda tenant, action_id: (404, "gone")
+    fake.fetch_review_page = lambda tenant, action_id, **_: (404, "gone")
     gone = c.get(f"/review/{agent}/act-1")
     assert gone.status_code == 200
     assert "Your form is ready" in gone.get_data(as_text=True)
