@@ -25,7 +25,8 @@ Check "I have no known allergies" if that is true for you, to continue.
   /* Made-up records (r6/voice.py): why Approve is off, in the ink a tester
      reads at 375px rather than the muted note colour. Here rather than in
      the shell, so a real review is the page it was, byte for byte. */
-  #review-gate-msg { color: var(--ink); font-weight: 600; }
+  /* Only the waiting hint: success/error states keep their own colours. */
+  #review-gate-msg.alert-secondary { color: var(--ink); font-weight: 600; }
 </style>{% endif %}{% endblock %}
 
 {% block content %}

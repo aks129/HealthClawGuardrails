@@ -30,7 +30,7 @@ SECRET = "review-voice-test-secret"
 
 #: Wording that may appear only on a sample review.
 SAMPLE_ONLY = ("sample person", "made-up", "sample records",
-               'id="sample-back-to-chat"', '#review-gate-msg {',
+               'id="sample-back-to-chat"', '#review-gate-msg.alert-secondary {',
                'aria-describedby')
 
 ROWS = {
@@ -151,7 +151,7 @@ def test_the_sample_gate_is_tied_to_the_button(app):
     btn = re.search(r'<button[^>]*id="approve-btn"[^>]*>', html).group(0)
     assert 'aria-describedby="review-gate-msg"' in btn
     style = "".join(re.findall(r"<style>(.*?)</style>", html, re.S))
-    assert re.search(r"#review-gate-msg\s*\{[^}]*color:\s*var\(--ink\)",
+    assert re.search(r"#review-gate-msg\.alert-secondary\s*\{[^}]*color:\s*var\(--ink\)",
                      style)
 
 
@@ -183,8 +183,20 @@ def intake_ready(app, tenant_headers):
     from tests.test_intake_attestation_gate import (_allergy, _medication,
                                                     _patient, _store)
     with app.app_context():
-        for resource in (_patient(), _medication(), _allergy()):
+        for resource in (_patient(), _medication(), _allergy(), _condition()):
             _store(resource, tenant_headers["X-Tenant-Id"])
+
+
+def _condition():
+    # A condition row too, so "the same rows" covers all three kinds
+    # (#919 QA G3 gap 2: with no condition the comparison was vacuous).
+    return {"resourceType": "Condition", "id": "voice-cond-1",
+            "subject": {"reference": "Patient/gate-patient-1"},
+            "clinicalStatus": {"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                "code": "active"}]},
+            "code": {"coding": [{"system": "http://snomed.info/sct",
+                                 "code": "38341003"}]}}
 
 
 def _get(client, auth_headers, action_id, query="", secret=None):
@@ -253,4 +265,6 @@ def test_the_voice_lists_the_same_rows(client, auth_headers, form_action):
     voiced = _get(client, auth_headers, form_action, "?voice=sample", SECRET)
     names = re.compile(r'name="((?:med|allergy|condition)-\d+)"')
     assert names.findall(voiced) == names.findall(plain)
-    assert names.findall(plain)
+    found = names.findall(plain)
+    for kind in ("med-", "allergy-", "condition-"):
+        assert any(n.startswith(kind) for n in found), kind
