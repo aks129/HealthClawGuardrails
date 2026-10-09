@@ -13,7 +13,7 @@ import pytest
 from careagents import beta
 from careagents.app import contact_links, create_app
 from tests.careagents_consent_helpers import consented
-from tests.careagents_stage1_helpers import allowlist_cfg
+from tests.careagents_stage1_helpers import allowlist_cfg, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
@@ -68,6 +68,7 @@ def _acct(svc):  # noqa: F811
 
 
 def test_an_invited_person_waiting_on_the_terms_is_told_so(monkeypatch):
+    pend_terms(monkeypatch)
     c, accounts = _stage1(monkeypatch)
     accounts.invite_real_records(EMAIL, "ops-1")
     page = c.get("/home").get_data(as_text=True)

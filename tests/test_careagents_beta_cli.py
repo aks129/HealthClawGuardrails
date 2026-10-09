@@ -8,7 +8,8 @@ import logging
 import re
 
 from careagents.app import create_app
-from tests.careagents_stage1_helpers import allowlist_cfg, approve_terms
+from tests.careagents_stage1_helpers import (
+    allowlist_cfg, approve_terms, pend_terms)
 from tests.test_careagents import FakeClient, _login
 
 
@@ -22,6 +23,7 @@ def _runner(**env):
 
 
 def test_invite_add_says_invites_wait_for_the_terms(monkeypatch):
+    pend_terms(monkeypatch)
     app, run, svc = _runner()
     r = run.invoke(args=["invites", "add", "T@Example.com", "--by", "ops-1"])
     assert r.exit_code == 0, r.output

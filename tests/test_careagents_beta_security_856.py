@@ -14,7 +14,7 @@ import time
 
 from careagents.models import Connection, RealRecordInvite
 from tests.careagents_consent_helpers import consented
-from tests.careagents_stage1_helpers import approve_terms
+from tests.careagents_stage1_helpers import approve_terms, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
@@ -22,6 +22,9 @@ EMAIL = "gene@example.com"
 
 
 def _real_app(cfg, svc, monkeypatch, email=EMAIL):  # noqa: F811
+    # Connected before the terms bump: the tests below approve a
+    # newer version and expect this one to be stale.
+    pend_terms(monkeypatch)
     from careagents.app import create_app
     fake = FakeClient()
     app = create_app(config=cfg, client=fake, accounts=svc)
