@@ -1034,6 +1034,10 @@ textarea:focus-visible {
   border-radius: var(--radius-sm); padding: 14px 16px; color: var(--ink-soft);
   margin-bottom: 24px; }
 
+/* The brief's way back: chat and hub, side by side at the title's edge. */
+.hub-head-actions { display: flex; gap: 8px; flex-wrap: wrap;
+  align-items: flex-start; flex: none; }
+
 /* /safety (#884 G7): the way back and the technical report on one line. */
 .safety-links { display: flex; justify-content: space-between;
   align-items: baseline; gap: 16px; margin-top: 20px; font-size: 16px; }
