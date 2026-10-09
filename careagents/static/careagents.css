@@ -351,7 +351,9 @@ h1 em { font-style: normal; color: var(--accent-ink); }
   background: var(--surface); border: 1px solid var(--hairline);
   border-radius: var(--radius-sm); padding: 8px 16px; cursor: pointer;
   font-family: inherit; text-decoration: none; line-height: 1.2;
+  white-space: nowrap;
 }
+.hub-head .pill { flex: none; }
 .pill:hover { border-color: var(--accent); color: var(--accent-ink); }
 .pill-quiet { cursor: default; }
 .pill-quiet:hover { border-color: var(--hairline); color: var(--ink); }
@@ -900,6 +902,14 @@ textarea:focus-visible {
   -webkit-mask: var(--i-key) center / contain no-repeat;
   mask: var(--i-key) center / contain no-repeat; }
 .hub-link { margin: 12px 0 0; }
+/* "Add a passkey" is the row under the list: full width, with a chevron. */
+#passkeys-section > .pill { display: flex; justify-content: space-between;
+  width: 100%; min-height: 52px; padding: 12px 16px; font-weight: 600;
+  border-radius: var(--radius); }
+#passkeys-section > .pill::after { content: ""; width: 20px; height: 20px;
+  background: var(--ink-soft);
+  -webkit-mask: var(--i-chevron) center / contain no-repeat;
+  mask: var(--i-chevron) center / contain no-repeat; }
 
 /* --- calm hub (spec 2026-09-26) ------------------------------------------ */
 .waiting { margin: 0 0 24px; padding: 16px 18px; border-radius: var(--radius);
