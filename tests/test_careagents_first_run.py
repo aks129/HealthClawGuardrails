@@ -109,7 +109,7 @@ def test_a_cross_site_form_does_not_sign_anyone_in(made, sent):
     assert "You're confirmed" in body
 
 
-@pytest.mark.parametrize("nonce", ["", "x" * 22, "wrong"])
+@pytest.mark.parametrize("nonce", ["", "x" * 22, "wrong", "ñønce-✓"])
 def test_a_wrong_nonce_does_not_sign_in(made, sent, nonce):
     app, svc = made(RESEND_API_KEY="re_test")
     c = app.test_client()

@@ -27,7 +27,6 @@ engine is built.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import ipaddress
 import logging
 import re
@@ -780,10 +779,13 @@ def register(app, svc, cfg, first_run=None) -> None:
         """Did this POST come from the confirm page this browser opened?
         Spent either way. A cross-site form carries no session cookie
         (SameSite=Lax), so it cannot sign a visitor into the account of
-        whoever owns the token (login CSRF)."""
+        whoever owns the token (login CSRF). Compared hashed, so no
+        spelling of a typed value can raise (#557)."""
+        # Here, not at the top: accounts.py imports this module.
+        from careagents.accounts import secret_matches
         held = session.pop(_NONCE_KEY, None)
         return (isinstance(held, str) and bool(given)
-                and hmac.compare_digest(held, given))
+                and secret_matches(given, held))
 
     @app.after_request
     def _tell_the_promoted(response):

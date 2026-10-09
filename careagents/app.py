@@ -1522,6 +1522,13 @@ def create_app(config: Config | None = None,
             logger.exception("chat history unavailable for agent %s", agent_id)
             past, history_lost = [], True
         conn = ctx.get("connection") or {}
+        sample = conn.get("kind") == "sample"
+        if sample:
+            # The banner above the log says the records are made up, so a
+            # replayed answer does not say it again (beta.under_banner).
+            past = [dict(m, content=beta.under_banner(str(m.get("content")
+                                                          or "")))
+                    if m.get("role") != "user" else m for m in past]
         pending = conn.get("status") == "pending"
         totals = None
         # Count when the greeting will use it, and whenever an import is
@@ -1589,9 +1596,9 @@ def create_app(config: Config | None = None,
                                intake=intake,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               offer_passkey=not svc.has_passkey(acct.id),
                                sample_line=(beta.SAMPLE_FRAME
-                                            if conn.get("kind") == "sample"
-                                            else None))
+                                            if sample else None))
 
     @app.get("/brief")
     @login_required

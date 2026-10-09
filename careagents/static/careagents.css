@@ -194,13 +194,36 @@ h1 em { font-style: italic; color: var(--clay); }
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 6px 4px 14px; border-bottom: 1px solid var(--hairline);
 }
-.chat-id { display: flex; align-items: center; gap: 12px; }
+.chat-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .chat-emoji { font-size: 26px; background: var(--paper); border-radius: 50%;
   width: 46px; height: 46px; display: flex; align-items: center;
-  justify-content: center; }
-.chat-name { font-size: 21px; }
-.chat-sub { font-size: 12.5px; color: var(--ink-soft); }
-.chat-tools { display: flex; gap: 8px; }
+  justify-content: center; flex: none; }
+.chat-name { font-size: 21px; overflow-wrap: anywhere; }
+/* The hub link, "Waiting for you" and the grade, behind one ⋯ button. */
+.chat-menu { position: relative; flex: none; }
+.chat-menu-btn {
+  list-style: none; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; min-width: 44px; min-height: 44px;
+  font-size: 22px; line-height: 1; color: var(--ink-soft);
+  border: 1px solid var(--hairline); border-radius: 999px;
+  background: var(--card);
+}
+.chat-menu-btn::-webkit-details-marker { display: none; }
+.chat-menu[open] .chat-menu-btn,
+.chat-menu-btn:hover { border-color: var(--clay); color: var(--clay-deep); }
+.chat-menu-list {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 10;
+  display: flex; flex-direction: column; min-width: 200px;
+  max-width: calc(100vw - 32px); padding: 6px;
+  background: var(--card); border: 1px solid var(--hairline);
+  border-radius: 14px; box-shadow: 0 8px 28px rgba(84,62,36,.14);
+}
+.chat-menu-list a {
+  display: block; padding: 12px 14px; border-radius: 10px;
+  font-size: 15px; font-weight: 600; color: var(--ink);
+  text-decoration: none;
+}
+.chat-menu-list a:hover { background: var(--paper); color: var(--clay-deep); }
 .pill {
   font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
   background: var(--card); border: 1px solid var(--hairline);
@@ -274,6 +297,15 @@ h1 em { font-style: italic; color: var(--clay); }
   padding: 9px 16px; cursor: pointer;
 }
 .starter:hover { border-color: var(--clay); }
+/* The greeting's one-tap answer: the same chip, filled, under the bubble. */
+.quick-replies { display: flex; gap: 8px; align-self: flex-start; }
+.quick-reply {
+  font-family: inherit; font-size: 14px; font-weight: 600; color: #fff;
+  background: var(--clay); border: 1px solid var(--clay);
+  border-radius: 999px; padding: 10px 18px; min-height: 44px;
+  cursor: pointer;
+}
+.quick-reply:hover { background: var(--clay-deep); }
 
 .typing { display: inline-flex; gap: 4px; padding: 16px 18px; }
 .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-soft);
@@ -730,14 +762,6 @@ textarea:focus-visible {
 /* The surfaces grid kept two columns at 375px; one reads at a phone's width. */
 @media (max-width: 480px) {
   .surface-row { grid-template-columns: 1fr; }
-}
-/* Chat header at 375px: three pills and the name were 15px wider than the
-   phone, so the page wobbled sideways and the guardrails pill was cut off.
-   The pills wrap under the name instead, and a pill never splits its words. */
-.chat-tools .pill { white-space: nowrap; }
-@media (max-width: 480px) {
-  .chat-head { flex-wrap: wrap; }
-  .chat-tools { flex-wrap: wrap; }
 }
 /* Hub: the sentence a delete or disconnect leaves behind, the brief's
    explanation, and the band's list of answered requests. */
