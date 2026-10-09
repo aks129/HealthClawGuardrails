@@ -26,7 +26,7 @@ from __future__ import annotations
 BASE_VERSION = "2026-08-01"
 
 #: The approval date ("YYYY-MM-DD") of the terms in TEMPLATE (#565).
-TERMS_VERSION: str | None = "2026-10-08"
+TERMS_VERSION: str | None = "2026-10-09"
 
 TEMPLATE = "_tester_terms.html"
 PENDING_MARKER = "TESTER-TERMS-PENDING-565"
