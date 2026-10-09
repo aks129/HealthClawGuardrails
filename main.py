@@ -510,6 +510,12 @@ def create_app(settings: Mapping[str, Any] | None = None) -> Flask:
             "pool_pre_ping": True,
         }
 
+    if db_uri.startswith("sqlite"):
+        # Uploads failed `database is locked` beside a concurrent writer;
+        # see r6/sqlite_locking.py. Postgres needs nothing.
+        from r6 import sqlite_locking
+        sqlite_locking.install()
+
     db.init_app(flask_app)
     register_model_metadata()
     _register_blueprints(flask_app)
