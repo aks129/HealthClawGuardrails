@@ -803,7 +803,7 @@ def create_app(config: Config | None = None,
             if refused:
                 return refused
             consent_version = tester_terms.CONSENT_VERSION
-        if connector_id != "fasten":
+        if connector_id not in ("fasten", "direct"):
             return _persist_connection(connector_id, acct, plan,
                                        consent_version)
         # Two tabs or devices connecting at once (#847): both passed the
@@ -820,6 +820,17 @@ def create_app(config: Config | None = None,
             # two taps made two identical rows, both stuck connecting. Only
             # a pending row is reused, and only after the gate and consent
             # above.
+            if connector_id == "direct":
+                # Same for a file: a connection still waiting for its first
+                # file takes the next one, so a second try never adds a
+                # second card.
+                waiting = svc.pending_connection(acct.id, "direct",
+                                                 status="empty")
+                if waiting:
+                    return jsonify({"id": waiting["id"], "status": "empty",
+                                    "existing": True})
+                return _persist_connection(connector_id, acct, plan,
+                                           consent_version)
             waiting = svc.pending_connection(acct.id, "fasten")
             if waiting:
                 return jsonify({

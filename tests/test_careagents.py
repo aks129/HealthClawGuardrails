@@ -5527,10 +5527,11 @@ def test_flash_cue_is_class_keyed_with_a_single_keyframe():
 
 def test_connection_action_buttons_are_styled_and_thumb_sized():
     """44px is the tap target floor; the shared rule is what supplies it."""
-    for sel in (".conn-refresh", ".conn-disconnect", ".conn-delete",
-                ".conn-refresh-msg"):
+    for sel in (".conn-refresh", ".conn-upload", ".conn-disconnect",
+                ".conn-delete", ".conn-refresh-msg"):
         assert sel in _CSS, sel
-    shared = _CSS.split(".conn-refresh, .conn-disconnect, .conn-delete {")[1]
+    shared = _CSS.split(
+        ".conn-refresh, .conn-upload, .conn-disconnect, .conn-delete {")[1]
     assert "min-height: 44px" in shared.split("}")[0]
 
 

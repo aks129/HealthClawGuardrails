@@ -26,6 +26,7 @@
       const id = tile.dataset.connector;
       let body = {};
       $("connect-msg").hidden = true;
+      if (id === "direct") return startFileUpload(tile);
       if (tile.dataset.providers) {
         const provider = await pickProvider(JSON.parse(tile.dataset.providers));
         if (!provider) return;
@@ -398,7 +399,8 @@
       "Please upload a FHIR JSON file — check that the filename ends " +
       "in .json.",
     invalid_json:
-      "That file isn't valid JSON. Try re-exporting from your provider.",
+      "That file can't be read here. Choose the records file your portal " +
+      "or app exported; its name ends in .json, not .pdf.",
     invalid_body:
       "We couldn't read the file. Try re-exporting from your provider.",
     not_a_bundle:
@@ -421,6 +423,12 @@
     ingest_failed:
       "The records service couldn't accept this upload. Try again in a " +
       "moment.",
+    "sign in":
+      "You've been signed out. Reload this page and sign in again.",
+    offline:
+      "The upload couldn't start. Check your connection and try again.",
+    start_failed:
+      "The upload couldn't start on our side. Try again in a moment.",
     records_paused:
       "Your records are paused, so new records can't be added right now. " +
       "If you didn't expect this, write to contactus@healthclaw.io.",
@@ -447,14 +455,91 @@
     announce(msg, text);
   }
 
+  function openPicker(owner) {
+    currentUploadCard = owner;
+    fileInput.value = "";
+    fileInput.click();
+  }
+
   document.querySelectorAll(".conn-upload").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const card = btn.closest(".conn-card");
-      currentUploadCard = { card, btn };
-      fileInput.value = "";
-      fileInput.click();
+      openPicker({ card: btn.closest(".conn-card"), btn, conn: btn.dataset.conn });
     });
   });
+
+  // The "Upload a file" tile (shakeout finding 5). Tapping it made an empty
+  // card above the fold and never opened the picker, so a person tapped
+  // again and got a second card. Now the picker opens inside the tap that
+  // agrees to the consent card: phones refuse a picker opened after a
+  // network wait. Nothing is created until a file is chosen.
+  async function startFileUpload(tile) {
+    // A card still waiting for its file is where this tap belongs; its
+    // consent was given when it was made.
+    const waiting = document.querySelector(
+      '.conn-card[data-kind="direct"][data-status="empty"] .conn-upload');
+    if (waiting) {
+      waiting.closest(".conn-card").scrollIntoView({ block: "center" });
+      return waiting.click();
+    }
+    // An earlier try on this page made the connection and then failed.
+    if (tile.dataset.conn) {
+      return openPicker({ tile, btn: tile, conn: tile.dataset.conn });
+    }
+    if (!(await showConsentCard())) return;
+    openPicker({ tile, btn: tile, conn: null });
+  }
+
+  // Send one file to a `direct` connection and say what happened, in one
+  // sentence and a style. Never throws.
+  async function sendFile(connId, file) {
+    const fail = (code, cid) =>
+      ({ ok: false, line: uploadErrorLine(code, cid), cls: "form-error" });
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      return fail("invalid_body");
+    }
+    let r, d;
+    try {
+      r = await fetch(`/api/connections/${connId}/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/fhir+json" },
+        body: text,
+      });
+      d = await r.json().catch(() => ({}));
+    } catch (e) {
+      return fail("offline");   // the person's signal, not our service
+    }
+    if (!r.ok) return fail(r.status === 401 ? "sign in" : d.error, d.correlation_id);
+    // Success or partial success — show a plain-language summary of
+    // what actually landed. When entries failed, surface the unique
+    // opaque correlation ids from `errors[]` (never the raw messages
+    // or objects — they can carry PHI-shaped SQL fragments) so the
+    // user has a support-quotable code per distinct failure.
+    // `ingested` also counts documents nothing here can open, so the line
+    // leads with `records_added` and the same sentence a refresh uses.
+    const ing = d.ingested | 0;
+    const skp = d.skipped | 0;
+    const fld = d.failed | 0;
+    const readable = typeof d.records_added === "number" ? d.records_added : ing;
+    const parts = [readableCountLine(readable, d.uncounted_note)];
+    // Every part is a whole sentence, because the lead is one.
+    if (skp) parts.push(`${skp} not saved (unsupported record types).`);
+    if (fld) parts.push(`${fld} could not be saved.`);
+    if (fld > 0) {
+      const codes = Array.from(new Set(
+        (d.errors || [])
+          .map((e) => e && e.correlation_id)
+          .filter(Boolean)));
+      if (codes.length) {
+        parts.push("Support code" + (codes.length === 1 ? "" : "s")
+                   + ": " + codes.join(", ") + ".");
+      }
+    }
+    return { ok: true, ing, line: parts.join(" "),
+             cls: (fld || skp) ? "form-warn" : "form-ok" };
+  }
 
   if (fileInput) {
     fileInput.addEventListener("change", async () => {
@@ -462,68 +547,47 @@
       currentUploadCard = null;
       const file = fileInput.files && fileInput.files[0];
       if (!owner || !file) return;
-      const { card, btn } = owner;
-      const msg = card.querySelector(".conn-refresh-msg");
+      const { card, tile, btn } = owner;
+      // A card answers in its own line; the tile, under itself.
+      const show = card
+        ? (text, cls) => sayUpload(card.querySelector(".conn-refresh-msg"), text, cls)
+        : (text) => say(tile, $("connect-msg"), text);
       // Front-line size check so we never send a request we already know
       // will be refused (server enforces the same cap).
       const MAX = 5 * 1024 * 1024;
       if (file.size > MAX) {
-        return sayUpload(msg, messageForError("payload_too_large"), "form-error");
+        return show(messageForError("payload_too_large"), "form-error");
       }
       btn.disabled = true;
-      sayUpload(msg, "Uploading " + file.name + "…");
-      let text;
-      try {
-        text = await file.text();
-      } catch (e) {
-        btn.disabled = false;
-        return sayUpload(msg, messageForError("invalid_body"), "form-error");
-      }
-      let r, d;
-      try {
-        r = await fetch(`/api/connections/${btn.dataset.conn}/upload`, {
-          method: "POST",
-          headers: { "Content-Type": "application/fhir+json" },
-          body: text,
-        });
-        d = await r.json().catch(() => ({}));
-      } catch (e) {
-        btn.disabled = false;
-        return sayUpload(msg, messageForError("ingest_failed"), "form-error");
-      }
-      btn.disabled = false;
-      if (!r.ok) {
-        return sayUpload(msg, uploadErrorLine(d.error, d.correlation_id),
-                         "form-error");
-      }
-      // Success or partial success — show a plain-language summary of
-      // what actually landed. When entries failed, surface the unique
-      // opaque correlation ids from `errors[]` (never the raw messages
-      // or objects — they can carry PHI-shaped SQL fragments) so the
-      // user has a support-quotable code per distinct failure.
-      // `ingested` also counts documents nothing here can open, so the line
-      // leads with `records_added` and the same sentence a refresh uses.
-      const ing = d.ingested | 0;
-      const skp = d.skipped | 0;
-      const fld = d.failed | 0;
-      const readable = typeof d.records_added === "number" ? d.records_added : ing;
-      const parts = [readableCountLine(readable, d.uncounted_note)];
-      // Every part is a whole sentence, because the lead is one.
-      if (skp) parts.push(`${skp} not saved (unsupported record types).`);
-      if (fld) parts.push(`${fld} could not be saved.`);
-      if (fld > 0) {
-        const codes = Array.from(new Set(
-          (d.errors || [])
-            .map((e) => e && e.correlation_id)
-            .filter(Boolean)));
-        if (codes.length) {
-          parts.push("Support code" + (codes.length === 1 ? "" : "s")
-                     + ": " + codes.join(", ") + ".");
+      show("Uploading " + file.name + "…");
+      let conn = owner.conn;
+      if (!conn) {
+        // Consent was given on the card that opened this picker. The server
+        // hands back a connection still waiting for a file, if there is one.
+        let res;
+        try {
+          res = await post("/api/connections/direct", { consent: true });
+        } catch (e) {
+          res = null;   // no signal: say so, and leave the tile tappable
         }
+        if (!res || !res.ok || !res.d.id) {
+          btn.disabled = false;
+          // No answer at all is the signal; an answer is our side failing.
+          const code = !res ? "offline"
+            : res.d.error === "sign in" ? "sign in" : "start_failed";
+          return show((res && res.d.message) || messageForError(code),
+                      "form-error");
+        }
+        conn = tile.dataset.conn = res.d.id;
       }
-      sayUpload(msg, parts.join(" "),
-          (fld || skp) ? "form-warn" : "form-ok");
-      if (ing > 0) {
+      const out = await sendFile(conn, file);
+      btn.disabled = false;
+      if (!card) {
+        // The new card is drawn by the reload; the sentence rides along.
+        return out.ok ? carryNotice(out.line) : show(out.line, out.cls);
+      }
+      show(out.line, out.cls);
+      if (out.ok && out.ing > 0) {
         // Reload so the card flips from `empty` to `active` and the
         // agent picker sees the new record count.
         setTimeout(() => location.reload(), 1400);
