@@ -40,7 +40,7 @@ test.describe('CareAgents landing', () => {
     await page.goto('/');
     await expect(page).toHaveTitle(/CareAgents/);
     await expect(page.locator('main.hero h1')).toContainText(
-      'knows your health');
+      'Understand your health records');
     // Signed out, the primary CTA is "Get started". Click it rather than
     // assert its href — a link that renders but does not route is the
     // failure a browser test exists to catch.

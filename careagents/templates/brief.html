@@ -89,7 +89,7 @@
     <div class="section-head"><h2>Recent labs</h2></div>
     {% set fields = sections.get('labs', []) %}
     {% if fields %}
-    <div class="brief-section">
+    <div class="brief-section brief-labs">
       {% for f in fields %}
       <div class="brief-field">
         <span class="brief-label">{{ f.label }}</span>
