@@ -55,3 +55,13 @@ def test_a_connection_consented_before_these_terms_must_accept_again():
     new = {"kind": "fasten", "consent_version": shipped}
     assert beta.turn_block(old, False, shipped) == beta.TERMS_TEXT
     assert beta.turn_block(new, False, shipped) is None
+
+
+def test_the_tell_us_link_the_terms_name_is_on_the_hub_and_the_chat():
+    """"Use the “Tell us” link in the app." The label the terms quote is a
+    link to /feedback on both screens a connected tester uses (#905)."""
+    assert "“Tell us” link in the app" in TEXT
+    templates = Path(__file__).resolve().parents[1] / "careagents" / "templates"
+    for page in ("home.html", "chat.html"):
+        assert '<a href="/feedback">Tell us</a>' in (
+            templates / page).read_text(), page
