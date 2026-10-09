@@ -93,17 +93,11 @@ test.describe('CareAgents auth', () => {
     await page.locator('#code').fill(code);
     await page.locator('#verify-btn').click();
 
-    // On a WebAuthn-capable browser the first verified sign-in offers passkey
-    // enrolment (auth.js:72); elsewhere it goes straight to the hub. Assert
-    // whichever this browser is, then skip — creating a passkey is out of
-    // scope and needs a virtual authenticator.
-    const canPasskey = await page.evaluate(() => !!window.PublicKeyCredential);
-    if (canPasskey) {
-      await expect(page.locator('#step-passkey')).toBeVisible();
-      await page.locator('#skip-passkey-btn').click();
-    }
-
+    // A brand-new account has nothing connected, so it is not offered a
+    // passkey before its records (first_run; the chat's ⋯ menu has "Add a
+    // passkey"). It goes straight to the hub on every browser.
     await expect(page).toHaveURL(/\/home$/);
+    await expect(page.locator('#step-passkey')).toBeHidden();
     await expect(page).toHaveTitle(/Your hub — CareAgents/);
     // "Your hub", not "Welcome back": a brand-new account lands here too
     // (#847, shipped in #853).
