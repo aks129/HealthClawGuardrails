@@ -200,6 +200,13 @@ class AccountService:
             return s.query(Connection).filter_by(
                 account_id=account_id).first() is not None
 
+    def has_real_connection(self, account_id: str) -> bool:
+        """Any connection that is not the sample, in any state."""
+        with self.session() as s:
+            return s.query(Connection).filter(
+                Connection.account_id == account_id,
+                Connection.kind != "sample").first() is not None
+
     def first_run_account(self, email: str) -> Account | None:
         """The account a confirmed beta request signs in to, or None.
 

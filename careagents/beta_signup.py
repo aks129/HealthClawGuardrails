@@ -384,7 +384,10 @@ def confirm_preview(session_scope, token: str) -> dict | None:
             else row.first_name
         number = row.pending_mobile if change else row.mobile
         return {"kind": "change" if change else "join", "first_name": name,
-                "tail": number[-4:] if number else None}
+                "tail": number[-4:] if number else None,
+                # Shown in full: Confirm signs in to this address's account,
+                # and whoever holds the link holds this inbox (#920 F2).
+                "email": row.email}
 
 
 def confirm(session_scope, token: str) -> dict | None:

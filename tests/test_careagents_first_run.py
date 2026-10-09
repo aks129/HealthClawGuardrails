@@ -281,3 +281,104 @@ def test_a_first_run_code_sign_in_skips_the_passkey_prompt(
     c.post("/api/connections/sample")
     again = app.test_client()
     assert _login(again, svc, monkeypatch, email=EMAIL)["first_run"] is False
+
+
+# --- the join check, and what a link session may not do (#920 review) ---------
+
+def test_a_change_never_signs_in_even_with_a_live_nonce(made, sent):
+    """Pins `done["kind"] == "join"` on the sign-in branch on its own: the
+    nonce here is genuine, so only the kind check stops the sign-in."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    first = app.test_client()
+    token, _n, _ = _ask(first, sent)
+    first.post("/beta/confirm", data={"t": token})      # joined, no sign-in
+    from tests.test_careagents_beta_signup import _age_caps
+    _age_caps(svc)
+    c = app.test_client()
+    assert _post(c, ip="203.0.113.8", first_name="Ave").status_code == 200
+    token = _confirm_token([m for m in sent if m[0] == EMAIL][-1][3])
+    with c.session_transaction() as s:
+        s["beta_confirm_nonce"] = "live-nonce-for-this-test"
+    r = c.post("/beta/confirm",
+               data={"t": token, "n": "live-nonce-for-this-test"})
+    assert r.status_code == 200
+    assert _signed_in_as(c) is None and _account(svc) is None
+
+
+def _link_session(app, sent):
+    c = app.test_client()
+    token, nonce, _ = _ask(c, sent)
+    assert c.post("/beta/confirm",
+                  data={"t": token, "n": nonce}).status_code == 303
+    return c
+
+
+def test_a_link_session_is_not_permanent(made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    token, nonce, _ = _ask(c, sent)
+    r = c.post("/beta/confirm", data={"t": token, "n": nonce})
+    cookie = next(h for h in r.headers.getlist("Set-Cookie")
+                  if h.startswith("session="))
+    assert "Expires=" not in cookie and "Max-Age=" not in cookie
+
+
+@pytest.mark.parametrize("path, body", [
+    ("/webauthn/register/options", None),
+    ("/webauthn/register/verify", {}),
+    ("/webauthn/consent/options", None),
+    ("/authorize/decide", {}),
+    ("/api/surfaces/telegram", {}),
+    ("/api/surfaces/imessage", {}),
+    ("/api/connections/direct", {"consent": True}),
+])
+def test_a_link_session_cannot_widen_itself(made, sent, path, body):
+    """A passkey, a grant to an app, a bound phone or chat, real records:
+    each outlasts or widens the session, so each wants a code first."""
+    app, _ = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    r = c.post(path, json=body) if body is not None else c.post(path)
+    assert r.status_code == 403, (path, r.status_code)
+    assert r.get_json()["error"] == "sign_in_again"
+
+
+def test_a_link_session_is_sent_to_sign_in_for_phone_links_and_consent(
+        made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    r = c.get("/link/done")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
+    # /auth signs a link session in properly, the email filled in, and
+    # never offers enrolment to it directly.
+    page = c.get("/auth?enroll=1").get_data(as_text=True)
+    assert f'value="{EMAIL}"' in page
+    assert re.search(r'<div id="step-start"\s*>', page)
+
+
+def test_a_code_sign_in_lifts_the_link_limits(made, sent, monkeypatch):
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    assert c.post("/webauthn/register/options").status_code == 403
+    _login(c, svc, monkeypatch, email=EMAIL)
+    with c.session_transaction() as s:
+        assert "via_link" not in s and s.permanent
+    assert c.post("/webauthn/register/options").status_code == 200
+
+
+def test_the_link_session_ends_once_real_records_arrive(made, sent):
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = _link_session(app, sent)
+    assert c.get("/home").status_code == 200        # the sample is fine
+    svc.add_connection(_account(svc).id, "fasten", "t-later", "Later",
+                       consent_version="v-test")
+    r = c.get("/home")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/auth")
+    assert _signed_in_as(c) is None
+    assert c.get("/api/approvals/count").status_code == 401
+
+
+def test_the_confirm_page_names_the_account_in_full(made, sent):
+    app, _ = made(RESEND_API_KEY="re_test")
+    _, _, page = _ask(app.test_client(), sent)
+    assert f"Confirm signs you in as\n        <b>{EMAIL}</b>" in page
+    assert page.index(EMAIL) < page.index('type="submit">Confirm')

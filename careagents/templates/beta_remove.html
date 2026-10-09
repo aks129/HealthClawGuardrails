@@ -21,6 +21,10 @@
       {# A new request signs you in and opens your chat, so the terms
          /auth shows are shown here, before the button. #}
       {% if nonce %}<input type="hidden" name="n" value="{{ nonce }}">
+      {# Whose account Confirm opens, so nobody is signed in to someone
+         else's by a link they were sent (#920 F2). #}
+      <p class="beta-signin-as">Confirm signs you in as
+        <b>{{ preview.email }}</b>. Not your email? Close this page.</p>
       <p class="auth-fine">By confirming you agree to the
         <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
         <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy

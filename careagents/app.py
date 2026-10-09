@@ -49,6 +49,14 @@ from careagents.personas import DEFAULT_PERSONA, PERSONAS
 
 logger = logging.getLogger(__name__)
 
+#: Session key: this session was opened by a beta confirm link (_first_run),
+#: not by a code or passkey. Limited (full_sign_in_required) and ended once
+#: the account has real records (login_required), #920 F1.
+_VIA_LINK = "via_link"
+#: What a link session is told when it reaches for more than the sample.
+REAUTH_TEXT = ("For that, sign in again with a code we email you. Your chat "
+               "stays as it is.")
+
 # `/healthz` asks HealthClaw whether a run worker is present. That call gets
 # its own budget rather than the client's 25s chat timeout: as a
 # `(connect, read)` pair the worst case is 2.0s of network wait, which fits
@@ -373,7 +381,15 @@ def create_app(config: Config | None = None,
             # at the moment the person is trying to confirm their records are
             # gone (#265). A vanished account is an ended session, and this is
             # the one place all protected routes pass through.
-            if current_account() is None:
+            #
+            # A session a confirm link opened (_first_run) ends the moment
+            # its account has anything but the sample: a forwarded link must
+            # never read records connected after it was used (#920 F1). A
+            # code or passkey sign-in replaces it with an ordinary session.
+            ended = current_account() is None or (
+                session.get(_VIA_LINK)
+                and svc.has_real_connection(session.get("account_id")))
+            if ended:
                 if session.get("account_id"):
                     # A texted link parked before this session went stale
                     # survives, so the sign-in that follows still binds it.
@@ -384,6 +400,23 @@ def create_app(config: Config | None = None,
                 if request.path.startswith("/api/") or request.path.startswith(
                         "/webauthn/"):
                     return jsonify({"error": "sign in"}), 401
+                return redirect(url_for("auth"))
+            return fn(*a, **k)
+        return wrapper
+
+    def full_sign_in_required(fn):
+        """For what outlasts or widens a session: a passkey, a grant to an
+        app, a phone or chat bound to the account, real records. A session
+        a confirm link opened is refused until a code or passkey sign-in
+        (#920 F1). Goes under @login_required."""
+        @wraps(fn)
+        def wrapper(*a, **k):
+            if session.get(_VIA_LINK):
+                if (request.path.startswith(("/api/", "/webauthn/"))
+                        or request.method == "POST"
+                        and request.path == "/authorize/decide"):
+                    return jsonify({"error": "sign_in_again",
+                                    "message": REAUTH_TEXT}), 403
                 return redirect(url_for("auth"))
             return fn(*a, **k)
         return wrapper
@@ -420,11 +453,18 @@ def create_app(config: Config | None = None,
         # quietly expired into email codes forever, because this route sent
         # every logged-in visitor straight back to /home (#223).
         enroll = request.args.get("enroll") == "1"
-        if session.get("account_id") and not enroll:
+        # A confirm-link session signs in properly here before anything
+        # full_sign_in_required guards, a passkey included.
+        via_link = bool(session.get(_VIA_LINK))
+        enroll = enroll and not via_link
+        if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
         # address is filled in and the email code is the first step.
         prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
+        if via_link and not isinstance(prefill, str):
+            me = current_account()
+            prefill = me.email if me else ""
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
@@ -563,6 +603,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/webauthn/register/options")
     @login_required
+    @full_sign_in_required
     def wa_register_options():
         acct = current_account()
         options, challenge = svc.registration_options(acct)
@@ -571,6 +612,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/webauthn/register/verify")
     @login_required
+    @full_sign_in_required
     def wa_register_verify():
         acct = current_account()
         challenge = session.pop("wa_challenge", None)
@@ -636,7 +678,9 @@ def create_app(config: Config | None = None,
         if request_id is None:
             return render_template("consent.html", state="invalid",
                                    me=current_account()), 400
-        if current_account() is None:
+        if current_account() is None or session.get(_VIA_LINK):
+            # A confirm-link session grants no app anything (#920 F1): the
+            # request waits for a code or passkey sign-in, as signed out.
             session["consent_req"] = req
             return redirect(url_for("auth"))
         try:
@@ -661,6 +705,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/webauthn/consent/options")
     @login_required
+    @full_sign_in_required
     def wa_consent_options():
         options, challenge = svc.authentication_options(require_uv=True)
         session["wa_consent_challenge"] = challenge
@@ -668,6 +713,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/authorize/decide")
     @login_required
+    @full_sign_in_required
     def consent_decide():
         body = request.get_json(force=True, silent=True) or {}
         request_id = consent.parse_handle(body.get("req") or "", cfg.mint_secret)
@@ -874,6 +920,10 @@ def create_app(config: Config | None = None,
         acct = current_account()
         body = request.get_json(silent=True) or {}
         if connector_id != "sample":
+            if session.get(_VIA_LINK):
+                # Real records only after a code or passkey (#920 F1).
+                return jsonify({"error": "sign_in_again",
+                                "message": REAUTH_TEXT}), 403
             return _start_connection(connector_id, acct, body)
         return _sample_tap(acct, body)
 
@@ -924,6 +974,10 @@ def create_app(config: Config | None = None,
         if acct is None:
             return None
         _login(acct)
+        # A link-opened session: gone with the browser, limited to the
+        # sample, and ended once real records arrive (#920 F1).
+        session.permanent = False
+        session[_VIA_LINK] = True
         answer = app.make_response(_sample_tap(acct, {}))
         landing = (answer.get_json(silent=True) or {}).get("redirect")
         if answer.status_code == 200 and landing:
@@ -1596,6 +1650,8 @@ def create_app(config: Config | None = None,
                                intake=intake,
                                summary_counts=intake.counts,
                                pending_reviews=reviews,
+                               # A link session reaches it through a code
+                               # sign-in first (/auth, #920 F1).
                                offer_passkey=not svc.has_passkey(acct.id),
                                sample_line=(beta.SAMPLE_FRAME
                                             if sample else None))
@@ -2457,6 +2513,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/api/surfaces/telegram")
     @login_required
+    @full_sign_in_required
     def connect_telegram():
         acct = current_account()
         body = request.get_json(silent=True) or {}
@@ -2599,6 +2656,7 @@ def create_app(config: Config | None = None,
 
     @app.post("/api/surfaces/imessage")
     @login_required
+    @full_sign_in_required
     def connect_imessage():
         acct = current_account()
         body = _imessage_json_object()
@@ -2705,6 +2763,7 @@ def create_app(config: Config | None = None,
 
     @app.route("/link/done", methods=["GET", "POST"])
     @login_required
+    @full_sign_in_required
     def imessage_link_claim():
         """GET asks, POST binds. A link can be forwarded, so whoever opens
         it must see which phone they are connecting and say yes; otherwise

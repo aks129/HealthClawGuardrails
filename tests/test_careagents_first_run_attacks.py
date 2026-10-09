@@ -1,8 +1,9 @@
 """Security review of #920 (confirm link signs in): exploit tests.
 
 Each test is written as the attack, and asserts the safe outcome. A test
-marked xfail(strict=True) pins a finding that is still open: it goes red
-(XPASS) when the finding is fixed, so the marker must come off then.
+that was marked xfail(strict=True) pinned an open finding; F1, F1b and F2
+are fixed (sessions a link opens are limited, and the confirm page names
+the account), so the markers are off.
 
 All data is synthetic. The canary clinic label never belongs to anyone.
 """
@@ -14,8 +15,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from careagents.models import Account
 from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
@@ -26,11 +25,6 @@ EMAIL = "avery@example.com"
 CANARY = "Canary Clinic Zephyrine Q7"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#920 F1: a session minted by a forwarded/leaked confirm link is a "
-    "90-day permanent session with no revocation, so it reads records the "
-    "owner connects AFTER the confirm. first_run_account checks for "
-    "connections only at confirm time."))
 def test_a_forwarded_link_session_does_not_see_records_connected_later(
         made, sent, monkeypatch):
     app, svc = made(RESEND_API_KEY="re_test")
@@ -56,9 +50,6 @@ def test_a_forwarded_link_session_does_not_see_records_connected_later(
     assert CANARY not in home.get_data(as_text=True)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#920 F1b: the same link session can enrol its own passkey with no "
-    "step-up, so its access outlives the cookie."))
 def test_a_forwarded_link_session_cannot_enrol_a_passkey(made, sent):
     app, svc = made(RESEND_API_KEY="re_test")
     stranger = app.test_client()
@@ -69,11 +60,6 @@ def test_a_forwarded_link_session_cannot_enrol_a_passkey(made, sent):
     assert r.status_code in (401, 403)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#920 F2: the confirm page names the first name the requester typed but "
-    "not the email whose account Confirm signs in to, so an attacker's own "
-    "link (victim's first name, attacker's email) signs the victim into the "
-    "attacker's account in one tap. The nonce only stops automated POSTs."))
 def test_the_confirm_page_says_whose_account_it_signs_in_to(made, sent):
     app, svc = made(RESEND_API_KEY="re_test")
     attacker = app.test_client()
