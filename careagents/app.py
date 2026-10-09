@@ -2863,7 +2863,7 @@ def create_app(config: Config | None = None,
         return jsonify({
             "name": "CareAgents", "short_name": "CareAgents",
             "start_url": "/home", "display": "standalone",
-            "background_color": "#FBF6EE", "theme_color": "#C2532E",
+            "background_color": "#F6F8F7", "theme_color": "#0B6B5D",
             "icons": [{"src": "/static/icon.svg", "sizes": "any",
                        "type": "image/svg+xml"}]})
 

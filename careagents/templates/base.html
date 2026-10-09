@@ -12,12 +12,14 @@
      about rendering type requires that. Do not put the CDN back. #}
   <link rel="stylesheet" href="{{ url_for('static', filename='fonts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='careagents.css') }}">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icon.svg') }}">
+  <meta name="theme-color" content="#F6F8F7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0E1412" media="(prefers-color-scheme: dark)">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
   <header class="topbar">
-    <a class="wordmark" href="/">care<span>agents</span></a>
+    <a class="wordmark" href="/">careagents</a>
     <a class="guardrail-tag" href="https://healthclaw.io" target="_blank" rel="noopener">
       <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true"><path d="M6.5 1 12 3.2v4.1c0 3.4-2.3 5.7-5.5 6.7C3.3 13 1 10.7 1 7.3V3.2L6.5 1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
       built by HealthClaw

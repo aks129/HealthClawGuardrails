@@ -10,55 +10,47 @@
     <script>history.replaceState(null, "", "/");</script>
     <p class="inline-msg deleted-note" role="status">Your account is deleted. The records behind every connection were deleted first. We keep a log of who looked at your records, with no health details in it.</p>
     {% endif %}
-    <p class="kicker">Your health, with someone finally on your side of the desk</p>
-    <h1>An agent that actually<br>knows your health —<br><em>and asks before it acts.</em></h1>
+    {# One headline about what it does for a patient, one button. Nothing on
+       this page names a safety grade, a sign-in method or the engine: those
+       are ours to care about, not the reader's (design language, 2026-10). #}
+    <h1>Understand your health records, in plain words.</h1>
     <p class="sub">
-      Meet your personal care agent. It reads your records with your name and
-      details taken out, keeps a log of every time it looks, and hands
-      <strong>you</strong> the pen before anything real happens.
+      A health assistant you can message. It reads your records, tells you
+      what they say, and asks you before it does anything.
     </p>
     <div class="cta-row">
       {% if me %}
-        <a class="btn-primary" href="/home">Go to your hub →</a>
+        <a class="btn-primary" href="/home">Go to your hub</a>
       {% else %}
         <a class="btn-primary" href="/auth">Get started</a>
       {% endif %}
-      <span class="cta-note">passkey sign-in · your records stay yours</span>
-    </div>
-    <div class="trust-strip" id="trust-strip">
-      <span class="trust-chip" id="badge-chip" title="Today's safety grade, checked live">
-        <span class="dot"></span> safety: <b id="badge-text">checking…</b>
-      </span>
-      <span class="trust-chip">every look is logged</span>
-      <span class="trust-chip">you approve every action</span>
+      <span class="cta-note">Start with made-up records. No real ones needed.</span>
     </div>
   </div>
 </main>
 
-<section class="how">
-  <h2>How it works</h2>
+<section class="how" aria-label="What it does">
   <ol class="steps">
     <li>
-      <span class="step-n">1</span>
-      <h3>Sign in with your face</h3>
+      <span class="step-n" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20V3.5Z"/><path d="M14 3.5V8h4M10 12h5M10 15.5h5"/></svg></span>
       {# The provider-login clause is gone rather than made conditional: this
          page is public, gets no account, and so cannot resolve the
          CARE_REAL_RECORDS switch that decides whether those logins are open. #}
-      <p>A passkey — Face ID, Touch ID, or your security key — is your login.
-      No password to forget or have stolen. Then connect your records.</p>
+      <h3>Reads your records</h3>
+      <p>Sign in with your email, then connect your records. Your name and
+      details are taken out before it reads them.</p>
     </li>
     <li>
-      <span class="step-n">2</span>
-      <h3>Ask real questions</h3>
-      <p>“What do my labs say?” “Am I due for a screening?” Answers come from
-      your records, in plain words, never made up.</p>
+      <span class="step-n" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4A2.5 2.5 0 0 1 4 13.5Z"/></svg></span>
+      <h3>Explains them plainly</h3>
+      <p>Ask what your labs say or which screenings are due. Answers come
+      from your records, in everyday words, never made up.</p>
     </li>
     <li>
-      <span class="step-n">3</span>
-      <h3>Let it do real work — with your sign-off</h3>
-      <p>It fills your new-patient intake form from the records. You confirm
-      every medication and allergy yourself — it can never say “no known
-      allergies” for you — then you get a PDF that shows you checked it.</p>
+      <span class="step-n" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+      <h3>Asks before it does anything</h3>
+      <p>It can fill in a new-patient form from your records. You check every
+      medication and allergy yourself, and nothing is sent until you say so.</p>
     </li>
   </ol>
 </section>
@@ -68,21 +60,12 @@
     {# The one plain explanation of the safety model on the marketing page
        (#876). Tester-facing screens do not use these words at all. #}
     <h3>How it keeps you safe</h3>
-    <p>Most health-AI demos ask you to trust them. This one shows its work.
-    Your name and details are taken out before your assistant reads a record,
-    every look is logged, your records are kept apart from everyone else's,
-    and nothing goes out without your OK. The open-source layer underneath
+    <p>Every time it looks at a record, that is logged. Your records are kept
+    apart from everyone else's, and nothing goes out without your OK. The
+    open-source layer underneath
     (<a href="https://healthclaw.io" target="_blank" rel="noopener">HealthClaw</a>)
-    checks itself on each of these and gives itself a grade from A to F, live,
-    in public.
+    checks itself on each of these every day, in public.
     <a href="/safety">See today’s grade</a>.</p>
   </div>
 </section>
-
-<script>
-fetch('/api/trust').then(r => r.json()).then(d => {
-  const el = document.getElementById('badge-text');
-  el.textContent = d.badge && d.badge !== 'unavailable' ? 'Grade ' + d.badge.split(' ')[0] : 'live';
-}).catch(() => {});
-</script>
 {% endblock %}
