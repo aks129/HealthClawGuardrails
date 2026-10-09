@@ -101,3 +101,22 @@ def test_a_connection_that_never_synced_does_not_say_updated():
     by_id = {r["id"]: r["updated"] for r in view["records"]}
     assert by_id == {"p": "", "e": "", "a": "Updated today",
                      "s": "Updated yesterday"}
+
+
+def test_live_records_with_one_label_are_numbered_by_when_they_were_added():
+    # Two uploads made the same day had the same title and an empty facts
+    # line, so nothing on the card told them apart (shakeout 2026-10-01,
+    # finding 5). A date alone collides on the same day; the order does not.
+    home = {"connections": [
+                _conn("b", label="Uploaded records", connected_at=NOW + 5),
+                _conn("a", label="Uploaded records", connected_at=NOW),
+                _conn("s", kind="sample", label="Sample"),
+                _conn("r", status="revoked", label="Uploaded records")],
+            "agents": [_agent("g1", "b")], "surfaces": []}
+    view = hub.build(home, NOW)
+    labels = {r["id"]: r["label"] for r in view["records"]}
+    assert labels == {"a": "Uploaded records 1", "b": "Uploaded records 2",
+                      "s": "Sample"}
+    assert view["past"][0]["label"] == "Uploaded records"
+    assert view["agents"][0]["reads"] == "Uploaded records 2"
+    assert {"id": "b", "label": "Uploaded records 2"} in view["move_choices"]
