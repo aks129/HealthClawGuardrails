@@ -2112,6 +2112,16 @@ def create_app(config: Config | None = None,
         human-approval path — the guardrail the product exists to
         guarantee (#410).
         """
+        ctx = _agent_action_context(agent_id, action_id)
+        return ctx["tenant"] if ctx else None
+
+    def _agent_action_context(agent_id, action_id):
+        """The agent context whose tenant owns this action, or None.
+
+        One read, so a caller deciding anything else from the context (the
+        review's sample voice) sees the same connection that resolved the
+        tenant (#919 security review F1).
+        """
         acct = current_account()
         ctx = _live_agent_context(acct, agent_id)
         if not ctx:
@@ -2122,7 +2132,7 @@ def create_app(config: Config | None = None,
             if _engine_said_absent(exc):
                 return None
             raise OwnershipUnknown from exc
-        return ctx["tenant"]
+        return ctx
 
     # Both review routes deny with 404 and stall with 503. Saying "that form
     # isn't yours" because we could not reach the engine is a confident false
@@ -2162,21 +2172,22 @@ def create_app(config: Config | None = None,
     @login_required
     def review(agent_id, action_id):
         try:
-            tenant = _agent_owns_action(agent_id, action_id)
+            ctx = _agent_action_context(agent_id, action_id)
         except OwnershipUnknown:
             return render_template("chat_error.html",
                                    message=_REVIEW_UNCHECKABLE), 503
-        if not tenant:
+        if not ctx:
             return render_template("chat_error.html",
                                    message="That form isn't yours."), 404
+        tenant = ctx["tenant"]
         if svc.is_paused(current_account().id):
             # Pause stops approvals too (beta spec 4.6, #856 review F1).
             return render_template("chat_error.html",
                                    message=beta.PAUSED_HUB_TEXT), 423
         # Made-up records ask the engine to word the review about "the sample
         # person" (r6/voice.py), so a tester is not asked to attest about
-        # someone else as "I". Decided from the connection, never the request.
-        ctx = _live_agent_context(current_account(), agent_id) or {}
+        # someone else as "I". Decided from the connection, never the request,
+        # and from the same read that resolved the tenant.
         sample = (ctx.get("connection") or {}).get("kind") == "sample"
         try:
             status, html = (hc.fetch_review_page(tenant, action_id,
