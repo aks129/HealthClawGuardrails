@@ -422,7 +422,12 @@ def create_app(config: Config | None = None,
         enroll = request.args.get("enroll") == "1"
         if session.get("account_id") and not enroll:
             return redirect(url_for("home"))
+        # Set by a beta confirm that could not sign in (beta_signup): the
+        # address is filled in and the email code is the first step.
+        prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
+                               prefill=(prefill if isinstance(prefill, str)
+                                        else ""),
                                imessage_pending=bool(
                                    session.get("imessage_link")),
                                terms_url=f"{cfg.healthclaw_public_base}/terms",
@@ -549,7 +554,10 @@ def create_app(config: Config | None = None,
         except AuthError as exc:
             return jsonify({"error": str(exc)}), 400
         _login(acct)
-        return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id)})
+        # Nothing connected yet: the records come first, and the passkey
+        # waits (it is in the chat's menu), so auth.js skips its prompt.
+        return jsonify({"ok": True, "has_passkey": svc.has_passkey(acct.id),
+                        "first_run": not svc.has_connections(acct.id)})
 
     # --- WebAuthn (biometric) ------------------------------------------------
 
@@ -867,6 +875,12 @@ def create_app(config: Config | None = None,
         body = request.get_json(silent=True) or {}
         if connector_id != "sample":
             return _start_connection(connector_id, acct, body)
+        return _sample_tap(acct, body)
+
+    def _sample_tap(acct, body):
+        """"Explore with made-up records": the hub's tap, and a confirmed
+        beta request's first run (_first_run)."""
+        connector_id = "sample"
         if svc.is_paused(acct.id):
             # Nothing new is added while paused, the sample included; the
             # same answer as refresh and upload (#856 sign-off F2).
@@ -894,6 +908,27 @@ def create_app(config: Config | None = None,
             return _start_connection(connector_id, acct, body)
         finally:
             svc.release_sample_start(acct.id)
+
+    def _first_run(email: str) -> str | None:
+        """Sign in the address that just confirmed its beta request and
+        open its made-up records, or None for the confirmed page.
+
+        Never swaps out someone else signed in on this browser, and never
+        signs in to an account with records already (first_run_account):
+        a forwarded link opens nothing that is there. A seed that fails
+        still signs in; the hub's sample button tries again."""
+        me = current_account()
+        if me is not None and me.email != email.strip().lower():
+            return None
+        acct = svc.first_run_account(email)
+        if acct is None:
+            return None
+        _login(acct)
+        answer = app.make_response(_sample_tap(acct, {}))
+        landing = (answer.get_json(silent=True) or {}).get("redirect")
+        if answer.status_code == 200 and landing:
+            return landing
+        return url_for("home")
 
     @app.post("/api/connections/<conn_id>/upload")
     @login_required
@@ -2971,7 +3006,7 @@ def create_app(config: Config | None = None,
     # --- pause and the weekly number (beta spec 4.5, 4.6) ------------------
 
     operator_cli.register(app, svc)
-    beta_signup.register(app, svc, cfg)
+    beta_signup.register(app, svc, cfg, first_run=_first_run)
     feedback.register(app, svc, cfg)
 
     return app

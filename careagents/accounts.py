@@ -194,6 +194,35 @@ class AccountService:
             raise AuthError(error)
         return result
 
+    def has_connections(self, account_id: str) -> bool:
+        """Has this account ever connected anything, sample included?"""
+        with self.session() as s:
+            return s.query(Connection).filter_by(
+                account_id=account_id).first() is not None
+
+    def first_run_account(self, email: str) -> Account | None:
+        """The account a confirmed beta request signs in to, or None.
+
+        The confirm link proves the mailbox, as an email code does, so the
+        address gets the account a code would give it: made now if there
+        is none, verified, its sign-in stamped. None when the account
+        already has a connection: a forwarded link must never open records
+        that are already there, so that account signs in the usual way."""
+        email = email.strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is not None and s.query(Connection).filter_by(
+                    account_id=acct.id).first() is not None:
+                return None
+            if acct is None:
+                acct = Account(email=email, email_verified_at=now())
+                s.add(acct)
+            elif acct.email_verified_at is None:
+                acct.email_verified_at = now()
+            acct.last_login_at = now()
+            s.flush()
+            return _detach(acct)
+
     def ping(self) -> bool:
         """True if the account store answers. Used by /healthz readiness."""
         try:

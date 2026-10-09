@@ -91,7 +91,10 @@
     clear();
     const res = await post("/api/auth/verify", { email: pendingEmail, code: $("code").value.trim() });
     if (!res.ok) return fail(res.d.error || "Wrong code.");
-    if (res.d.has_passkey || !window.PublicKeyCredential) { location.href = "/home"; return; }
+    // `first_run`: nothing connected yet. The records come first; the
+    // passkey waits in the chat's menu rather than standing in the way.
+    if (res.d.has_passkey || res.d.first_run === true ||
+        !window.PublicKeyCredential) { location.href = "/home"; return; }
     show("step-passkey");
   });
   $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify-btn").click(); });
