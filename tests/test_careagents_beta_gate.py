@@ -105,7 +105,7 @@ def test_an_invite_starts_the_env_allowlist_connect_only_after_acceptance(
     svc.invite_real_records(EMAIL, "operator")
 
     pend_terms(monkeypatch)
-    r = c.post("/api/connections/fasten", json={"consent": True})
+    r = c.post("/api/connections/fasten", json=consented())
     assert r.status_code == 503 and starts == [("fasten", False)]
 
     approve_terms(monkeypatch, shipped)
@@ -115,11 +115,11 @@ def test_an_invite_starts_the_env_allowlist_connect_only_after_acceptance(
     with svc.session() as s:
         assert s.query(Connection).filter_by(kind="fasten").count() == 0
 
-    invited = c.post("/api/connections/fasten", json={"consent": True})
+    invited = c.post("/api/connections/fasten", json=consented())
     listed_client = c.application.test_client()
     _login(listed_client, svc, monkeypatch, email="listed@example.com")
     listed = listed_client.post("/api/connections/fasten",
-                                json={"consent": True})
+                                json=consented())
     assert invited.status_code == listed.status_code == 200
     a, b = invited.get_json(), listed.get_json()
     assert a.keys() == b.keys() == {"id", "status", "connect_url"}
