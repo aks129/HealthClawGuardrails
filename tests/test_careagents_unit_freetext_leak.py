@@ -117,9 +117,14 @@ def test_summarize_bundle_drops_a_single_word_code_token():
 
 
 def test_summarize_bundle_still_names_a_code_shaped_token():
-    for code in ("999999999999", "E11.9", "S72.001A", "12345-6", "860975"):
+    for system, code in ((_SNOMED, "44054006"),
+                         ("http://hl7.org/fhir/sid/icd-10-cm", "E11.9"),
+                         ("http://hl7.org/fhir/sid/icd-10-cm", "S72.001A"),
+                         ("http://loinc.org", "12345-6"),
+                         ("http://www.nlm.nih.gov/research/umls/rxnorm",
+                          "860975")):
         cond = {"resourceType": "Condition",
-                "code": {"coding": [{"system": _SNOMED, "code": code}]}}
+                "code": {"coding": [{"system": system, "code": code}]}}
         assert _summarize_bundle(_bundle(cond))[0]["name"] == \
             f"unlabeled record, code {code}"
 

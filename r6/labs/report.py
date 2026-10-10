@@ -34,10 +34,15 @@ def annotate_observation(obs, result):
     if result.get("range_source") == "table":
         rng = {"text": "HealthClaw population default (adult); "
                        "not the performing lab's range"}
+        # The result's unit is the stored record's, unredacted, and this
+        # range is added after redaction ran on `obs` (#922 B4).
+        unit = result.get("unit")
+        if unit and not unit_is_shaped(unit):
+            unit = UNIT_REDACTED
         if result.get("low") is not None:
-            rng["low"] = {"value": result["low"], "unit": result.get("unit")}
+            rng["low"] = {"value": result["low"], "unit": unit}
         if result.get("high") is not None:
-            rng["high"] = {"value": result["high"], "unit": result.get("unit")}
+            rng["high"] = {"value": result["high"], "unit": unit}
         # A stored referenceRange that is not a list is upstream junk the
         # interpreter already ignored (r6/labs/interpret.py `_list`). It is
         # replaced by the range actually used; inserting into it raised and

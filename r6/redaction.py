@@ -238,18 +238,44 @@ _ATTACHMENT_ONLY_KEYS = (
 # A Quantity's `unit` is human-readable text, so upstream can write anything
 # there: a name, or an instruction to the model reading the record. A real
 # unit is one short token with no spaces, in UCUM's characters ("mg/dL",
-# "{beats}/min", "10*3/uL", "tablet"). This is a shape, not a list: the
-# engine serves every kind of record, and a closed list here would blank
-# legitimate units. A single word still fits it, so consumers that put a
-# unit in front of a model or a person keep their own closed list too
+# "{beats}/min", "10*3/uL"). This is a shape, not a list: the engine serves
+# every kind of record, and a closed list here would blank legitimate units.
+# Two limits keep a name out of the shape (#922 B4): a token of letters only
+# is a unit only when it is on the short list below, and no run of letters is
+# longer than eight, so a long name cannot ride in on a slash. A short name
+# beside a non-letter still fits, so consumers that put a unit in front of a
+# model or a person keep their own closed list too
 # (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
 _UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}_'\-µ°]{1,24}")
+_LONG_WORD = re.compile(r"[A-Za-zµ°]{9,}")
+#: Units of letters only. A superset of every letters-only unit on the
+#: consumers' closed lists, or the engine would blank one before they see it.
+_WORD_UNITS = frozenset({
+    'g', 'mg', 'ug', 'mcg', 'ng', 'pg', 'kg', 'L', 'l', 'dL', 'dl', 'mL',
+    'ml', 'uL', 'fL', 'm', 'cm', 'mm', 'km', 'um', 'nm', 's', 'sec', 'min',
+    'h', 'hr', 'd', 'wk', 'mo', 'a', 'U', 'IU', 'mU', 'kU', 'mEq', 'mmol',
+    'umol', 'nmol', 'pmol', 'mol', 'Cel', 'bpm', 'lb', 'lbs', 'oz', 'in',
+    'ft', 'cal', 'kcal', 'kJ', 'Hz', 'Pa', 'kPa', 'mmHg', 'pH', 'mOsm',
+    'tablet', 'tab', 'capsule', 'cap', 'puff', 'drop', 'spray', 'patch',
+    'dose', 'unit', 'units', 'each', 'ea', 'serving', 'cup', 'steps',
+})
 UNIT_REDACTED = '[Redacted]'
 
 
 def unit_is_shaped(value):
     """True when `value` is a string that could be a unit token."""
-    return isinstance(value, str) and bool(_UNIT_SHAPE.fullmatch(value))
+    if not isinstance(value, str) or not _UNIT_SHAPE.fullmatch(value):
+        return False
+    if value.isalpha():
+        return value in _WORD_UNITS
+    return not _LONG_WORD.search(value)
+
+
+def _is_quantity(obj):
+    """A Quantity (or Age, Duration, SimpleQuantity) by shape: a `unit`, or
+    a `value` beside a `code`. A Coding has no `value`."""
+    return ('resourceType' not in obj and 'coding' not in obj
+            and ('unit' in obj or ('value' in obj and 'code' in obj)))
 
 
 def _clean_unit(obj):
@@ -259,8 +285,15 @@ def _clean_unit(obj):
     number beside a unit it was not measured in is the defect #884 fixed.
     The replacement is on no allow-list, so they show no number instead. An
     object `unit` (ObservationDefinition's CodeableConcept) is walked like
-    any other."""
-    if 'unit' not in obj or 'resourceType' in obj:
+    any other.
+
+    A Quantity's `code` is its coded unit, which readers prefer to `unit`,
+    so it gets the same rule; one that fails is dropped (#922 B4)."""
+    if not _is_quantity(obj):
+        return
+    if isinstance(obj.get('code'), str) and not unit_is_shaped(obj['code']):
+        obj.pop('code')
+    if 'unit' not in obj:
         return
     unit = obj['unit']
     if isinstance(unit, dict):

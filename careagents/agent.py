@@ -299,12 +299,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             #   source" is what actually happened and points at the fix
             #   (ask the clinic to code it / confirm details at the visit).
             #
-            # The code is passed on only when it is shaped like one
-            # (`_CODE_TOKEN`); otherwise the record is still named, with no
-            # token.
-            raw = next((c.get("code") for c in (code.get("coding") or [])
-                        if isinstance(c, dict) and c.get("code")), None)
-            if raw and not _CODE_TOKEN.fullmatch(str(raw)):
+            # The code is passed on only when it has the shape of a code in
+            # the system its coding names (`_code_token`); otherwise the
+            # record is still named, with no token.
+            codings = [c for c in (code.get("coding") or [])
+                       if isinstance(c, dict) and c.get("code")]
+            raw = next((t for t in map(_code_token, codings) if t), None)
+            if codings and not raw:
                 item["name"] = "unlabeled record"
             elif raw:
                 item["name"] = f"unlabeled record, code {raw}"
@@ -335,7 +336,10 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                     "is still a real record — never treat it as absent; "
                     "suggest confirming the details with the clinician.")
             item["unreadable"] = True
-        if res.get("status"):
+        # Every field below is checked against a closed set or a parse before
+        # it is copied: ingest accepts any string in `status` or a date, and
+        # whatever is copied verbatim is a channel to the model (#922).
+        if res.get("status") in _STATUS.get(rt, ()):
             item["status"] = res["status"]
         vq = res.get("valueQuantity")
         if isinstance(vq, dict) and vq.get("value") is not None:
@@ -346,8 +350,9 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                 vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
             if unit is not None:
                 item["value"] = f"{vq.get('value')} {unit}".strip()
-        if res.get("effectiveDateTime"):
-            item["date"] = str(res["effectiveDateTime"])[:10]
+        date = labs_timeline.parse_date(res.get("effectiveDateTime"))
+        if date:
+            item["date"] = date
         out.append(item)
 
     if total > len(out):
@@ -383,12 +388,89 @@ _RECORD_UNITS = _UCUM_ALLOWED | frozenset({
     "h", "min",
 })
 
-#: What an unlabeled record's code must look like before the model sees it:
-#: digits, dots and dashes, with at most one capital letter at either end, as
-#: LOINC, SNOMED, RxNorm, CVX, ICD-10 and HCPCS codes are. Redaction keeps
-#: codes, and upstream can put a name or an instruction in `code` as easily
-#: as in `display`; no name fits this shape.
-_CODE_TOKEN = re.compile(r"[A-Z]?\d[\d.\-]{0,17}[A-Z]?")
+#: What an unlabeled record's code must look like before the model sees it,
+#: keyed by the coding's system. Redaction keeps codes, and upstream can put
+#: a name, a phone number or an instruction in `code` as easily as in
+#: `display`; one shape for every system let a phone number or an SSN
+#: through (#922 B3). ASCII digits only: `\d` also matches other scripts'.
+#: A code from any other system, or none, is not named.
+_CODE_SHAPES = {
+    "http://loinc.org": re.compile(r"[0-9]{1,5}-[0-9]"),
+    "http://snomed.info/sct": re.compile(r"[0-9]{6,18}"),
+    "http://hl7.org/fhir/sid/icd-10-cm": re.compile(
+        r"[A-Z][0-9]{2}(\.[0-9X]{1,3}[0-9A-Z]?)?"),
+    "http://hl7.org/fhir/sid/icd-10": re.compile(
+        r"[A-Z][0-9]{2}(\.[0-9X]{1,3}[0-9A-Z]?)?"),
+    "http://www.nlm.nih.gov/research/umls/rxnorm": re.compile(r"[0-9]{1,7}"),
+}
+
+# Verhoeff tables: a SNOMED CT identifier ends in a Verhoeff check digit,
+# which a nine-digit SSN or a ten-digit phone number fits one time in ten.
+_VD = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
+_VP = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
+
+
+def _verhoeff_ok(digits: str) -> bool:
+    c = 0
+    for i, d in enumerate(reversed(digits)):
+        c = _VD[c][_VP[i % 8][int(d)]]
+    return c == 0
+
+
+def _code_token(coding: dict) -> str | None:
+    """The coding's code when it has its system's shape, else None."""
+    code, shape = coding.get("code"), _CODE_SHAPES.get(coding.get("system"))
+    if not isinstance(code, str) or shape is None or not shape.fullmatch(code):
+        return None
+    if coding.get("system") == "http://snomed.info/sct" and not _verhoeff_ok(code):
+        return None
+    return code
+
+
+#: The `status` values FHIR defines per resource type (R4 through R6). A
+#: status passes to the model only when it is one of its type's; a type not
+#: listed here, or one with no `status` element (Condition,
+#: AllergyIntolerance), passes none (#922 B1).
+_STATUS = {
+    "Observation": frozenset({
+        "registered", "preliminary", "final", "amended", "corrected",
+        "cancelled", "entered-in-error", "unknown", "cannot-be-obtained"}),
+    "MedicationRequest": frozenset({
+        "active", "on-hold", "ended", "stopped", "completed", "cancelled",
+        "entered-in-error", "draft", "unknown"}),
+    "MedicationStatement": frozenset({
+        "active", "completed", "entered-in-error", "intended", "stopped",
+        "on-hold", "unknown", "not-taken", "recorded", "draft"}),
+    "Immunization": frozenset({"completed", "entered-in-error", "not-done"}),
+    "Procedure": frozenset({
+        "preparation", "in-progress", "not-done", "on-hold", "stopped",
+        "completed", "entered-in-error", "unknown"}),
+    "DiagnosticReport": frozenset({
+        "registered", "partial", "preliminary", "modified", "final",
+        "amended", "corrected", "appended", "cancelled", "entered-in-error",
+        "unknown"}),
+    "Encounter": frozenset({
+        "planned", "arrived", "triaged", "in-progress", "onleave",
+        "finished", "on-hold", "discharged", "completed", "cancelled",
+        "discontinued", "entered-in-error", "unknown"}),
+    "CarePlan": frozenset({
+        "draft", "active", "on-hold", "revoked", "completed",
+        "entered-in-error", "unknown"}),
+    "ServiceRequest": frozenset({
+        "draft", "active", "on-hold", "revoked", "completed",
+        "entered-in-error", "unknown"}),
+    "DocumentReference": frozenset({
+        "current", "superseded", "entered-in-error"}),
+}
 
 
 def _coded_unit(reading: dict, series: dict) -> str | None:

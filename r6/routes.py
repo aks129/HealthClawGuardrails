@@ -1356,8 +1356,9 @@ def observation_stats():
 
     observations = query.all()
 
-    # Extract numeric values matching the code filter
-    values = []
+    # Extract numeric values matching the code filter, and the unit of the
+    # first of them: not of whatever Observation the tenant stored first
+    values, unit = [], None
     for obs in observations:
         resource = json.loads(obs.resource_json)
         # Filter by code if specified
@@ -1370,6 +1371,7 @@ def observation_stats():
         if isinstance(vq, dict) and 'value' in vq:
             try:
                 values.append(float(vq['value']))
+                unit = unit or vq.get('unit')
             except (ValueError, TypeError):
                 pass
 
@@ -1393,14 +1395,6 @@ def observation_stats():
             {'name': 'mean', 'valueDecimal': stats['mean']},
         ])
 
-    unit = None
-    if values and observations:
-        for obs in observations:
-            resource = json.loads(obs.resource_json)
-            vq = resource.get('valueQuantity', {})
-            if vq.get('unit'):
-                unit = vq['unit']
-                break
     if unit and unit_is_shaped(unit):  # stored, unredacted: shape-check
         result['parameter'].append({'name': 'unit', 'valueString': unit})
 

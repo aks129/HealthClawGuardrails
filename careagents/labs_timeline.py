@@ -129,6 +129,10 @@ def _loinc_of(resource: dict) -> str | None:
     return None
 
 
+#: v3 ObservationInterpretation flags a chart may show.
+_FLAGS = frozenset({"N", "L", "H", "LL", "HH", "A", "AA"})
+
+
 def _flag_of(resource: dict) -> str:
     """The ENGINE's interpretation code, or IND when it did not assign one.
 
@@ -138,7 +142,11 @@ def _flag_of(resource: dict) -> str:
     for concept in (resource.get("interpretation") or []):
         for coding in ((concept or {}).get("coding") or []):
             if isinstance(coding, dict) and coding.get("code"):
-                return str(coding["code"])
+                # An unscored reading keeps the feed's own interpretation,
+                # whose code can be any text (#922): only a flag passes.
+                code = coding["code"]
+                return code if isinstance(code, str) and code in _FLAGS \
+                    else "IND"
     return "IND"
 
 

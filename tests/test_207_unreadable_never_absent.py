@@ -25,6 +25,8 @@ UNKNOWN_CODE = "Q99.9"
 def _condition(system: str, code: str, **coding_fields) -> dict:
     return {
         "resourceType": "Condition",
+        # Condition has no `status` element (clinicalStatus is a concept), so
+        # this one never reaches the summary (#922 B1).
         "status": "active",
         "code": {"coding": [{"system": system, "code": code,
                               **coding_fields}]},
@@ -54,7 +56,6 @@ def test_unknown_code_survives_redaction_as_unreadable_summary():
         "type": "Condition",
         "name": f"unlabeled record, code {UNKNOWN_CODE}",
         "unreadable": True,
-        "status": "active",
     }]
     assert "Jane" not in str(summary)
     assert "Secret" not in str(summary)
@@ -128,7 +129,6 @@ def test_agent_turn_receives_unreadable_record_and_never_emits_bare_no(
             "type": "Condition",
             "name": f"unlabeled record, code {UNKNOWN_CODE}",
             "unreadable": True,
-            "status": "active",
         }]
         return llm.LLMTurn(text=(
             f"I found an active condition record with code {UNKNOWN_CODE}, "
