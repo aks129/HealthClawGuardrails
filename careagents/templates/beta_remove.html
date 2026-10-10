@@ -18,19 +18,39 @@
     <p>Not right? Close this page and nothing changes.</p>
     <form method="post" action="/beta/confirm">
       <input type="hidden" name="t" value="{{ token }}">
+      {# A new request signs you in and opens your chat, so the terms
+         /auth shows are shown here, before the button. #}
+      {% if nonce %}<input type="hidden" name="n" value="{{ nonce }}">
+      {# Whose account Confirm opens, so nobody is signed in to someone
+         else's by a link they were sent (#920 F2). #}
+      <p class="beta-signin-as">Confirm signs you in as
+        <b>{{ preview.email }}</b>. Not your email? Close this page.</p>
+      <p class="auth-fine">By confirming you agree to the
+        <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and
+        <a href="{{ privacy_url }}" target="_blank" rel="noopener">Privacy
+          policy</a>.</p>{% endif %}
       <button class="btn-primary btn-block" type="submit">Confirm</button>
     </form>
     {% elif outcome == "confirmed" %}
     <h1>You're confirmed</h1>
     {% if done.kind == "join" %}
-    <p>Thanks, {{ done.first_name }}. We sent an email to {{ done.email }}.
-      If it isn't there in a few minutes, check spam.</p>
-    <h2 class="beta-form-title">What to do next</h2>
-    <ol class="beta-steps">
-      {% for step in steps %}<li>{{ step }}</li>
-      {% endfor %}
-    </ol>
-    <p>The same steps are in the email we sent.</p>
+    {# Signed in already lands in the chat; this page is the rare rest:
+       another browser, another account signed in here, or an account
+       that already has records. One button, the email filled in. #}
+    <p>Thanks, {{ done.first_name }}. We sent the steps for next time to
+      {{ done.email }}.</p>
+    {% if signed_in %}
+    <a class="btn-primary btn-block" href="/home">Open CareAgents</a>
+    {% elif someone_else %}
+    <p>Someone else is signed in on this browser. Sign them out, then sign
+      in with {{ done.email }}.</p>
+    <form method="post" action="/logout">
+      <button class="btn-primary btn-block" type="submit">Sign out</button>
+    </form>
+    {% else %}
+    <p>Sign in with a code we email you to start.</p>
+    <a class="btn-primary btn-block" href="/auth">Sign in</a>
+    {% endif %}
     {% else %}
     <p>Thanks, {{ done.first_name }}. Your request is updated.</p>
     <p>Something confusing? <a href="{{ feedback }}">Tell us</a>.</p>

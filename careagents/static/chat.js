@@ -124,7 +124,21 @@
     return (d && typeof d.message === "string" && d.message) || PACE_TEXT;
   }
 
+  // The sample's made-up-records line is the sticky banner above the log,
+  // so a bubble does not say it again. The worker still opens every stored
+  // and texted answer with it; only that exact leading copy is dropped,
+  // only while the banner is on this page, and never down to nothing
+  // (careagents/beta.py under_banner does the same for the history).
+  function withoutFrame(text) {
+    const banner = document.querySelector(".sample-banner");
+    const frame = banner ? banner.textContent.trim() : "";
+    if (!frame || text.indexOf(frame + "\n\n") !== 0) return text;
+    const rest = text.slice(frame.length + 2);
+    return rest.trim() ? rest : text;
+  }
+
   function addAgentText(text) {
+    text = withoutFrame(text);
     const m = el("div", "msg agent");
     log.appendChild(m);
     typewrite(m, withoutMarkers(text), function () {
@@ -374,6 +388,7 @@
           // retry loop that prints a fresh error on every pass, aimed at the
           // engine that also serves clinicians.
           typing.remove(); addAgentText(ev.text); state.done = true;
+          state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
         }
@@ -381,10 +396,23 @@
     }
   }
 
+  // The greeting's "Yes" and the ideas under it. Hidden while a turn runs,
+  // and back under an error, so trying again is one tap.
+  const suggestions = [document.getElementById("quick"), starters]
+    .filter(Boolean);
+  function hideSuggestions() {
+    suggestions.forEach((n) => { n.hidden = true; });
+  }
+  function showSuggestions() {
+    suggestions.forEach((n) => { n.hidden = false; log.appendChild(n); });
+    scroll();
+  }
+
   async function send(text) {
     if (busy || !text.trim()) return;
     busy = true; sendBtn.disabled = true;
-    if (starters) starters.remove();
+    hideSuggestions();
+    let failed = false;
     addUser(text);
     box.value = "";
     const typing = addTyping();
@@ -437,9 +465,12 @@
         if (!state.done) await pause(400);
       }
       if (typing.parentNode) typing.remove();
+      failed = state.failed === true;
+      if (failed) showSuggestions();
     } catch (e) {
       if (typing.parentNode) typing.remove();
       addAgentText("Connection hiccup — try that again.");
+      showSuggestions();
     } finally {
       busy = false; sendBtn.disabled = false; box.focus();
     }
@@ -480,6 +511,14 @@
   composer.addEventListener("submit", (e) => { e.preventDefault(); send(box.value); });
   document.querySelectorAll(".starter").forEach((b) =>
     b.addEventListener("click", () => send(b.textContent)));
+  document.querySelectorAll(".quick-reply").forEach((b) =>
+    b.addEventListener("click", () => send(b.dataset.ask || b.textContent)));
+
+  // The ⋯ menu closes on a tap anywhere else, as a phone menu does.
+  const menu = document.querySelector(".chat-menu");
+  if (menu) document.addEventListener("click", (e) => {
+    if (menu.open && !menu.contains(e.target)) menu.open = false;
+  });
 
   fetch("/api/trust").then((r) => r.json()).then((d) => {
     const pill = document.getElementById("trust-pill");

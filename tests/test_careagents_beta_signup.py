@@ -275,8 +275,11 @@ def test_confirming_joins_once_and_says_youre_in(made, sent):
     r = c.post("/beta/confirm", data={"t": token})
     assert r.status_code == 200
     page = _visible(r.get_data(as_text=True))
-    assert ("Thanks, Avery. We sent an email to avery@example.com. If it "
-            "isn't there in a few minutes, check spam.") in page
+    # A bare POST (no nonce from our confirm page) confirms but does not
+    # sign in, so the page ends with the sign-in button
+    # (tests/test_careagents_first_run.py has the signed-in path).
+    assert ("Thanks, Avery. We sent the steps for next time to "
+            "avery@example.com.") in page
     row = _row(svc)
     assert row["status"] == "new" and row["confirmed_at"] is not None
     assert row["confirm_hash"] is None
@@ -284,9 +287,9 @@ def test_confirming_joins_once_and_says_youre_in(made, sent):
     (to, _, html, text), = welcome
     assert to == "avery@example.com"
     flat = " ".join(text.split())
-    assert ("Hi Avery, thanks for helping test CareAgents. Here is what "
-            "to do. It takes about 15 minutes. 1. Open careagents.cloud and "
-            "tap \"Get started\".") in flat
+    assert ("Hi Avery, thanks for helping test CareAgents. Here is how to "
+            "sign in, now or any time. Trying it takes about 15 minutes. "
+            "1. Open careagents.cloud and tap \"Get started\".") in flat
     assert ("You'll use made-up records, not your own. CareAgents is not a "
             "doctor.") in flat
     assert "href='https://careagents.cloud'" in html
@@ -1055,8 +1058,8 @@ def test_confirmed_says_what_to_do_next(made, sent):
     app, _ = made(RESEND_API_KEY="re_test")
     r = _join(app, sent)
     text = _visible(r.get_data(as_text=True))
-    assert "What to do next" in text
-    assert 'Open careagents.cloud and tap &#34;Get started&#34;.' in text
+    assert "Sign in with a code we email you to start." in text
+    assert 'href="/auth">Sign in</a>' in r.get_data(as_text=True)
 
 
 def test_keep_my_request_lands_on_a_plain_page(made, sent):

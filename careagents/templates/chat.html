@@ -5,23 +5,30 @@
 <main class="chat-wrap">
   <div class="chat-head">
     <div class="chat-id">
-      <span class="chat-emoji">{{ persona.emoji }}</span>
-      <div>
-        <div class="chat-name">{{ me.name }}</div>
-        <div class="chat-sub">{{ persona.name }}</div>
-      </div>
+      <span class="chat-emoji" aria-hidden="true">{{ persona.emoji }}</span>
+      <div class="chat-name">{{ me.name }}</div>
     </div>
-    <div class="chat-tools">
-      <a class="pill" href="/home">← hub</a>
-      <a class="pill" href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
-      {# A link to what the grade means, the page the landing links too
-         (#884 G7). Ours, so the same tab. #}
-      <a class="pill pill-quiet" id="trust-pill" title="What the safety grade means"
-         href="/safety">Safety grade: …</a>
-    </div>
+    {# One quiet menu, not three pills and a persona label: a first-timer
+       at 375px read five things before the first question (2026-10
+       patient walk). A <details>, so it opens without script. #}
+    <details class="chat-menu">
+      <summary class="chat-menu-btn" aria-label="Menu">⋯</summary>
+      <nav class="chat-menu-list">
+        <a href="/home">Your hub</a>
+        <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
+        {# A link to what the grade means, the page the landing links too
+           (#884 G7). Ours, so the same tab. #}
+        <a id="trust-pill" title="What the safety grade means"
+           href="/safety">Safety grade: …</a>
+        {# A first sign-in skips the passkey prompt; it waits here. #}
+        {% if offer_passkey %}<a href="/auth?enroll=1">Add a passkey</a>{% endif %}
+      </nav>
+    </details>
   </div>{# Sample records only: one plain line above the log, sticky, and
      written onto this tag so a real chat page renders byte for byte as
-     before. Every sample answer opens with the same line (worker). #}{% if sample_line %}
+     before. Every sample answer opens with the same line (worker); this
+     page shows it here only, so a bubble drops that leading copy
+     (beta.under_banner, chat.js withoutFrame). #}{% if sample_line %}
   <p class="beta-banner sample-banner" role="note">{{ sample_line }}</p>{% endif %}
 
   {# Opened from a texted chart link (?chart=): the history stays hidden
@@ -77,22 +84,27 @@
     <div class="msg agent">
       {#- -#}<p>Hi — I'm {{ me.name }}. I found <strong>{{ summary_counts.conditions }} condition{{ 's' if summary_counts.conditions != 1 else '' }}</strong>, <strong>{{ summary_counts.medications }} medication{{ 's' if summary_counts.medications != 1 else '' }}</strong>, and <strong>{{ summary_counts.labs }} test result{{ 's' if summary_counts.labs != 1 else '' }} &amp; measurement{{ 's' if summary_counts.labs != 1 else '' }}</strong> in {{ 'these made-up' if sample_line else 'your' }} records. Want me to walk through what they show?</p>
       {#- -#}</div>
+    {# The greeting asks a question: one tap answers it. What it sends
+       names the records, since the greeting is not in the model's history. #}
+    <div class="quick-replies" id="quick">
+      <button type="button" class="quick-reply" data-ask="Walk me through what {{ 'these made-up' if sample_line else 'my' }} records show.">Yes, walk me through</button>
+    </div>
     {% else %}
     <div class="msg agent">
       {#- -#}<p>Hi — I'm {{ me.name }}. I can read the health records in this space, explain labs in plain language, check what preventive care is due, and fill out your new-patient intake form — though you'll approve every line of that yourself.</p>
       {#- -#}<p>What would you like to know?</p>
       {#- -#}</div>
     {% endif %}
-    {% if not past %}
     {# One block for every first visit. Intake comes first: that path ends
-       in an approval, which is what the product is for (spec section 5). #}
-    <div class="starters" id="starters">
+       in an approval, which is what the product is for (spec section 5).
+       A returning visit has it hidden: chat.js shows it after an error, so
+       the next try is one tap. #}
+    <div class="starters" id="starters"{% if past %} hidden{% endif %}>
       <button type="button" class="starter">Fill out my intake form for a new doctor</button>
       <button type="button" class="starter">What do my labs say?</button>
       <button type="button" class="starter">Any screenings I'm due for?</button>
       <button type="button" class="starter">What medications am I on?</button>
     </div>
-    {% endif %}
   </div>
 
   <form class="chat-input" id="composer">

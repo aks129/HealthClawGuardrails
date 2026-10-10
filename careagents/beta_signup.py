@@ -39,7 +39,8 @@ import click
 # A dependency of `requests`, so always installed; the stdlib codec is
 # IDNA 2003 and has no UTS-46 mapping.
 import idna
-from flask import jsonify, make_response, render_template, request
+from flask import (jsonify, make_response, redirect, render_template,
+                   request, session)
 from markupsafe import Markup, escape
 from sqlalchemy import Column, Float, String, update
 from sqlalchemy.exc import IntegrityError
@@ -383,7 +384,10 @@ def confirm_preview(session_scope, token: str) -> dict | None:
             else row.first_name
         number = row.pending_mobile if change else row.mobile
         return {"kind": "change" if change else "join", "first_name": name,
-                "tail": number[-4:] if number else None}
+                "tail": number[-4:] if number else None,
+                # Shown in full: Confirm signs in to this address's account,
+                # and whoever holds the link holds this inbox (#920 F2).
+                "email": row.email}
 
 
 def confirm(session_scope, token: str) -> dict | None:
@@ -635,10 +639,12 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
     return mail.send_message(cfg, email, subject, html, text)
 
 
-#: What to do once confirmed, in the words on the screens: the landing
-#: page's "Get started", auth.html's code steps and the passkey screen a
-#: phone shows after the first code, then the hub. A quoted label must be
-#: on that screen (tests/test_careagents_feedback.py checks each one).
+#: How to sign in, now or later, in the words on the screens: the landing
+#: page's "Get started" and auth.html's code steps. Confirming already
+#: signed a new tester in and opened the chat (app.py `_first_run`), and
+#: a first sign-in skips the passkey screen, so this is the way back, not
+#: the way in. A quoted label must be on that screen
+#: (tests/test_careagents_feedback.py checks each one).
 NEXT_STEPS = (
     'Open careagents.cloud and tap "Get started".',
     # The big button on that screen is the passkey one; say where the
@@ -646,10 +652,8 @@ NEXT_STEPS = (
     'Under "or use your email", type the same email you used to join the '
     'beta and tap "Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
-    'If it asks you to add a passkey, you can tap "Skip for now".',
-    'Tap "Explore with made-up records". A chat opens.',
-    "Ask a question, or tap one of the ideas on the screen.",
-    'Tap "Tell us" to send us what you think.',
+    'Open the chat on made-up records and ask a question, or tap one of '
+    'the ideas. Tap "Tell us" to send us what you think.',
 )
 #: The line in a tester email that is the numbered steps.
 _STEPS = "next_steps"
@@ -671,7 +675,8 @@ def steps_html(feedback_url: str = FEEDBACK_URL) -> list:
 
 def youre_in_lines(cfg, first_name: str) -> list:
     return [f"Hi {first_name}, thanks for helping test CareAgents. Here is "
-            "what to do. It takes about 15 minutes.",
+            "how to sign in, now or any time. Trying it takes about 15 "
+            "minutes.",
             _STEPS,
             "You'll use made-up records, not your own. CareAgents is not a "
             "doctor."]
@@ -727,7 +732,15 @@ def _notify_owner(cfg, joined: dict) -> None:
 _FREES_A_SPOT = frozenset({"beta_remove", "delete_account"})
 
 
-def register(app, svc, cfg) -> None:
+#: The session key holding the nonce of the confirm page this browser
+#: opened last, and the one holding the email the fallback fills in.
+_NONCE_KEY = "beta_confirm_nonce"
+AUTH_EMAIL_KEY = "auth_email"
+
+
+def register(app, svc, cfg, first_run=None) -> None:
+    """`first_run(email)` signs the confirmed address in and returns where
+    to land, or None to show the confirmed page (careagents/app.py)."""
     submits: OrderedDict[str, deque] = OrderedDict()
 
     def _client_key() -> str:
@@ -761,8 +774,21 @@ def register(app, svc, cfg) -> None:
     def _page(outcome, status=200, **ctx):
         return _no_referrer(make_response(render_template(
             "beta_remove.html", outcome=outcome, feedback=FEEDBACK_URL,
-            steps=steps_html(),
+            terms_url=f"{cfg.healthclaw_public_base}/terms",
+            privacy_url=f"{cfg.healthclaw_public_base}/privacy",
             **ctx), status))
+
+    def _nonce_matches(given: str) -> bool:
+        """Did this POST come from the confirm page this browser opened?
+        Spent either way. A cross-site form carries no session cookie
+        (SameSite=Lax), so it cannot sign a visitor into the account of
+        whoever owns the token (login CSRF). Compared hashed, so no
+        spelling of a typed value can raise (#557)."""
+        # Here, not at the top: accounts.py imports this module.
+        from careagents.accounts import secret_matches
+        held = session.pop(_NONCE_KEY, None)
+        return (isinstance(held, str) and bool(given)
+                and secret_matches(given, held))
 
     @app.after_request
     def _tell_the_promoted(response):
@@ -844,10 +870,17 @@ def register(app, svc, cfg) -> None:
         preview = confirm_preview(svc.session, token)
         if preview is None:
             return _page("gone", 410)
-        return _page("confirm_ask", token=token, preview=preview)
+        nonce = None
+        if preview["kind"] == "join":
+            # Only a new request signs in (see beta_confirm).
+            nonce = secrets.token_urlsafe(16)
+            session[_NONCE_KEY] = nonce
+        return _page("confirm_ask", token=token, preview=preview,
+                     nonce=nonce)
 
     @app.post("/beta/confirm")
     def beta_confirm():
+        from_our_page = _nonce_matches(str(request.form.get("n") or ""))
         done = confirm(svc.session, str(request.form.get("t") or ""))
         if done is None:
             return _page("gone", 410)
@@ -871,7 +904,24 @@ def register(app, svc, cfg) -> None:
                 _notify_owner(cfg, done)
             except Exception:               # pragma: no cover - defensive
                 logger.warning("beta welcome email failed to send")
-        return _page("confirmed", done=done)
+        if done["kind"] == "join" and from_our_page and first_run:
+            # The token reached only this inbox and was spent by a button
+            # press on our page, in this browser: the proof an email code
+            # gives, so it signs in the same way (first_run says when not).
+            landing = first_run(done["email"])
+            if landing:
+                return _no_referrer(redirect(landing, 303))
+        if done["kind"] == "join" and not session.get("account_id"):
+            # /auth fills this in and opens on the email-code step.
+            session[AUTH_EMAIL_KEY] = done["email"]
+        # Who this browser is signed in as decides the one button: their
+        # hub only if it is this address's own account, else sign out.
+        me = session.get("account_id")
+        me = svc.get_account(me) if me else None
+        mine = me is not None and account_key(me.email) == account_key(
+            done["email"])
+        return _page("confirmed", done=done, signed_in=mine,
+                     someone_else=me is not None and not mine)
 
     @app.get("/beta/remove")
     def beta_remove_ask():

@@ -346,12 +346,10 @@ def test_every_step_names_a_label_that_is_on_the_screen():
                for t in ("landing.html", "auth.html", "home.html")}
     labels = [q for s in beta_signup.NEXT_STEPS for q in _quoted(s)]
     assert labels == ["Get started", "or use your email", "Email me a code",
-                      "Continue", "Skip for now",
-                      "Explore with made-up records", "Tell us"]
+                      "Continue", "Tell us"]
     where = {"Get started": "landing.html",
              "or use your email": "auth.html", "Email me a code": "auth.html",
-             "Continue": "auth.html", "Skip for now": "auth.html",
-             "Explore with made-up records": "home.html"}
+             "Continue": "auth.html"}
     for label, page in where.items():
         assert label in screens[page], (label, page)
     assert 'maxlength="8"' in screens["auth.html"]
@@ -362,22 +360,19 @@ def test_every_step_names_a_label_that_is_on_the_screen():
     assert '<a href="/feedback">Tell us</a>' in chat
 
 
-def test_the_confirmed_page_lists_the_steps(made, sent):
+def test_the_confirmed_page_is_one_button_not_a_list(made, sent):
+    """Confirming from our own page signs a new tester in and opens the
+    chat (tests/test_careagents_first_run.py). A bare POST lands here: no
+    steps to read, one button to sign in, and the steps go by email."""
     app, _ = made(RESEND_API_KEY="re_test")
     r = _confirm(app, sent)
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     text = _visible(body)
-    steps = body[body.index('<ol class="beta-steps'):]
-    steps = steps[:steps.index("</ol>")]
-    assert steps.count("<li") == len(beta_signup.NEXT_STEPS)
-    # Tags dropped without a space, so a linked label reads as typed.
-    flat = " ".join(html.unescape(re.sub(r"<[^>]+>", "", steps)).split())
-    for s in beta_signup.NEXT_STEPS:
-        assert s in flat
-    assert '<a href="https://careagents.cloud">careagents.cloud</a>' in steps
-    assert 'href="/feedback"' in body
+    assert '<ol class="beta-steps' not in body
+    assert 'class="btn-primary btn-block" href="/auth">Sign in</a>' in body
     assert "Thanks, Avery." in text
+    assert len(beta_signup.NEXT_STEPS) == 4
 
 
 def test_the_youre_in_email_lists_the_steps(made, sent):
@@ -527,8 +522,7 @@ def test_step_two_says_to_use_the_same_email(made, sent):
     # where the email box is.
     assert beta_signup.NEXT_STEPS[1] == SAME_EMAIL
     app, _ = made(RESEND_API_KEY="re_test")
-    page = _confirm(app, sent).get_data(as_text=True)
-    assert SAME_EMAIL in html.unescape(_visible(page))
+    _confirm(app, sent)
     (msg,) = [m for m in sent if m["subject"].startswith("You're in")]
     assert f"2. {SAME_EMAIL}" in msg["text"]
     assert SAME_EMAIL in html.unescape(msg["html"])

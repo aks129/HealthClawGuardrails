@@ -12,21 +12,35 @@
     <p class="setup-sub" id="imessage-pending">
       Sign in to connect your phone to CareAgents.</p>
     {% endif %}
+    {% if prefill %}
+    <p class="setup-sub">We'll email you an 8-digit code to sign in.</p>
+    {% else %}
     <p class="setup-sub">Sign in with your face or fingerprint. No passwords —
     a passkey lives on your device and can't be stolen by a fake site.</p>
+    {% endif %}
 
     <div id="err" class="form-error" hidden></div>
 
     <!-- Step: passkey-first (skipped when an existing account is enrolling) -->
     <div id="step-start" {% if enroll %}hidden{% endif %}>
+      {# Sent here by a beta confirm (`prefill`): a newcomer has no
+         passkey, so the email code comes first and is the big button. #}
+      {% if not prefill %}
       <button class="btn-primary btn-block" id="passkey-btn">
         Sign in with a passkey</button>
       <div class="or">or use your email</div>
+      {% endif %}
       <label class="field-label" for="email">Email</label>
       <input class="field" id="email" type="email" inputmode="email"
-             autocomplete="email" placeholder="you@example.com" autofocus>
-      <button class="btn-secondary btn-block" id="email-btn">
+             autocomplete="email" placeholder="you@example.com" autofocus
+             {%- if prefill %} value="{{ prefill }}"{% endif %}>
+      <button class="{{ 'btn-primary' if prefill else 'btn-secondary' }} btn-block" id="email-btn">
         Email me a code</button>
+      {% if prefill %}
+      <div class="or">or</div>
+      <button class="btn-secondary btn-block" id="passkey-btn">
+        Sign in with a passkey</button>
+      {% endif %}
       <p class="auth-fine">New here? The same steps sign you up.</p>
       <p class="auth-fine">By continuing you agree to the
         <a href="{{ terms_url }}" target="_blank" rel="noopener">Terms</a> and

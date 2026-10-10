@@ -43,7 +43,10 @@ function element(tag) {
   });
   return n;
 }
-globalThis.document = { createElement: element, createTextNode: textNode };
+// No `.sample-banner` here: addAgentText looks for one (withoutFrame), and
+// a page without it keeps every word (test_careagents_calm_chat_header.py).
+globalThis.document = { createElement: element, createTextNode: textNode,
+                        querySelector: () => null };
 
 function cut(from, to) {
   const a = src.indexOf(from), b = src.indexOf(to, a);
