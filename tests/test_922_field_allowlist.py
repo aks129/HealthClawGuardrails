@@ -81,14 +81,18 @@ def test_a_non_date_gives_no_date(eff):
     ("http://example.org/ids", "860975"),   # a system with no shape
 ])
 def test_a_code_not_shaped_for_its_system_is_not_named(system, code):
+    # No code is ever named now, shaped or not; the system may be.
     item = _summary(_cond(system, code), redact=False)[0]
-    assert item["name"] == "unlabeled record"
+    assert item["name"].startswith("unlabeled record")
+    assert code not in item["name"]
     assert item["unreadable"] is True
 
 
-def test_a_real_snomed_code_is_still_named():
+def test_a_real_snomed_code_names_its_system_not_the_code():
+    # Even a valid SNOMED id is not passed: a check digit admits one SSN or
+    # phone number in ten (#922 re-test R1).
     assert _summary(_cond(SNOMED, "44054006"), redact=False)[0]["name"] == \
-        "unlabeled record, code 44054006"
+        "unlabeled record (SNOMED CT code)"
 
 
 # --- allowlist -------------------------------------------------------------

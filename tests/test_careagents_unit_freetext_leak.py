@@ -116,7 +116,7 @@ def test_summarize_bundle_drops_a_single_word_code_token():
     assert "Zebulon" not in json.dumps(_summarize_bundle(_bundle(cond)))
 
 
-def test_summarize_bundle_still_names_a_code_shaped_token():
+def test_summarize_bundle_names_the_system_never_the_code():
     for system, code in ((_SNOMED, "44054006"),
                          ("http://hl7.org/fhir/sid/icd-10-cm", "E11.9"),
                          ("http://hl7.org/fhir/sid/icd-10-cm", "S72.001A"),
@@ -125,8 +125,9 @@ def test_summarize_bundle_still_names_a_code_shaped_token():
                           "860975")):
         cond = {"resourceType": "Condition",
                 "code": {"coding": [{"system": system, "code": code}]}}
-        assert _summarize_bundle(_bundle(cond))[0]["name"] == \
-            f"unlabeled record, code {code}"
+        name = _summarize_bundle(_bundle(cond))[0]["name"]
+        # The system is named; the code never is (#922 re-test R1, R2).
+        assert name.startswith("unlabeled record (") and code not in name
 
 
 def test_summarize_bundle_keeps_a_recognised_value_and_unit():

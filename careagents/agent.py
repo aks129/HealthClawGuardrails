@@ -17,7 +17,6 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
-import re
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
@@ -299,16 +298,17 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             #   source" is what actually happened and points at the fix
             #   (ask the clinic to code it / confirm details at the visit).
             #
-            # The code is passed on only when it has the shape of a code in
-            # the system its coding names (`_code_token`); otherwise the
-            # record is still named, with no token.
+            # The record is named with the system its coding comes from,
+            # never the code itself (`_CODE_SYSTEM_NAMES`).
             codings = [c for c in (code.get("coding") or [])
                        if isinstance(c, dict) and c.get("code")]
-            raw = next((t for t in map(_code_token, codings) if t), None)
-            if codings and not raw:
+            system = next((_CODE_SYSTEM_NAMES[c.get("system")]
+                           for c in codings
+                           if c.get("system") in _CODE_SYSTEM_NAMES), None)
+            if system:
+                item["name"] = f"unlabeled record ({system} code)"
+            elif codings:
                 item["name"] = "unlabeled record"
-            elif raw:
-                item["name"] = f"unlabeled record, code {raw}"
             elif lookup_reason in ("unavailable", "not-attempted",
                                   "not-a-ref"):
                 # We did not learn anything about this record's coding, so we
@@ -388,56 +388,20 @@ _RECORD_UNITS = _UCUM_ALLOWED | frozenset({
     "h", "min",
 })
 
-#: What an unlabeled record's code must look like before the model sees it,
-#: keyed by the coding's system. Redaction keeps codes, and upstream can put
-#: a name, a phone number or an instruction in `code` as easily as in
-#: `display`; one shape for every system let a phone number or an SSN
-#: through (#922 B3). ASCII digits only: `\d` also matches other scripts'.
-#: A code from any other system, or none, is not named.
-_CODE_SHAPES = {
-    "http://loinc.org": re.compile(r"[0-9]{1,5}-[0-9]"),
-    "http://snomed.info/sct": re.compile(r"[0-9]{6,18}"),
-    "http://hl7.org/fhir/sid/icd-10-cm": re.compile(
-        r"[A-Z][0-9]{2}(\.[0-9X]{1,3}[0-9A-Z]?)?"),
-    "http://hl7.org/fhir/sid/icd-10": re.compile(
-        r"[A-Z][0-9]{2}(\.[0-9X]{1,3}[0-9A-Z]?)?"),
-    "http://www.nlm.nih.gov/research/umls/rxnorm": re.compile(r"[0-9]{1,7}"),
-    # Older feeds still carry ICD-9-CM (#207's own case is 250.00): three
-    # digits, or V/E plus two or three, with at most two after the dot.
-    "http://hl7.org/fhir/sid/icd-9-cm": re.compile(
-        r"([0-9]{3}|V[0-9]{2}|E[0-9]{3})(\.[0-9]{1,2})?"),
+#: The code systems an unlabeled record can be said to come from. The code
+#: itself never reaches the model: redaction keeps codes, and upstream can
+#: put a name, a phone number or an instruction in `code`. Per-system shape
+#: checks kept admitting some (an SSN-shaped SNOMED id with a valid check
+#: digit, a 7-digit phone as RxNorm; #922 re-tests), and the number adds
+#: nothing the model needs: the record exists, uncoded at the source.
+_CODE_SYSTEM_NAMES = {
+    "http://loinc.org": "LOINC",
+    "http://snomed.info/sct": "SNOMED CT",
+    "http://hl7.org/fhir/sid/icd-10-cm": "ICD-10-CM",
+    "http://hl7.org/fhir/sid/icd-10": "ICD-10",
+    "http://hl7.org/fhir/sid/icd-9-cm": "ICD-9-CM",
+    "http://www.nlm.nih.gov/research/umls/rxnorm": "RxNorm",
 }
-
-# Verhoeff tables: a SNOMED CT identifier ends in a Verhoeff check digit,
-# which a nine-digit SSN or a ten-digit phone number fits one time in ten.
-_VD = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
-    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
-    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
-    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
-_VP = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
-    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
-    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
-
-
-def _verhoeff_ok(digits: str) -> bool:
-    c = 0
-    for i, d in enumerate(reversed(digits)):
-        c = _VD[c][_VP[i % 8][int(d)]]
-    return c == 0
-
-
-def _code_token(coding: dict) -> str | None:
-    """The coding's code when it has its system's shape, else None."""
-    code, shape = coding.get("code"), _CODE_SHAPES.get(coding.get("system"))
-    if not isinstance(code, str) or shape is None or not shape.fullmatch(code):
-        return None
-    if coding.get("system") == "http://snomed.info/sct" and not _verhoeff_ok(code):
-        return None
-    return code
 
 
 #: The `status` values FHIR defines per resource type (R4 through R6). A

@@ -258,17 +258,29 @@ _WORD_UNITS = frozenset({
     'ft', 'cal', 'kcal', 'kJ', 'Hz', 'Pa', 'kPa', 'mmHg', 'pH', 'mOsm',
     'tablet', 'tab', 'capsule', 'cap', 'puff', 'drop', 'spray', 'patch',
     'dose', 'unit', 'units', 'each', 'ea', 'serving', 'cup', 'steps',
+    # Letter runs inside UCUM codes the consumers allow: mm[Hg], [lb_av],
+    # [in_i], [degF], µmol/L.
+    'Hg', 'av', 'i', 'degF', 'µmol', 'µg', 'µL',
+    # Words inside the UCUM `{...}` annotations the consumers allow. The
+    # annotation is checked like the rest: `{Smith}/min` would carry a name.
+    'beats', 'breaths', 'cells', 'score', 'tbl',
 })
 UNIT_REDACTED = '[Redacted]'
 
 
+_LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
+
+
 def unit_is_shaped(value):
-    """True when `value` is a string that could be a unit token."""
+    """True when `value` is a string that could be a unit token: unit
+    characters only, and every run of letters, annotations included, is a
+    known unit word. Checking only all-letter tokens let phrases through
+    joined by `_`, `.`, `-` or `/` (#922 re-test R3)."""
     if not isinstance(value, str) or not _UNIT_SHAPE.fullmatch(value):
         return False
-    if value.isalpha():
-        return value in _WORD_UNITS
-    return not _LONG_WORD.search(value)
+    if _LONG_WORD.search(value):
+        return False
+    return all(run in _WORD_UNITS for run in _LETTER_RUN.findall(value))
 
 
 def _is_quantity(obj):

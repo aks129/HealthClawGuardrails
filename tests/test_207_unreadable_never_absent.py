@@ -54,7 +54,7 @@ def test_unknown_code_survives_redaction_as_unreadable_summary():
 
     assert summary == [{
         "type": "Condition",
-        "name": f"unlabeled record, code {UNKNOWN_CODE}",
+        "name": "unlabeled record (ICD-10-CM code)",
         "unreadable": True,
     }]
     assert "Jane" not in str(summary)
@@ -70,7 +70,7 @@ def test_mixed_bundle_labels_known_and_flags_unknown():
     assert len(summary) == 2
     assert "diabetes" in summary[0]["name"].lower()
     assert summary[0].get("unreadable") is None
-    assert summary[1]["name"].endswith(UNKNOWN_CODE)
+    assert summary[1]["name"] == "unlabeled record (ICD-10-CM code)"
     assert summary[1]["unreadable"] is True
 
 
@@ -127,11 +127,11 @@ def test_agent_turn_receives_unreadable_record_and_never_emits_bare_no(
         result = json.loads(messages[-1]["content"])
         assert result == [{
             "type": "Condition",
-            "name": f"unlabeled record, code {UNKNOWN_CODE}",
+            "name": "unlabeled record (ICD-10-CM code)",
             "unreadable": True,
         }]
         return llm.LLMTurn(text=(
-            f"I found an active condition record with code {UNKNOWN_CODE}, "
+            "I found an active condition record with an ICD-10-CM code, "
             "but I cannot read its name here. Ask your clinician to identify "
             "the code; I cannot treat this record as absence."))
 
