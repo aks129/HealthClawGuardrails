@@ -268,6 +268,10 @@ _WORD_UNITS = frozenset({
 UNIT_REDACTED = '[Redacted]'
 
 
+#: No UCUM unit has four digits in a row (10*12, 1.73 and mm[Hg] stay under
+#: it); a phone number, an SSN or a year does (#922 re-test, unit word
+#: followed by digits).
+_LONG_NUMBER = re.compile(r"[0-9]{4,}")
 _LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
 _LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
 
@@ -279,7 +283,7 @@ def unit_is_shaped(value):
     joined by `_`, `.`, `-` or `/` (#922 re-test R3)."""
     if not isinstance(value, str) or not _UNIT_SHAPE.fullmatch(value):
         return False
-    if _LONG_WORD.search(value):
+    if _LONG_WORD.search(value) or _LONG_NUMBER.search(value):
         return False
     runs = _LETTER_RUN.findall(value)
     if not runs:
