@@ -402,6 +402,10 @@ _CODE_SHAPES = {
     "http://hl7.org/fhir/sid/icd-10": re.compile(
         r"[A-Z][0-9]{2}(\.[0-9X]{1,3}[0-9A-Z]?)?"),
     "http://www.nlm.nih.gov/research/umls/rxnorm": re.compile(r"[0-9]{1,7}"),
+    # Older feeds still carry ICD-9-CM (#207's own case is 250.00): three
+    # digits, or V/E plus two or three, with at most two after the dot.
+    "http://hl7.org/fhir/sid/icd-9-cm": re.compile(
+        r"([0-9]{3}|V[0-9]{2}|E[0-9]{3})(\.[0-9]{1,2})?"),
 }
 
 # Verhoeff tables: a SNOMED CT identifier ends in a Verhoeff check digit,
