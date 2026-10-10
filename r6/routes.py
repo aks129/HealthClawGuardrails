@@ -1401,9 +1401,7 @@ def observation_stats():
             if vq.get('unit'):
                 unit = vq['unit']
                 break
-    # Read from the stored record, not a redacted copy, so the unit is
-    # whatever upstream wrote; a free-text one is not echoed to the caller.
-    if unit and unit_is_shaped(unit):
+    if unit and unit_is_shaped(unit):  # stored, unredacted: shape-check
         result['parameter'].append({'name': 'unit', 'valueString': unit})
 
     record_audit_event('read', 'Observation', None,

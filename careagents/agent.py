@@ -522,6 +522,10 @@ def _timeline_in_words(series: dict) -> dict:
     A single reading has no direction, so it gets neither."""
     out = {"name": series["name"], "readings": len(series["readings"]),
            "trend_plottable": series["trend_plottable"]}
+    if series.get("withheld"):
+        # Readings exist but their unit could not be confirmed, so no
+        # numbers: say so rather than imply there are none.
+        out["readings_unit_unconfirmed"] = series["withheld"]
     if not series["trend_plottable"]:
         return out
     dated = [r for r in series["readings"] if r["date"]]
@@ -613,8 +617,11 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         topic = str(args.get("topic") or "")
         labs = hc.interpret_labs(tenant)
         keys = labs_timeline.keys_for_topic(topic)
-        series = labs_timeline.build_series(labs.get("bundle") or {}, keys)
-        if series:
+        series = labs_timeline.build_series(labs.get("bundle") or {}, keys,
+                                            keep_withheld=on_text)
+        # Only a series with readings can be drawn; one kept for its
+        # withheld count alone has no chart to link to.
+        if any(s["readings"] for s in series):
             events.append({"type": "card", "kind": "lab-timeline",
                            "topic": topic})
         if on_text:
@@ -630,7 +637,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "link to the chart is included below your answer. A "
                          "series with trend_plottable false has a single "
                          "reading — say so, and never describe it as rising "
-                         "or falling."
+                         "or falling. A series with readings_unit_unconfirmed "
+                         "has that many readings whose unit could not be "
+                         "confirmed: say they are on file but give no "
+                         "numbers for them."
                          if series else
                          "No lab series matched in the CONNECTED records. "
                          "That is not the same as the person never having "

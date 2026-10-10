@@ -164,12 +164,19 @@ def _date_of(resource: dict) -> str:
 
 
 def build_series(interpret_bundle: dict,
-                 keys: list[str] | None = None) -> list[dict]:
+                 keys: list[str] | None = None,
+                 keep_withheld: bool = False) -> list[dict]:
     """Per-analyte series from an $interpret return Bundle, oldest first.
 
     Only analytes with at least one numeric reading appear: an empty panel
     tells the person nothing and invites the model to narrate an absence it
     cannot support.
+
+    keep_withheld: also keep an analyte whose every reading was dropped for
+    an unrecognised unit, with no readings and a `withheld` count. The text
+    surface needs it so the model says the readings exist but cannot be
+    shown, instead of saying there are none (#884 QA F1). The chart never
+    asks for it: it has nothing to draw.
     """
     entries = (interpret_bundle or {}).get("entry") or []
     wanted = None if keys is None else set(keys)
@@ -180,6 +187,7 @@ def build_series(interpret_bundle: dict,
             continue
         codes = set(analyte["codes"])
         readings = []
+        withheld = 0
         for entry in entries:
             resource = (entry or {}).get("resource") or {}
             if _loinc_of(resource) not in codes:
@@ -199,6 +207,7 @@ def build_series(interpret_bundle: dict,
             # (#884 QA F1). With no unit stated it is the analyte's own.
             unit = coded_unit(quantity, analyte["key"])
             if unit is None:
+                withheld += 1
                 continue
             readings.append({
                 "date": _date_of(resource),
@@ -206,10 +215,10 @@ def build_series(interpret_bundle: dict,
                 "unit": unit,
                 "flag": _flag_of(resource),
             })
-        if not readings:
+        if not readings and not (keep_withheld and withheld):
             continue
         readings.sort(key=lambda r: r["date"])
-        series.append({
+        one = {
             "key": analyte["key"],
             "name": analyte["name"],
             "unit": next((r["unit"] for r in readings if r["unit"]), ""),
@@ -217,5 +226,8 @@ def build_series(interpret_bundle: dict,
             # One reading has no direction. The surface must not draw a line
             # through it, and the model must not narrate a trend from it.
             "trend_plottable": len([r for r in readings if r["date"]]) >= 2,
-        })
+        }
+        if keep_withheld and withheld:
+            one["withheld"] = withheld
+        series.append(one)
     return series
