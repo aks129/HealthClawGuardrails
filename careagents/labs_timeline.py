@@ -61,6 +61,13 @@ UCUM_ALLOWED = frozenset({
     "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
     "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
     "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
+    # Common lab units real feeds send, found refused by #922 QA (F3).
+    "u[IU]/mL", "m[IU]/mL", "m[IU]/L", "k[IU]/L", "[iU]/L", "mIU/mL",
+    "uIU/mL", "mIU/L", "meq/L", "mosm/kg", "mOsm/kg", "{INR}", "INR",
+    "{ratio}", "{score}", "{titer}", "{index}", "{copies}/mL",
+    "/[HPF]", "/[LPF]", "s", "ms", "mm/h", "mm/[Hg]", "cm[H2O]",
+    "mg/(24.h)", "ng/mL{FEU}", "mg/g{creat}", "K/uL", "x10E3/uL",
+    "x10E6/uL", "fl",
 })
 
 

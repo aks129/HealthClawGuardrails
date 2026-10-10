@@ -668,7 +668,7 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         labs = hc.interpret_labs(tenant)
         keys = labs_timeline.keys_for_topic(topic)
         series = labs_timeline.build_series(labs.get("bundle") or {}, keys,
-                                            keep_withheld=on_text)
+                                            keep_withheld=True)
         # Only a series with readings can be drawn; one kept for its
         # withheld count alone has no chart to link to.
         if any(s["readings"] for s in series):
@@ -702,15 +702,20 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         # numbers. Handing them over too would invite the model to restate
         # every value and, worse, to narrate a direction from a single point.
         return json.dumps({
-            "chart_shown": bool(series),
+            "chart_shown": any(s["readings"] for s in series),
             "series": [{"name": s["name"], "readings": len(s["readings"]),
-                        "trend_plottable": s["trend_plottable"]}
+                        "trend_plottable": s["trend_plottable"],
+                        **({"readings_unit_unconfirmed": s["withheld"]}
+                           if s.get("withheld") else {})}
                        for s in series],
             "note": ("A chart is now visible to the person. Describe what it "
                      "shows in one or two sentences and invite a question; do "
                      "not list every value. A series with trend_plottable "
                      "false has a single reading — say so, and never describe "
-                     "it as rising or falling."
+                     "it as rising or falling. A series with "
+                     "readings_unit_unconfirmed has readings on file whose "
+                     "unit could not be confirmed, so they are not charted: "
+                     "say they exist, give no numbers."
                      if series else
                      "No lab series matched in the CONNECTED records. That is "
                      "not the same as the person never having had this test — "

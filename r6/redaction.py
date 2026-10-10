@@ -235,62 +235,57 @@ _ATTACHMENT_ONLY_KEYS = (
     'duration', 'height', 'width',
 )
 
-# A Quantity's `unit` is human-readable text, so upstream can write anything
-# there: a name, or an instruction to the model reading the record. A real
-# unit is one short token with no spaces, in UCUM's characters ("mg/dL",
-# "{beats}/min", "10*3/uL"). This is a shape, not a list: the engine serves
-# every kind of record, and a closed list here would blank legitimate units.
-# Two limits keep a name out of the shape (#922 B4): a token of letters only
-# is a unit only when it is on the short list below, and no run of letters is
-# longer than eight, so a long name cannot ride in on a slash. A short name
-# beside a non-letter still fits, so consumers that put a unit in front of a
-# model or a person keep their own closed list too
-# (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
-_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}_'\-µ°]{1,24}")
+# A unit the engine passes on is one short token in UCUM's characters, with
+# no spaces ("mg/dL", "{beats}/min", "u[IU]/mL", "mg/(24.h)"). The engine
+# serves every kind of record and redacts on every read, so this is a guard
+# against prose and identifiers, not a UCUM validator: a rule strict enough
+# to stop every name also blanked real units on every read (#922 QA F1).
+# It refuses
+# - a run of nine or more letters (a long name or a word of an instruction),
+# - a run of four or more digits (a phone number, an SSN, a year),
+# - two or more runs of four or more letters ("IGNORE_ALL_PREVIOUS",
+#   "Zebulon.Quixtran"),
+# - a token of letters only that is not a known unit word,
+# - a letterless token other than %, 1 or a power of ten.
+# A single short word beside a non-letter ("{Smith}", "Smith/dL") still
+# fits. That residual is tracked on #925; consumers that put a unit in front
+# of a model or a person keep their own closed lists, which are the real
+# guard (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
+_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()_'\-µ°]{1,24}")
 _LONG_WORD = re.compile(r"[A-Za-zµ°]{9,}")
-#: Units of letters only. A superset of every letters-only unit on the
-#: consumers' closed lists, or the engine would blank one before they see it.
-_WORD_UNITS = frozenset({
-    'g', 'mg', 'ug', 'mcg', 'ng', 'pg', 'kg', 'L', 'l', 'dL', 'dl', 'mL',
-    'ml', 'uL', 'fL', 'm', 'cm', 'mm', 'km', 'um', 'nm', 's', 'sec', 'min',
-    'h', 'hr', 'd', 'wk', 'mo', 'a', 'U', 'IU', 'mU', 'kU', 'mEq', 'mmol',
-    'umol', 'nmol', 'pmol', 'mol', 'Cel', 'bpm', 'lb', 'lbs', 'oz', 'in',
-    'ft', 'cal', 'kcal', 'kJ', 'Hz', 'Pa', 'kPa', 'mmHg', 'pH', 'mOsm',
-    'tablet', 'tab', 'capsule', 'cap', 'puff', 'drop', 'spray', 'patch',
-    'dose', 'unit', 'units', 'each', 'ea', 'serving', 'cup', 'steps',
-    # Letter runs inside UCUM codes the consumers allow: mm[Hg], [lb_av],
-    # [in_i], [degF], µmol/L.
-    'Hg', 'av', 'i', 'degF', 'µmol', 'µg', 'µL',
-    # Words inside the UCUM `{...}` annotations the consumers allow. The
-    # annotation is checked like the rest: `{Smith}/min` would carry a name.
-    'beats', 'breaths', 'cells', 'score', 'tbl',
+_LONG_NUMBER = re.compile(r"[0-9]{4,}")
+_LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
+_LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
+#: Units of letters only, compared case-insensitively. A superset of every
+#: letters-only unit on the consumers' closed lists, or the engine would
+#: blank one before they see it.
+_WORD_UNITS = frozenset(w.lower() for w in {
+    'g', 'mg', 'ug', 'mcg', 'ng', 'pg', 'kg', 'L', 'dL', 'mL', 'uL', 'fL',
+    'fl', 'm', 'cm', 'mm', 'km', 'um', 'nm', 's', 'ms', 'sec', 'min', 'h',
+    'hr', 'd', 'wk', 'mo', 'a', 'U', 'IU', 'mU', 'kU', 'mEq', 'mmol', 'umol',
+    'nmol', 'pmol', 'mol', 'Cel', 'bpm', 'lb', 'lbs', 'oz', 'in', 'ft',
+    'cal', 'kcal', 'kJ', 'Hz', 'Pa', 'kPa', 'mmHg', 'pH', 'mOsm', 'INR',
+    'tablet', 'tablets', 'tab', 'capsule', 'capsules', 'cap', 'puff',
+    'drop', 'drops', 'spray', 'patch', 'dose', 'unit', 'units', 'each',
+    'ea', 'serving', 'cup', 'steps', 'year', 'years', 'month', 'months',
+    'week', 'weeks', 'day', 'days', 'hour', 'hours', 'minute', 'minutes',
+    'second', 'seconds', 'µmol', 'µg', 'µL', 'degF',
 })
 UNIT_REDACTED = '[Redacted]'
 
 
-#: No UCUM unit has four digits in a row (10*12, 1.73 and mm[Hg] stay under
-#: it); a phone number, an SSN or a year does (#922 re-test, unit word
-#: followed by digits).
-_LONG_NUMBER = re.compile(r"[0-9]{4,}")
-_LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
-_LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
-
-
 def unit_is_shaped(value):
-    """True when `value` is a string that could be a unit token: unit
-    characters only, and every run of letters, annotations included, is a
-    known unit word. Checking only all-letter tokens let phrases through
-    joined by `_`, `.`, `-` or `/` (#922 re-test R3)."""
+    """True when `value` could be a unit: see the rules above."""
     if not isinstance(value, str) or not _UNIT_SHAPE.fullmatch(value):
         return False
     if _LONG_WORD.search(value) or _LONG_NUMBER.search(value):
         return False
     runs = _LETTER_RUN.findall(value)
     if not runs:
-        # No unit word at all: only UCUM's few letterless units. Digits
-        # alone passed before, so a phone number or SSN did (#922 N2).
         return bool(_LETTERLESS_UNIT.fullmatch(value))
-    return all(run in _WORD_UNITS for run in runs)
+    if value.isalpha():
+        return value.lower() in _WORD_UNITS
+    return sum(len(r) >= 4 for r in runs) <= 1
 
 
 def _is_quantity(obj):
@@ -310,11 +305,12 @@ def _clean_unit(obj):
     any other.
 
     A Quantity's `code` is its coded unit, which readers prefer to `unit`,
-    so it gets the same rule; one that fails is dropped (#922 B4)."""
+    so it gets the same rule; one that fails is replaced too, never dropped,
+    so a coded unit is not lost on a read (#922 B4, QA F1)."""
     if not _is_quantity(obj):
         return
     if isinstance(obj.get('code'), str) and not unit_is_shaped(obj['code']):
-        obj.pop('code')
+        obj['code'] = UNIT_REDACTED
     if 'unit' not in obj:
         return
     unit = obj['unit']
