@@ -23,9 +23,12 @@ on all resource access paths (not just context ingestion).
 - Photos: Remove entirely
 - Narratives: Replace with redacted div
 - Notes/comments: Replace with [Redacted]
+- Quantity units: Replace a unit that is not one short unit-shaped token
+  with [Redacted]; keep the coded `code` and `system`
 """
 
 import json
+import re
 
 from r6.safe_read import code_shape, is_coding_shaped
 from r6.terminology import label_codings
@@ -232,6 +235,41 @@ _ATTACHMENT_ONLY_KEYS = (
     'duration', 'height', 'width',
 )
 
+# A Quantity's `unit` is human-readable text, so upstream can write anything
+# there: a name, or an instruction to the model reading the record. A real
+# unit is one short token with no spaces, in UCUM's characters ("mg/dL",
+# "{beats}/min", "10*3/uL", "tablet"). This is a shape, not a list: the
+# engine serves every kind of record, and a closed list here would blank
+# legitimate units. A single word still fits it, so consumers that put a
+# unit in front of a model or a person keep their own closed list too
+# (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
+_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}_'\-µ°]{1,24}")
+UNIT_REDACTED = '[Redacted]'
+
+
+def unit_is_shaped(value):
+    """True when `value` is a string that could be a unit token."""
+    return isinstance(value, str) and bool(_UNIT_SHAPE.fullmatch(value))
+
+
+def _clean_unit(obj):
+    """Replace a `unit` that is not unit-shaped, in place; drop one that is
+    not a string or an object. Replaced rather than dropped: readers treat
+    an absent unit as "the analyte's usual unit" (r6/brief/engine.py), and a
+    number beside a unit it was not measured in is the defect #884 fixed.
+    The replacement is on no allow-list, so they show no number instead. An
+    object `unit` (ObservationDefinition's CodeableConcept) is walked like
+    any other."""
+    if 'unit' not in obj or 'resourceType' in obj:
+        return
+    unit = obj['unit']
+    if isinstance(unit, dict):
+        return
+    if not isinstance(unit, str):
+        obj.pop('unit')
+    elif not unit_is_shaped(unit):
+        obj['unit'] = UNIT_REDACTED
+
 
 def clean_codings(obj):
     """Apply the Coding rule to one dict: its `coding` list, and the dict
@@ -288,6 +326,7 @@ def _redact_recursive(obj):
     # Coding-shaped dict, wherever it sits (R886-1); r6/safe_read.code_shape
     # is the rule the validator applies on write too.
     clean_codings(obj)
+    _clean_unit(obj)
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an
