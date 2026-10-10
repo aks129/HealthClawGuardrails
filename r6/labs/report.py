@@ -16,7 +16,21 @@ from r6.labs.trend import kdigo_consumer_line
 from r6.redaction import UNIT_REDACTED, unit_is_shaped
 from r6.terminology import LOINC, lookup
 
-_LOINC_SHAPE = re.compile(r"\d{1,8}-\d")
+#: A LOINC code: up to five ASCII digits, a dash, and its mod-10 check
+#: digit. `\d` matched other scripts' digits, and eight digits left room
+#: for a phone number (#922 re-test N1).
+_LOINC_SHAPE = re.compile(r"([0-9]{1,5})-([0-9])")
+
+
+def _loinc_ok(code):
+    m = isinstance(code, str) and _LOINC_SHAPE.fullmatch(code)
+    if not m:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(m.group(1))):
+        d = int(ch) * (2 if i % 2 == 0 else 1)
+        total += d - 9 if d > 9 else d
+    return (10 - total % 10) % 10 == int(m.group(2))
 
 V3_INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 
@@ -97,8 +111,7 @@ def _undecided_name(r):
     # Only a code shaped like a LOINC is named: the interpreter takes any
     # string under the LOINC system, and upstream can write a name there.
     return lookup(LOINC, code) or (
-        f"LOINC {code}" if isinstance(code, str) and _LOINC_SHAPE.fullmatch(code)
-        else "an unidentified analyte")
+        f"LOINC {code}" if _loinc_ok(code) else "an unidentified analyte")
 
 
 def _undecided_names(results):

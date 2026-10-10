@@ -268,6 +268,7 @@ _WORD_UNITS = frozenset({
 UNIT_REDACTED = '[Redacted]'
 
 
+_LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
 _LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
 
 
@@ -280,7 +281,12 @@ def unit_is_shaped(value):
         return False
     if _LONG_WORD.search(value):
         return False
-    return all(run in _WORD_UNITS for run in _LETTER_RUN.findall(value))
+    runs = _LETTER_RUN.findall(value)
+    if not runs:
+        # No unit word at all: only UCUM's few letterless units. Digits
+        # alone passed before, so a phone number or SSN did (#922 N2).
+        return bool(_LETTERLESS_UNIT.fullmatch(value))
+    return all(run in _WORD_UNITS for run in runs)
 
 
 def _is_quantity(obj):
