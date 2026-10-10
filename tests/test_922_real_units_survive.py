@@ -53,3 +53,24 @@ def test_redaction_keeps_a_real_unit_and_its_code(unit):
 @pytest.mark.parametrize("unit", LAB_UNITS)
 def test_a_common_lab_unit_is_on_careagents_list(unit):
     assert unit in UCUM_ALLOWED
+
+
+def test_every_wearable_unit_reaches_the_model():
+    """Our own writer and our own reader must agree: a unit the wearable
+    mapper writes is on the list `_summarize_bundle` passes to the model,
+    or step counts and VO2 max reach it with no value (#922 QA F3)."""
+    from careagents.agent import _RECORD_UNITS
+    from r6.wearables.mapper import METRIC_MAP
+    for key, spec in METRIC_MAP.items():
+        for unit in (spec["unit_ucum"], spec["unit_human"]):
+            assert unit in _RECORD_UNITS, (key, unit)
+            assert unit_is_shaped(unit), (key, unit)
+
+
+@pytest.mark.parametrize("unit", [
+    "{count}", "mL/min/kg", "ng/L", "mL/min", "{cells}/uL", "{SG}",
+    "{#}/[HPF]", "mg/24.h", "[iU]/mL"])
+def test_a_found_lab_unit_reaches_the_model(unit):
+    from careagents.agent import _RECORD_UNITS
+    assert unit in _RECORD_UNITS
+    assert unit_is_shaped(unit)

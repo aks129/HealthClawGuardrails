@@ -251,7 +251,7 @@ _ATTACHMENT_ONLY_KEYS = (
 # fits. That residual is tracked on #925; consumers that put a unit in front
 # of a model or a person keep their own closed lists, which are the real
 # guard (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
-_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()_'\-µ°]{1,24}")
+_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()#_'\-µ°]{1,24}")
 _LONG_WORD = re.compile(r"[A-Za-zµ°]{9,}")
 _LONG_NUMBER = re.compile(r"[0-9]{4,}")
 _LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")

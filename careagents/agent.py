@@ -386,6 +386,12 @@ _RECORD_UNITS = _UCUM_ALLOWED | frozenset({
     "kg", "g", "[lb_av]", "lb", "cm", "m", "[in_i]", "in", "kg/m2",
     "/min", "{beats}/min", "bpm", "{breaths}/min", "Cel", "[degF]",
     "h", "min",
+    # Units our own wearable mapper writes (r6/wearables/mapper.py), and
+    # real lab and vital codes #922 QA found dropped (F3).
+    "{count}", "steps", "mL/min/kg", "breaths/min", "°C", "°F",
+    "ng/L", "mL/min", "{cells}/uL", "{SG}", "{#}/[HPF]", "mL", "L/min",
+    "U/mL", "kU/L", "ug/mL", "mg/24.h", "/uL", "[iU]/mL", "mg/kg", "1",
+    "a", "d", "wk", "mo", "lbs", "beats/min", "mg/dl",
 })
 
 #: The code systems an unlabeled record can be said to come from. The code
