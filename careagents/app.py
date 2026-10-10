@@ -976,11 +976,14 @@ def create_app(config: Config | None = None,
         acct = svc.first_run_account(email)
         if acct is None:
             return None
-        _login(acct)
-        # A link-opened session: gone with the browser, limited to the
-        # sample, and ended once real records arrive (#920 F1).
-        session.permanent = False
-        session[_VIA_LINK] = True
+        if me is None:
+            _login(acct)
+            # A link-opened session: gone with the browser, limited to the
+            # sample, and ended once real records arrive (#920 F1).
+            session.permanent = False
+            session[_VIA_LINK] = True
+        # Already signed in here as this address: that session, full or
+        # link, stays as it is; never downgraded (#920 QA Low 1).
         answer = app.make_response(_sample_tap(acct, {}))
         landing = (answer.get_json(silent=True) or {}).get("redirect")
         if answer.status_code == 200 and landing:

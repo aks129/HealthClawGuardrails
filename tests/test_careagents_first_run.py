@@ -399,6 +399,24 @@ def test_a_forwarded_link_cannot_delete_an_existing_empty_account(
     assert _account(svc) is not None and _account(svc).id == owner_id
 
 
+def test_a_full_session_confirming_its_own_link_stays_full(
+        made, sent, monkeypatch):
+    """Signed in with a code, nothing connected yet, then taps Confirm on
+    their own link in the same browser: the chat opens and the session is
+    not downgraded to a link session (#920 QA Low 1)."""
+    app, svc = made(RESEND_API_KEY="re_test")
+    c = app.test_client()
+    _login(c, svc, monkeypatch, email=EMAIL)
+    me = _signed_in_as(c)
+    token, nonce, _ = _ask(c, sent)
+    r = c.post("/beta/confirm", data={"t": token, "n": nonce})
+    assert r.status_code == 303 and "/chat?agent=" in r.headers["Location"]
+    with c.session_transaction() as s:
+        assert s["account_id"] == me
+        assert "via_link" not in s and s.permanent
+    assert c.post("/webauthn/register/options").status_code == 200
+
+
 def test_a_link_session_cannot_revoke_a_grant(made, sent):
     app, _ = made(RESEND_API_KEY="re_test")
     c = _link_session(app, sent)
