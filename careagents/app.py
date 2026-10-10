@@ -35,7 +35,7 @@ from careagents.accounts import (AccountService, AuthError, MailError,
                                  secret_matches)
 from careagents import advisors, analytics, connectors, consent, mail
 from careagents import beta, imessage, operator_cli, tester_terms
-from careagents import sendblue_surface
+from careagents import security_headers, sendblue_surface
 from careagents import brief as brief_mod
 from careagents import hub as hub_view
 from careagents import intake_state
@@ -328,6 +328,8 @@ def create_app(config: Config | None = None,
     #: connector flow may rely on the default policy.
     _NO_REFERRER_ENDPOINTS = frozenset(
         {"imessage_link", "imessage_link_claim", "auth"})
+
+    security_headers.install(app, production=cfg.app_env == "production")
 
     @app.after_request
     def _no_referrer_on_the_link_path(response):
