@@ -17,6 +17,7 @@ raw bundles, to keep turns small and grounded.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import quote
 
 from careagents import brief as brief_mod
@@ -297,9 +298,15 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             #   and tells the person nothing; "recorded but not coded at the
             #   source" is what actually happened and points at the fix
             #   (ask the clinic to code it / confirm details at the visit).
+            #
+            # The code is passed on only when it is shaped like one
+            # (`_CODE_TOKEN`); otherwise the record is still named, with no
+            # token.
             raw = next((c.get("code") for c in (code.get("coding") or [])
                         if isinstance(c, dict) and c.get("code")), None)
-            if raw:
+            if raw and not _CODE_TOKEN.fullmatch(str(raw)):
+                item["name"] = "unlabeled record"
+            elif raw:
                 item["name"] = f"unlabeled record, code {raw}"
             elif lookup_reason in ("unavailable", "not-attempted",
                                   "not-a-ref"):
@@ -332,7 +339,13 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             item["status"] = res["status"]
         vq = res.get("valueQuantity")
         if isinstance(vq, dict) and vq.get("value") is not None:
-            item["value"] = f"{vq.get('value')} {vq.get('unit', '')}".strip()
+            # The coded, allow-listed unit, never the free-text `unit`:
+            # upstream can write a name or an instruction there. A unit we
+            # do not recognise means no number, as on get_labs (#884 QA F1).
+            unit = labs_timeline.coded_unit(
+                vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
+            if unit is not None:
+                item["value"] = f"{vq.get('value')} {unit}".strip()
         if res.get("effectiveDateTime"):
             item["date"] = str(res["effectiveDateTime"])[:10]
         out.append(item)
@@ -357,38 +370,32 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
 MAX_BRIEF_FIELDS = 6
 
 
-#: Units a lab reading may carry to the model: exact, case-sensitive
-#: tokens. A closed list: any other string, however unit-shaped, could be a
-#: word (R875-3). The same list the visit brief keeps (r6/brief/engine.py);
-#: CareAgents imports nothing from the engine, so it is repeated.
-_UCUM_ALLOWED = frozenset({
-    "mg/dL", "g/dL", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "mEq/L",
-    "mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L", "mmol/mol",
-    "g/L", "mg/L", "ug/L", "10*9/L", "10^9/L", "10*12/L", "10^12/L",
-    "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
-    "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
-    "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
+#: Units a lab reading may carry to the model: the closed list in
+#: labs_timeline, which builds the chart's series from it too.
+_UCUM_ALLOWED = labs_timeline.UCUM_ALLOWED
+
+#: Units an Observation in a record list may carry: the lab list plus the
+#: vital-sign units a search_records answer shows. Still closed, for the
+#: same reason (R875-3).
+_RECORD_UNITS = _UCUM_ALLOWED | frozenset({
+    "kg", "g", "[lb_av]", "lb", "cm", "m", "[in_i]", "in", "kg/m2",
+    "/min", "{beats}/min", "bpm", "{breaths}/min", "Cel", "[degF]",
+    "h", "min",
 })
+
+#: What an unlabeled record's code must look like before the model sees it:
+#: digits, dots and dashes, with at most one capital letter at either end, as
+#: LOINC, SNOMED, RxNorm, CVX, ICD-10 and HCPCS codes are. Redaction keeps
+#: codes, and upstream can put a name or an instruction in `code` as easily
+#: as in `display`; no name fits this shape.
+_CODE_TOKEN = re.compile(r"[A-Z]?\d[\d.\-]{0,17}[A-Z]?")
 
 
 def _coded_unit(reading: dict, series: dict) -> str | None:
-    """The unit the reading stated, or None when it stated one we do not
-    recognise; then its number is not passed on either (#884 QA F1).
-
-    - its code (any system, or none) or its unit string is an exact
-      allowlist token: that token. Only a token from the list ever leaves.
-    - neither is present: the analyte's known unit, else "".
-    - anything else: None. The analyte's usual unit used to stand in, which
-      put a number beside a unit it was not measured in.
-    """
-    stated = [v for v in (reading.get("code"), reading.get("unit"))
-              if v is not None and v != ""]
-    for value in stated:
-        if isinstance(value, str) and value in _UCUM_ALLOWED:
-            return value
-    if stated:
-        return None
-    return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
+    """`labs_timeline.coded_unit` for a reading in a series: the stated
+    allow-listed unit, the analyte's known one when none was stated, or None
+    for a unit we do not recognise (#884 QA F1)."""
+    return labs_timeline.coded_unit(reading, series.get("key"))
 
 
 #: The engine's analyte name per LOINC code, mirrored from

@@ -8,11 +8,15 @@ build_consumer_summary() is the plain-language, outcomes-oriented consumer view.
 Neither summary may be placed in audit detail (PHI).
 """
 import copy
+import re
 
 from r6.labs.interpret import (NO_NUMERIC_VALUE, RANGE_NOT_ASSERTED,
                                UNIT_MISMATCH, UNKNOWN_ANALYTE)
 from r6.labs.trend import kdigo_consumer_line
+from r6.redaction import UNIT_REDACTED, unit_is_shaped
 from r6.terminology import LOINC, lookup
+
+_LOINC_SHAPE = re.compile(r"\d{1,8}-\d")
 
 V3_INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 
@@ -61,8 +65,13 @@ def build_interpretation_summary(results):
         elif flag == "H":
             buckets["high"] += 1
         if flag != "N":
+            # The result's unit is the stored record's, unredacted; on the
+            # performing lab's range it is whatever upstream wrote.
+            unit = r.get("unit")
             flagged.append({"analyte": r.get("analyte"), "value": r.get("value"),
-                            "unit": r.get("unit"), "flag": flag})
+                            "unit": unit if unit_is_shaped(unit)
+                            else (UNIT_REDACTED if unit else unit),
+                            "flag": flag})
     return {**buckets, "flagged": flagged, "total": len(results),
             "indeterminate_analytes": _undecided_names(results)}
 
@@ -80,8 +89,11 @@ def _undecided_name(r):
     if r.get("analyte"):
         return r["analyte"]
     code = r.get("loinc")
-    return lookup(LOINC, code) or (f"LOINC {code}" if code
-                                   else "an unidentified analyte")
+    # Only a code shaped like a LOINC is named: the interpreter takes any
+    # string under the LOINC system, and upstream can write a name there.
+    return lookup(LOINC, code) or (
+        f"LOINC {code}" if isinstance(code, str) and _LOINC_SHAPE.fullmatch(code)
+        else "an unidentified analyte")
 
 
 def _undecided_names(results):

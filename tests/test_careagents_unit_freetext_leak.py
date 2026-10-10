@@ -186,7 +186,18 @@ def test_interpret_does_not_echo_a_free_text_unit_or_code(
     r = client.post("/r6/fhir/Observation/$interpret", json={},
                     headers=tenant_headers)
     assert r.status_code == 200
-    _clean(r.get_data(as_text=True))
+    params = {p["name"]: p for p in r.get_json()["parameter"]}
+    # The summaries are prose and lists built here, read out by agents.
+    _clean(params["summary"]["valueString"])
+    _clean(params["consumerSummary"]["valueString"])
+    # The returned records keep their codes (redaction keeps Coding.code by
+    # design; consumers shape-check before naming one), but not the unit.
+    bundle = params["return"]["resource"]
+    units = [e["resource"]["valueQuantity"].get("unit")
+             for e in bundle["entry"]]
+    _clean(json.dumps(units))
+    _clean(json.dumps([rr for e in bundle["entry"]
+                       for rr in e["resource"].get("referenceRange", [])]))
 
 
 def test_stats_does_not_echo_a_free_text_unit(

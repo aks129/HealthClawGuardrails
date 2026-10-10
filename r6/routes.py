@@ -43,7 +43,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 error_fidelity_outcome, lenient_search_warnings,
                                 unsupported_input_text)
 from r6.redaction import apply_patient_controlled_redaction
-from r6.redaction import apply_redaction
+from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
                        require_grant, require_open_tenant, tenant_from_request)
 from r6.stepup import generate_step_up_token
@@ -1401,7 +1401,9 @@ def observation_stats():
             if vq.get('unit'):
                 unit = vq['unit']
                 break
-    if unit:
+    # Read from the stored record, not a redacted copy, so the unit is
+    # whatever upstream wrote; a free-text one is not echoed to the caller.
+    if unit and unit_is_shaped(unit):
         result['parameter'].append({'name': 'unit', 'valueString': unit})
 
     record_audit_event('read', 'Observation', None,

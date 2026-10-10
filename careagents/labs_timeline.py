@@ -48,6 +48,42 @@ ANALYTES = [
 #: missing. Never the reading's free-text `unit`.
 KNOWN_UNITS = {a["key"]: a["unit"] for a in ANALYTES}
 
+#: Units a lab reading may carry to the model or the browser: exact,
+#: case-sensitive tokens. A closed list: any other string, however
+#: unit-shaped, could be a word (R875-3). The same list the visit brief keeps
+#: (r6/brief/engine.py); CareAgents imports nothing from the engine, so it is
+#: repeated. It lives here rather than in agent.py because the chart's series
+#: are built here and agent.py imports this module, not the other way round.
+UCUM_ALLOWED = frozenset({
+    "mg/dL", "g/dL", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "mEq/L",
+    "mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L", "mmol/mol",
+    "g/L", "mg/L", "ug/L", "10*9/L", "10^9/L", "10*12/L", "10^12/L",
+    "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
+    "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
+    "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
+})
+
+
+def coded_unit(reading: dict, key: str | None,
+               allowed: frozenset = UCUM_ALLOWED) -> str | None:
+    """The unit the reading stated, or None when it stated one we do not
+    recognise; then its number is not passed on either (#884 QA F1).
+
+    - its code (any system, or none) or its unit string is an exact
+      allowlist token: that token. Only a token from the list ever leaves.
+    - neither is present: the analyte's known unit, else "".
+    - anything else: None. The analyte's usual unit used to stand in, which
+      put a number beside a unit it was not measured in.
+    """
+    stated = [v for v in (reading.get("code"), reading.get("unit"))
+              if v is not None and v != ""]
+    for value in stated:
+        if isinstance(value, str) and value in allowed:
+            return value
+    if stated:
+        return None
+    return KNOWN_UNITS.get(key, "")
+
 # Free-text search terms -> analyte keys, so "how's my cholesterol?" narrows to
 # the lipid panel instead of dumping every series into the chat.
 _TOPICS = {
@@ -154,14 +190,20 @@ def build_series(interpret_bundle: dict,
             # a clinical claim nobody made onto a chart.
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 continue
+            # Only an allow-listed unit goes on: the series is the
+            # /api/labs/timeline JSON, and upstream can write any text,
+            # a name or an instruction, into `unit` or `code`. A unit stated
+            # but not recognised drops the reading, as a missing number
+            # does: blanking it would let a reader fall back to the usual
+            # unit and put the number beside a unit it was not measured in
+            # (#884 QA F1). With no unit stated it is the analyte's own.
+            unit = coded_unit(quantity, analyte["key"])
+            if unit is None:
+                continue
             readings.append({
                 "date": _date_of(resource),
                 "value": value,
-                "unit": quantity.get("unit") or "",
-                # The coded unit, for any reader that must not pass the
-                # free-text `unit` on (careagents/agent.py, text surfaces).
-                "code": quantity.get("code"),
-                "system": quantity.get("system"),
+                "unit": unit,
                 "flag": _flag_of(resource),
             })
         if not readings:
