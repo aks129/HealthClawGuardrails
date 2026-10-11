@@ -522,8 +522,9 @@ def test_no_resource_query_file_ignores_soft_delete():
 #: 3733 -> 3736 (CTO ruling on #913): the revoke route refuses a public
 #: tenant with 422 before any write, matching purge. 3736 -> 3739: the
 #: same call on /internal/seed, $curatr-apply-fix and /demo/agent-loop
-#: (security re-check of #913, R3-R5).
-_GOD_MODULE_LINES = 3739
+#: (security re-check of #913, R3-R5). 3739 -> 3733 (#922 B5): $stats takes
+#: its unit in the loop that filters by code; the second loop is gone.
+_GOD_MODULE_LINES = 3733
 
 
 def test_the_god_module_only_shrinks():
