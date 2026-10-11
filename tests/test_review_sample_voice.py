@@ -88,8 +88,8 @@ def test_a_sample_review_is_about_the_sample_person(app, ctx):
     assert voices.SAMPLE_BANNER in html
     assert 'id="sample-back-to-chat"' in html
     # Nothing on it speaks to the tester as the person in the records.
-    text = re.sub(r"<script.*?</script>|<style.*?</style>|<!--.*?-->", "",
-                  html, flags=re.S)
+    text = re.sub(r"<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->",
+                  "", html, flags=re.S | re.I)
     assert "About you" not in text
     assert "I have no known allergies" not in text
     assert "from your records" not in text
