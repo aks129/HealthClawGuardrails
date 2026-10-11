@@ -218,9 +218,19 @@ def test_daily_report_counts_days_conversion_and_inviters(svc, monkeypatch):  # 
     assert report["days"][0]["via_invite"] == 1
     joined_to_confirmed = report["conversion"][0]
     assert joined_to_confirmed["from_n"] == 2
+    # Conversion counts accounts that reached both steps: `a` answered
+    # without a confirmed beta request, so confirmed -> first_answer is
+    # 0 of 0, not 1 of 0.
     answered = next(c for c in report["conversion"]
                     if c["to"] == "first_answer")
-    assert answered["to_n"] == 1
+    assert (answered["from_n"], answered["to_n"]) == (0, 0)
+    assert answered["percent"] is None
+    funnel.mark(svc.session, a.id, "confirmed")
+    report = funnel.daily(svc.session, days=1)
+    answered = next(c for c in report["conversion"]
+                    if c["to"] == "first_answer")
+    assert (answered["from_n"], answered["to_n"],
+            answered["percent"]) == (1, 1, 100)
     assert report["per_inviter"] == [{"inviter_id": a.id, "joined": 1}]
 
 
@@ -441,6 +451,28 @@ def test_no_card_without_an_invite_or_a_live_fasten(monkeypatch, env):
             # The gate is untouched: still refused server-side.
             r = c.post("/api/connections/fasten", json={"consent": True})
             assert r.status_code == 503
+    finally:
+        svc_.engine.dispose()
+
+
+def test_fasten_failed_counts_only_past_the_gate(monkeypatch):
+    """A refusal at the real-records gate is not a Fasten failure; an
+    invited account refused because Fasten is not set up is."""
+    from careagents import tester_terms
+    consent = {"consent": True,
+               "consent_version": tester_terms.CONSENT_VERSION}
+    app, svc_, c, _ = _invited_app(monkeypatch, invited=False)
+    try:
+        assert c.post("/api/connections/fasten",
+                      json=consent).status_code == 503
+        assert _today(svc_)["fasten_failed"] == 0
+    finally:
+        svc_.engine.dispose()
+    app, svc_, c, _ = _invited_app(monkeypatch, FASTEN_PUBLIC_KEY="")
+    try:
+        assert c.post("/api/connections/fasten",
+                      json=consent).status_code == 503
+        assert _today(svc_)["fasten_failed"] == 1
     finally:
         svc_.engine.dispose()
 
