@@ -259,8 +259,8 @@ def test_the_real_chat_page_renders_as_main(cfg, svc, monkeypatch):  # noqa: F81
     body = c.get(f"/chat?agent={agent_id}").get_data(as_text=True)
     # The header is now one ⋯ menu (tests/test_careagents_calm_chat_header.py);
     # what follows it, where a sample-only construct would leak, is as main.
-    assert ('href="/auth?enroll=1">Add a passkey</a>\n      </nav>\n'
-            '    </details>\n  </div>\n\n  \n'
+    assert ('<button type="submit">Sign out</button>\n        </form>\n'
+            '      </nav>\n    </details>\n  </div>\n\n  \n'
             '  <div class="chat-log" id=') in body
 
 

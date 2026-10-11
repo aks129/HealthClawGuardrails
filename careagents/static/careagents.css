@@ -224,6 +224,14 @@ h1 em { font-style: italic; color: var(--clay); }
   text-decoration: none;
 }
 .chat-menu-list a:hover { background: var(--paper); color: var(--clay-deep); }
+/* Sign out is a POST, so a button drawn as the links around it. */
+.chat-menu-list form { margin: 0; }
+.chat-menu-list button {
+  display: block; width: 100%; text-align: left; padding: 12px 14px;
+  border: 0; border-radius: 10px; background: none; cursor: pointer;
+  font: inherit; font-size: 15px; font-weight: 600; color: var(--ink);
+}
+.chat-menu-list button:hover { background: var(--paper); color: var(--clay-deep); }
 .pill {
   font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
   background: var(--card); border: 1px solid var(--hairline);

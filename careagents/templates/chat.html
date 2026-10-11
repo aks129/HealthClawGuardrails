@@ -14,14 +14,17 @@
     <details class="chat-menu">
       <summary class="chat-menu-btn" aria-label="Menu">⋯</summary>
       <nav class="chat-menu-list">
-        <a href="/home">Your hub</a>
+        <a href="/home">Home</a>
         <a href="/agents/{{ me.id }}/approvals" title="Requests waiting for your answer">Waiting for you</a>
-        {# A link to what the grade means, the page the landing links too
-           (#884 G7). Ours, so the same tab. #}
-        <a id="trust-pill" title="What the safety grade means"
-           href="/safety">Safety grade: …</a>
-        {# A first sign-in skips the passkey prompt; it waits here. #}
-        {% if offer_passkey %}<a href="/auth?enroll=1">Add a passkey</a>{% endif %}
+        {# The page the landing links too (#884 G7), named for what it
+           tells a patient, not as a grade. Ours, so the same tab. #}
+        <a id="trust-pill" href="/safety">How we keep you safe</a>
+        {# A first sign-in skips the passkey prompt; it waits here, and
+           comes back to this chat (`agent`). #}
+        {% if offer_passkey %}<a href="/auth?enroll=1&amp;agent={{ agent_id }}">Add a passkey</a>{% endif %}
+        <form method="post" action="/logout">
+          <button type="submit">Sign out</button>
+        </form>
       </nav>
     </details>
   </div>{# Sample records only: one plain line above the log, sticky, and
@@ -40,6 +43,9 @@
        greeting is where a patient looks for "did my records land?", and it
        used to be computed only for a first visit — so the one person actually
        watching for arrival was the one person never shown it (#336). #}
+    {% if passkey_added %}
+    <div class="chat-notice" role="status">Passkey added. Next time, sign in with your face or fingerprint.</div>
+    {% endif %}
     {% if intake and intake.state in ("arriving", "overdue") %}
     <div class="chat-notice">
       {% if intake.state == "arriving" %}

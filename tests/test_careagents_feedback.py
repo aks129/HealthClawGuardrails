@@ -346,10 +346,11 @@ def test_every_step_names_a_label_that_is_on_the_screen():
                for t in ("landing.html", "auth.html", "home.html")}
     labels = [q for s in beta_signup.NEXT_STEPS for q in _quoted(s)]
     assert labels == ["Get started", "or use your email", "Email me a code",
-                      "Continue", "Tell us"]
+                      "Continue", "Skip for now", "Chat", "Tell us"]
     where = {"Get started": "landing.html",
              "or use your email": "auth.html", "Email me a code": "auth.html",
-             "Continue": "auth.html"}
+             "Continue": "auth.html", "Skip for now": "auth.html",
+             "Chat": "home.html"}
     for label, page in where.items():
         assert label in screens[page], (label, page)
     assert 'maxlength="8"' in screens["auth.html"]
@@ -372,7 +373,7 @@ def test_the_confirmed_page_is_one_button_not_a_list(made, sent):
     assert '<ol class="beta-steps' not in body
     assert 'class="btn-primary btn-block" href="/auth">Sign in</a>' in body
     assert "Thanks, Avery." in text
-    assert len(beta_signup.NEXT_STEPS) == 4
+    assert len(beta_signup.NEXT_STEPS) == 5
 
 
 def test_the_youre_in_email_lists_the_steps(made, sent):

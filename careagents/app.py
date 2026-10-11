@@ -454,20 +454,30 @@ def create_app(config: Config | None = None,
         # verification: skip once and the "sign in with your face" promise
         # quietly expired into email codes forever, because this route sent
         # every logged-in visitor straight back to /home (#223).
-        enroll = request.args.get("enroll") == "1"
+        asked_enroll = request.args.get("enroll") == "1"
         # A confirm-link session signs in properly here before anything
         # full_sign_in_required guards, a passkey included.
         via_link = bool(session.get(_VIA_LINK))
-        enroll = enroll and not via_link
+        enroll = asked_enroll and not via_link
+        # The chat "Add a passkey" came from, to return to afterwards: only
+        # this account's own, so it can never send anyone elsewhere.
+        back = ""
+        me = current_account()
+        agent = request.args.get("agent") or ""
+        if asked_enroll and me and svc.get_agent_context(me.id, agent):
+            back = url_for("chat", agent=agent)
         if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
         # address is filled in and the email code is the first step.
         prefill = session.get(beta_signup.AUTH_EMAIL_KEY)
         if via_link and not isinstance(prefill, str):
-            me = current_account()
             prefill = me.email if me else ""
         return render_template("auth.html", rp_id=cfg.rp_id, enroll=enroll,
+                               back=back,
+                               # "Add a passkey" from a link session: say
+                               # why a code comes first (patient walk F1).
+                               code_for_passkey=asked_enroll and via_link,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
                                imessage_pending=bool(
@@ -1660,6 +1670,11 @@ def create_app(config: Config | None = None,
                                # A link session reaches it through a code
                                # sign-in first (/auth, #920 F1).
                                offer_passkey=not svc.has_passkey(acct.id),
+                               # Back from /auth?enroll=1 (auth.js); said
+                               # only when the passkey is really there.
+                               passkey_added=(
+                                   request.args.get("passkey") == "added"
+                                   and svc.has_passkey(acct.id)),
                                sample_line=(beta.SAMPLE_FRAME
                                             if sample else None))
 

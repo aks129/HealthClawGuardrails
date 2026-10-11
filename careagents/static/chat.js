@@ -520,11 +520,5 @@
     if (menu.open && !menu.contains(e.target)) menu.open = false;
   });
 
-  fetch("/api/trust").then((r) => r.json()).then((d) => {
-    const pill = document.getElementById("trust-pill");
-    const grade = d.badge && d.badge !== "unavailable" ? d.badge.split(" ")[0] : "—";
-    pill.textContent = "Safety grade: " + grade;
-  }).catch(() => {});
-
   box.focus();
 })();

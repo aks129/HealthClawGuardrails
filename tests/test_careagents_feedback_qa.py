@@ -42,13 +42,15 @@ def test_a_signed_out_send_keeps_nothing_in_a_cookie(made, sent):
     assert MARKER not in " ".join(r.headers.getlist("Set-Cookie"))
 
 
-def test_the_chat_step_names_only_what_the_chat_shows(made, monkeypatch):
-    """The step that opens the made-up records quotes no hub button (a
-    first sign-in opens the chat, tests/test_careagents_first_run.py); its
-    one quoted label is the chat's feedback link."""
+def test_the_chat_step_names_the_hub_button_and_the_chat_link(
+        made, monkeypatch):
+    """The step that opens the made-up records names the hub's "Chat"
+    button and the chat's "Tell us" link, as a returning tester sees them
+    (patient walk on #920, F2)."""
     app, svc = made()
     c = _signed_in(app, svc, monkeypatch)
     chat = c.get(c.post("/api/connections/sample").get_json()["redirect"])
     (step,) = [s for s in beta_signup.NEXT_STEPS if "made-up records" in s]
-    assert re.findall(r'"([^"]+)"', step) == ["Tell us"]
+    assert re.findall(r'"([^"]+)"', step) == ["Chat", "Tell us"]
     assert '<a href="/feedback">Tell us</a>' in chat.get_data(as_text=True)
+    assert '">Chat</a>' in c.get("/home").get_data(as_text=True)

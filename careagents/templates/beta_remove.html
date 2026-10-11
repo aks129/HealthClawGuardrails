@@ -13,7 +13,8 @@
     <p>{% if preview.kind == "join" %}A new request{% else %}A change to your request{% endif %} to test CareAgents:</p>
     <ul class="beta-steps">
       <li>First name: <b>{{ preview.first_name }}</b></li>
-      <li>{% if preview.tail %}Mobile: ending in {{ preview.tail }}{% elif preview.kind == "join" %}Mobile: no mobile{% else %}Mobile: no new mobile{% endif %}</li>
+      {# No line for a mobile nobody gave. #}
+      {% if preview.tail %}<li>Mobile: ending in {{ preview.tail }}</li>{% elif preview.kind != "join" %}<li>Mobile: no new mobile</li>{% endif %}
     </ul>
     <p>Not right? Close this page and nothing changes.</p>
     <form method="post" action="/beta/confirm">
@@ -73,8 +74,12 @@
     <p>Your beta request is removed.</p>
     {% else %}
     <h1>This link no longer works</h1>
-    <p>It was used already, it ran out, or a newer email replaced it. Use the
-      link in our latest email, or <a href="{{ feedback }}">tell us</a>.</p>
+    <p>It was used already, it ran out, or a newer email replaced it. If you
+      already confirmed, sign in with a code we email you.</p>
+    {# Nothing about the address comes from the token here: /auth fills
+       the email in only from this browser's own session. #}
+    <a class="btn-primary btn-block" href="/auth">Sign in</a>
+    <p>Something not right? <a href="{{ feedback }}">Tell us</a>.</p>
     {% endif %}
   </div>
 </main>

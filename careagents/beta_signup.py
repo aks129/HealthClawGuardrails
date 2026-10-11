@@ -639,12 +639,14 @@ def _tester_email(cfg, email: str, subject: str, lines: list,
     return mail.send_message(cfg, email, subject, html, text)
 
 
-#: How to sign in, now or later, in the words on the screens: the landing
-#: page's "Get started" and auth.html's code steps. Confirming already
-#: signed a new tester in and opened the chat (app.py `_first_run`), and
-#: a first sign-in skips the passkey screen, so this is the way back, not
-#: the way in. A quoted label must be on that screen
-#: (tests/test_careagents_feedback.py checks each one).
+#: How to come back, in the words on the screens: the landing page's "Get
+#: started", auth.html's code steps, and the hub. This email arrives while
+#: the tester is already in the chat (confirming signed them in, app.py
+#: `_first_run`), so these are the way back, not the way in. By then the
+#: account has the made-up records, so after the code auth.html offers a
+#: passkey ("Create passkey" or "Skip for now"); only an account with
+#: nothing connected skips that screen. A quoted label must be on that
+#: screen (tests/test_careagents_feedback.py checks each one).
 NEXT_STEPS = (
     'Open careagents.cloud and tap "Get started".',
     # The big button on that screen is the passkey one; say where the
@@ -652,8 +654,9 @@ NEXT_STEPS = (
     'Under "or use your email", type the same email you used to join the '
     'beta and tap "Email me a code".',
     'We email you an 8-digit code. Type it in and tap "Continue".',
-    'Open the chat on made-up records and ask a question, or tap one of '
-    'the ideas. Tap "Tell us" to send us what you think.',
+    'If it offers a passkey, you can set one up or tap "Skip for now".',
+    'On your hub, tap "Chat" to open the made-up records. Ask a question, '
+    'or tap one of the ideas. Tap "Tell us" to send us what you think.',
 )
 #: The line in a tester email that is the numbered steps.
 _STEPS = "next_steps"

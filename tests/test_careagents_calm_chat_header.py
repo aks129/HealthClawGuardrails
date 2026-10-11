@@ -79,7 +79,8 @@ def test_the_menu_offers_a_passkey_until_there_is_one(cfg, svc, monkeypatch):  #
     """A first run skips the passkey prompt; this is where it waits."""
     _app, c, _fake, agent_id, _t, _cid = _chat_app(cfg, svc, monkeypatch)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
-    assert 'href="/auth?enroll=1">Add a passkey</a>' in menu
+    assert f'href="/auth?enroll=1&amp;agent={agent_id}">Add a passkey</a>' \
+        in menu
     monkeypatch.setattr(svc, "has_passkey", lambda account_id: True)
     menu = _menu(c.get(f"/chat?agent={agent_id}").get_data(as_text=True))
     assert "Add a passkey" not in menu
