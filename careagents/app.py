@@ -918,11 +918,14 @@ def create_app(config: Config | None = None,
     def _start_connection(connector_id, acct, body):
         # New connections only (D3): refresh, poll, upload and delete on an
         # existing connection never consult the real-records switch.
+        real_open = _real_records_open(acct)
         plan = connectors.start(
             connector_id, body.get("provider"), cfg, hc,
-            real_records=_real_records_open(acct))
+            real_records=real_open)
         if plan.get("error"):
-            if connector_id == "fasten":
+            if connector_id == "fasten" and real_open:
+                # Past the gate and still refused: Fasten is not available
+                # here. A refusal at the gate is not a Fasten failure.
                 funnel.safely(funnel.count_issue, svc.session,
                               "fasten_failed")
             return jsonify({"error": plan["error"]}), plan.get("code", 400)
