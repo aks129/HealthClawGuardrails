@@ -277,6 +277,7 @@ def daily(session_scope, days: int = 7,
     rows = {d: {"day": d, **{m: 0 for m in MILESTONES}, "via_invite": 0,
                 **{k: 0 for k in ISSUE_KINDS}} for d in labels}
     reached = {m: 0 for m in MILESTONES}
+    both = {(a, b): 0 for a, b in zip(MILESTONES, MILESTONES[1:])}
     with session_scope() as s:
         for f in s.query(FunnelAccount).all():
             for m in MILESTONES:
@@ -289,6 +290,9 @@ def daily(session_scope, days: int = 7,
                     rows[d][m] += 1
                     if m == "joined" and f.invited_by:
                         rows[d]["via_invite"] += 1
+            for a, b in both:
+                if getattr(f, a) is not None and getattr(f, b) is not None:
+                    both[(a, b)] += 1
         for i in s.query(IssueDay).filter(IssueDay.day >= labels[-1]):
             if i.day in rows and i.kind in ISSUE_KINDS:
                 rows[i.day][i.kind] += i.count or 0
@@ -297,12 +301,15 @@ def daily(session_scope, days: int = 7,
         per_inviter = invites.per_inviter(s)
     window = {k: sum(r[k] for r in rows.values())
               for k in (*MILESTONES, "via_invite", *ISSUE_KINDS)}
+    # Of the accounts that reached one step, how many also reached the
+    # next. The steps are not strictly ordered (a phone can be linked on
+    # made-up records), so "both" is counted, never "the later one".
     conversion = []
-    for a, b in zip(MILESTONES, MILESTONES[1:]):
-        rate = (round(100 * reached[b] / reached[a])
+    for a, b in both:
+        rate = (round(100 * both[(a, b)] / reached[a])
                 if reached[a] else None)
         conversion.append({"from": a, "to": b, "from_n": reached[a],
-                           "to_n": reached[b], "percent": rate})
+                           "to_n": both[(a, b)], "percent": rate})
     return {"days": [rows[d] for d in labels], "window": window,
             "reached": reached, "conversion": conversion,
             "requests_waiting": waiting, "per_inviter": per_inviter}
