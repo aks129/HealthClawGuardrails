@@ -132,6 +132,24 @@ class Config:
         # Where a new /beta request is announced (careagents/beta_signup.py).
         # Unset = no announcement; the request is still saved.
         self.beta_notify_email = e.get("CARE_BETA_NOTIFY_EMAIL", "")
+        # Sign-ups one personal invite link admits (careagents/invites.py).
+        # The operator can set a different cap on one link.
+        try:
+            invite_cap = int(e.get("CARE_INVITE_LINK_CAP", "5"))
+        except ValueError:
+            logger.warning("CARE_INVITE_LINK_CAP is not a whole number; "
+                           "using 5")
+            invite_cap = 5
+        self.invite_link_cap = max(0, invite_cap)
+        # Who may open /admin/funnel (careagents/funnel.py): the owner's own
+        # account emails, comma-separated, case-insensitive. Unset = nobody.
+        # Deliberately not CARE_REAL_RECORDS_ALLOWLIST, which holds testers.
+        self.owner_emails = frozenset(
+            x.strip().lower()
+            for x in (e.get("CARE_OWNER_EMAILS") or "").split(",")
+            if x.strip())
+        # Where the worker sends the once-a-day funnel digest. Unset = off.
+        self.digest_to = (e.get("CARE_DIGEST_TO") or "").strip()
         # Wearables (Open Wearables sidecar): only advertise a LIVE connect flow
         # where the sidecar + its OAuth developer auth are actually wired.
         # Otherwise Apple Health / wearables show as a "coming soon" tile.

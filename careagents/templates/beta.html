@@ -9,7 +9,12 @@
 <main class="setup-wrap">
   <div class="setup-card beta-page">
     <h1>Help us test CareAgents</h1>
-    {% if ref %}
+    {% if invite %}
+    {# A personal invite link (careagents/invites.py). The inviter's own
+       first name if they gave one, and nothing else about them. #}
+    <p class="beta-open">{% if invite.first_name %}{{ invite.first_name }} invited you{% else %}Someone you know invited you{% endif %}
+      to try CareAgents. It is free during the beta.</p>
+    {% elif ref %}
     <p class="beta-open">Someone you know sent you this link. CareAgents is
       free during the beta.</p>
     {% else %}
@@ -54,6 +59,7 @@
         <input id="beta-website" name="website" tabindex="-1" autocomplete="off">
       </div>
       <input type="hidden" name="ref" value="{{ ref }}">
+      <input type="hidden" name="invite" value="{{ invite.code if invite else '' }}">
       <label class="beta-consent">
         <input type="checkbox" id="beta-consent" name="consent" required>
         <span>You can contact me about the beta.

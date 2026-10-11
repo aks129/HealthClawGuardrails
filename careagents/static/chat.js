@@ -391,6 +391,11 @@
           state.failed = true;
         } else if (ev.type === "done") {
           state.done = true;
+          // An answer came: the next step, if the page offers one.
+          if (ev.status === "completed") {
+            const next = document.getElementById("connect-next");
+            if (next) next.hidden = false;
+          }
         }
       }
     }
