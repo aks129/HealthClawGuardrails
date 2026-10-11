@@ -43,7 +43,7 @@ from r6.search_fidelity import (_SEARCH_PARAMETER_SPECS, _SUPPORTED_PARAMS_TEXT,
                                 error_fidelity_outcome, lenient_search_warnings,
                                 unsupported_input_text)
 from r6.redaction import apply_patient_controlled_redaction
-from r6.redaction import apply_redaction
+from r6.redaction import apply_redaction, unit_is_shaped
 from r6.access import (Scope, Tenant, TenantRejected, TenantSource,
                        require_grant, require_open_tenant, tenant_from_request)
 from r6.stepup import generate_step_up_token
@@ -1356,8 +1356,9 @@ def observation_stats():
 
     observations = query.all()
 
-    # Extract numeric values matching the code filter
-    values = []
+    # Extract numeric values matching the code filter, and the unit of the
+    # first of them: not of whatever Observation the tenant stored first
+    values, unit = [], None
     for obs in observations:
         resource = json.loads(obs.resource_json)
         # Filter by code if specified
@@ -1370,6 +1371,7 @@ def observation_stats():
         if isinstance(vq, dict) and 'value' in vq:
             try:
                 values.append(float(vq['value']))
+                unit = unit or vq.get('unit')
             except (ValueError, TypeError):
                 pass
 
@@ -1393,15 +1395,7 @@ def observation_stats():
             {'name': 'mean', 'valueDecimal': stats['mean']},
         ])
 
-    unit = None
-    if values and observations:
-        for obs in observations:
-            resource = json.loads(obs.resource_json)
-            vq = resource.get('valueQuantity', {})
-            if vq.get('unit'):
-                unit = vq['unit']
-                break
-    if unit:
+    if unit and unit_is_shaped(unit):  # stored, unredacted: shape-check
         result['parameter'].append({'name': 'unit', 'valueString': unit})
 
     record_audit_event('read', 'Observation', None,

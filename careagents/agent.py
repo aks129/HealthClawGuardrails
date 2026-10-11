@@ -297,10 +297,18 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
             #   and tells the person nothing; "recorded but not coded at the
             #   source" is what actually happened and points at the fix
             #   (ask the clinic to code it / confirm details at the visit).
-            raw = next((c.get("code") for c in (code.get("coding") or [])
-                        if isinstance(c, dict) and c.get("code")), None)
-            if raw:
-                item["name"] = f"unlabeled record, code {raw}"
+            #
+            # The record is named with the system its coding comes from,
+            # never the code itself (`_CODE_SYSTEM_NAMES`).
+            codings = [c for c in (code.get("coding") or [])
+                       if isinstance(c, dict) and c.get("code")]
+            system = next((_CODE_SYSTEM_NAMES[c.get("system")]
+                           for c in codings
+                           if c.get("system") in _CODE_SYSTEM_NAMES), None)
+            if system:
+                item["name"] = f"unlabeled record ({system} code)"
+            elif codings:
+                item["name"] = "unlabeled record"
             elif lookup_reason in ("unavailable", "not-attempted",
                                   "not-a-ref"):
                 # We did not learn anything about this record's coding, so we
@@ -328,13 +336,23 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
                     "is still a real record — never treat it as absent; "
                     "suggest confirming the details with the clinician.")
             item["unreadable"] = True
-        if res.get("status"):
+        # Every field below is checked against a closed set or a parse before
+        # it is copied: ingest accepts any string in `status` or a date, and
+        # whatever is copied verbatim is a channel to the model (#922).
+        if res.get("status") in _STATUS.get(rt, ()):
             item["status"] = res["status"]
         vq = res.get("valueQuantity")
         if isinstance(vq, dict) and vq.get("value") is not None:
-            item["value"] = f"{vq.get('value')} {vq.get('unit', '')}".strip()
-        if res.get("effectiveDateTime"):
-            item["date"] = str(res["effectiveDateTime"])[:10]
+            # The coded, allow-listed unit, never the free-text `unit`:
+            # upstream can write a name or an instruction there. A unit we
+            # do not recognise means no number, as on get_labs (#884 QA F1).
+            unit = labs_timeline.coded_unit(
+                vq, _ANALYTE_KEY.get(_obs_loinc(res) or ""), _RECORD_UNITS)
+            if unit is not None:
+                item["value"] = f"{vq.get('value')} {unit}".strip()
+        date = labs_timeline.parse_date(res.get("effectiveDateTime"))
+        if date:
+            item["date"] = date
         out.append(item)
 
     if total > len(out):
@@ -357,38 +375,83 @@ def _summarize_bundle(bundle: dict, limit: int = 12,
 MAX_BRIEF_FIELDS = 6
 
 
-#: Units a lab reading may carry to the model: exact, case-sensitive
-#: tokens. A closed list: any other string, however unit-shaped, could be a
-#: word (R875-3). The same list the visit brief keeps (r6/brief/engine.py);
-#: CareAgents imports nothing from the engine, so it is repeated.
-_UCUM_ALLOWED = frozenset({
-    "mg/dL", "g/dL", "ng/mL", "pg/mL", "ng/dL", "ug/dL", "mEq/L",
-    "mmol/L", "umol/L", "µmol/L", "nmol/L", "pmol/L", "mmol/mol",
-    "g/L", "mg/L", "ug/L", "10*9/L", "10^9/L", "10*12/L", "10^12/L",
-    "%", "U/L", "[IU]/L", "IU/L", "mm[Hg]", "mmHg",
-    "mL/min/{1.73_m2}", "mL/min/1.73m2", "10*3/uL", "10^3/uL",
-    "10*6/uL", "10^6/uL", "fL", "pg", "mg/mmol", "mg/g", "[pH]", "pH",
+#: Units a lab reading may carry to the model: the closed list in
+#: labs_timeline, which builds the chart's series from it too.
+_UCUM_ALLOWED = labs_timeline.UCUM_ALLOWED
+
+#: Units an Observation in a record list may carry: the lab list plus the
+#: vital-sign units a search_records answer shows. Still closed, for the
+#: same reason (R875-3).
+_RECORD_UNITS = _UCUM_ALLOWED | frozenset({
+    "kg", "g", "[lb_av]", "lb", "cm", "m", "[in_i]", "in", "kg/m2",
+    "/min", "{beats}/min", "bpm", "{breaths}/min", "Cel", "[degF]",
+    "h", "min",
+    # Units our own wearable mapper writes (r6/wearables/mapper.py), and
+    # real lab and vital codes #922 QA found dropped (F3).
+    "{count}", "steps", "mL/min/kg", "breaths/min", "°C", "°F",
+    "ng/L", "mL/min", "{cells}/uL", "{SG}", "{#}/[HPF]", "mL", "L/min",
+    "U/mL", "kU/L", "ug/mL", "mg/24.h", "/uL", "[iU]/mL", "mg/kg", "1",
+    "a", "d", "wk", "mo", "lbs", "beats/min", "mg/dl",
 })
+
+#: The code systems an unlabeled record can be said to come from. The code
+#: itself never reaches the model: redaction keeps codes, and upstream can
+#: put a name, a phone number or an instruction in `code`. Per-system shape
+#: checks kept admitting some (an SSN-shaped SNOMED id with a valid check
+#: digit, a 7-digit phone as RxNorm; #922 re-tests), and the number adds
+#: nothing the model needs: the record exists, uncoded at the source.
+_CODE_SYSTEM_NAMES = {
+    "http://loinc.org": "LOINC",
+    "http://snomed.info/sct": "SNOMED CT",
+    "http://hl7.org/fhir/sid/icd-10-cm": "ICD-10-CM",
+    "http://hl7.org/fhir/sid/icd-10": "ICD-10",
+    "http://hl7.org/fhir/sid/icd-9-cm": "ICD-9-CM",
+    "http://www.nlm.nih.gov/research/umls/rxnorm": "RxNorm",
+}
+
+
+#: The `status` values FHIR defines per resource type (R4 through R6). A
+#: status passes to the model only when it is one of its type's; a type not
+#: listed here, or one with no `status` element (Condition,
+#: AllergyIntolerance), passes none (#922 B1).
+_STATUS = {
+    "Observation": frozenset({
+        "registered", "preliminary", "final", "amended", "corrected",
+        "cancelled", "entered-in-error", "unknown", "cannot-be-obtained"}),
+    "MedicationRequest": frozenset({
+        "active", "on-hold", "ended", "stopped", "completed", "cancelled",
+        "entered-in-error", "draft", "unknown"}),
+    "MedicationStatement": frozenset({
+        "active", "completed", "entered-in-error", "intended", "stopped",
+        "on-hold", "unknown", "not-taken", "recorded", "draft"}),
+    "Immunization": frozenset({"completed", "entered-in-error", "not-done"}),
+    "Procedure": frozenset({
+        "preparation", "in-progress", "not-done", "on-hold", "stopped",
+        "completed", "entered-in-error", "unknown"}),
+    "DiagnosticReport": frozenset({
+        "registered", "partial", "preliminary", "modified", "final",
+        "amended", "corrected", "appended", "cancelled", "entered-in-error",
+        "unknown"}),
+    "Encounter": frozenset({
+        "planned", "arrived", "triaged", "in-progress", "onleave",
+        "finished", "on-hold", "discharged", "completed", "cancelled",
+        "discontinued", "entered-in-error", "unknown"}),
+    "CarePlan": frozenset({
+        "draft", "active", "on-hold", "revoked", "completed",
+        "entered-in-error", "unknown"}),
+    "ServiceRequest": frozenset({
+        "draft", "active", "on-hold", "revoked", "completed",
+        "entered-in-error", "unknown"}),
+    "DocumentReference": frozenset({
+        "current", "superseded", "entered-in-error"}),
+}
 
 
 def _coded_unit(reading: dict, series: dict) -> str | None:
-    """The unit the reading stated, or None when it stated one we do not
-    recognise; then its number is not passed on either (#884 QA F1).
-
-    - its code (any system, or none) or its unit string is an exact
-      allowlist token: that token. Only a token from the list ever leaves.
-    - neither is present: the analyte's known unit, else "".
-    - anything else: None. The analyte's usual unit used to stand in, which
-      put a number beside a unit it was not measured in.
-    """
-    stated = [v for v in (reading.get("code"), reading.get("unit"))
-              if v is not None and v != ""]
-    for value in stated:
-        if isinstance(value, str) and value in _UCUM_ALLOWED:
-            return value
-    if stated:
-        return None
-    return labs_timeline.KNOWN_UNITS.get(series.get("key"), "")
+    """`labs_timeline.coded_unit` for a reading in a series: the stated
+    allow-listed unit, the analyte's known one when none was stated, or None
+    for a unit we do not recognise (#884 QA F1)."""
+    return labs_timeline.coded_unit(reading, series.get("key"))
 
 
 #: The engine's analyte name per LOINC code, mirrored from
@@ -515,6 +578,10 @@ def _timeline_in_words(series: dict) -> dict:
     A single reading has no direction, so it gets neither."""
     out = {"name": series["name"], "readings": len(series["readings"]),
            "trend_plottable": series["trend_plottable"]}
+    if series.get("withheld"):
+        # Readings exist but their unit could not be confirmed, so no
+        # numbers: say so rather than imply there are none.
+        out["readings_unit_unconfirmed"] = series["withheld"]
     if not series["trend_plottable"]:
         return out
     dated = [r for r in series["readings"] if r["date"]]
@@ -606,8 +673,11 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         topic = str(args.get("topic") or "")
         labs = hc.interpret_labs(tenant)
         keys = labs_timeline.keys_for_topic(topic)
-        series = labs_timeline.build_series(labs.get("bundle") or {}, keys)
-        if series:
+        series = labs_timeline.build_series(labs.get("bundle") or {}, keys,
+                                            keep_withheld=True)
+        # Only a series with readings can be drawn; one kept for its
+        # withheld count alone has no chart to link to.
+        if any(s["readings"] for s in series):
             events.append({"type": "card", "kind": "lab-timeline",
                            "topic": topic})
         if on_text:
@@ -623,7 +693,10 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
                          "link to the chart is included below your answer. A "
                          "series with trend_plottable false has a single "
                          "reading — say so, and never describe it as rising "
-                         "or falling."
+                         "or falling. A series with readings_unit_unconfirmed "
+                         "has that many readings whose unit could not be "
+                         "confirmed: say they are on file but give no "
+                         "numbers for them."
                          if series else
                          "No lab series matched in the CONNECTED records. "
                          "That is not the same as the person never having "
@@ -635,15 +708,20 @@ def _execute_tool(hc: HealthClawClient, tenant: str, name: str,
         # numbers. Handing them over too would invite the model to restate
         # every value and, worse, to narrate a direction from a single point.
         return json.dumps({
-            "chart_shown": bool(series),
+            "chart_shown": any(s["readings"] for s in series),
             "series": [{"name": s["name"], "readings": len(s["readings"]),
-                        "trend_plottable": s["trend_plottable"]}
+                        "trend_plottable": s["trend_plottable"],
+                        **({"readings_unit_unconfirmed": s["withheld"]}
+                           if s.get("withheld") else {})}
                        for s in series],
             "note": ("A chart is now visible to the person. Describe what it "
                      "shows in one or two sentences and invite a question; do "
                      "not list every value. A series with trend_plottable "
                      "false has a single reading — say so, and never describe "
-                     "it as rising or falling."
+                     "it as rising or falling. A series with "
+                     "readings_unit_unconfirmed has readings on file whose "
+                     "unit could not be confirmed, so they are not charted: "
+                     "say they exist, give no numbers."
                      if series else
                      "No lab series matched in the CONNECTED records. That is "
                      "not the same as the person never having had this test — "

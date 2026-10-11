@@ -1881,7 +1881,8 @@ def test_unreadable_record_is_never_summarized_as_nothing():
     items = _summarize_bundle(bundle)
     assert len(items) == 1
     assert items[0]["unreadable"] is True
-    assert "250.00" in items[0]["name"]
+    # Named by its system; the code itself never reaches the model (#922).
+    assert items[0]["name"] == "unlabeled record (ICD-9-CM code)"
 
 
 def test_a_truncated_list_says_so_rather_than_looking_complete():
