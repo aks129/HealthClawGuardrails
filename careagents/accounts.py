@@ -26,8 +26,9 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
-# Also puts the beta tables in Base.metadata before any engine is built.
-from careagents import beta_signup
+# Also puts the beta, invite and funnel tables in Base.metadata before any
+# engine is built.
+from careagents import beta_signup, funnel, invites
 from careagents.models import (Account, ActivityDay, Agent, Connection,
                                EmailToken, Grant, ImessageHandleState,
                                ImessageLink, Passkey, RealRecordInvite,
@@ -162,6 +163,7 @@ class AccountService:
         # outcome, let the session commit, then raise afterwards.
         error: str | None = None
         result: _Row | None = None
+        made = False
         with self.session() as s:
             # Fetch the single live code by email (not by hash) so a wrong
             # guess is counted against it and the code can be burned.
@@ -185,6 +187,7 @@ class AccountService:
                 if acct is None:
                     acct = Account(email=email, email_verified_at=now())
                     s.add(acct)
+                    made = True
                 elif acct.email_verified_at is None:
                     acct.email_verified_at = now()
                 acct.last_login_at = now()
@@ -192,6 +195,8 @@ class AccountService:
                 result = _detach(acct)
         if error:
             raise AuthError(error)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
         return result
 
     def has_connections(self, account_id: str) -> bool:
@@ -214,6 +219,7 @@ class AccountService:
             if acct is not None and s.query(Connection).filter_by(
                     account_id=acct.id).first() is not None:
                 return None
+            made = acct is None
             if acct is None:
                 acct = Account(email=email, email_verified_at=now())
                 s.add(acct)
@@ -221,7 +227,10 @@ class AccountService:
                 acct.email_verified_at = now()
             acct.last_login_at = now()
             s.flush()
-            return _detach(acct)
+            result = _detach(acct)
+        if made:
+            funnel.safely(funnel.new_account, self.session, result.id)
+        return result
 
     def ping(self) -> bool:
         """True if the account store answers. Used by /healthz readiness."""
@@ -627,6 +636,9 @@ class AccountService:
             for model in (Surface, Agent, Grant, Connection, Passkey,
                           UsageDay, ActivityDay):
                 s.query(model).filter_by(account_id=account_id).delete()
+            # Its invite link (a foreign key here) and funnel row go too.
+            invites.delete_for_account(s, acct)
+            funnel.delete_for_account(s, account_id)
             s.query(EmailToken).filter_by(email=acct.email).delete()
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.

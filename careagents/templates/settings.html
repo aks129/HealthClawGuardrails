@@ -24,6 +24,36 @@
     <a class="pill" href="/auth?enroll=1">Add a passkey</a>
   </section>
 
+  {# One personal invite link per account (careagents/invites.py). The
+     link is the whole of what is shared; invite.js copies or shares it. #}
+  {% if invite %}
+  <section class="hub-section" id="invite-section">
+    <div class="section-head"><h2>Invite friends and family</h2></div>
+    <div class="invite-row">
+      <div class="invite-row-head">
+        <b>Your link</b>
+        <span class="invite-used">{% if invite.revoked %}turned off{% else %}{{ invite.used }} of {{ invite.cap }} used{% endif %}</span>
+      </div>
+      {% if not invite.revoked %}
+      <code class="invite-url" id="invite-url">{{ invite.url }}</code>
+      {% endif %}
+    </div>
+    {% if invite.revoked %}
+    <p class="card-note">This link no longer lets anyone join.</p>
+    {% elif invite.used >= invite.cap %}
+    <p class="card-note">All {{ invite.cap }} places on your link are used.</p>
+    {% else %}
+    <p class="card-note">Up to {{ invite.cap }} people can join with it.
+      They start on made-up records.</p>
+    <div class="invite-actions">
+      <button type="button" class="pill" id="invite-share" hidden>Share</button>
+      <button type="button" class="pill" id="invite-copy">Copy link</button>
+    </div>
+    {% endif %}
+    <p class="inline-msg" id="invite-msg" role="status" aria-live="polite" hidden></p>
+  </section>
+  {% endif %}
+
   <section class="hub-section">
     <div class="section-head"><h2>Where you can reach your assistant</h2></div>
     <div class="surface-row">
@@ -109,4 +139,5 @@
 {# The hub's script: its dialog, announce and delete primitives are shared,
    and every handler is guarded by the element it binds. #}
 <script src="{{ url_for('static', filename='home.js') }}"></script>
+<script src="{{ url_for('static', filename='invite.js') }}"></script>
 {% endblock %}
