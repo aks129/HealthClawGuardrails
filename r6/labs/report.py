@@ -8,11 +8,29 @@ build_consumer_summary() is the plain-language, outcomes-oriented consumer view.
 Neither summary may be placed in audit detail (PHI).
 """
 import copy
+import re
 
 from r6.labs.interpret import (NO_NUMERIC_VALUE, RANGE_NOT_ASSERTED,
                                UNIT_MISMATCH, UNKNOWN_ANALYTE)
 from r6.labs.trend import kdigo_consumer_line
+from r6.redaction import UNIT_REDACTED, unit_is_shaped
 from r6.terminology import LOINC, lookup
+
+#: A LOINC code: up to five ASCII digits, a dash, and its mod-10 check
+#: digit. `\d` matched other scripts' digits, and eight digits left room
+#: for a phone number (#922 re-test N1).
+_LOINC_SHAPE = re.compile(r"([0-9]{1,5})-([0-9])")
+
+
+def _loinc_ok(code):
+    m = isinstance(code, str) and _LOINC_SHAPE.fullmatch(code)
+    if not m:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(m.group(1))):
+        d = int(ch) * (2 if i % 2 == 0 else 1)
+        total += d - 9 if d > 9 else d
+    return (10 - total % 10) % 10 == int(m.group(2))
 
 V3_INTERPRETATION = "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
 
@@ -30,10 +48,15 @@ def annotate_observation(obs, result):
     if result.get("range_source") == "table":
         rng = {"text": "HealthClaw population default (adult); "
                        "not the performing lab's range"}
+        # The result's unit is the stored record's, unredacted, and this
+        # range is added after redaction ran on `obs` (#922 B4).
+        unit = result.get("unit")
+        if unit and not unit_is_shaped(unit):
+            unit = UNIT_REDACTED
         if result.get("low") is not None:
-            rng["low"] = {"value": result["low"], "unit": result.get("unit")}
+            rng["low"] = {"value": result["low"], "unit": unit}
         if result.get("high") is not None:
-            rng["high"] = {"value": result["high"], "unit": result.get("unit")}
+            rng["high"] = {"value": result["high"], "unit": unit}
         # A stored referenceRange that is not a list is upstream junk the
         # interpreter already ignored (r6/labs/interpret.py `_list`). It is
         # replaced by the range actually used; inserting into it raised and
@@ -61,8 +84,13 @@ def build_interpretation_summary(results):
         elif flag == "H":
             buckets["high"] += 1
         if flag != "N":
+            # The result's unit is the stored record's, unredacted; on the
+            # performing lab's range it is whatever upstream wrote.
+            unit = r.get("unit")
             flagged.append({"analyte": r.get("analyte"), "value": r.get("value"),
-                            "unit": r.get("unit"), "flag": flag})
+                            "unit": unit if unit_is_shaped(unit)
+                            else (UNIT_REDACTED if unit else unit),
+                            "flag": flag})
     return {**buckets, "flagged": flagged, "total": len(results),
             "indeterminate_analytes": _undecided_names(results)}
 
@@ -80,8 +108,10 @@ def _undecided_name(r):
     if r.get("analyte"):
         return r["analyte"]
     code = r.get("loinc")
-    return lookup(LOINC, code) or (f"LOINC {code}" if code
-                                   else "an unidentified analyte")
+    # Only a code shaped like a LOINC is named: the interpreter takes any
+    # string under the LOINC system, and upstream can write a name there.
+    return lookup(LOINC, code) or (
+        f"LOINC {code}" if _loinc_ok(code) else "an unidentified analyte")
 
 
 def _undecided_names(results):
