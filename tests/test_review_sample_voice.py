@@ -17,6 +17,7 @@ Synthetic data only.
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from collections import Counter
 
 import pytest
@@ -51,6 +52,32 @@ def _render(app, **ctx):
         base["sample_banner"] = voices.SAMPLE_BANNER
     with app.test_request_context():
         return render_template("action_review.html", **base)
+
+
+class _Text(HTMLParser):
+    """The page's text outside script and style, as a reader sees it."""
+
+    def __init__(self):
+        super().__init__()
+        self.parts, self._skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip += 1
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data):
+        if not self._skip:
+            self.parts.append(data)
+
+
+def _visible_text(html):
+    parser = _Text()
+    parser.feed(html)
+    return " ".join(parser.parts)
 
 
 def _nka_input(html):
@@ -88,8 +115,7 @@ def test_a_sample_review_is_about_the_sample_person(app, ctx):
     assert voices.SAMPLE_BANNER in html
     assert 'id="sample-back-to-chat"' in html
     # Nothing on it speaks to the tester as the person in the records.
-    text = re.sub(r"<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->",
-                  "", html, flags=re.S | re.I)
+    text = _visible_text(html)
     assert "About you" not in text
     assert "I have no known allergies" not in text
     assert "from your records" not in text
