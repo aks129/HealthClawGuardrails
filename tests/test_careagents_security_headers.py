@@ -94,3 +94,22 @@ def test_a_header_a_handler_set_is_kept():
                      lambda: ("ok", 200, {"X-Frame-Options": "SAMEORIGIN"}))
     r = app.test_client().get("/_own_frame_policy")
     assert r.headers["X-Frame-Options"] == "SAMEORIGIN"
+
+
+def test_the_production_app_sends_hsts_on_a_plain_http_request():
+    # The module test above builds its own Flask app, so it cannot see the
+    # wiring in create_app. Railway sets X-Forwarded-Proto today; if it ever
+    # stops, the production flag is the only thing that keeps HSTS on, and
+    # passing production=False at the call site must fail a test.
+    cfg = Config(env={"CARE_ENV": "production",
+                      "CARE_SESSION_SECRET": "x" * 32,
+                      "HEALTHCLAW_MINT_SECRET": "m", "OPENAI_API_KEY": "k",
+                      "RESEND_API_KEY": "r",
+                      "REDIS_URL": "redis://localhost:6379/1",
+                      "CARE_DATABASE_URL": "sqlite:///:memory:"})
+    app = create_app(config=cfg, client=FakeClient(),
+                     accounts=AccountService(cfg))
+    app.config["TESTING"] = True
+    r = app.test_client().get("/healthz", base_url="http://careagents.cloud")
+    assert "X-Forwarded-Proto" not in r.request.headers
+    assert r.headers["Strict-Transport-Security"] == "max-age=31536000"
