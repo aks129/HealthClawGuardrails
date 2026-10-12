@@ -11,6 +11,7 @@ SQLite on the VPS, file-locked 0600.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import time
 
@@ -19,6 +20,8 @@ from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer,
                         inspect, text)
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 def _uid(prefix: str) -> str:
@@ -140,7 +143,73 @@ class Surface(Base):
     handle = Column(String(120), nullable=True)         # chat id / code
     status = Column(String(16), default="pending")      # active|pending
     bound_at = Column(Float, nullable=True)
+    # When a pending pairing code stops working. NULL on a pending row made
+    # before this column existed reads as expired (fail closed).
+    code_exp = Column(Float, nullable=True)
+    # 1 when the next reply on this surface should open with the welcome:
+    # set by a bind that had no message to answer (the sign-in link).
+    welcome_due = Column(Integer, default=0)
+    # iMessage re-verification (#871): a number can be reassigned to someone
+    # else. When the owner last proved the handle is theirs (a bind, or a
+    # re-confirm through /link), when it last texted, and when we first
+    # asked it to re-confirm (NULL while nothing is pending). See
+    # careagents.imessage.reverify_due.
+    verified_at = Column(Float, nullable=True)
+    last_inbound_at = Column(Float, nullable=True)
+    reverify_notified_at = Column(Float, nullable=True)
     account = relationship("Account", back_populates="surfaces")
+
+
+class ImessageLink(Base):
+    """A one-time sign-in link texted to an unbound iMessage handle.
+
+    Only the token's SHA-256 is stored. Used once, then stamped; expires
+    after 30 minutes. The handle is the sender's address (a phone number or
+    an Apple ID email), the same pointer a bound Surface keeps. No PHI.
+    """
+    __tablename__ = "ca_imessage_links"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("iml"))
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    handle = Column(String(120), nullable=False)
+    created_at = Column(Float, default=now)
+    exp = Column(Float, nullable=False)
+    used_at = Column(Float, nullable=True)
+
+
+class ImessageHandleState(Base):
+    """Per-sender counters and the STOP flag, keyed by a SHA-256 of the
+    normalized handle so the sender's address itself is not kept here.
+
+    Counts only: failed pairing codes and links issued, each in a window.
+    """
+    __tablename__ = "ca_imessage_handles"
+    handle_key = Column(String(64), primary_key=True)
+    opted_out_at = Column(Float, nullable=True)
+    fail_count = Column(Integer, default=0)
+    fail_window_start = Column(Float, nullable=True)
+    link_count = Column(Integer, default=0)
+    link_window_start = Column(Float, nullable=True)
+
+
+class SendblueMessage(Base):
+    """One inbound Sendblue text, as pointers: seen once, and the run whose
+    answer the worker owes it.
+
+    `key_hash` is a SHA-256 of Sendblue's message_handle, so a webhook
+    retry is recognised without keeping Sendblue's id. No content, no
+    number: the answer is read from the run when it is sent, and the
+    number from the surface. `surface_id` is a plain pointer, not a foreign
+    key, because STOP and disconnect delete the surface.
+    """
+    __tablename__ = "ca_sendblue_messages"
+    id = Column(String(32), primary_key=True, default=lambda: _uid("sbm"))
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(Float, default=now)
+    surface_id = Column(String(32), nullable=True)
+    run_id = Column(String(64), nullable=True)
+    delivered_at = Column(Float, nullable=True, index=True)
+    # sent | withheld | failed | timeout | unbound | absent
+    outcome = Column(String(16), nullable=True)
 
 
 class Grant(Base):
@@ -167,6 +236,11 @@ class Grant(Base):
     revoked_at = Column(Float, nullable=True)
 
 
+#: The name of the one-row-per-account-and-day rule on `ca_usage_days`: a
+#: constraint on a new table, a unique index on one made before it.
+USAGE_DAY_UNIQUE = "uq_ca_usage_days_acct_day"
+
+
 class UsageDay(Base):
     """Per-account daily LLM turn count — a durable spend ceiling.
 
@@ -176,8 +250,14 @@ class UsageDay(Base):
     and durable: one row per account per UTC day.
 
     Counts only — no message content, nothing PHI-adjacent.
+
+    One row per account and day, enforced (#862 review F5): two racing
+    first-of-day inserts made two rows, and a read saw only one. A table
+    made before the constraint gets it from `_ensure_usage_day_unique`.
     """
     __tablename__ = "ca_usage_days"
+    __table_args__ = (UniqueConstraint("account_id", "day",
+                                       name=USAGE_DAY_UNIQUE),)
     id = Column(String(32), primary_key=True, default=lambda: _uid("use"))
     account_id = Column(String(32), ForeignKey("ca_accounts.id"), index=True)
     day = Column(String(10), nullable=False, index=True)   # UTC "YYYY-MM-DD"
@@ -291,6 +371,31 @@ def _ensure_columns(engine) -> None:
                      "switch_prompted_at", "real_paused_at"):
             if name not in cols:
                 _add_column(engine, "ca_accounts", name, "FLOAT")
+    if "ca_surfaces" in tables:
+        cols = {c["name"] for c in insp.get_columns("ca_surfaces")}
+        if "code_exp" not in cols:
+            _add_column(engine, "ca_surfaces", "code_exp", "FLOAT")
+        if "welcome_due" not in cols:
+            _add_column(engine, "ca_surfaces", "welcome_due",
+                        "INTEGER DEFAULT 0")
+        for name in ("verified_at", "last_inbound_at",
+                     "reverify_notified_at"):
+            if name not in cols:
+                _add_column(engine, "ca_surfaces", name, "FLOAT")
+        # A binding from before #871 counts as verified when it was bound,
+        # or now if that was never recorded, and as last heard from now:
+        # silence counts from the deploy, so existing testers are not all
+        # asked (and their owners emailed) that day. Idempotent: only NULLs
+        # change.
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE ca_surfaces SET verified_at = COALESCE(bound_at, :t) "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND verified_at IS NULL"), {"t": now()})
+            conn.execute(text(
+                "UPDATE ca_surfaces SET last_inbound_at = :t "
+                "WHERE kind = 'imessage' AND status = 'active' "
+                "AND last_inbound_at IS NULL"), {"t": now()})
     if "ca_grants" in tables:
         cols = {c["name"] for c in insp.get_columns("ca_grants")}
         if "redirect_host" not in cols:
@@ -331,6 +436,166 @@ def _ensure_columns(engine) -> None:
                     "INTEGER"))
         if "reconsented_at" not in cols:
             _add_column(engine, "ca_connections", "reconsented_at", "FLOAT")
+
+
+def _usage_day_is_unique(engine) -> bool:
+    """Is (account_id, day) on ca_usage_days already unique, by constraint
+    (a table created from the model) or by index (one migrated here)?"""
+    insp = inspect(engine)
+    pair = ["account_id", "day"]
+    return (any(c["column_names"] == pair
+                for c in insp.get_unique_constraints("ca_usage_days"))
+            or any(i["unique"] and i["column_names"] == pair
+                   for i in insp.get_indexes("ca_usage_days")))
+
+
+#: Postgres advisory-lock key that serialises the ca_usage_days migration
+#: across processes booting together. Any fixed 64-bit number works, as long
+#: as nothing else in this database takes the same one.
+_USAGE_DAY_LOCK_KEY = 8_620_005
+
+#: Postgres SQLSTATE for a detected deadlock: the transaction was rolled
+#: back and is safe to run again.
+_DEADLOCK = "40P01"
+
+
+def _ensure_usage_day_unique(engine) -> None:
+    """Give a ca_usage_days made before the constraint one row per account
+    and day (#862 review F5), idempotently, on SQLite and Postgres.
+
+    Such a table may already hold duplicates, which would fail the index, so
+    each duplicate group is first collapsed into its oldest-id row with the
+    group's summed turns: a turn charged is never forgotten. Collapse and
+    index run in one transaction. A turn charged by an old process between
+    the two can add a duplicate back and fail the index; that is retried.
+
+    Peers are NOT harmless on Postgres (#862 QA): processes booting together
+    on duplicates each took row locks to collapse and then the index's table
+    lock, and deadlocked; 1 to 3 of 4 boots died. So on Postgres the whole
+    transaction first takes one advisory lock, and checks again under it: a
+    peer that finished first leaves nothing to do. A deadlock is still
+    retried, in case some other writer is involved. SQLite serialises
+    writers itself and needs no lock.
+    """
+    if "ca_usage_days" not in inspect(engine).get_table_names():
+        return
+    if _usage_day_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _USAGE_DAY_LOCK_KEY})
+                    if _usage_day_is_unique(conn):
+                        return              # a peer finished while we waited
+                groups = conn.execute(text(
+                    "SELECT account_id, day, MIN(id), SUM(COALESCE(turns, 0)) "
+                    "FROM ca_usage_days GROUP BY account_id, day "
+                    "HAVING COUNT(*) > 1")).all()
+                for account_id, day, keep, total in groups:
+                    conn.execute(text(
+                        "UPDATE ca_usage_days SET turns = :t WHERE id = :k"),
+                        {"t": int(total), "k": keep})
+                    conn.execute(text(
+                        "DELETE FROM ca_usage_days WHERE account_id = :a "
+                        "AND day = :d AND id <> :k"),
+                        {"a": account_id, "d": day, "k": keep})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {USAGE_DAY_UNIQUE} "
+                    "ON ca_usage_days (account_id, day)"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return                      # a peer made the index first
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            # Said, not swallowed: under the advisory lock this should not
+            # happen, and a test asserts it does not.
+            logger.warning("ca_usage_days migration retried: %s",
+                           "deadlock" if not isinstance(exc, IntegrityError)
+                           else "duplicate added during collapse")
+
+
+#: One active iMessage binding per handle (#866 security F2): a partial
+#: unique index, so pending rows (which carry a pairing code in `handle`)
+#: and other surface kinds are untouched.
+IMESSAGE_HANDLE_UNIQUE = "uq_ca_surfaces_imessage_active_handle"
+
+#: Advisory-lock key for that migration; distinct from the usage-day one.
+_IMESSAGE_HANDLE_LOCK_KEY = 8_660_002
+
+
+def _imessage_handle_is_unique(conn_or_engine) -> bool:
+    return any(i["name"] == IMESSAGE_HANDLE_UNIQUE
+               for i in inspect(conn_or_engine).get_indexes("ca_surfaces"))
+
+
+def _ensure_imessage_handle_unique(engine) -> None:
+    """Create the partial unique index on active iMessage handles,
+    idempotently, on SQLite and Postgres.
+
+    A table from before it may hold one handle active on two rows (the race
+    the index closes). Each such group keeps its newest binding (latest
+    `bound_at`, then highest id) and the rest are deleted, in the same
+    transaction as the index. On Postgres an advisory lock serialises peers
+    booting together, as `_ensure_usage_day_unique` does.
+    """
+    from careagents.imessage import normalize_handle
+    if "ca_surfaces" not in inspect(engine).get_table_names():
+        return
+    if _imessage_handle_is_unique(engine):
+        return
+    postgres = engine.dialect.name == "postgresql"
+    for attempt in range(3):
+        try:
+            with engine.begin() as conn:
+                if postgres:
+                    conn.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                                 {"k": _IMESSAGE_HANDLE_LOCK_KEY})
+                    if _imessage_handle_is_unique(conn):
+                        return
+                # Rows bound before handles were normalized are rewritten to
+                # the normalized form first, so two spellings of one sender
+                # meet in the dedupe below. One that will not normalize keeps
+                # its spelling (still found by the raw-handle fallback).
+                rows = conn.execute(text(
+                    "SELECT id, handle, bound_at FROM ca_surfaces "
+                    "WHERE kind = 'imessage' AND status = 'active'")).all()
+                groups: dict = {}
+                for row_id, handle, bound_at in rows:
+                    norm = normalize_handle(handle) or handle
+                    groups.setdefault(norm, []).append(
+                        (bound_at or 0.0, row_id, handle))
+                for norm, members in groups.items():
+                    members.sort()
+                    keep_bound, keep_id, keep_handle = members[-1]
+                    for _, row_id, _h in members[:-1]:
+                        conn.execute(text(
+                            "DELETE FROM ca_surfaces WHERE id = :i"),
+                            {"i": row_id})
+                    if keep_handle != norm:
+                        conn.execute(text(
+                            "UPDATE ca_surfaces SET handle = :h "
+                            "WHERE id = :i"), {"h": norm, "i": keep_id})
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                    f"{IMESSAGE_HANDLE_UNIQUE} ON ca_surfaces (handle) "
+                    "WHERE kind = 'imessage' AND status = 'active'"))
+            return
+        except (IntegrityError, OperationalError, ProgrammingError) as exc:
+            msg = str(exc.orig).lower()
+            if any(m in msg for m in _CREATED_BY_A_PEER):
+                return
+            retryable = (isinstance(exc, IntegrityError)
+                         or getattr(exc.orig, "pgcode", None) == _DEADLOCK)
+            if attempt == 2 or not retryable:
+                raise
+            logger.warning("ca_surfaces handle index migration retried")
 
 
 #: What a peer creating the same table first looks like, by backend. SQLite
@@ -386,6 +651,8 @@ def make_engine(url: str):
                            **pool_kwargs)
     _create_tables(engine)
     _ensure_columns(engine)
+    _ensure_usage_day_unique(engine)
+    _ensure_imessage_handle_unique(engine)
     return engine
 
 

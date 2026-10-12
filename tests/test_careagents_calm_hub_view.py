@@ -63,6 +63,18 @@ def test_build_splits_live_from_past_and_names_what_each_agent_reads():
     assert sample["is_sample"] is True and sample["updated"] == "Updated today"
 
 
+def test_has_real_counts_any_real_connection_not_yet_revoked():
+    """#856 sign-off F3: still connecting or empty is still real."""
+    def has_real(*conns):
+        return hub.build({"connections": list(conns), "agents": []},
+                         NOW)["has_real"]
+    sample = _conn("s", kind="sample")
+    assert has_real(sample, _conn("p", "fasten", "pending")) is True
+    assert has_real(sample, _conn("e", "direct", "empty")) is True
+    assert has_real(sample, _conn("r", "fasten", "revoked")) is False
+    assert has_real(sample) is False
+
+
 def test_the_switch_prompt_needs_an_agent_on_the_sample_and_a_real_source():
     sample, real = _conn("s", kind="sample"), _conn("f", kind="fasten")
     only_sample = {"connections": [sample], "agents": [_agent("g", "s")]}

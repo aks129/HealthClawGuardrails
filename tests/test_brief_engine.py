@@ -11,7 +11,11 @@ The unknown-never-absent assertion covers every test: no output field may
 contain an absence string.
 """
 
+import pytest
+
+from r6 import terminology
 from r6.brief.engine import (
+    DOSE_NOT_LISTED,
     generate_brief,
     build_problems,
     build_medications,
@@ -65,6 +69,25 @@ def _assert_no_absence_strings(result: BriefResult) -> None:
 # FHIR fixtures
 # ---------------------------------------------------------------------------
 
+#: The fixtures name things by code, as the engine reads them (#884 QA F3:
+#: labels come from r6/terminology.py by code, never from text or display).
+#: This test system's codes are their own labels.
+_TEST_SYSTEM = "urn:test:brief"
+
+
+@pytest.fixture(autouse=True)
+def _test_codes(monkeypatch):
+    real = terminology.lookup
+
+    def lookup(system, code):
+        return code if system == _TEST_SYSTEM else real(system, code)
+    monkeypatch.setattr(terminology, "lookup", lookup)
+
+
+def _coded(label):
+    return {"coding": [{"system": _TEST_SYSTEM, "code": label}]}
+
+
 def _condition(id_, code_text, status="active", onset="2021-03-15"):
     return {
         "resourceType": "Condition",
@@ -73,7 +96,7 @@ def _condition(id_, code_text, status="active", onset="2021-03-15"):
             "coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
                         "code": status}]
         },
-        "code": {"text": code_text},
+        "code": _coded(code_text),
         "onsetDateTime": onset,
     }
 
@@ -83,17 +106,20 @@ def _med_request(id_, name, dosage="10mg daily", status="active"):
         "resourceType": "MedicationRequest",
         "id": id_,
         "status": status,
-        "medicationCodeableConcept": {"text": name},
+        "medicationCodeableConcept": _coded(name),
         "dosageInstruction": [{"text": dosage}],
     }
 
 
 def _observation(id_, code_text, value, unit, date="2026-07-01T09:00:00Z"):
+    # The unit is read from the UCUM code only, never `unit` (R884-1).
     return {
         "resourceType": "Observation",
         "id": id_,
-        "code": {"text": code_text},
-        "valueQuantity": {"value": value, "unit": unit},
+        "code": _coded(code_text),
+        "valueQuantity": {"value": value, "unit": unit,
+                          "system": "http://unitsofmeasure.org",
+                          "code": unit},
         "effectiveDateTime": date,
     }
 
@@ -103,7 +129,7 @@ def _encounter(id_, type_text, status="finished", date="2026-06-15T10:00:00Z"):
         "resourceType": "Encounter",
         "id": id_,
         "status": status,
-        "type": [{"text": type_text}],
+        "type": [_coded(type_text)],
         "period": {"start": date},
     }
 
@@ -140,7 +166,7 @@ class TestFullRecords:
         _med_request("m-3", "Cetirizine", "10mg as needed", status="completed"),  # excluded
     ]
     OBSERVATIONS = [
-        _observation("o-1", "Blood pressure", 128, "mmHg", "2026-07-15T08:00:00Z"),
+        _observation("o-1", "Blood pressure", 128, "mm[Hg]", "2026-07-15T08:00:00Z"),
         _observation("o-2", "HbA1c", 7.2, "%", "2026-06-01T09:00:00Z"),
         _observation("o-3", "Total cholesterol", 195, "mg/dL", "2026-05-10T08:00:00Z"),
     ]
@@ -161,18 +187,21 @@ class TestFullRecords:
         assert len(problems) == 2
         assert all(isinstance(f, BriefField) for f in problems)
         assert problems[0].source_type == "Condition"
-        assert "2019-01" in problems[0].value  # onset projected into value
+        assert problems[0].label == "Hypertension"
+        assert problems[0].value == "Active since Jan 2019"
 
     def test_medications_only_active(self):
         meds = build_medications(self.MEDS)
         assert len(meds) == 2
         assert meds[0].source_type == "MedicationRequest"
-        assert "10mg once daily" in meds[0].value
+        assert meds[0].label == "Lisinopril"
+        # Dosage.text is upstream free text: never shown.
+        assert meds[0].value == DOSE_NOT_LISTED
 
     def test_labs_ordered_newest_first(self):
         labs = build_labs(self.OBSERVATIONS)
         assert len(labs) == 3
-        assert "2026-07-15" in labs[0].value  # most recent first
+        assert labs[0].value == "128 mmHg (Jul 15, 2026)"  # newest first
 
     def test_care_gaps_populated(self):
         gaps = build_care_gaps(self.CARE_GAPS)

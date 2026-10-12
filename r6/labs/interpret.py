@@ -13,6 +13,8 @@ a test enforces it. Values are adult defaults and should be clinician-reviewed
 Decision support, not diagnosis.
 """
 
+from r6.safe_read import as_dict, as_list, is_number
+
 # Citable provenance for the ranges below. Keys are referenced by each entry.
 REFERENCES = {
     "adult-cc": "Standard adult clinical-chemistry reference ranges "
@@ -20,6 +22,15 @@ REFERENCES = {
     "panic": "Common critical (panic) value conventions "
              "(consensus laboratory critical-value tables).",
     "ata-lipid": "Adult lipid/HbA1c targets (ATP III / ADA-style thresholds).",
+    "kdigo-2012": "Kidney Disease: Improving Global Outcomes (KDIGO) Acute "
+                  "Kidney Injury Work Group. KDIGO Clinical Practice Guideline "
+                  "for Acute Kidney Injury. Kidney Int Suppl. 2012;2(1):1-138 "
+                  "(creatinine criteria and staging, sections 2.1.1-2.1.2). "
+                  "Used by r6/labs/trend.py.",
+    "si-creatinine": "Creatinine SI conversion: 1 mg/dL = 88.4 umol/L "
+                     "(molar mass 113.12 g/mol; AMA Manual of Style SI "
+                     "conversion table). Creatinine-specific; not a general "
+                     "mass-to-molar factor. Used by r6/labs/trend.py.",
 }
 
 # unit = expected UCUM unit; low/high optional (one-sided ranges allowed);
@@ -85,16 +96,30 @@ UNIT_MISMATCH = "unit-mismatch"            #: units differ from the range's
 RANGE_NOT_ASSERTED = "range-not-asserted"  #: one-sided lab range, wrong side
 
 
+# The write API stores what it is given, so any field may hold a string, a
+# list or null where FHIR says object. One such row used to raise here and
+# turn the whole $interpret call into a 500 for every patient in the tenant
+# (#869). The readers are shared with every other engine route (#879).
+_dict, _list = as_dict, as_list
+
+
 def _loinc(obs):
-    for c in obs.get("code", {}).get("coding", []):
-        if c.get("system") == LOINC_SYSTEM and c.get("code"):
+    for c in _list(_dict(obs.get("code")).get("coding")):
+        if isinstance(c, dict) and c.get("system") == LOINC_SYSTEM \
+                and isinstance(c.get("code"), str) and c["code"]:
             return c["code"]
     return None
 
 
+# Finite only: a stored NaN or Infinity is not a measurement, and an
+# infinite value read as "high" put a bare Infinity token in the response.
+_is_number = is_number
+
+
 def _apply_sex(entry, patient):
     low, high = entry.get("low"), entry.get("high")
-    gender = (patient or {}).get("gender")
+    gender = _dict(patient).get("gender")
+    gender = gender if isinstance(gender, str) else None
     override = entry.get("sex", {}).get(gender) if gender else None
     if override:
         low = override.get("low", low)
@@ -106,11 +131,15 @@ def _resource_range(obs, value_unit):
     """The performing lab's range — trusted only when its unit is consistent
     with the value's unit (a range quoted in a different unit would invert the
     interpretation, so we skip it and fall back to the table)."""
-    for rr in obs.get("referenceRange", []):
-        low_q, high_q = rr.get("low", {}), rr.get("high", {})
+    for rr in _list(obs.get("referenceRange")):
+        if not isinstance(rr, dict):
+            continue
+        low_q, high_q = _dict(rr.get("low")), _dict(rr.get("high"))
         low, high = low_q.get("value"), high_q.get("value")
         if low is None and high is None:
             continue
+        if not all(b is None or _is_number(b) for b in (low, high)):
+            continue  # a bound that is not a number cannot be compared
         units = [q.get("unit") for q in (low_q, high_q) if q.get("unit")]
         if any(value_unit and u != value_unit for u in units):
             continue  # unit-inconsistent lab range — don't trust it
@@ -151,11 +180,11 @@ def interpret_observation(obs, patient=None):
     loinc = _loinc(obs)
     entry = LOINC_RANGES.get(loinc)
     analyte = entry["name"] if entry else None
-    vq = obs.get("valueQuantity") or {}
+    vq = _dict(obs.get("valueQuantity"))
     value, unit = vq.get("value"), vq.get("unit")
 
     # value must be a real number (bool is an int subclass — exclude it).
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if not _is_number(value):
         return _indeterminate(analyte, loinc, value, unit, "no numeric value",
                               NO_NUMERIC_VALUE)
     if loinc is None or entry is None:
@@ -178,7 +207,8 @@ def interpret_observation(obs, patient=None):
         low, high = _apply_sex(entry, patient)
         source = "table"
         note = "adult default range" + (
-            "" if (patient or {}).get("gender") or not entry.get("sex")
+            "" if isinstance(_dict(patient).get("gender"), str)
+            or not entry.get("sex")
             else "; sex unknown — used non-specific range")
 
     flag = _flag(value, low, high, crit_low, crit_high)

@@ -38,6 +38,7 @@ from models import db
 from r6.command_center import projector, access, gateway
 from r6.audit import add_audit_event
 from r6.command_center.models import (
+    KNOWN_CHANNELS,
     AgentTask,
     Conversation,
     ConversationMessage,
@@ -369,6 +370,41 @@ def _authz_write(tenant_id: str) -> tuple | None:
     }), 401
 
 
+def _create_conversation(tenant_id, conversation_id, agent_id, channel):
+    """Create the conversation row, or return the one a concurrent first
+    turn created a moment earlier.
+
+    The caller's SELECT found no row, but two first turns of the same new
+    thread (a double-tapped send, two surfaces) both get that answer. A plain
+    INSERT then made the loser fail on pk_cc_conversations, a 500 that
+    CareAgents reported as "message store unavailable".
+
+    INSERT ... ON CONFLICT DO NOTHING, then read the row back. On Postgres
+    the loser's INSERT waits for the winner's transaction and then does
+    nothing; the read that follows sees the committed row. On SQLite writers
+    are serialised, so the loser inserts after the winner commits and does
+    nothing. Not a SAVEPOINT: on pysqlite a savepoint opened here starts its
+    own transaction, and releasing it commits the row on its own, outside
+    the request's transaction (and see #859 on SAVEPOINT locking).
+    """
+    values = {"id": conversation_id, "tenant_id": tenant_id,
+              "agent_id": agent_id, "created_by_surface": channel}
+    dialect = db.session.get_bind(mapper=Conversation).dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:  # pragma: no cover - only Postgres and SQLite are deployed
+        conversation = Conversation(**values)
+        db.session.add(conversation)
+        return conversation
+    db.session.execute(
+        insert(Conversation).values(**values)
+        .on_conflict_do_nothing(index_elements=["tenant_id", "id"]))
+    return Conversation.query.filter_by(
+        tenant_id=tenant_id, id=conversation_id).one()
+
+
 @command_center_blueprint.route("/api/conversations", methods=["POST"])
 def api_conversations_create():
     """
@@ -420,22 +456,19 @@ def api_conversations_create():
         return jsonify({"error": "role must be user, assistant, or system"}), 400
     if not isinstance(text, str):
         return jsonify({"error": "text must be a string"}), 400
-    if not isinstance(channel, str) or not 1 <= len(channel) <= 32:
+    if not isinstance(channel, str) or channel not in KNOWN_CHANNELS:
+        # A closed list, not a length: the value is copied into audit detail.
+        # The type check comes first: `in` on a list or an object raised
+        # TypeError (unhashable), a 500 instead of this 400 (R884-2).
         return jsonify({"error": "invalid channel/surface"}), 400
 
     conversation = Conversation.query.filter_by(
         tenant_id=tenant_id, id=conversation_id).first()
-    if conversation is not None:
-        if conversation.agent_id != agent_id:
-            return jsonify({"error": "conversation belongs to another agent"}), 409
-    else:
-        conversation = Conversation(
-            id=conversation_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            created_by_surface=channel,
-        )
-        db.session.add(conversation)
+    if conversation is None:
+        conversation = _create_conversation(
+            tenant_id, conversation_id, agent_id, channel)
+    if conversation.agent_id != agent_id:
+        return jsonify({"error": "conversation belongs to another agent"}), 409
 
     if request_id:
         prior = ConversationMessage.query.filter_by(

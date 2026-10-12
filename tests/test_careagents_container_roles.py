@@ -53,7 +53,7 @@ WEB_ARGV = [
     "--timeout", "180",
     "--access-logfile", "-",
     "--error-logfile", "-",
-    "--access-logformat", '%(h)s "%(r)s" %(s)s %(M)sms',
+    "--access-logformat", '%(h)s "%(m)s %(U)s" %(s)s %(M)sms',
 ]
 
 # /bin/dash is /bin/sh on Debian, so it is both the image's shell and CI's.

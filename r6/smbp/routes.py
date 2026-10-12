@@ -13,12 +13,14 @@ from flask import Blueprint, request, jsonify, Response
 
 from r6.models import R6Resource, db
 from r6.access import (Scope, TenantRejected, TenantSource, require_grant,
-                       tenant_from_request)
+                       require_open_tenant, tenant_from_request)
+from r6.fasten.models import tenant_closed
 from r6.audit import add_audit_event
 from r6.smbp.models import SMBPSession
 from r6.smbp.monitoring import build_bp_observation
 from r6.smbp.triage import classify
 from r6.smbp.report import build_report, render_html, render_pdf
+from r6.safe_read import subject_reference
 from r6.body_guard import json_body_within_depth
 from r6.read_auth import authenticate_tenant_read
 
@@ -104,6 +106,8 @@ def reading():
         absent_status=401,
         rejected_status=401,
     )
+    # Disconnected or deleted in CareAgents: no new readings (409, audited).
+    require_open_tenant(grant.tenant_id)
 
     body = request.get_json(silent=True) or {}
     try:
@@ -151,7 +155,7 @@ def report(session_id):
     observations = []
     for r in rows:
         obs = r.to_fhir_json()
-        if obs.get("subject", {}).get("reference") == session.patient_ref:
+        if subject_reference(obs) == session.patient_ref:
             observations.append(obs)
 
     label = session.patient_ref.split("/")[-1]
@@ -165,7 +169,10 @@ def report(session_id):
 
     if request.args.get("format") == "pdf":
         pdf = render_pdf(rep)
-        _persist_document_reference(tenant_id, session, len(pdf))
+        # The report is a read and stays open on a closed tenant; only the
+        # DocumentReference it would file is a new record, so it is skipped.
+        if not tenant_closed(tenant_id):
+            _persist_document_reference(tenant_id, session, len(pdf))
         return Response(pdf, mimetype="application/pdf")
     return Response(render_html(rep), mimetype="text/html")
 

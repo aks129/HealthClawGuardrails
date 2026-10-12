@@ -46,6 +46,7 @@ __all__ = [
     'TenantSource', 'Tenant', 'TenantRejected', 'tenant_from_request',
     'Scope', 'Grant', 'StepUpDenied', 'require_grant', 'has_grant',
     'public_step_up_reason',
+    'TenantClosed', 'require_open_tenant',
     'register_error_handlers',
     'audit', 'AuditAssertionError',
     'install_audit_assertions', 'install_read_audit_assertion',
@@ -675,6 +676,7 @@ def register_error_handlers(app) -> None:
     """
     app.register_error_handler(StepUpDenied, _render_step_up_denied)
     app.register_error_handler(TenantRejected, _render_tenant_rejected)
+    app.register_error_handler(TenantClosed, _render_tenant_closed)
 
 
 #: Refusals that write NO audit row, each with the reason. Being on this list
@@ -840,6 +842,66 @@ def _render_tenant_rejected(exc: TenantRejected):
     return outcome_response('error', 'invalid',
                             'X-Tenant-Id must match [a-zA-Z0-9_-]{1,64}',
                             status=400)
+
+
+# ---------------------------------------------------------------------------
+# Closed tenants — no new records after a disconnect or a delete
+# ---------------------------------------------------------------------------
+
+class TenantClosed(Exception):
+    """The account holder disconnected or deleted this tenant.
+
+    Raised by require_open_tenant; rendered app-wide as a 409 with one
+    PHI-free audit row.
+    """
+
+    def __init__(self, tenant_id: str):
+        super().__init__('tenant closed')
+        self.tenant_id = tenant_id
+
+
+def require_open_tenant(tenant: Tenant | str) -> None:
+    """Refuse a write that would bring records into a closed tenant.
+
+    THE ONE PROPERTY: when this returns, the tenant carries no revocation
+    tombstone (r6.fasten.models.TenantClosure, written by a
+    CareAgents Disconnect and by purge). It says nothing about who the
+    caller is: call it AFTER the route's own authorization, so an
+    unauthenticated caller cannot learn which tenants are closed.
+
+    Resolved by module attribute at call time (§1.0), and imported lazily
+    because r6.fasten imports this module.
+    """
+    from r6.fasten import models as _fasten_models_mod
+    tenant_id = tenant.id if isinstance(tenant, Tenant) else tenant
+    if _fasten_models_mod.tenant_closed(tenant_id):
+        raise TenantClosed(tenant_id)
+
+
+def _render_tenant_closed(exc: TenantClosed):
+    """409, audited once. Rolls back first, as _audit_refusal does, so
+    nothing the handler staged before the check commits with the row. The
+    caller was authorized before the check ran, so no refusal budget."""
+    try:
+        db.session.rollback()
+        audit(
+            tenant=exc.tenant_id,
+            event_type=_EVENT_TYPE_BY_METHOD.get(request.method, 'read'),
+            outcome='failure',
+            detail=(f'write refused at {request.endpoint or "unknown"}: '
+                    'tenant disconnected'),
+        )
+        db.session.commit()
+    except SQLAlchemyError as audit_exc:
+        logger.error('closed-tenant refusal audit write failed: %s',
+                     type(audit_exc).__name__)
+        try:
+            db.session.rollback()
+        except SQLAlchemyError:
+            pass  # the connection is gone; teardown discards the session
+    return outcome_response('error', 'conflict',
+                            'This connection was disconnected; no new '
+                            'records are accepted for it.', status=409)
 
 
 # ---------------------------------------------------------------------------

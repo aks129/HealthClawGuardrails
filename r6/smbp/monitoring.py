@@ -5,6 +5,8 @@ and diastolic (8462-4) components in mm[Hg]. AM/PM is derived from the
 effectiveDateTime hour (< 12:00 local-naive => AM, else PM).
 """
 
+from r6.safe_read import as_dict, as_list, codes, is_number, string_field
+
 UCUM_MMHG = {"unit": "mm[Hg]", "system": "http://unitsofmeasure.org", "code": "mm[Hg]"}
 
 
@@ -32,11 +34,19 @@ def build_bp_observation(patient_ref, systolic, diastolic, effective):
 
 
 def _components(obs):
-    """Return (systolic, diastolic) from a BP-panel Observation, or (None, None)."""
+    """Return (systolic, diastolic) from a BP-panel Observation, or (None, None).
+
+    A component of the wrong shape, or a value that is not a finite number
+    (a string, NaN, Infinity), reads as missing, so the reading is skipped
+    rather than raising in the averages or the triage band (#879).
+    """
     sys_v = dia_v = None
-    for c in obs.get("component", []):
-        code = c.get("code", {}).get("coding", [{}])[0].get("code")
-        val = c.get("valueQuantity", {}).get("value")
+    for c in as_list(obs.get("component")):
+        c = as_dict(c)
+        code = next(iter(codes(c.get("code"))), None)
+        val = as_dict(c.get("valueQuantity")).get("value")
+        if not is_number(val):
+            continue
         if code == "8480-6":
             sys_v = val
         elif code == "8462-4":
@@ -75,7 +85,7 @@ def averages(observations):
         s, d = _components(obs)
         if s is None or d is None:
             continue
-        eff = obs.get("effectiveDateTime", "")
+        eff = string_field(obs, "effectiveDateTime")
         allp.append((s, d))
         days.add(eff[:10])
         (am if slot_of(eff) == "AM" else pm).append((s, d))

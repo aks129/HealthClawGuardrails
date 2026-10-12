@@ -12,7 +12,8 @@ import pytest
 
 from careagents import beta
 from careagents.app import contact_links, create_app
-from tests.careagents_stage1_helpers import allowlist_cfg
+from tests.careagents_consent_helpers import consented
+from tests.careagents_stage1_helpers import allowlist_cfg, pend_terms
 from tests.test_careagents import (  # noqa: F401  (pytest fixtures)
     FakeClient, _login, cfg, svc)
 
@@ -40,8 +41,8 @@ def _stage1(monkeypatch, **env):
 def test_a_paused_hub_says_so_and_offers_no_refresh_or_upload(
         cfg, svc, monkeypatch):  # noqa: F811
     c = _hub(cfg, svc, monkeypatch)
-    c.post("/api/connections/fasten", json={"consent": True})
-    c.post("/api/connections/direct", json={"consent": True})
+    c.post("/api/connections/fasten", json=consented())
+    c.post("/api/connections/direct", json=consented())
     for conn in svc.list_home(_acct(svc))["connections"]:
         svc.set_connection_status(conn["tenant_id"], "active")
     before = c.get("/home").get_data(as_text=True)
@@ -67,11 +68,12 @@ def _acct(svc):  # noqa: F811
 
 
 def test_an_invited_person_waiting_on_the_terms_is_told_so(monkeypatch):
+    pend_terms(monkeypatch)
     c, accounts = _stage1(monkeypatch)
     accounts.invite_real_records(EMAIL, "ops-1")
     page = c.get("/home").get_data(as_text=True)
     assert "You're invited. This opens soon." in page.replace("&#39;", "'")
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
 
 
 def test_someone_with_real_records_is_not_promised_them_again(monkeypatch):
@@ -81,13 +83,29 @@ def test_someone_with_real_records_is_not_promised_them_again(monkeypatch):
                             "Uploaded records", status="active",
                             consent_version="2026-08-01")
     page = c.get("/home").get_data(as_text=True)
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
     assert "Adding more records isn" in page
+
+
+@pytest.mark.parametrize("status", ["pending", "empty"])
+def test_a_real_connection_with_no_records_yet_is_not_promised_again(
+        monkeypatch, status):
+    """#856 sign-off F3: a real connection still connecting, or connected
+    with nothing in it yet, is a real connection all the same."""
+    c, accounts = _stage1(monkeypatch)
+    accounts.add_connection(_acct(accounts), "fasten", "t-waiting",
+                            "Your doctor's records", status=status,
+                            consent_version="2026-08-01")
+    page = c.get("/home").get_data(as_text=True)
+    assert "Coming later in the beta" not in page
+    assert "Adding more records isn" in page
+    # The beta banner still says "connected" only for an active one.
+    assert "your records are connected" not in page
 
 
 def test_an_uninvited_newcomer_still_sees_what_is_coming(monkeypatch):
     c, _ = _stage1(monkeypatch)
-    assert "Coming for invited testers" in c.get("/home").get_data(
+    assert "Coming later in the beta" in c.get("/home").get_data(
         as_text=True)
 
 
@@ -97,8 +115,28 @@ def test_a_paused_hub_shows_no_terms_prompt_and_no_invite_line(monkeypatch):
     accounts.set_paused(EMAIL, True)
     page = c.get("/home").get_data(as_text=True).replace("&#39;", "'")
     assert "You're invited" not in page
-    assert "Coming for invited testers" not in page
+    assert "Coming later in the beta" not in page
     assert 'data-reconsent=' not in page
+
+
+def test_a_paused_hub_offers_no_made_up_records(monkeypatch):
+    """#856 sign-off F2: the pause line says nothing new can be added, so
+    the hub offers no sample to add either."""
+    c, accounts = _stage1(monkeypatch)
+    before = c.get("/home").get_data(as_text=True)
+    assert 'id="explore-sample"' in before
+    accounts.set_paused(EMAIL, True)
+    page = c.get("/home").get_data(as_text=True)
+    assert 'id="hub-paused"' in page
+    assert "Explore with made-up records" not in page
+    assert 'data-connector="sample"' not in page
+    # Nothing is listed under "Add records", so no heading over nothing.
+    assert 'id="connect-section"' in before and "Add records" in before
+    assert 'id="connect-section"' not in page
+    assert "Add records" not in page
+    # And no line pointing at the section that is not there.
+    assert "Add some below" in before
+    assert "Add some below" not in page and "No records yet." in page
 
 
 def test_contact_links_escapes_everything_but_the_address():

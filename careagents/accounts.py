@@ -16,7 +16,7 @@ import secrets
 import time
 from contextlib import contextmanager
 
-from sqlalchemy import or_, text, update
+from sqlalchemy import func, or_, text, update
 from sqlalchemy.exc import IntegrityError
 
 import webauthn
@@ -26,9 +26,12 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
                                       UserVerificationRequirement)
 
 from careagents import mail
+# Also puts the beta tables in Base.metadata before any engine is built.
+from careagents import beta_signup
 from careagents.models import (Account, ActivityDay, Agent, Connection,
-                               EmailToken, Grant, Passkey, RealRecordInvite,
-                               Surface, UsageDay, make_engine,
+                               EmailToken, Grant, ImessageHandleState,
+                               ImessageLink, Passkey, RealRecordInvite,
+                               SendblueMessage, Surface, UsageDay, make_engine,
                                make_session_factory, now)
 
 logger = logging.getLogger(__name__)
@@ -190,6 +193,42 @@ class AccountService:
         if error:
             raise AuthError(error)
         return result
+
+    def has_connections(self, account_id: str) -> bool:
+        """Has this account ever connected anything, sample included?"""
+        with self.session() as s:
+            return s.query(Connection).filter_by(
+                account_id=account_id).first() is not None
+
+    def has_real_connection(self, account_id: str) -> bool:
+        """Any connection that is not the sample, in any state."""
+        with self.session() as s:
+            return s.query(Connection).filter(
+                Connection.account_id == account_id,
+                Connection.kind != "sample").first() is not None
+
+    def first_run_account(self, email: str) -> Account | None:
+        """The account a confirmed beta request signs in to, or None.
+
+        The confirm link proves the mailbox, as an email code does, so the
+        address gets the account a code would give it: made now if there
+        is none, verified, its sign-in stamped. None when the account
+        already has a connection: a forwarded link must never open records
+        that are already there, so that account signs in the usual way."""
+        email = email.strip().lower()
+        with self.session() as s:
+            acct = s.query(Account).filter_by(email=email).first()
+            if acct is not None and s.query(Connection).filter_by(
+                    account_id=acct.id).first() is not None:
+                return None
+            if acct is None:
+                acct = Account(email=email, email_verified_at=now())
+                s.add(acct)
+            elif acct.email_verified_at is None:
+                acct.email_verified_at = now()
+            acct.last_login_at = now()
+            s.flush()
+            return _detach(acct)
 
     def ping(self) -> bool:
         """True if the account store answers. Used by /healthz readiness."""
@@ -452,21 +491,60 @@ class AccountService:
         Durable and shared, unlike the in-process burst limiter — a restart or
         a second gunicorn worker must not hand the account a fresh allowance,
         because every turn costs the operator real money.
+
+        Atomic (#862 review F5): the worker charges from several slots at
+        once, and a read-then-write let two of them pass on one count. One
+        conditional UPDATE both checks and charges, so it either adds one
+        under the cap or changes nothing. With no row yet, insert one; the
+        unique (account_id, day) turns a racing insert into a retry of the
+        UPDATE, the same shape as count_activity.
         """
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        turns = func.coalesce(UsageDay.turns, 0)
+        charge = (update(UsageDay)
+                  .where(UsageDay.account_id == account_id,
+                         UsageDay.day == day, turns < cap)
+                  .values(turns=turns + 1)
+                  .execution_options(synchronize_session=False))
+        for _ in range(4):
+            with self.session() as s:
+                if s.execute(charge).rowcount:
+                    # Our row lock holds until commit: this reads our charge.
+                    return True, self._turns_today(s, account_id, day)
+                if s.query(UsageDay.id).filter_by(
+                        account_id=account_id, day=day).first():
+                    used = self._turns_today(s, account_id, day)
+                    if used >= cap:
+                        return False, used
+                    # Under the cap: a peer inserted today's row after our
+                    # UPDATE looked and found none (#862 security G1).
+                    # Charge it, rather than refuse a turn the cap allows.
+                    continue
+            if cap <= 0:
+                return False, 0
+            try:
+                with self.session() as s:
+                    s.add(UsageDay(account_id=account_id, day=day, turns=1))
+                return True, 1
+            except IntegrityError:
+                continue        # a peer made today's row: charge it instead
+        raise RuntimeError("could not charge today's turn")
+
+    @staticmethod
+    def _turns_today(s, account_id: str, day: str) -> int:
+        return int(s.query(func.coalesce(func.sum(UsageDay.turns), 0))
+                   .filter(UsageDay.account_id == account_id,
+                           UsageDay.day == day).scalar())
+
+    def daily_turns_used(self, account_id: str) -> int:
+        """Today's charged turns, read only. Admission asks this; the worker
+        charges with claim_daily_turn where the model is called. A sum, so
+        it reads every row even on a table not yet given the constraint."""
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with self.session() as s:
-            row = (s.query(UsageDay)
-                   .filter_by(account_id=account_id, day=day).first())
-            if row is None:
-                row = UsageDay(account_id=account_id, day=day, turns=0)
-                s.add(row)
-                s.flush()
-            used = int(row.turns or 0)
-            if used >= cap:
-                return False, used
-            row.turns = used + 1
-            return True, used + 1
+            return self._turns_today(s, account_id, day)
 
     _ACTIVITY_FIELDS = ("asked", "approved")
 
@@ -495,8 +573,14 @@ class AccountService:
                 s.execute(stmt)
 
     def set_connection_status(self, tenant_id: str, status: str) -> None:
+        """Move every live row on the tenant. A revoked row is never moved:
+        only the person disconnects, and records landing (a poll, an upload,
+        the chat page settling) must not undo it (security review of #904,
+        F3). Revoking goes through revoke_connection, one row at a time."""
         with self.session() as s:
-            for c in s.query(Connection).filter_by(tenant_id=tenant_id).all():
+            for c in (s.query(Connection)
+                      .filter(Connection.tenant_id == tenant_id,
+                              Connection.status != "revoked").all()):
                 c.status = status
 
     def revoke_connection(self, account_id: str, conn_id: str) -> bool:
@@ -555,6 +639,10 @@ class AccountService:
             # The invite is keyed by the same address (beta spec 4.2). The
             # operator can invite again if the person comes back.
             s.query(RealRecordInvite).filter_by(email=acct.email).delete()
+            # So is a beta request (beta onboarding brief section 5),
+            # matched by mailbox since a request keeps its domain in ASCII;
+            # its iMessage spot goes to the oldest waitlisted request.
+            beta_signup.delete_for_account(s, acct.email)
             s.delete(acct)
             return True
 
@@ -831,13 +919,16 @@ class AccountService:
 
     def add_surface(self, account_id: str, agent_id: str, kind: str,
                     handle: str | None, status: str = "pending") -> str:
+        from careagents.imessage import CODE_TTL_SECONDS
         with self.session() as s:
             if not s.query(Agent).filter_by(
                     id=agent_id, account_id=account_id).first():
                 raise AuthError("That agent isn't yours.")
             x = Surface(account_id=account_id, agent_id=agent_id, kind=kind,
                         handle=handle, status=status,
-                        bound_at=now() if status == "active" else None)
+                        bound_at=now() if status == "active" else None,
+                        code_exp=(now() + CODE_TTL_SECONDS
+                                  if status == "pending" else None))
             s.add(x)
             s.flush()
             return x.id
@@ -845,20 +936,30 @@ class AccountService:
     def find_surface_by_code(self, code: str,
                              kind: str = "telegram") -> dict | None:
         with self.session() as s:
-            x = (s.query(Surface)
-                 .filter_by(handle=code, kind=kind, status="pending")
-                 .first())
+            q = s.query(Surface).filter_by(handle=code, kind=kind,
+                                           status="pending")
+            if kind == "imessage":
+                # Codes expire; a row from before the column reads as expired.
+                q = q.filter(Surface.code_exp.isnot(None),
+                             Surface.code_exp > now())
+            x = q.first()
             return _surf_dict(x) | {"account_id": x.account_id} if x else None
 
-    def find_surface_by_handle(self, handle: str,
-                               kind: str = "imessage") -> dict | None:
+    def find_surface_by_handle(self, handle: str, kind: str = "imessage",
+                               also: str | None = None) -> dict | None:
         """Resolve an active surface by the bound external handle — used to
-        route an inbound message to the right agent."""
+        route an inbound message to the right agent. `also` is the handle as
+        it arrived, for a row bound before handles were normalized."""
+        names = {h for h in (handle, also) if h}
+        if not names:
+            return None
         with self.session() as s:
             x = (s.query(Surface)
-                 .filter_by(handle=handle, kind=kind, status="active")
+                 .filter(Surface.handle.in_(names), Surface.kind == kind,
+                         Surface.status == "active")
+                 .order_by(Surface.bound_at.desc())
                  .first())
-            return _surf_dict(x) | {"account_id": x.account_id} if x else None
+            return _surf_dict(x) | _reverify_fields(x) if x else None
 
     def bind_surface(self, surface_id: str, handle: str) -> None:
         with self.session() as s:
@@ -867,6 +968,322 @@ class AccountService:
                 x.handle = handle
                 x.status = "active"
                 x.bound_at = now()
+
+    # --- iMessage: one handle, one account ----------------------------------
+    # Handles arrive normalized (careagents.imessage.normalize_handle).
+
+    def bind_imessage_handle(self, account_id: str, handle: str,
+                             pending_surface_id: str | None = None,
+                             welcome: bool = False,
+                             also: str | None = None) -> str:
+        """Bind a handle to an account: "connected", "confirmed" or
+        "taken". "confirmed" is the sign-in link re-confirming a handle
+        already bound here (#871): nothing new was connected.
+
+        A handle is bound to at most one account. Bound elsewhere, nothing
+        changes until that binding is undone (STOP, or disconnect on the
+        web). Bound here already, the older binding is replaced, so a new
+        pairing code moves the handle to that code's assistant. `also` is
+        the handle as it arrived, for a row bound before normalization.
+
+        The check below is a read; the partial unique index on active
+        iMessage handles (models._ensure_imessage_handle_unique) is what
+        holds when two binds race, and its refusal reads as "taken".
+        """
+        try:
+            return self._bind_imessage_handle(
+                account_id, handle, pending_surface_id, welcome, also)
+        except IntegrityError:
+            return "taken"
+
+    def _bind_imessage_handle(self, account_id, handle, pending_surface_id,
+                              welcome, also) -> str:
+        names = {h for h in (handle, also) if h}
+        with self.session() as s:
+            bound = (s.query(Surface)
+                     .filter(Surface.kind == "imessage",
+                             Surface.handle.in_(names),
+                             Surface.status == "active").all())
+            if any(x.account_id != account_id for x in bound):
+                return "taken"
+            if bound and not pending_surface_id:
+                # Bound here already: the sign-in link re-confirms (#871).
+                # Refreshed in place, so the handle keeps its assistant.
+                for x in bound:
+                    x.verified_at = x.last_inbound_at = now()
+                    x.reverify_notified_at = None
+                return "confirmed"
+            if pending_surface_id:
+                x = s.get(Surface, pending_surface_id)
+                if x is None or x.account_id != account_id:
+                    return "taken"
+            else:
+                first = (s.query(Agent).filter_by(account_id=account_id)
+                         .order_by(Agent.id).first())
+                x = Surface(account_id=account_id, kind="imessage",
+                            agent_id=first.id if first else None)
+                s.add(x)
+            for old in bound:
+                s.delete(old)
+            # Deleted before the new row takes the handle, or the unique
+            # index sees both at once.
+            s.flush()
+            x.handle = handle
+            x.status = "active"
+            x.bound_at = now()
+            x.code_exp = None
+            x.welcome_due = 1 if welcome else 0
+            x.verified_at = x.last_inbound_at = now()
+            x.reverify_notified_at = None
+            st = self._handle_state(s, handle)
+            st.opted_out_at = None
+            return "connected"
+
+    def imessage_agent_context(self, surface: dict) -> dict | None:
+        """The agent a bound handle talks to. A handle bound by the sign-in
+        link before the account had an assistant gets the account's first
+        one, once it exists."""
+        agent_id = surface.get("agent_id")
+        if not agent_id:
+            with self.session() as s:
+                first = (s.query(Agent)
+                         .filter_by(account_id=surface["account_id"])
+                         .order_by(Agent.id).first())
+                if first is None:
+                    return None
+                agent_id = first.id
+                x = s.get(Surface, surface["id"])
+                if x is not None:
+                    x.agent_id = agent_id
+            surface["agent_id"] = agent_id
+        return self.get_agent_context(surface["account_id"], agent_id)
+
+    def take_imessage_welcome(self, surface_id: str) -> bool:
+        """True once, if this surface's next reply should open with the
+        welcome. A conditional update, so two racing turns welcome once."""
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id,
+                                   Surface.welcome_due == 1)
+                            .values(welcome_due=0))
+            return res.rowcount == 1
+
+    def imessage_note_inbound(self, surface_id: str) -> None:
+        """A bound handle's text was let through: it is not silent."""
+        with self.session() as s:
+            s.execute(update(Surface).where(Surface.id == surface_id)
+                      .values(last_inbound_at=now()))
+
+    def imessage_mark_reverify(self, surface_id: str,
+                               verified_at: float | None) -> bool:
+        """True once per re-verification: the first time it is required.
+        A conditional update, so two racing texts email the owner once.
+        `verified_at` is the value read with the surface: if a confirm has
+        changed it since, nothing is set (compare-and-set)."""
+        same = (Surface.verified_at.is_(None) if verified_at is None
+                else Surface.verified_at == verified_at)
+        with self.session() as s:
+            res = s.execute(update(Surface)
+                            .where(Surface.id == surface_id, same,
+                                   Surface.reverify_notified_at.is_(None))
+                            .values(reverify_notified_at=now()))
+            return res.rowcount == 1
+
+    def disconnect_imessage(self, account_id: str,
+                            surface_id: str | None = None) -> int:
+        """Remove one iMessage binding on the account (`surface_id`), or
+        every binding and pending code. Each freed handle gets its link
+        allowance back, so its next text is answered with a fresh link
+        rather than silence."""
+        with self.session() as s:
+            q = s.query(Surface).filter_by(account_id=account_id,
+                                           kind="imessage")
+            if surface_id is not None:
+                q = q.filter_by(id=surface_id, status="active")
+            rows = q.all()
+            for x in rows:
+                if x.status == "active" and x.handle:
+                    st = s.get(ImessageHandleState, _handle_key(x.handle))
+                    if st is not None:
+                        st.link_count, st.link_window_start = 0, None
+                s.delete(x)
+            return len(rows)
+
+    def _handle_state(self, s, handle: str) -> ImessageHandleState:
+        key = _handle_key(handle)
+        st = s.get(ImessageHandleState, key)
+        if st is None:
+            st = ImessageHandleState(handle_key=key, fail_count=0,
+                                     link_count=0)
+            s.add(st)
+        return st
+
+    def imessage_stop(self, handle: str, also: str | None = None) -> bool:
+        """Unbind the handle (and the raw spelling `also`, for a row bound
+        before normalization), void its unused sign-in links, and remember
+        the STOP. True if this is news: not already opted out."""
+        names = list({h for h in (handle, also) if h})
+        with self.session() as s:
+            s.query(Surface).filter(
+                Surface.kind == "imessage", Surface.handle.in_(names),
+                Surface.status == "active").delete(synchronize_session=False)
+            s.query(ImessageLink).filter(
+                ImessageLink.handle.in_(names),
+                ImessageLink.used_at.is_(None)).update(
+                    {"used_at": now()}, synchronize_session=False)
+            st = self._handle_state(s, handle)
+            first = st.opted_out_at is None
+            st.opted_out_at = st.opted_out_at or now()
+            return first
+
+    def imessage_opted_out(self, handle: str) -> bool:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.opted_out_at)
+
+    def imessage_opt_in(self, handle: str) -> None:
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            if st is not None:
+                st.opted_out_at = None
+
+    def imessage_bind_locked(self, handle: str) -> bool:
+        from careagents.imessage import BIND_ATTEMPTS, WINDOW_SECONDS
+        with self.session() as s:
+            st = s.get(ImessageHandleState, _handle_key(handle))
+            return bool(st and st.fail_window_start
+                        and now() - st.fail_window_start < WINDOW_SECONDS
+                        and (st.fail_count or 0) >= BIND_ATTEMPTS)
+
+    def imessage_note_bind_failure(self, handle: str) -> None:
+        from careagents.imessage import WINDOW_SECONDS
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.fail_window_start
+                    or now() - st.fail_window_start >= WINDOW_SECONDS):
+                st.fail_window_start, st.fail_count = now(), 0
+            st.fail_count = (st.fail_count or 0) + 1
+
+    def issue_imessage_link(self, handle: str) -> str | None:
+        """Mint a one-time sign-in link for `handle`; the token is returned
+        once and only its hash is kept. None past the window's allowance."""
+        from careagents.imessage import (LINK_TTL_SECONDS, LINKS_PER_WINDOW,
+                                         WINDOW_SECONDS, hash_token,
+                                         new_link_token)
+        with self.session() as s:
+            st = self._handle_state(s, handle)
+            if (not st.link_window_start
+                    or now() - st.link_window_start >= WINDOW_SECONDS):
+                st.link_window_start, st.link_count = now(), 0
+            if (st.link_count or 0) >= LINKS_PER_WINDOW:
+                return None
+            st.link_count = (st.link_count or 0) + 1
+            token = new_link_token()
+            s.add(ImessageLink(token_hash=hash_token(token), handle=handle,
+                               exp=now() + LINK_TTL_SECONDS))
+            return token
+
+    def peek_imessage_link(self, token: str) -> str | None:
+        """The id of a live (unused, unexpired) link, without spending it."""
+        from careagents.imessage import hash_token
+        with self.session() as s:
+            link = (s.query(ImessageLink)
+                    .filter_by(token_hash=hash_token(token))
+                    .filter(ImessageLink.used_at.is_(None),
+                            ImessageLink.exp > now()).first())
+            return link.id if link else None
+
+    def void_imessage_link(self, link_id: str) -> None:
+        """Spend a link without binding anything ("No, this isn't mine")."""
+        with self.session() as s:
+            s.execute(update(ImessageLink)
+                      .where(ImessageLink.id == link_id,
+                             ImessageLink.used_at.is_(None))
+                      .values(used_at=now()))
+
+    def imessage_link_handle(self, link_id: str) -> str | None:
+        """The handle a live link would bind, for the confirm page."""
+        with self.session() as s:
+            link = s.get(ImessageLink, link_id)
+            if link is None or link.used_at is not None or link.exp <= now():
+                return None
+            return link.handle
+
+    def claim_imessage_link(self, link_id: str, account_id: str) -> str:
+        """Spend a link for a signed-in account and bind its handle:
+        "connected", "confirmed", "taken" or "expired". Spent exactly
+        once."""
+        with self.session() as s:
+            res = s.execute(update(ImessageLink)
+                            .where(ImessageLink.id == link_id,
+                                   ImessageLink.used_at.is_(None),
+                                   ImessageLink.exp > now())
+                            .values(used_at=now()))
+            if res.rowcount != 1:
+                return "expired"
+            handle = s.get(ImessageLink, link_id).handle
+        return self.bind_imessage_handle(account_id, handle, welcome=True)
+
+    def get_surface(self, surface_id: str) -> dict | None:
+        """An active surface by id, with its account, or None."""
+        with self.session() as s:
+            x = s.get(Surface, surface_id)
+            if x is None or x.status != "active":
+                return None
+            return _surf_dict(x) | _reverify_fields(x)
+
+    # --- Sendblue: seen-once inbound texts and owed answers ------------------
+    # Pointers only (models.SendblueMessage). `key` is a hash of Sendblue's
+    # message_handle, made by the caller.
+
+    def sendblue_claim_inbound(self, key: str) -> bool:
+        """True the first time `key` is seen; False for a webhook retry."""
+        try:
+            with self.session() as s:
+                s.add(SendblueMessage(key_hash=key))
+            return True
+        except IntegrityError:
+            return False
+
+    def sendblue_release_inbound(self, key: str) -> None:
+        """Forget `key`, so Sendblue's retry is handled afresh."""
+        with self.session() as s:
+            s.query(SendblueMessage).filter_by(key_hash=key).delete()
+
+    def sendblue_track_run(self, key: str, surface_id: str,
+                           run_id: str) -> None:
+        with self.session() as s:
+            x = s.query(SendblueMessage).filter_by(key_hash=key).first()
+            if x is not None:
+                x.surface_id, x.run_id = surface_id, run_id
+
+    def sendblue_pending(self, limit: int = 50) -> list[dict]:
+        """Owed answers, oldest first."""
+        with self.session() as s:
+            rows = (s.query(SendblueMessage)
+                    .filter(SendblueMessage.run_id.isnot(None),
+                            SendblueMessage.delivered_at.is_(None))
+                    .order_by(SendblueMessage.created_at)
+                    .limit(limit).all())
+            return [{"id": x.id, "surface_id": x.surface_id,
+                     "run_id": x.run_id, "created_at": x.created_at}
+                    for x in rows]
+
+    def sendblue_mark_delivered(self, row_id: str, outcome: str) -> bool:
+        """Close an owed answer. True for the one caller that closed it, so
+        two worker processes never both send it."""
+        with self.session() as s:
+            res = s.execute(update(SendblueMessage)
+                            .where(SendblueMessage.id == row_id,
+                                   SendblueMessage.delivered_at.is_(None))
+                            .values(delivered_at=now(), outcome=outcome))
+            return res.rowcount == 1
+
+    def sendblue_set_outcome(self, row_id: str, outcome: str) -> None:
+        with self.session() as s:
+            x = s.get(SendblueMessage, row_id)
+            if x is not None:
+                x.outcome = outcome
 
 
 # --- detach helpers: return plain dict-ish objects usable after the session --
@@ -910,9 +1327,39 @@ def _surf_dict(x: Surface) -> dict:
             "status": x.status, "agent_id": x.agent_id}
 
 
+def _reverify_fields(x: Surface) -> dict:
+    """An active iMessage surface's account and re-verification clocks
+    (#871), for careagents.imessage.reverify_due."""
+    return {"account_id": x.account_id, "bound_at": x.bound_at,
+            "verified_at": x.verified_at,
+            "last_inbound_at": x.last_inbound_at,
+            "reverify_notified_at": x.reverify_notified_at}
+
+
 def _opts_to_dict(options_json: str) -> dict:
     import json
     return json.loads(options_json)
+
+
+def secret_matches(provided: str, expected: str) -> bool:
+    """A shared secret from a request header, compared in constant time.
+
+    Both sides are hashed here first, so `compare_digest` only ever meets
+    two hexdigests this process computed: no caller spelling (non-ASCII, a
+    lone surrogate) can raise inside it (#557). An empty expected secret
+    matches nothing.
+    """
+    if not expected:
+        return False
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(
+            str(value).encode("utf-8", "surrogatepass")).hexdigest()
+    return hmac.compare_digest(digest(provided), digest(expected))
+
+
+def _handle_key(handle: str) -> str:
+    return hashlib.sha256(handle.encode()).hexdigest()
 
 
 def new_binding_code() -> str:

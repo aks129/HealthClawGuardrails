@@ -14,6 +14,7 @@ from r6.access import TenantSource, tenant_from_request
 from models import db
 from r6.models import R6Resource
 from r6.audit import add_audit_event
+from r6.safe_read import subject_reference
 from r6.quality.measures import evaluate_nqf0018, evaluate_population
 from r6.quality.report import (
     build_individual_report, build_summary_report, build_measure_resource,
@@ -48,8 +49,9 @@ def register_quality_routes(blueprint, deps):
             is_deleted=False).all()]
 
     def _for_subject(resources, subject_ref):
+        # A subject of the wrong shape reads as no subject (#879).
         return [r for r in resources
-                if r.get("subject", {}).get("reference") == subject_ref]
+                if subject_reference(r) == subject_ref]
 
     @blueprint.route(f"/Measure/{MEASURE_ID}", methods=["GET"])
     def get_measure():

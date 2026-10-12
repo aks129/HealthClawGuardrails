@@ -39,6 +39,7 @@ def test_fresh_install_builds_current_schema_without_flask_app(tmp_path):
         "context_envelopes",
         "fasten_connections",
         "fasten_jobs",
+        "tenant_closures",
         "proposed_actions",
         "action_events",
         "action_confirmations",
@@ -291,7 +292,7 @@ def test_initialize_database_runs_alembic_on_the_app_engine(monkeypatch):
         assert schema.get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
-    assert revision == "0009_audit_append_only"
+    assert revision == "0010_fasten_tenant_revocation"
 
 
 def test_legacy_environment_flag_cannot_run_ddl_during_factory(monkeypatch):
@@ -463,11 +464,11 @@ def test_legacy_create_all_database_is_adopted_not_recreated(tmp_path):
 
     revision = upgrade_database(engine)  # must NOT raise 'already exists'
 
-    assert revision == "0009_audit_append_only"
+    assert revision == "0010_fasten_tenant_revocation"
     inspector = inspect(engine)
     assert "alembic_version" in inspector.get_table_names()
     # And it must be repeatable (deploys run it every release).
-    assert upgrade_database(engine) == "0009_audit_append_only"
+    assert upgrade_database(engine) == "0010_fasten_tenant_revocation"
 
 
 def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
@@ -503,7 +504,7 @@ def test_pre_v1_8_database_missing_baseline_tables_is_adopted(tmp_path):
 
     revision = upgrade_database(engine)
 
-    assert revision == "0009_audit_append_only"
+    assert revision == "0010_fasten_tenant_revocation"
     inspector = inspect(engine)
     assert {
         "action_confirmations", "action_events", "proposed_actions",
@@ -551,7 +552,7 @@ def test_pre_w0_sqlite_database_with_unnamed_pk_upgrades(tmp_path):
         ))
 
     revision = upgrade_database(engine)
-    assert revision == "0009_audit_append_only"
+    assert revision == "0010_fasten_tenant_revocation"
 
     inspector = inspect(engine)
     pk = inspector.get_pk_constraint("r6_resources")
@@ -594,9 +595,9 @@ def test_legacy_create_all_upgrade_on_configured_database():
 
         revision = upgrade_database(engine)  # must not raise "already exists"
 
-        assert revision == "0009_audit_append_only"
+        assert revision == "0010_fasten_tenant_revocation"
         assert "alembic_version" in inspect(engine).get_table_names()
-        assert upgrade_database(engine) == "0009_audit_append_only"  # idempotent
+        assert upgrade_database(engine) == "0010_fasten_tenant_revocation"  # idempotent
         assert inspect(engine).get_pk_constraint("r6_resources")[
             "constrained_columns"
         ] == ["tenant_id", "resource_type", "id"]
@@ -606,3 +607,28 @@ def test_legacy_create_all_upgrade_on_configured_database():
                 c.execute(text("DROP SCHEMA public CASCADE"))
                 c.execute(text("CREATE SCHEMA public"))
         engine.dispose()
+
+
+def test_tenant_closure_migration_is_reversible(tmp_path):
+    """0010 creates the tenant-wide disconnect record that every Fasten
+    ingest path checks; without it the first disconnect 500s in production.
+
+    MUTATION: empty upgrade() in 0010 -> red on the first assertion.
+    """
+    url = f"sqlite:///{tmp_path / 'revocation.db'}"
+    config = _config(url)
+    engine = create_engine(url)
+
+    command.upgrade(config, "head")
+    schema = inspect(engine)
+    assert "tenant_closures" in schema.get_table_names()
+    assert schema.get_pk_constraint("tenant_closures")[
+        "constrained_columns"] == ["tenant_id"]
+
+    command.downgrade(config, "0009_audit_append_only")
+    assert "tenant_closures" not in inspect(
+        engine).get_table_names()
+
+    command.upgrade(config, "head")
+    assert "tenant_closures" in inspect(engine).get_table_names()
+    engine.dispose()

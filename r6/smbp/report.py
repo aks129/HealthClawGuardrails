@@ -11,16 +11,18 @@ import io
 
 from r6.smbp.monitoring import averages, adherence, slot_of, _components
 from r6.smbp.triage import classify, HOME_SYSTOLIC, HOME_DIASTOLIC
+from r6.safe_read import string_field
 
 
 def build_report(patient_ref, patient_label, days, observations):
     """Return a report dict computed from BP-panel Observations."""
     rows = []
-    for obs in sorted(observations, key=lambda o: o.get("effectiveDateTime", "")):
+    for obs in sorted(observations,
+                      key=lambda o: string_field(o, "effectiveDateTime")):
         s, d = _components(obs)
         if s is None or d is None:
             continue
-        eff = obs.get("effectiveDateTime", "")
+        eff = string_field(obs, "effectiveDateTime")
         band = classify(s, d)["band"]
         rows.append({
             "when": eff,

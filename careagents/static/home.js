@@ -10,6 +10,16 @@
     return { ok: r.ok, d: await r.json().catch(() => ({})) };
   }
 
+  // The terms version the consent cards on this page show, as rendered.
+  // Every consent sends it back so the server records the wording the
+  // person read. A 428 to a consent that carried it means the terms changed
+  // after this page loaded: reload to show the current card. Never resend
+  // the version the 428 names; that would accept wording nobody saw.
+  const versioned = document.querySelector("[data-consent-version]");
+  const shownConsentVersion = versioned ? versioned.dataset.consentVersion : "";
+  const termsChanged = (res) =>
+    !res.ok && res.d.error === "consent_required";
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
@@ -28,10 +38,12 @@
         const agreed = await showConsentCard();
         if (!agreed) return;
         body.consent = true;
+        body.consent_version = shownConsentVersion;
       }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
+      if (body.consent && termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
         // needs dismissing, and the page stays usable.
@@ -75,7 +87,9 @@
       if (!agreed) return;
       btn.disabled = true;
       const res = await post(
-        `/api/connections/${btn.dataset.reconsent}/consent`, { consent: true });
+        `/api/connections/${btn.dataset.reconsent}/consent`,
+        { consent: true, consent_version: shownConsentVersion });
+      if (termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         btn.disabled = false;
         return announce(btn.parentElement.querySelector(".inline-msg"),
@@ -330,7 +344,10 @@
       // Only clear what this poller wrote — the refresh flow shares this
       // element and its message must survive.
       if (saidUnavailable) { msg.hidden = true; saidUnavailable = false; }
-      if (d.status === "active") { clearInterval(iv); location.reload(); }
+      // Disconnected (perhaps in another tab): stop and show the real state.
+      if (d.status === "active" || d.status === "revoked") {
+        clearInterval(iv); location.reload();
+      }
     }, 5000);
   });
 
@@ -352,7 +369,8 @@
         const agreed = await showConsentCard();
         if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
         res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
-                         { consent: true });
+                         { consent: true, consent_version: shownConsentVersion });
+        if (termsChanged(res)) { location.reload(); return; }
       }
       btn.disabled = false;
       // `message` first: a coded refusal (records_paused) carries its
@@ -548,7 +566,8 @@
         // hands back a connection still waiting for a file, if there is one.
         let res;
         try {
-          res = await post("/api/connections/direct", { consent: true });
+          res = await post("/api/connections/direct",
+                         { consent: true, consent_version: shownConsentVersion });
         } catch (e) {
           res = null;   // no signal: say so, and leave the tile tappable
         }
@@ -687,7 +706,9 @@
       announce(msg, d.message || "We couldn't confirm your records were deleted.");
       return;
     }
-    location.assign("/?deleted=1");
+    // replace, not assign: Back must not return to the settings of an
+    // account that is gone (#884 G7).
+    location.replace("/?deleted=1");
   });
 
   // The word, in any case, with the whitespace trimmed: phones capitalise
@@ -775,12 +796,13 @@
   // approval that finished left the band at "Nothing yet" with no way to the
   // result, and one that failed vanished. Each line says what happened and,
   // where there is one, the next step. Labels and names go in as text.
-  const SUPPORT = "Email support@healthclaw.io to check.";
+  // The one contact address (#856), linked by showRecent.
+  const SUPPORT = "Email " + CONTACT + " to check.";
   const recentLine = (r) => {
     const what = r.label + (r.to ? " to " + r.to : "") + ": ";
     // A form with its PDF is "ready": it went nowhere, it waits for the
     // person to save, print or send it (#853).
-    if (r.state === "done") return { text: what + (r.link ? "ready." : "Done."),
+    if (r.state === "done") return { text: what + (r.link ? "Ready." : "Done."),
       link: r.link ? { href: r.link, text: "Open the PDF", away: true } : null };
     if (r.state === "failed") return { text: what + "Didn't finish.",
       link: r.chat ? { href: r.chat, text: "Ask " + r.agent_name + " to try again" } : null,
@@ -815,6 +837,7 @@
       if (!line) return;
       const li = document.createElement("li");
       li.textContent = line.text;
+      linkContact(li);   // before any link below: it rewrites the text
       if (line.link && /^(https?:\/\/|\/)/.test(line.link.href)) {
         const a = document.createElement("a");
         a.href = line.link.href;
@@ -984,6 +1007,7 @@
   const im = $("im-surface");
   if (im) im.addEventListener("click", async () => {
     $("surfaces-msg").hidden = true;
+    $("surfaces-msg").classList.remove("is-ok");
     const agentId = im.dataset.agent;
     if (!agentId) {
       return say(im, $("surfaces-msg"),
@@ -994,6 +1018,29 @@
     $("im-state").textContent = "pending — text to finish";
     // iMessage needs the whole "care <code>" line as the text body.
     showCodeCard("care " + res.d.code, res.d.instructions || "Text this code to connect:");
+  });
+  // Disconnect, one phone per tile: its texts stop reaching the assistant.
+  // Texting again later sends a fresh sign-in link. Success is said in the
+  // calm style; only a failure uses the error colour.
+  document.querySelectorAll(".im-disconnect").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tile = btn.closest(".surface");
+      const msg = $("surfaces-msg");
+      btn.disabled = true;
+      const res = await post("/api/surfaces/imessage/disconnect",
+                             { surface_id: btn.dataset.surface });
+      if (!res.ok) {
+        btn.disabled = false;
+        msg.classList.remove("is-ok");
+        return say(tile, msg, "Couldn't disconnect. Try again.");
+      }
+      btn.remove();
+      tile.classList.remove("on");
+      tile.querySelector(".im-state").textContent = "disconnected";
+      msg.classList.add("is-ok");
+      say(tile, msg,
+        "Disconnected. Texts from that phone won't reach your assistant.");
+    });
   });
   // --- grants: revoke a consent given to a third-party agent (spec §13.4) ---
   // HealthClaw is asked first; the card changes only on its yes, and a

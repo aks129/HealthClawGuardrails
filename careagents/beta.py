@@ -30,6 +30,31 @@ PAUSED_HUB_TEXT = ("Your records are paused for now. Your assistant won't "
                    "didn't expect this, write to contactus@healthclaw.io.")
 
 
+#: What a turn answers when the day's allowance is spent by the time the
+#: worker charges it (#856 sign-off F4). The same words as the 429 at
+#: admission.
+DAILY_LIMIT_TEXT = ("You've reached today's message limit. It resets "
+                    "overnight.")
+
+
+#: The sample connection's one line: the banner on its chat page, and the
+#: opening line of every answer the worker finishes on it, web and text
+#: alike. A tester read a sample creatinine rise, dated today and worded
+#: "your", as her own result and stopped (2026-10-08 patient walk).
+SAMPLE_FRAME = ("These are made-up records, not yours. Nothing here is about "
+                "you.")
+
+
+def under_banner(text: str) -> str:
+    """A sample answer as the web chat shows it under its sticky banner:
+    without the worker's leading copy of SAMPLE_FRAME, so the line shows
+    once per view. Only that exact copy on its own line, and never down
+    to nothing. Called only where the banner is rendered on the page."""
+    lead = SAMPLE_FRAME + "\n\n"
+    rest = text[len(lead):] if text.startswith(lead) else ""
+    return rest if rest.strip() else text
+
+
 #: What a real-record assistant answers while its connection's consent is
 #: older than the current terms (spec section 4.3).
 #: True before and after #565 is approved: a connection made before the
@@ -46,7 +71,9 @@ def turn_block(connection: dict, paused: bool,
     Checked in the run worker, the only caller of llm.complete here, so it
     holds for every turn CareAgents runs: web chat and the iMessage relay,
     including runs queued before the change. Telegram is answered by an
-    external gateway, not by this worker, so it is NOT covered.
+    external gateway, not by this worker, so this check does NOT cover it;
+    instead CareAgents refuses to mint a code for, or bind a chat to, an
+    agent on anything but the sample (app.py, `_is_real`).
     Anything that is not the sample needs consent at the current version,
     so an older or unknown kind fails closed.
     """
