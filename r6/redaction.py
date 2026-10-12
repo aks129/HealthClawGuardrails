@@ -23,9 +23,12 @@ on all resource access paths (not just context ingestion).
 - Photos: Remove entirely
 - Narratives: Replace with redacted div
 - Notes/comments: Replace with [Redacted]
+- Quantity units: Replace a unit that is not one short unit-shaped token
+  with [Redacted]; keep the coded `code` and `system`
 """
 
 import json
+import re
 
 from r6.safe_read import code_shape, is_coding_shaped
 from r6.terminology import label_codings
@@ -232,6 +235,92 @@ _ATTACHMENT_ONLY_KEYS = (
     'duration', 'height', 'width',
 )
 
+# A unit the engine passes on is one short token in UCUM's characters, with
+# no spaces ("mg/dL", "{beats}/min", "u[IU]/mL", "mg/(24.h)"). The engine
+# serves every kind of record and redacts on every read, so this is a guard
+# against prose and identifiers, not a UCUM validator: a rule strict enough
+# to stop every name also blanked real units on every read (#922 QA F1).
+# It refuses
+# - a run of nine or more letters (a long name or a word of an instruction),
+# - a run of four or more digits (a phone number, an SSN, a year),
+# - two or more runs of four or more letters ("IGNORE_ALL_PREVIOUS",
+#   "Zebulon.Quixtran"),
+# - a token of letters only that is not a known unit word,
+# - a letterless token other than %, 1 or a power of ten.
+# A single short word beside a non-letter ("{Smith}", "Smith/dL") still
+# fits. That residual is tracked on #925; consumers that put a unit in front
+# of a model or a person keep their own closed lists, which are the real
+# guard (careagents/labs_timeline.py UCUM_ALLOWED, r6/brief/engine.py).
+_UNIT_SHAPE = re.compile(r"[A-Za-z0-9%/.*^\[\]{}()#_'\-µ°]{1,24}")
+_LONG_WORD = re.compile(r"[A-Za-zµ°]{9,}")
+_LONG_NUMBER = re.compile(r"[0-9]{4,}")
+_LETTERLESS_UNIT = re.compile(r"%|1|10[*^][0-9]{1,2}")
+_LETTER_RUN = re.compile(r"[A-Za-zµ°]+")
+#: Units of letters only, compared case-insensitively. A superset of every
+#: letters-only unit on the consumers' closed lists, or the engine would
+#: blank one before they see it.
+_WORD_UNITS = frozenset(w.lower() for w in {
+    'g', 'mg', 'ug', 'mcg', 'ng', 'pg', 'kg', 'L', 'dL', 'mL', 'uL', 'fL',
+    'fl', 'm', 'cm', 'mm', 'km', 'um', 'nm', 's', 'ms', 'sec', 'min', 'h',
+    'hr', 'd', 'wk', 'mo', 'a', 'U', 'IU', 'mU', 'kU', 'mEq', 'mmol', 'umol',
+    'nmol', 'pmol', 'mol', 'Cel', 'bpm', 'lb', 'lbs', 'oz', 'in', 'ft',
+    'cal', 'kcal', 'kJ', 'Hz', 'Pa', 'kPa', 'mmHg', 'pH', 'mOsm', 'INR',
+    'tablet', 'tablets', 'tab', 'capsule', 'capsules', 'cap', 'puff',
+    'drop', 'drops', 'spray', 'patch', 'dose', 'unit', 'units', 'each',
+    'ea', 'serving', 'cup', 'steps', 'year', 'years', 'month', 'months',
+    'week', 'weeks', 'day', 'days', 'hour', 'hours', 'minute', 'minutes',
+    'second', 'seconds', 'µmol', 'µg', 'µL', 'degF',
+})
+UNIT_REDACTED = '[Redacted]'
+
+
+def unit_is_shaped(value):
+    """True when `value` could be a unit: see the rules above."""
+    if not isinstance(value, str) or not _UNIT_SHAPE.fullmatch(value):
+        return False
+    if _LONG_WORD.search(value) or _LONG_NUMBER.search(value):
+        return False
+    runs = _LETTER_RUN.findall(value)
+    if not runs:
+        return bool(_LETTERLESS_UNIT.fullmatch(value))
+    if value.isalpha():
+        return value.lower() in _WORD_UNITS
+    return sum(len(r) >= 4 for r in runs) <= 1
+
+
+def _is_quantity(obj):
+    """A Quantity (or Age, Duration, SimpleQuantity) by shape: a `unit`, or
+    a `value` beside a `code`. A Coding has no `value`."""
+    return ('resourceType' not in obj and 'coding' not in obj
+            and ('unit' in obj or ('value' in obj and 'code' in obj)))
+
+
+def _clean_unit(obj):
+    """Replace a `unit` that is not unit-shaped, in place; drop one that is
+    not a string or an object. Replaced rather than dropped: readers treat
+    an absent unit as "the analyte's usual unit" (r6/brief/engine.py), and a
+    number beside a unit it was not measured in is the defect #884 fixed.
+    The replacement is on no allow-list, so they show no number instead. An
+    object `unit` (ObservationDefinition's CodeableConcept) is walked like
+    any other.
+
+    A Quantity's `code` is its coded unit, which readers prefer to `unit`,
+    so it gets the same rule; one that fails is replaced too, never dropped,
+    so a coded unit is not lost on a read (#922 B4, QA F1)."""
+    if not _is_quantity(obj):
+        return
+    if isinstance(obj.get('code'), str) and not unit_is_shaped(obj['code']):
+        obj['code'] = UNIT_REDACTED
+    if 'unit' not in obj:
+        return
+    unit = obj['unit']
+    if isinstance(unit, dict):
+        return
+    if not isinstance(unit, str):
+        obj.pop('unit')
+    elif not unit_is_shaped(unit):
+        obj['unit'] = UNIT_REDACTED
+
 
 def clean_codings(obj):
     """Apply the Coding rule to one dict: its `coding` list, and the dict
@@ -288,6 +377,7 @@ def _redact_recursive(obj):
     # Coding-shaped dict, wherever it sits (R886-1); r6/safe_read.code_shape
     # is the rule the validator applies on write too.
     clean_codings(obj)
+    _clean_unit(obj)
 
     # Attachment content and signed URLs can directly contain or reveal PHI.
     # Every Attachment element is optional, so it is known by shape: an

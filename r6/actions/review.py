@@ -48,11 +48,13 @@ from r6.actions.confirmations import has_confirmation, issue_confirmation
 from r6.actions.models import PayloadSealed, ProposedAction
 from r6.actions.routes import _error, _tenant_or_none, actions_blueprint
 from r6.audit import add_audit_event, record_audit_event
+from r6.internal_auth import internal_secret_presented
 from r6.brief.engine import MEDICINE_UNNAMED
 from r6.models import R6Resource
 from r6.redaction import apply_redaction
 from r6.sdc.intake import intake_questionnaire
 from r6.sdc.populate import populate_questionnaire
+from r6 import voice as voices
 from r6.access import Scope, require_grant, require_open_tenant
 
 logger = logging.getLogger(__name__)
@@ -428,6 +430,16 @@ def review_form(action_id):
         return _error(404, 'Unknown action')
 
     if action.kind == 'form-fill':
+        # Wording only (r6/voice.py): CareAgents asks for the sample voice
+        # on its made-up records, so a tester is not asked to attest "I have
+        # no known allergies" about a person who is not them. It never
+        # reaches a read, the rows listed, the gate or the audit. Honoured
+        # only with the internal secret, as on the brief (#908): any other
+        # step-up holder could otherwise word a person's own attestation as
+        # "the sample person's".
+        voice = voices.parse(request.args.get('voice'))
+        if voice != voices.PATIENT and not internal_secret_presented():
+            voice = voices.PATIENT
         _questionnaire, _patient, draft_qr, content = _draft_qr(action, tenant_id)
         demographics = _demographics(draft_qr)
         meds, allergies, conditions = _view_rows(draft_qr)
@@ -440,6 +452,8 @@ def review_form(action_id):
             action_id=action_id, demographics=demographics,
             meds=meds, allergies=allergies, conditions=conditions,
             record_readable=content.resolved, record_reason=content.reason)
+        if voice == voices.SAMPLE:
+            context.update(voice=voice, sample_banner=voices.SAMPLE_BANNER)
     else:
         detail = 'approve page rendered; kind=%s' % action.kind
         template, context = 'action_approve.html', _approve_context(action)

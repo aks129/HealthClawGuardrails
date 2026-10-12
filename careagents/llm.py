@@ -208,8 +208,11 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     a_messages = _to_anthropic_messages(messages)
     try:
         resp = client.messages.create(
-            model=cfg.anthropic_model, max_tokens=1200, system=system,
-            messages=a_messages, tools=a_tools)
+            model=cfg.anthropic_model,
+            max_tokens=getattr(cfg, "anthropic_max_tokens", 8000),
+            output_config={"effort": getattr(cfg, "anthropic_effort",
+                                             "medium")},
+            system=system, messages=a_messages, tools=a_tools)
     except anthropic.APIError as exc:  # surface a category, not internals
         # No retry loop here on purpose: the Anthropic SDK already retries
         # 429 and 5xx internally (max_retries), so wrapping it in another
@@ -229,7 +232,20 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
         elif block.type == "tool_use":
             turn.tool_calls.append(ToolCall(
                 id=block.id, name=block.name, arguments=dict(block.input)))
+    stop = getattr(resp, "stop_reason", None)
+    if stop == "refusal" and not turn.text.strip():
+        # A safety decline arrives as HTTP 200 with no text; an empty
+        # bubble reads as a broken app.
+        turn.text = REFUSAL_TEXT
+    elif stop == "max_tokens" and not turn.tool_calls:
+        # Cut off mid-answer: say so instead of ending mid-sentence.
+        turn.text = turn.text.rstrip() + "\n\n" + CUT_OFF_TEXT
     return turn
+
+
+REFUSAL_TEXT = ("I can't help with that one. Try asking it another way, "
+                "or ask your doctor.")
+CUT_OFF_TEXT = "(That ran long and was cut off. Ask me to continue.)"
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:

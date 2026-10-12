@@ -587,9 +587,19 @@ class HealthClawClient:
 
     # --- review-page relay (credential-injecting proxy) ----------------------
 
-    def fetch_review_page(self, tenant: str, action_id: str) -> tuple[int, str]:
-        r = self._send("GET", f"{self.actions}/{action_id}/review",
-                       headers=self._headers(tenant), what="review fetch")
+    def fetch_review_page(self, tenant: str, action_id: str,
+                          voice: str | None = None) -> tuple[int, str]:
+        """`voice="sample"` asks the engine to word the intake review about
+        the made-up sample person (r6/voice.py), with the internal secret it
+        requires, as `fetch_appointment_brief` does. Without it the request
+        is exactly what it was."""
+        sample = voice == "sample"
+        headers = self._headers(tenant)
+        if sample:
+            headers["X-Internal-Secret"] = self.mint_secret
+        r = self._send("GET", f"{self.actions}/{action_id}/review"
+                       + ("?voice=sample" if sample else ""),
+                       headers=headers, what="review fetch")
         return r.status_code, r.text
 
     def submit_review(self, tenant: str, action_id: str,

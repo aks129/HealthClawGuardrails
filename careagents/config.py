@@ -203,7 +203,15 @@ class Config:
         self.openai_api_key = e.get("OPENAI_API_KEY", "")
         self.openai_base = (e.get("OPENAI_BASE_URL")
                             or "https://api.openai.com/v1").rstrip("/")
-        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5")
+        self.anthropic_model = e.get("CARE_MODEL", "claude-sonnet-5-5")
+        # Current Claude models always think before answering, and thinking
+        # spends the same max_tokens as the answer: at 1200 a thorough lab
+        # answer was cut off mid-sentence at every effort level. Effort is
+        # the depth control; medium keeps chat brisk without losing care.
+        effort = e.get("CARE_EFFORT", "medium")
+        self.anthropic_effort = (effort if effort in ("low", "medium", "high")
+                                 else "medium")
+        self.anthropic_max_tokens = 8000
         self.openai_model = e.get("CARE_OPENAI_MODEL", "gpt-4o-mini")
         # With real records open, chat turns carry redacted-but-real health
         # data to the model host, so that host must be vetted: one of the

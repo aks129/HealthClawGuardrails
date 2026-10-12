@@ -169,7 +169,7 @@ def test_a_chart_link_hides_the_history_until_the_chart_is_ready(
 
 def test_the_review_page_is_titled_careagents(sb_cfg, sb_svc, monkeypatch):  # noqa: F811
     app, c, fake, hc, agent_id = _app(sb_cfg, sb_svc, monkeypatch)
-    hc.fetch_review_page = lambda t, a: (200, (
+    hc.fetch_review_page = lambda t, a, **_: (200, (
         "<html><head><title>Review your intake form — HealthClaw Guardrails"
         f"</title></head><body>/r6/actions/{a}/review</body></html>"))
     page = c.get(f"/review/{agent_id}/act-1").get_data(as_text=True)
