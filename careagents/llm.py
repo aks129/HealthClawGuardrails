@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 
 import requests
 
+from careagents import routing
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +45,16 @@ class LLMTurn:
     # Some OpenAI-compatible backends (Gemini) require echoing opaque fields
     # like thought_signature that a reconstructed call would drop.
     raw_tool_calls: list = field(default_factory=list)
+    # Anthropic only: for routing, the log line and the daily counts.
+    model: str = ""
+    tier: int = 0
+    escalated: bool = False
+    advisor_calls: int = 0
+    advisor_errors: int = 0
+    stop_reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    advisor_output_tokens: int = 0
 
 
 class LLMError(RuntimeError):
@@ -206,13 +218,55 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     a_tools = [{"name": t["name"], "description": t["description"],
                 "input_schema": t["parameters"]} for t in tools]
     a_messages = _to_anthropic_messages(messages)
-    try:
-        resp = client.messages.create(
-            model=cfg.anthropic_model,
-            max_tokens=getattr(cfg, "anthropic_max_tokens", 8000),
-            output_config={"effort": getattr(cfg, "anthropic_effort",
-                                             "medium")},
+    max_tokens = getattr(cfg, "anthropic_max_tokens", 8000)
+    effort = getattr(cfg, "anthropic_effort", "medium")
+    started = _time_mod.monotonic()
+
+    if not getattr(cfg, "routing", False):
+        turn = _anthropic_call(
+            anthropic, client.messages, model=cfg.anthropic_model,
+            max_tokens=max_tokens, output_config={"effort": effort},
             system=system, messages=a_messages, tools=a_tools)
+        _observe(cfg, turn, None, started)
+        return turn
+
+    # CARE_ROUTING=on (careagents/routing.py).
+    tier = routing.tier_for(messages)
+    escalated = False
+    if tier == routing.TIER_HAIKU:
+        # No fallbacks: Haiku 5.5 has no server-side fallback, and a list of
+        # fallback models is a 400 there.
+        turn = _anthropic_call(
+            anthropic, client.messages, model=routing.HAIKU_MODEL,
+            max_tokens=max_tokens, output_config={"effort": "low"},
+            system=system, messages=a_messages, tools=a_tools)
+        if any(c.name in routing.CLINICAL_TOOLS for c in turn.tool_calls):
+            # The turn was clinical after all. Haiku's reply is discarded
+            # unexecuted, so its tool call never reaches the history.
+            tier, escalated = routing.TIER_SONNET, True
+    if tier == routing.TIER_SONNET:
+        betas = [routing.FALLBACK_BETA]
+        s_tools, s_system = a_tools, system
+        if getattr(cfg, "advisor", False):
+            # Offered on every call of the loop, the no-tools final one too.
+            # The history we send never carries advisor blocks (it is rebuilt
+            # provider-neutrally), which the API accepts (live, 2026-10-12).
+            betas.insert(0, routing.ADVISOR_BETA)
+            s_tools = [*a_tools, routing.ADVISOR_TOOL]
+            s_system = system + routing.ADVISOR_NOTE
+        turn = _anthropic_call(
+            anthropic, client.beta.messages, model=routing.SONNET_MODEL,
+            max_tokens=max_tokens, output_config={"effort": effort},
+            system=s_system, messages=a_messages, tools=s_tools,
+            betas=betas, extra_body={"fallbacks": "default"})
+    turn.tier, turn.escalated = tier, escalated
+    _observe(cfg, turn, tier, started)
+    return turn
+
+
+def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
+    try:
+        resp = endpoint.create(**kw)
     except anthropic.APIError as exc:  # surface a category, not internals
         # No retry loop here on purpose: the Anthropic SDK already retries
         # 429 and 5xx internally (max_retries), so wrapping it in another
@@ -225,14 +279,35 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
             raise LLMRateLimited("model call rate limited (HTTP 429)") from exc
         raise LLMError(f"model call failed ({type(exc).__name__})") from exc
 
-    turn = LLMTurn()
+    turn = LLMTurn(model=kw["model"])
     for block in resp.content:
         if block.type == "text":
             turn.text += block.text
         elif block.type == "tool_use":
             turn.tool_calls.append(ToolCall(
                 id=block.id, name=block.name, arguments=dict(block.input)))
+        elif block.type == "advisor_tool_result":
+            # Opus advice is encrypted (advisor_redacted_result) and is
+            # never read. Text before it is the executor announcing that it
+            # will consult someone, which the person should not see.
+            content = getattr(block, "content", None)
+            kind = (content.get("type") if isinstance(content, dict)
+                    else getattr(content, "type", None))
+            if kind == "advisor_tool_result_error":
+                turn.advisor_errors += 1
+            else:
+                turn.advisor_calls += 1
+            turn.text = ""
     stop = getattr(resp, "stop_reason", None)
+    turn.stop_reason = stop or ""
+    usage = getattr(resp, "usage", None)
+    turn.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    turn.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    for it in getattr(usage, "iterations", None) or []:
+        get = it.get if isinstance(it, dict) else (
+            lambda k, _it=it: getattr(_it, k, None))
+        if get("type") == "advisor_message":
+            turn.advisor_output_tokens += int(get("output_tokens") or 0)
     if stop == "refusal" and not turn.text.strip():
         # A safety decline arrives as HTTP 200 with no text; an empty
         # bubble reads as a broken app.
@@ -241,6 +316,28 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
         # Cut off mid-answer: say so instead of ending mid-sentence.
         turn.text = turn.text.rstrip() + "\n\n" + CUT_OFF_TEXT
     return turn
+
+
+def _observe(cfg, turn: LLMTurn, tier, started: float) -> None:
+    """One log line per model call, and the day's counts. Never content."""
+    name = {routing.TIER_HAIKU: "haiku",
+            routing.TIER_SONNET: "sonnet"}.get(tier, "single")
+    logger.info(
+        "model call tier=%s model=%s stop=%s secs=%.1f in=%d out=%d "
+        "advisor=%d advisor_out=%d escalated=%s", name, turn.model,
+        turn.stop_reason or "-", _time_mod.monotonic() - started,
+        turn.input_tokens, turn.output_tokens, turn.advisor_calls,
+        turn.advisor_output_tokens, turn.escalated)
+    # A call that answers (no tool calls) ends the turn: count it once there.
+    answered = not turn.tool_calls
+    routing.count(cfg, {
+        f"turns_{name}": answered,
+        "escalations": turn.escalated,
+        "advisor_consults": turn.advisor_calls,
+        "advisor_errors": turn.advisor_errors,
+        "refusals": turn.stop_reason == "refusal",
+        "cut_offs": turn.stop_reason == "max_tokens",
+    })
 
 
 REFUSAL_TEXT = ("I can't help with that one. Try asking it another way, "
