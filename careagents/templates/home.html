@@ -51,8 +51,11 @@
   <section class="switch-prompt" id="switch-prompt"
            data-agent="{{ switch_prompt.agent_id }}"
            data-conn="{{ switch_prompt.connection_id }}">
-    <p>Switch {{ switch_prompt.agent_name }} to your records?</p>
-    <button type="button" class="btn-primary" id="switch-yes">Switch</button>
+    {# The next step once records land (#937): say they arrived, with the
+       count when there is one, and make switching the one primary button. #}
+    <p><b>Your records are here.</b>{% if switch_prompt.count_line %} {{ switch_prompt.count_line }} arrived.{% endif %}
+      {{ switch_prompt.agent_name }} still reads the made-up records. Switch to yours?</p>
+    <button type="button" class="btn-primary" id="switch-yes">Switch {{ switch_prompt.agent_name }} to your records</button>
     <button type="button" class="linkish" id="switch-later">Not now</button>
     <span class="inline-msg" id="switch-msg" role="status" aria-live="polite" hidden></span>
   </section>
@@ -150,6 +153,10 @@
         <span class="status status-{{ c.status }}">{{ c.status_word }}</span>
         {% endif %}
         <p class="conn-facts">{{ c.count_line }}{% if c.count_line and c.updated %} · {% endif %}{{ c.updated }}</p>
+        {% if connect_pages.get(c.id) %}
+        <p class="card-note">Not finished? <a class="open-connect-page" href="{{ connect_pages[c.id] }}"
+             target="_blank" rel="noopener">Open the connect page</a></p>
+        {% endif %}
         {% if paused %}
         {# Paused: nothing new can be added, so no button that would fail. #}
         {% elif c.kind == 'direct' %}

@@ -474,6 +474,13 @@ def create_app(config: Config | None = None,
                             and via_link and me is not None)
         if code_for_connect:
             back = url_for("home") + "#connect-records"
+        # The same step for Settings' invite link (#937): a code, then back
+        # to the card that now shows the link.
+        code_for_invite = (request.args.get("invite") == "1"
+                           and via_link and me is not None
+                           and not code_for_connect)
+        if code_for_invite:
+            back = url_for("settings") + "#invite-section"
         if session.get("account_id") and not enroll and not via_link:
             return redirect(url_for("home"))
         # Set by a beta confirm that could not sign in (beta_signup): the
@@ -487,6 +494,7 @@ def create_app(config: Config | None = None,
                                # why a code comes first (patient walk F1).
                                code_for_passkey=asked_enroll and via_link,
                                code_for_connect=code_for_connect,
+                               code_for_invite=code_for_invite,
                                prefill=(prefill if isinstance(prefill, str)
                                         else ""),
                                imessage_pending=bool(
@@ -540,6 +548,14 @@ def create_app(config: Config | None = None,
                             else "made-up records"),
             switch_prompt=(None if svc.switch_prompted_at(acct.id)
                            else hub_view.switch_prompt(data)),
+            # A Fasten card still connecting links to its connect page
+            # (#937). A link is never blocked as a popup is, so a person
+            # whose browser blocked the first window is not left with only
+            # a Refresh that repeats it.
+            connect_pages=({} if paused else {
+                r["id"]: hc.fasten_connect_url(r["tenant_id"])
+                for r in view["records"]
+                if r["kind"] == "fasten" and r["status"] == "pending"}),
             has_grants=bool(svc.list_grants(acct.id)),
             menu_open=real_open, groups=connectors.GROUPS,
             terms_url=f"{cfg.healthclaw_public_base}/terms",
@@ -621,6 +637,9 @@ def create_app(config: Config | None = None,
                 logger.warning("invite link not shown")
         return render_template(
             "settings.html", me=acct, invite=invite,
+            # Says where the link is instead of leaving the section out
+            # (#937): one code sign-in away.
+            link_session=bool(session.get(_VIA_LINK)),
             passkeys=svc.list_passkeys(acct.id),
             grants=_grants_with_labels(svc.list_grants(acct.id),
                                        data["connections"]),
@@ -1537,6 +1556,18 @@ def create_app(config: Config | None = None,
                 funnel.safely(funnel.mark, svc.session, acct.id,
                               "records_connected")
             out = {"status": "active"}
+            # First records ever on this connection: store the count the
+            # card shows ("N records", hub.py). Only when none is stored, so
+            # a refresh's baseline below is never overwritten (#937). A
+            # failed count leaves it unset, which the card shows as nothing,
+            # never as zero.
+            if conns[conn_tenant].get("last_count") is None:
+                try:
+                    svc.mark_synced(conns[conn_tenant]["id"],
+                                    hc.record_count(conn_tenant),
+                                    hc.uncounted_record_count(conn_tenant))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
             # After a refresh, report growth against the baseline that refresh
             # recorded. Read-only: the count is re-baselined by the next
             # refresh, so repeated polls keep showing the same number instead
@@ -1737,6 +1768,13 @@ def create_app(config: Config | None = None,
             # Records landed while nobody was polling /connect. Settle the
             # stored status here so the next visit costs no counts.
             svc.set_connection_status(ctx["tenant"], "active")
+            # And the hub card's "N records", as the poll stores it (#937).
+            if conn.get("id") and conn.get("last_count") is None:
+                try:
+                    svc.mark_synced(conn["id"], hc.record_count(ctx["tenant"]),
+                                    hc.uncounted_record_count(ctx["tenant"]))
+                except HealthClawError:
+                    logger.warning("record count unavailable on activation")
         # The "Open the review" card is a turn event, and history keeps only
         # text, so a reload lost it while the reply above still promised it
         # (#847). Ask the engine what is waiting instead; nothing is stored.

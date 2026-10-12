@@ -27,11 +27,41 @@
     (d && typeof d.error === "string" && d.error.includes(" ") && d.error) ||
     fallback;
 
+  // --- a page to open after a request: the popup iOS blocks (#937) ---
+  // iOS Safari and in-app browsers block window.open unless it runs inside
+  // the tap itself, and the connect page's address only exists after an
+  // await. So the window opens empty on the tap and is pointed at the page
+  // once the answer is in. `noopener` cannot be passed here (open would
+  // return null, leaving nothing to point); the opener is cut instead.
+  function openBlank() {
+    let w = null;
+    try { w = window.open("", "_blank"); } catch (e) { w = null; }
+    if (w) { try { w.opener = null; } catch (e) { /* nothing to cut */ } }
+    return w;
+  }
+  function dropBlank(w) {
+    if (w && !w.closed) { try { w.close(); } catch (e) { /* gone */ } }
+  }
+  // Point the window opened on the tap at `url`. Blocked, or closed by the
+  // person meanwhile: say so with a link, since a tapped link always opens.
+  // Returns whether the page opened.
+  function sendTo(w, url, anchor, msgEl) {
+    if (w && !w.closed) {
+      try { w.location.href = url; return true; } catch (e) { /* below */ }
+    }
+    say(anchor, msgEl, "Your browser didn't open the connect page.",
+        { href: url, text: "Open the connect page" });
+    return false;
+  }
+
   // --- connector marketplace: one handler for every tile ---
   document.querySelectorAll(".connector-tile").forEach((tile) => {
     tile.addEventListener("click", async () => {
       const id = tile.dataset.connector;
       let body = {};
+      // Only Fasten answers with a page to open (connect_url).
+      const opensPage = id === "fasten";
+      let page = null;
       $("connect-msg").hidden = true;
       if (tile.dataset.providers) {
         const provider = await pickProvider(JSON.parse(tile.dataset.providers));
@@ -40,15 +70,21 @@
       }
       // Real-record sources: informed consent before anything happens. The
       // server refuses (428) without it, so this card is UX, not the gate.
+      // "I agree" is the last tap before the request, so the window for the
+      // connect page opens inside it.
       if (tile.dataset.consent) {
-        const agreed = await showConsentCard();
+        const agreed = await showConsentCard(
+          opensPage ? () => { page = openBlank(); } : null);
         if (!agreed) return;
         body.consent = true;
         body.consent_version = shownConsentVersion;
+      } else if (opensPage) {
+        page = openBlank();
       }
       tile.disabled = true;
       const res = await post("/api/connections/" + id, body);
       tile.disabled = false;
+      if (!res.ok || !res.d.connect_url) dropBlank(page);
       if (body.consent && termsChanged(res)) { location.reload(); return; }
       if (!res.ok) {
         // Inline, directly under the tile that was tapped: never blocks, never
@@ -57,19 +93,22 @@
                    refusal(res.d, "Couldn't connect that source."));
       }
       if (res.d.redirect) { location.assign(res.d.redirect); return; }
-      if (res.d.connect_url) window.open(res.d.connect_url, "_blank", "noopener");
+      // Blocked: stay on this page with the link rather than reload it away.
+      if (res.d.connect_url &&
+          !sendTo(page, res.d.connect_url, tile, $("connect-msg"))) return;
       location.reload();
     });
   });
 
-  // Consent card: resolves true only on an explicit "I agree".
-  function showConsentCard() {
+  // Consent card: resolves true only on an explicit "I agree". `onAgree`
+  // runs inside the agree tap itself, for what a browser allows only there.
+  function showConsentCard(onAgree) {
     return new Promise((resolve) => {
       const modal = document.getElementById("consent-modal");
       const agree = document.getElementById("consent-agree");
       const cancel = document.getElementById("consent-cancel");
       const done = (v) => { modal.hidden = true; resolve(v); };
-      agree.onclick = () => done(true);
+      agree.onclick = () => { if (onAgree) onAgree(); done(true); };
       cancel.onclick = () => done(false);
       modal.hidden = false;
     });
@@ -214,7 +253,8 @@
   // fold on a phone — which looks exactly like the dead browser dialog this
   // replaced, so the position is part of the fix, not decoration. Moving the
   // one element keeps the id stable for anything addressing it.
-  function say(anchor, el, text) {
+  // `link` ({href, text}), when given, follows the sentence as a real link.
+  function say(anchor, el, text, link) {
     if (anchor && el.previousElementSibling !== anchor) {
       // The move is a remove-then-insert, so the region leaves the
       // accessibility tree even when it was already on screen. Hide it first
@@ -229,6 +269,15 @@
       el.hidden = true;
     }
     announce(el, text, () => {
+      if (link) {
+        const a = document.createElement("a");
+        a.href = link.href;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.className = "open-connect-page";
+        a.textContent = link.text;
+        el.append(" ", a);
+      }
       // Only scrolls if it isn't already fully visible, and only as far as it
       // has to — no jump when the message is already under the user's thumb.
       // Never while a dialog is up: the message is behind the overlay, so the
@@ -367,25 +416,32 @@
       // Named apart from the module-scope say(anchor, el, text): this one is
       // card-local and takes only the text.
       const report = (t) => announce(msg, t);
+      // Refresh answers with the provider's sign-in page (Fasten, devices):
+      // open the window on this tap, as the tiles do (#937). A consent card
+      // in between replaces it with one opened on "I agree".
+      let page = openBlank();
       btn.disabled = true;
       report("Checking…");
       let res = await post(`/api/connections/${btn.dataset.conn}/refresh`);
       // 428 means this deployment wants consent re-affirmed for the re-pull.
       if (!res.ok && res.d.error === "consent_required") {
-        const agreed = await showConsentCard();
+        dropBlank(page);
+        page = null;
+        const agreed = await showConsentCard(() => { page = openBlank(); });
         if (!agreed) { btn.disabled = false; msg.hidden = true; return; }
         res = await post(`/api/connections/${btn.dataset.conn}/refresh`,
                          { consent: true, consent_version: shownConsentVersion });
-        if (termsChanged(res)) { location.reload(); return; }
+        if (termsChanged(res)) { dropBlank(page); location.reload(); return; }
       }
       btn.disabled = false;
+      if (!res.ok || !res.d.reauth_url) dropBlank(page);
       // `message` first: a coded refusal (records_paused) carries its
       // sentence there, and the code itself is never shown (#856 review).
       if (!res.ok) return report(refusal(res.d,
                                          "Couldn't refresh right now."));
       if (res.d.unsupported) return report(res.d.reason);
       if (res.d.reauth_url) {
-        window.open(res.d.reauth_url, "_blank", "noopener");
+        if (!sendTo(page, res.d.reauth_url, null, msg)) return;
         report("Finish signing in to your provider — new records appear here.");
         watchForNewRecords(card, msg);
       }
