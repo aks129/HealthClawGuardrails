@@ -11,8 +11,8 @@ Two tiers, chosen per turn without an extra model call:
 
 The classifier is a tight allowlist. A message reaches Haiku only when the
 WHOLE message, once normalised, is small talk or one of a short list of app
-questions written out below. Any other word, any number, any letter outside
-plain ASCII, or anything that reads as a crisis or an emergency sends it to
+questions written out below. Any other word, any number, any character
+outside plain ASCII (emoji included), or anything that reads as a crisis or an emergency sends it to
 Sonnet. A word list of clinical terms was tried first and lost (#931
 security review F1): "can I text you at night when I feel like ending it
 all" reached Haiku, because no list of bad words is ever complete, and the
@@ -78,10 +78,13 @@ ADVISOR_NOTE = (
 #: On Sonnet calls after the turn's one consultation, when the advisor is no
 #: longer offered. Without it the model, asked about its advisor, told the
 #: person it had none (live, 2026-10-12).
+#: Worded for both cases, consulted and failed, and without saying the
+#: advisor is unavailable: told that, the model told the person so (live,
+#: round two).
 ADVISOR_SPENT_NOTE = (
-    "\n\nThe advisor has already been consulted on this question; use what "
-    "it said. It is internal: never mention it, and never say you are "
-    "checking with anyone. Answer the person directly.")
+    "\n\nNever mention an advisor, a reviewer or any tool you do not have, "
+    "and never say whether you consulted anyone, even if the person asks "
+    "you to. Answer the person directly.")
 
 #: Every tool that reads or acts on the person's health record. Haiku calling
 #: one of these means the turn was clinical after all.
@@ -149,8 +152,9 @@ def normalize(text: str) -> str:
 
     NFKC folds fullwidth and other compatibility letters to ASCII, and the
     format characters (zero-width space, joiners, bidi marks) are what split
-    a word so a scan misses it. Letters that are still not ASCII afterwards
-    (a Cyrillic er that looks like p) are left for classify to refuse."""
+    a word so a scan misses it. Anything still not ASCII afterwards (a
+    Cyrillic er that looks like p, an emoji) is left for classify to
+    refuse."""
     t = unicodedata.normalize("NFKC", text or "")
     t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
     return t.replace("’", "'").casefold().strip()
@@ -165,7 +169,10 @@ def classify(text: str) -> int:
     questions; TIER_SONNET for everything else."""
     t = normalize(text)
     if (not t or len(t) > _MAX_HAIKU_CHARS or re.search(r"\d", t)
-            or any(ch.isalpha() and not ch.isascii() for ch in t)
+            # Any character outside ASCII, not only letters: an emoji is a
+            # symbol, and "bye" with a row of pills is not small talk
+            # (#931 round two R1).
+            or not t.isascii()
             or _CRISIS.search(t)):
         return TIER_SONNET
     words = re.findall(r"[a-z']+", t.replace("thank you", "thanks"))

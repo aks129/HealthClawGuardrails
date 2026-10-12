@@ -52,6 +52,10 @@ class LLMTurn:
     advisor_calls: int = 0
     advisor_errors: int = 0
     advisor_timed_out: bool = False
+    # The advised attempt failed (timeout, 5xx, connection) and the call was
+    # answered without it. advisor_calls is then 1: the turn's consultation
+    # is spent.
+    advisor_failed: bool = False
     stop_reason: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -62,7 +66,12 @@ class LLMError(RuntimeError):
     pass
 
 
-class LLMTimeout(LLMError):
+class LLMTransient(LLMError):
+    """A failure the same request may not repeat: 5xx, 529 overloaded, or
+    a dropped connection, after whatever retries the call was given."""
+
+
+class LLMTimeout(LLMTransient):
     """The provider did not answer within this call's budget."""
 
 
@@ -227,7 +236,7 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
     # CARE_ROUTING=on (careagents/routing.py).
     started = _time_mod.monotonic()
     tier = routing.tier_for(messages)
-    escalated = advisor_timed_out = False
+    escalated = advisor_timed_out = advisor_failed = False
     if tier == routing.TIER_HAIKU:
         # Haiku sees the current turn only. An earlier answer may hold the
         # person's results, and small talk does not need them (#931 F2).
@@ -273,20 +282,19 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
                     tools=[*a_tools, routing.ADVISOR_TOOL],
                     betas=[*oauth, routing.ADVISOR_BETA,
                            routing.FALLBACK_BETA], **sonnet)
-            except LLMTimeout:
-                # Answer without the advisor rather than fail the turn, in
-                # what is left of this call's share of the deadline.
-                advisor_timed_out = True
-                logger.warning("advisor call timed out; answering without it")
+            except LLMTransient as exc:
+                # A timeout, a 5xx/529 or a dropped connection: with no SDK
+                # retries on this call, answer without the advisor rather
+                # than fail the turn (#931 round two R2), in the share of
+                # the deadline kept back for it.
+                advisor_failed = True
+                advisor_timed_out = isinstance(exc, LLMTimeout)
+                logger.warning("advisor call failed (%s); answering without "
+                               "it", type(exc.__cause__).__name__)
         if turn is None:
-            if advisor_timed_out:
-                left = (_deadline(cfg) * _DEADLINE_SHARE
-                        - (_time_mod.monotonic() - started))
-                budget = {"timeout": max(5.0, left), "max_retries": 0}
-            else:
-                budget = _budget
-            spent = (getattr(cfg, "advisor", False) and not advisor_timed_out
-                     and routing.advisor_used(messages))
+            budget = _fallback_budget(cfg) if advisor_failed else _budget
+            spent = (getattr(cfg, "advisor", False)
+                     and (advisor_failed or routing.advisor_used(messages)))
             turn = _anthropic_call(
                 anthropic,
                 _anthropic_client(anthropic, cfg, **budget).beta.messages,
@@ -295,6 +303,13 @@ def _anthropic_complete(cfg, system, messages, tools) -> LLMTurn:
                 betas=[*oauth, routing.FALLBACK_BETA], **sonnet)
     turn.tier, turn.escalated = tier, escalated
     turn.advisor_timed_out = advisor_timed_out
+    turn.advisor_failed = advisor_failed
+    if advisor_failed:
+        # The failed attempt is the turn's one consultation: later rounds
+        # are not offered the advisor again, with a fresh budget, after this
+        # round already spent most of its share (#931 round two R3). The
+        # callers record advisor_calls in the history and checkpoints.
+        turn.advisor_calls = max(turn.advisor_calls, 1)
     _observe(turn, tier, started)
     return turn
 
@@ -317,16 +332,27 @@ def _deadline(cfg) -> float:
                  or _FALLBACK_DEADLINE_SECONDS)
 
 
-#: Of a call's share of the deadline, what an advised attempt may take. The
-#: rest is kept so a timed-out advised call can still be answered without
-#: the advisor: 76.5s and 13.5s at the default 120s deadline. One consult
-#: measured 13-18s per turn in the eval; the reviewer's forced two-consult
-#: call needed most of a 24.7s attempt (#931 F6).
-_ADVISED_SHARE = 0.85
+#: Of a call's share of the deadline (90s at the default 120s), what the
+#: advised attempt may take: 54s. The other 36s are kept for answering
+#: without the advisor if it fails, as two attempts of 18s, so a failed
+#: advised call, its fallback and one ordinary tool round (24.7s) still
+#: fit inside 120s (#931 round two R3). A one-consult call measured
+#: 13-29s live (#931 F6 probes); max_uses is 1.
+_ADVISED_SHARE = 0.6
+_FALLBACK_RETRIES = 1
 
 
 def _advised_timeout(cfg) -> float:
     return max(5.0, _deadline(cfg) * _DEADLINE_SHARE * _ADVISED_SHARE)
+
+
+def _fallback_budget(cfg) -> dict:
+    """The kept-back share for answering without a failed advisor, split
+    over the attempts the SDK may make (it retries 5xx, 529, connection
+    errors and timeouts)."""
+    reserve = _deadline(cfg) * _DEADLINE_SHARE - _advised_timeout(cfg)
+    return {"timeout": max(5.0, reserve / (1 + _FALLBACK_RETRIES)),
+            "max_retries": _FALLBACK_RETRIES}
 
 
 def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
@@ -345,6 +371,11 @@ def _anthropic_call(anthropic, endpoint, **kw) -> LLMTurn:
             raise LLMOutOfCredit("model call refused on billing") from exc
         if getattr(exc, "status_code", None) == 429:
             raise LLMRateLimited("model call rate limited (HTTP 429)") from exc
+        conn_cls = getattr(anthropic, "APIConnectionError", None)
+        if ((getattr(exc, "status_code", None) or 0) >= 500
+                or (conn_cls is not None and isinstance(exc, conn_cls))):
+            raise LLMTransient(
+                f"model call failed ({type(exc).__name__})") from exc
         raise LLMError(f"model call failed ({type(exc).__name__})") from exc
 
     turn = LLMTurn(model=kw["model"])
@@ -401,8 +432,11 @@ def _observe(turn: LLMTurn, tier, started: float) -> None:
     routing.count({
         f"turns_{name}": answered,
         "escalations": turn.escalated,
-        "advisor_consults": turn.advisor_calls,
-        "advisor_errors": turn.advisor_errors,
+        # A failed advised attempt spends the turn's consultation without
+        # being one; it is counted as an error (or a timeout) instead.
+        "advisor_consults": 0 if turn.advisor_failed else turn.advisor_calls,
+        "advisor_errors": turn.advisor_errors + (
+            turn.advisor_failed and not turn.advisor_timed_out),
         "advisor_timeouts": turn.advisor_timed_out,
         "refusals": turn.stop_reason == "refusal",
         "cut_offs": turn.stop_reason == "max_tokens",
