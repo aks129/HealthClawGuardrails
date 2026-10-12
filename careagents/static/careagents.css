@@ -972,6 +972,12 @@ textarea:focus-visible {
   align-items: center; min-height: 52px; color: var(--on-accent);
   background: var(--accent); border-color: var(--accent); font-weight: 600; }
 #explore-sample.connector-tile:hover { background: var(--accent-hover); }
+/* The primary next step on the hub is a button, not a list row: the
+   `.connector-tile` reset above must not flatten it (#934 QA M1). */
+.connector-tile.btn-primary { flex-direction: row; justify-content: center;
+  align-items: center; min-height: 52px; color: var(--on-accent);
+  background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.connector-tile.btn-primary:hover { background: var(--accent-hover); }
 .menu-closed-line { margin: 12px 0 0; color: var(--ink-soft); }
 .past summary { cursor: pointer; min-height: 44px; display: flex;
   align-items: center; font-weight: 600; }

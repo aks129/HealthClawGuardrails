@@ -601,5 +601,29 @@ def test_the_invite_page_says_records_can_follow_when_they_can(
     assert "not your own" in html and 'id="beta-records-line"' not in html
 
 
+def test_the_invite_banner_agrees_with_the_page(made, monkeypatch):  # noqa: F811
+    """The banner said "made-up records only" above a page that offered
+    your own records next (#934 QA)."""
+    app, svc = made(CARE_REAL_RECORDS="allowlist",
+                    CARE_REAL_RECORDS_ALLOWLIST="inviter@example.com")
+    _, code, _ = _inviter(app, svc, monkeypatch)
+    html = app.test_client().get(f"/i?c={code}").get_data(as_text=True)
+    assert "made-up records first, then your own" in html
+    assert "made-up records only" not in html
+    _, other, _ = _inviter(app, svc, monkeypatch, email="plain@example.com")
+    html = app.test_client().get(f"/i?c={other}").get_data(as_text=True)
+    assert "made-up records only" in html
+
+
+def test_the_connect_next_step_is_drawn_as_a_button():
+    """`.connector-tile` resets colour and weight; the hub's primary next
+    step must not render as a plain list row (#934 QA M1)."""
+    css = _static("careagents.css")
+    rule = css[css.index(".connector-tile.btn-primary {"):]
+    rule = rule[:rule.index("}")]
+    assert "background: var(--accent)" in rule
+    assert "color: var(--on-accent)" in rule
+
+
 def test_link_copied_is_not_drawn_as_an_error():
     assert 'classList.add("is-ok")' in _static("invite.js")

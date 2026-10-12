@@ -419,7 +419,10 @@ def register(app, svc, cfg, beta_context) -> None:
         resp = make_response(render_template(
             "beta.html", **beta_context(), invite={"code": code,
                                                "first_name": name,
-                                               "real": real}))
+                                               "real": real},
+            # The banner says the same as the page about whose records.
+            banner_records=("made-up records first, then your own"
+                            if real else "made-up records only")))
         # The code is in this page's address: it goes to no other site.
         resp.headers["Referrer-Policy"] = "no-referrer"
         return resp
