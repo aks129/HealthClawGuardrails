@@ -7,12 +7,10 @@ the marker comes off then. Synthetic data only.
 
 from __future__ import annotations
 
-import threading
 
 import pytest
 
-from careagents import beta, invites, tester_terms
-from careagents.config import Config
+from careagents import invites, tester_terms
 from careagents.models import RealRecordInvite
 from tests.test_careagents import _login
 from tests.test_careagents_beta_signup import (  # noqa: F401  (fixtures)
@@ -29,49 +27,9 @@ def _active_invites(svc) -> int:
                 .filter(RealRecordInvite.revoked_at.is_(None)).count())
 
 
-def test_concurrent_confirms_never_pass_the_stage1_cap(tmp_path, monkeypatch):
-    from careagents.accounts import AccountService
-    from tests.test_careagents import _make_account
-    cfg = Config(env={"CARE_DATABASE_URL": f"sqlite:///{tmp_path}/s1.db",
-                      "OPENAI_API_KEY": "k", "CARE_INVITE_LINK_CAP": "20"})
-    svc = AccountService(cfg)
-    try:
-        for i in range(beta.STAGE1_INVITE_CAP - 1):
-            svc.invite_real_records(f"t{i}@example.com", "operator")
-        host = _make_account(svc, monkeypatch, "host@example.com")
-        link = invites.link_for(svc.session, host.id, 20)
-        joiners = [f"racer{i}@example.org" for i in range(8)]
-        for e in joiners:
-            assert invites.note_pending(svc.session, e, link["code"], 20)
-
-        # Hold every caller between the count and the insert, so the
-        # check-then-act window is hit deterministically.
-        from sqlalchemy.orm import Query
-        real_count = Query.count
-        gate = threading.Barrier(len(joiners), timeout=10)
-
-        def count(self):
-            n = real_count(self)
-            if threading.current_thread().name.startswith("racer"):
-                try:
-                    gate.wait()
-                except threading.BrokenBarrierError:
-                    pass
-            return n
-        monkeypatch.setattr(Query, "count", count)
-
-        out = []
-        threads = [threading.Thread(
-            target=lambda e=e: out.append(invites.on_join(svc, cfg, e)),
-            name=f"racer{i}") for i, e in enumerate(joiners)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        monkeypatch.setattr(Query, "count", real_count)
-        assert _active_invites(svc) <= beta.STAGE1_INVITE_CAP
-    finally:
-        svc.engine.dispose()
+# The stage 1 cap under racing joins is pinned for real in
+# tests/test_careagents_invite_cap_race_r2.py: an earlier pin here granted
+# nothing (its inviter had no real-record access) and passed vacuously.
 
 
 def test_a_peer_link_does_not_reopen_an_operator_revoked_invite(

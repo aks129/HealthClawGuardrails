@@ -246,10 +246,22 @@ def test_cli_prints_the_daily_table(cfg, svc, monkeypatch):  # noqa: F811
 
 # --- the owner page -----------------------------------------------------------
 
+def _svc_cfg(svc, **env):  # noqa: F811
+    """A Config on the `svc` fixture's database, left as it is. `_cfg()`
+    drops every table on a non-SQLite test database (Postgres in CI)."""
+    from careagents.config import Config
+    return Config(env={"CARE_DATABASE_URL": svc.cfg.database_url,
+                       "CARE_RP_ID": "localhost",
+                       "CARE_ORIGIN": "http://localhost",
+                       "OPENAI_API_KEY": "k",
+                       "HEALTHCLAW_MINT_SECRET": "mint-secret",
+                       "CARE_ALLOW_REAL_MAIL": "1", **env})
+
+
 def _app(svc, **env):  # noqa: F811
     from careagents.app import create_app
-    from tests.test_careagents_beta_signup import _cfg
-    a = create_app(config=_cfg(**env), client=FakeClient(), accounts=svc)
+    a = create_app(config=_svc_cfg(svc, **env), client=FakeClient(),
+                   accounts=svc)
     a.config["TESTING"] = True
     return a
 
@@ -294,14 +306,13 @@ def test_admin_page_shows_the_owner_counts_and_no_emails(svc, monkeypatch):  # n
 # --- the digest -------------------------------------------------------------
 
 def test_digest_is_off_without_an_address(svc):  # noqa: F811
-    from tests.test_careagents_beta_signup import _cfg
-    assert funnel.send_digest_if_due(svc.session, _cfg()) is None
+    assert funnel.send_digest_if_due(svc.session, _svc_cfg(svc)) is None
 
 
 def test_digest_sends_once_per_day(svc, monkeypatch):  # noqa: F811
     from careagents import mail
-    from tests.test_careagents_beta_signup import _cfg
-    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x",
+    cfg_ = _svc_cfg(svc, CARE_DIGEST_TO="owner@example.com",
+                    RESEND_API_KEY="re_x",
                 CARE_ALLOW_REAL_MAIL="1")
     sent = []
 
@@ -327,8 +338,8 @@ def test_digest_sends_once_per_day(svc, monkeypatch):  # noqa: F811
 
 def test_a_refused_digest_is_tried_again(svc, monkeypatch):  # noqa: F811
     from careagents import mail
-    from tests.test_careagents_beta_signup import _cfg
-    cfg_ = _cfg(CARE_DIGEST_TO="owner@example.com", RESEND_API_KEY="re_x",
+    cfg_ = _svc_cfg(svc, CARE_DIGEST_TO="owner@example.com",
+                    RESEND_API_KEY="re_x",
                 CARE_ALLOW_REAL_MAIL="1")
     outcomes = [mail.NOT_SENT, mail.SENT]
     monkeypatch.setattr(mail, "send_message",
